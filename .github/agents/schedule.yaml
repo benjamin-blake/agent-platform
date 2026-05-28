@@ -1,0 +1,71 @@
+# Scheduled agent manifest
+#
+# Each entry declares an autonomous agent that runs on a cron schedule via
+# .github/workflows/scheduled-agents.yml.
+#
+# Fields:
+#   name:        Unique identifier used with --agent NAME flag
+#   cron:        UTC cron expression (minute hour day-of-month month day-of-week)
+#   model:       LLM to use (free models preferred: gpt-5-mini)
+#   prompt_path: Path to the agent prompt file (relative to repo root)
+#   description: Human-readable summary of what the agent does
+#
+# Cron schedule notes:
+#   - All times are UTC
+#   - Agents run on different days to avoid overlap
+#   - Monday=1 ... Sunday=7 in GitHub Actions cron syntax
+
+agents:
+  # Monday 06:00 UTC — finds docs that are stale relative to their source files
+  - name: doc-freshness
+    cron: "0 6 * * 1"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/doc-freshness.prompt.md
+    description: Identify documentation files that have not been updated since their corresponding source files changed.
+
+  # Tuesday 06:00 UTC — finds Python functions and classes with no references
+  - name: orphan-code
+    cron: "0 6 * * 2"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/orphan-code.prompt.md
+    description: Detect unreferenced functions, classes, and modules in scripts/ and src/.
+
+  # Wednesday 06:00 UTC — reviews recent session transcripts for recurring friction
+  - name: transcript-review
+    cron: "0 6 * * 3"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/transcript-review.prompt.md
+    description: Analyse recent session transcripts to surface recurring friction patterns and unresolved issues.
+
+  # Thursday 06:00 UTC — lightweight static analysis for code smells
+  - name: code-smell
+    cron: "0 6 * * 4"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/code-smell.prompt.md
+    description: Scan Python source files for common code smells such as oversized functions, deep nesting, bare except clauses, and mutable default arguments.
+
+  # Friday 06:00 UTC — audits prompts and instructions for quality issues
+  - name: prompt-quality
+    cron: "0 6 * * 5"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/prompt-quality.prompt.md
+    description: Review all .prompt.md, .agent.md, and .instructions.md files for stale references, contradictions, and maintenance issues.
+
+  # Monday 08:00 UTC — clusters open recs, detects workarounds, suggests batches
+  - name: rec-curator
+    cron: "0 8 * * *"
+    model: claude-sonnet-4.6
+    provider: copilot-sdk
+    enabled: true
+    prompt_path: .github/prompts/scheduled/rec-curator.prompt.md
+    description: Cluster open recommendations, detect workaround patterns, suggest batches for parallel execution, and auto-file root-cause recs.

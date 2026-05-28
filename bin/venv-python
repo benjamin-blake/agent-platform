@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# OS-aware venv Python resolver. Picks .venv/bin/python on Linux/macOS or
+# .venv/Scripts/python.exe on Windows (MINGW/MSYS/CYGWIN). Used by all harness
+# call sites so the repo works on both the Windows VM and Linux containers (CD.2).
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+        ;;
+    *)
+        PYTHON="$REPO_ROOT/.venv/bin/python"
+        ;;
+esac
+
+if [ ! -f "$PYTHON" ]; then
+    echo "ERROR: venv Python not found at $PYTHON -- run: pip install -r requirements.txt in $REPO_ROOT" >&2
+    exit 1
+fi
+
+exec "$PYTHON" "$@"

@@ -1,0 +1,88 @@
+"""Verifier registry and discovery logic.
+
+Central registry of all programmatic verifiers used in the V3 integration flow.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+
+from .athena_views import AthenaViewsVerifier
+from .causal_chain import CausalChainVerifier
+from .data_quality import DataQualityVerifier
+from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .outbox_health import OutboxHealthVerifier
+from .schema_integrity import SchemaIntegrityVerifier
+
+# Registry of all verifiers that should run during the integration flow.
+# These provide hard gates for autonomous execution.
+REGISTRY: list[type[Verifier]] = [
+    OutboxHealthVerifier,
+    AthenaViewsVerifier,
+    SchemaIntegrityVerifier,
+    DataQualityVerifier,
+    CausalChainVerifier,
+]
+
+
+async def run_all_verifiers(
+    tier_filter: VerifierTier | None = None,
+    min_severity: VerifierSeverity | None = None,
+    verifier_name: str | None = None,
+) -> list[VerifierResult]:
+    """Instantiate and run all registered verifiers sequentially.
+
+    Args:
+        tier_filter: If provided, only run verifiers in this tier.
+        min_severity: If provided, only run verifiers with this severity or higher.
+        verifier_name: If provided, only run the verifier with this class name.
+
+    Returns:
+        List of VerifierResult objects.
+    """
+    results = []
+    for verifier_cls in REGISTRY:
+        # Instantiate to check properties
+        verifier = verifier_cls()
+
+        if verifier_name and verifier.name != verifier_name:
+            continue
+
+        if tier_filter and verifier.tier.value != tier_filter.value:
+            continue
+
+        if min_severity and verifier.severity.rank < min_severity.rank:
+            continue
+
+        results.append(await verifier.run())
+    return results
+
+
+def check_coverage(scope_files: list[str]) -> list[str]:
+    """Return scope files not matched by any registered verifier's covers globs.
+
+    Wave 1 of INTENT-verification-system.md: surfaces V3 verifier coverage gaps
+    so planners and `validate.py --coverage` can identify scope files that lack
+    a verifier. Reads each verifier class's `covers` attribute (a list of
+    fnmatch globs) directly from the REGISTRY without instantiation.
+    """
+    all_globs: list[str] = []
+    for verifier_cls in REGISTRY:
+        all_globs.extend(getattr(verifier_cls, "covers", ["**"]))
+
+    uncovered: list[str] = []
+    for path in scope_files:
+        normalised = path.replace("\\", "/")
+        if not any(fnmatch.fnmatch(normalised, glob) for glob in all_globs):
+            uncovered.append(path)
+    return uncovered
+
+
+__all__ = [
+    "Verifier",
+    "VerifierResult",
+    "VerifierStatus",
+    "REGISTRY",
+    "check_coverage",
+    "run_all_verifiers",
+]

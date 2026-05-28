@@ -1,0 +1,89 @@
+# Company Environment Configuration
+# Use on: Company VM for formula discovery and AWS infrastructure management
+
+environment: company
+
+# AWS Configuration (Full Access)
+aws:
+  region: eu-west-2
+  profile: company-aws-profile
+  account_id: "REDACTED-ACCOUNT-ID"
+
+  # S3 Buckets
+  s3_discovery_bucket: bblake-platform-formulas-discovery
+  s3_staging_bucket: bblake-platform-formulas-staging
+  s3_production_bucket: bblake-platform-formulas-production
+
+  # Data Lake
+  s3_data_lake_bucket: bblake-platform-data-lake
+  glue_database: trading_formulas_db
+
+  # Agent logs and telemetry staging
+  s3_agent_logs_bucket: bblake-platform-agent-logs
+
+  # Athena Workgroups
+  athena_lab_workgroup: agent-platform-lab
+  athena_prod_workgroup: agent-platform-production
+
+# SageMaker Configuration
+sagemaker:
+  instance_type: ml.c5.2xlarge
+  use_spot_instances: true
+  max_runtime_seconds: 3600
+  max_wait_seconds: 7200
+  volume_size_gb: 30
+
+# Lab Mode (Formula Discovery)
+lab:
+  pysr_iterations: 100
+  pysr_populations: 15
+  pysr_binary_operators: ["+", "*", "-", "/"]
+  pysr_unary_operators: ["tanh", "log", "exp", "abs"]
+  min_sharpe_ratio: 0.5
+  backtest_period_days: 252  # 1 year
+  train_test_split: 0.8
+
+# Data Pipeline
+data:
+  provider: yfinance
+  universe: ftse_100
+  schedule_cron: "0 18 * * 1-5"  # 6pm UTC weekdays (after LSE close)
+  features:
+    technicals: true
+    sentiment: true
+    fundamentals: true
+  retry_attempts: 3
+  retry_delay_seconds: 60
+  overwrite_existing: true
+
+# Lineage Tracking
+lineage:
+  iceberg_table: formula_lineage
+  track_training_data: true
+  track_hyperparameters: true
+  track_code_version: true
+
+# PostgreSQL (Optional - for local testing on company VM)
+postgres:
+  host: localhost
+  port: 5432
+  database: trading
+  user: postgres
+  # Password from environment variable: POSTGRES_PASSWORD
+
+# Trading Configuration (for testing)
+trading:
+  max_position_size: 1000.0
+  latency_threshold: 0.1
+  min_signal_threshold: 0.1
+
+# Live Trading (not used on company environment)
+live:
+  memory_retrieval_top_k: 10
+  embedding_dim: 128
+
+# Meta-learner (not used on company environment)
+meta_learner:
+  use_gating_network: true
+  learning_rate: 0.001
+  hidden_dim: 64

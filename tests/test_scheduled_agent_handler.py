@@ -1,0 +1,920 @@
+"""Unit tests for src/data/handlers/scheduled_agent_handler.py."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import src.data.handlers.scheduled_agent_handler as handler_mod
+from src.data.handlers.scheduled_agent_handler import (
+    _get_gemini_api_key,
+    _get_github_pat,
+    _invoke_bedrock,
+    _invoke_copilot_sdk,
+    _invoke_gemini,
+    _invoke_github_models,
+    _load_manifest,
+    _load_prompt,
+    handler,
+)
+
+
+class TestGetGithubPat:
+    """Tests for _get_github_pat()."""
+
+    def test_returns_env_var_pat_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_PAT", "ghp_direct_token")
+        monkeypatch.delenv("GITHUB_PAT_SECRET_ARN", raising=False)
+        assert _get_github_pat() == "ghp_direct_token"
+
+    def test_returns_empty_when_no_env_and_no_arn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_PAT", raising=False)
+        monkeypatch.delenv("GITHUB_PAT_SECRET_ARN", raising=False)
+        assert _get_github_pat() == ""
+
+    def test_fetches_from_secrets_manager_when_arn_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_PAT", raising=False)
+        monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
+        mock_client = MagicMock()
+        mock_client.get_secret_value.return_value = {"SecretString": "ghp_from_secrets"}  # pragma: allowlist secret
+        with patch("boto3.client", return_value=mock_client):
+            result = _get_github_pat()
+        assert result == "ghp_from_secrets"
+
+    def test_returns_empty_on_secrets_manager_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_PAT", raising=False)
+        monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
+        with patch("boto3.client", side_effect=Exception("access denied")):
+            result = _get_github_pat()
+        assert result == ""
+
+
+class TestLoadPrompt:
+    """Tests for _load_prompt()."""
+
+    def test_reads_prompt_from_repo_root(self, tmp_path: Path) -> None:
+        prompt_file = tmp_path / ".github" / "prompts" / "scheduled" / "test.prompt.md"
+        prompt_file.parent.mkdir(parents=True)
+        prompt_file.write_text("## Test prompt", encoding="utf-8")
+        with patch.object(handler_mod, "_REPO_ROOT", tmp_path):
+            result = _load_prompt(".github/prompts/scheduled/test.prompt.md")
+        assert result == "## Test prompt"
+
+    def test_returns_empty_when_not_found(self, tmp_path: Path) -> None:
+        with patch.object(handler_mod, "_REPO_ROOT", tmp_path):
+            result = _load_prompt(".github/prompts/scheduled/missing.prompt.md")
+        assert result == ""
+
+
+class TestLoadManifest:
+    """Tests for _load_manifest()."""
+
+    def test_loads_manifest_from_repo_root(self, tmp_path: Path) -> None:
+        manifest_dir = tmp_path / ".github" / "agents"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "schedule.yaml").write_text(
+            "agents:\n  - name: test-agent\n    cron: '0 6 * * 1'\n"
+            "    model: gpt-4.1-mini\n    prompt_path: prompts/test.md\n",
+            encoding="utf-8",
+        )
+        with patch.object(handler_mod, "_REPO_ROOT", tmp_path):
+            agents = _load_manifest()
+        assert len(agents) == 1
+        assert agents[0]["name"] == "test-agent"
+
+    def test_returns_empty_when_manifest_missing(self, tmp_path: Path) -> None:
+        with patch.object(handler_mod, "_REPO_ROOT", tmp_path):
+            agents = _load_manifest()
+        assert agents == []
+
+
+class TestInvokeBedrock:
+    """Tests for _invoke_bedrock()."""
+
+    def test_returns_content_on_success(self) -> None:
+        fake_response = {
+            "content": "analysis result",
+            "stop_reason": "end_turn",
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "error": False,
+            "message": "",
+        }
+        with patch("scripts.bedrock_client.converse", return_value=fake_response):
+            output, has_error, err_msg = _invoke_bedrock(
+                "test prompt",
+                "anthropic.claude-3-5-haiku-20241022-v1:0",
+            )
+        assert output == "analysis result"
+        assert has_error is False
+        assert err_msg == ""
+
+    def test_returns_error_on_failure(self) -> None:
+        fake_response = {
+            "content": "",
+            "stop_reason": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "error": True,
+            "message": "Model not found",
+        }
+        with patch("scripts.bedrock_client.converse", return_value=fake_response):
+            output, has_error, err_msg = _invoke_bedrock(
+                "test prompt",
+                "bad-model-id",
+            )
+        assert output == ""
+        assert has_error is True
+        assert err_msg == "Model not found"
+
+
+class TestInvokeGithubModels:
+    """Tests for _invoke_github_models()."""
+
+    def test_returns_content_on_success(self) -> None:
+        fake_response = {"choices": [{"message": {"content": "some output"}}]}
+        with patch(
+            "scripts.github_models_client.chat_completion",
+            return_value=fake_response,
+        ):
+            output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
+        assert output == "some output"
+        assert has_error is False
+
+    def test_returns_error_on_api_error(self) -> None:
+        fake_response = {"error": True, "message": "Rate limit"}
+        with patch(
+            "scripts.github_models_client.chat_completion",
+            return_value=fake_response,
+        ):
+            output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
+        assert output == ""
+        assert has_error is True
+        assert err_msg == "Rate limit"
+
+    def test_returns_error_on_malformed_response(self) -> None:
+        fake_response = {"choices": []}
+        with patch(
+            "scripts.github_models_client.chat_completion",
+            return_value=fake_response,
+        ):
+            output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
+        assert output == ""
+        assert has_error is True
+        assert "missing content" in err_msg.lower()
+
+
+class TestHandler:
+    """Tests for handler()."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
+
+    def _make_agent(
+        self,
+        name: str = "doc-freshness",
+        cron: str = "0 6 * * 1",
+        provider: str = "github-models",
+    ) -> dict:
+        return {
+            "name": name,
+            "cron": cron,
+            "model": "gpt-4.1-mini",
+            "prompt_path": ".github/prompts/scheduled/test.prompt.md",
+            "provider": provider,
+        }
+
+    def test_counts_failed_agent_when_pat_unavailable(self) -> None:
+        """Missing PAT fails github-models agent without global early return."""
+        agents = [self._make_agent(provider="github-models")]
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value=""),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+        ):
+            result = handler({}, None)
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 1
+
+    def test_runs_due_agents_and_writes_findings(self) -> None:
+        fake_response = {"choices": [{"message": {"content": ('[{"title": "stale doc", "file": "ARCH.md"}]')}}]}
+        agents = [self._make_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_response,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/doc-freshness/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 1
+        assert result["agents_failed"] == 0
+        assert result["total_findings"] == 1
+        assert "agents/doc-freshness/ts.jsonl" in result["keys_written"]
+
+    def test_skips_agent_when_not_due(self) -> None:
+        agents = [self._make_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=False,
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 0
+
+    def test_counts_failed_agent_on_api_error(self) -> None:
+        agents = [self._make_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value={"error": True, "message": "Rate limit"},
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 1
+
+    def test_counts_failed_agent_when_prompt_missing(self) -> None:
+        agents = [self._make_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value=""),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 1
+
+    def test_counts_failed_agent_when_write_fails(self) -> None:
+        agents = [self._make_agent()]
+        fake_response = {"choices": [{"message": {"content": "[]"}}]}
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_response,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="",
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_failed"] == 1
+
+    def test_model_override_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCHEDULED_AGENT_MODEL", "gemini-3.0-flash")
+        agents = [self._make_agent()]
+        fake_response = {"choices": [{"message": {"content": "[]"}}]}
+        captured_calls: list[dict] = []
+
+        def mock_chat(**kwargs: object) -> dict:
+            captured_calls.append(dict(kwargs))
+            return fake_response
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                side_effect=mock_chat,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/x/ts.jsonl",
+            ),
+        ):
+            handler({}, None)
+
+        assert captured_calls[0]["model"] == "gemini-3.0-flash"
+
+    def test_bedrock_provider_routes_to_converse(self) -> None:
+        """Bedrock agents use converse() and skip PAT retrieval."""
+        agents = [
+            self._make_agent(
+                name="code-smell",
+                provider="bedrock",
+            )
+        ]
+        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        fake_bedrock = {
+            "content": '[{"title": "smell", "file": "x.py"}]',
+            "stop_reason": "end_turn",
+            "input_tokens": 5,
+            "output_tokens": 10,
+            "error": False,
+            "message": "",
+        }
+
+        with (
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.bedrock_client.converse",
+                return_value=fake_bedrock,
+            ) as mock_converse,
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/code-smell/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        mock_converse.assert_called_once_with(
+            prompt="prompt",
+            model_id="anthropic.claude-3-5-haiku-20241022-v1:0",
+            region="eu-west-2",
+            max_tokens=4096,
+            credentials=None,
+        )
+        assert result["agents_run"] == 1
+        assert result["total_findings"] == 1
+
+    def test_bedrock_agent_does_not_require_pat(self) -> None:
+        """Bedrock agents run even without a PAT configured."""
+        agents = [
+            self._make_agent(
+                name="doc-freshness",
+                provider="bedrock",
+            )
+        ]
+        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        fake_bedrock = {
+            "content": "[]",
+            "stop_reason": "end_turn",
+            "input_tokens": 5,
+            "output_tokens": 10,
+            "error": False,
+            "message": "",
+        }
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="") as mock_pat,
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.bedrock_client.converse",
+                return_value=fake_bedrock,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/doc-freshness/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        # PAT is not needed so handler should not fail.
+        mock_pat.assert_not_called()
+        assert "error" not in result
+        assert result["agents_run"] == 1
+
+    def test_bedrock_failure_counts_as_failed(self) -> None:
+        """Bedrock API error increments agents_failed."""
+        agents = [
+            self._make_agent(
+                name="code-smell",
+                provider="bedrock",
+            )
+        ]
+        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        fake_bedrock = {
+            "content": "",
+            "stop_reason": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "error": True,
+            "message": "ResourceNotFoundException",
+        }
+
+        with (
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.bedrock_client.converse",
+                return_value=fake_bedrock,
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_failed"] == 1
+        assert result["agents_run"] == 0
+
+    def test_default_missing_provider_falls_back_to_github_models(
+        self,
+    ) -> None:
+        """Agent without a provider field defaults to github-models."""
+        agent = {
+            "name": "legacy-agent",
+            "cron": "0 6 * * 1",
+            "model": "gpt-4.1-mini",
+            "prompt_path": ".github/prompts/scheduled/test.prompt.md",
+            # No "provider" key -- must default to github-models
+        }
+        fake_response = {"choices": [{"message": {"content": "[]"}}]}
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_response,
+            ) as mock_gh,
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/legacy-agent/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        # Should have called github-models, not bedrock
+        mock_gh.assert_called_once()
+        assert result["agents_run"] == 1
+
+    def test_mixed_providers_only_requires_pat_for_github_models(
+        self,
+    ) -> None:
+        """When both providers are due, PAT is only required for
+        github-models."""
+        bedrock_agent = self._make_agent(name="bedrock-agent", provider="bedrock")
+        bedrock_agent["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        gh_agent = self._make_agent(name="gh-agent", provider="github-models")
+        agents = [bedrock_agent, gh_agent]
+
+        fake_bedrock = {
+            "content": "[]",
+            "stop_reason": "end_turn",
+            "input_tokens": 5,
+            "output_tokens": 10,
+            "error": False,
+            "message": "",
+        }
+        fake_gh_response = {"choices": [{"message": {"content": "[]"}}]}
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.bedrock_client.converse",
+                return_value=fake_bedrock,
+            ),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_gh_response,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/x/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 2
+        assert result["agents_failed"] == 0
+
+    def test_mixed_providers_runs_bedrock_when_pat_missing(self) -> None:
+        """Missing PAT should fail only github-models, not block bedrock."""
+        bedrock_agent = self._make_agent(name="bedrock-agent", provider="bedrock")
+        bedrock_agent["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        gh_agent = self._make_agent(name="gh-agent", provider="github-models")
+        agents = [bedrock_agent, gh_agent]
+
+        fake_bedrock = {
+            "content": "[]",
+            "stop_reason": "end_turn",
+            "input_tokens": 5,
+            "output_tokens": 10,
+            "error": False,
+            "message": "",
+        }
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="") as mock_pat,
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch(
+                "scripts.run_scheduled_agent.is_agent_due",
+                return_value=True,
+            ),
+            patch(
+                "scripts.bedrock_client.converse",
+                return_value=fake_bedrock,
+            ) as mock_converse,
+            patch(
+                "scripts.github_models_client.chat_completion",
+            ) as mock_gh,
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/x/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        mock_pat.assert_called_once()
+        mock_converse.assert_called_once()
+        mock_gh.assert_not_called()
+        assert result["agents_run"] == 1
+        assert result["agents_failed"] == 1
+
+
+class TestInvokeCopilotSdk:
+    """Tests for _invoke_copilot_sdk()."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
+
+    def test_success_path_returns_content(self) -> None:
+        fake_response = {"content": "sdk output", "error": False, "message": ""}
+        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
+            output, has_error, err_msg = _invoke_copilot_sdk("test prompt", "claude-haiku-4.5", "ghp_test")
+        assert output == "sdk output"
+        assert has_error is False
+        assert err_msg == ""
+
+    def test_error_path_returns_error_tuple(self) -> None:
+        fake_response = {"content": "", "error": True, "message": "SDK failure"}
+        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
+            output, has_error, err_msg = _invoke_copilot_sdk("test prompt", "claude-haiku-4.5", "ghp_test")
+        assert output == ""
+        assert has_error is True
+        assert err_msg == "SDK failure"
+
+    def test_handler_routes_copilot_sdk_provider(self) -> None:
+        """Handler calls _invoke_copilot_sdk for copilot-sdk provider."""
+        agent = {
+            "name": "doc-freshness",
+            "cron": "0 6 * * 1",
+            "model": "claude-haiku-4.5",
+            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
+            "provider": "copilot-sdk",
+        }
+        fake_response = {"content": "[]", "error": False, "message": ""}
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch(
+                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
+                return_value=fake_response,
+            ) as mock_sdk,
+            patch("scripts.bedrock_client.converse") as mock_bedrock,
+            patch("scripts.github_models_client.chat_completion") as mock_gh,
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/doc-freshness/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        mock_sdk.assert_called_once()
+        mock_bedrock.assert_not_called()
+        mock_gh.assert_not_called()
+        assert result["agents_run"] == 1
+        assert result["agents_failed"] == 0
+
+    def test_rec_curator_preload_triggered_for_copilot_sdk(self) -> None:
+        """_preload_rec_curator_context is called for copilot-sdk rec-curator."""
+        agent = {
+            "name": "rec-curator",
+            "cron": "0 8 * * *",
+            "model": "claude-sonnet-4.6",
+            "prompt_path": ".github/prompts/scheduled/rec-curator.prompt.md",
+            "provider": "copilot-sdk",
+        }
+        fake_response = {"content": "[]", "error": False, "message": ""}
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch.object(handler_mod, "_load_prompt", return_value="base prompt"),
+            patch.object(
+                handler_mod,
+                "_preload_rec_curator_context",
+                return_value="enriched prompt",
+            ) as mock_preload,
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch(
+                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
+                return_value=fake_response,
+            ),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/rec-curator/ts.jsonl",
+            ),
+        ):
+            handler({}, None)
+
+        mock_preload.assert_called_once_with("base prompt")
+
+
+class TestGetGeminiApiKey:
+    """Tests for _get_gemini_api_key()."""
+
+    def test_returns_env_var_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
+        assert _get_gemini_api_key() == "test-gemini-key"
+
+    def test_returns_empty_when_no_env_and_no_arn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
+        assert _get_gemini_api_key() == ""
+
+    def test_fetches_from_secrets_manager_when_arn_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv(
+            "GEMINI_API_KEY_SECRET_ARN",
+            "arn:aws:secretsmanager:eu-west-2:123:secret/gemini-key",
+        )
+        mock_client = MagicMock()
+        mock_client.get_secret_value.return_value = {"SecretString": "gemini-from-secrets"}  # pragma: allowlist secret
+        with patch("boto3.client", return_value=mock_client):
+            result = _get_gemini_api_key()
+        assert result == "gemini-from-secrets"
+
+    def test_returns_empty_on_secrets_manager_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv(
+            "GEMINI_API_KEY_SECRET_ARN",
+            "arn:aws:secretsmanager:eu-west-2:123:secret/gemini-key",
+        )
+        with patch("boto3.client", side_effect=Exception("denied")):
+            result = _get_gemini_api_key()
+        assert result == ""
+
+
+class TestInvokeGemini:
+    """Tests for _invoke_gemini() and gemini handler routing."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
+
+    def test_success_path_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
+        fake_response = {"content": "gemini output", "error": False, "message": ""}
+        with patch(
+            "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
+            return_value=fake_response,
+        ) as mock_sdk:
+            output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
+        assert output == "gemini output"
+        assert has_error is False
+        assert err_msg == ""
+        call_kwargs = mock_sdk.call_args.kwargs
+        assert call_kwargs["provider_config"]["type"] == "openai"
+        assert "generativelanguage.googleapis.com" in call_kwargs["provider_config"]["base_url"]
+        assert call_kwargs["provider_config"]["api_key"] == "test-gemini-key"  # pragma: allowlist secret
+
+    def test_error_path_returns_error_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
+        fake_response = {"content": "", "error": True, "message": "Gemini API error"}
+        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
+            output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
+        assert output == ""
+        assert has_error is True
+        assert err_msg == "Gemini API error"
+
+    def test_returns_error_when_gemini_key_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
+        output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
+        assert output == ""
+        assert has_error is True
+        assert "gemini api key" in err_msg.lower()
+
+    def test_handler_routes_gemini_provider(self) -> None:
+        """Handler calls _invoke_gemini for gemini provider."""
+        agent = {
+            "name": "doc-freshness",
+            "cron": "0 6 * * 1",
+            "model": "gemini-2.5-flash",
+            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
+            "provider": "gemini",
+        }
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")) as mock_gemini,
+            patch("scripts.bedrock_client.converse") as mock_bedrock,
+            patch("scripts.github_models_client.chat_completion") as mock_gh,
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/doc-freshness/ts.jsonl",
+            ),
+        ):
+            result = handler({}, None)
+
+        mock_gemini.assert_called_once()
+        mock_bedrock.assert_not_called()
+        mock_gh.assert_not_called()
+        assert result["agents_run"] == 1
+        assert result["agents_failed"] == 0
+
+    def test_gemini_requires_pat(self) -> None:
+        """Missing PAT causes gemini agent to be counted as failed."""
+        agent = {
+            "name": "doc-freshness",
+            "cron": "0 6 * * 1",
+            "model": "gemini-2.5-flash",
+            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
+            "provider": "gemini",
+        }
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value=""),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+        ):
+            result = handler({}, None)
+
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 1
+
+    def test_rec_curator_preload_triggered_for_gemini(self) -> None:
+        """_preload_rec_curator_context is called for gemini rec-curator."""
+        agent = {
+            "name": "rec-curator",
+            "cron": "0 8 * * *",
+            "model": "gemini-2.5-pro",
+            "prompt_path": ".github/prompts/scheduled/rec-curator.prompt.md",
+            "provider": "gemini",
+        }
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
+            patch.object(handler_mod, "_load_prompt", return_value="base prompt"),
+            patch.object(
+                handler_mod,
+                "_preload_rec_curator_context",
+                return_value="enriched prompt",
+            ) as mock_preload,
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/rec-curator/ts.jsonl",
+            ),
+        ):
+            handler({}, None)
+
+        mock_preload.assert_called_once_with("base prompt")
+
+
+class TestHandlerTelemetry:
+    """Tests that handler() emits telemetry via agent_telemetry functions."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
+
+    def _make_gemini_agent(self) -> dict:
+        return {
+            "name": "doc-freshness",
+            "cron": "0 6 * * 1",
+            "model": "gemini-2.5-flash",
+            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
+            "provider": "gemini",
+        }
+
+    def test_telemetry_emitted_for_successful_gemini_run(self) -> None:
+        """open_invocation and close_invocation called with correct args for a successful Gemini run."""
+        agents = [self._make_gemini_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")),
+            patch(
+                "scripts.s3_log_store.write_timestamped_findings",
+                return_value="agents/doc-freshness/ts.jsonl",
+            ),
+            patch(
+                "src.data.handlers.agent_telemetry.open_invocation",
+            ) as mock_open,
+            patch(
+                "src.data.handlers.agent_telemetry.close_invocation",
+            ) as mock_close,
+        ):
+            result = handler({}, None)
+
+        mock_open.assert_called_once_with(
+            agent_name="doc-freshness",
+            trigger="eventbridge",
+            model="gemini-2.5-flash",
+            provider="gemini",
+        )
+        mock_close.assert_called_once()
+        close_kwargs = mock_close.call_args
+        outcome_arg = close_kwargs.kwargs.get("outcome") or (close_kwargs.args[0] if close_kwargs.args else None)
+        assert outcome_arg == "success"
+        assert result["agents_run"] == 1
+
+    def test_close_invocation_called_with_failed_on_api_error(self) -> None:
+        """close_invocation(outcome='failed') called when agent API call returns error."""
+        agents = [self._make_gemini_agent()]
+
+        with (
+            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_load_manifest", return_value=agents),
+            patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
+            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
+            patch.object(handler_mod, "_invoke_gemini", return_value=("", True, "API timeout")),
+            patch(
+                "src.data.handlers.agent_telemetry.open_invocation",
+            ),
+            patch(
+                "src.data.handlers.agent_telemetry.close_invocation",
+            ) as mock_close,
+        ):
+            result = handler({}, None)
+
+        mock_close.assert_called_once()
+        close_kwargs = mock_close.call_args
+        outcome_arg = close_kwargs.kwargs.get("outcome") or (close_kwargs.args[0] if close_kwargs.args else None)
+        assert outcome_arg == "failed"
+        assert result["agents_failed"] == 1

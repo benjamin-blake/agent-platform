@@ -1,0 +1,318 @@
+# Data Quality Checks: Ops Tables
+# Recommendations, decisions, execution plans, priority queue, session log.
+
+database: trading_formulas_db
+athena_workgroup: agent-platform-production
+
+tables:
+  ops_recommendations:
+    description: "Recommendation lifecycle (SCD Type 2 - use _current view)"
+    view_suffix: _current
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    recency:
+      column: last_updated_timestamp
+      warn_after_hours: 24
+      error_after_hours: 168
+      enforced: true
+    columns:
+      id:
+        description: "Recommendation unique identifier, format rec-NNN"
+        semantics: "DynamoDB-allocated; never set directly by agents. SCD2: multiple rows per id in base table; uniqueness enforced at _current view level only."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+          # Not unique because SCD Type 2 has multiple versions per ID.
+          # Uniqueness is enforced at the _current view level.
+      title:
+        description: "Concise one-line description of the recommendation"
+        semantics: "Minimum 10 characters enforced at write time in ops_data_portal. Near-duplicate titles across different file targets are legitimate."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+      source:
+        description: "Agent type that filed this recommendation; harness-injected AGENT_TYPE identifier"
+        semantics: "Lineage key: analytically equivalent to session_id for cross-table joins to telemetry on agent type. Never set by agents -- injected from AGENT_TYPE env var by the invocation harness. Validated against config/agent/data_quality/source_registry.yaml at write time in ops_data_portal -- unregistered values are rejected before reaching Iceberg. Human-initiated portal calls use source=manual."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+      effort:
+        description: "Estimated implementation size (t-shirt: XS/S/M/L/XL)"
+        semantics: "Interim string label. Migration rec-627: convert to LOC-weighted integer; t-shirt labels derived in _current view from integer thresholds. Weights defined in config/agent/executor/capabilities.yaml."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+          - accepted_values:
+              values: [XS, S, M, L, XL]
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+      priority:
+        description: "Business urgency tier (Critical/High/Medium/Low)"
+        semantics: "Interim string label. Migration rec-628: convert to int 1-4 (1=Critical, 4=Low); ORDER BY priority ASC gives urgency sort. Labels derived in _current view via CASE. Source-informed defaults at portal write time."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+          - accepted_values:
+              values: [Critical, High, Medium, Low]
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+      status:
+        description: "Recommendation lifecycle state"
+        semantics: "Valid domain: open | closed | failed | declined | superseded. Pydantic Literal guard at write time (rec-594). SCD2 append-only: deletion requires setting status=superseded via ops_data_portal -- never direct JSONL edits."
+        tests:
+          - not_null:
+              enforced: true
+              write_time: true
+          - accepted_values:
+              values: [open, closed, failed, declined, superseded]
+              enforced: true
+      automatable:
+        description: "Whether this recommendation is within the executor's current capability boundary"
+        semantics: "Derived, never agent-set. Formula: (file NOT IN executor_boundary) AND (risk_score <= executor_maturity_ceiling). Both inputs from config/agent/executor/capabilities.yaml. Recomputed only when the maturity ceiling is raised."
+        tests:
+          - not_null:
+              enforced: true
+              write_time: true
+      file:
+        description: "Repo-relative path to the primary source file this recommendation targets"
+        semantics: "Must use forward slashes. Must not be absolute. Validated at write time by ops_data_portal._validate_file_path. Recs targeting files-to-be-created are valid -- no existence check applied."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+          - path_syntax:
+              write_time: true
+              enforced: true
+      context:
+        description: "Why this recommendation exists -- minimum 80 stripped characters"
+        semantics: "Must answer 'what problem does this solve and why now?'. Enforced at write time via ops_data_portal._validate_context_length (>= 80 stripped chars). Executor relies on this for planning; thin contexts produce low-quality execution."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+          - expression:
+              sql: "LENGTH(TRIM(context)) >= 80"
+              description: "context must be at least 80 stripped characters"
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+              python: "len(value.strip()) >= 80"
+      acceptance:
+        description: "Verifiable shell command that proves the recommendation is implemented"
+        semantics: "Must pass lint_acceptance_command() from scripts/executor/acceptance_lint.py. Prefer grep/pytest commands over prose descriptions. Banned patterns: python -c one-liners, absolute paths, line-number greps, fenced blocks."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+              write_time: true
+          - acceptance_lint:
+              write_time: true
+              enforced: true
+      risk:
+        description: "Implementation risk tier (low/medium/high)"
+        semantics: "Derived, never agent-set. Formula: R = (C x S) / M where C=max cyclomatic complexity of target file, S=effort scale factor, M=coverage% + 0.1 baseline. Thresholds: 0-5=low, 6-15=medium, 15+=high. Portal derives at write time from file + effort."
+        tests:
+          - not_null:
+              enforced: true
+              write_time: true
+          - accepted_values:
+              values: [low, medium, high]
+              enforced: true
+              write_time: true
+      created_timestamp:
+        description: "Timestamp when this recommendation was first filed"
+        semantics: "SCD2 invariant: identical across all versions of a given rec id; does not change on update. Enforced constraint: created_timestamp <= last_updated_timestamp."
+        tests:
+          - not_null:
+              enforced: true
+              exclude_before: '2026-05-01'
+          - expression:
+              sql: "created_timestamp <= last_updated_timestamp"
+              description: "created_timestamp must not be after last_updated_timestamp"
+              enforced: true
+              exclude_before: '2026-05-01'
+      last_updated_timestamp:
+        description: "Timestamp of the most recent write to this SCD2 row"
+        semantics: "Advances on every SCD2 append (open->closed, field update, etc.). Covered by table-level recency check (warn_after_hours: 24, error_after_hours: 168). Enforced constraint: created_timestamp <= last_updated_timestamp."
+
+  ops_decisions:
+    description: "Architectural decisions governing the ML trading system (SCD Type 2, append-only Iceberg). Portal-first invariant enforced from Phase 0+1 onward: all writes via scripts/ops_data_portal.py file_decision/update_decision. Source of truth post-Phase-3b; DECISIONS.md is decommissioned after Phase 3b."
+    view_suffix: _current
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    recency:
+      column: last_updated_timestamp
+      warn_after_hours: 24
+      error_after_hours: 168
+      enforced: false  # decisions written infrequently; staleness is expected
+    columns:
+      id:
+        description: "Canonical string decision key (dec-NNN format). Introduced Phase 0+1; backfilled for all historical rows before view rewrite."
+        semantics: "Primary deduplication key for ops_decisions_current view post-Phase-0+1. Must match ^dec-\\d+$. Dual-write invariant: int(id.split('-')[1]) == decision_id when both set."
+        tests:
+          - not_null:
+              enforced: false
+              phase4_session: ops-decisions-graduation-phase-5
+          - expression:
+              sql: "regexp_like(id, '^dec-[0-9]+$')"
+              description: "id must match ^dec-\\d+$ format"
+              enforced: false
+              phase4_session: ops-decisions-graduation-phase-5
+      decision_id:
+        description: "Legacy integer decision key (e.g. 50). Deprecated in Phase 6 after 14-day clean-data window post-Phase-5."
+        semantics: "Redundant projection of id: decision_id = int(id.split('-')[1]). Preserved through Phase 5 for reader compatibility. Phase 6 column drop depends on dual-write invariant holding for every row."
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      title:
+        description: "Human-readable title of the decision."
+        semantics: "Required field. Must be present for agent consumption. No minimum-length enforcement in Phase 0+1; Phase 2 ratification session may add length gate."
+        tests:
+          - not_null
+      status:
+        description: "Lifecycle state of the decision."
+        semantics: "Current free-text drift includes 'Decided', 'Superseded', 'Open', and others. Phase 2 narrows to enum. Phase 0+1 placeholder only."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [Decided, Superseded, Open]
+              enforced: false  # invalid values present; narrowed in Phase 2
+      problem:
+        description: "Problem statement that motivated the decision."
+        semantics: "Optional in Phase 0+1; may gain minimum-length enforcement in Phase 2."
+      decision_text:
+        description: "The decision made."
+        semantics: "Core narrative field. Optional in Phase 0+1."
+      context:
+        description: "Why this decision was made."
+        semantics: "Rationale and constraints. Optional in Phase 0+1; Phase 2 may enforce minimum length."
+      decided_date:
+        description: "Date the decision was ratified."
+        semantics: "Current drift includes empty string, 'April 2026', 'March 2026', ISO 8601 dates. Phase 2 normalises to ISO 8601 or null."
+      related_decisions:
+        description: "Legacy array of related decision IDs (integers)."
+        semantics: "Deprecated in Phase 6 after related_decisions_v2 is populated. Do not write new values to this field post-Phase-0+1."
+      related_decisions_v2:
+        description: "Array of related decision IDs in dec-NNN string format."
+        semantics: "Introduced Phase 0+1. Populated in Phase 4 from related_decisions integer values per the Phase 2 int-to-dec-NNN mapping table."
+      created_timestamp:
+        description: "SCD2 creation timestamp for this row version."
+        semantics: "Set by OpsWriter on first write. Not null post-Phase-0+1 for new rows. Historical rows may be null."
+      last_updated_timestamp:
+        description: "SCD2 ordering key. The row with the latest last_updated_timestamp for a given id is current."
+        semantics: "Advances on every SCD2 append (status change, field update, etc.). Partition key for ops_decisions_current view post-Phase-0+1."
+
+  ops_execution_plans:
+    description: "Executor plan records"
+    row_count:
+      min: 1
+      severity: warn  # may be empty if executor hasn't run recently
+    recency:
+      column: last_updated_timestamp
+      warn_after_hours: 48
+      error_after_hours: 168
+      enforced: false  # data stale beyond error threshold
+    columns:
+      plan_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      rec_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - relationships:
+              to_table: ops_recommendations
+              to_column: id
+              severity: warn  # SCD complicates this
+      branch:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      verification_tier:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [V1, V2, V3]
+              enforced: false  # no manifest yet; enroll after DQ remediation session
+
+  ops_session_log:
+    description: "Session log entries"
+    row_count:
+      min: 1
+      severity: warn
+    recency:
+      column: last_updated_timestamp
+      warn_after_hours: 48
+      error_after_hours: 168
+      enforced: false  # data stale beyond error threshold
+    columns:
+      session_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      session_type:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+
+  ops_priority_queue:
+    description: "Curator-generated priority rankings"
+    row_count:
+      min: 1
+      severity: warn
+    recency:
+      column: last_updated_timestamp
+      warn_after_hours: 36
+      error_after_hours: 72
+      enforced: false  # data stale beyond error threshold
+    columns:
+      queue_run_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      rank:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - expression:
+              sql: "rank >= 1"
+              description: "Rank must be positive"
+              enforced: false  # no manifest yet; enroll after DQ remediation session
+      rec_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - relationships:
+              to_table: ops_recommendations
+              to_column: id
+              severity: warn
+      mode:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [solo, compound]
+              enforced: false  # no manifest yet; enroll after DQ remediation session

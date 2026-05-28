@@ -1,0 +1,127 @@
+name: CI
+# Thin safety net: calls python -m scripts.validate (single source of truth for validation logic).
+# Agents validate locally via python -m scripts.validate before pushing.
+# To add a new check: add it to validate.py first, then it runs both locally and here.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-validate:
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 30
+    concurrency:
+      group: ci-runner
+      cancel-in-progress: false
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install fast-tier dependencies only
+      # --pre runs ruff, mypy, pytest --picked, pyyaml-backed validators.
+      # It does NOT need torch, CUDA, pyarrow, awswrangler, etc. Installing
+      # the full requirements.txt fills the self-hosted runner's disk
+      # (~3GB of torch+CUDA wheels). Pin versions matching requirements.txt.
+      run: |
+        python -m pip install --upgrade pip
+        pip install \
+          'ruff==0.15.9' \
+          'mypy>=1.5.0' \
+          'pytest>=7.4.0' \
+          'pytest-picked>=0.5.0' \
+          'pyyaml>=6.0' \
+          'pydantic>=2.0.0'
+
+    - name: Validate fast tier (ruff lint, ruff format, mypy, prompt checks)
+      env:
+        AWS_DEFAULT_REGION: eu-west-2
+      run: python -m scripts.validate --pre
+
+  main-validate:
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 60
+    concurrency:
+      group: ci-runner
+      cancel-in-progress: false
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)
+      env:
+        AWS_DEFAULT_REGION: eu-west-2
+      run: python -m scripts.validate
+
+  terraform-validate:
+    # Self-hosted runner (see Decision 68 and CLAUDE.md runbook).
+    # No concurrency: ci-runner here. Putting terraform-validate in the same
+    # group as pr-validate/main-validate causes GitHub to cancel one of them
+    # within a single workflow run. The self-hosted runner already serialises
+    # execution at the host level, so the plan's "share the runner" intent
+    # is preserved without GitHub-side concurrency.
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: cd terraform && terraform init -backend=false
+
+    - name: Terraform Validate
+      run: cd terraform && terraform validate
+
+    - name: Terraform Format Check
+      run: cd terraform && terraform fmt -check

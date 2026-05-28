@@ -1,0 +1,106 @@
+# Personal Environment Configuration
+# Use on: Personal computer for live trading with discovered formulas
+
+environment: personal
+
+# Company S3 Access (Read-Only)
+company:
+  s3_production_bucket: formulas-production
+  s3_staging_bucket: formulas-staging
+  s3_region: eu-west-2
+  aws_profile: company-aws-profile
+  formula_sync_interval_seconds: 300  # 5 minutes
+  formula_file_pattern: "*.jsonl"
+
+# PostgreSQL (Local Docker)
+postgres:
+  host: postgres  # Docker service name (use 'localhost' if running outside Docker)
+  port: 5432
+  database: trading
+  user: trading
+  # Password from environment variable: POSTGRES_PASSWORD
+  connection_pool_size: 10
+  connection_timeout_seconds: 30
+
+# Trading Configuration
+trading:
+  max_position_size: 1000.0
+  latency_threshold: 0.1  # 100ms
+  min_signal_threshold: 0.1
+  max_concurrent_trades: 10
+  risk_per_trade: 0.02  # 2% of capital
+
+# A/B Testing
+ab_testing:
+  enabled: true
+  test_duration_days: 14
+  traffic_split: 0.5  # 50/50 control vs test
+  min_trades_for_significance: 100
+  min_p_value: 0.05
+  min_sharpe_improvement: 0.1
+  evaluation_frequency_hours: 24
+  max_concurrent_tests: 10
+
+# Circuit Breakers
+circuit_breakers:
+  enabled: true
+  failure_threshold: 0.3  # Open if win rate < 30%
+  evaluation_window: 100  # Last 100 trades
+  recovery_wait_seconds: 3600  # 1 hour
+  max_consecutive_failures: 5
+
+# RAT Ensemble
+live:
+  memory_retrieval_top_k: 10
+  embedding_dim: 128
+  max_active_formulas: 50
+  min_trades_for_memory: 10
+  context_similarity_threshold: 0.7
+
+# Meta-Learner
+meta_learner:
+  use_gating_network: true
+  learning_rate: 0.001
+  hidden_dim: 64
+
+  # Auto-Weighting
+  weight_rebalance_frequency_hours: 24
+  weight_decay_rate: 0.1  # 10% per day for underperformers
+  min_allocation_weight: 0.01  # Below this, demote to staging
+  max_allocation_weight: 0.20  # Cap at 20% per formula
+  sharpe_threshold_for_decay: 0.3
+
+  # Performance Tracking
+  performance_window_days: 30
+  min_trades_for_weighting: 100
+
+# Monitoring
+monitoring:
+  export_metrics_to_cloudwatch: true
+  export_frequency_hours: 1
+  cloudwatch_namespace: "TradingSystem/Personal"
+
+  # Local Grafana
+  grafana_enabled: true
+  grafana_port: 3000
+
+  # Alerts
+  slack_webhook_url: ""  # Set via environment variable: SLACK_WEBHOOK_URL
+  alert_on_circuit_breaker: true
+  alert_on_ab_test_completion: true
+  alert_on_formula_promotion: true
+
+# Execution Engine
+execution:
+  async_enabled: true
+  latency_penalty_scale: 1.0
+  max_latency_ms: 200
+  queue_size: 1000
+
+# Logging
+logging:
+  level: INFO
+  format: json
+  log_trades: true
+  log_predictions: true
+  log_outcomes: true

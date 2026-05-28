@@ -1,0 +1,167 @@
+# DQ Decision Manifest: ops_decisions
+# Per-field root cause classification and enforcement readiness.
+# Protocol: docs/dq/DQ_REMEDIATION_METHODOLOGY.md
+#
+# human_decision values: pending | approved | deferred | declined
+# enforcement_ready values: READY_NOW | NEEDS_TEMPORAL_GATE | NEEDS_WRITE_FIX |
+#   NEEDS_DATA_CORRECTION | NEEDS_PROTOTYPE | REMOVE_TEST | NO_TEST_NEEDED
+
+table: ops_decisions
+description: Architectural decisions governing the ML trading system (SCD Type 2, n=37 current rows as of 2026-05-13)
+bootstrap_anchor: '2026-05-13'
+last_updated: '2026-05-13'
+decisions_session: 'ops-decisions-graduation-phase-0-1'
+
+# Pre-plan investigation DQ run: 2026-05-12
+# Result: row_count PASS; recency enforced: false; all column checks enforced: false
+# Historical rows: 37 in ops_decisions_current; 52 parsed from DECISIONS.md + DECISIONS_ARCHIVE.md
+
+fields:
+
+  id:
+    root_cause_class: B
+    human_decision: pending
+    enforcement_ready: NEEDS_TEMPORAL_GATE
+    phase4_session: ops-decisions-graduation-phase-5
+    notes: >
+      New column added in Phase 0+1. Backfilled for all 37 historical rows via
+      UPDATE SET id = 'dec-' || lpad(CAST(decision_id AS varchar), 3, '0').
+      Null rate post-backfill: 0. Phase 2 ratification session to approve
+      not_null and regex enforcement. Temporal gate with exclude_before 2026-05-13
+      appropriate once Phase 2 approves.
+    current_test: "not_null (enforced: false) + expression regexp_like(id, '^dec-[0-9]+$') (enforced: false)"
+    last_verdict: pending
+
+  decision_id:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: ops-decisions-graduation-phase-6
+    notes: >
+      Legacy integer key. Deprecated in Phase 6. Null rate: some historical rows
+      may have null decision_id if they predate integer allocation. Dual-write invariant
+      (int(id.split('-')[1]) == decision_id) enforced by Pydantic validator at write time
+      from Phase 0+1. Not worth adding a DQ check for a deprecated column.
+    current_test: "not_null (enforced: false)"
+    last_verdict: no test enforced
+
+  title:
+    root_cause_class: B
+    human_decision: pending
+    enforcement_ready: READY_NOW
+    phase4_session: ops-decisions-graduation-phase-5
+    notes: >
+      Required field. All 37 current rows have non-null title. Existing not_null
+      check (enforced: true) is appropriate. Phase 2 may add minimum-length enforcement
+      (e.g. >= 20 chars) matching the recommendations pattern.
+    current_test: "not_null (enforced: true)"
+    last_verdict: PASS
+
+  status:
+    root_cause_class: D
+    human_decision: pending
+    enforcement_ready: NEEDS_DATA_CORRECTION
+    phase4_session: ops-decisions-graduation-phase-4
+    notes: >
+      Current free-text drift: 'Decided', 'Decided -- March 2026',
+      'Agent-decided -- pending human review...', 'Empirical finding...',
+      'Accepted Risk', 'open', 'Superseded by Decision 37 (April 2026)', empty string.
+      Phase 2 ratification narrows to enum (Decided | Superseded | Open | Declined).
+      Free-text colour-commentary migrates to context field or new decision_notes field.
+      After Phase 2 approval, Phase 4 corrects historical data, then Phase 5 enforces.
+    current_test: "not_null (enforced: true) + accepted_values [Decided, Superseded, Open] (enforced: false)"
+    last_verdict: FAIL
+
+  problem:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: ops-decisions-graduation-phase-2
+    notes: >
+      Optional field. No check warranted in Phase 0+1. Phase 2 may add
+      minimum-length enforcement if ratification session decides it is required.
+    current_test: none
+    last_verdict: no test
+
+  decision_text:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: ops-decisions-graduation-phase-2
+    notes: >
+      Core narrative field. Optional in Phase 0+1. Phase 2 may enforce minimum
+      length (e.g. >= 80 chars) mirroring the recommendations context field pattern.
+    current_test: none
+    last_verdict: no test
+
+  context:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: ops-decisions-graduation-phase-2
+    notes: >
+      Rationale and constraints. Optional in Phase 0+1. Phase 2 may add
+      minimum-length gate. Not to be confused with the recommendations context
+      field (same name, different table, different enforcement target).
+    current_test: none
+    last_verdict: no test
+
+  decided_date:
+    root_cause_class: D
+    human_decision: pending
+    enforcement_ready: NEEDS_DATA_CORRECTION
+    phase4_session: ops-decisions-graduation-phase-4
+    notes: >
+      Format drift: empty string, 'April 2026', 'March 2026', '2026-04-23'.
+      Phase 2 normalises to ISO 8601 date string or null. Phase 4 corrects
+      historical values. Phase 5 enforces expression check (ISO 8601 regex).
+    current_test: none
+    last_verdict: no test
+
+  related_decisions:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: ops-decisions-graduation-phase-6
+    notes: >
+      Legacy array<int>. Superseded by related_decisions_v2 in Phase 4.
+      Deprecated in Phase 6. No new values to be written post-Phase-0+1.
+      No DQ check warranted for a deprecated column.
+    current_test: none
+    last_verdict: no test
+
+  related_decisions_v2:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: NEEDS_DATA_CORRECTION
+    phase4_session: ops-decisions-graduation-phase-4
+    notes: >
+      New column introduced Phase 0+1. Populated in Phase 4 from related_decisions
+      integer values per the Phase 2 int-to-dec-NNN mapping table. All rows null
+      until Phase 4. No check warranted until Phase 4 population is complete.
+    current_test: none
+    last_verdict: no test
+
+  created_timestamp:
+    root_cause_class: B
+    human_decision: pending
+    enforcement_ready: NEEDS_TEMPORAL_GATE
+    phase4_session: ops-decisions-graduation-phase-5
+    notes: >
+      Set by OpsWriter on first write. Historical rows may be null if written
+      before SCD2 migration. Temporal gate with exclude_before 2026-05-13
+      appropriate for new writes. Phase 2 to ratify enforcement strategy.
+    current_test: none
+    last_verdict: no test
+
+  last_updated_timestamp:
+    root_cause_class: A
+    human_decision: pending
+    enforcement_ready: READY_NOW
+    phase4_session: ops-decisions-graduation-phase-5
+    notes: >
+      SCD2 ordering key. Required for all rows. Covered by table-level recency
+      check (enforced: false in Phase 0+1 because decisions are written infrequently).
+      Phase 2 to ratify whether recency should be enforced or remain informational.
+    current_test: "recency (enforced: false)"
+    last_verdict: no enforced test

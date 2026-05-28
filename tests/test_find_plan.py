@@ -1,0 +1,134 @@
+"""Tests for scripts/find_plan.py -- plan file resolution logic."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "find_plan.py"
+_spec = importlib.util.spec_from_file_location("find_plan", _SCRIPT_PATH)
+_find_plan = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_find_plan)  # type: ignore[union-attr]
+sys.modules["find_plan"] = _find_plan
+
+find_plan_file = _find_plan.find_plan_file
+ROOT = _find_plan.ROOT
+
+
+def _mock_git(branch: str, returncode: int = 0) -> MagicMock:
+    result = MagicMock()
+    result.returncode = returncode
+    result.stdout = branch + "\n" if branch else ""
+    return result
+
+
+class TestFindPlanFile:
+    def test_agent_branch_returns_branch_specific_plan(self, tmp_path: Path) -> None:
+        """Branch agent/foo-bar -> finds PLAN-foo-bar.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan = tmp_path / "docs" / "plans" / "PLAN-foo-bar.md"
+        plan.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/foo-bar")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == plan
+
+    def test_agent_branch_no_branch_plan_falls_back_to_legacy(self, tmp_path: Path) -> None:
+        """Branch agent/foo-bar with no PLAN-foo-bar.md -> falls back to PLAN.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/foo-bar")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == legacy
+
+    def test_main_branch_falls_back_to_legacy_plan(self, tmp_path: Path) -> None:
+        """Branch main -> no slug extraction, falls back to PLAN.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("main")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == legacy
+
+    def test_no_plan_file_exists_returns_none(self, tmp_path: Path) -> None:
+        """Neither branch-specific nor legacy plan -> returns None."""
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/no-plan")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result is None
+
+    def test_git_failure_falls_back_to_legacy(self, tmp_path: Path) -> None:
+        """Git command fails -> falls back to PLAN.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("", returncode=1)),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == legacy
+
+    def test_detached_head_falls_back_to_legacy(self, tmp_path: Path) -> None:
+        """Detached HEAD (empty branch string) -> falls back to PLAN.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == legacy
+
+    def test_main_outputs_not_found_when_no_plan(self, tmp_path: Path, capsys) -> None:
+        """CLI: prints NOT_FOUND when no plan exists."""
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/no-plan")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            rc = _find_plan.main()
+
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out.strip() == "NOT_FOUND"
+
+    def test_main_outputs_path_when_plan_exists(self, tmp_path: Path, capsys) -> None:
+        """CLI: prints plan file path when plan exists."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan = tmp_path / "docs" / "plans" / "PLAN-my-feature.md"
+        plan.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/my-feature")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            rc = _find_plan.main()
+
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert str(plan) in captured.out.strip()

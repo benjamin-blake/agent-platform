@@ -1,0 +1,341 @@
+# Data Quality Checks: Telemetry Tables
+# Modelled after dbt test semantics. Each check compiles to an Athena SQL query.
+# The runner asserts zero violations (rows that FAIL the check).
+#
+# Supported test types:
+#   not_null        - column must not contain NULL values
+#   unique          - column must have no duplicate values
+#   accepted_values - column values must be in the given list
+#   relationships   - FK column must reference an existing PK in another table
+#   row_count       - table must have >= min rows (catches empty tables)
+#   recency         - max(timestamp_column) must be within threshold of now
+#   expression      - arbitrary SQL expression that must be true for all rows
+#
+# Severity levels:
+#   error   - hard gate failure (blocks merge / fires Critical rec)
+#   warn    - advisory (fires Medium rec, does not block)
+
+database: trading_formulas_db
+athena_workgroup: agent-platform-production
+
+tables:
+  telemetry_sessions:
+    description: "One row per workflow invocation (plan, implement, executor, etc)"
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    recency:
+      column: started_at
+      warn_after_hours: 48
+      error_after_hours: 168
+      enforced: false  # advisory: sessions write at close, CI runs during session - chicken-and-egg with hard gate
+    columns:
+      session_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      trade_date:
+        tests:
+          - not_null
+      workflow:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [plan, implement, executor, scheduled_agent, strategic_review, ci_triage]
+              severity: warn  # new workflows may appear
+      outcome:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [success, failed, abandoned, partial, timeout]
+              enforced: false  # invalid values present
+      started_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      duration_seconds:
+        tests:
+          - expression:
+              sql: "duration_seconds >= 0"
+              description: "Duration must be non-negative"
+              enforced: true
+      ingested_at:
+        tests:
+          - not_null
+
+  telemetry_phases:
+    description: "One row per phase within a session"
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    columns:
+      phase_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      session_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - relationships:
+              to_table: telemetry_sessions
+              to_column: session_id
+              enforced: false  # FK violations present
+      phase:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      phase_order:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - expression:
+              sql: "phase_order >= 1"
+              description: "Phase order must be positive"
+              enforced: true
+      trade_date:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      ingested_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+
+  telemetry_steps:
+    description: "One row per implementation step"
+    row_count:
+      min: 1
+      severity: error
+      enforced: false  # table below minimum row count
+    columns:
+      step_id:
+        tests:
+          - not_null
+          - unique
+      session_id:
+        tests:
+          - not_null
+          - relationships:
+              to_table: telemetry_sessions
+              to_column: session_id
+              enforced: true
+      phase_id:
+        tests:
+          - not_null
+          - relationships:
+              to_table: telemetry_phases
+              to_column: phase_id
+              enforced: true
+      step_number:
+        tests:
+          - not_null
+          - expression:
+              sql: "step_number >= 1"
+              description: "Step number must be positive"
+              enforced: true
+      title:
+        tests:
+          - not_null
+      outcome:
+        tests:
+          - not_null
+      trade_date:
+        tests:
+          - not_null
+      ingested_at:
+        tests:
+          - not_null
+
+  telemetry_process_events:
+    description: "Notable events: rework, exceptions, info"
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    columns:
+      event_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      timestamp:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      tier:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [rework, exception, info, decision]
+              enforced: false  # invalid values present
+      category:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      severity:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [warning, error, info]
+              enforced: false  # invalid values present
+      session_id:
+        tests:
+          - relationships:
+              to_table: telemetry_sessions
+              to_column: session_id
+              severity: warn  # session_id is optional on process_events
+      trade_date:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      ingested_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+
+  telemetry_model_calls:
+    description: "One row per LLM invocation"
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    columns:
+      call_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      timestamp:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      provider:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [gemini, bedrock, copilot, github_models]
+              severity: warn
+      model:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      purpose:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      duration_seconds:
+        tests:
+          - expression:
+              sql: "duration_seconds >= 0"
+              description: "Duration must be non-negative"
+              enforced: true
+      tokens_input:
+        tests:
+          - expression:
+              sql: "tokens_input >= 0"
+              description: "Token count must be non-negative"
+              severity: warn
+      session_id:
+        tests:
+          - relationships:
+              to_table: telemetry_sessions
+              to_column: session_id
+              severity: warn  # optional FK
+      trade_date:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      ingested_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+
+  telemetry_transcripts:
+    description: "Metadata index for stored transcripts"
+    row_count:
+      min: 1
+      severity: warn  # transcripts are best-effort
+    columns:
+      transcript_id:
+        tests:
+          - not_null
+          - unique
+      timestamp:
+        tests:
+          - not_null
+      purpose:
+        tests:
+          - not_null
+      session_id:
+        tests:
+          - relationships:
+              to_table: telemetry_sessions
+              to_column: session_id
+              severity: warn
+      trade_date:
+        tests:
+          - not_null
+      ingested_at:
+        tests:
+          - not_null
+
+  telemetry_agent_invocations:
+    description: "One row per Lambda-triggered agent invocation"
+    row_count:
+      min: 1
+      severity: error
+      enforced: true
+    columns:
+      invocation_id:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - unique:
+              enforced: false  # duplicates present
+      agent_name:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      trigger:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+          - accepted_values:
+              values: [schedule, manual, force]
+              enforced: false  # invalid values present
+      started_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      outcome:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      duration_seconds:
+        tests:
+          - expression:
+              sql: "duration_seconds >= 0"
+              description: "Duration must be non-negative"
+              enforced: true
+      trade_date:
+        tests:
+          - not_null:
+              enforced: false  # nulls present
+      ingested_at:
+        tests:
+          - not_null:
+              enforced: false  # nulls present

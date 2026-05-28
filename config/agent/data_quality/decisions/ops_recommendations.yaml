@@ -1,0 +1,568 @@
+# DQ Decision Manifest: ops_recommendations
+# Per-field root cause classification and enforcement readiness.
+# Protocol: docs/dq/DQ_REMEDIATION_METHODOLOGY.md
+# Briefing:  docs/dq/ops-recommendations-remediation-briefing.md
+#
+# human_decision values: pending | approved | deferred | declined
+# enforcement_ready values: READY_NOW | NEEDS_TEMPORAL_GATE | NEEDS_WRITE_FIX |
+#   NEEDS_DATA_CORRECTION | NEEDS_PROTOTYPE | REMOVE_TEST | NO_TEST_NEEDED
+
+table: ops_recommendations
+description: Recommendation lifecycle records (SCD Type 2, n=630 local cache as of 2026-05-06)
+bootstrap_anchor: '2026-05-01'
+last_updated: '2026-05-12'
+decisions_session: '2026-05-06'
+
+# Pre-plan investigation DQ run: 2026-05-06T13:54Z
+# Result: 11 FAIL + 1 WARN + 1 ERROR + 2 PASS (16 checks total)
+# Note: latest dq-latest.json (14:16Z) shows 16 ERROR -- Athena was unreachable.
+# Null rates and invalid value counts sourced from local JSONL cache (n=630).
+
+fields:
+
+  # --------------------------------------------------------------------------
+  # Tested fields (covered by ops.yaml checks)
+  # --------------------------------------------------------------------------
+
+  id:
+    root_cause_class: B
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      not_null enforced with exclude_before 2026-05-01 temporal gate. Format check via
+      expression: id RLIKE '^rec-[0-9]+$' (enforced, exclude_before 2026-05-01) -- rejects
+      dec-XXX and empty-string IDs post-enforcement anchor. Uniqueness enforced at the
+      _current view level only (not the base table; SCD2 legitimately produces multiple rows
+      per ID). The 1 empty-string open record (title='Two-tier validation architecture...')
+      is a bootstrap artifact -- left as-is, ages out via the exclude_before gate.
+    enforcement_ready: NEEDS_TEMPORAL_GATE
+    phase4_session: wave-5-deferred
+    notes: >
+      Null rate 0.2% (~1-2 records). Bootstrap artifact: a small number of very early
+      records were written before the id field was required. The write path now always
+      sets id via DynamoDB allocation. Temporal gate with exclude_before 2026-05-01 would
+      scope the check to post-enforcement records only.
+    current_test: "not_null (enforced: false)"
+    last_verdict: FAIL
+
+  date:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-05-07'
+    enforcement_ready: REMOVE_TEST
+    phase4_session: complete
+    notes: >
+      The `date` column was removed from the Iceberg schema as part of Decision 56
+      (SCD2 simplification, April 2026). The not_null check in ops.yaml references a
+      column that no longer exists. The DQ runner returns ERROR (not FAIL) for this check.
+      Action: delete the `date` column section from ops_recommendations in ops.yaml.
+      No data change needed.
+    current_test: "not_null (enforced: false)"
+    last_verdict: ERROR
+
+  title:
+    root_cause_class: B
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      not_null enforced with exclude_before 2026-05-01 temporal gate. Minimum 10 characters
+      enforced at write time in ops_data_portal -- prevents stub titles ("fix bug", "test")
+      that are useless as executor planning input. Duplicate check: unique severity warn on
+      _current view only -- hard enforcement rejected because legitimate near-duplicate
+      titles exist (e.g. "Add test coverage for X" across different modules). The 2 null
+      bootstrap records resolve via the exclude_before gate.
+    enforcement_ready: READY_NOW
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Null rate 0.3% (~2 records). Bootstrap artifact: same cohort as id/source/effort/
+      priority. These appear to be dec-XXX records (ops_decisions entries written to the
+      wrong table during early migration). Temporal gate with exclude_before 2026-05-01
+      is the remediation path. write_time: true added to not_null in dq-write-enforcement-unification.
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01, write_time: true)"
+    last_verdict: PASS
+
+  source:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Source is a harness-injected agent_type identifier -- agents must never set it
+      directly. AGENT_TYPE is a first-class system primitive to be enforced uniformly
+      across all agent invocation paths (Lambda dispatcher, Claude Code scheduled agents,
+      hooks, manual portal calls). Forward vision: source is a lineage key analytically
+      equivalent to session_id, intended to join ops_recommendations to telemetry tables
+      on agent type in future cross-table queries.
+
+      Implementation steps: (1) Create config/agent/data_quality/source_registry.yaml as the
+      authoritative agent-type taxonomy. Each entry carries the canonical kebab-case
+      identifier, analytical description, signal interpretation, and added_date. This
+      registry is the write-time enforcement anchor -- ops_data_portal validates source
+      against it and hard-fails if the agent type is not registered. Human-initiated
+      portal calls use source=manual as a fallback. (2) Add a CI check to validate.py
+      that scans all agent entry points (Lambda handlers, scheduled agent configs, Claude
+      Code agent definitions) and verifies each sets AGENT_TYPE from a registered value.
+      A new agent that does not register its type must fail CI before reaching production.
+      (3) Drop the accepted_values DQ check entirely -- validation is at write time in
+      the portal, not at DQ run time. (4) Keep not_null enforced as a harness health
+      signal: source null means context injection failed on some invocation path. (5)
+      Correct rec-553 and rec-564 (source='Autonomous Postflight Cleanup') via
+      ops_data_portal to 'autonomous-postflight-cleanup' and register
+      autonomous-postflight-cleanup in the source registry. (6) The 35 bootstrap
+      empty-string records resolve automatically via the status deletion decision.
+    enforcement_ready: write_fix_deployed
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Two distinct issues. (1) Null/empty-string rate 5.6% (~35 records) -- Class B
+      bootstrap artifact for the same pre-enforcement cohort as effort/priority. (2) The
+      accepted_values list in ops.yaml (executor-supervision, code-review, planning,
+      brainstorm, scheduled_verification, cron-review) is missing 11+ legitimate source
+      identifiers in active use: executor-postmortem (41), cli-migration-analysis (27),
+      telemetry-audit (15), executor-gap-analysis (11), architectural-review (10),
+      implement-agent (5), cc-scheduled-agent-test (3), manual (2), workflow-audit (1),
+      tech-debt (1), delegate-investigation (1), infra-recommendation-executor (1).
+      These are Class A config mismatches -- valid data rejected by a stale list. Also
+      2 records with "Autonomous Postflight Cleanup" (spaces + capitalisation) are Class D
+      (format violation). The accepted_values check has severity: warn -- it produces WARN
+      not FAIL. write_time: true applied to not_null in dq-write-enforcement-unification;
+      source validated against registry at portal write time (validate_source()).
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01, write_time: true)"
+    last_verdict: PASS
+
+  effort:
+    root_cause_class: B
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Interim: accepted_values (XS/S/M/L/XL) and not_null enforced with exclude_before
+      2026-05-01 temporal gate. The 35 empty-string bootstrap records resolve via the gate
+      and the status deletion. Schema migration rec-627 (Medium/L): convert effort to int
+      storing weighted LOC -- effort = sum(LOC(file) x file_type_weight). Weights:
+      .py/.ts/.js=1.0, .tf=0.5, .yaml/.json=0.3, .md/.txt=0.05 -- defined in
+      config/agent/executor/capabilities.yaml. Documentation recs score near-zero via the weight
+      coefficient without requiring separate doc-detection logic. T-shirt labels derived in
+      _current view from thresholds 0-10=XS, 11-50=S, 51-150=M, 151-500=L, 500+=XL. Risk
+      formula simplifies to S = effort/100 after migration -- no mapping table needed.
+    enforcement_ready: READY_NOW
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Null/empty-string rate 5.6% (~35 records). Same bootstrap cohort as source/priority.
+      For non-null records, values are valid (XS/S/M/L/XL). The accepted_values check
+      (enforced: true) may also fail if empty strings count as invalid values. Temporal
+      gate with exclude_before 2026-05-01 resolves both the not_null and accepted_values
+      violations for this cohort. write_time: true added to both not_null and accepted_values
+      in dq-write-enforcement-unification.
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01, write_time: true) + accepted_values (enforced: true, write_time: true)"
+    last_verdict: PASS
+
+  priority:
+    root_cause_class: B
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Interim: accepted_values (Critical/High/Medium/Low) and not_null enforced with
+      exclude_before 2026-05-01 temporal gate. The 35 empty-string bootstrap records
+      resolve via the gate. Schema migration rec-628 (Medium/M): convert priority to int
+      1-4 (1=Critical, 2=High, 3=Medium, 4=Low). 4-point scale preserved -- wider integer
+      ranges create false precision for a business urgency judgment. Human-readable labels
+      derived in _current view via CASE expression. Source-informed defaults at portal write
+      time (executor-postmortem -> High; executor-supervision -> Medium) with agent override
+      capability. Enables ORDER BY priority ASC and arithmetic in curator scheduling formula.
+    enforcement_ready: READY_NOW
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Null/empty-string rate 5.6% (~35 records). Same bootstrap cohort as source/effort.
+      For non-null records, values are valid (Critical/High/Medium/Low). Same temporal
+      gate strategy as effort. write_time: true added to both not_null and accepted_values
+      in dq-write-enforcement-unification.
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01, write_time: true) + accepted_values (enforced: true, write_time: true)"
+    last_verdict: PASS
+
+  status:
+    root_cause_class: D
+    human_decision: approved
+    decided_date: '2026-05-06'
+    decided_action: >
+      Delete all 31 dec-XXX records (22 Decided + 9 Unknown) and rec-001/rec-002 (stub
+      records) from ops_recommendations via ops_data_portal. No migration to ops_decisions
+      -- schema incompatibility (int vs string PKs; missing narrative fields) and low
+      consequence of the content make deletion the correct path. Spot-check
+      docs/DECISIONS.md before deletion to confirm any still-relevant content is captured
+      there. After deletion, enable accepted_values and not_null checks once rec-594
+      (Pydantic Literal for status) is merged. Zero dependency references confirmed --
+      deletion is safe. write_time: true added to not_null in dq-write-enforcement-unification;
+      write-path guard via _load_write_time_validators ensures new records always have valid status.
+    enforcement_ready: write_fix_deployed
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Two invalid value groups: (1) 'Decided' x22 -- ops_decisions records (dec-XXX IDs)
+      that were written to the ops_recommendations table during early migration. Domain
+      pollution: 'Decided' is a valid ops_decisions status but not a valid recommendation
+      status. (2) 'Unknown' x9 -- migration artifacts from before the status field was
+      normalised. Also 2 empty-string records (~Class B). Valid statuses: open, closed,
+      failed, declined, superseded. Data correction: use ops_data_portal to correct the
+      22 Decided and 9 Unknown records. Write-path guard: rec-594 (Pydantic Literal for
+      status field) prevents recurrence. After correction and rec-594 is implemented,
+      enforce the accepted_values check.
+    current_test: "not_null (enforced: true, write_time: true) + accepted_values (enforced: true)"
+    last_verdict: PASS
+    rca_note: >
+      Null-status rows were rec-608 (hollow, bypass via append_jsonl pre-PR-304) and ghost row
+      (id=NULL, compact() artifact pre-PR-323). Cleaned by cleanup_ops_rec_orphans.py.
+      Class E: post-deploy cleanup not executed in prior sessions.
+
+  automatable:
+    root_cause_class: C
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Live Athena query (2026-05-07) confirmed 44 current records with empty automatable
+      (935 current records total in Iceberg; JSONL cache of 630 was stale/partial).
+      Automatable is deterministic and must never be agent-assigned. Formula:
+      automatable = (file NOT IN executor_boundary) AND (risk_score(rec) <=
+      executor_maturity_ceiling). risk_score uses the same R = (C x S) / M formula
+      approved for the risk field. Both inputs come from config/agent/executor/capabilities.yaml
+      (canonical machine-readable source of truth for boundary pattern list, current
+      ceiling value, and ceiling raise history). DECISIONS.md is the narrative record of
+      why the ceiling changed. Portal derives automatable at write time from the formula;
+      agents never set it directly. Recomputation of open recs is triggered only when
+      the maturity ceiling is raised -- not on a periodic schedule. Implementation steps:
+      (1) Create config/agent/executor/capabilities.yaml with current ceiling, boundary
+      patterns, and raise history. (2) Update ops_data_portal to derive automatable from
+      the formula using this config. (3) Backfill the 44 null records by running the
+      formula over their current file + effort values. (4) Enforce not_null with temporal
+      gate anchored to the backfill date once exclude_before is supported in the runner.
+    enforcement_ready: write_fix_deployed
+    phase4_session: complete
+    resolved_date: '2026-05-10'
+    resolution_pr: '#319'
+    notes: >
+      Null rate 6.2% (~39 records, manifest estimate; live Athena confirms 44 as of
+      2026-05-07). Write path gap: early recommendations were filed via direct JSONL
+      writes or brainstorm sessions that did not include the automatable field.
+      The ops_data_portal now requires automatable for new records. Fix: identify records
+      missing automatable and patch them via ops_data_portal. Enforce for new records via
+      temporal gate after the backfill.
+    current_test: "not_null (enforced: true, write_time: true)"
+    last_verdict: PASS
+
+  risk:
+    root_cause_class: D
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Implement a deterministic proxy formula in ops_data_portal to compute and set risk
+      at rec-filing time. Formula: R = (C x S) / M where C = max cyclomatic complexity of
+      current target file (radon cc --max), S = effort-to-LOC scale (XS=0.1, S=0.5, M=1.0,
+      L=3.0, XL=5.0), M = existing coverage % of target file (coverage report) + 0.1
+      baseline. Thresholds: 0-5 = low, 6-15 = medium, 15+ = high. Agents never set risk
+      directly -- portal derives it from file + effort inputs. Run formula as a backfill
+      over all null/invalid-domain risk records (unclassified x28, wrong-case x5, free-text
+      x3) using their current file + effort values -- no per-record human review. The 36
+      empty-string records are the dec-XXX bootstrap cohort and resolve automatically via
+      the status deletion. Also implement the full formula (actual LOC diff, actual CC of
+      new code, actual changed-line coverage) as a separate executor PR quality gate --
+      this does not affect the stored risk field. After backfill and portal fix, enforce
+      accepted_values check.
+    enforcement_ready: write_fix_deployed
+    phase4_session: dq-write-enforcement-unification
+    resolved_date: '2026-05-11'
+    resolution_pr: '#322'
+    notes: >
+      Two categories of violation. (1) Invalid domain values: 'unclassified' x28 (wrong
+      domain -- predates the low/medium/high enum), 'Low' x1, 'Medium' x1, 'High' x1
+      (wrong case), plus 3 free-text strings that leaked from code review findings
+      (e.g., 'Duplicate try/except json.loads pattern...'). These are Class D. (2)
+      Null/empty-string rate 5.7% (~36 records) -- Class B/C overlap (some are bootstrap,
+      some are write path gaps). Remediation path: data correction for the domain/case
+      violations + Pydantic validation at write sites. Temporal gate for the null cohort
+      after the write-path fix is deployed. write_time: true added to not_null and
+      accepted_values in dq-write-enforcement-unification; _derive_computed_fields()
+      ensures risk is always derived from formula at write time.
+    current_test: "not_null (enforced: true, write_time: true) + accepted_values (enforced: true, write_time: true)"
+    last_verdict: PASS
+
+  last_updated_timestamp:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Recency check already enforced and passing -- no remediation needed. Add SCD2
+      consistency expression check mirroring created_timestamp decision:
+      created_timestamp <= last_updated_timestamp (enforced, no temporal gate -- this
+      invariant must hold for all rows regardless of age). Optional: last_updated_timestamp
+      <= CURRENT_TIMESTAMP sanity check. No changes to the existing recency check
+      (warn_after_hours: 24, error_after_hours: 168, enforced: true) -- it is correct.
+    enforcement_ready: READY_NOW
+    phase4_session: complete
+    notes: >
+      Covered by the recency check (warn_after_hours: 24, error_after_hours: 168,
+      enforced: true). The recency check PASSED in the pre-plan DQ run (2026-05-06T13:54Z),
+      confirming the table is being written to recently. The check is already enforced.
+      No remediation needed -- this field is in good standing. The ERROR verdict in
+      dq-latest.json (14:16Z) reflects Athena being unreachable, not a data problem.
+    current_test: "recency (enforced: true)"
+    last_verdict: PASS
+
+  # --------------------------------------------------------------------------
+  # Untested candidate fields (in Terraform schema; no ops.yaml check yet)
+  # --------------------------------------------------------------------------
+
+  created_timestamp:
+    root_cause_class: B
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Add not_null check to ops.yaml with exclude_before 2026-05-01 temporal gate once
+      runner supports exclude_before. No data backfill -- the 23 null records are pre-SCD2
+      migration bootstrap artifacts covered by the old date string column. SCD2 consistency
+      check via expression: created_timestamp <= last_updated_timestamp (enforced, no
+      temporal gate needed -- this invariant must hold for all rows regardless of age).
+      Optional belt-and-suspenders: created_timestamp <= CURRENT_TIMESTAMP sanity check.
+      No MAX(created_timestamp) assertion -- creation ordering is not guaranteed to be
+      strictly sequential (batch imports and backfills are legitimate).
+    enforcement_ready: NEEDS_TEMPORAL_GATE
+    phase4_session: wave-5-deferred
+    notes: >
+      Null rate 3.7% (~23 records). Bootstrap artifact from the SCD2 schema migration
+      (Decision 56, April 2026). Records written before the migration used a `date` string
+      column for creation date; the migration mapped these to created_timestamp but some
+      early records were missed or predated the migration. A not_null check with
+      exclude_before 2026-05-01 covers post-migration records. Expression check
+      created_timestamp <= last_updated_timestamp enforced for post-anchor records; was
+      failing on the NULL-id ghost row (id=NULL, compact() artifact pre-PR-323) until
+      that row was purged by cleanup_ops_rec_orphans.py.
+    current_test: "not_null (enforced: true, exclude_before: 2026-05-01) + expression created_timestamp <= last_updated_timestamp (enforced: true, exclude_before: 2026-05-01)"
+    last_verdict: PASS
+
+  file:
+    root_cause_class: C
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Validate file as a syntactically correct relative path at write time in
+      ops_data_portal (no absolute paths, no backslashes as separators) -- do NOT check
+      file existence, as recs targeting files to be created are valid. DQ check: not_null
+      with exclude_before 2026-05-01 temporal gate. Backfill ~36 open recs missing file
+      via manual inspection. Closed recs left as-is.
+    enforcement_ready: GRADUATED
+    phase4_session: complete
+    resolved_date: '2026-05-11'
+    resolution_pr: '#320'
+    notes: >
+      Null rate 5.7% (~36 records). Write path gap: the file field is required by the
+      recommendation schema but older recs filed via brainstorm or manual sessions did not
+      always set it. The ops_data_portal validates file for new records. Remediation:
+      backfill missing file values for open recs via ops_data_portal, then enforce with
+      temporal gate. A not_null check can be added to ops.yaml once the write-path fix
+      is deployed.
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01)"
+    last_verdict: PASS
+
+  context:
+    root_cause_class: C
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Enforce 80-character minimum at write time in ops_data_portal AND as a DQ
+      expression check (LENGTH(TRIM(context)) >= 80) with exclude_before 2026-05-01
+      temporal gate. 80 characters is one complete sentence -- sufficient to answer
+      "why does this rec exist" without being burdensome; prevents trivial entries
+      like "fix bug" or "add test". Backfill ~36 open recs with missing/thin context
+      via manual review. Closed recs left as-is.
+    enforcement_ready: GRADUATED
+    phase4_session: complete
+    resolved_date: '2026-05-11'
+    resolution_pr: '#320'
+    notes: >
+      Null rate 5.7% (~36 records). Same cohort and root cause as file. The context field
+      is required in spirit but was not validated at write time in early sessions.
+      Same remediation path as file.
+    current_test: "not_null (enforced: true) + expression LENGTH(TRIM(context))>=80 (enforced: true, exclude_before 2026-05-01)"
+    last_verdict: PASS
+
+  acceptance:
+    root_cause_class: C
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Split validation into two tiers. Tier 1 (write time, portal): call
+      lint_acceptance_command() in file_rec() to reject banned patterns immediately
+      (python -c one-liners, absolute paths, line-number greps, fenced blocks, bad bash
+      syntax). These rules are always correct regardless of file state. Tier 2 (execution
+      time, executor): validate_acceptance_feasibility() remains at execution time only --
+      file existence is context-dependent on what the implementation creates. DQ check:
+      not_null with exclude_before 2026-05-01 temporal gate only -- no structural
+      acceptance validation in the DQ runner, that is the portal's job. Backfill ~36
+      open recs missing acceptance via manual authoring. Closed recs left as-is.
+      Pre-requisite within same implementation scope: rec-626 (High/S, open) -- 78 records
+      carry prose instead of shell commands; step_runner.run_acceptance() silently returns
+      True for these (backwards-compat path), creating false verification confidence.
+      Category 1 (open + automatable=true: rec-108, rec-095, rec-130, rec-549) must have
+      acceptance converted to grep/pytest commands before the executor targets them.
+    enforcement_ready: GRADUATED
+    phase4_session: complete
+    resolved_date: '2026-05-11'
+    resolution_pr: '#320'
+    notes: >
+      Null rate 5.7% (~36 records). Same cohort and root cause as file and context. The
+      acceptance command is required by the recommendation schema but was omitted in early
+      brainstorm/manual recs. Same remediation path.
+    current_test: "not_null (enforced: true, exclude_before 2026-05-01)"
+    last_verdict: PASS
+
+  resolution:
+    root_cause_class: A
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: >
+      Resolution semantics depend on the outcome of the execution fields architectural
+      review (see deferred execution_result/execution_date/execution_branch/execution_pr_url/
+      execution_steps). If execution state is normalised to ops_execution_plans/telemetry,
+      the definition of "why a rec was resolved" changes and may affect what resolution
+      is expected to contain. Revisit in a dedicated architectural session on execution
+      state normalisation.
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: deferred
+    notes: >
+      Null rate 86.5% (~545 records). Resolution is ONLY meaningful for declined,
+      superseded, or failed recommendations -- approximately 3% of the corpus. A universal
+      not_null check would fail for 97% of records correctly. A conditional check
+      (resolution is not null WHERE status IN declined, superseded, failed) would be
+      meaningful but the DQ runner does not currently support conditional checks.
+      No universal not_null check should be added. Flag as future work if conditional
+      check support is added to the runner.
+    current_test: none
+    last_verdict: no test
+
+  execution_result:
+    root_cause_class: C
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: >
+      Pending architectural decision on whether execution state fields belong in
+      ops_recommendations or should be normalised to ops_execution_plans/telemetry.
+      The rec_id joining key provides a normalised alternative to denormalising executor
+      output into the recs table. Duplicated state creates two sources of truth that can
+      drift (rec says success, execution plan says failed). Revisit in a dedicated session
+      on execution state normalisation alongside resolution, execution_date,
+      execution_branch, execution_pr_url, and execution_steps.
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: wave-4-deferred
+    notes: >
+      Null rate 62.5% (~394 records). Intentionally null for all open recommendations
+      and all manually-implemented recommendations (execution_result='manual' is set only
+      when the executor ran). A universal not_null check would fail for all open recs.
+      A conditional check (execution_result is not null WHERE status IN closed, failed)
+      would be meaningful but requires conditional check support in the runner. No
+      universal check should be added.
+    current_test: none
+    last_verdict: no test
+
+  execution_date:
+    root_cause_class: C
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: "See execution_result deferred_reason -- same architectural review."
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: wave-4-deferred
+    notes: >
+      Null rate 64.0% (~403 records). Same pattern as execution_result -- set by the
+      executor on close only. No universal check appropriate.
+    current_test: none
+    last_verdict: no test
+
+  execution_branch:
+    root_cause_class: C
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: "See execution_result deferred_reason -- same architectural review."
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: wave-4-deferred
+    notes: >
+      Null rate 66.8% (~421 records). Same pattern as execution_result. No universal
+      check appropriate.
+    current_test: none
+    last_verdict: no test
+
+  execution_pr_url:
+    root_cause_class: C
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: "See execution_result deferred_reason -- same architectural review."
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: wave-4-deferred
+    notes: >
+      Null rate 82.2% (~518 records). Same pattern as execution_result. No universal
+      check appropriate.
+    current_test: none
+    last_verdict: no test
+
+  execution_steps:
+    root_cause_class: C
+    human_decision: deferred
+    decided_date: '2026-05-07'
+    deferred_reason: "See execution_result deferred_reason -- same architectural review."
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: wave-4-deferred
+    notes: >
+      Null rate 92.7% (~584 records). Same pattern as execution_result. No universal
+      check appropriate.
+    current_test: none
+    last_verdict: no test
+
+  dependencies:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Nullable array<string> -- no not_null check (null means no dependencies, which is
+      the valid common case for most recs). When non-null, each element must match
+      ^rec-[0-9]+$ via array expression check:
+      CARDINALITY(FILTER(dependencies, x -> NOT REGEXP_LIKE(x, '^rec-[0-9]+$'))) = 0
+      (enforced). Referential integrity: relationships check to_table=ops_recommendations
+      severity=warn (array RI; blocked on rec-609 resolution -- array<string> returned as
+      string from Athena breaks element iteration). Both checks blocked on rec-609 and
+      exclude_before runner support. No data backfill needed -- no known invalid values
+      in current records.
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: deferred-rec-609
+    notes: >
+      Truly optional array field (array<string>). Most recommendations have no
+      inter-rec dependencies. A not_null check would be semantically wrong -- null
+      dependencies means no dependencies, which is the expected state. No check needed.
+    current_test: none
+    last_verdict: no test
+
+  tags:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-05-07'
+    decided_action: >
+      Tags are an analytical dimension requiring a canonical allowed list, not a free-form
+      array. Create config/agent/data_quality/tag_registry.yaml as the authoritative tag taxonomy.
+      Each entry carries the canonical kebab-case value, description of what it categorises,
+      and added_date. Portal validates each element of the tags array against the registry
+      at write time -- unregistered tag triggers a warning that prompts the agent to
+      register or use an existing tag (softer governance than source, which is a CI gate,
+      because tag vocabulary grows faster than agent types). DQ runner: expression check
+      validating all elements match ^[a-z][a-z0-9-]*$ (format backstop, blocked on rec-609
+      array<string> fix). Registry is the semantic gate; regex is the structural gate.
+      Future: auto-tagging by agents via content analysis is compatible with the registry
+      pattern -- auto-generated tags still require registry membership.
+    enforcement_ready: NO_TEST_NEEDED
+    phase4_session: deferred-rec-609
+    notes: >
+      Truly optional array field (array<string>). Categorisation tags are not required
+      by any workflow. A not_null check would be semantically wrong. No check needed.
+    current_test: none
+    last_verdict: no test

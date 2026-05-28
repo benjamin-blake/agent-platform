@@ -1,0 +1,80 @@
+name: CI RCA
+# Triggered on every CI failure. Invokes the ci-rca agent headlessly to diagnose
+# the root cause and file a recommendation via ops_data_portal.
+# Decision 72: RCA-as-Plan-Source for CI Merge Gate Failures.
+
+on:
+  workflow_run:
+    workflows: ["CI", "Main Canary"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'GitHub Actions run ID of the failed CI run to diagnose'
+        required: true
+        type: string
+
+# Only run when CI failed -- skip success and cancellation.
+# Loop guard: this workflow is NOT listed in the workflows: filter above,
+# so a ci-rca failure cannot trigger another ci-rca run.
+jobs:
+  rca:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout at failing commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Activate venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet -e ".[dev]" 2>/dev/null || true
+
+      # TODO(bedrock): When this runner migrates to GitHub-hosted (target: 90-day window),
+      # replace this step and the `claude -p` invocation below with a Python entrypoint
+      # that calls bedrock-runtime via the runner's IAM role (boto3). This eliminates the
+      # Claude Code CLI dependency, the CLAUDE_CODE_OAUTH_TOKEN rotation requirement, and the
+      # npm permission complexity (EACCES on global npm install without sudo) entirely.
+      - name: Install Claude Code CLI
+        run: |
+          if ! command -v claude &> /dev/null; then
+            sudo npm install -g @anthropic-ai/claude-code@2.1.148 --omit=dev --omit=optional && sudo npm cache clean --force
+          fi
+          claude --version
+
+      - name: Run ci-rca agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          AWS_PROFILE: company-aws-profile
+        run: |
+          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
+          claude -p \
+            --output-format json \
+            --max-turns 30 \
+            "Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}" \
+            > /tmp/ci-rca-output.json 2>&1 || true
+          cat /tmp/ci-rca-output.json
+
+      - name: Comment on originating PR
+        if: ${{ github.event.workflow_run.pull_requests[0] != null && github.event.workflow_run.pull_requests[0].number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUM="${{ github.event.workflow_run.pull_requests[0].number }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          # Extract rec ID from agent output if present
+          REC_ID=$(grep -oE '"rec-[0-9]+"' /tmp/ci-rca-output.json | head -1 | tr -d '"' || echo "unknown")
+          gh pr comment "${PR_NUM}" \
+            --body "ci-rca agent diagnosed CI run ${RUN_ID} and filed ${REC_ID}. Review in the next /plan session under 'CI RCA Recs (open)'."
