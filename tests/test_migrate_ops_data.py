@@ -143,6 +143,7 @@ def _run(
     *,
     dry_run=False,
     force_skip_existing=False,
+    source_workgroup="company-aws-workgroup",
     raw_recs=None,
     raw_decs=None,
     expected_recs=2,
@@ -182,6 +183,7 @@ def _run(
         code = mod.migrate(
             profile_source="company-aws-profile",
             profile_dest="agent_platform",
+            source_workgroup=source_workgroup,
             dry_run=dry_run,
             force_skip_existing=force_skip_existing,
         )
@@ -284,3 +286,50 @@ def test_unregistered_source_aborts(tmp_path: Path) -> None:
 
     data = json.loads(summary.read_text(encoding="utf-8"))
     assert "totally-unregistered-source" in data["unregistered_sources"]
+
+
+def test_source_workgroup_threaded(tmp_path: Path) -> None:
+    """--source-workgroup reaches the SOURCE reads; dest count reads keep the dest workgroup."""
+    base = _FakeAthena(_RAW_RECS, _RAW_DECS, 2, 1)
+    seen: list[tuple[str, str]] = []
+
+    def recording(session, query, workgroup):
+        seen.append((query.strip(), workgroup))
+        return base(session, query, workgroup)
+
+    file_rec = MagicMock(side_effect=lambda fields, **kw: f"rec-{kw['_migration_int_id']:03d}")
+    file_decision = MagicMock(side_effect=lambda fields, **kw: f"dec-{kw['_migration_int_id']:03d}")
+    with ExitStack() as stack:
+        stack.enter_context(patch("boto3.Session", return_value=MagicMock()))
+        stack.enter_context(patch("scripts.ops_writer.DATABASE", "agent_platform"))
+        stack.enter_context(patch("scripts.ops_writer.ATHENA_WORKGROUP", "agent-platform-production"))
+        stack.enter_context(patch("scripts.ops_writer.OpsWriter.write", MagicMock()))
+        stack.enter_context(patch("scripts.migrate_ops_data._athena_rows", recording))
+        stack.enter_context(patch("scripts.migrate_ops_data._read_counter", side_effect=lambda s, n: 99999))
+        stack.enter_context(patch("scripts.ops_data_portal.file_rec", file_rec))
+        stack.enter_context(patch("scripts.ops_data_portal.file_decision", file_decision))
+        stack.enter_context(patch("scripts.ops_data_portal.sync", MagicMock(return_value={})))
+        stack.enter_context(patch("scripts.sync_recommendations.reseed_recommendations_counter"))
+        stack.enter_context(patch("scripts.sync_recommendations.reseed_decisions_counter"))
+        stack.enter_context(patch("scripts.migrate_ops_data._SUMMARY_PATH", tmp_path / "s.json"))
+        code = mod.migrate(
+            profile_source="company-aws-profile",
+            profile_dest="agent_platform",
+            source_workgroup="real-source-wg",
+            dry_run=False,
+            force_skip_existing=False,
+        )
+    assert code == 0
+    source_wgs = [wg for q, wg in seen if q.startswith("SELECT * FROM trading_formulas_db")]
+    assert source_wgs and all(wg == "real-source-wg" for wg in source_wgs)
+    dest_wgs = [wg for q, wg in seen if "count(*) AS n" in q]
+    assert dest_wgs and all(wg == "agent-platform-production" for wg in dest_wgs)
+
+
+def test_main_threads_source_workgroup() -> None:
+    """main() forwards --source-workgroup (placeholder default and explicit override) to migrate()."""
+    with patch("scripts.migrate_ops_data.migrate", return_value=0) as m:
+        assert mod.main(["--dry-run"]) == 0
+        assert m.call_args.kwargs["source_workgroup"] == mod._DEFAULT_SOURCE_WORKGROUP
+        assert mod.main(["--source-workgroup", "wg-override"]) == 0
+        assert m.call_args.kwargs["source_workgroup"] == "wg-override"

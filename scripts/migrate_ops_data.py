@@ -38,13 +38,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SUMMARY_PATH = _REPO_ROOT / "logs" / "debug" / "migration-summary.json"
 _AWS_REGION = "eu-west-2"
 
-# SOURCE (work account) Athena coordinates. These are the repo's public-safe placeholder
-# resource names; the migration legitimately reads the work warehouse through them.
+# SOURCE (work account) Athena coordinates. _SOURCE_DATABASE is a public-safe work resource
+# name kept committed; the migration legitimately reads the work warehouse through it.
 _SOURCE_DATABASE = "trading_formulas_db"
-_SOURCE_WORKGROUP = "agent-platform-production"
 
-# The real source profile is supplied at runtime via --profile-source. This default is the
-# repo's redaction placeholder ONLY and will not resolve to a live profile on its own.
+# The real source workgroup and profile are supplied at runtime via --source-workgroup /
+# --profile-source. These defaults are redaction placeholders ONLY and will not resolve to a
+# live workgroup/profile on their own -- the real source workgroup is a scrubbed identifier
+# deliberately kept out of this (public) repository.
+_DEFAULT_SOURCE_WORKGROUP = "company-aws-workgroup"
 _DEFAULT_SOURCE_PROFILE = "company-aws-profile"
 _DEFAULT_DEST_PROFILE = "agent_platform"
 
@@ -348,6 +350,7 @@ def _verify_migration(
 def migrate(
     profile_source: str,
     profile_dest: str,
+    source_workgroup: str,
     dry_run: bool,
     force_skip_existing: bool,
 ) -> int:
@@ -391,13 +394,13 @@ def migrate(
     raw_recs = _athena_rows(
         source_session,
         f"SELECT * FROM {_SOURCE_DATABASE}.ops_recommendations_current",
-        _SOURCE_WORKGROUP,
+        source_workgroup,
     )
     logger.info("Reading source decisions from %s.ops_decisions_current ...", _SOURCE_DATABASE)
     raw_decs = _athena_rows(
         source_session,
         f"SELECT * FROM {_SOURCE_DATABASE}.ops_decisions_current",
-        _SOURCE_WORKGROUP,
+        source_workgroup,
     )
     summary["source_recs"] = len(raw_recs)
     summary["source_decisions"] = len(raw_decs)
@@ -525,6 +528,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="AWS profile for the SOURCE (work) account read. Pass the real work profile at runtime.",
     )
     parser.add_argument(
+        "--source-workgroup",
+        default=_DEFAULT_SOURCE_WORKGROUP,
+        help="Athena workgroup for the SOURCE (work) account read. Pass the real work workgroup at runtime.",
+    )
+    parser.add_argument(
         "--profile-dest", default=_DEFAULT_DEST_PROFILE, help="AWS profile for the DEST (personal) account writes."
     )
     parser.add_argument(
@@ -539,6 +547,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return migrate(
             profile_source=args.profile_source,
             profile_dest=args.profile_dest,
+            source_workgroup=args.source_workgroup,
             dry_run=args.dry_run,
             force_skip_existing=args.force_skip_existing,
         )
