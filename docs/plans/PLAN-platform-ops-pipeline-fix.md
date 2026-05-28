@@ -33,7 +33,7 @@ Phase 1: Core Infrastructure (complete) / Phase Platform (parallel)
 | `scripts/sync_recommendations.py` | Modify | (rec-504) Add `OpsWriter().write('ops_recommendations', entry)` per merged/resolved entry in `merge_from_s3()`. |
 | `tests/test_sync_recommendations.py` | Modify | (rec-504) Mock `OpsWriter` in `merge_from_s3` tests. |
 | `scripts/session_preflight.py` | Modify | (rec-505) Add `s3_log_bucket_set` check: warn when `S3_LOG_BUCKET` unset and SSO active. Add field to report dict. |
-| `docs/GETTING_STARTED.md` | Modify | (rec-505) Document `export S3_LOG_BUCKET=bblake-platform-agent-logs` as required shell profile entry. |
+| `docs/GETTING_STARTED.md` | Modify | (rec-505) Document `export S3_LOG_BUCKET=agent-platform-agent-logs` as required shell profile entry. |
 | `scripts/backfill_ops_tables.py` | Create | (rec-506) One-shot backfill: reads local JSONL, calls `OpsWriter().write()` per entry, `compact()` per table, runs 5 Athena COUNT(*) queries, prints row counts. |
 | `tests/test_backfill_ops_tables.py` | Create | (rec-506) Unit tests: table mapping, OpsWriter calls, --help, --profile arg. |
 | `.gitignore` | Modify | (rec-507) Add operational JSONL files to stop git tracking. |
@@ -105,7 +105,7 @@ for manual post-deploy invocation. This is used for smoke testing in Step 23.
 ## Context
 
 - **Decision 50** (`docs/DECISIONS.md`): Iceberg append-only ops data store architecture is settled -- this plan implements the remaining gaps to make it work end-to-end.
-- **`docs/contracts/ops-data-store.md`**: Authoritative schema for all 5 tables. Staging prefix layout: `staging/{table_name}/trade_date=YYYY-MM-DD/batch-{uuid}.jsonl` in bucket `bblake-platform-agent-logs`.
+- **`docs/contracts/ops-data-store.md`**: Authoritative schema for all 5 tables. Staging prefix layout: `staging/{table_name}/trade_date=YYYY-MM-DD/batch-{uuid}.jsonl` in bucket `agent-platform-agent-logs`.
 - **Current IAM gap**: `scheduled_agent_lambda` policy has only S3 (Get/Put/List), SecretsManager, CloudWatch. Missing: Athena actions, Glue catalog reads, `s3:DeleteObject` (needed by `OpsWriter.compact()` to remove processed staging files).
 - **`plan.py` gap**: `save_plan()` writes `PLANS_JSONL` via `open()` at line 251. No write-through to OpsWriter. Already imports from `scripts.executor.jsonl_store`. Add import for OpsWriter.
 - **`sync_recommendations.py` gap**: `merge_from_s3()` overwrites local recs file via `open()`, bypassing OpsWriter entirely.
@@ -265,14 +265,14 @@ s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 if sso_status == "ok" and not s3_log_bucket_set:
     print(
         "WARNING: S3_LOG_BUCKET is unset -- OpsWriter write-through disabled. "
-        "To enable: export S3_LOG_BUCKET=bblake-platform-agent-logs",
+        "To enable: export S3_LOG_BUCKET=agent-platform-agent-logs",
         file=sys.stderr,
     )
 ```
 
 Add `"s3_log_bucket_set": s3_log_bucket_set` to the `report` dict.
 
-In `docs/GETTING_STARTED.md`, find the shell environment or AWS configuration section and add: `export S3_LOG_BUCKET=bblake-platform-agent-logs  # enables OpsWriter write-through to Iceberg`.
+In `docs/GETTING_STARTED.md`, find the shell environment or AWS configuration section and add: `export S3_LOG_BUCKET=agent-platform-agent-logs  # enables OpsWriter write-through to Iceberg`.
 
 Verify: `grep -q 's3_log_bucket_set' scripts/session_preflight.py` exits 0.
 **Close rec-505** using the Rec-Closing Procedure.
@@ -281,11 +281,11 @@ Verify: `grep -q 's3_log_bucket_set' scripts/session_preflight.py` exits 0.
 
 Create a new script:
 
-- `argparse` CLI: `--profile` (sets `os.environ['AWS_PROFILE']`), `--bucket` (overrides `S3_LOG_BUCKET`, default `bblake-platform-agent-logs`).
+- `argparse` CLI: `--profile` (sets `os.environ['AWS_PROFILE']`), `--bucket` (overrides `S3_LOG_BUCKET`, default `agent-platform-agent-logs`).
 - Table-to-file mapping dict: `ops_recommendations` -> `logs/.recommendations-log.jsonl`, `ops_execution_plans` -> `logs/.execution-plans.jsonl`, `ops_session_log` -> `logs/.session-telemetry.jsonl`, `ops_decisions` -> `logs/.decisions-index.jsonl`, `ops_priority_queue` -> None.
 - For each table with a source file: read JSONL entries (skip blank lines, `#` comments, `{"_schema` lines), call `OpsWriter().write(table, entry)` per entry, then `OpsWriter().compact(table)`, print row counts.
 - For `ops_priority_queue`: just call `compact()` to flush existing staging.
-- After all tables: run five Athena `SELECT COUNT(*) FROM trading_formulas_db.{table}` queries via `subprocess.run` with `aws athena start-query-execution` (workgroup `agent-platform-production`, output `s3://bblake-platform-agent-logs/athena-results/`). Poll with `aws athena get-query-execution` until SUCCEEDED. Use `encoding='utf-8', errors='replace'` on all subprocess with `text=True`. Print each table's row count.
+- After all tables: run five Athena `SELECT COUNT(*) FROM trading_formulas_db.{table}` queries via `subprocess.run` with `aws athena start-query-execution` (workgroup `agent-platform-production`, output `s3://agent-platform-agent-logs/athena-results/`). Poll with `aws athena get-query-execution` until SUCCEEDED. Use `encoding='utf-8', errors='replace'` on all subprocess with `text=True`. Print each table's row count.
 - Exit non-zero if any of the four non-curator tables returns 0 rows.
 - Print `"Backfill complete"` on success.
 - Type hints required.
@@ -384,7 +384,7 @@ If response contains `FunctionError`, check CloudWatch logs: `aws logs tail /aws
 ### Step 24: Run backfill + Athena verification (iterative deploy-test-fix loop)
 
 ```bash
-export S3_LOG_BUCKET=bblake-platform-agent-logs
+export S3_LOG_BUCKET=agent-platform-agent-logs
 python -m scripts.backfill_ops_tables --profile company-aws-profile
 ```
 

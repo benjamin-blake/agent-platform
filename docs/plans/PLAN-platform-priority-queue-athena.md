@@ -62,7 +62,7 @@ The priority queue is a Lambda-produced artifact — it has no meaningful local 
 **Detail:**
 - Query: `SELECT id, date, title, source, effort, priority, status, automatable, risk, file, context, acceptance, dependencies, tags FROM ops_recommendations_current WHERE status = 'open'`
 - Database: `trading_formulas_db`, workgroup: `agent-platform-production`
-- Athena output location: `s3://bblake-platform-agent-logs/athena-results/`
+- Athena output location: `s3://agent-platform-agent-logs/athena-results/`
 - Poll for completion with 2s intervals, up to 60s timeout
 - On failure: log warning, fall back to existing `read_jsonl()` path (graceful degradation per ops_writer contract)
 - Return: `list[dict]` matching the same shape the model currently receives

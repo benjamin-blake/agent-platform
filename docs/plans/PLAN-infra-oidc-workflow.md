@@ -171,4 +171,4 @@ terraform destroy -target=aws_iam_role.github_actions_agent_logs
 
 21. **Trigger `doc-freshness` agent as smoke test.** Go to Actions → Scheduled Agents → Run workflow → Agent: `doc-freshness` → Run. Verify the "Configure AWS credentials" step shows "Assuming role arn:aws:iam::REDACTED-ACCOUNT-ID:role/..." and completes successfully.
 
-22. **Verify S3 output exists.** Run `aws s3 ls s3://bblake-platform-agent-logs/ --region eu-west-2 --recursive` and confirm a new `.jsonl` file from the smoke test run.
+22. **Verify S3 output exists.** Run `aws s3 ls s3://agent-platform-agent-logs/ --region eu-west-2 --recursive` and confirm a new `.jsonl` file from the smoke test run.

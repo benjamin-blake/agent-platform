@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -24,13 +23,15 @@ try:
 except ImportError:
     _BOTO3_AVAILABLE = False
 
+from scripts.aws_profile import resolve_aws_profile
+
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LOCAL_RECS_FILE = _REPO_ROOT / "logs" / ".recommendations-log.jsonl"
 _DYNAMODB_TABLE = "agent-platform-counters"
 _AWS_REGION = "eu-west-2"
-_SSO_PROFILE = "company-aws-profile"
+_SSO_PROFILE = "agent_platform"
 
 
 def _read_local_recs() -> list[dict]:
@@ -61,7 +62,7 @@ def next_id(counter_name: str, profile: str | None = None) -> str | int:
     """
     if not _BOTO3_AVAILABLE:
         raise RuntimeError("boto3 not available; cannot allocate ID from DynamoDB")
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
     response = ddb.update_item(
@@ -92,7 +93,7 @@ def reseed_decisions_counter(max_id: int, profile: str | None = None) -> None:
     """
     if not _BOTO3_AVAILABLE:
         raise RuntimeError("boto3 not available; cannot reseed DynamoDB counter")
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
     try:
@@ -106,6 +107,41 @@ def reseed_decisions_counter(max_id: int, profile: str | None = None) -> None:
         logger.info("reseed_decisions_counter: advanced counter to %d", max_id)
     except ddb.exceptions.ConditionalCheckFailedException:
         logger.info("reseed_decisions_counter: counter already >= %d (no-op)", max_id)
+
+
+def reseed_recommendations_counter(max_id: int, profile: str | None = None) -> None:
+    """Monotonically advance the DynamoDB recommendations counter to max_id.
+
+    Uses a ConditionExpression so the counter never decreases (calling with a
+    lower max_id is a no-op via ConditionalCheckFailedException). Safe to call
+    multiple times with the same max_id (idempotent).
+
+    Symmetric with reseed_decisions_counter. Required by the Phase C migration
+    (Step 13c HARD gate, Decision 50): after preserving historical rec-NNN ids
+    via _migration_int_id, the counter MUST be raised above the migrated max so a
+    future _next_id cannot re-issue a migrated id and SCD2-merge two distinct recs.
+    seed_counters' unconditional put_item could LOWER the counter -- never use it
+    to re-seed.
+
+    Raises:
+        RuntimeError: if boto3 is unavailable or DynamoDB is unreachable.
+    """
+    if not _BOTO3_AVAILABLE:
+        raise RuntimeError("boto3 not available; cannot reseed DynamoDB counter")
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
+    session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
+    ddb = session.client("dynamodb", region_name=_AWS_REGION)
+    try:
+        ddb.update_item(
+            TableName=_DYNAMODB_TABLE,
+            Key={"counter_name": {"S": "recommendations"}},
+            UpdateExpression="SET current_value = :max",
+            ConditionExpression="attribute_not_exists(current_value) OR current_value < :max",
+            ExpressionAttributeValues={":max": {"N": str(max_id)}},
+        )
+        logger.info("reseed_recommendations_counter: advanced counter to %d", max_id)
+    except ddb.exceptions.ConditionalCheckFailedException:
+        logger.info("reseed_recommendations_counter: counter already >= %d (no-op)", max_id)
 
 
 def seed_counters(profile: str | None = None) -> dict:
@@ -151,7 +187,7 @@ def seed_counters(profile: str | None = None) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not parse DECISIONS.md for seed: %s", exc)
 
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
 

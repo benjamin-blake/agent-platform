@@ -53,6 +53,22 @@ def _clear_executor_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _clear_aws_credential_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip ambient AWS credential-signal env vars so profile-resolution tests stay hermetic.
+
+    scripts.aws_profile.resolve_aws_profile returns None (boto3 default chain) when
+    AWS_ACCESS_KEY_ID or AWS_LAMBDA_FUNCTION_NAME is present. The OIDC main-validate runner
+    exports AWS_ACCESS_KEY_ID into the job env before pytest, which would flip named-profile
+    assertions to None and fail them only on CI. Clearing these keeps unit tests deterministic
+    across local and CI; integration tests opt out.
+    """
+    if "integration" in [m.name for m in request.node.own_markers]:
+        return
+    for var in ("AWS_ACCESS_KEY_ID", "AWS_LAMBDA_FUNCTION_NAME"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_plans_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect PLANS_JSONL to a per-test temp file.
 

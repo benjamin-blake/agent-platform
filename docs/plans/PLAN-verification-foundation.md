@@ -50,7 +50,7 @@ None.
 |---|-------|--------|---------|-------------------|--------|
 | 1 | [pre-deploy] | Run unit tests | `.venv/Scripts/python.exe -m pytest tests/test_verifiers/` | All tests pass | Debug mock logic or verifier code |
 | 2 | [pre-deploy] | Run validation | `$env:PYTHONPATH='.'; .venv/Scripts/python.exe scripts/validate.py --integration` | Includes 'Verification Harness' section | Check `validate.py` hook |
-| 3 | [pre-deploy] | Test bucket fix | `.venv/Scripts/python.exe scripts/ops_writer.py --test-bucket` | Returns 'bblake-platform-agent-logs' | Add CLI test arg to `ops_writer.py` |
+| 3 | [pre-deploy] | Test bucket fix | `.venv/Scripts/python.exe scripts/ops_writer.py --test-bucket` | Returns 'agent-platform-agent-logs' | Add CLI test arg to `ops_writer.py` |
 | 4 | [pre-deploy] | Test gate | `.venv/Scripts/python.exe scripts/executor/postflight.py --test-verifiers` | Blocks on FAIL, warns on SKIPPED | Add CLI test arg to `postflight.py` |
 | 5 | [post-deploy] | Smoke test Lambda | `.venv/Scripts/python.exe -m scripts.run_scheduled_agent --smoke-test rec-curator` | Output shows successful S3 write-through | Check `ops_writer.py` and Lambda logs |
 

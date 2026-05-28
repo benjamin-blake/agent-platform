@@ -29,43 +29,25 @@ _LOGS_DIR = _REPO_ROOT / "logs"
 _OUTBOX_DIR = _LOGS_DIR / ".ops-outbox"
 
 # Maps Iceberg table name -> local JSONL file (relative to _LOGS_DIR)
+# Public-migration (2026-05-28): telemetry_* tables + ops_session_log / ops_execution_plans are
+# NOT migrated to the personal account. Their entries are removed so sync_ops.pull does not issue
+# TABLE_NOT_FOUND queries on every sync. Re-add if telemetry is reprovisioned.
 _TABLE_TO_LOCAL: dict[str, str] = {
     "ops_recommendations": ".recommendations-log.jsonl",
-    "ops_execution_plans": ".execution-plans.jsonl",
-    "ops_session_log": ".session-telemetry.jsonl",
     "ops_decisions": ".decisions-index.jsonl",
     "ops_priority_queue": "priority-queue/.priority-queue.jsonl",
-    "telemetry_sessions": ".telemetry-sessions.jsonl",
-    "telemetry_phases": ".telemetry-phases.jsonl",
-    "telemetry_steps": ".telemetry-steps.jsonl",
-    "telemetry_process_events": ".telemetry-process-events.jsonl",
-    "telemetry_model_calls": ".telemetry-model-calls.jsonl",
-    "telemetry_transcripts": ".telemetry-transcripts.jsonl",
-    "telemetry_agent_invocations": ".telemetry-agent-invocations.jsonl",
 }
 
 # Maps Iceberg table name -> Athena view/table to query
 _TABLE_TO_VIEW: dict[str, str] = {
     "ops_recommendations": "ops_recommendations_current",
-    "ops_execution_plans": "ops_execution_plans",
-    "ops_session_log": "ops_session_log",
     "ops_decisions": "ops_decisions_current",
     "ops_priority_queue": "ops_priority_queue_current",
-    # telemetry current-state views (deduplication via ROW_NUMBER)
-    "telemetry_sessions": "telemetry_sessions_current",
-    "telemetry_phases": "telemetry_phases_current",
-    "telemetry_steps": "telemetry_steps_current",
-    # events/calls/transcripts are append-only with no _current view (never updated)
-    "telemetry_process_events": "telemetry_process_events",
-    "telemetry_model_calls": "telemetry_model_calls",
-    "telemetry_transcripts": "telemetry_transcripts",
-    # agent invocations have a _current view (findings processor may update same invocation_id)
-    "telemetry_agent_invocations": "telemetry_agent_invocations_current",
 }
 
-_DATABASE = "trading_formulas_db"
+_DATABASE = "agent_platform"
 _WORKGROUP = "agent-platform-production"
-_SSO_PROFILE = "company-aws-profile"
+_SSO_PROFILE = "agent_platform"
 _SYNC_REJECTS_LOG = _LOGS_DIR / "debug" / "dq-sync-rejects.jsonl"
 _DECISIONS_SYNC_REJECTS_LOG = _LOGS_DIR / "debug" / "decisions-sync-rejects.jsonl"
 _REQUIRED_REC_FIELDS = ["title", "source", "effort", "priority"]

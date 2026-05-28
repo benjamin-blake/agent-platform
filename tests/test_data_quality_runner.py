@@ -342,7 +342,7 @@ def test_run_checks_profile_default_env(monkeypatch):
 
 
 def test_run_checks_profile_hard_default(monkeypatch):
-    """Defaults to company-aws-profile when no env vars or arg are set."""
+    """Defaults to agent_platform when no env vars or arg are set."""
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     with patch("boto3.Session") as mock_session:
@@ -350,7 +350,7 @@ def test_run_checks_profile_hard_default(monkeypatch):
         with patch("scripts.data_quality_runner._execute_check") as mock_exec:
             mock_exec.return_value = CheckResult(Check("t", "c", "type", "sql", "desc"), "PASS")
             run_checks([Check("t", "c", "type", "sql", "desc")], "wg", "db")
-    mock_session.assert_called_once_with(profile_name="company-aws-profile")
+    mock_session.assert_called_once_with(profile_name="agent_platform")
 
 
 def test_print_results_json(capsys):

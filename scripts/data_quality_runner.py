@@ -6,19 +6,19 @@ VIOLATION rows. Zero violations = PASS. Any violations = FAIL (or WARN).
 
 Usage:
     # Run all checks for all tables
-    AWS_PROFILE=company-aws-profile python -m scripts.data_quality_runner
+    AWS_PROFILE=agent_platform python -m scripts.data_quality_runner
 
     # Run checks for a single table
-    AWS_PROFILE=company-aws-profile python -m scripts.data_quality_runner --table telemetry_sessions
+    AWS_PROFILE=agent_platform python -m scripts.data_quality_runner --table telemetry_sessions
 
     # Run checks from a specific YAML file
-    AWS_PROFILE=company-aws-profile python -m scripts.data_quality_runner --file config/agent/data_quality/telemetry.yaml
+    AWS_PROFILE=agent_platform python -m scripts.data_quality_runner --file config/agent/data_quality/telemetry.yaml
 
     # Dry-run: print compiled SQL without executing
     python -m scripts.data_quality_runner --dry-run
 
     # JSON output for programmatic consumption
-    AWS_PROFILE=company-aws-profile python -m scripts.data_quality_runner --json
+    AWS_PROFILE=agent_platform python -m scripts.data_quality_runner --json
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def load_tombstones(path: Path = _TOMBSTONES_PATH) -> list[dict]:
 def build_tombstone_checks(
     tombstones: list[dict],
     table_filter: str | None = None,
-    database: str = "trading_formulas_db",
+    database: str = "agent_platform",
 ) -> list[Check]:
     """Generate tombstone_resurrection Check objects from the tombstones manifest."""
     checks: list[Check] = []
@@ -171,7 +171,7 @@ def load_checks(
     with open(yaml_path, encoding="utf-8") as f:
         spec = yaml.safe_load(f)
 
-    database = spec.get("database", "trading_formulas_db")
+    database = spec.get("database", "agent_platform")
     workgroup = spec.get("athena_workgroup", "agent-platform-production")
     metadata = {"database": database, "athena_workgroup": workgroup}
 
@@ -559,7 +559,9 @@ def run_checks(
             duration_seconds=0.0,
         )
 
-    _profile = profile_name or os.environ.get("AWS_PROFILE") or os.environ.get("AWS_DEFAULT_PROFILE") or "company-aws-profile"
+    from scripts.aws_profile import resolve_aws_profile
+
+    _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
     session = boto3.Session(profile_name=_profile)
     athena = session.client("athena", region_name="eu-west-2")
 
@@ -696,7 +698,7 @@ def main() -> int:
         "--profile",
         default=None,
         metavar="PROFILE",
-        help="AWS SSO profile name (default: AWS_PROFILE env, then company-aws-profile)",
+        help="AWS SSO profile name (default: AWS_PROFILE env, then agent_platform)",
     )
     args = parser.parse_args()
 
@@ -719,7 +721,7 @@ def main() -> int:
     for yf in yaml_files:
         checks, metadata = load_checks(yf, table_filter=args.table)
         file_wg = metadata.get("athena_workgroup", "agent-platform-production")
-        file_db = metadata.get("database", "trading_formulas_db")
+        file_db = metadata.get("database", "agent_platform")
         if workgroup is None:
             workgroup, database = file_wg, file_db
         elif file_wg != workgroup or file_db != database:
@@ -736,7 +738,7 @@ def main() -> int:
         all_checks.extend(checks)
 
     workgroup = workgroup or "agent-platform-production"
-    database = database or "trading_formulas_db"
+    database = database or "agent_platform"
 
     # Add tombstone resurrection checks
     tombstones = load_tombstones()

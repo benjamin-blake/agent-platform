@@ -361,12 +361,12 @@ The aggregate session table (`ops_sessions`, renamed from
   the aggregates have real data to shape against.
 - Probably does not need its own write Lambda. Likely paths:
   - Materialised view computed from turn events via scheduled
-    `bblake-platform-maintenance` invocation.
+    `agent-platform-maintenance` invocation.
   - Or: thin `open_session` / `close_session` verbs on an existing
     Lambda, used only by hooks, with row content derived from turn
     events at close time.
   - Or: pure derived view, no write path -- aggregate query runs at
-    read time inside the `bblake-platform-query` Lambda.
+    read time inside the `agent-platform-query` Lambda.
 
 The decision is deferred to a follow-on REPORT-ONLY plan once the
 event-tier has accumulated 3-6 months of data and usage patterns are
@@ -375,7 +375,7 @@ visible.
 ## 10. Write Lambda design: `agent-platform-log-turn`
 
 Naming follows the `agent-platform-{purpose}` convention (chosen over
-`bblake-platform-{purpose}` so the open-source-ready surface does not
+`agent-platform-{purpose}` so the open-source-ready surface does not
 hardcode the maintainer's name).
 
 | Aspect | Decision |
@@ -389,12 +389,12 @@ hardcode the maintainer's name).
 | Write ordering | Metadata row first, transcript row second. Orphan-metadata degrades gracefully (debug returns "no transcript"); orphan-transcript impossible by ordering. |
 | Multi-table atomicity | None. Iceberg does not natively transact across tables. DQ alarm-not-gate check (per CD.12) surfaces orphans at sync time -- check named explicitly in Section 12 CD.NN.d. |
 | Orphan-metadata operator playbook | When DQ check surfaces a metadata row with no matching transcript: (1) check Lambda CloudWatch error log for the corresponding `turn_id` and the transcript-write call; (2) if the Lambda fully failed mid-write (rare), append a placeholder transcript row with `user_input=assistant_output='[UNRECOVERABLE: write-mid-failure]'` and `tool_calls=[]` so downstream joins succeed; (3) file a `source=ops_rca` rec if pattern recurs (>5/week) per Decision 55. The "no transcript available" debug response is the *graceful* path, not the *fix* path. |
-| File-count / compaction | Stop hook produces one parquet per turn (the natural hook write granularity). At 100 turns/session x 30 sessions/month = 3000 events/month divided across `day()` partitions, transcript-table file count grows linearly. Iceberg compaction is mandatory; owner is the existing `bblake-platform-maintenance` Lambda (T1.4 / EventBridge-scheduled). Compaction policy: target ~256MB per file; rewrite runs daily during low-activity window. Compaction lag SLO (TBD in T1.9 SLO ratification): file count per partition <1000 at any time. |
+| File-count / compaction | Stop hook produces one parquet per turn (the natural hook write granularity). At 100 turns/session x 30 sessions/month = 3000 events/month divided across `day()` partitions, transcript-table file count grows linearly. Iceberg compaction is mandatory; owner is the existing `agent-platform-maintenance` Lambda (T1.4 / EventBridge-scheduled). Compaction policy: target ~256MB per file; rewrite runs daily during low-activity window. Compaction lag SLO (TBD in T1.9 SLO ratification): file count per partition <1000 at any time. |
 | Transcript kill switch | Lambda env var `STORE_TRANSCRIPTS=true\|false`. Defaults true. Allows cost-emergency disable without changing caller code or schema. |
 | Class B contract | Ratified per CD.25 at `docs/contracts/lambda-agent-platform-log-turn.yaml` (follow-on plan). |
 
 Read verbs are NOT in this Lambda. They extend the future
-`bblake-platform-query` Lambda (T0.7c / T1.2, naming per the existing
+`agent-platform-query` Lambda (T0.7c / T1.2, naming per the existing
 platform roadmap; whether the `bblake-` prefix is itself renamed for
 open-source readiness is out of scope for this audit and deferred to
 a separate roadmap-renaming item) with:
@@ -560,7 +560,7 @@ conditions are met:
    filed against the event tier requesting an aggregate-shape that the
    raw event table cannot answer cheaply (signal: query patterns
    demand structure)
-3. Either `bblake-platform-query` Lambda has a deployed verb backed
+3. Either `agent-platform-query` Lambda has a deployed verb backed
    by an event-tier query (signal: read path is exercised) OR 6
    months have elapsed since the event-tier Lambda deployment
    (signal: deferral has not slid indefinitely)
@@ -606,9 +606,9 @@ this audit proposes.
 | Reader rewire: `session_preflight.recent_sessions` via Lambda query verb | T1.2 (query Lambda verb expansion) deployed with `list_recent_sessions` verb | Part of T1.5 sweep. `list_recent_sessions` is not in T0.7c's minimum_verbs set; expansion belongs to T1.2. |
 | Writer rewire: `session_postflight.py` calls `agent_sdk.log_session_close` | Aggregate Lambda or close-verb decision (Section 9) settled | Part of T1.5 sweep. |
 | Markdown surface retirement | Reader+writer rewires complete | Per CD.NN.b. |
-| Backfill historical rows | All above complete | Best-effort import from `ops_session_log` + `telemetry_sessions` with `imported=true` flag. **Downstream query-verb contract**: every query verb in `bblake-platform-query` that touches `telemetry_agent_turns` must accept `include_imported: bool = False` and default-exclude `imported=true` rows from cost rollups, friction analysis, and SLO computations. Including imported rows is opt-in for historical-trend queries only. Prevents the backfill-drift class of rollup error. |
+| Backfill historical rows | All above complete | Best-effort import from `ops_session_log` + `telemetry_sessions` with `imported=true` flag. **Downstream query-verb contract**: every query verb in `agent-platform-query` that touches `telemetry_agent_turns` must accept `include_imported: bool = False` and default-exclude `imported=true` rows from cost rollups, friction analysis, and SLO computations. Including imported rows is opt-in for historical-trend queries only. Prevents the backfill-drift class of rollup error. |
 | Aggregate-tier follow-on REPORT-ONLY | Structural trigger per CD.NN.e (3 conditions, not wall-clock) | Per CD.NN.e structural-trigger definition. |
-| **Rename `bblake-platform-{purpose}` Lambdas to `agent-platform-{purpose}`** | T0.7c deployed (so the first Lambda renamed is the read path with the smallest blast radius) | Bounds the mixed-prefix state to a known lifetime. Sweep covers: `bblake-platform-log-rec`, `bblake-platform-log-decision`, `bblake-platform-query`, `bblake-platform-update-rec`, `bblake-platform-list-tools`, `bblake-platform-maintenance`. Function URLs change; Terraform outputs rewritten; agent_sdk verb-name registry updated; CloudWatch log group names migrated (drop old, create new -- accept log loss in transition). DEFERRED: `build_lambda.py --deploy` (pending Decision 67 reversal). Open-source readiness rationale per the convention introduced in CD.NN.c. |
+| **Rename `agent-platform-{purpose}` Lambdas to `agent-platform-{purpose}`** | T0.7c deployed (so the first Lambda renamed is the read path with the smallest blast radius) | Bounds the mixed-prefix state to a known lifetime. Sweep covers: `agent-platform-log-rec`, `agent-platform-log-decision`, `agent-platform-query`, `agent-platform-update-rec`, `agent-platform-list-tools`, `agent-platform-maintenance`. Function URLs change; Terraform outputs rewritten; agent_sdk verb-name registry updated; CloudWatch log group names migrated (drop old, create new -- accept log loss in transition). DEFERRED: `build_lambda.py --deploy` (pending Decision 67 reversal). Open-source readiness rationale per the convention introduced in CD.NN.c. |
 
 Per CD.20/CD.23 (private operational data not exported to public repo):
 no stub proposes export of session-log or turn-event data outside the

@@ -19,10 +19,14 @@ on:
 # so a ci-rca failure cannot trigger another ci-rca run.
 jobs:
   rca:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
-    runs-on: [self-hosted, linux]
+    # Fork-PR privilege gate (public-repo CRITICAL): ci-rca runs in the base-repo context with the
+    # write-capable branch role, so a fork PR that merely fails CI must NOT trigger it. workflow_dispatch
+    # (manual, privileged actor) is retained; workflow_run is gated to the same repo (non-fork).
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository) }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      id-token: write
       contents: read
       pull-requests: write
 
@@ -54,10 +58,16 @@ jobs:
           fi
           claude --version
 
+      - name: Configure AWS credentials (OIDC -- branch role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
       - name: Run ci-rca agent
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          AWS_PROFILE: company-aws-profile
+          AWS_PROFILE: agent_platform
         run: |
           RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
           claude -p \

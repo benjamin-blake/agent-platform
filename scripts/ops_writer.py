@@ -21,6 +21,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from scripts.aws_profile import resolve_aws_profile
+
 ROOT = Path(__file__).resolve().parent.parent
 
 try:
@@ -80,7 +82,7 @@ _OPS_TABLE_NAMES: list[str] = [
 TABLE_NAMES: list[str] = _OPS_TABLE_NAMES + _TELEMETRY_TABLE_NAMES
 
 STAGING_PREFIX = "staging"
-DATABASE = "trading_formulas_db"
+DATABASE = "agent_platform"
 ATHENA_WORKGROUP = "agent-platform-production"
 _BUCKET_ENV_VAR = "S3_LOG_BUCKET"
 
@@ -115,7 +117,7 @@ _OPS_TABLE_DTYPES: dict[str, dict[str, str]] = {
 }
 _TABLE_DTYPES: dict[str, dict[str, str]] = {**_OPS_TABLE_DTYPES, **_TELEMETRY_TABLE_DTYPES}
 
-_SSO_PROFILE = "company-aws-profile"
+_SSO_PROFILE = "agent_platform"
 
 
 class OpsWriter:
@@ -137,8 +139,7 @@ class OpsWriter:
         if self._client is None:
             if not _BOTO3_AVAILABLE:
                 return None
-            _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-            profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+            profile = resolve_aws_profile(default=_SSO_PROFILE)
             if profile:
                 session = _boto3.Session(profile_name=profile)
                 self._client = session.client("s3", region_name="eu-west-2")
@@ -150,8 +151,7 @@ class OpsWriter:
         """Return a boto3.Session using the same profile resolution as _get_client()."""
         if not _BOTO3_AVAILABLE:
             return None
-        _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-        profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+        profile = resolve_aws_profile(default=_SSO_PROFILE)
         if profile:
             return _boto3.Session(profile_name=profile)
         return _boto3.Session()
@@ -175,14 +175,17 @@ class OpsWriter:
         except Exception:  # noqa: BLE001
             pass
 
-        # Fallback 2: direct parse of config/config.company.yaml (last resort)
+        # Fallback 2: direct parse of config/config.personal.yaml (last resort).
+        # Personal-account config is now canonical; the legacy config.company.yaml fallback
+        # would resolve the OLD work bucket in any steady-state process where S3_LOG_BUCKET
+        # is unset (Step 19, Finding 4).
         try:
-            company_cfg = ROOT / "config" / "config.company.yaml"
-            if company_cfg.exists():
+            personal_cfg = ROOT / "config" / "config.personal.yaml"  # canonical post-migration
+            if personal_cfg.exists():
                 # Avoid heavy yaml import if possible, but for config it's usually okay
                 import yaml  # noqa: PLC0415
 
-                with company_cfg.open("r", encoding="utf-8") as f:
+                with personal_cfg.open("r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f)
                     return cfg.get("aws", {}).get("s3_agent_logs_bucket", "")
         except Exception:  # noqa: BLE001
@@ -639,8 +642,7 @@ class OpsWriter:
             return
 
         try:
-            _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-            profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+            profile = resolve_aws_profile(default=_SSO_PROFILE)
             if profile:
                 session = _boto3.Session(profile_name=profile)
                 athena = session.client("athena", region_name="eu-west-2")

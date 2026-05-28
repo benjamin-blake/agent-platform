@@ -41,7 +41,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON = sys.executable
-_SSO_PROFILE = "company-aws-profile"
+_SSO_PROFILE = "agent_platform"
 MAX_COMMIT_RETRIES = 3
 CI_POLL_INTERVAL_SECONDS = 30
 CI_POLL_TIMEOUT_SECONDS = 600  # 10 minutes (CI takes ~4min; allow for startup + buffer)

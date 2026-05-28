@@ -1,4 +1,4 @@
-"""Tests for reseed_decisions_counter() in scripts/sync_recommendations.py."""
+"""Tests for reseed_decisions_counter() / reseed_recommendations_counter() in scripts/sync_recommendations.py."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.sync_recommendations import reseed_decisions_counter
+from scripts.sync_recommendations import reseed_decisions_counter, reseed_recommendations_counter
 
 
 class _FakeConditionalCheckFailed(Exception):
@@ -67,3 +67,37 @@ class TestReseedDecisionsCounter:
         with patch("scripts.sync_recommendations._BOTO3_AVAILABLE", False):
             with pytest.raises(RuntimeError, match="boto3 not available"):
                 reseed_decisions_counter(10)
+
+
+class TestReseedRecommendationsCounter:
+    """Tests for reseed_recommendations_counter() (Step 13c monotonic counter gate)."""
+
+    def test_monotonic_higher_max_advances_counter(self) -> None:
+        """update_item targets the recommendations counter with a monotonic condition."""
+        mock_ddb = _make_mock_ddb(reject=False)
+
+        with patch("scripts.sync_recommendations.boto3") as mock_boto3:
+            mock_boto3.Session.return_value.client.return_value = mock_ddb
+            reseed_recommendations_counter(1944)
+
+        mock_ddb.update_item.assert_called_once_with(
+            TableName="agent-platform-counters",
+            Key={"counter_name": {"S": "recommendations"}},
+            UpdateExpression="SET current_value = :max",
+            ConditionExpression="attribute_not_exists(current_value) OR current_value < :max",
+            ExpressionAttributeValues={":max": {"N": "1944"}},
+        )
+
+    def test_rejected_lower_max_is_noop(self) -> None:
+        """ConditionalCheckFailed from a lower max_id is swallowed; no exception propagates."""
+        mock_ddb = _make_mock_ddb(reject=True)
+
+        with patch("scripts.sync_recommendations.boto3") as mock_boto3:
+            mock_boto3.Session.return_value.client.return_value = mock_ddb
+            reseed_recommendations_counter(5)
+
+    def test_boto3_unavailable_raises_runtime_error(self) -> None:
+        """RuntimeError is raised when boto3 is not available."""
+        with patch("scripts.sync_recommendations._BOTO3_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="boto3 not available"):
+                reseed_recommendations_counter(10)

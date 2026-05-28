@@ -52,7 +52,7 @@ Phase Platform (Automation Infrastructure) -- parallel track to Phase 1 (Core In
 | # | Phase | Action | Command | Expected Outcome | Fix If |
 |---|-------|--------|---------|-----------------|--------|
 | 1 | [pre-deploy] | `_SSO_PROFILE` constant present in all credential-allocation files | `.venv/Scripts/python.exe -c "files=['scripts/sync_recommendations.py','scripts/ops_data_portal.py','scripts/ops_writer.py','scripts/session_postflight.py']; bad=[f for f in files if open(f).read().count('_SSO_PROFILE')<1]; assert not bad, f'Missing _SSO_PROFILE: {bad}'; print('ok')"` | `ok` | Add missing constant to each failing file |
-| 2 | [pre-deploy] | `S3_LOG_BUCKET` default wired in preflight | `.venv/Scripts/python.exe -c "import re; c=open('scripts/session_preflight.py').read(); assert re.search(r'setdefault.*S3_LOG_BUCKET', c), 'setdefault not found'; print('ok')"` | `ok` | Add `os.environ.setdefault("S3_LOG_BUCKET", "bblake-platform-agent-logs")` near start of `run_preflight()` |
+| 2 | [pre-deploy] | `S3_LOG_BUCKET` default wired in preflight | `.venv/Scripts/python.exe -c "import re; c=open('scripts/session_preflight.py').read(); assert re.search(r'setdefault.*S3_LOG_BUCKET', c), 'setdefault not found'; print('ok')"` | `ok` | Add `os.environ.setdefault("S3_LOG_BUCKET", "agent-platform-agent-logs")` near start of `run_preflight()` |
 | 3 | [pre-deploy] | SSO startup precedes pull in preflight | `.venv/Scripts/python.exe -c "lines=open('scripts/session_preflight.py').read().splitlines(); sso=next(i for i,l in enumerate(lines) if '_handle_sso_startup' in l and 'sso_status' in l); pull=next(i for i,l in enumerate(lines) if '_sync_ops_pull()' in l); assert sso < pull, f'SSO at {sso} is AFTER pull at {pull}'; print(f'ok: SSO at {sso}, pull at {pull}')"` | `ok: SSO at N, pull at M` where N < M | Swap the blocks -- SSO must come before pull |
 | 4 | [pre-deploy] | `drain_pending()` accepts `profile` parameter | `.venv/Scripts/python.exe -c "from scripts.ops_data_portal import drain_pending; import inspect; p=inspect.signature(drain_pending).parameters; assert 'profile' in p, 'profile param missing'; print('ok')"` | `ok` | Add `profile: str \| None = None` to `drain_pending()` signature |
 | 5 | [pre-deploy] | All new and existing tests pass in affected modules | `.venv/Scripts/python.exe -m pytest tests/test_sync_recommendations.py tests/test_ops_data_portal.py tests/test_ops_writer.py tests/test_session_preflight.py -q` | All green, no failures | Fix the failing test; if a mock is broken, re-read the changed code path |
@@ -125,7 +125,7 @@ Phase Platform (Automation Infrastructure) -- parallel track to Phase 1 (Core In
 
 4. **`scripts/session_preflight.py`** -- rename + ordering + defaults + drain:
    - Line 44: rename `_ATHENA_PROFILE = "company-aws-profile"` → `_SSO_PROFILE = "company-aws-profile"`; update all 6 usage sites (lines 188, 196, 233, 264, 297, 755).
-   - Before `venv_ok = check_venv()` (line 935), add: `os.environ.setdefault("S3_LOG_BUCKET", "bblake-platform-agent-logs")`
+   - Before `venv_ok = check_venv()` (line 935), add: `os.environ.setdefault("S3_LOG_BUCKET", "agent-platform-agent-logs")`
    - Move the `_sync_ops_pull()` try/except block (lines 946-951) to AFTER `sso_status = _handle_sso_startup(check_sso_status())` (currently line 958)
    - After the SSO line (now confirmed valid), add a best-effort `drain_pending()` call:
      ```python

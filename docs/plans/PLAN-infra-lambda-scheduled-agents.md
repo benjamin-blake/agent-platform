@@ -65,7 +65,7 @@ Infrastructure (post-Phase 1)
 ## S3 Key Structure
 
 ```
-s3://bblake-platform-agent-logs/
+s3://agent-platform-agent-logs/
 ├── agents/                                    ← Raw findings per agent (convention-based)
 │   ├── doc-freshness/
 │   │   └── 2026-04-07T06:00:00Z.jsonl
@@ -219,7 +219,7 @@ s3://bblake-platform-agent-logs/
     - `aws_secretsmanager_secret.github_pat` + `aws_secretsmanager_secret_version` (placeholder, manual value)
     - `aws_iam_role.scheduled_agent_lambda` with trust policy for Lambda
     - `aws_iam_policy.scheduled_agent_lambda` with permissions:
-      - S3: `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on `bblake-platform-agent-logs`
+      - S3: `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on `agent-platform-agent-logs`
       - Secrets Manager: `secretsmanager:GetSecretValue` on `github_pat` secret ARN
       - CloudWatch Logs: `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
     - `aws_lambda_function.scheduled_agent_dispatcher`

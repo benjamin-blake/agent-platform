@@ -7,7 +7,8 @@ Returns SKIPPED if auth is missing, PASS if connected, and FAIL if queries fail.
 from __future__ import annotations
 
 import logging
-import os
+
+from scripts.aws_profile import resolve_aws_profile
 
 from .harness import Verifier, VerifierResult, VerifierStatus
 
@@ -30,7 +31,7 @@ class AthenaViewsVerifier(Verifier):
 
         # 1. Check Auth (SSO)
         try:
-            profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
+            profile = resolve_aws_profile(default="agent_platform")
             session = boto3.Session(profile_name=profile)
             sts = session.client("sts")
             sts.get_caller_identity()

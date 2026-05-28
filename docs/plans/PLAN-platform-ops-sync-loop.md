@@ -528,7 +528,7 @@ modified module without syntax/import errors.
 If SSO is active:
 
 ```bash
-export S3_LOG_BUCKET=bblake-platform-agent-logs
+export S3_LOG_BUCKET=agent-platform-agent-logs
 python -m scripts.sync_ops pull --profile company-aws-profile
 ```
 

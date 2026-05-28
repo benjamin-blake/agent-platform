@@ -320,7 +320,7 @@ resource "aws_iam_role" "athena_execution" {
 
 # Agent Logs: Append-only log storage for cron agents (eliminates git write access requirement)
 resource "aws_s3_bucket" "agent_logs" {
-  bucket = "bblake-platform-agent-logs"
+  bucket = "agent-platform-agent-logs"
 
   tags = {
     Name    = "Agent Logs Bucket"

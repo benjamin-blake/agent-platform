@@ -1,3 +1,9 @@
+# DEPRECATED 2026-05-28 -- CD.21
+# Self-hosted EC2 runner retired; CI now uses GitHub-hosted runners + OIDC (personal account).
+# Retained as an architectural-evolution artefact per CD.21. The work-account root is no longer
+# applied; to fully decommission run terraform destroy against the work-account state later.
+# The live instance was terminated via AWS CLI on 2026-05-28 (Phase A, Step 4b).
+
 # Self-hosted GitHub Actions runner on EC2 (Decision 68)
 # Replaces GitHub-hosted ubuntu-latest to eliminate the 2000 min/month billing cap.
 # IAM credentials via instance metadata -- no SSO session needed in CI.
@@ -22,7 +28,7 @@ data "aws_caller_identity" "runner" {}
 # Look up existing S3 buckets by name -- avoids pulling main.tf resource definitions
 # as apply-time dependencies, which would cause Terraform to attempt recreation.
 data "aws_s3_bucket" "runner_agent_logs" {
-  bucket = "bblake-platform-agent-logs"
+  bucket = "agent-platform-agent-logs"
 }
 
 data "aws_s3_bucket" "runner_data_lake" {

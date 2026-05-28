@@ -800,7 +800,6 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         scripts_dir / "sync_ops.py",
         scripts_dir / "ops_writer.py",
         scripts_dir / "s3_log_store.py",
-        scripts_dir / "verify_schema_migration.py",
         scripts_dir / "executor" / "plan.py",
         scripts_dir / "validate.py",  # contains regex patterns that match the rule
     }
@@ -2168,7 +2167,9 @@ def ensure_fresh_dq_results(failed: list[str]) -> None:
     try:
         import boto3
 
-        profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
+        from scripts.aws_profile import resolve_aws_profile
+
+        profile = resolve_aws_profile(default="agent_platform")
         boto3.Session(profile_name=profile).client("sts", region_name="eu-west-2").get_caller_identity()
     except Exception:
         print(

@@ -7,7 +7,7 @@ priority queue) are stored as append-only Iceberg tables in Athena. Current stat
 via ROW_NUMBER() views. This replaces the fragile dual-source JSONL+S3 pattern (Decision 45)
 with a unified, SQL-queryable audit trail (Decision 50).
 
-**Authoritative store:** `bblake-platform-agent-logs` S3 bucket, `iceberg/` prefix.
+**Authoritative store:** `agent-platform-agent-logs` S3 bucket, `iceberg/` prefix.
 **Database:** `trading_formulas_db` (Glue catalog, Athena engine v3).
 **Workgroup:** `agent-platform-production` (engine v3 required for Iceberg operations).
 
@@ -183,10 +183,10 @@ WHERE queue_run_id = (
 
 ## S3 Prefix Layout
 
-All ops data lives in bucket `bblake-platform-agent-logs`.
+All ops data lives in bucket `agent-platform-agent-logs`.
 
 ```
-bblake-platform-agent-logs/
+agent-platform-agent-logs/
   staging/
     ops_recommendations/
       trade_date=YYYY-MM-DD/

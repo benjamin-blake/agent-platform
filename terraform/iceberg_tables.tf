@@ -1006,7 +1006,8 @@ ${each.value}
     # exists. This is expected idempotent behaviour on re-plan after DDL hash changes
     # or on first-time apply over a pre-existing database. It does NOT mask real
     # table-creation failures — recheck Athena query history if tables are missing.
-    # Schema evolution on existing tables is handled by scripts/migrate_schema.py.
+    # Schema evolution on existing tables is handled by the daily pipeline's
+    # awswrangler writes (schema_evolution=True).
     on_failure = continue
   }
 

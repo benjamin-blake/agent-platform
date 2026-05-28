@@ -61,14 +61,14 @@ Infra (cross-cutting workflow improvement)
 - Windows Git Bash shell (no PowerShell)
 - Use `sys.executable` not `'python'` in subprocess calls
 - Import safety: no exceptions raised during module import
-- S3 bucket: `bblake-platform-agent-logs` (already exists)
+- S3 bucket: `agent-platform-agent-logs` (already exists)
 - AWS profile: `company-aws-profile`
 
 ## Context
 - **Two workflows affected**: Manual (`/plan` + `/implement`) and Automated (`/develop-executor`) -- see Dual-Workflow Applicability section above
 - **Manual workflow critique gate**: `.github/agents/plan-critique.agent.md` (invoked by Opus at end of `/plan`)
 - **Executor workflow critique gate**: `config/prompts/executor/critique.prompt.md` (invoked by executor before each step)
-- **S3 recommendations path**: `s3://bblake-platform-agent-logs/recommendations/agent-recommendations.jsonl`
+- **S3 recommendations path**: `s3://agent-platform-agent-logs/recommendations/agent-recommendations.jsonl`
 - **Local recommendations**: `logs/.recommendations-log.jsonl`
 - **s3_log_store.py** already provides `read_jsonl()`, `append_jsonl()`, `get_backend()` for S3/local switching
 - **S3 concurrency**: Read-modify-write race conditions are an accepted risk (see Decision 33 pattern); sync operations are idempotent and run during human-attended sessions, minimizing collision probability

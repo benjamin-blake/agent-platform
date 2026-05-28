@@ -13,7 +13,7 @@ Entries older than last 5 sessions.
 1. `anthropic.claude-opus-4-6-v1` (direct) → Marketplace subscription required — SCP blocks marketplace actions.
 2. `eu.anthropic.claude-opus-4-6-v1` (cross-region profile) → SCP `p-g7wa3rax` explicitly denies Bedrock in eu-north-1 where the EU profile routes.
 3. Probed all 50+ on-demand models in eu-west-2 → `anthropic.claude-sonnet-4-6` confirmed directly callable, no marketplace, no cross-region routing.
-4. First runs returned empty `[]` — `.recommendations-log.jsonl` not in S3. Uploaded files manually to `bblake-platform-agent-logs`.
+4. First runs returned empty `[]` — `.recommendations-log.jsonl` not in S3. Uploaded files manually to `agent-platform-agent-logs`.
 5. Bedrock `converse()` timed out after 5 min — boto3 default read_timeout=60s. Fixed with `botocore.config.Config(read_timeout=840)`.
 6. `aws lambda invoke` CLI timed out at 60 s — fixed with `--cli-read-timeout 900`.
 7. 198 open recs of 523 total — filtered to open-only before context injection.
@@ -1085,7 +1085,7 @@ tests/test_run_scheduled_agent.py                | 318 ++++++++++
 
 **Plan:** PLAN-infra-s3-logs.md
 **Intent:** Enable stateless cron agents by migrating append-only log files from git-tracked local storage to S3, and consolidate telemetry across manual and automated workflows into a unified session envelope.
-**Done:** Created `scripts/s3_log_store.py` (unified S3/local log I/O). Integrated S3 backend into 14 scripts. Created `scripts/session_telemetry.py` for cross-workflow session envelope (`logs/.session-telemetry.jsonl`). Added `_capture_executor_telemetry()` to `execute_recommendation.py` so executor runs write friction to `.retro-lite-log.jsonl` and session envelopes alongside manual workflow. Added Terraform resources for `bblake-platform-agent-logs` bucket. 8 new tests for session telemetry, 15 for S3 log store, 3 for executor telemetry capture. Decision 34 documents the rationale for cross-workflow telemetry consolidation.
+**Done:** Created `scripts/s3_log_store.py` (unified S3/local log I/O). Integrated S3 backend into 14 scripts. Created `scripts/session_telemetry.py` for cross-workflow session envelope (`logs/.session-telemetry.jsonl`). Added `_capture_executor_telemetry()` to `execute_recommendation.py` so executor runs write friction to `.retro-lite-log.jsonl` and session envelopes alongside manual workflow. Added Terraform resources for `agent-platform-agent-logs` bucket. 8 new tests for session telemetry, 15 for S3 log store, 3 for executor telemetry capture. Decision 34 documents the rationale for cross-workflow telemetry consolidation.
 
 ### Changes
 

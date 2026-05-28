@@ -12,14 +12,34 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 
 ## AWS context
 - Region: `eu-west-2`
-- Account: REDACTED-ACCOUNT-ID (sandbox)
-- Profile: `company-aws-profile` (SSO) for agent operations.
-- Glue database: `trading_formulas_db`.
-- Company SCPs block IAM user creation and external OIDC provider registration. Do not propose either — see Decisions 36 and 37.
+- Account: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed).
+- Profile: `agent_platform` (PlatformDev, runtime) for agent operations; `agent_platform_admin` (PlatformAdmin) for provisioning (creates IAM + OIDC).
+- Glue database: `agent_platform` (personal module). Retained work-root `.tf` files still reference `trading_formulas_db`.
+- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
+- The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
+
+## Out-of-band IAM grants (drift -- not managed by this module)
+
+Applied directly via the `platform_breakglass` IAM user (full admin); NOT codified in
+`terraform/personal/`. The `PlatformDev` and `PlatformAdmin` roles pre-exist the module, so
+re-creating infra elsewhere will not restore these policies -- reapply manually if needed.
+
+- **`PlatformDataLakeProvisioning`** (inline policy on role `PlatformAdmin`) -- grants the
+  data-plane rights `PlatformAdmin`'s base `AdminOps` policy lacks (it is an identity admin:
+  `iam:*` + lambda + secretsmanager only). Scope: Glue + Athena `Resource: "*"`; `s3:*` on
+  `agent-platform-data-lake`; `dynamodb:*` on `table/agent-platform-*`. Required so `terraform apply`
+  under `agent_platform_admin` can create the data lake, workgroup, Glue DB, and counters table.
+- **PlatformDev runtime grant (PENDING -- required before the ops-data migration runs):** the
+  `agent_platform` (PlatformDev) runtime role is currently permissionless. The migration needs:
+  Athena `StartQueryExecution`/`GetQueryExecution`/`GetQueryResults`/`GetWorkGroup`; S3 read-write
+  on `agent-platform-data-lake`; DynamoDB `GetItem`/`UpdateItem` on `agent-platform-counters`;
+  Glue `GetDatabase`/`GetTable`/`GetPartitions`. Grant via `platform_breakglass`; record here once applied.
+
+Follow-up: codify these (import the roles or attach managed policies) and author a formal Decision
+once the migration completes and the ops portal is writable.
 
 ## Athena workgroup rules
-- `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries.
-- `agent-platform-lab` (engine v3) — PySR formula discovery.
+- `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
 - `primary` (engine v2, default) — **do not use** for Iceberg DML or VACUUM. v2 doesn't support full Iceberg semantics.
 
 ## Athena/Iceberg DDL gotchas

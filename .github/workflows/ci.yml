@@ -15,11 +15,8 @@ permissions:
 jobs:
   pr-validate:
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    concurrency:
-      group: ci-runner
-      cancel-in-progress: false
     permissions:
       contents: read
 
@@ -44,7 +41,7 @@ jobs:
     - name: Install fast-tier dependencies only
       # --pre runs ruff, mypy, pytest --picked, pyyaml-backed validators.
       # It does NOT need torch, CUDA, pyarrow, awswrangler, etc. Installing
-      # the full requirements.txt fills the self-hosted runner's disk
+      # the full requirements.txt fills the runner's disk
       # (~3GB of torch+CUDA wheels). Pin versions matching requirements.txt.
       run: |
         python -m pip install --upgrade pip
@@ -63,16 +60,20 @@ jobs:
 
   main-validate:
     if: github.event_name == 'push'
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    concurrency:
-      group: ci-runner
-      cancel-in-progress: false
     permissions:
+      id-token: write      # REQUIRED for OIDC token minting
       contents: read
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Configure AWS credentials (OIDC -- branch role)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+        aws-region: eu-west-2
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
@@ -98,13 +99,11 @@ jobs:
       run: python -m scripts.validate
 
   terraform-validate:
-    # Self-hosted runner (see Decision 68 and CLAUDE.md runbook).
-    # No concurrency: ci-runner here. Putting terraform-validate in the same
-    # group as pr-validate/main-validate causes GitHub to cancel one of them
-    # within a single workflow run. The self-hosted runner already serialises
-    # execution at the host level, so the plan's "share the runner" intent
-    # is preserved without GitHub-side concurrency.
-    runs-on: [self-hosted, linux]
+    # GitHub-hosted runner (CD.21 -- self-hosted runner retired). Makes ZERO AWS
+    # calls (terraform init -backend=false + validate + fmt), so no OIDC step is
+    # added. Fires on both push and PR (no if: guard); a branch-role OIDC step here
+    # would reject PR events whose sub claim is refs/pull/*.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read

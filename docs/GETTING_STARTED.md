@@ -77,7 +77,7 @@ This provides a single queryable timeline of all work across all workflows. The 
 **Required shell profile entry for local sessions** (enables OpsWriter write-through to Iceberg):
 
 ```bash
-export S3_LOG_BUCKET=bblake-platform-agent-logs  # enables OpsWriter write-through to Iceberg
+export S3_LOG_BUCKET=agent-platform-agent-logs  # enables OpsWriter write-through to Iceberg
 ```
 
 Add this to your `~/.bashrc` or `~/.bash_profile`. Without it, `OpsWriter.write()` silently no-ops locally and ops tables will not receive data from local sessions. The preflight check (`python -m scripts.session_preflight`) warns when this is unset with active SSO.
@@ -122,34 +122,34 @@ Use this environment for formula discovery and AWS infrastructure management.
 - **AWS CLI v2**: Download from https://awscli.amazonaws.com/AWSCLIV2.msi
 - **Terraform 1.0+**: `terraform version`
 - **GitHub CLI (`gh`)**: `winget install GitHub.cli`, then `gh auth login` (select GitHub.com, HTTPS, browser auth). Verify: `gh auth status`. Required for CI feedback loop and automated PR creation (`session_close` Steps 5b, 5c, 5d).
-- **AWS SSO Access**: To REDACTED-EMPLOYER AWS account (REDACTED-ACCOUNT-ID)
+- **AWS SSO Access**: To your AWS account
 
 ### Step 1: Configure AWS SSO
 
 Add the following to `~/.aws/config`:
 
 ```ini
-[profile company-aws-profile]
-sso_session = company-aws-profile
-sso_account_id = REDACTED-ACCOUNT-ID
+[profile your-aws-profile]
+sso_session = your-aws-profile
+sso_account_id = <your-account-id>
 sso_role_name = AdministratorAccess
 region = eu-west-2
 output = json
 
-[sso-session company-aws-profile]
-sso_start_url = https://REDACTED-EMPLOYER.awsapps.com/start/#/?tab=accounts
+[sso-session your-aws-profile]
+sso_start_url = https://your-sso-portal.awsapps.com/start
 sso_region = eu-west-2
 sso_registration_scopes = sso:account:access
 ```
 
 Authenticate:
 ```bash
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 ```
 
 Verify:
 ```bash
-aws sts get-caller-identity --profile company-aws-profile
+aws sts get-caller-identity --profile your-aws-profile
 # Should show Account ID and assume role session
 ```
 
@@ -189,8 +189,8 @@ cp terraform.tfvars.example terraform.tfvars
 
 # Deploy
 terraform init
-terraform plan -var="aws_profile=company-aws-profile"
-terraform apply -var="aws_profile=company-aws-profile"
+terraform plan -var="aws_profile=your-aws-profile"
+terraform apply -var="aws_profile=your-aws-profile"
 
 # Note the outputs (bucket names, Athena workgroup, etc.)
 ```
@@ -222,14 +222,14 @@ python -m src.main --environment=company lab
 
 ```bash
 # Check S3 buckets exist
-aws s3 ls --profile company-aws-profile | grep formulas-
+aws s3 ls --profile your-aws-profile | grep formulas-
 
 # Query lineage table
 aws athena start-query-execution \
   --query-string "SELECT COUNT(*) FROM formula_lineage" \
   --query-execution-context Database=trading_formulas_db \
   --work-group agent-platform-lab \
-  --profile company-aws-profile
+  --profile your-aws-profile
 
 # Check CloudWatch dashboards
 # Navigate to: AWS Console → CloudWatch → Dashboards
@@ -249,14 +249,14 @@ python -m src.data.pipeline --dry-run --universe ftse_100 --date 2026-03-20
 aws athena start-query-execution \
   --query-string "SELECT * FROM formula_lineage ORDER BY created_at DESC LIMIT 10" \
   --work-group agent-platform-lab \
-  --profile company-aws-profile
+  --profile your-aws-profile
 
 # Check costs
 aws ce get-cost-and-usage \
   --time-period Start=2026-01-01,End=2026-01-31 \
   --granularity MONTHLY \
   --metrics UnblendedCost \
-  --profile company-aws-profile
+  --profile your-aws-profile
 ```
 
 ### Deploying Lambda Changes
@@ -272,7 +272,7 @@ python scripts/build_lambda.py
 python scripts/build_lambda.py --skip-upload
 
 # Force a specific bucket
-python scripts/build_lambda.py --bucket bblake-platform-data-lake
+python scripts/build_lambda.py --bucket agent-platform-data-lake
 ```
 ```
 
@@ -284,9 +284,9 @@ On Windows, `--input (Get-Content ... -Raw)` strips embedded quotes during Power
 # Write JSON without BOM, then reference via file:// to avoid quote-stripping
 [System.IO.File]::WriteAllText("$env:TEMP\sfn.json", '{"date":"auto","discovery_enabled":false}')
 aws stepfunctions start-execution `
-  --state-machine-arn "arn:aws:states:eu-west-2:REDACTED-ACCOUNT-ID:stateMachine:agent-platform-data-pipeline" `
+  --state-machine-arn "arn:aws:states:eu-west-2:<your-account-id>:stateMachine:agent-platform-data-pipeline" `
   --input file://$env:TEMP/sfn.json `
-  --profile company-aws-profile --region eu-west-2
+  --profile your-aws-profile --region eu-west-2
 ```
 
 `"date": "auto"` resolves to today's date inside the Lambda. Pass an ISO date string (e.g. `"2026-03-20"`) to reprocess a specific day.
@@ -304,12 +304,12 @@ Use this environment for live trading with discovered formulas.
 - **Python 3.12+**: `python --version`
 - **Docker & Docker Compose**: `docker --version`, `docker-compose --version`
 - **AWS CLI v2**: For S3 access to company buckets
-- **AWS SSO Configured**: Same `company-aws-profile` profile (read-only S3)
+- **AWS SSO Configured**: Same `your-aws-profile` profile (read-only S3)
 
 ### Step 1: Configure AWS SSO (Same as Company)
 
 ```bash
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 ```
 
 ### Step 2: Install Dependencies
@@ -344,7 +344,7 @@ POSTGRES_PASSWORD=your-secure-password
 COMPANY_S3_PRODUCTION_BUCKET=formulas-production
 COMPANY_S3_STAGING_BUCKET=formulas-staging
 COMPANY_S3_REGION=eu-west-2
-AWS_PROFILE=company-aws-profile
+AWS_PROFILE=your-aws-profile
 ```
 
 ### Step 4: Start Docker Services
@@ -472,10 +472,10 @@ terraform import aws_s3_bucket.formulas_discovery formulas-discovery
 **Solution:**
 ```bash
 # Verify AWS SSO login
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 
 # Test S3 access
-aws s3 ls s3://formulas-production/ --profile company-aws-profile
+aws s3 ls s3://formulas-production/ --profile your-aws-profile
 
 # Check docker/.env has correct AWS_PROFILE
 ```
@@ -503,7 +503,7 @@ docker-compose logs formula-sync
 docker-compose restart formula-sync
 
 # Verify S3 buckets have formulas
-aws s3 ls s3://formulas-production/ --profile company-aws-profile
+aws s3 ls s3://formulas-production/ --profile your-aws-profile
 ```
 
 **Problem:** A/B tests never complete
@@ -532,9 +532,9 @@ docker-compose logs trading-system
 
 **Problem:** `ALTER TABLE ADD COLUMNS` fails with `name already exists`
 
-**Solution:** Athena Iceberg does not support `ADD COLUMN IF NOT EXISTS`. Issue one `ALTER TABLE` per column and catch the "already exists" failure to make migrations idempotent (see `scripts/migrate_schema.py` for the pattern).
+**Solution:** Athena Iceberg does not support `ADD COLUMN IF NOT EXISTS`. Issue one `ALTER TABLE` per column and catch the "already exists" failure to make migrations idempotent.
 
-**Problem:** Need to run `scripts/migrate_schema.py` or other local scripts against AWS
+**Problem:** Need to run a local script against AWS
 
 **Solution:** Set `$env:TRADING_CONFIG = "config\config.company.yaml"` before running. The default config loader reads `config/config.yaml` which has placeholder workgroup names.
 
@@ -546,19 +546,19 @@ docker-compose logs trading-system
 
 **Solution:** The deps layer requires Linux-compatible wheels (`--platform manylinux2014_x86_64`). If pip cannot find matching wheels, the package will be skipped. Use `python scripts/build_lambda.py --skip-upload` to build and inspect the layer locally, then upload manually if needed.
 
-**Problem:** `scripts/migrate_schema.py` fails with `WorkGroup is not found`
+**Problem:** A local script fails with `WorkGroup is not found`
 
 **Solution:** Set `$env:ENVIRONMENT = "company"` before running — the config loader will automatically pick up `config/config.company.yaml`. Alternatively use `$env:TRADING_CONFIG = "config\config.company.yaml"` for an explicit path override.
 
 **Problem:** `terraform apply` fails with `Athena query failed with status: FAILED` on `null_resource.create_iceberg_tables`
 
-**Solution:** Athena Iceberg returns `FAILED` (not `SUCCEEDED`) for `CREATE TABLE IF NOT EXISTS` when the table already exists. This triggers whenever the DDL query hash changes (e.g. after adding a column to `iceberg_tables.tf`). The provisioner uses `on_failure = continue` so this should not abort apply. If it does, verify the table already exists: `aws glue get-table --database-name trading_formulas_db --name market_data --profile company-aws-profile`. Schema evolution on existing tables must be done via `scripts/migrate_schema.py`.
+**Solution:** Athena Iceberg returns `FAILED` (not `SUCCEEDED`) for `CREATE TABLE IF NOT EXISTS` when the table already exists. This triggers whenever the DDL query hash changes (e.g. after adding a column to `iceberg_tables.tf`). The provisioner uses `on_failure = continue` so this should not abort apply. If it does, verify the table already exists: `aws glue get-table --database-name trading_formulas_db --name market_data --profile your-aws-profile`. Schema evolution on existing tables is handled by the daily pipeline's awswrangler writes (`schema_evolution=True`).
 
 **Problem:** `terraform plan` fails with `filemd5: open .\lambda-packages\data-pipeline-extras-layer.zip: The system cannot find the file specified`
 
 **Solution:** The extras layer zip is not tracked in git. Download it from S3 before running `terraform plan`:
 ```powershell
-aws s3 cp s3://bblake-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip lambda-packages/data-pipeline-extras-layer.zip --profile company-aws-profile --region eu-west-2
+aws s3 cp s3://agent-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip lambda-packages/data-pipeline-extras-layer.zip --profile your-aws-profile --region eu-west-2
 ```
 
 **Problem:** Pipeline returns empty data
@@ -576,7 +576,7 @@ aws s3 cp s3://bblake-platform-data-lake/lambda-packages/data-pipeline-extras-la
 **Solution:**
 ```bash
 # Re-authenticate (sessions last 8-12 hours)
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 ```
 
 **Problem:** Python import errors
@@ -892,7 +892,7 @@ S3 ObjectCreated (agents/) → findings_processor Lambda
    aws secretsmanager put-secret-value \
      --secret-id agent-platform-github-pat \
      --secret-string "ghp_YOUR_PAT_HERE" \
-     --profile company-aws-profile
+     --profile your-aws-profile
    ```
 
 ### First Run
@@ -903,7 +903,7 @@ Invoke the dispatcher Lambda manually to verify the configuration:
 aws lambda invoke \
   --function-name agent-platform-scheduled-agent-dispatcher \
   --payload '{}' \
-  --profile company-aws-profile \
+  --profile your-aws-profile \
   output.json && cat output.json
 ```
 
@@ -920,7 +920,7 @@ python -m scripts.run_scheduled_agent --agent doc-freshness --dry-run
 python -m scripts.run_scheduled_agent --due
 ```
 
-Set `S3_LOG_BUCKET=bblake-platform-agent-logs` in your environment to enable S3
+Set `S3_LOG_BUCKET=agent-platform-agent-logs` in your environment to enable S3
 output; omit it to fall back to local `logs/` files.
 
 ---

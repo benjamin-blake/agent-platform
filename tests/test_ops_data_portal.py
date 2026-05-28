@@ -1099,3 +1099,111 @@ class TestPipelineConsolidation:
 
             with pytest.raises(RuntimeError, match="Athena unreachable"):
                 update_rec("rec-042", {"status": "closed"})
+
+
+class TestMigrationParams:
+    """Tests for the private migration params on file_rec / file_decision / drain_pending."""
+
+    def test_file_rec_migration_int_id_pads_to_three_digits(self, tmp_path: Path) -> None:
+        """_migration_int_id bypasses _next_id and pads to rec-NNN (FK-compatible)."""
+        with (
+            patch("scripts.ops_data_portal._next_id") as mock_next_id,
+            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(dict(_VALID_FIELDS), _migration_int_id=5, _migration_mode=True, _skip_sync=True)
+
+        assert result == "rec-005"
+        mock_next_id.assert_not_called()
+
+    def test_file_rec_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
+        """_skip_sync=True defers the per-row _sync_table flush."""
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value="rec-700"),
+            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            file_rec(dict(_VALID_FIELDS), _skip_sync=True)
+            mock_sync.assert_not_called()
+
+            file_rec(dict(_VALID_FIELDS))
+            mock_sync.assert_called_once()
+
+    def test_file_rec_migration_mode_bypasses_content_validators(self, tmp_path: Path) -> None:
+        """_migration_mode lets a historical row that fails content rules import; the schema still applies."""
+        thin = {**_VALID_FIELDS, "context": "too short", "acceptance": ""}
+
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value="rec-701"),
+            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            # Without migration mode the short context is rejected.
+            with pytest.raises(ValueError, match="context"):
+                file_rec(dict(thin), _migration_int_id=701)
+
+            # With migration mode it imports.
+            assert file_rec(dict(thin), _migration_int_id=701, _migration_mode=True, _skip_sync=True) == "rec-701"
+
+    def test_file_rec_migration_id_bypasses_next_id_even_when_dynamo_down(self, tmp_path: Path) -> None:
+        """A migration row never goes to the portal outbox: _migration_int_id skips _next_id entirely."""
+        pending_dir = tmp_path / "pending"
+        with (
+            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("unreachable")),
+            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(dict(_VALID_FIELDS), _migration_int_id=42, _migration_mode=True, _skip_sync=True)
+
+        assert result == "rec-042"
+        assert not pending_dir.exists() or not list(pending_dir.glob("*.json"))
+
+    def test_file_decision_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
+        """_skip_sync=True on file_decision defers the per-row flush."""
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value=77),
+            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
+            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+        ):
+            from scripts.ops_data_portal import file_decision
+
+            file_decision({"title": "d", "status": "open"}, _skip_sync=True)
+            mock_sync.assert_not_called()
+
+    def test_drain_pending_honors_migration_int_id(self, tmp_path: Path) -> None:
+        """A pending rec carrying migration markers drains to the preserved padded id, no _next_id."""
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir(parents=True)
+        payload = {**_VALID_FIELDS, "context": "short", "_migration_int_id": 8, "_migration_mode": True}
+        payload.pop("id", None)
+        (pending_dir / "m.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        with (
+            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch("scripts.ops_data_portal._next_id") as mock_next_id,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+        ):
+            from scripts.ops_data_portal import drain_pending
+
+            result = drain_pending()
+
+        assert result["drained"] == 1
+        mock_next_id.assert_not_called()
+        _, call_rec = mock_opswriter.return_value.write.call_args[0]
+        assert call_rec["id"] == "rec-008"

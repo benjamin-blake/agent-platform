@@ -5,8 +5,9 @@ Runs the full DQ check suite directly against Athena. Never reads from a local c
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from scripts.aws_profile import resolve_aws_profile
 
 from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
@@ -45,7 +46,7 @@ class DataQualityVerifier(Verifier):
                 message=f"Required module unavailable (skipping DQ check): {exc}",
             )
 
-        profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
+        profile = resolve_aws_profile(default="agent_platform")
         try:
             boto3.Session(profile_name=profile).client("sts", region_name="eu-west-2").get_caller_identity()
         except Exception as exc:
@@ -66,7 +67,7 @@ class DataQualityVerifier(Verifier):
 
         all_checks = []
         workgroup = "agent-platform-production"
-        database = "trading_formulas_db"
+        database = "agent_platform"
         for yf in yaml_files:
             checks, metadata = load_checks(yf)
             workgroup = metadata.get("athena_workgroup", workgroup)

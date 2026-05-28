@@ -10,16 +10,20 @@ permissions:
 
 jobs:
   canary:
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    concurrency:
-      group: ci-runner
-      cancel-in-progress: false
     permissions:
+      id-token: write
       contents: read
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Configure AWS credentials (OIDC -- branch role)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+        aws-region: eu-west-2
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5

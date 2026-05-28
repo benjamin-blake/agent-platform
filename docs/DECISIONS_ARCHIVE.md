@@ -120,7 +120,7 @@ The system produces logs from two distinct environments: cloud (Lambda agents, s
 
 | Log origin | Primary store | Secondary store | Write pattern |
 |---|---|---|---|
-| Cloud-produced (Lambda agents, scheduled agents) | S3 (`bblake-platform-agent-logs`) | Local (read-only pull) | Lambda writes to S3; local pulls on session start |
+| Cloud-produced (Lambda agents, scheduled agents) | S3 (`agent-platform-agent-logs`) | Local (read-only pull) | Lambda writes to S3; local pulls on session start |
 | Locally-produced (session scripts, executor) | Local filesystem | S3 (push on `git push`) | Scripts write locally; `session_postflight.py` pushes to S3 |
 | Shared-mutable (priority queue, recommendations) | Local + S3 | N/A | `log_writer.py` (future) handles atomic read-modify-write |
 

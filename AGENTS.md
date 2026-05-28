@@ -4,7 +4,7 @@ Universal rules for Claude Code. Auto-loaded into every session.
 For full project context (AWS config, file router, recommendation schema, gotchas), see `docs/PROJECT_CONTEXT.md` — workflows load it on demand; you don't need it ambiently.
 
 ## Role and environment
-You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (Linux container, Ubuntu 24.04). compute node is the PySR compute node, reached via REDACTED-VPN + SSH when needed. Bash is the primary shell in all agent-facing contexts.
+You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
 
 ## Code style
 - Python 3.12+, type hints required, `async` for I/O.
@@ -49,6 +49,9 @@ You are a Lead Software Developer writing production-quality Python. The user is
   `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`) must include a
   `DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test
   (pending Decision 67 reversal)` execution step in lieu of active deployment steps.
+- **T2.12 security gate deferred (CD.20):** GHAS secret scanning + push protection, GitHub
+  branch protection with required status checks, CodeQL, Dependabot, and the fork-PR approval
+  policy are not yet enabled on the public repo. To be addressed in a follow-on session.
 
 ## Memory policy — CLAUDE.md is canonical persistence
 Do **not** write to the auto-memory system (`~/.claude/projects/.../memory/`) in this project. The user's persistence model is git-tracked CLAUDE.md files (root + per-directory) plus structured logs (`docs/SESSION_LOG.md`, `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`).
@@ -86,7 +89,7 @@ When a slash command instructs you to "apply" or "invoke" a skill, use the `Skil
 ## Operational data governance — Single Portal Invariant
 All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. IDs are allocated atomically via DynamoDB; the local JSONL files are read-only caches.
 
-Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity (SSO). If unreachable, run `aws sso login --profile company-aws-profile` first.
+Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity (SSO). If unreachable, run `aws sso login --profile agent_platform` first.
 
 ## Warehouse-as-source-of-truth invariant
 This is an append-only lakehouse. Athena (over Iceberg) is the single source of truth for all operational data. Local files have exactly two valid roles:
@@ -101,7 +104,7 @@ The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and 
 If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls from Athena and overwrites local). Never fix drift by re-staging from the local file.
 
 ## Merge protocol
-- **Authoritative pre-merge gate**: remote CI (`validate.py` on the self-hosted runner, Decision 68) is the authoritative gate. A branch is not merge-ready until CI passes.
+- **Authoritative pre-merge gate**: remote CI (`validate.py` on GitHub-hosted runners with OIDC, CD.21) is the authoritative gate. A branch is not merge-ready until CI passes.
 - **Local `--pre` is advisory only**: `python -m scripts.validate --pre` runs lint/format/prompts only. It shortens the edit loop but does NOT gate merges. Passing `--pre` locally does not mean CI will pass.
 - **Full presubmit**: `python -m scripts.validate` (no flags) runs the full check suite identical to CI. Use this locally before pushing to reduce round trips, but CI is still authoritative.
 - Two-tier model: presubmit (default, no flags) + `--pre` (edit-loop). Decision 60 migration complete per `docs/INTENT-validation-architecture.md`.
@@ -130,11 +133,11 @@ Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, co
 
 1. **Quick (AWS CLI only, no Terraform apply):**
    ```bash
-   aws events enable-rule --name agent-platform-hourly-scheduled-agents --profile company-aws-profile
+   aws events enable-rule --name agent-platform-hourly-scheduled-agents --profile agent_platform
    aws lambda update-function-configuration \
      --function-name agent-platform-scheduled-agent-dispatcher \
      --environment 'Variables={SCHEDULED_AGENTS_ENABLED=true,GITHUB_PAT_SECRET_ARN=<arn>,S3_LOG_BUCKET=<bucket>,GEMINI_API_KEY_SECRET_ARN=<arn>}' \
-     --profile company-aws-profile
+     --profile agent_platform
    ```
 
 2. **Permanent (via Terraform):**
@@ -145,69 +148,29 @@ Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, co
 
 3. **Verify:**
    - Check CloudWatch logs for `/aws/lambda/agent-platform-scheduled-agent-dispatcher` — should show agents dispatching within the next hour
-   - Verify agent findings files appear in S3 under `s3://bblake-platform-agent-logs/agents/`
+   - Verify agent findings files appear in S3 under `s3://agent-platform-data-lake/agents/`
    - Run `bin/venv-python -m scripts.run_scheduled_agent --smoke-test doc-freshness` to confirm the `OpsWriter` id-validation guard (added in dq-ops-rec-corrections) is active in the deployed package and that agent writes reach S3.
 
-### Self-hosted GitHub Actions runner
+### CI runner (GitHub-hosted)
 
-EC2 t3.medium runner in eu-west-2 (`agent-platform-runner`). See `terraform/ec2_runner.tf` and Decision 68.
+The self-hosted EC2 runner was retired 2026-05-28 per CD.21. CI now runs on GitHub-hosted
+runners (`ubuntu-latest`) with OIDC to the personal account (role
+`agent-platform-github-ci-branch` for branch/push events, `agent-platform-github-ci-pr` for
+pull requests). See `terraform/personal/oidc.tf`. The work-account runner definition is
+retained in `terraform/ec2_runner.tf` as an architectural-evolution artefact (no longer applied).
 
-1. **Check status:**
-   ```bash
-   sudo systemctl status "actions.runner.*"
-   ```
+### Claude Code OAuth token (CI + scheduled agents)
 
-2. **Start/stop:**
-   ```bash
-   sudo systemctl start "actions.runner.*"
-   sudo systemctl stop "actions.runner.*"
-   ```
+Setup (one-time, local terminal):
+```bash
+claude setup-token
+# Copy the printed token -- it uses your Max plan subscription (no API billing)
+```
+In GitHub: repo -> Settings -> Secrets and variables -> Actions -> Repository secrets
+-> New secret. Name: `CLAUDE_CODE_OAUTH_TOKEN`. Paste the token.
 
-3. **Re-registration (token expires in 60 minutes):**
-   ```bash
-   cd ~/actions-runner
-   sudo ./svc.sh stop
-   ./config.sh remove
-   # Generate new token: GitHub repo -> Settings -> Actions -> Runners -> New self-hosted runner
-   ./config.sh --url https://github.com/{owner}/{repo} --token <TOKEN>
-   sudo ./svc.sh install && sudo ./svc.sh start
-   ```
+Rotation: re-run `claude setup-token` locally. Update the GH Actions secret with
+the new token. Set a 90-day calendar reminder. If the scheduled agent workflow fails
+with auth errors, check token expiry first.
 
-4. **Health check (from local machine):**
-   ```bash
-   gh api repos/{owner}/{repo}/actions/runners --jq '.runners[]'
-   ```
-
-5. **Shell access:** No SSH key pair is configured (the runner connects to GitHub via HTTPS only; no inbound port needed). For emergency access, use **EC2 Instance Connect** from the AWS console (EC2 -> Instances -> Connect -> EC2 Instance Connect). No key pair or open port required on Ubuntu 22.04 AMIs.
-   ```bash
-   # Get the instance ID for console navigation:
-   aws ec2 describe-instances --filters "Name=tag:Name,Values=agent-platform-runner" --profile company-aws-profile --query "Reservations[].Instances[].InstanceId" --output text
-   ```
-
-6. **AWS credential delegation block** (written by user_data; must be present at `/home/ubuntu/.aws/config`):
-   ```ini
-   [profile company-aws-profile]
-   credential_source = Ec2InstanceMetadata
-   region = eu-west-2
-   ```
-   If absent (user_data failure), recreate manually on the instance and re-run verification step 3 from `docs/plans/PLAN-self-hosted-runner.md`.
-
-7. **IAM permission boundary:** Do not extend the runner's IAM policy beyond `terraform/ec2_runner.tf`. If a new CI check needs AWS access, add the specific action to `aws_iam_policy.github_runner_ci` and run `terraform plan` (present to human) then `terraform apply`.
-
-8. **Warm runner (future intent -- not built):** See Decision 68. Do not add persistent venv caching without the drift-enforcement plan (hash-gate, workspace reset, concurrency locking).
-
-9. **OAuth token for Claude Code scheduled agents:**
-
-   Setup (one-time, local terminal):
-   ```bash
-   claude setup-token
-   # Copy the printed token -- it uses your Max plan subscription (no API billing)
-   ```
-   In GitHub: repo -> Settings -> Secrets and variables -> Actions -> Repository secrets
-   -> New secret. Name: `CLAUDE_CODE_OAUTH_TOKEN`. Paste the token.
-
-   Rotation: re-run `claude setup-token` locally. Update the GH Actions secret with
-   the new token. Set a 90-day calendar reminder. If the scheduled agent workflow fails
-   with auth errors, check token expiry first.
-
-   Do not share this token or commit it to any file in the repository.
+Do not share this token or commit it to any file in the repository.

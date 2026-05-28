@@ -83,7 +83,7 @@ Phase Platform (automation infrastructure)
 - Decision 48 (docs/DECISIONS.md): Verification Tier Classification -- this plan is V3
 - Existing Iceberg table pattern: terraform/iceberg_tables.tf uses locals.glue_tables map + locals.create_table_queries map + null_resource.create_iceberg_tables for_each. Existing tables (market_data) use PARTITIONED BY (trade_date), Parquet+gzip, with write.metadata.delete-after-commit.enabled and write.metadata.previous-versions-max=10.
 - Existing write pattern: scripts/s3_log_store.py provides append_jsonl(key, entry) and overwrite_jsonl(key, entries) with dual S3/local backend and PYTEST_CURRENT_TEST guard.
-- S3 bucket for ops data: bblake-platform-agent-logs (already exists, used by s3_log_store.py)
+- S3 bucket for ops data: agent-platform-agent-logs (already exists, used by s3_log_store.py)
 - Athena workgroup: agent-platform-production (engine v3, required for Iceberg operations)
 
 ## Pre-Implementation Checklist
@@ -119,8 +119,8 @@ Phase Platform (automation infrastructure)
    - **ops_priority_queue_current**: WHERE queue_run_id = (SELECT queue_run_id FROM trading_formulas_db.ops_priority_queue ORDER BY ingested_at DESC LIMIT 1)
 
 3. **S3 prefix layout**:
-   - Staging: staging/ops_{table}/trade_date=YYYY-MM-DD/batch-{uuid}.jsonl in bblake-platform-agent-logs
-   - Iceberg: iceberg/ops_{table}/ in bblake-platform-agent-logs
+   - Staging: staging/ops_{table}/trade_date=YYYY-MM-DD/batch-{uuid}.jsonl in agent-platform-agent-logs
+   - Iceberg: iceberg/ops_{table}/ in agent-platform-agent-logs
 
 4. **Write flow diagram**: local JSONL -> OpsWriter.write() -> S3 staging upload -> session_postflight compact_all() -> Athena INSERT into Iceberg -> views expose current state
 
@@ -148,7 +148,7 @@ Match the markdown style of existing docs/contracts/ files (log-storage.md, infe
 1. **Add Decision 50** after Decision 49 (current top section), following the same format:
    - Title: "Append-Only Ops Data Store via Iceberg (Decided)"
    - Problem: dual source of truth (local JSONL vs S3), no audit trail, no structured query capability, schema drift across write sites
-   - Decision: all operational structured logs stored as append-only Iceberg tables; current state exposed via ROW_NUMBER() views; Parquet+gzip; partitioned by trade_date; located in bblake-platform-agent-logs/iceberg/; OpsWriter class handles staging+compaction; INSERT-only semantics (no MERGEs)
+   - Decision: all operational structured logs stored as append-only Iceberg tables; current state exposed via ROW_NUMBER() views; Parquet+gzip; partitioned by trade_date; located in agent-platform-agent-logs/iceberg/; OpsWriter class handles staging+compaction; INSERT-only semantics (no MERGEs)
    - Supersedes: Decision 45
    - Related: Decision 48, Decision 49
    - Reference: docs/contracts/ops-data-store.md

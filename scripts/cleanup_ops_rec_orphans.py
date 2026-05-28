@@ -27,10 +27,10 @@ import boto3
 KNOWN_ORPHAN_IDS: list[str] = ["rec-608", "rec-633"]
 
 _WORKGROUP = "agent-platform-production"
-_DATABASE = "trading_formulas_db"
+_DATABASE = "agent_platform"
 _AWS_REGION = "eu-west-2"
-_SSO_PROFILE = "company-aws-profile"
-_S3_SCRATCH = "s3://bblake-platform-agent-logs/athena-scratch/"
+_SSO_PROFILE = "agent_platform"
+_S3_SCRATCH = "s3://agent-platform-data-lake/athena-scratch/"
 
 
 def _run_athena_query(client: Any, sql: str) -> str:

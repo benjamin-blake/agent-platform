@@ -56,7 +56,7 @@ For rollback: `terraform destroy -target=aws_dynamodb_table.counters`
 | 7 | [post-deploy] | Seed counters with current max IDs (dynamic) | `python -m scripts.sync_recommendations --seed --profile company-aws-profile` | Prints seeded values for recommendations and decisions counters (dynamically reads max from local JSONL + DECISIONS.md) | Check table name, region, profile |
 | 8 | [post-deploy] | Allocate a rec ID via CLI | `python -m scripts.sync_recommendations --next-id recommendations --profile company-aws-profile` | Prints `rec-522` (first allocation after seed) | Check DynamoDB permissions, table name |
 | 9 | [post-deploy] | Allocate a decision ID via CLI | `python -m scripts.sync_recommendations --next-id decisions --profile company-aws-profile` | Prints integer `56` | Same as above |
-| 10 | [post-deploy] | Run postflight document staging via CLI | `AWS_PROFILE=company-aws-profile S3_LOG_BUCKET=bblake-platform-agent-logs python -m scripts.session_postflight --stage-documents` | Prints staging counts for ops_decisions and ops_recommendations, exits 0 | Check OpsWriter, S3 bucket, parse logic |
+| 10 | [post-deploy] | Run postflight document staging via CLI | `AWS_PROFILE=company-aws-profile S3_LOG_BUCKET=agent-platform-agent-logs python -m scripts.session_postflight --stage-documents` | Prints staging counts for ops_decisions and ops_recommendations, exits 0 | Check OpsWriter, S3 bucket, parse logic |
 
 ## Constraints
 - No IAM users (Decision 36/37) -- DynamoDB accessed via SSO profile

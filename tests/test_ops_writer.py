@@ -319,7 +319,7 @@ class TestOpsWriterCompact:
         assert count == 1
         mock_wr.athena.to_iceberg.assert_called_once()
         call_kwargs = mock_wr.athena.to_iceberg.call_args[1]
-        assert call_kwargs["database"] == "trading_formulas_db"
+        assert call_kwargs["database"] == "agent_platform"
         assert call_kwargs["table"] == "ops_recommendations"
         assert call_kwargs["mode"] == "append"
         assert call_kwargs["workgroup"] == "agent-platform-production"
@@ -638,10 +638,10 @@ class TestBucketResolution:
         env_without_bucket["ENVIRONMENT"] = "company"
         with patch.dict("os.environ", env_without_bucket, clear=True):
             result = writer._bucket()
-        assert result == "bblake-platform-agent-logs"
+        assert result == "agent-platform-agent-logs"
 
-    def test_no_env_no_config_returns_empty(self):
-        """_bucket() returns '' when env var is unset and config lookup raises."""
+    def test_falls_back_to_personal_config_when_config_object_raises(self):
+        """When env is unset and Config() raises, Fallback-2 parses config.personal.yaml directly."""
         import os
 
         writer = _make_writer()
@@ -652,7 +652,7 @@ class TestBucketResolution:
                 side_effect=RuntimeError("config unavailable"),
             ):
                 result = writer._bucket()
-        assert result == "bblake-platform-agent-logs"
+        assert result == "agent-platform-data-lake"
 
 
 # ---------------------------------------------------------------------------

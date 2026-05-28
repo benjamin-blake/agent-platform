@@ -692,7 +692,7 @@ Between-rec hooks call drain() only (not full sync()) to avoid 5x Athena query c
 **Decision:** All operational structured logs (recommendations, execution plans, session telemetry,
 decisions, priority queue) are stored as append-only Iceberg tables in Athena. Current state is exposed
 via ROW_NUMBER() views. Parquet + gzip, partitioned by `trade_date`. Located in
-`bblake-platform-agent-logs/iceberg/`. The `OpsWriter` class in `scripts/ops_writer.py` handles
+`agent-platform-agent-logs/iceberg/`. The `OpsWriter` class in `scripts/ops_writer.py` handles
 staging uploads and Athena compaction. INSERT-only semantics (no MERGEs). Supersedes Decision 45.
 
 **Problem:**

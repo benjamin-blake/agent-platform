@@ -161,11 +161,11 @@ See detailed setup in [GETTING_STARTED.md](docs/GETTING_STARTED.md) for environm
 1. **Configure AWS SSO**:
 ```bash
 aws configure sso
-# SSO start URL: https://REDACTED-EMPLOYER.awsapps.com/start/#/?tab=accounts
+# SSO start URL: https://your-sso-portal.awsapps.com/start
 # SSO region: eu-west-2
-# Account ID: REDACTED-ACCOUNT-ID
+# Account ID: <your-account-id>
 
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 ```
 
 2. **Deploy Infrastructure**:
@@ -487,7 +487,7 @@ See [DECISIONS.md](docs/DECISIONS.md) for full context on all decisions:
 environment: company
 aws:
   region: eu-west-2
-  profile: company-aws-profile
+  profile: your-aws-profile
   s3_discovery_bucket: formulas-discovery
   s3_staging_bucket: formulas-staging
   s3_production_bucket: formulas-production
@@ -508,7 +508,7 @@ company:
   s3_production_bucket: formulas-production
   s3_staging_bucket: formulas-staging
   s3_region: eu-west-2
-  aws_profile: company-aws-profile  # Read-only access
+  aws_profile: your-aws-profile  # Read-only access
 postgres:
   host: localhost
   port: 5432

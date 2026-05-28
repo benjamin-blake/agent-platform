@@ -11,7 +11,7 @@ BEDROCK_CREDENTIALS_SECRET_ARN : ARN of the Secrets Manager secret containing
     cross-account Bedrock credentials (JSON with ``aws_access_key_id`` and
     ``aws_secret_access_key``). Falls back to ``GITHUB_PAT_SECRET_ARN`` if unset.
 S3_LOG_BUCKET          : S3 bucket name for writing agent findings
-    (e.g. ``bblake-platform-agent-logs``).
+    (e.g. ``agent-platform-data-lake``).
 SCHEDULED_AGENT_MODEL  : Optional model override.
 
 Providers

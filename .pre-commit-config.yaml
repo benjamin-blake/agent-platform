@@ -28,3 +28,20 @@ repos:
     -   id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
         exclude: ^logs/\.copilot-otel\.jsonl$
+
+# Shape-based denylist (PLAN-public-migration). detect-secrets above catches high-entropy/known-
+# credential patterns; this catches specific never-commit identifiers by their SHAPE, never by
+# literal value -- a literal denylist would itself leak the secret into this (soon-public) config.
+# Scoped to never-commit shapes only; work RESOURCE names (company-aws-profile, trading_formulas_db,
+# ...) are intentionally NOT blocked here -- they are mid-scrub and a block would stall Phases D-F.
+# This is the local belt-and-braces analogue of GHAS push protection (deferred T2.12 / Step 33).
+-   repo: local
+    hooks:
+    -   id: block-sensitive-identifiers
+        name: Block sensitive identifiers (shape-based, never-commit)
+        description: Personal/work 12-digit AWS account IDs in ARNs, IAM principal/access-key IDs, and work SSO hub profile names.
+        language: pygrep
+        # The ARN branch allowlists 336392948345 (AWS-managed AWSSDKPandas layer account -- public,
+        # not a secret) via negative lookahead, so it still catches personal/work account IDs.
+        entry: '(arn:aws:[^:]*:[^:]*:(?!336392948345:)[0-9]{12}:|\b(?:AIDA|ASIA|AKIA)[A-Z0-9]{16}\b|\b[a-z]+_information_hub\b)'
+        exclude: ^\.secrets\.baseline$

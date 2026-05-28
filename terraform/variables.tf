@@ -129,9 +129,11 @@ variable "data_pipeline_schedule_enabled" {
 # Platform Account Variables
 
 variable "platform_account_id" {
+  # No committed default (PLAN-public-migration Step 9): the personal account ID must not be a
+  # committed literal. Supplied via gitignored tfvars if the work root is ever applied (it is not,
+  # post-CD.21). Still referenced by lambda_tooling_iam.tf, so the variable is retained.
   description = "Personal AWS account id hosting the platform Lambda surface (agent_platform profile target)"
   type        = string
-  default     = "REDACTED-PERSONAL-ACCOUNT"
 }
 
 variable "platform_profile_name" {
