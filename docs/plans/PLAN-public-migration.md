@@ -337,6 +337,37 @@ no longer applied, so no `count` guard is required.
   - **Step 5 counter maxes (read 2026-05-28, work account `agent-platform-counters`):**
     recommendations=944, decisions=81. Step 7 seed (floor, +1000): recommendations=1944,
     decisions=1081. Step 13c re-asserts counter >= max(migrated_id)+margin post-migration.
+  - **Phase A EXECUTED VIA SCORCHED EARTH (2026-05-28) -- supersedes Steps 1-6 below:**
+    The filter-repo-on-history approach (Steps 2-3) was attempted and ABANDONED. Regex
+    substitutions had case-sensitivity gaps (e.g. `[Tt]ailscale` missed `TAILSCALE_AUTHKEY` and
+    `Tailnet`), and the history (919 commits, 24 branches) was too dense with personal / topology /
+    employer prose for reliable token-scrubbing ("music production" and "Ryzen 9 9950X" had no
+    patterns at all). Instead the repo was collapsed to a SINGLE orphan commit:
+    - `git checkout --orphan` -> one "Initial commit" (`4bd5850`); author = committer =
+      `217728084+benjamin-blake@users.noreply.github.com` (human identity; bot authorships dropped
+      with the deleted history; AI involvement kept via a `Co-Authored-By: Claude` trailer).
+    - DELETED from the tree entirely (43 files): `docs/plans/briefings/`, `docs/audit-reports/`,
+      `docs/plans/PLAN-platform-extraction-strategy.md`, `docs/plans/PLAN-t03-pattern-b-agent-auth.md`,
+      `docs/plans/PLAN-bedrock-migration.md`.
+    - `substitutions.txt` (gitignored) expanded to case-insensitive employer/copyright/tailscale/
+      openssh/home-rig rules + a broad `regex:ml-trading-[A-Za-z0-9_-]+` + Tailnet / Ryzen / "music
+      production" / gmail->no-reply, applied via `git filter-repo --replace-text` over the one commit.
+    - VERIFIED clean (whole-tree `git grep`): zero hits for employer name, account IDs, work
+      profiles, every `ml-trading-*` variant, Tailscale/Tailnet/Ryzen/OpenSSH/home-rig, "music
+      production", emails, and live access keys (AKIA/AIDA/ASIA). `git log --format=%ae` = only the
+      no-reply. Pre-scrub backup kept at `../mlsbx-prescrub-backup.git` (local, off-repo).
+  - **Step 4b DONE:** EC2 runner `ml-trading-system-runner` (`i-04b1aff54bd174f68`) terminated
+    2026-05-28.
+  - **Step 6 REPLACED by repo recreate (2026-05-28):** force-push + rename was replaced by
+    delete-and-recreate -- safer, because GitHub keeps old `refs/pull/*` commits fetchable after a
+    force-push. A fresh PRIVATE repo `benjamin-blake/agent-platform` was created and the single clean
+    commit pushed (`main` + `agent/public-migration` both at `4bd5850`); the old
+    `machine-learning-sandbox` repo is deleted. OIDC sub claims already target `agent-platform`, so
+    NO rename step remains anywhere in the plan.
+  - **PHASE A IS COMPLETE.** The next `/implement` session starts at Phase B (Step 7). The repo stays
+    PRIVATE until Phase G / Step 32. OPEN prerequisite before the Step 31 migration: confirm
+    `agent_platform`/PlatformDev has Athena query / S3 read-write / DynamoDB get-update / Glue get
+    runtime perms (provisioning still uses `agent_platform_admin`).
 
 ## Pre-Implementation Checklist
 
@@ -356,7 +387,12 @@ no longer applied, so no `count` guard is required.
 
 ## Ordered Execution Steps
 
-### Phase A: Pre-Branch History Scrub (human-executed; agent prepares artifacts in Steps 1-3)
+### Phase A: Pre-Branch History Scrub -- COMPLETE 2026-05-28 (DO NOT RE-RUN)
+
+> **Phase A was executed via a SCORCHED-EARTH squash, not the filter-repo-on-history steps below.**
+> See "Phase A EXECUTED VIA SCORCHED EARTH" in the Context section above for what actually happened.
+> Steps 1-6 in this subsection are SUPERSEDED and retained only for historical context. A fresh
+> `/implement` session should START AT PHASE B (Step 7).
 
 **Step 1 -- Prepare `substitutions.txt` and update `.gitignore`**
 
