@@ -45,7 +45,7 @@ class DataQualityVerifier(Verifier):
                 message=f"Required module unavailable (skipping DQ check): {exc}",
             )
 
-        profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
+        profile = os.environ.get("AWS_PROFILE", "agent_platform")
         try:
             boto3.Session(profile_name=profile).client("sts", region_name="eu-west-2").get_caller_identity()
         except Exception as exc:
@@ -66,7 +66,7 @@ class DataQualityVerifier(Verifier):
 
         all_checks = []
         workgroup = "agent-platform-production"
-        database = "trading_formulas_db"
+        database = "agent_platform"
         for yf in yaml_files:
             checks, metadata = load_checks(yf)
             workgroup = metadata.get("athena_workgroup", workgroup)

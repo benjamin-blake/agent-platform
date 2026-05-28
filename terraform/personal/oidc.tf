@@ -15,8 +15,8 @@ locals {
 }
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
   # GitHub Actions OIDC root CA thumbprint -- a public, well-known value (not a secret).
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"] # pragma: allowlist secret
 }
@@ -26,7 +26,7 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_branch" {
-  name        = "bblake-platform-github-ci-branch"
+  name        = "agent-platform-github-ci-branch"
   description = "GitHub Actions CI (write): main + agent/* branches via OIDC"
 
   assume_role_policy = jsonencode({
@@ -55,7 +55,7 @@ resource "aws_iam_role" "github_ci_branch" {
 }
 
 resource "aws_iam_role_policy" "github_ci_branch" {
-  name = "bblake-platform-github-ci-branch"
+  name = "agent-platform-github-ci-branch"
   role = aws_iam_role.github_ci_branch.id
 
   policy = jsonencode({
@@ -142,7 +142,7 @@ resource "aws_iam_role_policy" "github_ci_branch" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_pr" {
-  name        = "bblake-platform-github-ci-pr"
+  name        = "agent-platform-github-ci-pr"
   description = "GitHub Actions CI (read-only): PR context via OIDC"
 
   assume_role_policy = jsonencode({
@@ -168,7 +168,7 @@ resource "aws_iam_role" "github_ci_pr" {
 }
 
 resource "aws_iam_role_policy" "github_ci_pr" {
-  name = "bblake-platform-github-ci-pr"
+  name = "agent-platform-github-ci-pr"
   role = aws_iam_role.github_ci_pr.id
 
   policy = jsonencode({
@@ -203,9 +203,9 @@ resource "aws_iam_role_policy" "github_ci_pr" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/athena/*"]
       },
       {
-        Sid    = "S3ReadTables"
-        Effect = "Allow"
-        Action = ["s3:GetObject"]
+        Sid      = "S3ReadTables"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
         Resource = ["${aws_s3_bucket.data_lake.arn}/iceberg/*"]
       },
       {

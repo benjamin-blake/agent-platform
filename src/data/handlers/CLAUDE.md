@@ -16,7 +16,7 @@ If any of these are missing from a plan that touches handlers here, the plan is 
 - All handlers must accept a `force_{param}` event field for plan-driven re-runs.
 - IAM-modifying plans: `terraform apply` must precede Lambda code deploy. See `terraform/CLAUDE.md` for the IAM precedence rule.
 - Scheduled-agent handlers route by the `provider` field in `.github/agents/schedule.yaml` — not by `LLM_PROVIDER` env var.
-- `bblake-platform-agent-logs` is the agent log bucket for cron workflows. Don't write to other buckets unless the plan explicitly says so.
+- `agent-platform-data-lake` is the agent log bucket for cron workflows. Don't write to other buckets unless the plan explicitly says so.
 
 ## Subprocess gotcha (Copilot SDK legacy)
 The Copilot CLI binary extracts to `$HOME` at startup. Lambda has no home directory for the sandbox user — handlers spawning Copilot subprocesses must pass `SubprocessConfig(env={"HOME": "/tmp"})`. Same applies to any future model-CLI subprocess.

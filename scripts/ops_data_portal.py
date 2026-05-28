@@ -48,9 +48,9 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PENDING_OUTBOX = _REPO_ROOT / "logs" / ".ops-outbox" / "ops_recommendations_pending"
 _DECISIONS_PENDING_OUTBOX = _REPO_ROOT / "logs" / ".ops-outbox" / "ops_decisions_pending"
-_SSO_PROFILE = "company-aws-profile"
+_SSO_PROFILE = "agent_platform"
 
-_ATHENA_DATABASE = "trading_formulas_db"
+_ATHENA_DATABASE = "agent_platform"
 _ATHENA_WORKGROUP = "agent-platform-production"
 _AWS_REGION = "eu-west-2"
 
@@ -262,7 +262,13 @@ def _load_write_time_validators(table: str) -> list[tuple[str, Callable]]:
     return validators
 
 
-def file_rec(fields: dict, profile: Optional[str] = None) -> str:
+def file_rec(
+    fields: dict,
+    profile: Optional[str] = None,
+    _migration_int_id: Optional[int] = None,
+    _skip_sync: bool = False,
+    _migration_mode: bool = False,
+) -> str:
     """Allocate a new recommendation ID and stage the record to OpsWriter.
 
     On success returns the allocated ID (e.g. 'rec-522').
@@ -274,6 +280,20 @@ def file_rec(fields: dict, profile: Optional[str] = None) -> str:
         fields: Rec fields (MUST include at minimum: title, file, status,
                 source, effort, priority, context, acceptance, risk).
         profile: Optional AWS profile override (uses AWS_PROFILE env var by default).
+        _migration_int_id: PRIVATE. Used only by the Phase C migration script to
+            bypass the DynamoDB allocator and preserve historical integer IDs.
+            When set, the id is formed as f"rec-{n:03d}" (same zero-padding as
+            next_id) so dependency / priority-queue FKs to padded ids still match.
+            Threaded through the offline outbox + drain_pending so a DynamoDB blip
+            cannot silently renumber a migrated rec. Must not be used elsewhere.
+        _skip_sync: PRIVATE. When True, suppress the per-row _sync_table() flush so
+            a bulk import can call sync() exactly once at the end. Migration-only.
+        _migration_mode: PRIVATE. When True, bypass the write-time CONTENT-quality
+            validation surface (the three explicit calls _validate_file_path /
+            _validate_context_length / lint_acceptance_command AND the YAML-loaded
+            _load_write_time_validators loop) so historical rows that predate later
+            content-rule tightening still import. validate_source and the
+            Recommendation schema (model_validate) remain enforced. Migration-only.
 
     Returns:
         Allocated ID string ('rec-NNN') or 'pending-<uuid>' when offline.
@@ -292,19 +312,30 @@ def file_rec(fields: dict, profile: Optional[str] = None) -> str:
 
     _derive_computed_fields(fields)
 
-    for _col, _validator in _load_write_time_validators("ops_recommendations"):
-        _validator(fields.get(_col), _col)
+    if not _migration_mode:
+        for _col, _validator in _load_write_time_validators("ops_recommendations"):
+            _validator(fields.get(_col), _col)
 
     validate_source(fields["source"])
-    _validate_file_path(fields["file"])
-    _validate_context_length(fields["context"])
-    lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"])
-    if not lint_ok:
-        raise ValueError(lint_msg)
+
+    if not _migration_mode:
+        _validate_file_path(fields["file"])
+        _validate_context_length(fields["context"])
+        lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"])
+        if not lint_ok:
+            raise ValueError(lint_msg)
 
     try:
-        rec_id = _next_id("recommendations", profile=profile)
+        if _migration_int_id is not None:
+            rec_id = f"rec-{_migration_int_id:03d}"
+        else:
+            rec_id = _next_id("recommendations", profile=profile)
     except Exception as exc:
+        # Reached only when _next_id raises -- i.e. NON-migration writes (migration rows set
+        # _migration_int_id, which bypasses _next_id, so they never reach here). Migration id
+        # preservation under S3 flakiness is handled by OpsWriter's own outbox, which stages the
+        # record with its already-resolved id. drain_pending still honours a migration marker if
+        # one is present in a payload, but file_rec does not produce such a payload.
         logger.warning("[PORTAL] DynamoDB unreachable or credentials missing, queuing rec to pending outbox: %s", exc)
         pending_id = str(uuid.uuid4())
         _PENDING_OUTBOX.mkdir(parents=True, exist_ok=True)
@@ -323,7 +354,8 @@ def file_rec(fields: dict, profile: Optional[str] = None) -> str:
     OpsWriter().write("ops_recommendations", merged)
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Filed %s: %s", rec_id, merged.get("title", ""))
-    _sync_table("ops_recommendations")
+    if not _skip_sync:
+        _sync_table("ops_recommendations")
     return str(rec_id)
 
 
@@ -450,15 +482,18 @@ def file_decision(
     fields: dict,
     profile: Optional[str] = None,
     _migration_int_id: Optional[int] = None,
+    _skip_sync: bool = False,
 ) -> str:
     """Allocate a new decision ID and stage the record to OpsWriter.
 
     Args:
         fields: Decision fields (title, status at minimum).
         profile: Optional AWS profile override.
-        _migration_int_id: PRIVATE. Used only by the Phase 3a migration script to
+        _migration_int_id: PRIVATE. Used only by the Phase C migration script to
             bypass the DynamoDB allocator and preserve historical integer IDs.
             Must not be used by any other caller.
+        _skip_sync: PRIVATE. When True, suppress the per-row _sync_table() flush so
+            a bulk import can call sync() exactly once at the end. Migration-only.
 
     Returns:
         Allocated decision ID string (e.g. 'dec-073'), or 'pending-<uuid>' when
@@ -487,7 +522,8 @@ def file_decision(
         OpsWriter().write("ops_decisions", merged)
         _append_to_local_jsonl(DECISIONS_JSONL, merged)
         logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
-        _sync_table("ops_decisions")
+        if not _skip_sync:
+            _sync_table("ops_decisions")
         return dec_id
 
     except RuntimeError as exc:
@@ -667,6 +703,11 @@ def drain_pending(profile: str | None = None) -> dict:
             skipped += 1
             continue
 
+        # Migration markers (preserved through the outbox so a DynamoDB blip cannot
+        # renumber a migrated rec or re-impose content validation on a historical row).
+        migration_int_id = fields.pop("_migration_int_id", None)
+        migration_mode = bool(fields.pop("_migration_mode", False))
+
         try:
             validate_source(fields.get("source", ""))
         except ValueError as exc:
@@ -699,20 +740,24 @@ def drain_pending(profile: str | None = None) -> dict:
                         skipped += 1
                     continue
 
-        try:
-            rec_id = _next_id("recommendations", profile=profile or _SSO_PROFILE)
-        except RuntimeError as exc:
-            logger.warning("[PORTAL] DynamoDB still unreachable during drain, skipping %s: %s", pending_file.name, exc)
-            skipped += 1
-            continue
+        if migration_int_id is not None:
+            rec_id = f"rec-{int(migration_int_id):03d}"
+        else:
+            try:
+                rec_id = _next_id("recommendations", profile=profile or _SSO_PROFILE)
+            except RuntimeError as exc:
+                logger.warning("[PORTAL] DynamoDB still unreachable during drain, skipping %s: %s", pending_file.name, exc)
+                skipped += 1
+                continue
 
         try:
             merged = dict(fields)
             merged["id"] = str(rec_id)
             merged.setdefault("date", date.today().isoformat())
             _derive_computed_fields(merged)
-            for _col, _validator in _load_write_time_validators("ops_recommendations"):
-                _validator(merged.get(_col), _col)
+            if not migration_mode:
+                for _col, _validator in _load_write_time_validators("ops_recommendations"):
+                    _validator(merged.get(_col), _col)
             Recommendation.model_validate(merged)
             OpsWriter().write("ops_recommendations", merged)
             _append_to_local_jsonl(RECS_JSONL, merged)
@@ -890,7 +935,7 @@ def _delete_postmortems_from_iceberg(failed_rec_id: str, profile: Optional[str] 
         f"WHERE source = 'executor-postmortem' "
         f"AND title LIKE '{title_prefix}%'"
     )
-    bucket = os.environ.get("S3_LOG_BUCKET", "bblake-platform-agent-logs")
+    bucket = os.environ.get("S3_LOG_BUCKET", "agent-platform-data-lake")
 
     try:
         response = athena.start_query_execution(

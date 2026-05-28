@@ -42,12 +42,12 @@ provider "aws" {
 # ---------------------------------------------------------------------------
 
 resource "aws_glue_catalog_database" "ops" {
-  name        = "bblake_platform"
+  name        = "agent_platform"
   description = "Personal-account operational data lake (ops_recommendations / ops_decisions / ops_priority_queue Iceberg tables)"
 }
 
 resource "aws_athena_workgroup" "production" {
-  name        = "bblake-platform-production"
+  name        = "agent-platform-production"
   description = "Production queries: OPTIMIZE, MERGE writes, all ops portal/preflight queries"
 
   configuration {
@@ -77,7 +77,7 @@ resource "aws_athena_workgroup" "production" {
 # ---------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "data_lake" {
-  bucket = "bblake-platform-data-lake"
+  bucket = "agent-platform-data-lake"
 
   tags = {
     Name    = "Platform Data Lake"
@@ -145,7 +145,7 @@ resource "aws_s3_bucket_policy" "data_lake_https_only" {
 # ---------------------------------------------------------------------------
 
 resource "aws_dynamodb_table" "counters" {
-  name         = "bblake-platform-counters"
+  name         = "agent-platform-counters"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "counter_name"
 

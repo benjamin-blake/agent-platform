@@ -419,6 +419,82 @@ no longer applied, so no `count` guard is required.
        coexist (separate cached tokens), confirmed live.
     3. **Record the `PlatformDataLakeProvisioning` IAM change** (and, once granted, the PlatformDev runtime policy)
        as a Decision / runbook entry during the Phase F doc pass.
+- **Phase C COMPLETE + Phase D functional core COMPLETE (2026-05-28) -- plus a NAMING REWORK that supersedes Phase B:**
+  - **NAMING REWORK (human decision, 2026-05-28) -- supersedes every `bblake-*` name in this plan.** The user
+    chose to make the platform resource names user/product-agnostic. ALL personal-account resource names are now
+    `agent-platform-*` / `agent_platform`, NOT `bblake-*`:
+    - Glue DB `bblake_platform` -> **`agent_platform`**
+    - Athena workgroup `bblake-platform-production` -> **`agent-platform-production`**
+    - S3 bucket `bblake-platform-data-lake` -> **`agent-platform-data-lake`**
+    - DynamoDB `bblake-platform-counters` -> **`agent-platform-counters`**
+    - IAM roles `bblake-platform-github-ci-branch` / `-pr` -> **`agent-platform-github-ci-*`**
+    The SSO profiles are UNCHANGED: runtime `agent_platform`, provisioning `agent_platform_admin`.
+    **Everywhere this plan says `bblake-platform-*` / `bblake_platform`, read `agent-platform-*` / `agent_platform`.**
+  - **LIVE INFRA RE-APPLY REQUIRED (Phase B deployed `bblake-*`; the code now targets `agent-*`).** Before the
+    Step 31 migration a human must, in order: (a) re-grant the breakglass `PlatformDataLakeProvisioning` inline
+    policy on role `PlatformAdmin` (via IAM user `platform-breakglass`) scoped to the NEW `agent-platform-*` ARNs
+    (S3 `arn:aws:s3:::agent-platform-data-lake[/*]`, `dynamodb:*` on `table/agent-platform-*`, glue on
+    `agent_platform`, athena on `agent-platform-production`) -- else the apply AccessDenies creating the new names;
+    (b) reconcile the S3 bucket -- the user MANUALLY CREATED `agent-platform-data-lake` in the AWS console (name is
+    globally free, confirmed), so either delete that empty bucket so Terraform owns it OR `terraform import` it,
+    else `terraform apply` errors `BucketAlreadyExists`; (c) `terraform -chdir=terraform/personal apply
+    -var-file=terraform.personal.tfvars` under `agent_platform_admin` -- a single apply REPLACES the 21 `bblake-*`
+    resources with `agent-*` (all empty, zero data loss; cheapest moment, migration not yet run); (d) re-run VP8-12
+    against the `agent-*` names. `terraform validate` + `fmt` already pass on the renamed module.
+  - **Phase C landed (all unit-tested, green):** `scripts/ops_data_portal.py` (`file_rec` gained private
+    `_migration_int_id`/`_skip_sync`/`_migration_mode`; `file_decision` gained `_skip_sync`; `drain_pending` honours
+    a migration marker if present -- file_rec's offline branch intentionally does NOT set it, see the in-code
+    comment: migration rows bypass `_next_id` so that branch is unreachable for them, and OpsWriter's own outbox
+    preserves the staged id). `scripts/sync_recommendations.py` gained monotonic `reseed_recommendations_counter`.
+    `scripts/migrate_ops_data.py` CREATED (read-only boto3 Athena read of the SOURCE `*_current` views; writes ONLY
+    via the portal; idempotency guard; source-registry reconciliation; required-field pre-validation skip-report;
+    counter reseed HARD gate; post-write count + content spot-check; `migration-summary.json`). `migrate()` was
+    refactored into `_dry_run_skip_accounting` / `_write_recs` / `_write_decisions` / `_verify_migration` helpers to
+    clear the Decision-43 cyclomatic-complexity gate. Tests: `tests/test_migrate_ops_data.py` (NEW, 9 tests) +
+    new-branch coverage in `tests/test_ops_data_portal.py` and `tests/test_sync_recommendations_decisions.py`.
+    `config/agent/data_quality/source_registry.yaml` gained 2 legacy entries (`implement-session`,
+    `Autonomous Postflight Cleanup`) so the migrated rows pass `validate_source` (registry is now 30 entries).
+    **`--profile-source` default is the SAFE placeholder `company-aws-profile`, NOT the real work profile** -- the
+    real source profile (Phase B record item 2; blocked by the pre-commit `*_information_hub` shape hook) is passed
+    at runtime: `--profile-source <real-profile>`.
+  - **Phase D functional sweep landed (constant flip + telemetry removal + venv fix):** retargeted constants to
+    `agent_platform` / `agent-platform-production` / `agent-platform-data-lake` / `agent-platform-counters` and
+    `_SSO_PROFILE = "agent_platform"` across `ops_data_portal.py`, `ops_writer.py` (+ `_bucket()` Fallback-2 now
+    reads `config.personal.yaml`, not `config.company.yaml`), `sync_ops.py` (telemetry + `ops_session_log` +
+    `ops_execution_plans` removed from `_TABLE_TO_LOCAL`/`_TABLE_TO_VIEW`), `sync_recommendations.py`,
+    `session_preflight.py` (constants + SSO bootstrap profile + dotted priority-queue DB literal +
+    `check_telemetry_health` DB literals + `S3_LOG_BUCKET` default + **venv detection now name-independent**:
+    `(ROOT/.venv/pyvenv.cfg).exists()` instead of `ROOT.name in sys.executable`), `data_quality_runner.py`,
+    `cleanup_ops_rec_orphans.py`, `verifiers/data_quality.py`, and the Lambda docstrings in `src/data/handlers/`.
+    `config/agent/data_quality/ops.yaml` retargeted; `telemetry.yaml` emptied (`tables: {}`) + retargeted so it
+    does not conflict-abort with ops.yaml. `config/config.personal.yaml` gained an `aws:` block
+    (`s3_agent_logs_bucket: agent-platform-data-lake`, profile `agent_platform`). `terraform/personal/main.tf` +
+    `oidc.tf` renamed (validate + fmt pass). Sweep-broken tests fixed: `test_sync_ops` telemetry-mapping tests
+    rewritten to assert the new absent-invariant; `test_data_quality_runner`, `test_ops_writer`,
+    `test_session_preflight` (SSO profile + venv fixtures), `test_rec_write_guidance` (28->30) updated.
+  - **TEST STATE: green except 3 PRE-EXISTING Windows-only artifacts (NOT introduced here; pass on ubuntu-latest CI
+    -- do NOT chase them):** `test_session_preflight.py::TestFormatPreflightSummary::
+    test_summary_is_a_single_block_referencing_the_report_path` (`Path('/tmp/..')` renders `\tmp\..` on Windows);
+    `test_executor_formatters.py::TestVenvPythonResolution::{test_linux_layout_preferred_when_both_present,
+    test_ruff_resolution_linux_first}` and `test_executor_step_runner.py::TestVenvPythonResolution::
+    test_linux_layout_preferred_when_both_present` (Linux-layout preference asserted on a win32 host). `validate
+    --pre` complexity gate passes; `test_validate.py` (150) passes in isolation.
+  - **REMAINING WORK for the next agent (start here):**
+    - Phase D **Step 20** (public-disclosure HEAD scrub: `docs/GETTING_STARTED.md`, `README.md`,
+      `config/config.company.yaml` legacy-deprecation notice, `config/README.md`, `src/main.py`) and **Step 21**
+      (verify CV files already absent from the tree -- Phase A scorched-earth should have removed them).
+    - Phase E **Steps 22-24** (CI workflows -> `ubuntu-latest` + OIDC; preserve Decision 74 in ci-rca; fork gate).
+    - Phase F **Steps 25-27** + IAM record: `AGENTS.md`, `docs/PROJECT_CONTEXT.md`, **`terraform/CLAUDE.md` (still
+      says `bblake_platform` -- flip to `agent_platform`)**, finish `tests/test_session_preflight.py` fixtures;
+      record the breakglass `PlatformDataLakeProvisioning` grant + the PlatformDev runtime grant as a Decision/runbook.
+    - Phase G: the live blockers above (breakglass re-grant, bucket reconcile, terraform apply) THEN Steps 28-32
+      (outbox quiescence + dry-run with the real `--profile-source`, full validate, single bundled PR at Step 30,
+      run migration, public flip). Commits bundle into ONE PR at Step 30 -- do NOT push/PR before then.
+    - **OPEN doc decision for the human:** ~40 historical journal docs (`docs/plans/PLAN-*.md`, `DECISIONS*.md`,
+      `CHANGELOG.md`, `INTENT-*.md`, `SESSION_LOG_ARCHIVE.md`) still contain `bblake-platform` as a frozen
+      historical record. These are NOT load-bearing and `bblake` is the author's handle (not a secret). Decide
+      whether to cosmetically rewrite them to `agent-platform` for showcase consistency or leave them as accurate
+      history. The functional code + current-state docs use `agent-platform-*`.
 
 ## Pre-Implementation Checklist
 

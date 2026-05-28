@@ -10,7 +10,7 @@ GITHUB_PAT_SECRET_ARN : ARN of the Secrets Manager secret containing the
     GitHub PAT used to call the GitHub Models API for comparison.
 GITHUB_PAT             : Alternatively, the PAT can be set directly as an
     env var (for local testing).
-S3_LOG_BUCKET          : S3 bucket name (e.g. ``bblake-platform-agent-logs``).
+S3_LOG_BUCKET          : S3 bucket name (e.g. ``agent-platform-data-lake``).
 
 S3 key layout
 -------------

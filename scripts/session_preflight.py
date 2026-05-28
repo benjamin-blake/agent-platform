@@ -42,10 +42,10 @@ PRIORITY_QUEUE_FILE = ROOT / "logs" / "priority-queue" / ".priority-queue.jsonl"
 
 TELEMETRY_ACTIVE_SESSION_FILE = ROOT / "logs" / ".telemetry-active-session.json"
 
-_ATHENA_DATABASE = "trading_formulas_db"
+_ATHENA_DATABASE = "agent_platform"
 _ATHENA_WORKGROUP = "agent-platform-production"
-_ATHENA_OUTPUT_LOCATION = "s3://bblake-platform-agent-logs/athena-results/"
-_SSO_PROFILE = "company-aws-profile"
+_ATHENA_OUTPUT_LOCATION = "s3://agent-platform-data-lake/athena-results/"
+_SSO_PROFILE = "agent_platform"
 _ATHENA_POLL_TIMEOUT_SECONDS = 10
 _NON_AUTOMATABLE_SOFTCAP = 250
 
@@ -74,10 +74,10 @@ def check_venv() -> bool:
             if parent == (ROOT / ".venv").resolve():
                 return True
             break
-    # Worktree fallback: the worktree shares the main repo's venv which may live
-    # outside ROOT; accept if the repo name appears in the executable path.
-    repo_name = ROOT.name  # e.g. "agent-platform"
-    return repo_name.lower() in str(sys.executable).lower()
+    # Fallback: accept if ROOT has its own venv. This is name-independent -- the on-disk
+    # directory name may stay "agent-platform" (or anything) after a GitHub rename, so a
+    # match against the repo/directory name is unreliable.
+    return (ROOT / ".venv" / "pyvenv.cfg").exists()
 
 
 def is_worktree() -> bool:
@@ -260,7 +260,7 @@ def check_sso_status() -> str:
     """Non-blocking SSO check. Returns 'ok', 'expired', or 'unavailable'."""
     try:
         result = subprocess.run(
-            ["aws", "sts", "get-caller-identity", "--profile", "company-aws-profile"],
+            ["aws", "sts", "get-caller-identity", "--profile", _SSO_PROFILE],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -565,7 +565,7 @@ def read_priority_queue(max_items: int = 5) -> list[dict]:
     """
     rows = _run_athena_query(
         "SELECT rec_id, rank, rationale, north_star_impact "
-        "FROM trading_formulas_db.ops_priority_queue_current "
+        f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
         "ORDER BY CAST(rank AS INTEGER)"
     )
     if rows is None:
@@ -1016,9 +1016,13 @@ def _athena_run_query(client: object, sql: str, *, poll_timeout: int = _ATHENA_P
 def check_telemetry_health() -> dict:
     """Query Athena for telemetry session metrics and return health dict.
 
-    Uses ``trading_formulas_db.telemetry_sessions_current`` (7-day window) to
+    Uses ``agent_platform.telemetry_sessions_current`` (7-day window) to
     compute session count, success rate, and latest session staleness.  Also
     queries ``telemetry_process_events`` for the top-5 recent friction patterns.
+
+    Telemetry tables were NOT migrated to the personal account (public-migration,
+    2026-05-28); these queries therefore fail with TABLE_NOT_FOUND and are caught
+    below, degrading to a non-fatal warning rather than raising.
 
     Degrades gracefully when SSO is expired or Athena is unreachable -- returns
     ``overall: "unknown"`` with a single ``athena-query`` check entry.
@@ -1041,7 +1045,7 @@ def check_telemetry_health() -> dict:
             "SELECT COUNT(*) AS total, "
             "SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) AS success_count, "
             "MAX(started_at) AS latest "
-            "FROM trading_formulas_db.telemetry_sessions_current "
+            f"FROM {_ATHENA_DATABASE}.telemetry_sessions_current "
             "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY"
         )
         try:
@@ -1095,7 +1099,7 @@ def check_telemetry_health() -> dict:
         # -- Top-5 friction patterns from process events --
         friction_sql = (
             "SELECT category, description, COUNT(*) AS occurrences "
-            "FROM trading_formulas_db.telemetry_process_events "
+            f"FROM {_ATHENA_DATABASE}.telemetry_process_events "
             "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY "
             "GROUP BY category, description "
             "ORDER BY occurrences DESC LIMIT 5"
@@ -1223,12 +1227,12 @@ def main() -> int:
     print_telemetry_health(telemetry_health)
 
     if not os.environ.get("PYTEST_CURRENT_TEST"):
-        os.environ.setdefault("S3_LOG_BUCKET", "bblake-platform-agent-logs")
+        os.environ.setdefault("S3_LOG_BUCKET", "agent-platform-data-lake")
 
     venv_ok = check_venv()
     if not venv_ok:
         print(f"CRITICAL: Wrong virtual environment. sys.executable={sys.executable}")
-        print(f"Expected a path containing '{ROOT.name}'.")
+        print(f"Expected the venv at '{ROOT / '.venv'}'.")
         _print_activate_hint()
 
     # Run log sync before git_status so a successful sync clears the dirty tree

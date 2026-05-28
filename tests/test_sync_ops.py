@@ -590,7 +590,12 @@ class TestMain:
 
 
 class TestTelemetryMappings:
-    """All 7 telemetry tables appear in both _TABLE_TO_LOCAL and _TABLE_TO_VIEW."""
+    """Telemetry + non-migrated ops tables were removed from the sync maps (public-migration).
+
+    Only ops_recommendations / ops_decisions / ops_priority_queue are migrated to the personal
+    account; telemetry_*, ops_session_log, and ops_execution_plans must NOT appear in the maps, or
+    sync_ops.pull would issue TABLE_NOT_FOUND queries on every sync.
+    """
 
     _TELEMETRY_TABLES = [
         "telemetry_sessions",
@@ -601,43 +606,34 @@ class TestTelemetryMappings:
         "telemetry_transcripts",
         "telemetry_agent_invocations",
     ]
+    _REMOVED_OPS_TABLES = ["ops_session_log", "ops_execution_plans"]
 
-    def test_all_telemetry_tables_in_table_to_local(self):
-        """All 7 telemetry tables have a local JSONL file mapping."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL
-
-        for table in self._TELEMETRY_TABLES:
-            assert table in _TABLE_TO_LOCAL, f"{table} missing from _TABLE_TO_LOCAL"
-
-    def test_all_telemetry_tables_in_table_to_view(self):
-        """All 7 telemetry tables have an Athena view/table mapping."""
-        from scripts.sync_ops import _TABLE_TO_VIEW
+    def test_telemetry_tables_absent_from_maps(self):
+        """No telemetry table is mapped (they are not migrated to the personal account)."""
+        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
 
         for table in self._TELEMETRY_TABLES:
-            assert table in _TABLE_TO_VIEW, f"{table} missing from _TABLE_TO_VIEW"
+            assert table not in _TABLE_TO_LOCAL, f"{table} should be removed from _TABLE_TO_LOCAL"
+            assert table not in _TABLE_TO_VIEW, f"{table} should be removed from _TABLE_TO_VIEW"
 
-    def test_telemetry_local_paths_use_telemetry_prefix(self):
-        """Local JSONL paths for telemetry tables use the .telemetry- prefix."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL
+    def test_non_migrated_ops_tables_absent(self):
+        """ops_session_log and ops_execution_plans are not migrated and must be absent."""
+        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
 
-        for table in self._TELEMETRY_TABLES:
-            local_path = _TABLE_TO_LOCAL[table]
-            assert local_path.startswith(".telemetry-"), f"{table} local path {local_path!r} should start with .telemetry-"
+        for table in self._REMOVED_OPS_TABLES:
+            assert table not in _TABLE_TO_LOCAL
+            assert table not in _TABLE_TO_VIEW
 
-    def test_current_views_for_deduplicatable_tables(self):
-        """Tables with entity identity use _current views; others map to base table."""
-        from scripts.sync_ops import _TABLE_TO_VIEW
+    def test_migrated_ops_tables_present(self):
+        """The three migrated ops tables remain mapped to their _current views."""
+        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
 
-        # These have _current views (ROW_NUMBER deduplication by PK)
-        assert _TABLE_TO_VIEW["telemetry_sessions"] == "telemetry_sessions_current"
-        assert _TABLE_TO_VIEW["telemetry_phases"] == "telemetry_phases_current"
-        assert _TABLE_TO_VIEW["telemetry_steps"] == "telemetry_steps_current"
-        assert _TABLE_TO_VIEW["telemetry_agent_invocations"] == "telemetry_agent_invocations_current"
-
-        # These are append-only (no deduplication needed) -- map to base table
-        assert _TABLE_TO_VIEW["telemetry_process_events"] == "telemetry_process_events"
-        assert _TABLE_TO_VIEW["telemetry_model_calls"] == "telemetry_model_calls"
-        assert _TABLE_TO_VIEW["telemetry_transcripts"] == "telemetry_transcripts"
+        migrated = {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
+        assert set(_TABLE_TO_VIEW) == migrated
+        assert set(_TABLE_TO_LOCAL) == migrated
+        assert _TABLE_TO_VIEW["ops_recommendations"] == "ops_recommendations_current"
+        assert _TABLE_TO_VIEW["ops_decisions"] == "ops_decisions_current"
+        assert _TABLE_TO_VIEW["ops_priority_queue"] == "ops_priority_queue_current"
 
     def test_drain_handles_telemetry_outbox_files(self, tmp_path):
         """drain() can process outbox files for telemetry tables."""

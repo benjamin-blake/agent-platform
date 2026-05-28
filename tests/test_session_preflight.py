@@ -738,15 +738,28 @@ class TestCheckVenvWorktree:
         ):
             assert _preflight.check_venv() is True
 
-    def test_check_venv_accepts_repo_name_in_path(self) -> None:
-        """check_venv() returns True when repo name is in sys.executable path (worktree fallback)."""
-        repo_name = _preflight.ROOT.name  # "agent-platform"
-        with patch("sys.executable", f"C:/some/path/{repo_name}/.venv/Scripts/python.exe"):
+    def test_check_venv_accepts_root_with_pyvenv_cfg(self, tmp_path: Path) -> None:
+        """check_venv() returns True via the name-independent fallback when ROOT has its own .venv.
+
+        The on-disk directory name may stay 'agent-platform' (or anything) after a GitHub rename,
+        so the fallback checks for ROOT/.venv/pyvenv.cfg rather than matching the repo name.
+        """
+        fake_root = tmp_path / "some-renamed-dir"
+        (fake_root / ".venv").mkdir(parents=True)
+        (fake_root / ".venv" / "pyvenv.cfg").touch()
+        with (
+            patch("session_preflight.ROOT", fake_root),
+            patch("sys.executable", "C:/unrelated/path/python.exe"),
+            patch("session_preflight.sys.executable", "C:/unrelated/path/python.exe"),
+        ):
             assert _preflight.check_venv() is True
 
-    def test_check_venv_rejects_wrong_venv(self) -> None:
-        """check_venv() returns False when sys.executable is from a different repo."""
+    def test_check_venv_rejects_wrong_venv(self, tmp_path: Path) -> None:
+        """check_venv() returns False when exe is a different repo's venv and ROOT has no .venv."""
+        fake_root = tmp_path / "agent-platform"
+        fake_root.mkdir()  # deliberately no .venv -> fallback must be False
         with (
+            patch("session_preflight.ROOT", fake_root),
             patch("sys.executable", "C:/other-repo/.venv/Scripts/python.exe"),
             patch("session_preflight.sys.executable", "C:/other-repo/.venv/Scripts/python.exe"),
         ):
@@ -1050,7 +1063,7 @@ class TestReadPriorityQueueAthena:
         ):
             result = _preflight._handle_sso_startup("expired")
         mock_run.assert_called_once_with(
-            ["aws", "sso", "login", "--profile", "company-aws-profile"],
+            ["aws", "sso", "login", "--profile", "agent_platform"],
             check=False,
             timeout=300,
         )
