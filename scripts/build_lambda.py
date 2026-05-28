@@ -36,6 +36,7 @@ PROD_DEPS = [
 
 _LAMBDA_SCRIPTS = [
     "__init__.py",
+    "aws_profile.py",
     "bedrock_client.py",
     "copilot_sdk_client.py",
     "copilot_wrapper.py",
@@ -317,7 +318,7 @@ def resolve_bucket(profile: str) -> str:
     )
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
-    return "bblake-platform-data-lake"
+    return "agent-platform-data-lake"
 
 
 def validate_bucket_exists(bucket: str, profile: str, region: str) -> bool:

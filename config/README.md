@@ -53,12 +53,12 @@ export TRADING_CONFIG=/path/to/config.personal.yaml
 ```yaml
 aws:
   region: eu-west-2
-  profile: company-aws-profile
-  s3_discovery_bucket: bblake-platform-formulas-discovery
-  s3_staging_bucket: bblake-platform-formulas-staging
-  s3_production_bucket: bblake-platform-formulas-production
-  s3_data_lake_bucket: bblake-platform-data-lake
-  s3_agent_logs_bucket: bblake-platform-agent-logs
+  profile: your-aws-profile
+  s3_discovery_bucket: agent-platform-formulas-discovery
+  s3_staging_bucket: agent-platform-formulas-staging
+  s3_production_bucket: agent-platform-formulas-production
+  s3_data_lake_bucket: agent-platform-data-lake
+  s3_agent_logs_bucket: agent-platform-agent-logs
   glue_database: trading_formulas_db
   athena_lab_workgroup: agent-platform-lab
   athena_prod_workgroup: agent-platform-production
@@ -75,7 +75,7 @@ company:
   s3_production_bucket: formulas-production
   s3_staging_bucket: formulas-staging
   s3_region: eu-west-2
-  aws_profile: company-aws-profile  # Read-only access
+  aws_profile: your-aws-profile  # Read-only access
   formula_sync_interval_seconds: 300  # 5 minutes
 ```
 
@@ -147,7 +147,7 @@ meta_learner:
 ### Required for Both Environments
 ```bash
 POSTGRES_PASSWORD=your-secure-password
-AWS_PROFILE=company-aws-profile
+AWS_PROFILE=your-aws-profile
 ```
 
 ### Optional Overrides
@@ -166,7 +166,7 @@ MAX_POSITION_SIZE=500.0
 ```bash
 # S3 bucket for agent log output. When set, agents write findings to S3.
 # When unset, falls back to local logs/ directory.
-S3_LOG_BUCKET=bblake-platform-agent-logs
+S3_LOG_BUCKET=agent-platform-agent-logs
 
 # Optional: override the model used for ALL scheduled agents (ignores
 # per-agent model in .github/agents/schedule.yaml). Useful for testing.
@@ -182,7 +182,7 @@ GITHUB_TOKEN=ghp_your_pat_here
 ### Company Environment Only
 ```bash
 # For SageMaker jobs
-SAGEMAKER_ROLE_ARN=arn:aws:iam::REDACTED-ACCOUNT-ID:role/SageMakerRole
+SAGEMAKER_ROLE_ARN=arn:aws:iam::YOUR_ACCOUNT_ID:role/SageMakerRole
 ```
 
 ### Personal Environment Only
@@ -269,13 +269,13 @@ export TRADING_CONFIG=$(pwd)/config/config.yaml
 **Solution:**
 ```bash
 # Re-authenticate SSO
-aws sso login --profile company-aws-profile
+aws sso login --profile your-aws-profile
 
 # Verify profile exists
-cat ~/.aws/config | grep company-aws-profile
+cat ~/.aws/config | grep your-aws-profile
 
 # Test access
-aws sts get-caller-identity --profile company-aws-profile
+aws sts get-caller-identity --profile your-aws-profile
 ```
 
 **Problem:** PostgreSQL connection fails
@@ -310,7 +310,7 @@ Controls where agent log files are read from and written to.
 | Value | Behaviour |
 |-------|-----------|
 | unset (default) | Local fallback — logs written to `logs/` directory in repo |
-| `bblake-platform-agent-logs` | S3 mode — reads and appends go to the agent-logs S3 bucket |
+| `agent-platform-agent-logs` | S3 mode — reads and appends go to the agent-logs S3 bucket |
 
 **When to set:** GitHub Actions scheduled agents (e.g., `run_scheduled_agent`, `retro-lite`, `session_metrics`).
 Setting this variable eliminates the need for git write access in scheduled workflows.
@@ -326,8 +326,8 @@ Setting this variable eliminates the need for git write access in scheduled work
 **Example (GitHub Actions):**
 ```yaml
 env:
-  S3_LOG_BUCKET: bblake-platform-agent-logs
-  AWS_PROFILE: company-aws-profile
+  S3_LOG_BUCKET: agent-platform-agent-logs
+  AWS_PROFILE: your-aws-profile
 ```
 
 ---

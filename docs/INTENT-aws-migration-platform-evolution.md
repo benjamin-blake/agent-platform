@@ -4,7 +4,7 @@
 
 ## Application Status
 
-- 2026-05-24 -- Open Question #2 resolved: `agent_platform` supersedes the `bblake_platform` recommendation; account `REDACTED-PERSONAL-ACCOUNT` confirmed as migration destination (PR for agent/migration-t03-t06-prep).
+- 2026-05-24 -- Open Question #2 resolved: `agent_platform` supersedes the `agent_platform` recommendation; account `REDACTED-PERSONAL-ACCOUNT` confirmed as migration destination (PR for agent/migration-t03-t06-prep).
 
 ## Status
 DRAFT v5 — addresses round-3 critique findings (architect REVISE 13 issues; adversarial REVISE 12 risk findings) and round-4 framing-fix findings on the STRATEGIC-suspension scope (architect REVISE 10 issues; adversarial REVISE 6 risk findings). The STRATEGIC-suspension rule is consistent across all four governance surfaces (AGENTS.md, planning skill, CD.17, this INTENT): STRATEGIC plan-artefact authoring is **blocked at planning time** (`/plan` Step 12d, planning skill Complexity Assessment, plan-critique skill) because the downstream consumer of STRATEGIC plans — `/implement`'s decomposition into atomic recommendations queued for the autonomous executor (`scripts/execute_recommendation.py`) — has a paused executor at the end of the chain. `tier_item.strategic: true` flags in ROADMAP-PLATFORM.yaml remain valid as YAML data; they signal "decompose into a tree of atomic IMPLEMENTATION plans at `/plan` time" per CD.17, NOT "file a STRATEGIC plan-artefact with Work Areas." Other round-3 and round-4 findings resolved inline or explicitly logged in Known Gaps below.
@@ -56,11 +56,11 @@ The two freezes are linked (same triggering decision, same reversal trigger via 
 
 | Current name | Parameterised? | Source | Role |
 |--------------|----------------|--------|------|
-| `bblake-platform-data-lake` | Yes — `${var.s3_bucket_prefix}-data-lake` | `terraform/main.tf:76` (lifecycle prevent_destroy at 78-79) | Product |
-| `bblake-platform-formulas-discovery` | Yes — same pattern | `terraform/main.tf:35` | Product |
-| `bblake-platform-formulas-staging` | Yes — same pattern | `terraform/main.tf:46` (lifecycle prevent_destroy at 48-49) | Product |
-| `bblake-platform-formulas-production` | Yes — same pattern | `terraform/main.tf:61` (lifecycle prevent_destroy at 63-64) | Product |
-| `bblake-platform-agent-logs` | **No — HARDCODED** | `terraform/main.tf:308`, `terraform/ec2_runner.tf:25` | **Platform** |
+| `agent-platform-data-lake` | Yes — `${var.s3_bucket_prefix}-data-lake` | `terraform/main.tf:76` (lifecycle prevent_destroy at 78-79) | Product |
+| `agent-platform-formulas-discovery` | Yes — same pattern | `terraform/main.tf:35` | Product |
+| `agent-platform-formulas-staging` | Yes — same pattern | `terraform/main.tf:46` (lifecycle prevent_destroy at 48-49) | Product |
+| `agent-platform-formulas-production` | Yes — same pattern | `terraform/main.tf:61` (lifecycle prevent_destroy at 63-64) | Product |
+| `agent-platform-agent-logs` | **No — HARDCODED** | `terraform/main.tf:308`, `terraform/ec2_runner.tf:25` | **Platform** |
 | `agent-platform-counters` (DynamoDB) | **No — HARDCODED** | `terraform/dynamodb.tf:7` | Platform: id allocator |
 | `${var.project_name}-{handler}` Lambda log groups | Yes | `terraform/data_pipeline.tf:161-201` | Mixed |
 | `trading_formulas_db` (Glue database) | Hardcoded literal + var mismatch | `terraform/ec2_runner.tf:181-182`; `var.glue_database_name` default is `formulas_db` | Mixed |
@@ -78,7 +78,7 @@ The two freezes are linked (same triggering decision, same reversal trigger via 
 | File:line | Site | Current value |
 |-----------|------|---------------|
 | `scripts/ops_data_portal.py:53-54` | `_ATHENA_DATABASE`, `_ATHENA_WORKGROUP` | `trading_formulas_db`, `agent-platform-production` |
-| `scripts/ops_data_portal.py:893` | `S3_LOG_BUCKET` fallback | `bblake-platform-agent-logs` |
+| `scripts/ops_data_portal.py:893` | `S3_LOG_BUCKET` fallback | `agent-platform-agent-logs` |
 | `scripts/ops_writer.py:83-84` | `DATABASE`, `ATHENA_WORKGROUP` | same |
 | `scripts/sync_ops.py:65-66` | `_DATABASE`, `_WORKGROUP` | same |
 | `scripts/sync_recommendations.py:31` | `_DYNAMODB_TABLE` | `agent-platform-counters` |
@@ -135,7 +135,7 @@ Secrets Manager secrets cannot be renamed — only deleted (with 7-30 day deleti
 
 | File | Content |
 |------|---------|
-| `CLAUDE.md` "Re-enable Lambda scheduled agents" | Hardcodes `agent-platform-hourly-scheduled-agents`, `agent-platform-scheduled-agent-dispatcher`, `bblake-platform-agent-logs` |
+| `CLAUDE.md` "Re-enable Lambda scheduled agents" | Hardcodes `agent-platform-hourly-scheduled-agents`, `agent-platform-scheduled-agent-dispatcher`, `agent-platform-agent-logs` |
 | `CLAUDE.md` "Self-hosted GitHub Actions runner" | Hardcodes `agent-platform-runner` |
 | `CLAUDE.md` "Copilot SDK auth requires OAuth token" gotcha | Hardcodes `agent-platform-github-pat` |
 
@@ -197,14 +197,14 @@ Two categories. Each has one naming pattern. **`platform` is a reserved value of
 ```
 Pattern:  {owner}-platform-{purpose}     (Lambda, S3, DynamoDB, Athena workgroup, EC2 tag)
           {owner}_platform               (Glue database — underscores for SQL)
-Examples: bblake-platform-agent-logs           bblake-platform-counters
-          bblake-platform-log-rec              bblake-platform-query
-          bblake-platform-update-rec           bblake-platform-log-decision
-          bblake-platform-list-tools           bblake-platform-maintenance
-          bblake-platform-ops-compaction       bblake-platform-scheduled-agent
-          bblake-platform-github-pat (Secrets Manager — newly created, not renamed)
-          bblake-platform-production           (Athena workgroup for ops + telemetry writes)
-          bblake_platform                       (Glue database for ops_* and telemetry_* tables)
+Examples: agent-platform-agent-logs           agent-platform-counters
+          agent-platform-log-rec              agent-platform-query
+          agent-platform-update-rec           agent-platform-log-decision
+          agent-platform-list-tools           agent-platform-maintenance
+          agent-platform-ops-compaction       agent-platform-scheduled-agent
+          agent-platform-github-pat (Secrets Manager — newly created, not renamed)
+          agent-platform-production           (Athena workgroup for ops + telemetry writes)
+          agent_platform                       (Glue database for ops_* and telemetry_* tables)
 ```
 
 **Category 2 — Project-scoped resources:**
@@ -223,20 +223,20 @@ Examples: bblake-trading-system-data-lake             bblake-trading-system-form
 
 ### Telemetry table routing (resolves round-2 adversarial #4 + architect #3)
 
-**All `telemetry_*` tables live in `bblake_platform` Glue database** alongside the `ops_*` tables. They are operational/platform observability data, not product business data. Both ops and telemetry writes go through `bblake-platform-production` Athena workgroup. The 10 enumerated views (Part 1A) all land in `bblake_platform`:
+**All `telemetry_*` tables live in `agent_platform` Glue database** alongside the `ops_*` tables. They are operational/platform observability data, not product business data. Both ops and telemetry writes go through `agent-platform-production` Athena workgroup. The 10 enumerated views (Part 1A) all land in `agent_platform`:
 
 | View | Database | Workgroup |
 |------|----------|-----------|
-| `ops_recommendations_current` | `bblake_platform` | `bblake-platform-production` |
-| `ops_decisions_current` | `bblake_platform` | `bblake-platform-production` |
-| `ops_priority_queue_current` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_sessions_current` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_phases_current` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_steps_current` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_agent_invocations_current` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_session_summary_30d` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_phase_time_distribution` | `bblake_platform` | `bblake-platform-production` |
-| `telemetry_event_frequency_30d` | `bblake_platform` | `bblake-platform-production` |
+| `ops_recommendations_current` | `agent_platform` | `agent-platform-production` |
+| `ops_decisions_current` | `agent_platform` | `agent-platform-production` |
+| `ops_priority_queue_current` | `agent_platform` | `agent-platform-production` |
+| `telemetry_sessions_current` | `agent_platform` | `agent-platform-production` |
+| `telemetry_phases_current` | `agent_platform` | `agent-platform-production` |
+| `telemetry_steps_current` | `agent_platform` | `agent-platform-production` |
+| `telemetry_agent_invocations_current` | `agent_platform` | `agent-platform-production` |
+| `telemetry_session_summary_30d` | `agent_platform` | `agent-platform-production` |
+| `telemetry_phase_time_distribution` | `agent_platform` | `agent-platform-production` |
+| `telemetry_event_frequency_30d` | `agent_platform` | `agent-platform-production` |
 
 ### Environment axis (resolves round-1 architect #9)
 
@@ -259,26 +259,26 @@ locals {
 
 | Current name | Category | Proposed name |
 |--------------|----------|---------------|
-| `bblake-platform-data-lake` | Project | `bblake-trading-system-data-lake` |
-| `bblake-platform-formulas-discovery` | Project | `bblake-trading-system-formulas-discovery` |
-| `bblake-platform-formulas-staging` | Project | `bblake-trading-system-formulas-staging` |
-| `bblake-platform-formulas-production` | Project | `bblake-trading-system-formulas-production` |
-| `bblake-platform-agent-logs` | **Platform** | `bblake-platform-agent-logs` |
-| `agent-platform-counters` | Platform | `bblake-platform-counters` |
-| `agent-platform-github-pat` (Secrets Manager) | Platform | `bblake-platform-github-pat` (newly created in personal account; secret rotation procedure in CLAUDE.md updated) |
-| `trading_formulas_db` (Glue) | **Split** | `bblake_platform` (ops_* + telemetry_*) + `bblake_trading_system` (market_data, formula_lineage) |
-| `agent-platform-production` (Athena workgroup) | **Split** | `bblake-platform-production` (ops + telemetry) + `bblake-trading-system-production` (product) |
+| `agent-platform-data-lake` | Project | `bblake-trading-system-data-lake` |
+| `agent-platform-formulas-discovery` | Project | `bblake-trading-system-formulas-discovery` |
+| `agent-platform-formulas-staging` | Project | `bblake-trading-system-formulas-staging` |
+| `agent-platform-formulas-production` | Project | `bblake-trading-system-formulas-production` |
+| `agent-platform-agent-logs` | **Platform** | `agent-platform-agent-logs` |
+| `agent-platform-counters` | Platform | `agent-platform-counters` |
+| `agent-platform-github-pat` (Secrets Manager) | Platform | `agent-platform-github-pat` (newly created in personal account; secret rotation procedure in CLAUDE.md updated) |
+| `trading_formulas_db` (Glue) | **Split** | `agent_platform` (ops_* + telemetry_*) + `bblake_trading_system` (market_data, formula_lineage) |
+| `agent-platform-production` (Athena workgroup) | **Split** | `agent-platform-production` (ops + telemetry) + `bblake-trading-system-production` (product) |
 | `agent-platform-lab` (Athena workgroup) | Project | `bblake-trading-system-lab` |
 | `agent-platform-fetch-market-data` (Lambda) | Project | `bblake-trading-system-fetch-market-data` |
-| `agent-platform-scheduled-agent-dispatcher` (Lambda) | Platform | `bblake-platform-scheduled-agent-dispatcher` |
-| `agent-platform-findings-processor` (Lambda) | Platform | `bblake-platform-findings-processor` |
-| `agent-platform-ops-compaction` (Lambda) | Platform | `bblake-platform-ops-compaction` |
-| CD.10 future Lambdas | Platform | `bblake-platform-{log-rec,log-decision,query,update-rec,list-tools,maintenance}` |
+| `agent-platform-scheduled-agent-dispatcher` (Lambda) | Platform | `agent-platform-scheduled-agent-dispatcher` |
+| `agent-platform-findings-processor` (Lambda) | Platform | `agent-platform-findings-processor` |
+| `agent-platform-ops-compaction` (Lambda) | Platform | `agent-platform-ops-compaction` |
+| CD.10 future Lambdas | Platform | `agent-platform-{log-rec,log-decision,query,update-rec,list-tools,maintenance}` |
 | `agent-platform-runner` (EC2 tag, work account) | n/a | **No rename.** Retired in T2.10 per CD.21. |
 
 ### Cross-database query policy
 
-After the split, cross-DB queries use fully-qualified table names (`bblake_platform.ops_recommendations` JOIN `bblake_trading_system.formula_lineage`). Workgroup routing per verb category: ops + telemetry verbs → `bblake-platform-production`; product verbs → `bblake-trading-system-production`; cross-DB joins use the platform workgroup by default (cost attribution lands on platform side, reflecting that the join is operational analytics). T0.7c amendment (Part 8) implements this routing.
+After the split, cross-DB queries use fully-qualified table names (`agent_platform.ops_recommendations` JOIN `bblake_trading_system.formula_lineage`). Workgroup routing per verb category: ops + telemetry verbs → `agent-platform-production`; product verbs → `bblake-trading-system-production`; cross-DB joins use the platform workgroup by default (cost attribution lands on platform side, reflecting that the join is operational analytics). T0.7c amendment (Part 8) implements this routing.
 
 ### IAM identity surface (three distinct concerns)
 
@@ -287,15 +287,15 @@ After the split, cross-DB queries use fully-qualified table names (`bblake_platf
 | SSO CLI profile (`~/.aws/config`) | `company-aws-profile` | See "SSO profile decision" below — conditional on Known Gap #2 closure |
 | IAM Identity Center permission set | n/a (work account differs) | `PlatformDev`, `PlatformAdmin` (per T0.3 exit criteria) |
 | IAM role policies embedding resource names | `arn:aws:glue:...:database/trading_formulas_db` etc. (`terraform/ec2_runner.tf:181-182`) | Derived from Terraform locals; T0.16 produces IAM translation table |
-| **GitHub OIDC trust policy `sub` claim** | `repo:benjamin-blake/agent-platform:*` (planned by T2.10) | `repo:benjamin-blake/bblake-platform:*` — **MUST update atomically with T2.15 rename**. URL redirects do NOT update OIDC subs (round-2 adversarial #2). |
+| **GitHub OIDC trust policy `sub` claim** | `repo:benjamin-blake/agent-platform:*` (planned by T2.10) | `repo:benjamin-blake/agent-platform:*` — **MUST update atomically with T2.15 rename**. URL redirects do NOT update OIDC subs (round-2 adversarial #2). |
 
 ### Pre-T2.1 freeze on legacy `agent-logs` bucket writes (resolves round-2 architect #6)
 
-The current `bblake-platform-agent-logs` bucket is the active outbox drain target for `OpsWriter`. Between T0.15 (code-side decoupling lands a config-driven bucket name) and T2.1 (personal-account bucket exists), writes must continue against the legacy bucket. After T2.1 succeeds and T2.2 imports complete, a new tier item **T2.18b** (Part 8) flips the active bucket to `bblake-platform-agent-logs` and freezes the legacy bucket as read-only via S3 Bucket Policy. The legacy bucket stays read-only for one drain cycle (so any in-flight outbox can be read but not appended) then is decommissioned with the work account.
+The current `agent-platform-agent-logs` bucket is the active outbox drain target for `OpsWriter`. Between T0.15 (code-side decoupling lands a config-driven bucket name) and T2.1 (personal-account bucket exists), writes must continue against the legacy bucket. After T2.1 succeeds and T2.2 imports complete, a new tier item **T2.18b** (Part 8) flips the active bucket to `agent-platform-agent-logs` and freezes the legacy bucket as read-only via S3 Bucket Policy. The legacy bucket stays read-only for one drain cycle (so any in-flight outbox can be read but not appended) then is decommissioned with the work account.
 
 ### SSO profile decision (conditional on Known Gap #2)
 
-Resolved 2026-05-24 (PR for agent/migration-t03-t06-prep): the SSO profile name is `agent_platform`. The personal account `REDACTED-PERSONAL-ACCOUNT` (current `personal-bedrock-profile` profile target) is confirmed as the migration destination -- `personal-bedrock-profile` is folded into `agent_platform` during the T0.3 cleanup. The profile name `agent_platform` is intentionally decoupled from the `bblake-platform-*` resource prefix: profile names live on the developer machine and need to admit non-bblake-owned or assumed-CI-role profiles cleanly, while resource names live in AWS-global namespace and benefit from owner-coupling. Known Gap #2 closed.
+Resolved 2026-05-24 (PR for agent/migration-t03-t06-prep): the SSO profile name is `agent_platform`. The personal account `REDACTED-PERSONAL-ACCOUNT` (current `personal-bedrock-profile` profile target) is confirmed as the migration destination -- `personal-bedrock-profile` is folded into `agent_platform` during the T0.3 cleanup. The profile name `agent_platform` is intentionally decoupled from the `agent-platform-*` resource prefix: profile names live on the developer machine and need to admit non-bblake-owned or assumed-CI-role profiles cleanly, while resource names live in AWS-global namespace and benefit from owner-coupling. Known Gap #2 closed.
 
 ---
 
@@ -309,16 +309,16 @@ Resolved 2026-05-24 (PR for agent/migration-t03-t06-prep): the SSO profile name 
 
 | Candidate | Pros | Cons |
 |-----------|------|------|
-| **`bblake-platform`** (recommended) | Matches AWS naming convention; clearest ownership; project-agnostic | Less descriptive |
+| **`agent-platform`** (recommended) | Matches AWS naming convention; clearest ownership; project-agnostic | Less descriptive |
 | `agentic-platform` | Descriptive of methodology | Generic-enough to collide |
 | `self-improving-platform` | Captures North Star | Long; aspirational tone |
 | `recursive-agents` | Memorable | Vague substrate |
 
-Recommendation: **`bblake-platform`**.
+Recommendation: **`agent-platform`**.
 
 ### Naming-collision note (round-2 architect #12)
 
-The repo name `bblake-platform` and the AWS resource prefix `bblake-platform-*` share spelling. This is deliberate (single identifier across surfaces) and unproblematic when the directory hierarchy ever introduces project subtrees (e.g. `projects/trading-system/`): the repo name remains platform-scoped because the platform code spans the repo root and the project subtree is just one consumer. If the directory restructure ever happens (Open Question #5), the convention is preserved.
+The repo name `agent-platform` and the AWS resource prefix `agent-platform-*` share spelling. This is deliberate (single identifier across surfaces) and unproblematic when the directory hierarchy ever introduces project subtrees (e.g. `projects/trading-system/`): the repo name remains platform-scoped because the platform code spans the repo root and the project subtree is just one consumer. If the directory restructure ever happens (Open Question #5), the convention is preserved.
 
 ### Migration mechanics (revised — round-2 adversarial #2 + #3 + architect #10)
 
@@ -339,7 +339,7 @@ GitHub integration survivability categorised:
 | Third-party CI badges (Codecov, etc.) | Partial — service-specific | Update each service's repo configuration |
 | Local clone directory names (`~/Git Repos/agent-platform/`) | Operator must rename manually | Document one-time `git remote set-url` + directory rename procedure in CLAUDE.md |
 
-**Semantic dependency on repo directory name** (round-2 adversarial #3): `scripts/session_preflight.py:68` keys venv-detection off `ROOT.name.lower()`. After repo rename + local directory rename, `ROOT.name = "bblake-platform"` and the existing venv at `.venv/Scripts/python.exe` resolves because the new name is also `in` the executable path. But mixed-state operators (renamed remote, unrenamed local) would have `ROOT.name = "agent-platform"` while venv path includes neither (if they re-cloned to a fresh path). T0.15 includes a semantic refactor: replace the `ROOT.name` heuristic with an explicit `VENV_PATH` env var (set by T0.5 session-start hook) OR with a check that the venv directory contains a marker file written by the setup script. Tests at `tests/test_session_preflight.py:481,493,505` are updated to use the new mechanism. (Listed in T0.15's files_in_scope below.)
+**Semantic dependency on repo directory name** (round-2 adversarial #3): `scripts/session_preflight.py:68` keys venv-detection off `ROOT.name.lower()`. After repo rename + local directory rename, `ROOT.name = "agent-platform"` and the existing venv at `.venv/Scripts/python.exe` resolves because the new name is also `in` the executable path. But mixed-state operators (renamed remote, unrenamed local) would have `ROOT.name = "agent-platform"` while venv path includes neither (if they re-cloned to a fresh path). T0.15 includes a semantic refactor: replace the `ROOT.name` heuristic with an explicit `VENV_PATH` env var (set by T0.5 session-start hook) OR with a check that the venv directory contains a marker file written by the setup script. Tests at `tests/test_session_preflight.py:481,493,505` are updated to use the new mechanism. (Listed in T0.15's files_in_scope below.)
 
 ### Sequencing
 
@@ -464,9 +464,9 @@ Yes — ordering is correctly planned. Adding `project_id` is additive. The amen
 
 (Detail unchanged from v2; adds reserved-id `platform`.) **Gates:** [T0.12a, T0.7a, T0.7b, T0.7c].
 
-### CD.27 — Repo rename to `bblake-platform`
+### CD.27 — Repo rename to `agent-platform`
 
-**Detail:** Rename precedes T2.1. Self-hosted runner registration survives. **GitHub OIDC trust policy MUST be updated atomically with the rename** — `sub` claim changes from `repo:benjamin-blake/agent-platform:*` to `repo:benjamin-blake/bblake-platform:*`. URL redirects do not propagate to OIDC subs. Reference sweep covers the broad surface including legacy resource names in operational runbooks AND the semantic `session_preflight.py:68` directory-name dependency AND test fixtures. Sweep dedups with T-1.0 (ROADMAP.md sweep — already complete) by re-running the same grep patterns against new targets.
+**Detail:** Rename precedes T2.1. Self-hosted runner registration survives. **GitHub OIDC trust policy MUST be updated atomically with the rename** — `sub` claim changes from `repo:benjamin-blake/agent-platform:*` to `repo:benjamin-blake/agent-platform:*`. URL redirects do not propagate to OIDC subs. Reference sweep covers the broad surface including legacy resource names in operational runbooks AND the semantic `session_preflight.py:68` directory-name dependency AND test fixtures. Sweep dedups with T-1.0 (ROADMAP.md sweep — already complete) by re-running the same grep patterns against new targets.
 
 **Gates:** [T2.15, T2.1]. (T2.13 is a downstream consumer that *uses* the renamed repo for the public flip but does not *establish* the rename, so per CD-gate semantics it is not a gate of CD.27 — round-3 architect #12.)
 
@@ -496,7 +496,7 @@ CD.10 currently lists gates `[T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]
 
 ### T0.15 — Code-side resource name decoupling + semantic refactor + AST gate
 
-**Intent:** Per CD.25 and the Part 1B inventory. Refactor Python module-level constants and inline SQL to consume `src/common/aws_naming.py` rather than literals. Update YAML configs and Lambda handlers. **Semantic refactor of `scripts/session_preflight.py:68`**: replace `ROOT.name`-based venv detection with explicit `VENV_PATH` env var (sourced from T0.5's session-start hook), with fallback to a marker-file check at `.venv/.platform-marker` for environments not running the session-start hook (round-2 adversarial #3). The refactor must work BOTH pre- and post-rename so it can ship independently of T2.15 timing (round-3 architect #1). Update `tests/test_session_preflight.py:51,53,61,481,493,505` accordingly (all six lines are venv-detection fixtures per round-3 adversarial #4 correction; lines 51/53/61 are NOT SSO-profile fixtures despite earlier mis-categorisation). Add presubmit gate in `validate.py` combining: (a) literal-grep for `trading_formulas_db|agent-platform-*|bblake-platform-*|agent-platform` outside the helper, (b) **AST-based check** that walks `scripts/ops_*.py`, `src/lambdas/`, `scripts/agent_sdk/` for any `COALESCE(project_id, ...)` call (round-2 adversarial #8). AST check uses `ast.NodeVisitor` over Python source. For SQL literals inside string arguments, the gate vendors `sqlglot` (small, well-maintained SQL AST library — round-3 adversarial #8) rather than rolling a bespoke parser; falls back to substring match when `sqlglot` cannot parse. Operational runbooks in CLAUDE.md are NOT swept here — they live in T2.15.
+**Intent:** Per CD.25 and the Part 1B inventory. Refactor Python module-level constants and inline SQL to consume `src/common/aws_naming.py` rather than literals. Update YAML configs and Lambda handlers. **Semantic refactor of `scripts/session_preflight.py:68`**: replace `ROOT.name`-based venv detection with explicit `VENV_PATH` env var (sourced from T0.5's session-start hook), with fallback to a marker-file check at `.venv/.platform-marker` for environments not running the session-start hook (round-2 adversarial #3). The refactor must work BOTH pre- and post-rename so it can ship independently of T2.15 timing (round-3 architect #1). Update `tests/test_session_preflight.py:51,53,61,481,493,505` accordingly (all six lines are venv-detection fixtures per round-3 adversarial #4 correction; lines 51/53/61 are NOT SSO-profile fixtures despite earlier mis-categorisation). Add presubmit gate in `validate.py` combining: (a) literal-grep for `trading_formulas_db|agent-platform-*|agent-platform-*|agent-platform` outside the helper, (b) **AST-based check** that walks `scripts/ops_*.py`, `src/lambdas/`, `scripts/agent_sdk/` for any `COALESCE(project_id, ...)` call (round-2 adversarial #8). AST check uses `ast.NodeVisitor` over Python source. For SQL literals inside string arguments, the gate vendors `sqlglot` (small, well-maintained SQL AST library — round-3 adversarial #8) rather than rolling a bespoke parser; falls back to substring match when `sqlglot` cannot parse. Operational runbooks in CLAUDE.md are NOT swept here — they live in T2.15.
 
 **depends_on:** [T0.12a, T0.5]
 **files_in_scope:** All Part 1B Python module-level constants + YAML config files + `src/common/aws_naming.py` (new) + `scripts/session_preflight.py:68` (semantic refactor) + `tests/test_session_preflight.py` (lines 51,53,61,481,493,505) + `scripts/validate.py` (grep + AST gates) + `requirements.txt` (vendor `sqlglot`) + `src/data/handlers/*.py` (Lambda handler defaults)
@@ -532,13 +532,13 @@ CD.10 currently lists gates `[T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]
 
 **Intent:** Per CD.27. GitHub rename and IAM trust-policy update happen in different control planes (GitHub Settings API vs `aws iam update-assume-role-policy`), so true atomicity is impossible. Procedure that achieves equivalent safety via both-subs-present overlap (round-3 adversarial #10):
 
-(a) Pre-step: Update GitHub OIDC trust policy to include BOTH `sub` values via a wildcard or two-element list — `repo:benjamin-blake/agent-platform:*` AND `repo:benjamin-blake/bblake-platform:*` — before rename. CI runs continue under the old name's sub.
+(a) Pre-step: Update GitHub OIDC trust policy to include BOTH `sub` values via a wildcard or two-element list — `repo:benjamin-blake/agent-platform:*` AND `repo:benjamin-blake/agent-platform:*` — before rename. CI runs continue under the old name's sub.
 (b) Disable any in-flight scheduled workflows (`gh workflow disable` for the cron-driven ones) to minimise the rename window's CI traffic.
-(c) Rename GitHub repo `agent-platform` → `bblake-platform` via GitHub settings API.
+(c) Rename GitHub repo `agent-platform` → `agent-platform` via GitHub settings API.
 (d) Verify a CI run on the renamed repo succeeds with OIDC under the new sub.
 (e) Post-step: Remove the old `repo:benjamin-blake/agent-platform:*` sub from trust policy (no longer reachable).
 (f) Re-enable disabled workflows.
-(g) Verify self-hosted runner registration survives (`gh api repos/benjamin-blake/bblake-platform/actions/runners` returns the existing runner without re-registration; if absent, re-register per CLAUDE.md — round-3 architect #11).
+(g) Verify self-hosted runner registration survives (`gh api repos/benjamin-blake/agent-platform/actions/runners` returns the existing runner without re-registration; if absent, re-register per CLAUDE.md — round-3 architect #11).
 (h) Reference sweep across: `CLAUDE.md` (entire file plus operational runbooks for re-enabling Lambda scheduled agents, self-hosted runner, and Copilot SDK OAuth token rotation — last hardcodes `agent-platform-github-pat`), `AGENTS.md`, all `docs/`, all `scripts/`, all `terraform/` (comments AND `ec2_runner.tf:236` user_data — round-3 architect #9), `README.md`, `setup.py`, `bin/`, `tests/`, `.github/copilot-instructions.md`, `.github/prompts/`, `.claude/skills/`, `.claude/commands/`, `.agents/skills/`, `.agents/workflows/`. Sweep dedups against T-1.0 (already complete): re-runs the same grep predicates with new search strings; T-1.0's swept-file inventory is a starting set, not authoritative for new patterns.
 
 **depends_on:** [T-1.0, T0.15, T0.16]
@@ -549,7 +549,7 @@ CD.10 currently lists gates `[T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]
 
 ### T2.16 — Glue database split + Athena workgroup split (atomic)
 
-**Intent:** Per CD.25 and the Part 3 telemetry-routing table. The single `trading_formulas_db` Glue database splits into `bblake_platform` (ops_recommendations, ops_decisions, ops_session_log, AND all telemetry_* tables — Part 3 routing) and `bblake_trading_system` (market_data, formula_lineage, formula_outcomes, ab_tests). The single `agent-platform-production` Athena workgroup splits into `bblake-platform-production` (ops + telemetry writes) and `bblake-trading-system-production` (product writes). schema_to_iceberg generator (T0.13) consumes a class-level `@target_database` annotation with semantic values (`platform` or `project`), NOT physical DB names (round-2 architect #8) — generator resolves to physical name via `local.glue_platform_db` / `local.glue_project_db`.
+**Intent:** Per CD.25 and the Part 3 telemetry-routing table. The single `trading_formulas_db` Glue database splits into `agent_platform` (ops_recommendations, ops_decisions, ops_session_log, AND all telemetry_* tables — Part 3 routing) and `bblake_trading_system` (market_data, formula_lineage, formula_outcomes, ab_tests). The single `agent-platform-production` Athena workgroup splits into `agent-platform-production` (ops + telemetry writes) and `bblake-trading-system-production` (product writes). schema_to_iceberg generator (T0.13) consumes a class-level `@target_database` annotation with semantic values (`platform` or `project`), NOT physical DB names (round-2 architect #8) — generator resolves to physical name via `local.glue_platform_db` / `local.glue_project_db`.
 
 **Atomic view re-creation:** All 10 views (enumerated by name in Part 3 telemetry routing table) re-created in one `null_resource` with `create_before_destroy = true`. View names (not line numbers, round-2 architect #13): `ops_recommendations_current`, `ops_decisions_current`, `ops_priority_queue_current`, `telemetry_sessions_current`, `telemetry_phases_current`, `telemetry_steps_current`, `telemetry_agent_invocations_current`, `telemetry_session_summary_30d`, `telemetry_phase_time_distribution`, `telemetry_event_frequency_30d`. CI gate verifies all 10 views resolve before declaring T2.16 complete.
 
@@ -578,9 +578,9 @@ T0.15 dependency added per round-3 adversarial #7: Lambda handlers (`scheduled_a
 
 1. Add a feature flag `OPS_WRITER_FROZEN=true` env var support to `scripts/ops_writer.py` that causes BOTH `write()` AND `compact()` to return `403 Frozen` immediately, with no DynamoDB call and no S3 write (round-3 adversarial #2: `compact()` is the path that drains the outbox into Iceberg, and freezing only `write()` leaves the resurrection path open). Add this support in T2.18's first commit. The freeze flag itself is a code change to a Lambda-bundled module; per the standard Decision-67 DEFERRED-deploy rule, the work-account Lambda continues running the un-frozen code while the personal-account Lambda picks up the frozen code on its first cold-start in the new account. Quiescence in the WORK account is therefore enforced via an alternative mechanism: an IAM-policy deny rule attached to the work-account Lambda's role that blocks `dynamodb:UpdateItem` on the counters table — a Terraform-only change, no Lambda redeploy needed (round-3 architect #3).
 2. Apply the IAM deny rule on the work-account Lambda counters access. Verify next `file_rec` against work account returns 403.
-3. Verify quiescence on BOTH write AND drain paths: `aws dynamodb scan --table-name agent-platform-counters --select COUNT` returns stable count across 30 seconds AND `aws s3 ls s3://bblake-platform-agent-logs/outbox/ --recursive` returns the same listing across two 60s-apart samples (round-3 adversarial #2 — confirms no in-flight drain is moving data).
+3. Verify quiescence on BOTH write AND drain paths: `aws dynamodb scan --table-name agent-platform-counters --select COUNT` returns stable count across 30 seconds AND `aws s3 ls s3://agent-platform-agent-logs/outbox/ --recursive` returns the same listing across two 60s-apart samples (round-3 adversarial #2 — confirms no in-flight drain is moving data).
 4. Dump current max value per counter: `aws dynamodb scan --table-name agent-platform-counters --projection-expression "counter_name,current_value"`.
-5. Seed personal-account `bblake-platform-counters` table with `current_value + 1000` (safety margin against any late writes that snuck through, round-2 adversarial #5) for each counter.
+5. Seed personal-account `agent-platform-counters` table with `current_value + 1000` (safety margin against any late writes that snuck through, round-2 adversarial #5) for each counter.
 6. Verify: a test `file_rec` via the new `log-rec` Lambda allocates the next id (work-account max + 1001).
 7. Flip writers in the new account: unset `OPS_WRITER_FROZEN` on personal-account Lambdas.
 8. Legacy `OpsWriter` in work account remains frozen permanently (the work account is being decommissioned).
@@ -594,7 +594,7 @@ T0.15 dependency added per round-3 adversarial #7: Lambda handlers (`scheduled_a
 
 ### T2.18b — Legacy `agent-logs` bucket write-freeze + cutover
 
-**Intent:** Per round-2 architect #6. After T2.1 creates `bblake-platform-agent-logs` and T0.15's config-driven bucket plumbing is in place, but before T2.2 imports, flip the active bucket to the new name and apply a read-only Bucket Policy to the legacy bucket. Procedure: (1) T0.15 ships the `S3_LOG_BUCKET` env var as the source-of-truth for bucket selection (already standard in handlers, just verify). (2) Update active deployments to set `S3_LOG_BUCKET=bblake-platform-agent-logs`. (3) Wait for one drain cycle so any in-flight outbox writes against the legacy bucket complete. (4) Apply Bucket Policy on `bblake-platform-agent-logs` denying `s3:PutObject` from all principals except a one-time-cleanup admin role. (5) Verify drain via `aws s3 ls s3://bblake-platform-agent-logs/outbox/` returns expected residual files.
+**Intent:** Per round-2 architect #6. After T2.1 creates `agent-platform-agent-logs` and T0.15's config-driven bucket plumbing is in place, but before T2.2 imports, flip the active bucket to the new name and apply a read-only Bucket Policy to the legacy bucket. Procedure: (1) T0.15 ships the `S3_LOG_BUCKET` env var as the source-of-truth for bucket selection (already standard in handlers, just verify). (2) Update active deployments to set `S3_LOG_BUCKET=agent-platform-agent-logs`. (3) Wait for one drain cycle so any in-flight outbox writes against the legacy bucket complete. (4) Apply Bucket Policy on `agent-platform-agent-logs` denying `s3:PutObject` from all principals except a one-time-cleanup admin role. (5) Verify drain via `aws s3 ls s3://agent-platform-agent-logs/outbox/` returns expected residual files.
 
 **depends_on:** [T2.1, T0.15]
 **files_in_scope:** `terraform/legacy_bucket_freeze.tf` (new — work-account Terraform applies the Bucket Policy)
@@ -608,13 +608,13 @@ T0.15 dependency added per round-3 adversarial #7: Lambda handlers (`scheduled_a
 |---------------|-----------|
 | **T0.7a** (log-rec) | `depends_on` insert: `T0.12a` between `T0.12` and `T0.13` → `[T0.6, T0.12, T0.12a, T0.13]` (round-2 architect #1) |
 | **T0.7b** (log-decision) | Same: `[T0.6, T0.12, T0.12a, T0.13]` |
-| **T0.7c** (query) | Same `depends_on` insertion AND new exit-criterion: every list_* verb's workgroup routing follows Part 3 cross-DB policy (ops + telemetry → `bblake-platform-production`; product → `bblake-trading-system-production`; cross-DB → platform workgroup). T0.7c is authored against the two-workgroup world from the start (round-2 architect #3). Workgroup name comes from `src/common/aws_naming.py`. |
+| **T0.7c** (query) | Same `depends_on` insertion AND new exit-criterion: every list_* verb's workgroup routing follows Part 3 cross-DB policy (ops + telemetry → `agent-platform-production`; product → `bblake-trading-system-production`; cross-DB → platform workgroup). T0.7c is authored against the two-workgroup world from the start (round-2 architect #3). Workgroup name comes from `src/common/aws_naming.py`. |
 | **T0.13** (Iceberg DDL generator) | Consume class-level `@target_database` annotation with **semantic values** (`platform` or `project`) not physical names. Generator resolves to physical DB via `local.glue_platform_db` / `local.glue_project_db` (round-2 architect #8). Emit NOT NULL when `DqNotNull` present. |
 | **T2.1** (full Terraform re-deploy) | Depends on T0.15, T0.16, T0.17, T2.0, T2.15, T2.16. |
-| **T2.2** (ops + decisions import) | Depends_on extended to include `T2.18`. T2.18 is a strict precondition, not a peer (round-3 architect #2 correction). After import, one-off ETL backfills `project_id = "trading-system"`. `BackfillRequiredError` from `update-rec` is the transient guard inside this window only and is capped: T2.2 declares a hard wall-clock budget (default 24h) after which the implementing plan escalates rather than letting the window stay open indefinitely (round-3 adversarial #5). Exit criterion: `count(*) FROM bblake_platform.ops_recommendations_current WHERE project_id IS NULL == 0`. |
+| **T2.2** (ops + decisions import) | Depends_on extended to include `T2.18`. T2.18 is a strict precondition, not a peer (round-3 architect #2 correction). After import, one-off ETL backfills `project_id = "trading-system"`. `BackfillRequiredError` from `update-rec` is the transient guard inside this window only and is capped: T2.2 declares a hard wall-clock budget (default 24h) after which the implementing plan escalates rather than letting the window stay open indefinitely (round-3 adversarial #5). Exit criterion: `count(*) FROM agent_platform.ops_recommendations_current WHERE project_id IS NULL == 0`. |
 | **T2.3** (company-aws-profile sweep) | Sweep scoped to SSO profile only; legacy resource-name sweep lives in T0.15 (production code) and T2.15 (runbooks + docs). NOTE: `tests/test_session_preflight.py:51,53,61` are venv-detection fixtures keyed on the `agent-platform` directory name (NOT SSO-profile fixtures, per round-3 correction); they belong in T0.15's semantic-refactor scope alongside the lines at 481/493/505, NOT in T2.3. Test fixtures may still have semantic assumptions about the work-account profile beyond literal string — implementing plan investigates SSO-related fixtures separately. |
-| **T2.10** (OIDC + hosted-runner migration) | Trust policy `sub` claim uses `bblake-platform`, not `agent-platform`. T2.10 runs concurrently with or after T2.15; if T2.10 ships first, its trust policy uses the new repo name (since T2.15's rename precedes); if after, no impact. |
-| **T2.13** (public flip) | Depends_on gains T2.15. Public surface debuts under `bblake-platform`. |
+| **T2.10** (OIDC + hosted-runner migration) | Trust policy `sub` claim uses `agent-platform`, not `agent-platform`. T2.10 runs concurrently with or after T2.15; if T2.10 ships first, its trust policy uses the new repo name (since T2.15's rename precedes); if after, no impact. |
+| **T2.13** (public flip) | Depends_on gains T2.15. Public surface debuts under `agent-platform`. |
 | **CD.10** (Agent Tooling Platform) | Gates list extends to include T0.12a. |
 | **CD.16** (per-Lambda deploy gating) | Gates list extends to include T0.12a (round-2 architect #2). |
 
@@ -630,8 +630,8 @@ Both are listed in CD.28's gates; the principal-binding helper module is in T0.7
 
 ## Part 9 — Open Questions for Step 10 Critique
 
-1. **Final repo name.** Recommendation `bblake-platform`.
-2. **Final SSO profile name + personal account id.** **RESOLVED 2026-05-24** (PR for agent/migration-t03-t06-prep). SSO profile name: `agent_platform`. Personal account: `REDACTED-PERSONAL-ACCOUNT` (same as `personal-bedrock-profile`'s target). Profile decoupled from `bblake-platform-*` resource prefix by design.
+1. **Final repo name.** Recommendation `agent-platform`.
+2. **Final SSO profile name + personal account id.** **RESOLVED 2026-05-24** (PR for agent/migration-t03-t06-prep). SSO profile name: `agent_platform`. Personal account: `REDACTED-PERSONAL-ACCOUNT` (same as `personal-bedrock-profile`'s target). Profile decoupled from `agent-platform-*` resource prefix by design.
 3. **`project_id` allowed value for the trading project.** Recommendation `"trading-system"`. Alternatives `"trading"`, `"ftse100-formulas"`.
 4. **PLAN-platform-extraction-strategy.md fate.** Recommendation DEFERRED.
 5. **Directory restructure** (`projects/trading-system/src/` vs flat with directory-name split). Deferred — AWS migration does not require this.

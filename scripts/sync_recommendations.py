@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,8 @@ try:
     _BOTO3_AVAILABLE = True
 except ImportError:
     _BOTO3_AVAILABLE = False
+
+from scripts.aws_profile import resolve_aws_profile
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def next_id(counter_name: str, profile: str | None = None) -> str | int:
     """
     if not _BOTO3_AVAILABLE:
         raise RuntimeError("boto3 not available; cannot allocate ID from DynamoDB")
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
     response = ddb.update_item(
@@ -92,7 +93,7 @@ def reseed_decisions_counter(max_id: int, profile: str | None = None) -> None:
     """
     if not _BOTO3_AVAILABLE:
         raise RuntimeError("boto3 not available; cannot reseed DynamoDB counter")
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
     try:
@@ -127,7 +128,7 @@ def reseed_recommendations_counter(max_id: int, profile: str | None = None) -> N
     """
     if not _BOTO3_AVAILABLE:
         raise RuntimeError("boto3 not available; cannot reseed DynamoDB counter")
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
     try:
@@ -186,7 +187,7 @@ def seed_counters(profile: str | None = None) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not parse DECISIONS.md for seed: %s", exc)
 
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     ddb = session.client("dynamodb", region_name=_AWS_REGION)
 

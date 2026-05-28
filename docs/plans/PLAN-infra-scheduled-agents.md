@@ -42,7 +42,7 @@ Phase 1: Core Infrastructure (maintenance)
 
 ## Constraints
 - Agents run on free models only (gpt-4.1-mini, gemini-3.0-flash)
-- All output goes to S3 (bblake-platform-agent-logs) - no git write access
+- All output goes to S3 (agent-platform-agent-logs) - no git write access
 - Sequential execution in workflow (no parallelism)
 - GitHub Actions OIDC for AWS credentials (existing pattern)
 - Copilot CLI requires GITHUB_TOKEN with copilot scope (manual setup by human)
@@ -50,7 +50,7 @@ Phase 1: Core Infrastructure (maintenance)
 ## Context
 - **Decision 33**: S3 append race condition accepted for sequential agents
 - **Decision 34**: Unified session telemetry enables cross-workflow friction analysis
-- **S3 bucket**: bblake-platform-agent-logs (created in Plan 1)
+- **S3 bucket**: agent-platform-agent-logs (created in Plan 1)
 - **Existing pattern**: refresh-copilot-multipliers.yml uses monthly cron
 
 ## Pre-Implementation Checklist

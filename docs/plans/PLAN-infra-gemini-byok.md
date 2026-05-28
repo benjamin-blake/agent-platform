@@ -67,7 +67,7 @@ Phase Platform (automation infrastructure) -- runs in parallel with domain phase
 | 13 | [post-deploy] | Trigger code-smell agent | `python -m scripts.run_scheduled_agent --trigger-lambda code-smell` | Lambda returns `agents_run: 1, agents_failed: 0` | Agent failure |
 | 14 | [post-deploy] | Trigger prompt-quality agent | `python -m scripts.run_scheduled_agent --trigger-lambda prompt-quality` | Lambda returns `agents_run: 1, agents_failed: 0` | Agent failure |
 | 15 | [post-deploy] | Trigger rec-curator agent | `python -m scripts.run_scheduled_agent --trigger-lambda rec-curator` | Lambda returns `agents_run: 1, agents_failed: 0` with structured JSON findings | Agent failure or empty output |
-| 16 | [post-deploy] | Verify findings landed in S3 | `aws s3 ls s3://bblake-platform-agent-logs/agents/ --recursive --profile company-aws-profile \| tail -6` | At least 6 recent finding files (one per triggered agent) | S3 write failed |
+| 16 | [post-deploy] | Verify findings landed in S3 | `aws s3 ls s3://agent-platform-agent-logs/agents/ --recursive --profile company-aws-profile \| tail -6` | At least 6 recent finding files (one per triggered agent) | S3 write failed |
 
 ## Constraints
 - Gemini API key must NOT be committed to source. Stored in Secrets Manager only.

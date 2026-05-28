@@ -407,7 +407,7 @@ def _smoke_test(agent_name: str) -> int:
     logger.info("Smoke test: Lambda invocation succeeded.")
 
     # Step 3: Verify fresh S3 log object
-    bucket = "bblake-platform-agent-logs"
+    bucket = "agent-platform-agent-logs"
     prefix = f"agents/{agent_name}/"
     profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
     region = "eu-west-2"

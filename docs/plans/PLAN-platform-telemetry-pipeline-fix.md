@@ -28,7 +28,7 @@ Phase Platform (automation infrastructure)
 None.
 
 ## Acceptance Criteria
-- [ ] `config/config.company.yaml` has `aws.s3_agent_logs_bucket: bblake-platform-agent-logs`
+- [ ] `config/config.company.yaml` has `aws.s3_agent_logs_bucket: agent-platform-agent-logs`
 - [ ] `OpsWriter._bucket()` resolves from config when `S3_LOG_BUCKET` env var is unset and `ENVIRONMENT=company`
 - [ ] `OpsWriter._bucket()` returns the env var when it IS set (Lambda unchanged)
 - [ ] After a session open/close + drain + compact cycle, the `telemetry_sessions` record is queryable in Athena
@@ -47,7 +47,7 @@ None.
 
 ## Constraints
 - AWS profile `company-aws-profile` required for S3 and Athena operations
-- `S3_LOG_BUCKET` value is `bblake-platform-agent-logs` (from terraform/scheduled_agents.tf)
+- `S3_LOG_BUCKET` value is `agent-platform-agent-logs` (from terraform/scheduled_agents.tf)
 - Must not break Lambda handlers (env var takes priority over config -- Lambda always has it set)
 - Must not break pytest (telemetry writes are no-ops under PYTEST_CURRENT_TEST)
 - Config resolution order: env var > config file
@@ -78,7 +78,7 @@ Add under the `aws:` section in `config/config.company.yaml`:
 
 ```yaml
   # Agent logs and telemetry staging
-  s3_agent_logs_bucket: bblake-platform-agent-logs
+  s3_agent_logs_bucket: agent-platform-agent-logs
 ```
 
 **Acceptance:** `grep -q "s3_agent_logs_bucket" config/config.company.yaml`
@@ -104,7 +104,7 @@ def _bucket(self) -> str:
 
 This is the single fix point. All consumers -- `write()`, `emit()`, `compact()`, and any code calling these via `drain()` or `drain_pending()` -- automatically benefit.
 
-**Acceptance:** `grep -q "s3_agent_logs_bucket" scripts/ops_writer.py && python -c "import os; os.environ.pop('S3_LOG_BUCKET', None); os.environ['ENVIRONMENT']='company'; from scripts.ops_writer import OpsWriter; b=OpsWriter()._bucket(); assert b == 'bblake-platform-agent-logs', f'got: {b}'; print('OK')"`
+**Acceptance:** `grep -q "s3_agent_logs_bucket" scripts/ops_writer.py && python -c "import os; os.environ.pop('S3_LOG_BUCKET', None); os.environ['ENVIRONMENT']='company'; from scripts.ops_writer import OpsWriter; b=OpsWriter()._bucket(); assert b == 'agent-platform-agent-logs', f'got: {b}'; print('OK')"`
 
 ---
 
@@ -114,7 +114,7 @@ Modify `tests/test_ops_writer.py`:
 
 Add `TestBucketResolution` class:
 - `test_env_var_takes_priority`: Set S3_LOG_BUCKET env var, assert `_bucket()` returns it regardless of config
-- `test_config_fallback`: Unset S3_LOG_BUCKET, set ENVIRONMENT=company, assert `_bucket()` returns `bblake-platform-agent-logs`
+- `test_config_fallback`: Unset S3_LOG_BUCKET, set ENVIRONMENT=company, assert `_bucket()` returns `agent-platform-agent-logs`
 - `test_no_env_no_config`: Unset S3_LOG_BUCKET, mock config.get to raise, assert `_bucket()` returns `""`
 
 **Acceptance:** `python -m pytest tests/test_ops_writer.py -q --tb=short`

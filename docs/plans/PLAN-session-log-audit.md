@@ -103,7 +103,7 @@ Plus:
   AWS substrate that the proposed Lambda will land on.
 - Naming convention: new Lambdas use `agent-platform-{purpose}` prefix
   for open-source-readiness; existing roadmap-planned Lambdas keep their
-  `bblake-platform-{purpose}` names until a separate roadmap-renaming
+  `agent-platform-{purpose}` names until a separate roadmap-renaming
   item addresses them.
 
 ## Pre-Implementation Checklist

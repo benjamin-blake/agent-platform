@@ -9,7 +9,7 @@ and how other components read it.
 ## Pattern 1 -- Cloud-Produced
 
 Lambda functions write JSONL objects directly to S3 under the
-`bblake-platform-agent-logs` bucket. Local readers retrieve them
+`agent-platform-agent-logs` bucket. Local readers retrieve them
 via `s3_log_store.read_jsonl()`.
 
 **Flow:** Lambda handler --> S3 --> `s3_log_store.read_jsonl(key)`

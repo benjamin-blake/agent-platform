@@ -16,7 +16,7 @@ Phase 1: Core Infrastructure (maintenance)
 | File | Action | Purpose |
 |------|--------|---------|
 | terraform/data_pipeline.tf | Modify | Add IAM policy for GitHub Actions OIDC role to access agent-logs bucket |
-| terraform/main.tf | Modify | Add `aws_s3_bucket.agent_logs` resource for `bblake-platform-agent-logs` |
+| terraform/main.tf | Modify | Add `aws_s3_bucket.agent_logs` resource for `agent-platform-agent-logs` |
 | terraform/variables.tf | Modify | Add variable for agent logs bucket if needed |
 | terraform/outputs.tf | Modify | Add output for agent logs bucket ARN |
 | scripts/s3_log_store.py | Create | Unified S3 log read/write module with local fallback |
@@ -70,12 +70,12 @@ Phase 1: Core Infrastructure (maintenance)
 - Therefore: keep `update_recommendation_status()` as local-only operation; migrate only read operations to S3
 
 ## Acceptance Criteria
-- [ ] `terraform plan` shows new S3 bucket `bblake-platform-agent-logs` will be created
+- [ ] `terraform plan` shows new S3 bucket `agent-platform-agent-logs` will be created
 - [ ] `terraform apply` creates bucket successfully (requires SSO login)
 - [ ] `scripts/s3_log_store.py` exists with `read_jsonl()`, `append_jsonl()`, `list_keys()` functions
 - [ ] `S3_LOG_BUCKET` environment variable documented in config/README.md
 - [ ] All modified scripts work with `S3_LOG_BUCKET` unset (local fallback)
-- [ ] All modified scripts work with `S3_LOG_BUCKET=bblake-platform-agent-logs` (S3 mode)
+- [ ] All modified scripts work with `S3_LOG_BUCKET=agent-platform-agent-logs` (S3 mode)
 - [ ] `python -m pytest tests/test_s3_log_store.py -v` passes
 - [ ] `python -m pytest tests/` passes
 - [ ] `python scripts/validate.py` exits 0
@@ -91,7 +91,7 @@ Phase 1: Core Infrastructure (maintenance)
 ## Context
 - **Decision 24**: Agents use `company-aws-profile` profile only
 - **AWS Region**: eu-west-2
-- **Existing buckets**: `bblake-platform-{data-lake, formulas-discovery, formulas-staging, formulas-production}`
+- **Existing buckets**: `agent-platform-{data-lake, formulas-discovery, formulas-staging, formulas-production}`
 - **Known Gotcha**: Optional dependencies should use try/except ImportError pattern
 
 ## Pre-Implementation Checklist
@@ -108,7 +108,7 @@ Phase 1: Core Infrastructure (maintenance)
 ### Step 1: Add S3 bucket resource to Terraform
 **File**: terraform/main.tf
 **Action**: modify
-**Description**: Add `aws_s3_bucket.agent_logs` resource for bucket `bblake-platform-agent-logs` with versioning enabled. Add lifecycle policy to expire old versions after 90 days. Add tags for Project, Purpose, Phase.
+**Description**: Add `aws_s3_bucket.agent_logs` resource for bucket `agent-platform-agent-logs` with versioning enabled. Add lifecycle policy to expire old versions after 90 days. Add tags for Project, Purpose, Phase.
 **Acceptance**: `grep -q "agent_logs" terraform/main.tf && grep -q "agent-logs" terraform/main.tf`
 
 ### Step 2: Add Terraform outputs for agent logs bucket
@@ -278,7 +278,7 @@ Phase 1: Core Infrastructure (maintenance)
 **Action**: modify
 **Description**: Add section documenting:
 - `S3_LOG_BUCKET` environment variable
-- Bucket name: `bblake-platform-agent-logs`
+- Bucket name: `agent-platform-agent-logs`
 - When to use: GitHub Actions cron agents
 - Local fallback behavior when unset
 **Acceptance**: `grep -q "S3_LOG_BUCKET" config/README.md`
@@ -287,7 +287,7 @@ Phase 1: Core Infrastructure (maintenance)
 **File**: .github/copilot-instructions.md
 **Action**: modify
 **Description**: Add to AWS section:
-- New bucket: `bblake-platform-agent-logs`
+- New bucket: `agent-platform-agent-logs`
 - Purpose: Agent log storage for cron workflows
 - Add to File Router: s3_log_store.py location
 **Acceptance**: `grep -q "agent-logs" .github/copilot-instructions.md`
@@ -295,7 +295,7 @@ Phase 1: Core Infrastructure (maintenance)
 ### Step 22: Add IAM policy for GitHub Actions OIDC
 **File**: terraform/data_pipeline.tf
 **Action**: modify
-**Description**: Add IAM policy granting `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` permissions on the `bblake-platform-agent-logs` bucket. Attach to the GitHub Actions OIDC role (if exists) or document that this will be needed when the cron workflow is implemented.
+**Description**: Add IAM policy granting `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` permissions on the `agent-platform-agent-logs` bucket. Attach to the GitHub Actions OIDC role (if exists) or document that this will be needed when the cron workflow is implemented.
 **Acceptance**: `grep -q "agent.logs\|agent_logs" terraform/data_pipeline.tf`
 
 ### Step 23: Update .gitignore for S3-managed logs

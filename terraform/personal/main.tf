@@ -50,6 +50,10 @@ resource "aws_athena_workgroup" "production" {
   name        = "agent-platform-production"
   description = "Production queries: OPTIMIZE, MERGE writes, all ops portal/preflight queries"
 
+  # A rename forces destroy-then-create; DeleteWorkGroup rejects a workgroup that holds
+  # query-execution history unless RecursiveDeleteOption is set. force_destroy maps to it.
+  force_destroy = true
+
   configuration {
     enforce_workgroup_configuration    = true
     publish_cloudwatch_metrics_enabled = true

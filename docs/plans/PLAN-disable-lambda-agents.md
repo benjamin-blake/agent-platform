@@ -130,7 +130,7 @@ If the Claude Code scheduled agent migration is rolled back, re-enable Lambda di
 
 3. **Verify:**
    - Check CloudWatch logs for `/aws/lambda/agent-platform-scheduled-agent-dispatcher` — should show agents dispatching within the next hour
-   - Verify S3 bucket `bblake-platform-agent-logs` receives new agent findings files
+   - Verify S3 bucket `agent-platform-agent-logs` receives new agent findings files
 ```
 
 ---
@@ -146,7 +146,7 @@ If the Claude Code scheduled agent migration is rolled back, re-enable Lambda di
 | 5 (behavioral) | `aws lambda invoke --function-name agent-platform-scheduled-agent-dispatcher --payload '{}' --profile company-aws-profile /tmp/response.json && cat /tmp/response.json` | Response contains `"status": "disabled"` | [post-deploy] | V3 |
 | 6 (behavioral) | `aws logs tail /aws/lambda/agent-platform-scheduled-agent-dispatcher --follow --profile company-aws-profile --since 5m` | Log shows "Scheduled agents are disabled" message on invocation | [post-deploy] | V3 |
 | 7 (negative) | `aws events list-rules --name-prefix agent-platform-hourly --profile company-aws-profile \| grep -i state` | Rule state shows `"DISABLED"` or not present in active list | [post-deploy] | V2 |
-| 8 (integration) | `aws s3 ls s3://bblake-platform-agent-logs/agents/ --profile company-aws-profile \| wc -l` | No new findings files appear after 10 minutes (compared to baseline at step start) | [post-deploy] | V2 |
+| 8 (integration) | `aws s3 ls s3://agent-platform-agent-logs/agents/ --profile company-aws-profile \| wc -l` | No new findings files appear after 10 minutes (compared to baseline at step start) | [post-deploy] | V2 |
 
 **Verification Plan Notes:**
 

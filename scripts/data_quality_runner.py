@@ -559,7 +559,9 @@ def run_checks(
             duration_seconds=0.0,
         )
 
-    _profile = profile_name or os.environ.get("AWS_PROFILE") or os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform"
+    from scripts.aws_profile import resolve_aws_profile
+
+    _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
     session = boto3.Session(profile_name=_profile)
     athena = session.client("athena", region_name="eu-west-2")
 

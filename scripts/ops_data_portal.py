@@ -37,6 +37,7 @@ from typing import Callable, Optional
 import yaml
 from pydantic import ValidationError
 
+from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.acceptance_lint import lint_acceptance_command
 from scripts.executor.jsonl_store import _VALID_STATUSES, DECISIONS_JSONL, RECS_JSONL, Decision, Recommendation
 from scripts.executor.rec_write_guidance import validate_source
@@ -371,7 +372,7 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
 
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
-    effective_profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     try:
         session = _boto3.Session(profile_name=effective_profile)
         athena = session.client("athena", region_name=_AWS_REGION)
@@ -551,7 +552,7 @@ def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None)
 
     if not re.fullmatch(r"dec-\d+", decision_id):
         raise ValueError(f"_fetch_decision_from_athena: invalid decision_id: {decision_id!r}")
-    effective_profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     try:
         session = _boto3.Session(profile_name=effective_profile)
         athena = session.client("athena", region_name=_AWS_REGION)
@@ -925,7 +926,7 @@ def _delete_postmortems_from_iceberg(failed_rec_id: str, profile: Optional[str] 
         logger.warning("[PURGE] boto3 not available; skipping Iceberg delete for %s", failed_rec_id)
         return 0
 
-    _profile = profile or os.environ.get("AWS_PROFILE") or _SSO_PROFILE
+    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
     athena = session.client("athena", region_name=_AWS_REGION)
 

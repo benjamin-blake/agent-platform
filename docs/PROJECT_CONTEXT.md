@@ -7,7 +7,7 @@ See docs/contracts/instruction-architecture.md for the full information architec
 
 ## Rules
 
-- **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. Use `aws sso login --profile company-aws-profile` to refresh credentials when needed.
+- **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. Use `aws sso login --profile agent_platform` to refresh credentials when needed.
 - No emojis in code, scripts, or documentation
 - Python 3.12+, type hints required, async for I/O
 - **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
@@ -35,7 +35,7 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
 - **ID Authority:** Recommendation and decision IDs are allocated atomically via DynamoDB. The local JSONL files are read-only caches, not the source of truth.
 - **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads from Athena (requires SSO); raises `RuntimeError` if unreachable.
-- **Offline/Pending Outbox:** If AWS credentials (profile `company-aws-profile`) are missing or services are unreachable, the portal automatically queues records to `logs/.ops-outbox/`. Call `ops_data_portal.sync()` once connectivity is restored to drain and compact.
+- **Offline/Pending Outbox:** If AWS credentials (profile `agent_platform`) are missing or services are unreachable, the portal automatically queues records to `logs/.ops-outbox/`. Call `ops_data_portal.sync()` once connectivity is restored to drain and compact.
 - **SCD Type 2:** The authoritative store (Athena/Iceberg) uses append-only semantics. Deduplication to the latest record happens at query time via the `ops_recommendations_current` and `ops_decisions_current` views.
 
 ### Data Quality Enforcement
@@ -93,24 +93,22 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 ## AWS
 
 - **Region**: eu-west-2
-- **Account**: REDACTED-ACCOUNT-ID (sandbox)
-- **Profile**: company-aws-profile (SSO) -- **agents use this profile ONLY**
-  - Staging (`company-aws-profile-staging`) and production (`company-aws-profile-production`) profiles exist but are NOT referenced in prompts/agents
+- **Account**: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed)
+- **Profile**: `agent_platform` (PlatformDev, runtime; SSO) -- agents use this profile for all operations. `agent_platform_admin` (PlatformAdmin) is used for provisioning (IAM + OIDC) only.
   - Environment promotion is human-triggered via GitHub Actions, not agent-initiated
   - **Decision 57 (Interactive vs Autonomous SSO):** Interactive sessions should attempt auto-login or prompt the human for recovery. Autonomous executors (Lambda) MUST NOT attempt login; they skip SSO-dependent verifiers (emitting SKIPPED) to prevent pipeline deadlocks.
-  - `sso_status: "expired"` or `"unknown"` -- **Interactive SSO Recovery:** Attempt `aws sso login --profile company-aws-profile`. If browser is unavailable or login fails, STOP and prompt human: "AWS SSO session expired. Please run `aws sso login --profile company-aws-profile` in your terminal and type 'retry'." (Decision 57).
+  - `sso_status: "expired"` or `"unknown"` -- **Interactive SSO Recovery:** Attempt `aws sso login --profile agent_platform`. If browser is unavailable or login fails, STOP and prompt human: "AWS SSO session expired. Please run `aws sso login --profile agent_platform` in your terminal and type 'retry'." (Decision 57).
   - See Decision 24 in `docs/DECISIONS.md` for rationale
-- **Glue database**: trading_formulas_db
+- **Glue database**: agent_platform
 - **Athena workgroups**:
   - `agent-platform-production` (engine v3) -- used for OPTIMIZE, MERGE writes, and all production queries
   - `agent-platform-lab` (engine v3) -- used for PySR formula discovery queries
   - `primary` (engine v2, default) -- **do not use** for Iceberg operations; does not support `VACUUM` or full Iceberg DML
-- **S3 buckets**: bblake-platform-{data-lake, formulas-discovery, formulas-staging, formulas-production, agent-logs}
-  - `bblake-platform-agent-logs` -- Agent log storage for cron workflows (see `scripts/s3_log_store.py`)
+- **S3 bucket**: `agent-platform-data-lake` -- Iceberg data lake, Athena query results, and agent/cron log storage (set as `s3_agent_logs_bucket` in `config.personal.yaml`; see `scripts/s3_log_store.py`). Legacy work-account `formulas-*` buckets are not provisioned in the personal account.
 - **Lambda runtime**: Python 3.12
 - **Lambda layers**: AWSSDKPandas-Python312:22 (managed) + extras (yfinance/pyyaml, ~11 MB)
 - **Bedrock inference**: Personal account REDACTED-PERSONAL-ACCOUNT, profile `personal-bedrock-profile`, model `deepseek.v3.2` (DeepSeek V3.2 via Converse API). See Decision 52. **Dormant for executor** -- executor now uses Gemini CLI (Decision 53).
-- **GitHub Actions runner**: EC2 t3.medium, eu-west-2 (`agent-platform-runner`). See Decision 68 and `terraform/ec2_runner.tf`.
+- **CI runner**: GitHub-hosted `ubuntu-latest` with OIDC to the personal account (CD.21; superseded Decision 68). Branch role `agent-platform-github-ci-branch`, PR role `agent-platform-github-ci-pr`. See `terraform/personal/oidc.tf`.
 
 ## File Router
 
@@ -173,8 +171,8 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Copilot SDK client (Lambda) | [scripts/copilot_sdk_client.py](../scripts/copilot_sdk_client.py) |
 | Scheduled agent local runner | [scripts/run_scheduled_agent.py](../scripts/run_scheduled_agent.py) |
 | Scheduled agent prompts | [.github/prompts/scheduled/](../.github/prompts/scheduled/) -- doc-freshness, orphan-code, transcript-review, code-smell, findings-compare |
-| Scheduled agent infrastructure | [terraform/scheduled_agents.tf](../terraform/scheduled_agents.tf) -- cc-scheduled-agents Phase 4 (cron) requires the self-hosted runner (Decision 68) to avoid per-run GitHub Actions billing |
-| CI/CD runner infrastructure | [terraform/ec2_runner.tf](../terraform/ec2_runner.tf) -- EC2 t3.medium self-hosted runner, eu-west-2 (Decision 68) |
+| Scheduled agent infrastructure | [terraform/scheduled_agents.tf](../terraform/scheduled_agents.tf) -- work-account Lambda dispatcher (deferred per Decision 67); retained as artefact |
+| CI runner infrastructure | [terraform/personal/oidc.tf](../terraform/personal/oidc.tf) -- GitHub-hosted runners + OIDC roles (CD.21). [terraform/ec2_runner.tf](../terraform/ec2_runner.tf) retained as a retired-runner artefact |
 | Customisations manifest script | [scripts/list_customizations.py](../scripts/list_customizations.py) |
 | Recommendations migration script | [scripts/migrate_recommendations.py](../scripts/migrate_recommendations.py) |
 | Friction analysis JSONL log | [logs/.friction-analysis-log.jsonl](../logs/.friction-analysis-log.jsonl) |
@@ -229,7 +227,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Rec/Decision Write Portal (Critical):** Never append to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly. All writes MUST go through `python -m scripts.ops_data_portal` or the Python API.
   - **ID Authority:** IDs are allocated via DynamoDB. The local JSONL is a read-only cache. Use `ops_data_portal.sync()` to flush pending writes and rebuild.
-  - **Offline Mode:** If credentials (profile `company-aws-profile`) are missing, the portal queues to `logs/.ops-outbox/`. Run `aws sso login --profile company-aws-profile` then call `ops_data_portal.sync()` to restore.
+  - **Offline Mode:** If credentials (profile `agent_platform`) are missing, the portal queues to `logs/.ops-outbox/`. Run `aws sso login --profile agent_platform` then call `ops_data_portal.sync()` to restore.
   - **Deduplication:** The store uses SCD Type 2 append-only semantics; Athena views select the latest record.
   Direct file writes are caught by `validate.py` and will fail CI. Status changes (closing recs) must also use the portal.
 
@@ -277,7 +275,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **S3 backend + local mocking pattern (Medium):** Use a `get_backend()` switch so local mode preserves original file paths that tests mock. Bypassing mocked paths via absolute paths causes silent test failures.
 
-- **Self-hosted runner credential pattern (Important):** The runner (`agent-platform-runner`) uses an IAM instance role delegated via `~/.aws/config` `credential_source = Ec2InstanceMetadata`. Code that calls `boto3.Session(profile_name='company-aws-profile')` works on the runner without modification -- the SSO profile name is a local alias to instance metadata, not a real SSO session. Tests do not need code changes to work on CI.
+- **CI runner credential pattern (Important):** GitHub-hosted runners (CD.21) assume the OIDC role `agent-platform-github-ci-branch` (or `-pr` on pull requests) via `aws-actions/configure-aws-credentials`, which exports standard AWS credential env vars. There is no `~/.aws/config` on the runner, so code resolving a named SSO profile (`agent_platform`) must fall back to boto3's default credential chain when those env vars are present. Local and Claude-Code-on-web dev still resolve via the named profile.
 
 - **Terraform workflow integration (Important):** Plans with `.tf` files require `terraform plan` output presented to human before applying. Apply is never automatic. See `plan.prompt.md` Step 4 (Infrastructure Assessment).
 
@@ -288,16 +286,6 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 - **Copilot SDK PermissionHandler location (Important):** `PermissionHandler` is in `copilot.session`, not the top-level `copilot` package. Correct import: `from copilot.session import PermissionHandler`. The `create_session()` kwarg is `on_permission_request=PermissionHandler.approve_all` (not `permissions=`).
 
 - **Acceptance command format in executor planning prompts (Important):** Write a SINGLE inline backtick command. No trailing prose after the backtick. Use relative paths from repo root. Write `python -m scripts.MODULE` not `python scripts/MODULE.py`. No fenced code blocks. No `###` inside `grep -E` patterns.
-
-- **Company SCP blocks IAM and external OIDC:**
-  Do not create IAM users or use GitHub Actions OIDC federation. Use Lambda + Secrets Manager instead. See Decisions 36 and 37.
-
-  **Detail:**
-  Company SCPs (Service Control Policies) block both IAM user creation and external OIDC provider registration. Attempting to create an OIDC provider (e.g., for GitHub Actions) will fail with `EntityAlreadyExists` if the provider was previously created, or with an explicit SCP denial if not permitted. To check for existing OIDC providers, use:
-
-      aws iam list-open-id-connect-providers
-
-  If you see an SCP denial or no providers listed, you cannot use OIDC federation. All automation requiring AWS credentials must use Lambda + Secrets Manager or SSO profiles. See Decisions 36 and 37 for rationale and alternatives.
 
 - **Copilot CLI `@file` vs user message (Critical for executor):** `-p @filepath` as a standalone argument injects file contents as **document context**, not as a user instruction. Agentic models receiving context ask "what should I do with this?" and act on it -- they implement the spec instead of planning against it. This is the root cause of agentic planning loops. Correct pattern: put the `@filepath` **inside** the `-p` quoted argument so the CLI expands it inline as user-message content: `copilot -p "Generate a step-by-step plan for the attached spec. Do not write any code. @spec.txt"`. In `copilot_call()`, this means the `-p` arg must be `f"{inline_instruction} @{context_file_path}"`. Using `--share` does NOT inject content (it only sets transcript output path). `_PLAN_EXCLUDED_TOOLS` is a safety net, not the fix. See rec-119, rec-252.
 

@@ -5,7 +5,7 @@
 # alias. These resources are validate-only per this plan -- no terraform apply
 # runs until T2.1 lifts the Decision 67 Lambda freeze.
 #
-# Resource naming follows INTENT v5 Part 3: bblake-platform-{purpose}.
+# Resource naming follows INTENT v5 Part 3: agent-platform-{purpose}.
 # Lambda names (with hyphens) match the CD.10 canonical contract set exactly.
 #
 # PREREQUISITE (T2.1 implementing plan): before running `terraform plan`, create
@@ -61,7 +61,7 @@ data "archive_file" "platform_maintenance" {
 
 resource "aws_lambda_function" "log_rec" {
   provider         = aws.platform
-  function_name    = "bblake-platform-log-rec"
+  function_name    = "agent-platform-log-rec"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn
@@ -76,7 +76,7 @@ resource "aws_lambda_function" "log_rec" {
 
 resource "aws_lambda_function" "log_decision" {
   provider         = aws.platform
-  function_name    = "bblake-platform-log-decision"
+  function_name    = "agent-platform-log-decision"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn
@@ -91,7 +91,7 @@ resource "aws_lambda_function" "log_decision" {
 
 resource "aws_lambda_function" "query" {
   provider         = aws.platform
-  function_name    = "bblake-platform-query"
+  function_name    = "agent-platform-query"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn
@@ -106,7 +106,7 @@ resource "aws_lambda_function" "query" {
 
 resource "aws_lambda_function" "update_rec" {
   provider         = aws.platform
-  function_name    = "bblake-platform-update-rec"
+  function_name    = "agent-platform-update-rec"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn
@@ -121,7 +121,7 @@ resource "aws_lambda_function" "update_rec" {
 
 resource "aws_lambda_function" "list_tools" {
   provider         = aws.platform
-  function_name    = "bblake-platform-list-tools"
+  function_name    = "agent-platform-list-tools"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn
@@ -136,7 +136,7 @@ resource "aws_lambda_function" "list_tools" {
 
 resource "aws_lambda_function" "maintenance" {
   provider         = aws.platform
-  function_name    = "bblake-platform-maintenance"
+  function_name    = "agent-platform-maintenance"
   runtime          = "python3.12"
   handler          = "handler.handler"
   role             = aws_iam_role.platform_lambda_execution.arn

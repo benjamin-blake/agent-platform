@@ -638,7 +638,7 @@ class TestBucketResolution:
         env_without_bucket["ENVIRONMENT"] = "company"
         with patch.dict("os.environ", env_without_bucket, clear=True):
             result = writer._bucket()
-        assert result == "bblake-platform-agent-logs"
+        assert result == "agent-platform-agent-logs"
 
     def test_falls_back_to_personal_config_when_config_object_raises(self):
         """When env is unset and Config() raises, Fallback-2 parses config.personal.yaml directly."""

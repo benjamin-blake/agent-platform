@@ -18,7 +18,7 @@
 
 resource "aws_iam_role" "platform_lambda_execution" {
   provider = aws.platform
-  name     = "bblake-platform-lambda-execution"
+  name     = "agent-platform-lambda-execution"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -36,7 +36,7 @@ resource "aws_iam_role" "platform_lambda_execution" {
 
 resource "aws_iam_role_policy" "platform_lambda_logs" {
   provider = aws.platform
-  name     = "bblake-platform-lambda-logs"
+  name     = "agent-platform-lambda-logs"
   role     = aws_iam_role.platform_lambda_execution.id
 
   policy = jsonencode({
@@ -45,7 +45,7 @@ resource "aws_iam_role_policy" "platform_lambda_logs" {
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:${var.platform_region}:${var.platform_account_id}:log-group:/aws/lambda/bblake-platform-*:*"
+        Resource = "arn:aws:logs:${var.platform_region}:${var.platform_account_id}:log-group:/aws/lambda/agent-platform-*:*"
       }
     ]
   })
@@ -53,10 +53,10 @@ resource "aws_iam_role_policy" "platform_lambda_logs" {
 
 resource "aws_iam_role_policy" "platform_lambda_dynamodb" {
   provider = aws.platform
-  name     = "bblake-platform-lambda-dynamodb"
+  name     = "agent-platform-lambda-dynamodb"
   role     = aws_iam_role.platform_lambda_execution.id
 
-  # The bblake-platform-counters table does not exist as a Terraform resource in this
+  # The agent-platform-counters table does not exist as a Terraform resource in this
   # plan (T2.1 creates it). The ARN is referenced by name; terraform validate passes
   # regardless. The actual policy takes effect at T2.1 apply time.
   policy = jsonencode({
@@ -71,7 +71,7 @@ resource "aws_iam_role_policy" "platform_lambda_dynamodb" {
           "dynamodb:Query",
           "dynamodb:Scan",
         ]
-        Resource = "arn:aws:dynamodb:${var.platform_region}:${var.platform_account_id}:table/bblake-platform-counters"
+        Resource = "arn:aws:dynamodb:${var.platform_region}:${var.platform_account_id}:table/agent-platform-counters"
       }
     ]
   })
@@ -128,7 +128,7 @@ resource "aws_iam_role_policy" "platform_dev_daily_ops" {
         Sid      = "LambdaInvoke"
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunctionUrl", "lambda:InvokeFunction"]
-        Resource = "arn:aws:lambda:${var.platform_region}:${var.platform_account_id}:function:bblake-platform-*"
+        Resource = "arn:aws:lambda:${var.platform_region}:${var.platform_account_id}:function:agent-platform-*"
       },
       {
         Sid    = "S3PlatformBuckets"
@@ -148,7 +148,7 @@ resource "aws_iam_role_policy" "platform_dev_daily_ops" {
           "athena:GetQueryResults",
           "athena:StopQueryExecution",
         ]
-        Resource = "arn:aws:athena:${var.platform_region}:${var.platform_account_id}:workgroup/bblake-platform-production"
+        Resource = "arn:aws:athena:${var.platform_region}:${var.platform_account_id}:workgroup/agent-platform-production"
       },
       {
         Sid    = "DynamoDBOps"
@@ -161,7 +161,7 @@ resource "aws_iam_role_policy" "platform_dev_daily_ops" {
           "dynamodb:Query",
           "dynamodb:Scan",
         ]
-        Resource = "arn:aws:dynamodb:${var.platform_region}:${var.platform_account_id}:table/bblake-platform-*"
+        Resource = "arn:aws:dynamodb:${var.platform_region}:${var.platform_account_id}:table/agent-platform-*"
       },
       {
         Sid      = "GlueReadForAthena"

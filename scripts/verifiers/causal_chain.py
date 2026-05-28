@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 
+from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.telemetry import emit_process_event
 from scripts.ops_writer import DATABASE, OpsWriter
 
@@ -57,7 +57,7 @@ class CausalChainVerifier(Verifier):
             )
 
         # Pre-flight: credential + region check before emitting an orphan heartbeat.
-        profile = os.environ.get("AWS_PROFILE", "company-aws-profile")
+        profile = resolve_aws_profile(default="agent_platform")
         try:
             session = boto3.Session(profile_name=profile, region_name="eu-west-2")
             session.client("sts").get_caller_identity()

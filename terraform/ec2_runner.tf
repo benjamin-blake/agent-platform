@@ -28,7 +28,7 @@ data "aws_caller_identity" "runner" {}
 # Look up existing S3 buckets by name -- avoids pulling main.tf resource definitions
 # as apply-time dependencies, which would cause Terraform to attempt recreation.
 data "aws_s3_bucket" "runner_agent_logs" {
-  bucket = "bblake-platform-agent-logs"
+  bucket = "agent-platform-agent-logs"
 }
 
 data "aws_s3_bucket" "runner_data_lake" {

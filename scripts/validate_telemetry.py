@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _boto3 = None
 _ATHENA_DATABASE = "trading_formulas_db"
 _ATHENA_WORKGROUP = "agent-platform-production"
-_ATHENA_OUTPUT = "s3://bblake-platform-data-lake/athena-results/"
+_ATHENA_OUTPUT = "s3://agent-platform-data-lake/athena-results/"
 
 # FK relationships to validate: (child_table, fk_col, parent_table, pk_col)
 _FK_RELATIONSHIPS: list[tuple[str, str, str, str]] = [

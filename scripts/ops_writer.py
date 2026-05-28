@@ -21,6 +21,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from scripts.aws_profile import resolve_aws_profile
+
 ROOT = Path(__file__).resolve().parent.parent
 
 try:
@@ -137,8 +139,7 @@ class OpsWriter:
         if self._client is None:
             if not _BOTO3_AVAILABLE:
                 return None
-            _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-            profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+            profile = resolve_aws_profile(default=_SSO_PROFILE)
             if profile:
                 session = _boto3.Session(profile_name=profile)
                 self._client = session.client("s3", region_name="eu-west-2")
@@ -150,8 +151,7 @@ class OpsWriter:
         """Return a boto3.Session using the same profile resolution as _get_client()."""
         if not _BOTO3_AVAILABLE:
             return None
-        _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-        profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+        profile = resolve_aws_profile(default=_SSO_PROFILE)
         if profile:
             return _boto3.Session(profile_name=profile)
         return _boto3.Session()
@@ -642,8 +642,7 @@ class OpsWriter:
             return
 
         try:
-            _is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-            profile = os.environ.get("AWS_PROFILE") or (None if _is_lambda else _SSO_PROFILE)
+            profile = resolve_aws_profile(default=_SSO_PROFILE)
             if profile:
                 session = _boto3.Session(profile_name=profile)
                 athena = session.client("athena", region_name="eu-west-2")

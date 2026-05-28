@@ -46,10 +46,10 @@ the /implement chat, verify the active model is Opus before proceeding.
 | `terraform/ec2_runner.tf` | Modify | Add deprecation header comment (CD.21) ONLY. No `count` guard needed -- this file lives in the WORK-account root module, which is no longer applied (the personal module is separate). Resource definitions retained per CD.21 |
 | `scripts/migrate_ops_data.py` | Create | One-time migration: READS source rows via a separate read-only boto3 work-profile Athena query against the `*_current` views (latest-per-id); WRITES exclusively through `ops_data_portal.file_rec` / `file_decision` (NO direct `OpsWriter`). Preserves IDs (`_migration_int_id`), `created_timestamp`, and `source` verbatim. Idempotency guard; `--skip-sync` bulk write |
 | `tests/test_migrate_ops_data.py` | Create | Unit tests: mock Athena source, assert writes go via portal (not `OpsWriter.write`), assert migration never *reads* any `logs/` path as input, assert `_migration_int_id` set for BOTH recs and decisions, assert idempotency guard refuses on non-empty dest |
-| `scripts/sync_recommendations.py` | Modify | Update `_DYNAMODB_TABLE` -> `"bblake-platform-counters"`. Add a MONOTONIC `reseed_recommendations_counter` (conditional UpdateItem that only raises) -- none exists today; `seed_counters` can LOWER a counter (Decision-50 collision risk). Needed by Step 13c |
+| `scripts/sync_recommendations.py` | Modify | Update `_DYNAMODB_TABLE` -> `"agent-platform-counters"`. Add a MONOTONIC `reseed_recommendations_counter` (conditional UpdateItem that only raises) -- none exists today; `seed_counters` can LOWER a counter (Decision-50 collision risk). Needed by Step 13c |
 | `config/agent/data_quality/source_registry.yaml` | Modify | Register any source values present in the migrated data but missing from the registry (known: `implement-session`, `Autonomous Postflight Cleanup`) as legacy entries -- else `validate_source` rejects those rows mid-migration. Reconciled in Step 13b dry-run |
 | `scripts/ops_data_portal.py` | Modify | Update `_SSO_PROFILE`, `_ATHENA_DATABASE`, `_ATHENA_WORKGROUP` constants. Add a PRIVATE `_migration_int_id` param to `file_rec` (symmetric with the existing one on `file_decision`; bypasses `_next_id` when set). Add a `_skip_sync` flag to `file_rec`/`file_decision` so per-row `_sync_table()` is suppressed during bulk import (one `sync()` at end) |
-| `scripts/ops_writer.py` | Modify | Update `DATABASE`, `ATHENA_WORKGROUP` constants; update any hardcoded `bblake-platform-agent-logs` S3 bucket references to `bblake-platform-data-lake` (Lambda-packaged -- deploy deferred) |
+| `scripts/ops_writer.py` | Modify | Update `DATABASE`, `ATHENA_WORKGROUP` constants; update any hardcoded `agent-platform-agent-logs` S3 bucket references to `agent-platform-data-lake` (Lambda-packaged -- deploy deferred) |
 | `scripts/sync_ops.py` | Modify | Update constants; remove all `telemetry_*` entries AND `ops_session_log` / `ops_execution_plans` entries from `_TABLE_TO_LOCAL` / `_TABLE_TO_VIEW` |
 | `scripts/session_preflight.py` | Modify | Update constants; remove / wrap telemetry SQL queries; fix `check_telemetry_health()` hardcoded `"trading_formulas_db"` literal; fix `ROOT.name` venv detection for rename |
 | `scripts/data_quality_runner.py` | Modify | Update `_ATHENA_DATABASE`, `_ATHENA_WORKGROUP` constants |
@@ -105,14 +105,14 @@ existing work-account root (which uses the default + `aws.platform` aliased prov
 
 | Resource | Account | Module | Action |
 |----------|---------|--------|--------|
-| Glue DB `bblake_platform` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
-| Athena workgroup `bblake-platform-production` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
-| S3 bucket `bblake-platform-data-lake` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
-| DynamoDB table `bblake-platform-counters` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (seeded -- Step 7) |
+| Glue DB `agent_platform` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
+| Athena workgroup `agent-platform-production` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
+| S3 bucket `agent-platform-data-lake` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
+| DynamoDB table `agent-platform-counters` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (seeded -- Step 7) |
 | Iceberg tables `ops_recommendations` / `ops_decisions` / `ops_priority_queue` + their `_current` views | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (views needed before migration writes + preflight) |
 | OIDC provider `token.actions.githubusercontent.com` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create |
-| IAM role `bblake-platform-github-ci-branch` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (CI write perms; `refs/heads/main`+`agent/*`) |
-| IAM role `bblake-platform-github-ci-pr` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (read-only; `refs/pull/*`) |
+| IAM role `agent-platform-github-ci-branch` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (CI write perms; `refs/heads/main`+`agent/*`) |
+| IAM role `agent-platform-github-ci-pr` | REDACTED-PERSONAL-ACCOUNT | `terraform/personal/` | Create (read-only; `refs/pull/*`) |
 | EC2 runner `agent-platform-runner` | REDACTED-ACCOUNT-ID | AWS CLI (not Terraform) | Terminate pre-deploy |
 
 **terraform apply gating:** Step 12 produces a `terraform plan` output (run INSIDE
@@ -130,15 +130,15 @@ no longer applied, so no `count` guard is required.
   errors, connecting to personal account (requires `ops_priority_queue_current` to exist)
 - [ ] Migrated `ops_recommendations` count in personal account equals `source - skipped_invalid`,
   verified by a LIVE Athena query against the destination (not the local cache):
-  `SELECT count(*) FROM bblake_platform.ops_recommendations_current` equals
+  `SELECT count(*) FROM agent_platform.ops_recommendations_current` equals
   source `count(*)` minus the `skipped_invalid` rows (legacy rows missing required fields), all
   recorded in `logs/debug/migration-summary.json`. `skipped_invalid` must be a SHORT, explainable
   list -- a large count means the validator pre-check is wrong, not that the data is bad
 - [ ] Migrated `ops_decisions` count in personal account EQUALS source count, verified the same way
-  via a LIVE Athena query against `bblake_platform.ops_decisions_current`
-- [ ] Decision integer IDs preserved: `SELECT count(*) FROM bblake_platform.ops_decisions_current`
+  via a LIVE Athena query against `agent_platform.ops_decisions_current`
+- [ ] Decision integer IDs preserved: `SELECT count(*) FROM agent_platform.ops_decisions_current`
   grouped by `id` shows the SAME `dec-NNN` set as source (via `_migration_int_id` on `file_decision`)
-- [ ] Recommendation IDs preserved: the `rec-NNN` set in `bblake_platform.ops_recommendations_current`
+- [ ] Recommendation IDs preserved: the `rec-NNN` set in `agent_platform.ops_recommendations_current`
   matches source (via the NEW `_migration_int_id` on `file_rec`); no renumbering
 - [ ] `source` field preserved verbatim on every migrated row (already-registered values pass
   `validate_source`); `created_timestamp` preserved; `last_updated_timestamp` = import time (portal default)
@@ -150,7 +150,7 @@ no longer applied, so no `count` guard is required.
   `OpsWriter.write()` directly, and never *reads* any `logs/` path as input (unit-test asserted)
 - [ ] History scrub VERIFIED across ALL blobs in ALL refs (not by file extension): zero hits for
   every sensitive token (`REDACTED-ACCOUNT-ID`, `REDACTED-EMPLOYER`, `REDACTED-EMPLOYER` (case-insensitive),
-  `agent-platform`, `bblake-platform`, the work email, `company-aws-profile`) via
+  `agent-platform`, `agent-platform`, the work email, `company-aws-profile`) via
   `git grep <token> $(git rev-list --all)` AND `gitleaks detect --log-opts="--all"`
 - [ ] `git log --all --format="%ae" | sort -u` no longer contains the work-account email; the
   human author identity is the GitHub no-reply (`217728084+benjamin-blake@users.noreply.github.com`).
@@ -169,23 +169,23 @@ no longer applied, so no `count` guard is required.
 | 1 | pre-deploy | OIDC feasibility probe (BEFORE any irreversible action) | `aws iam list-open-id-connect-providers --profile agent_platform 2>&1; echo "exit=$?"` | `exit=0` (call permitted -- no SCP denial in personal account). `simulate-principal-policy` is NOT used: it evaluates identity policy, not SCPs | `AccessDenied` -> OIDC blocked in personal account; STOP before history rewrite / runner termination; escalate (CD.21 must be revisited) |
 | 2 | pre-deploy | Scan full git history for secrets (ALL refs) | `gitleaks detect --source . --log-opts="--all" 2>&1 \| tail -20` | 0 findings, or only tokens already in substitutions.txt | Add unaddressed patterns to substitutions.txt; rerun filter-repo |
 | 3 | pre-deploy | truffleHog verified-secret scan | `trufflehog git file://. --only-verified 2>&1 \| tail -20` | 0 verified findings | Rotate any live credential found; rewrite history |
-| 4 | pre-deploy | AUTHORITATIVE GATE: EVERY sensitive token gone from ALL blobs in ALL refs | `for t in REDACTED-ACCOUNT-ID REDACTED-PERSONAL-ACCOUNT REDACTED-EMPLOYER agent-platform agent-platform-svc bblake-platform company-aws-profile personal-bedrock-profile company-admin-profile company-static-profile; do echo "== $t =="; git grep -I -i "$t" $(git rev-list --all) -- 2>/dev/null \| head -3; done` | No output under any token (REDACTED-PERSONAL-ACCOUNT only after Step 11b parameterisation) | Add token to substitutions.txt (longest-first); rerun filter-repo; re-verify. THIS gate -- not the enumerated file list -- is authoritative |
+| 4 | pre-deploy | AUTHORITATIVE GATE: EVERY sensitive token gone from ALL blobs in ALL refs | `for t in REDACTED-ACCOUNT-ID REDACTED-PERSONAL-ACCOUNT REDACTED-EMPLOYER agent-platform agent-platform-svc agent-platform company-aws-profile personal-bedrock-profile company-admin-profile company-static-profile; do echo "== $t =="; git grep -I -i "$t" $(git rev-list --all) -- 2>/dev/null \| head -3; done` | No output under any token (REDACTED-PERSONAL-ACCOUNT only after Step 11b parameterisation) | Add token to substitutions.txt (longest-first); rerun filter-repo; re-verify. THIS gate -- not the enumerated file list -- is authoritative |
 | 5 | pre-deploy | Employer name + REDACTED-COPYRIGHT + live IAM UserIds + home-rig topology across history (ZERO-gate); full name (REVIEW) | `git grep -I -i "REDACTED-EMPLOYER" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "REDACTED-COPYRIGHT" $(git rev-list --all) 2>/dev/null \| head; git grep -I -E "AIDA[A-Z0-9]{16}" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i -e REDACTED-VPN -e "windows SSH" -e "compute node" -e "home REDACTED-CPU" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "benjamin blake" $(git rev-list --all) 2>/dev/null \| head` | ZERO output for national-archives/crown-copyright/AIDA/home-rig. The `benjamin blake` results are REVIEWED (name is intentionally public in LICENCE/attribution) -- confirm none tie the author to the deleted CV tooling or the employer | Add the missing `regex:` entry to substitutions.txt and rerun filter-repo; for a stray name-tie, scrub the phrase or purge the file |
 | 6 | pre-deploy | Verify CV files + secrets docs + account verifier purged from ALL history | `git log --all --oneline -- .github/prompts/build_cv_refactored.prompt.md .github/agents/cv-reviewer.agent.md docs/platform/agent-platform-bootstrap-record.yaml docs/runbooks/policies docs/runbooks/platform-account-bootstrap.md scripts/verify_platform_account.py tests/test_verify_platform_account.py \| head` | No output (no commits touch these paths) | Add `--invert-paths --path <each>` to the Pass-1 filter-repo; re-verify |
 | 7 | pre-deploy | Verify commit metadata email | `git log --all --format="%ae" \| sort -u` | Work-account email ABSENT; human identity = GH no-reply; bot authors (Copilot/github-actions/anthropic) retained | Rerun filter-repo with `--mailmap`; force-push |
 | 8 | pre-deploy | Terraform validate (personal module) | `cd terraform/personal && terraform init && terraform validate 2>&1` | "Success! The configuration is valid." | Fix Terraform syntax |
 | 9 | pre-deploy | Terraform plan (human gate, personal module) | `cd terraform/personal && terraform plan -var-file=terraform.personal.tfvars 2>&1 \| tail -40` | ONLY the personal-account ADDs from the Infra-Dependencies table (Glue DB, workgroup, S3, DynamoDB, 3 Iceberg tables + 3 `_current` views, OIDC provider, 2 roles). ZERO work-account resources (no Step Functions, Lambdas, EC2, monitoring) | If ANY work-account resource appears -> the personal module is not isolated; do not apply |
-| 10 | post-deploy | Verify Glue DB | `aws glue get-database --name bblake_platform --profile agent_platform --query 'Database.Name'` | `"bblake_platform"` | Rerun `terraform apply` |
-| 11 | post-deploy | Verify Athena workgroup | `aws athena get-work-group --work-group bblake-platform-production --profile agent_platform --query 'WorkGroup.Name'` | `"bblake-platform-production"` | Rerun `terraform apply` |
-| 12 | post-deploy | Verify priority-queue view exists (preflight depends on it) | `aws athena start-query-execution --query-string "SELECT count(*) FROM bblake_platform.ops_priority_queue_current" --work-group bblake-platform-production --profile agent_platform 2>&1` | Query SUCCEEDS (0 rows OK; TABLE/VIEW must exist) | Create the `ops_priority_queue` table + view in `terraform/personal/main.tf`; re-apply |
+| 10 | post-deploy | Verify Glue DB | `aws glue get-database --name agent_platform --profile agent_platform --query 'Database.Name'` | `"agent_platform"` | Rerun `terraform apply` |
+| 11 | post-deploy | Verify Athena workgroup | `aws athena get-work-group --work-group agent-platform-production --profile agent_platform --query 'WorkGroup.Name'` | `"agent-platform-production"` | Rerun `terraform apply` |
+| 12 | post-deploy | Verify priority-queue view exists (preflight depends on it) | `aws athena start-query-execution --query-string "SELECT count(*) FROM agent_platform.ops_priority_queue_current" --work-group agent-platform-production --profile agent_platform 2>&1` | Query SUCCEEDS (0 rows OK; TABLE/VIEW must exist) | Create the `ops_priority_queue` table + view in `terraform/personal/main.tf`; re-apply |
 | 13 | post-deploy | Migration dry-run (source connectivity) | `bin/venv-python -m scripts.migrate_ops_data --dry-run 2>&1 \| tail -15` | Reports source row counts; 0 writes; writes `logs/debug/migration-summary.json` | Fix profile/workgroup/database resolution |
 | 14 | post-deploy | Run full migration | `bin/venv-python -m scripts.migrate_ops_data 2>&1 \| tail -20` | N recs + M decisions imported via portal; one final sync; exit 0 | Fix import errors; inspect outbox for `pending-` sentinels |
-| 15 | post-deploy | Verify migrated counts via LIVE dest Athena (not summary) | `aws athena ...` query `SELECT count(*) FROM bblake_platform.ops_recommendations_current` and `..._decisions_current` (see Step 31) | dest counts EQUAL source counts in migration-summary.json | Investigate dropped rows / outbox stuck entries; re-run is refused by guard, so fix root cause |
+| 15 | post-deploy | Verify migrated counts via LIVE dest Athena (not summary) | `aws athena ...` query `SELECT count(*) FROM agent_platform.ops_recommendations_current` and `..._decisions_current` (see Step 31) | dest counts EQUAL source counts in migration-summary.json | Investigate dropped rows / outbox stuck entries; re-run is refused by guard, so fix root cause |
 | 16 | post-deploy | Verify ID preservation (no renumbering) | Athena: dest `rec-NNN`/`dec-NNN` id sets equal source id sets (diff the two) | Identical id sets | `_migration_int_id` not threaded on `file_rec`/`file_decision`; fix portal |
-| 17 | post-deploy | Verify counter seed HARD gate (Decision 50) | `aws dynamodb get-item --table-name bblake-platform-counters --key '{"counter_name":{"S":"recommendations"}}' --profile agent_platform --query 'Item.current_value.N' --output text` (repeat for decisions) | each `>= max(migrated_id) + margin` | Re-seed via terraform/CLI before any new portal write |
+| 17 | post-deploy | Verify counter seed HARD gate (Decision 50) | `aws dynamodb get-item --table-name agent-platform-counters --key '{"counter_name":{"S":"recommendations"}}' --profile agent_platform --query 'Item.current_value.N' --output text` (repeat for decisions) | each `>= max(migrated_id) + margin` | Re-seed via terraform/CLI before any new portal write |
 | 18 | post-deploy | Verify idempotency guard | `bin/venv-python -m scripts.migrate_ops_data 2>&1 \| tail -5` (run a SECOND time) | REFUSES (dest non-empty); 0 new writes; non-zero or explicit "already migrated" exit | Add the non-empty-dest guard before writes |
 | 19 | post-deploy | Verify preflight connects to personal account | `bin/venv-python -m scripts.session_preflight 2>&1 \| tail -5` | "Preflight OK", no Athena errors | Fix session_preflight constants / telemetry guards |
-| 20 | post-deploy | Verify CI on ubuntu-latest + OIDC (on the POST-MERGE main push, not a PR) | After merge, observe the `main-validate` run on the `main` push event (it is `if: push`); a PR does NOT exercise OIDC since `main-validate`/AWS jobs are push-gated | `main-validate` passes; OIDC step assumes `bblake-platform-github-ci-branch` (ARN via `vars.AWS_ACCOUNT_ID`); job has `id-token: write` | Add `id-token: write`; set `vars.AWS_ACCOUNT_ID`; fix IAM trust policy / thumbprint |
+| 20 | post-deploy | Verify CI on ubuntu-latest + OIDC (on the POST-MERGE main push, not a PR) | After merge, observe the `main-validate` run on the `main` push event (it is `if: push`); a PR does NOT exercise OIDC since `main-validate`/AWS jobs are push-gated | `main-validate` passes; OIDC step assumes `agent-platform-github-ci-branch` (ARN via `vars.AWS_ACCOUNT_ID`); job has `id-token: write` | Add `id-token: write`; set `vars.AWS_ACCOUNT_ID`; fix IAM trust policy / thumbprint |
 | 21 | post-deploy | Verify repo is public (LAST, only after scrub verified) | `curl -s https://api.github.com/repos/benjamin-blake/agent-platform --max-time 10 \| python -c "import sys,json; print(json.load(sys.stdin).get('private','unknown'))"` | `false` | Complete the visibility change in GitHub Settings |
 
 ## Constraints
@@ -296,8 +296,8 @@ no longer applied, so no `count` guard is required.
 - **rec-725**: Work-account Terraform state misalignment (113 missing resources). Out of scope.
   Personal account Terraform starts from a clean state.
 - **INTENT-aws-migration-platform-evolution.md**: The full naming-convention overhaul (T0.15,
-  T2.0, T2.15, T2.16) is deferred. Resource names chosen here (`bblake_platform` Glue DB,
-  `bblake-platform-production` workgroup) are aligned with the INTENT's Part 3 naming convention.
+  T2.0, T2.15, T2.16) is deferred. Resource names chosen here (`agent_platform` Glue DB,
+  `agent-platform-production` workgroup) are aligned with the INTENT's Part 3 naming convention.
 - **Personal account setup**: Account REDACTED-PERSONAL-ACCOUNT, SSO profile `agent_platform`, region
   `eu-west-2`. Personal-account infra lives in the NEW isolated `terraform/personal/` root module
   with its OWN `aws` provider + state (NOT the work-account root's default/`aws.platform`
@@ -314,7 +314,7 @@ no longer applied, so no `count` guard is required.
   before any branch-based code changes. After force-push, re-checkout the branch:
   `git checkout agent/public-migration`.
 - **Split-brain window (Decision 67)**: After this plan merges, local code references
-  `agent_platform` / `bblake_platform` but the work-account Lambda continues running with old
+  `agent_platform` / `agent_platform` but the work-account Lambda continues running with old
   constants until CD.17 reverses. No risk: work-account Lambda scheduled agents are already
   disabled (AGENTS.md runbook, May 2026).
 - **CI gap during migration**: The EC2 runner is terminated in Step 4 (pre-branch) but CI
@@ -369,9 +369,9 @@ no longer applied, so no `count` guard is required.
     `agent_platform`/PlatformDev has Athena query / S3 read-write / DynamoDB get-update / Glue get
     runtime perms (provisioning still uses `agent_platform_admin`).
 - **Phase B execution record (2026-05-28) -- personal infra APPLIED + verified; provisioning-perms gaps found:**
-  - **ALL 21 personal-account resources are LIVE in the personal account (`REDACTED-PERSONAL-ACCOUNT`).** Glue DB `bblake_platform`; Athena
-    workgroup `bblake-platform-production`; S3 `bblake-platform-data-lake` (versioned / AES256 / public-blocked /
-    HTTPS-only); DynamoDB `bblake-platform-counters` seeded `recommendations=1944` / `decisions=1081`; Iceberg
+  - **ALL 21 personal-account resources are LIVE in the personal account (`REDACTED-PERSONAL-ACCOUNT`).** Glue DB `agent_platform`; Athena
+    workgroup `agent-platform-production`; S3 `agent-platform-data-lake` (versioned / AES256 / public-blocked /
+    HTTPS-only); DynamoDB `agent-platform-counters` seeded `recommendations=1944` / `decisions=1081`; Iceberg
     tables `ops_recommendations` / `ops_decisions` / `ops_priority_queue` + their `_current` views. Verification:
     VP8 `terraform validate` = Success; VP9 `plan` = 21 add / 0 change / 0 destroy with ZERO work-account
     resources (separate-module isolation confirmed); VP10 Glue DB OK; VP11 workgroup OK; VP12 all three
@@ -395,7 +395,7 @@ no longer applied, so no `count` guard is required.
   - **IAM CHANGE MADE (out-of-band, via `platform_breakglass`) -- DRIFT, must be recorded/codified:** attached a
     NEW inline policy `PlatformDataLakeProvisioning` to IAM role `PlatformAdmin`, granting glue create/get/update/
     delete db+table + `glue:TagResource`/`UntagResource`/`GetTags` (the provider `default_tags` need TagResource),
-    `s3:*` on `arn:aws:s3:::bblake-platform-data-lake[/*]`, `dynamodb:*` on `table/bblake-platform-*`, and athena
+    `s3:*` on `arn:aws:s3:::agent-platform-data-lake[/*]`, `dynamodb:*` on `table/agent-platform-*`, and athena
     provisioning + query actions. This is NOT captured in `terraform/personal/` (the `PlatformAdmin` role is not
     managed by this module), so it is live drift. `platform_breakglass` is IAM user `platform-breakglass` (full
     admin). MUST be recorded as a Decision and/or codified (import the role or attach a managed policy) in a
@@ -407,7 +407,7 @@ no longer applied, so no `count` guard is required.
     1. **Runtime perms gap (same class as PlatformAdmin, NOT yet fixed).** `agent_platform`/PlatformDev -- the
        profile the migration WRITES under (`AWS_PROFILE=agent_platform`, Step 31) -- is permissionless. Before
        Step 31 it needs: Athena `StartQueryExecution`/`GetQueryExecution`/`GetQueryResults`/`GetWorkGroup`, S3
-       read-write on `bblake-platform-data-lake`, DynamoDB `GetItem`/`UpdateItem` on `bblake-platform-counters`,
+       read-write on `agent-platform-data-lake`, DynamoDB `GetItem`/`UpdateItem` on `agent-platform-counters`,
        Glue `GetDatabase`/`GetTable`/`GetPartitions`. Grant via a PlatformDev inline policy through
        `platform_breakglass` (mirror the branch-role policy already written in `terraform/personal/oidc.tf`), and
        record it. Expect the same iterate-on-AccessDenied risk -- grant a complete set in one shot.
@@ -423,13 +423,13 @@ no longer applied, so no `count` guard is required.
   - **NAMING REWORK (human decision, 2026-05-28) -- supersedes every `bblake-*` name in this plan.** The user
     chose to make the platform resource names user/product-agnostic. ALL personal-account resource names are now
     `agent-platform-*` / `agent_platform`, NOT `bblake-*`:
-    - Glue DB `bblake_platform` -> **`agent_platform`**
-    - Athena workgroup `bblake-platform-production` -> **`agent-platform-production`**
-    - S3 bucket `bblake-platform-data-lake` -> **`agent-platform-data-lake`**
-    - DynamoDB `bblake-platform-counters` -> **`agent-platform-counters`**
-    - IAM roles `bblake-platform-github-ci-branch` / `-pr` -> **`agent-platform-github-ci-*`**
+    - Glue DB `agent_platform` -> **`agent_platform`**
+    - Athena workgroup `agent-platform-production` -> **`agent-platform-production`**
+    - S3 bucket `agent-platform-data-lake` -> **`agent-platform-data-lake`**
+    - DynamoDB `agent-platform-counters` -> **`agent-platform-counters`**
+    - IAM roles `agent-platform-github-ci-branch` / `-pr` -> **`agent-platform-github-ci-*`**
     The SSO profiles are UNCHANGED: runtime `agent_platform`, provisioning `agent_platform_admin`.
-    **Everywhere this plan says `bblake-platform-*` / `bblake_platform`, read `agent-platform-*` / `agent_platform`.**
+    **Everywhere this plan says `agent-platform-*` / `agent_platform`, read `agent-platform-*` / `agent_platform`.**
   - **LIVE INFRA RE-APPLY REQUIRED (Phase B deployed `bblake-*`; the code now targets `agent-*`).** Before the
     Step 31 migration a human must, in order: (a) re-grant the breakglass `PlatformDataLakeProvisioning` inline
     policy on role `PlatformAdmin` (via IAM user `platform-breakglass`) scoped to the NEW `agent-platform-*` ARNs
@@ -479,22 +479,91 @@ no longer applied, so no `count` guard is required.
     test_ruff_resolution_linux_first}` and `test_executor_step_runner.py::TestVenvPythonResolution::
     test_linux_layout_preferred_when_both_present` (Linux-layout preference asserted on a win32 host). `validate
     --pre` complexity gate passes; `test_validate.py` (150) passes in isolation.
-  - **REMAINING WORK for the next agent (start here):**
-    - Phase D **Step 20** (public-disclosure HEAD scrub: `docs/GETTING_STARTED.md`, `README.md`,
-      `config/config.company.yaml` legacy-deprecation notice, `config/README.md`, `src/main.py`) and **Step 21**
-      (verify CV files already absent from the tree -- Phase A scorched-earth should have removed them).
-    - Phase E **Steps 22-24** (CI workflows -> `ubuntu-latest` + OIDC; preserve Decision 74 in ci-rca; fork gate).
-    - Phase F **Steps 25-27** + IAM record: `AGENTS.md`, `docs/PROJECT_CONTEXT.md`, **`terraform/CLAUDE.md` (still
-      says `bblake_platform` -- flip to `agent_platform`)**, finish `tests/test_session_preflight.py` fixtures;
-      record the breakglass `PlatformDataLakeProvisioning` grant + the PlatformDev runtime grant as a Decision/runbook.
-    - Phase G: the live blockers above (breakglass re-grant, bucket reconcile, terraform apply) THEN Steps 28-32
-      (outbox quiescence + dry-run with the real `--profile-source`, full validate, single bundled PR at Step 30,
-      run migration, public flip). Commits bundle into ONE PR at Step 30 -- do NOT push/PR before then.
-    - **OPEN doc decision for the human:** ~40 historical journal docs (`docs/plans/PLAN-*.md`, `DECISIONS*.md`,
-      `CHANGELOG.md`, `INTENT-*.md`, `SESSION_LOG_ARCHIVE.md`) still contain `bblake-platform` as a frozen
-      historical record. These are NOT load-bearing and `bblake` is the author's handle (not a secret). Decide
-      whether to cosmetically rewrite them to `agent-platform` for showcase consistency or leave them as accurate
-      history. The functional code + current-state docs use `agent-platform-*`.
+- **SESSION 2 execution record (2026-05-28) -- Terraform rename re-apply + Phase D Steps 20-21 + Phase E + Phase F DONE (UNCOMMITTED):**
+  - **Live infra reconciled to `agent-platform-*`.** Re-granted the breakglass `PlatformDataLakeProvisioning`
+    inline policy on `PlatformAdmin` (via `platform_breakglass`) to the NEW ARNs (S3 `agent-platform-data-lake`;
+    DynamoDB `table/agent-platform-*` + retained `table/agent-platform-*` for the destroy; Glue/Athena were already
+    `Resource:*`). Deleted the manually-created empty `agent-platform-data-lake` bucket so Terraform owns it. Added
+    `force_destroy = true` to `aws_athena_workgroup.production` in `terraform/personal/main.tf` (a rename forces
+    destroy-then-create; the old non-empty workgroup still needed a one-off `aws athena delete-work-group
+    --recursive-delete-option` first, because `force_destroy` is read from PRIOR state, not new config). `terraform
+    apply` = 14 added / 15 destroyed -> all 21 resources now `agent-platform-*`. VP8-12 re-verified: validate
+    Success; plan "No changes" (zero work-account drift); Glue DB `agent_platform`; workgroup
+    `agent-platform-production`; 3 `_current` views queryable (count=0); counters seeded 1944/1081.
+  - **Phase D Step 20 DONE** (HEAD disclosure scrub): `GETTING_STARTED.md` / `README.md` / `config/README.md`
+    genericised (`your-aws-profile`, `<your-account-id>`, `YOUR_ACCOUNT_ID`, generic SSO URL); `src/main.py`
+    account-ID print removed; `config/config.company.yaml` got the LEGACY notice (body intentionally unchanged).
+  - **Phase D Step 21 DONE**: CV files confirmed absent; removed the CV entry from
+    `logs/.customizations-manifest.json` (JSON re-validated, 16 entries).
+  - **Phase E Steps 22-24 DONE**: `ci.yml` / `ci-rca.yml` / `main-canary.yml` -> `ubuntu-latest`, dropped
+    `ci-runner` concurrency; OIDC branch-role step (`vars.AWS_ACCOUNT_ID` + role `agent-platform-github-ci-branch`)
+    added ONLY to AWS-calling jobs (`main-validate`, `main-canary`, `ci-rca`) with `id-token: write`; `pr-validate` /
+    `terraform-validate` intentionally NO OIDC; `ci-rca` got the fork-PR gate + `AWS_PROFILE=agent_platform`;
+    Decision 74 (workflow_dispatch + pinned `claude-code@2.1.148`) preserved. `claude.yml` got a CD.21 note (no AWS
+    step). `deploy.yml` (disabled, work-root) / `pre_commit.yml` / `refresh-copilot-multipliers.yml` unchanged (no AWS).
+  - **Phase F Steps 25-27 DONE**: `AGENTS.md` (home-rig sentence rewritten; merge-protocol -> CD.21; EC2 runbook
+    replaced with a CD.21 retirement note + preserved OAuth-token subsection; bucket -> `agent-platform-data-lake`;
+    T2.12/CD.20 deferral note); `docs/PROJECT_CONTEXT.md` (AWS section retargeted; SCP gotcha removed; CI-runner
+    credential-pattern note added); `terraform/CLAUDE.md` (`agent_platform`/`agent-platform-production` flipped +
+    new "Out-of-band IAM grants" runbook section). `tests/test_session_preflight.py` already clean (no edits needed).
+  - **IAM grants recorded** as a runbook in `terraform/CLAUDE.md` (NOT a formal Decision -- portal degraded +
+    dec-ID/ETL numbering is fragile mid-migration; formal Decision + Terraform codification is a post-migration
+    follow-up). The PlatformDev runtime grant is still PENDING (Phase G prerequisite).
+  - **Verification:** `validate --pre` green except the 1 documented Windows-only `test_session_preflight.py`
+    path-separator test (green on ubuntu CI); all 7 workflow YAML parse; manifest JSON valid; secret sweep over the
+    tracked tree = ZERO real-value hits. **Code-review verdict PROCEED** (0 Critical, 0 High, 2 Medium, 3 Low).
+  - **OIDC credential-chain fix (deferred at session-2 close; REVERSED 2026-05-28 -- user chose to BUNDLE it; see
+    the implementation spec in REMAINING WORK below).** ~15 sites across 8 files (`ops_data_portal`,
+    `ops_writer`, `sync_recommendations`, `data_quality_runner`, `verifiers/{data_quality,athena_views,causal_chain}`,
+    `validate`) call `boto3.Session(profile_name="agent_platform")`, which raises `ProfileNotFound` on GitHub-hosted
+    OIDC runners (no `~/.aws/config`). Degrades gracefully (verifiers SKIP, ci-rca queues to outbox) so CI does NOT
+    hard-fail, but OIDC is not truly exercised until a default-chain fallback lands: use `boto3.Session()` (default
+    chain) when `AWS_ACCESS_KEY_ID` is present in env; else the named profile (local/web unaffected). Bundle in the PR
+    or do as a focused follow-up; Step 20 VP (post-merge) is the natural trigger.
+  - **Code-review findings to file as recs** (once the portal is writable post-migration): (M) hosted-runner OIDC
+    jobs lack the default-chain fallback [= the deferred fix]; (M) `config/config.company.yaml` body retains
+    `company-aws-profile`/`agent-platform-*` (legacy, acceptable but inconsistent); (L) `claude.yml` keeps
+    `id-token: write` while its new comment says no AWS; (L) IAM grants documented not codified; (L) plan-scoped docs
+    (`.github/copilot-instructions.md` etc.) still carry placeholder tokens -- finish the sweep pre-flip.
+  - **REMAINING WORK for the next agent (start here) -- updated 2026-05-28, session 2:**
+    - **Step 30 -- commit + ONE PR.** The 15 session-2 files are UNCOMMITTED in the working tree on
+      `agent/public-migration`. Before committing, ALSO land the two bundled workstreams below (OIDC cred-chain fix +
+      cosmetic doc rewrite), then bundle EVERYTHING into ONE PR. The PR's OWN CI fails (self-hosted runner gone; old
+      `runs-on` still on `main`) -- expected; merge via GitHub UI / `gh pr merge --admin`.
+      Repo prerequisites already satisfied by the human: GitHub variable `AWS_ACCOUNT_ID` set, secret
+      `CLAUDE_CODE_OAUTH_TOKEN` set.
+    - **Set GitHub repo variable `AWS_ACCOUNT_ID`** (= the personal account id) in repo Settings -> Variables BEFORE
+      the post-merge CI OIDC can assume the role (Step 11b). Manual GitHub action.
+    - **Implement the OIDC credential-chain fix (DECIDED 2026-05-28: BUNDLE in this PR).** Add a helper that returns
+      `None` (boto3 default chain) when `os.environ.get("AWS_ACCESS_KEY_ID")` is set (OIDC on a hosted runner) --
+      keeping the existing Lambda branch -- else the named profile (`AWS_PROFILE` or `_SSO_PROFILE`). Apply at the ~15
+      sites: `ops_data_portal.py` (374/554/928), `ops_writer.py` (141/154/646), `sync_recommendations.py`
+      (64/95/130/189), `data_quality_runner.py` (562), `verifiers/data_quality.py` (48), `verifiers/athena_views.py`
+      (33), `verifiers/causal_chain.py` (60). Also fix `validate.py:2171` default `company-aws-profile` ->
+      `agent_platform`. Add a unit test (mock env with `AWS_ACCESS_KEY_ID` set -> assert default `Session()`, no
+      profile; unset -> named profile). Local/web unaffected (env creds absent there). Re-run `validate`.
+    - **Phase G go-live (post-merge):** (a) grant the PENDING PlatformDev runtime perms via `platform_breakglass`
+      (Athena/S3/DynamoDB/Glue -- see the `terraform/CLAUDE.md` runbook); (b) Step 28 outbox quiescence + dry-run with
+      the REAL `--profile-source` (the work source profile, supplied OUT-OF-BAND; the committed default stays the
+      `company-aws-profile` placeholder); (c) Step 31 migration with `AWS_PROFILE=agent_platform`; (d) Step 32 public
+      flip; (e) Step 20 VP (OIDC on the post-merge `main` push).
+    - **Pre-public-flip token sweep (VP4):** confirm/clean remaining `company-aws-profile` / `trading_formulas_db` /
+      `agent-platform` placeholders in plan-scoped docs (`.github/copilot-instructions.md`, `config.company.yaml`)
+      for public consistency. Placeholders/handle, not secrets.
+    - **Cosmetic doc rewrite (DECIDED 2026-05-28: REWRITE to `agent-platform`).** Replace `agent-platform` ->
+      `agent-platform` and `agent_platform` -> `agent_platform` across the historical journal docs
+      (`docs/plans/PLAN-*.md`, `DECISIONS*.md`, `CHANGELOG.md`, `INTENT-*.md`, `SESSION_LOG*.md`) for showcase
+      consistency. GUARDRAILS: scope to `docs/` journal files only; do NOT touch the intentional
+      `table/agent-platform-*` destroy-grant pattern in `terraform/CLAUDE.md` (functional, kept); leave the bare
+      `bblake` author handle alone where it is not part of a `agent-platform*` resource name. Bundle into this PR.
+
+- **SESSION 3 execution record (2026-05-28) -- bundled OIDC fix + full naming sweep + code-review remediation; committed + PR'd:**
+  - **OIDC credential-chain fix (Decision 1) DONE.** New zero-dep helper `scripts/aws_profile.py::resolve_aws_profile(explicit, default)` returns `None` (boto3 default chain) when `AWS_LAMBDA_FUNCTION_NAME` OR `AWS_ACCESS_KEY_ID` is set (Lambda / OIDC hosted runner), else `AWS_PROFILE` or the named default. Applied at all sites in `ops_writer.py`, `ops_data_portal.py`, `sync_recommendations.py`, `data_quality_runner.py`, `validate.py` (default also corrected `company-aws-profile`->`agent_platform`), and `verifiers/{data_quality,athena_views,causal_chain}.py`. Registered `aws_profile.py` in `build_lambda.py::_LAMBDA_SCRIPTS` (ops_writer imports it). Unit test `tests/test_aws_profile.py` (6 cases).
+  - **Full naming sweep (Decision 2, EXPANDED by user to functional code) DONE.** `bblake-platform`->`agent-platform` / `bblake_platform`->`agent_platform` swept repo-wide (journal docs, both ROADMAP files, configs, terraform, functional scripts, and the `terraform/CLAUDE.md` destroy-grant clause -- the latter cleared because the pre-rename destroy is complete). `git grep bblake[-_]platform` = ZERO repo-wide. Bare `bblake` handle (`Owner="bblake"`, `arn:...:bblake-*`, home paths) intentionally retained.
+  - **Obsolete scripts DELETED** (user-confirmed, same class as the already-removed `verify_platform_account.py`): `scripts/migrate_schema.py` (one-shot market_data feature-flatten) and `scripts/verify_schema_migration.py` (one-time Decision-56 probe). Refs cleaned: removed from `validate.py` write-source whitelist; `terraform/iceberg_tables.tf` + `GETTING_STARTED.md` references generalised. Journal/CHANGELOG mentions retained as accurate history.
+  - **Code-review verdict REVISE -> remediated.** HIGH fixed: added hermetic autouse fixture `_clear_aws_credential_env` in `tests/conftest.py` (strips `AWS_ACCESS_KEY_ID`/`AWS_LAMBDA_FUNCTION_NAME` for non-integration tests) so the new env-credential branch does not flip named-profile assertions on the OIDC `main-validate` runner -- verified: 140 profile/helper tests pass with `AWS_ACCESS_KEY_ID` set. LOW fixed: relocated the `aws_profile` import to the top-level group in `ops_writer.py` (no E402 waiver).
+  - **MEDIUM findings deferred to the Phase-G rec batch** (portal unwritable now -- runtime perms gap). The deleted scripts resolved their share; remaining stale defaults to file as recs once the portal is writable: dangling `agent-platform-agent-logs` (`run_scheduled_agent.py:410`), stale `company-aws-profile` defaults (`run_scheduled_agent.py:308,412`), stale `trading_formulas_db` defaults (`validate_telemetry.py:27`, `src/common/config.py:137`, `src/data/handlers/{feature_handler.py:109,scheduled_agent_handler.py:302}`). All on dormant/deferred/out-of-scope paths.
+  - **Local `validate` red = by-design / non-regression** (admin-merge per plan): 4 Windows-only path-separator unit tests (green on ubuntu CI; vanish on the planned move to Claude-Code-on-web), AWS V3/DQ AccessDenied (PlatformDev runtime perms gap = Phase-G prerequisite), and the pre-existing `src/main.py` coverage-gate miss (session-2 change; no `tests/test_main.py`). 2364 unit tests pass; zero regressions in any touched module.
 
 ## Pre-Implementation Checklist
 
@@ -538,7 +607,7 @@ REDACTED-PERSONAL-ACCOUNT==>REDACTED-PERSONAL-ACCOUNT
 REDACTED-EMPLOYER==>REDACTED-EMPLOYER
 agent-platform==>agent-platform
 agent-platform-svc==>agent-platform-svc
-bblake-platform==>bblake-platform
+agent-platform==>agent-platform
 agent-platform==>agent-platform
 company-aws-profile==>company-aws-profile
 company-aws-profile-staging==>company-aws-profile-staging
@@ -560,7 +629,7 @@ Notes:
 - `REDACTED-EMPLOYER` (bare host, NOT `REDACTED-EMPLOYER.awsapps.com/start`) so the partial-path
   form `REDACTED-EMPLOYER.awsapps.com/start/#/?tab=accounts` is fully caught and the verification
   grep for `REDACTED-EMPLOYER` can actually reach zero.
-- `agent-platform` and `bblake-platform` are employer-account RESOURCE names (164+ occurrences
+- `agent-platform` and `agent-platform` are employer-account RESOURCE names (164+ occurrences
   across 40+ tracked files, incl. `logs/runs/*.json`); they MUST be in the rewrite, not just HEAD.
 - `REDACTED-EMPLOYER` plus the regex catch the plain-English employer name in prose (README,
   GETTING_STARTED) that the underscore form misses. `Crown [Cc]opyright` catches the `LICENCE`
@@ -584,7 +653,7 @@ Notes:
   "bespoke CVs" phrasing is neutralised by a targeted substitution if it survives.
 - **Scope-discovery grep (run BEFORE finalising substitutions).** Do not rely on the enumerated file
   list -- run `grep -rIn -e REDACTED-ACCOUNT-ID -e REDACTED-PERSONAL-ACCOUNT -e agent-platform -e agent-platform-svc
-  -e bblake-platform -e company-aws-profile -e personal-bedrock-profile -e company-admin-profile -e company-static-profile
+  -e agent-platform -e company-aws-profile -e personal-bedrock-profile -e company-admin-profile -e company-static-profile
   -e REDACTED-EMPLOYER -e "AIDA" .` over the working tree and reconcile EVERY hit: either it is a
   doc/history blob the substitution scrubs, a functional file parameterised in Step 11b, or a file
   added to scope. The all-refs verification gate (Step 3 / VP step 4) is the authoritative check.
@@ -658,7 +727,7 @@ Verify the rewrite -- scan ALL blobs in ALL refs, NOT by file extension (the rep
 ```bash
 # AUTHORITATIVE GATE: every sensitive token must be absent from every blob in every ref.
 for t in REDACTED-ACCOUNT-ID REDACTED-PERSONAL-ACCOUNT REDACTED-EMPLOYER agent-platform agent-platform-svc \
-         bblake-platform company-aws-profile personal-bedrock-profile company-admin-profile company-static-profile; do
+         agent-platform company-aws-profile personal-bedrock-profile company-admin-profile company-static-profile; do
   echo "== $t =="
   git grep -I -i "$t" $(git rev-list --all) -- 2>/dev/null | head -3
 done
@@ -808,12 +877,12 @@ roles + the OIDC provider, which needs PlatformAdmin, NOT the permissionless Pla
 role) and `terraform { backend "local" {} }` (or an S3
 backend in the personal data-lake bucket). Create:
 
-- `aws_glue_catalog_database.bblake_platform` -- name `bblake_platform`
-- `aws_athena_workgroup.bblake_platform_production` -- name `bblake-platform-production`,
-  engine v3, S3 output `s3://bblake-platform-data-lake/athena/prod-results/`
-- `aws_s3_bucket.bblake_platform_data_lake` -- name `bblake-platform-data-lake`; versioning
+- `aws_glue_catalog_database.agent_platform` -- name `agent_platform`
+- `aws_athena_workgroup.agent_platform_production` -- name `agent-platform-production`,
+  engine v3, S3 output `s3://agent-platform-data-lake/athena/prod-results/`
+- `aws_s3_bucket.agent_platform_data_lake` -- name `agent-platform-data-lake`; versioning
   enabled, AES256 encryption, public access blocked
-- `aws_dynamodb_table.bblake_platform_counters` -- name `bblake-platform-counters`,
+- `aws_dynamodb_table.agent_platform_counters` -- name `agent-platform-counters`,
   `PAY_PER_REQUEST`, hash key `counter_name` (String). Seed via `aws_dynamodb_table_item`
   (create-only, so it cannot LOWER an existing counter):
   - `recommendations` = (work recs max from Step 5) + 1000
@@ -827,7 +896,7 @@ backend in the personal data-lake bucket). Create:
   (Step 13b) queries `ops_recommendations_current` BEFORE the first write; on a greenfield account
   that view must already exist (returning 0 rows) or the guard query errors. `read_priority_queue()`
   also hard-exits (Decision 61) if `ops_priority_queue_current` is absent. Use the
-  `ops_writer._refresh_view` SQL verbatim, retargeted to `bblake_platform`; the priority-queue view
+  `ops_writer._refresh_view` SQL verbatim, retargeted to `agent_platform`; the priority-queue view
   selects from the `ops_priority_queue` TABLE (NOT `ops_recommendations`).
 
 **Step 8 -- Create `terraform/personal/oidc.tf`**
@@ -835,18 +904,18 @@ backend in the personal data-lake bucket). Create:
 - `aws_iam_openid_connect_provider.github_actions` -- URL
   `https://token.actions.githubusercontent.com`, thumbprint
   `6938fd4d98bab03faadb97b34396831e3780aea1`, client_id_list `["sts.amazonaws.com"]`
-- `aws_iam_role.github_ci_branch` -- name `bblake-platform-github-ci-branch`. Trust policy:
+- `aws_iam_role.github_ci_branch` -- name `agent-platform-github-ci-branch`. Trust policy:
   `sts:AssumeRoleWithWebIdentity` with `StringEquals` on `aud = sts.amazonaws.com` AND `StringLike`
   on `:sub` matching ONLY `repo:benjamin-blake/agent-platform:ref:refs/heads/main` and
   `...:ref:refs/heads/agent/*` (a list, NOT a bare `refs/heads/*`). Used by branch/push workflows.
   Also set the repo fork-PR-approval policy ("require approval for all outside collaborators").
-- `aws_iam_role.github_ci_pr` -- name `bblake-platform-github-ci-pr`. Sub matches
+- `aws_iam_role.github_ci_pr` -- name `agent-platform-github-ci-pr`. Sub matches
   `...:ref:refs/pull/*`. READ-ONLY perms (S3:GetObject, Athena read, Glue GetDatabase/GetTable).
 - `aws_iam_role_policy.github_ci_branch` -- inline least-privilege policy (use the work-account
   `aws_iam_policy.github_runner_ci` as a template, retargeted to personal-account ARNs):
   `athena:StartQueryExecution/GetQueryExecution/GetQueryResults/GetWorkGroup` on
-  `bblake-platform-production`; `s3:GetObject/PutObject/ListBucket` on `bblake-platform-data-lake`;
-  `dynamodb:GetItem/UpdateItem` on `bblake-platform-counters`;
+  `agent-platform-production`; `s3:GetObject/PutObject/ListBucket` on `agent-platform-data-lake`;
+  `dynamodb:GetItem/UpdateItem` on `agent-platform-counters`;
   `glue:GetDatabase/GetTable/GetPartitions`. NO AdministratorAccess / wildcards.
 - `aws_iam_role.github_ci_branch` ARN is referenced by workflows via the GitHub repo variable
   `vars.AWS_ACCOUNT_ID` (Step 11b), NOT a committed literal.
@@ -890,7 +959,7 @@ terraform/personal/terraform.personal.tfvars` (Step 1 added `terraform/**/terraf
 So no workflow file commits the `REDACTED-PERSONAL-ACCOUNT` literal: in GitHub repo Settings -> Secrets and
 variables -> Actions -> Variables, add repository variable `AWS_ACCOUNT_ID = REDACTED-PERSONAL-ACCOUNT`. In every
 workflow OIDC step, reference the role as
-`arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/bblake-platform-github-ci-branch` (or `-pr`). After
+`arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch` (or `-pr`). After
 this, the `REDACTED-PERSONAL-ACCOUNT==>REDACTED-PERSONAL-ACCOUNT` substitution (Step 1) can safely scrub all
 remaining doc/history occurrences without breaking CI.
 
@@ -979,10 +1048,10 @@ never `OpsWriter.write()` directly. Requirements:
   via constants+env. Do NOT pass a `profile=` kwarg expecting it to redirect the account (it only
   redirects the id allocator). Do NOT call `ops_data_portal.sync(profile=...)` -- no such signature.
 - **Startup assertions (fail fast before any write):**
-  - `import scripts.ops_writer as ow; assert ow.DATABASE == "bblake_platform"` -- proves the process
+  - `import scripts.ops_writer as ow; assert ow.DATABASE == "agent_platform"` -- proves the process
     imported the FLIPPED constants (it must start after the merge, not span the flip).
-  - Explicitly `os.environ["S3_LOG_BUCKET"] = "bblake-platform-data-lake"` and assert
-    `OpsWriter()._bucket() == "bblake-platform-data-lake"`. `OpsWriter` resolves its bucket from the
+  - Explicitly `os.environ["S3_LOG_BUCKET"] = "agent-platform-data-lake"` and assert
+    `OpsWriter()._bucket() == "agent-platform-data-lake"`. `OpsWriter` resolves its bucket from the
     `S3_LOG_BUCKET` env var / `config.personal.yaml`, NOT a hardcoded literal -- if it is unset the
     writes stage to the wrong/empty bucket and the final compact finds nothing.
 - **Source-registry reconciliation (BEFORE any write; also run in `--dry-run`):** enumerate ALL
@@ -994,7 +1063,7 @@ never `OpsWriter.write()` directly. Requirements:
   as a legacy entry in `source_registry.yaml` (mirror the `agent-cron` "historical/no-new-recs"
   pattern) BEFORE the write phase. Fail loudly in dry-run if any stray remains unregistered.
 - **Idempotency guard (FIRST thing after connecting):** query
-  `SELECT count(*) FROM bblake_platform.ops_recommendations_current` (+ decisions) in the DEST.
+  `SELECT count(*) FROM agent_platform.ops_recommendations_current` (+ decisions) in the DEST.
   If either is non-empty, REFUSE to run (print "destination already populated -- aborting" and exit
   non-zero) unless `--force-skip-existing` is passed, in which case skip ids already present.
 - **Pre-validation + skip-report (BEFORE writing each rec):** check the row has all required fields
@@ -1030,7 +1099,7 @@ never `OpsWriter.write()` directly. Requirements:
 
 **Step 13c -- Seed DynamoDB counters above migrated max (HARD gate, MONOTONIC)**
 
-After import, ensure the personal `bblake-platform-counters` `recommendations` and `decisions`
+After import, ensure the personal `agent-platform-counters` `recommendations` and `decisions`
 counters are each `>= max(migrated_id) + margin` (e.g. +1000). Use a MONOTONIC reseed (conditional
 write that only raises, never lowers). NOTE: `sync_recommendations.reseed_decisions_counter` is
 monotonic but there is NO `reseed_recommendations_counter` today -- `seed_counters` uses an
@@ -1068,30 +1137,30 @@ For each file, locate the module-level constant definitions and update:
 | Script | Constant | Old value | New value |
 |--------|----------|-----------|-----------|
 | `scripts/ops_data_portal.py` | `_SSO_PROFILE` | `"company-aws-profile"` | `"agent_platform"` |
-| `scripts/ops_data_portal.py` | `_ATHENA_DATABASE` | `"trading_formulas_db"` | `"bblake_platform"` |
-| `scripts/ops_data_portal.py` | `_ATHENA_WORKGROUP` | `"agent-platform-production"` | `"bblake-platform-production"` |
-| `scripts/ops_writer.py` | `DATABASE` | `"trading_formulas_db"` | `"bblake_platform"` |
-| `scripts/ops_writer.py` | `ATHENA_WORKGROUP` | `"agent-platform-production"` | `"bblake-platform-production"` |
+| `scripts/ops_data_portal.py` | `_ATHENA_DATABASE` | `"trading_formulas_db"` | `"agent_platform"` |
+| `scripts/ops_data_portal.py` | `_ATHENA_WORKGROUP` | `"agent-platform-production"` | `"agent-platform-production"` |
+| `scripts/ops_writer.py` | `DATABASE` | `"trading_formulas_db"` | `"agent_platform"` |
+| `scripts/ops_writer.py` | `ATHENA_WORKGROUP` | `"agent-platform-production"` | `"agent-platform-production"` |
 | `scripts/sync_ops.py` | `_SSO_PROFILE` | `"company-aws-profile"` | `"agent_platform"` |
-| `scripts/sync_ops.py` | `_DATABASE` | `"trading_formulas_db"` | `"bblake_platform"` |
-| `scripts/sync_ops.py` | `_WORKGROUP` | `"agent-platform-production"` | `"bblake-platform-production"` |
-| `scripts/sync_recommendations.py` | `_DYNAMODB_TABLE` | `"agent-platform-counters"` | `"bblake-platform-counters"` |
-| `scripts/session_preflight.py` | `_ATHENA_DATABASE` | `"trading_formulas_db"` | `"bblake_platform"` |
-| `scripts/session_preflight.py` | `_ATHENA_WORKGROUP` | `"agent-platform-production"` | `"bblake-platform-production"` |
-| `scripts/session_preflight.py` | `_ATHENA_OUTPUT_LOCATION` | value contains `bblake-platform-agent-logs` | replace bucket segment with `bblake-platform-data-lake` |
-| `scripts/data_quality_runner.py` | various default-arg literals | `trading_formulas_db` / `agent-platform-production` | `bblake_platform` / `bblake-platform-production` |
+| `scripts/sync_ops.py` | `_DATABASE` | `"trading_formulas_db"` | `"agent_platform"` |
+| `scripts/sync_ops.py` | `_WORKGROUP` | `"agent-platform-production"` | `"agent-platform-production"` |
+| `scripts/sync_recommendations.py` | `_DYNAMODB_TABLE` | `"agent-platform-counters"` | `"agent-platform-counters"` |
+| `scripts/session_preflight.py` | `_ATHENA_DATABASE` | `"trading_formulas_db"` | `"agent_platform"` |
+| `scripts/session_preflight.py` | `_ATHENA_WORKGROUP` | `"agent-platform-production"` | `"agent-platform-production"` |
+| `scripts/session_preflight.py` | `_ATHENA_OUTPUT_LOCATION` | value contains `agent-platform-agent-logs` | replace bucket segment with `agent-platform-data-lake` |
+| `scripts/data_quality_runner.py` | various default-arg literals | `trading_formulas_db` / `agent-platform-production` | `agent_platform` / `agent-platform-production` |
 
 **IMPORTANT for `ops_writer.py` -- there is NO bucket literal to change here.** `ops_writer.py`
 resolves its bucket from the `S3_LOG_BUCKET` env var / `Config().get("aws.s3_agent_logs_bucket")` /
-`config.personal.yaml` -- it does NOT contain a hardcoded `"bblake-platform-agent-logs"` string
+`config.personal.yaml` -- it does NOT contain a hardcoded `"agent-platform-agent-logs"` string
 (an earlier draft wrongly listed one in the table; removed). Do NOT change the env-var NAME string
 `"S3_LOG_BUCKET"`. The data-lake bucket cutover therefore happens via env/config
 (`config.personal.yaml` Step 19 + the migration's explicit `S3_LOG_BUCKET` export in Step 13b),
-NOT via an `ops_writer.py` code edit. The two REAL hardcoded `"bblake-platform-agent-logs"`
+NOT via an `ops_writer.py` code edit. The two REAL hardcoded `"agent-platform-agent-logs"`
 literals live in `session_preflight.py:~1226` and `ops_data_portal.py:~893` (see the substring sweep).
 
 **IMPORTANT for `session_preflight.py`**: `_ATHENA_OUTPUT_LOCATION` currently references
-`bblake-platform-agent-logs` (not `data-lake`). Verify the actual value by reading the file
+`agent-platform-agent-logs` (not `data-lake`). Verify the actual value by reading the file
 before editing; do not rely on the description above.
 
 **Substring sweep (DO THIS -- the named-constant table above is NOT sufficient).** Several
@@ -1100,7 +1169,7 @@ constants, so a "find the constant" approach misses them. Grep the WHOLE of `scr
 and fix every runtime-path occurrence:
 
 ```bash
-grep -rn "trading_formulas_db\|agent-platform-production\|bblake-platform\|company-aws-profile" scripts/
+grep -rn "trading_formulas_db\|agent-platform-production\|agent-platform\|company-aws-profile" scripts/
 ```
 
 Known embedded literals that MUST be caught (verify line numbers by grep, do not trust these):
@@ -1108,12 +1177,12 @@ Known embedded literals that MUST be caught (verify line numbers by grep, do not
   inside `read_priority_queue()` -- preflight HARD-EXITS on this; the standalone-`"trading_formulas_db"`
   grep used in Step 17a will NOT catch this dotted form. Fix it explicitly.
 - `scripts/session_preflight.py` ~line 1226: `os.environ.setdefault("S3_LOG_BUCKET",
-  "bblake-platform-agent-logs")` -- change the DEFAULT VALUE to `bblake-platform-data-lake`
+  "agent-platform-agent-logs")` -- change the DEFAULT VALUE to `agent-platform-data-lake`
   (NOT the env-var name).
 - `scripts/session_preflight.py` ~line 263: a hardcoded `"company-aws-profile"` in the SSO
   bootstrap (not `_SSO_PROFILE`).
 - `scripts/ops_data_portal.py` ~line 893: `os.environ.get("S3_LOG_BUCKET",
-  "bblake-platform-agent-logs")` fallback in `_delete_postmortems_from_iceberg` -- update the value.
+  "agent-platform-agent-logs")` fallback in `_delete_postmortems_from_iceberg` -- update the value.
 
 The following ARE now in scope (they sit in the post-migration runtime path and would otherwise keep
 the employer profile/bucket active -- see the Scope table): `scripts/session_postflight.py`
@@ -1163,8 +1232,8 @@ and fix the line-1231 diagnostic so neither depends on the working-directory nam
 **Step 18 -- Update DQ YAML configs**
 
 `config/agent/data_quality/ops.yaml`: Update `database: trading_formulas_db` to
-`database: bblake_platform`; update `athena_workgroup: agent-platform-production` to
-`athena_workgroup: bblake-platform-production`. Do the same in any other ops DQ YAML
+`database: agent_platform`; update `athena_workgroup: agent-platform-production` to
+`athena_workgroup: agent-platform-production`. Do the same in any other ops DQ YAML
 (`config/agent/data_quality/decisions/*.yaml`).
 
 `config/agent/data_quality/telemetry.yaml`: **`enabled: false` is a NO-OP** -- `load_checks()` does
@@ -1175,7 +1244,7 @@ telemetry tables). Also, `data_quality_runner.main()` ABORTS if two YAMLs declar
    compile) -- OR delete the file entirely. Emptying with a comment is preferred for legibility:
    `# Telemetry tables not migrated (2026-05-28). Checks emptied; re-add if telemetry is reprovisioned.`
 2. Regardless of (1), update `telemetry.yaml`'s top-level `database`/`athena_workgroup` to
-   `bblake_platform` / `bblake-platform-production` so it does NOT conflict-abort against `ops.yaml`.
+   `agent_platform` / `agent-platform-production` so it does NOT conflict-abort against `ops.yaml`.
    (If the file is deleted instead, this is moot.)
 
 Verify after: `bin/venv-python -m scripts.data_quality_runner` runs without "Conflicting
@@ -1184,11 +1253,11 @@ database/workgroup" and without telemetry TABLE_NOT_FOUND errors.
 **Step 19 -- Update `config/config.personal.yaml` + fix the steady-state bucket fallback**
 
 Update `aws_profile: company-aws-profile` to `aws_profile: agent_platform`. Update any bucket names to
-personal-account equivalents. ADD an explicit `aws.s3_agent_logs_bucket: bblake-platform-data-lake`.
+personal-account equivalents. ADD an explicit `aws.s3_agent_logs_bucket: agent-platform-data-lake`.
 
 **Fix the `OpsWriter._bucket()` work-bucket fallback (Finding 4).** `_bucket()` resolves: (1)
 `S3_LOG_BUCKET` env; (2) `Config().get("aws.s3_agent_logs_bucket")`; (3) **direct parse of
-`config/config.company.yaml`**, which returns the OLD `bblake-platform-agent-logs`. So in ANY
+`config/config.company.yaml`**, which returns the OLD `agent-platform-agent-logs`. So in ANY
 steady-state process where `S3_LOG_BUCKET` is unset (not just the migration), ops writes stage to the
 employer bucket. Fix: change `ops_writer._bucket()`'s Fallback-2 to read `config/config.personal.yaml`
 (not `config.company.yaml`) AND set the value there. (NOTE: `ops_writer.py` is Lambda-packaged ->
@@ -1249,7 +1318,7 @@ top-level `permissions: contents: read` is NOT sufficient. Add a job-level permi
       - name: Configure AWS credentials (OIDC -- branch role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/bblake-platform-github-ci-branch
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
           aws-region: eu-west-2
       # ... existing validate steps ...
 ```
@@ -1319,9 +1388,9 @@ grep -rn "runs-on" .github/workflows/
 - In the "Self-hosted GitHub Actions runner" runbook section: replace the entire runbook
   body with: `Runner retired 2026-05-28 per CD.21. CI now uses GitHub-hosted runners
   (ubuntu-latest) with OIDC to personal account REDACTED-PERSONAL-ACCOUNT (role:
-  bblake-platform-github-ci-branch). See terraform/personal/oidc.tf.`
+  agent-platform-github-ci-branch). See terraform/personal/oidc.tf.`
 - In the "Re-enable Lambda scheduled agents" runbook: update bucket name
-  `bblake-platform-agent-logs` to `bblake-platform-data-lake`.
+  `agent-platform-agent-logs` to `agent-platform-data-lake`.
 - Add a note under Temporary Operational Constraints:
   `T2.12 security gate deferred (CD.20): GHAS secret scanning, branch protection, CodeQL,
   and fork-PR approval policy are not yet enabled. To be addressed in a follow-on session.`
@@ -1329,8 +1398,8 @@ grep -rn "runs-on" .github/workflows/
 **Step 26 -- Update `docs/PROJECT_CONTEXT.md`**
 
 In the AWS section: account to `REDACTED-PERSONAL-ACCOUNT`, profile to `agent_platform`, Glue database to
-`bblake_platform`, Athena workgroups to `bblake-platform-production` / `bblake-platform-lab`,
-S3 buckets to `bblake-platform-*` equivalents. Update GitHub Actions runner reference to
+`agent_platform`, Athena workgroups to `agent-platform-production` / `agent-platform-lab`,
+S3 buckets to `agent-platform-*` equivalents. Update GitHub Actions runner reference to
 "GitHub-hosted ubuntu-latest with OIDC". Remove company SCP gotcha note (applies to work
 account only; personal account is not SCP-restricted).
 
@@ -1429,15 +1498,15 @@ print('OK: dest == source')
 
 # Independent cross-check straight from Athena (does not trust the summary file):
 aws athena start-query-execution \
-  --query-string "SELECT count(*) FROM bblake_platform.ops_recommendations_current" \
-  --work-group bblake-platform-production --profile agent_platform
+  --query-string "SELECT count(*) FROM agent_platform.ops_recommendations_current" \
+  --work-group agent-platform-production --profile agent_platform
 
 # Seed/verify counters above migrated max (HARD gate, Step 13c)
 bin/venv-python -c "
 import boto3
 ddb = boto3.Session(profile_name='agent_platform').client('dynamodb')
 for c in ('recommendations','decisions'):
-    v = ddb.get_item(TableName='bblake-platform-counters',
+    v = ddb.get_item(TableName='agent-platform-counters',
                      Key={'counter_name':{'S':c}})['Item']['current_value']['N']
     print(c, 'counter =', v)
 "

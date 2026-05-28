@@ -160,7 +160,6 @@ def run_lab_mode():
     """Run formula discovery in lab mode (company environment only)."""
     print("\n=== Lab Mode: Formula Discovery ===")
     print("Environment: Company VM")
-    print("AWS Account: REDACTED-ACCOUNT-ID")
     print("Resources: SageMaker, Athena, S3")
     print()
 

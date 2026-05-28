@@ -56,8 +56,8 @@ See [docs/ROADMAP-PRODUCT.md](../docs/ROADMAP-PRODUCT.md) for product phases, [d
   - `agent-platform-production` (engine v3) -- used for OPTIMIZE, MERGE writes, and all production queries
   - `agent-platform-lab` (engine v3) -- used for PySR formula discovery queries
   - `primary` (engine v2, default) -- **do not use** for Iceberg operations; does not support `VACUUM` or full Iceberg DML
-- **S3 buckets**: bblake-platform-{data-lake, formulas-discovery, formulas-staging, formulas-production, agent-logs}
-  - `bblake-platform-agent-logs` -- Agent log storage for cron workflows (see `scripts/s3_log_store.py`)
+- **S3 buckets**: agent-platform-{data-lake, formulas-discovery, formulas-staging, formulas-production, agent-logs}
+  - `agent-platform-agent-logs` -- Agent log storage for cron workflows (see `scripts/s3_log_store.py`)
 - **Lambda runtime**: Python 3.12
 - **Lambda layers**: AWSSDKPandas-Python312:22 (managed) + extras (yfinance/pyyaml, ~11 MB)
 - **Bedrock inference**: Personal account REDACTED-PERSONAL-ACCOUNT, profile `personal-bedrock-profile`, model `deepseek.v3.2` (DeepSeek V3.2 via Converse API). See Decision 52. **Dormant for executor** -- executor now uses Gemini CLI (Decision 53).

@@ -106,7 +106,7 @@ Iceberg provides:
 
 4. **Lambda package zips present locally**: `filemd5()` in `data_pipeline.tf` requires both zip files to exist on disk before `terraform plan`. They are not tracked in git. If missing, download from S3:
    ```powershell
-   aws s3 cp s3://bblake-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip ../lambda-packages/data-pipeline-extras-layer.zip --profile company-aws-profile --region eu-west-2
+   aws s3 cp s3://agent-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip ../lambda-packages/data-pipeline-extras-layer.zip --profile company-aws-profile --region eu-west-2
    # data-pipeline.zip is built by scripts/build_lambda.ps1 and uploaded by the Lambda deploy step
    ```
 
