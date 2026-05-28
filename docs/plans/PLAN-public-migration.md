@@ -368,6 +368,57 @@ no longer applied, so no `count` guard is required.
     PRIVATE until Phase G / Step 32. OPEN prerequisite before the Step 31 migration: confirm
     `agent_platform`/PlatformDev has Athena query / S3 read-write / DynamoDB get-update / Glue get
     runtime perms (provisioning still uses `agent_platform_admin`).
+- **Phase B execution record (2026-05-28) -- personal infra APPLIED + verified; provisioning-perms gaps found:**
+  - **ALL 21 personal-account resources are LIVE in the personal account (`REDACTED-PERSONAL-ACCOUNT`).** Glue DB `bblake_platform`; Athena
+    workgroup `bblake-platform-production`; S3 `bblake-platform-data-lake` (versioned / AES256 / public-blocked /
+    HTTPS-only); DynamoDB `bblake-platform-counters` seeded `recommendations=1944` / `decisions=1081`; Iceberg
+    tables `ops_recommendations` / `ops_decisions` / `ops_priority_queue` + their `_current` views. Verification:
+    VP8 `terraform validate` = Success; VP9 `plan` = 21 add / 0 change / 0 destroy with ZERO work-account
+    resources (separate-module isolation confirmed); VP10 Glue DB OK; VP11 workgroup OK; VP12 all three
+    `_current` views queryable via live Athena (count=0 each). **Phase B is COMPLETE -- a fresh agent starts at
+    Phase C (Step 13a). Do NOT re-run Phase B (Steps 7-12).**
+  - **Files (UNCOMMITTED, in the working tree on `agent/public-migration` -- NOT yet committed):** created
+    `terraform/personal/main.tf`, `terraform/personal/oidc.tf`, `terraform/personal/variables.tf` (NO `account_id`
+    default), and the gitignored `terraform/personal/terraform.personal.tfvars` (the real account id lives ONLY
+    here -- verified absent from every committed file). Modified `terraform/ec2_runner.tf` (CD.21 deprecation
+    header only), `terraform/variables.tf` (removed the scrubbed `platform_account_id` default; the var is KEPT --
+    `lambda_tooling_iam.tf` still references it), `terraform/CLAUDE.md` (account/profile/Glue-DB/workgroup
+    retargeted, SCP note dropped, personal-module pointer added), `.gitignore` (added `terraform/**/` state /
+    `.terraform/` / lock / tfplan patterns so the local-backend personal state cannot leak). Intentionally NOT
+    committed -- the plan bundles everything into one PR at Step 30 (committing now would leave CI referencing the
+    dead self-hosted runner).
+  - **PlatformAdmin (`agent_platform_admin`) is an IDENTITY admin, NOT a data-plane admin.** Its inline `AdminOps`
+    policy grants only `iam:*`, lambda management, and secretsmanager. The first apply created the OIDC provider +
+    2 IAM roles, then AccessDenied on `glue:CreateDatabase` / `s3:CreateBucket` / `dynamodb:CreateTable`. The
+    Phase A note ("provisioning MUST run under agent_platform_admin / PlatformAdmin") was inferred from a single
+    `list-open-id-connect-providers` probe, which only proved IAM/OIDC reach -- not data-plane create rights.
+  - **IAM CHANGE MADE (out-of-band, via `platform_breakglass`) -- DRIFT, must be recorded/codified:** attached a
+    NEW inline policy `PlatformDataLakeProvisioning` to IAM role `PlatformAdmin`, granting glue create/get/update/
+    delete db+table + `glue:TagResource`/`UntagResource`/`GetTags` (the provider `default_tags` need TagResource),
+    `s3:*` on `arn:aws:s3:::bblake-platform-data-lake[/*]`, `dynamodb:*` on `table/bblake-platform-*`, and athena
+    provisioning + query actions. This is NOT captured in `terraform/personal/` (the `PlatformAdmin` role is not
+    managed by this module), so it is live drift. `platform_breakglass` is IAM user `platform-breakglass` (full
+    admin). MUST be recorded as a Decision and/or codified (import the role or attach a managed policy) in a
+    follow-up -- per repo memory policy it was NOT auto-saved anywhere.
+  - **Provisioning now works under `agent_platform_admin`** (after the policy above). `terraform.personal.tfvars`
+    keeps `aws_profile = "agent_platform_admin"`. `terraform init` has already been run locally (`.terraform/`
+    present but gitignored; a fresh CLONE would re-run `terraform -chdir=terraform/personal init`).
+  - **CARRIED FORWARD TO PHASE C -- resolve BEFORE the Step 31 migration:**
+    1. **Runtime perms gap (same class as PlatformAdmin, NOT yet fixed).** `agent_platform`/PlatformDev -- the
+       profile the migration WRITES under (`AWS_PROFILE=agent_platform`, Step 31) -- is permissionless. Before
+       Step 31 it needs: Athena `StartQueryExecution`/`GetQueryExecution`/`GetQueryResults`/`GetWorkGroup`, S3
+       read-write on `bblake-platform-data-lake`, DynamoDB `GetItem`/`UpdateItem` on `bblake-platform-counters`,
+       Glue `GetDatabase`/`GetTable`/`GetPartitions`. Grant via a PlatformDev inline policy through
+       `platform_breakglass` (mirror the branch-role policy already written in `terraform/personal/oidc.tf`), and
+       record it. Expect the same iterate-on-AccessDenied risk -- grant a complete set in one shot.
+    2. **Migration SOURCE profile is NOT `company-aws-profile`** -- that placeholder name does not exist in
+       `~/.aws/config`. The real work-account source profile name is supplied to the fresh agent OUT-OF-BAND (it is
+       a work-account identifier and is deliberately kept out of this committed plan). Set
+       `scripts/migrate_ops_data.py` `--profile-source` default to that real profile name, NOT `company-aws-profile`.
+       Single-account-SSO is NOT a constraint: the personal (`agent_platform*`) and the work source SSO sessions
+       coexist (separate cached tokens), confirmed live.
+    3. **Record the `PlatformDataLakeProvisioning` IAM change** (and, once granted, the PlatformDev runtime policy)
+       as a Decision / runbook entry during the Phase F doc pass.
 
 ## Pre-Implementation Checklist
 
@@ -658,7 +709,13 @@ Verify: `git remote -v` shows `agent-platform`; repo is still private
 
 ---
 
-### Phase B: Terraform -- Personal Account Infrastructure (SEPARATE root module)
+### Phase B: Terraform -- Personal Account Infrastructure (SEPARATE root module) -- COMPLETE 2026-05-28 (DO NOT RE-RUN)
+
+> **Phase B was APPLIED and verified on 2026-05-28.** All 21 personal-account resources are live; VP8-12 pass.
+> See "Phase B execution record (2026-05-28)" in the Context section above for the full account, including the
+> out-of-band `PlatformDataLakeProvisioning` IAM grant on the `PlatformAdmin` role and the carried-forward
+> runtime-perms gap (`agent_platform`/PlatformDev) + source-profile (real name supplied out-of-band) notes. Steps 7-12
+> below are retained for reference only. A fresh agent should START AT PHASE C (Step 13a).
 
 **Why a separate module:** the existing `terraform/` root repoints its DEFAULT `aws` provider via
 `terraform.personal.tfvars`, and only ~8 of ~137 resources use the `aws.platform` alias -- the rest

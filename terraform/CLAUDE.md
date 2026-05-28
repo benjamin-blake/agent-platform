@@ -12,20 +12,20 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 
 ## AWS context
 - Region: `eu-west-2`
-- Account: REDACTED-ACCOUNT-ID (sandbox)
-- Profile: `company-aws-profile` (SSO) for agent operations.
-- Glue database: `trading_formulas_db`.
-- Company SCPs block IAM user creation and external OIDC provider registration. Do not propose either — see Decisions 36 and 37.
+- Account: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed).
+- Profile: `agent_platform` (PlatformDev, runtime) for agent operations; `agent_platform_admin` (PlatformAdmin) for provisioning (creates IAM + OIDC).
+- Glue database: `bblake_platform` (personal module). Retained work-root `.tf` files still reference `trading_formulas_db`.
+- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
+- The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
 ## Athena workgroup rules
-- `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries.
-- `agent-platform-lab` (engine v3) — PySR formula discovery.
+- `bblake-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
 - `primary` (engine v2, default) — **do not use** for Iceberg DML or VACUUM. v2 doesn't support full Iceberg semantics.
 
 ## Athena/Iceberg DDL gotchas
 - `ALTER TABLE ADD COLUMNS` has no `IF NOT EXISTS`. Issue one column per statement; ignore "already exists" errors.
 - `CREATE TABLE IF NOT EXISTS` does not update TBLPROPERTIES on an existing table. Use `ALTER TABLE SET TBLPROPERTIES` instead.
-- `VACUUM` requires engine v3. Always use `WorkGroup='agent-platform-production'`.
+- `VACUUM` requires engine v3. Always use `WorkGroup='bblake-platform-production'`.
 - Iceberg integer promotion: prior writes may have promoted `int` → `bigint`. Re-declaring as `int` fails ("Cannot change column type: long -> int"). Detect and honour existing promoted types.
 
 ## Lambda interaction
