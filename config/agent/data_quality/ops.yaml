@@ -219,65 +219,6 @@ tables:
         description: "SCD2 ordering key. The row with the latest last_updated_timestamp for a given id is current."
         semantics: "Advances on every SCD2 append (status change, field update, etc.). Partition key for ops_decisions_current view post-Phase-0+1."
 
-  ops_execution_plans:
-    description: "Executor plan records"
-    row_count:
-      min: 1
-      severity: warn  # may be empty if executor hasn't run recently
-    recency:
-      column: last_updated_timestamp
-      warn_after_hours: 48
-      error_after_hours: 168
-      enforced: false  # data stale beyond error threshold
-    columns:
-      plan_id:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-          - unique:
-              enforced: false  # duplicates present
-      rec_id:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-          - relationships:
-              to_table: ops_recommendations
-              to_column: id
-              severity: warn  # SCD complicates this
-      branch:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-      verification_tier:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-          - accepted_values:
-              values: [V1, V2, V3]
-              enforced: false  # no manifest yet; enroll after DQ remediation session
-
-  ops_session_log:
-    description: "Session log entries"
-    row_count:
-      min: 1
-      severity: warn
-    recency:
-      column: last_updated_timestamp
-      warn_after_hours: 48
-      error_after_hours: 168
-      enforced: false  # data stale beyond error threshold
-    columns:
-      session_id:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-          - unique:
-              enforced: false  # duplicates present
-      session_type:
-        tests:
-          - not_null:
-              enforced: false  # nulls present
-
   ops_priority_queue:
     description: "Curator-generated priority rankings"
     row_count:

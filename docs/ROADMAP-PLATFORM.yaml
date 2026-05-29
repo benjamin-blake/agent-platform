@@ -2778,6 +2778,48 @@ tier_items:
     bootstrap_completion_exempt: false
     status: not_started
 
+  - id: T2.15
+    tier: T2
+    name: CI verification-coverage restoration
+    intent: |
+      Restore three verifier/DQ checks deferred during the public-repo CI bootstrap
+      (agent/ci-bootstrap-public-repo, 2026-05-29). Three deliberate deferrals:
+
+      1. ops_execution_plans DQ checks - removed from config/agent/data_quality/ops.yaml
+         because the table is unprovisioned in the personal account (terraform/personal/
+         provisions only ops_recommendations, ops_decisions, ops_priority_queue). Restore
+         once ops_execution_plans is provisioned, gated on CD.17 executor-freeze reversal
+         at T4.2. Decision 67 is the superseded ancestor; cite CD.11/CD.16/CD.17 as the
+         live owners.
+
+      2. ops_session_log DQ checks - removed from ops.yaml because ops_session_log is
+         slated for retirement (docs/INTENT-session-log-architecture.md, proposed
+         CD.NN.a). Restoration means new DQ checks against telemetry_agent_turns, not
+         restoring the old session-log checks. Gated on telemetry_agent_turns going live
+         (T3.2/T3.3) and the retirement decision ratification.
+
+      3. CausalChainVerifier - deregistered from scripts/verifiers/__init__.py because
+         its target table (telemetry_process_events) is unprovisioned. On an OIDC runner
+         with valid credentials it emits a heartbeat into staging and then times out (180s
+         Athena poll), leaving an orphan heartbeat row. Reactivation requires a rewrite
+         against telemetry_agent_turns (owned by the T3.2 causal-chain verifier item) and
+         restoration of its covers globs in validate.py --coverage. Gated on CD.17
+         telemetry trust (T3.2/T3.3).
+    depends_on: []
+    files_in_scope:
+      - config/agent/data_quality/ops.yaml
+      - scripts/verifiers/__init__.py
+      - scripts/verifiers/causal_chain.py
+    exit_criteria:
+      - "ops_execution_plans DQ block restored in ops.yaml (or table formally retired with rec via ops_data_portal) after provisioning in personal account; gated on CD.17 reversal at T4.2"
+      - "ops_session_log DQ coverage replaced by telemetry_agent_turns checks once INTENT-session-log-architecture.md retirement (proposed CD.NN.a) is ratified and telemetry_agent_turns is live (T3.2/T3.3)"
+      - "CausalChainVerifier re-registered in scripts/verifiers/__init__.py, rewritten to target telemetry_agent_turns, and its covers globs restored in validate.py --coverage (T3.2)"
+    related_candidate_decisions: [CD.17]
+    effort: M
+    strategic: false
+    bootstrap_completion_exempt: false
+    status: not_started
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
