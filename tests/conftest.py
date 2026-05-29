@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
-import pandas as pd
 import pytest
 
 # Prevent any subprocess that spawns validate.py from recursing into a full
@@ -126,13 +124,16 @@ def _block_llm_cli_subprocess(request: pytest.FixtureRequest, monkeypatch: pytes
 
 
 @pytest.fixture
-def ohlcv_df() -> pd.DataFrame:
+def ohlcv_df():  # type: ignore[return]
     """Standard single-symbol OHLCV DataFrame (60 business days, seed=42).
 
     Use this fixture for tests that need a reproducible OHLCV frame without
     caring about specific price behaviour. Tests that require controlled price
     shape (e.g. MACD crossover tests) should build their own data locally.
     """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
     np.random.seed(42)
     timestamps = pd.date_range("2026-01-01", periods=60, freq="B")
     price = 100.0
