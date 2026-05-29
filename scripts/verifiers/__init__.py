@@ -8,7 +8,6 @@ from __future__ import annotations
 import fnmatch
 
 from .athena_views import AthenaViewsVerifier
-from .causal_chain import CausalChainVerifier
 from .data_quality import DataQualityVerifier
 from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 from .outbox_health import OutboxHealthVerifier
@@ -21,7 +20,9 @@ REGISTRY: list[type[Verifier]] = [
     AthenaViewsVerifier,
     SchemaIntegrityVerifier,
     DataQualityVerifier,
-    CausalChainVerifier,
+    # CausalChainVerifier deregistered during public-repo CI bootstrap; telemetry tables
+    # are deferred. Reactivate per docs/ROADMAP-PLATFORM.yaml T2.15 and
+    # docs/INTENT-session-log-architecture.md once telemetry_agent_turns is live.
 ]
 
 

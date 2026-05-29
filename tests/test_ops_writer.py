@@ -312,6 +312,7 @@ class TestOpsWriterCompact:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             count = writer.compact("ops_recommendations", "2026-04-20")
@@ -343,6 +344,7 @@ class TestOpsWriterCompact:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
             writer.compact("ops_recommendations", "2026-04-20")
@@ -469,6 +471,7 @@ class TestOpsWriterCompact:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             mock_wr.athena.to_iceberg.side_effect = _capture_df
@@ -790,6 +793,7 @@ class TestOpsWriterCompactEdgeCases:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
             count = writer.compact("ops_recommendations", "2026-04-20")
@@ -1222,6 +1226,7 @@ class TestOpsWriterCompactTimestampHandling:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             mock_wr.athena.to_iceberg.side_effect = _capture_to_iceberg
@@ -1271,6 +1276,7 @@ class TestOpsWriterCompactTimestampHandling:
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             mock_wr.athena.to_iceberg.side_effect = _capture_to_iceberg
