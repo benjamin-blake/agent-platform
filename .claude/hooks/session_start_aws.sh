@@ -1,51 +1,44 @@
 #!/usr/bin/env bash
-# SessionStart hook: materialise AWS SSO credentials from env vars.
-# Runs on every Claude Code session start (including resume). Idempotent.
+# SessionStart hook: verify the static-key AWS assume-role chain.
 #
-# Environment variables (all optional; missing = graceful skip):
-#   AWS_SSO_CACHE_B64    -- base64-encoded tarball of ~/.aws/sso/cache/
-#   AWS_SSO_START_URL    -- e.g. https://your-org.awsapps.com/start
-#   AWS_SSO_ACCOUNT_ID   -- 12-digit account number
-#   AWS_SSO_ROLE_NAME    -- e.g. DeveloperAccess
-#   AWS_DEFAULT_REGION   -- e.g. eu-west-2
+# Credential model (personal account, CC-web-primary): the cloud-env "Setup script"
+# field materialises ~/.aws/{credentials,config} -- a near-powerless agent_static
+# IAM key plus an agent_platform (PlatformDev) / agent_platform_admin (PlatformAdmin)
+# assume-role profile. See bin/setup-cloud-env.sh header for the exact field content.
 #
-# Exits 0 on success or graceful skip; non-zero only on real I/O failure.
+# This hook does NOT create credentials. It runs every session start (including
+# resume) and verifies the chain resolves, turning a silent AccessDenied into an
+# obvious session-start message. Advisory only: always exits 0 so a missing or
+# expired credential never blocks the session.
 
-set -euo pipefail
+set -uo pipefail
 
 log() { printf '[session_start_aws] %s\n' "$*"; }
 
-# Block 1: SSO cache from AWS_SSO_CACHE_B64
-if [ -n "${AWS_SSO_CACHE_B64:-}" ]; then
-    log "Restoring AWS SSO cache from AWS_SSO_CACHE_B64"
-    mkdir -p "$HOME/.aws/sso"
-    chmod 700 "$HOME/.aws"
-    printf '%s' "$AWS_SSO_CACHE_B64" | base64 -d | tar -C "$HOME/.aws/sso" -xzf -
-    chmod -R go-rwx "$HOME/.aws/sso"
-    log "SSO cache restored"
-else
-    log "AWS_SSO_CACHE_B64 not set -- skipping SSO cache restore"
+# Profile resolution mirrors scripts/aws_profile.py: an explicit AWS_PROFILE wins
+# (the admin env sets agent_platform_admin), otherwise default to agent_platform.
+PROFILE="${AWS_PROFILE:-agent_platform}"
+
+if [ ! -f "$HOME/.aws/credentials" ] && [ ! -f "$HOME/.aws/config" ]; then
+    log "WARNING: ~/.aws not materialised -- AWS calls will fail."
+    log "  Fix: the cloud-env Setup script must write ~/.aws (see bin/setup-cloud-env.sh header)."
+    exit 0
 fi
 
-# Block 2: ~/.aws/config from AWS_SSO_* env vars
-if [ -n "${AWS_SSO_START_URL:-}" ] && [ -n "${AWS_SSO_ACCOUNT_ID:-}" ] && [ -n "${AWS_SSO_ROLE_NAME:-}" ]; then
-    log "Writing ~/.aws/config from AWS_SSO_* env vars"
-    mkdir -p "$HOME/.aws"
-    chmod 700 "$HOME/.aws"
-    cat > "$HOME/.aws/config" <<EOF
-[profile company-aws-profile]
-sso_session = company-aws-profile
-sso_account_id = ${AWS_SSO_ACCOUNT_ID}
-sso_role_name = ${AWS_SSO_ROLE_NAME}
-region = ${AWS_DEFAULT_REGION:-eu-west-2}
-output = json
-
-[sso-session company-aws-profile]
-sso_start_url = ${AWS_SSO_START_URL}
-sso_region = ${AWS_DEFAULT_REGION:-eu-west-2}
-sso_registration_scopes = sso:account:access
-EOF
-    log "~/.aws/config written"
-else
-    log "AWS_SSO_START_URL/ACCOUNT_ID/ROLE_NAME not all set -- skipping ~/.aws/config write"
+if ! command -v aws >/dev/null 2>&1; then
+    log "aws CLI not on PATH yet (setup-cloud-env.sh installs it) -- skipping credential check."
+    exit 0
 fi
+
+log "Verifying AWS profile '$PROFILE' (static-key assume-role chain)..."
+if arn="$(aws sts get-caller-identity --profile "$PROFILE" --query Arn --output text 2>&1)"; then
+    log "OK: assumed $arn"
+    log "  Note: get-caller-identity needs no IAM permissions. If ops calls still fail with"
+    log "  AccessDenied, the role's runtime grant is missing -- see terraform/personal/platform_roles.tf."
+else
+    log "WARNING: could not assume '$PROFILE':"
+    log "  $arn"
+    log "  Check ~/.aws/config external_id and that the agent_static key is valid / un-rotated."
+fi
+
+exit 0

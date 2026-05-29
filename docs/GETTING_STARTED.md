@@ -124,34 +124,45 @@ Use this environment for formula discovery and AWS infrastructure management.
 - **GitHub CLI (`gh`)**: `winget install GitHub.cli`, then `gh auth login` (select GitHub.com, HTTPS, browser auth). Verify: `gh auth status`. Required for CI feedback loop and automated PR creation (`session_close` Steps 5b, 5c, 5d).
 - **AWS SSO Access**: To your AWS account
 
-### Step 1: Configure AWS SSO
+### Step 1: Configure AWS credentials (static key + assume-role)
 
-Add the following to `~/.aws/config`:
+> The primary dev surface is now Claude Code on the web, where the "Setup script"
+> field materialises `~/.aws` automatically -- see the header of
+> [`bin/setup-cloud-env.sh`](../bin/setup-cloud-env.sh). The steps below are the
+> local-machine (escape-hatch) equivalent. There is no SSO / daily MFA.
+
+Add a near-powerless `agent_static` IAM-user key to `~/.aws/credentials`:
 
 ```ini
-[profile your-aws-profile]
-sso_session = your-aws-profile
-sso_account_id = <your-account-id>
-sso_role_name = AdministratorAccess
+[agent_static]
+aws_access_key_id = <your-access-key-id>
+aws_secret_access_key = <your-secret-access-key>
+```
+
+Add the assume-role profile to `~/.aws/config`:
+
+```ini
+[profile agent_static]
 region = eu-west-2
 output = json
 
-[sso-session your-aws-profile]
-sso_start_url = https://your-sso-portal.awsapps.com/start
-sso_region = eu-west-2
-sso_registration_scopes = sso:account:access
+[profile agent_platform]
+role_arn = arn:aws:iam::<your-account-id>:role/PlatformDev
+source_profile = agent_static
+external_id = <your-platformdev-external-id>
+duration_seconds = 36000
+region = eu-west-2
+output = json
 ```
 
-Authenticate:
+Verify (boto3/CLI assume PlatformDev automatically and auto-refresh; no `aws sso login`):
 ```bash
-aws sso login --profile your-aws-profile
+aws sts get-caller-identity --profile agent_platform
+# Should show an assumed-role ARN ending in .../PlatformDev/...
 ```
 
-Verify:
-```bash
-aws sts get-caller-identity --profile your-aws-profile
-# Should show Account ID and assume role session
-```
+For infrastructure work, add a parallel `[profile agent_platform_admin]` (role
+`PlatformAdmin`, its own external_id) and target it with `AWS_PROFILE=agent_platform_admin`.
 
 ### Step 2: Install Dependencies
 
@@ -306,10 +317,12 @@ Use this environment for live trading with discovered formulas.
 - **AWS CLI v2**: For S3 access to company buckets
 - **AWS SSO Configured**: Same `your-aws-profile` profile (read-only S3)
 
-### Step 1: Configure AWS SSO (Same as Company)
+### Step 1: Configure AWS credentials (same as Company)
 
+Use the same `agent_platform` static-key + assume-role profile from Company
+Environment Step 1 above:
 ```bash
-aws sso login --profile your-aws-profile
+aws sts get-caller-identity --profile agent_platform
 ```
 
 ### Step 2: Install Dependencies
@@ -571,12 +584,17 @@ aws s3 cp s3://agent-platform-data-lake/lambda-packages/data-pipeline-extras-lay
 
 ### Common Issues (Both Environments)
 
-**Problem:** AWS SSO session expired
+**Problem:** AWS calls fail with `ExpiredToken` or `AccessDenied`
 
 **Solution:**
 ```bash
-# Re-authenticate (sessions last 8-12 hours)
-aws sso login --profile your-aws-profile
+# The agent_platform profile auto-refreshes PlatformDev from the agent_static key,
+# so there is no SSO login to repeat. Confirm the chain resolves:
+aws sts get-caller-identity --profile agent_platform
+# AccessDenied on ops calls (not on get-caller-identity) -> the PlatformDev runtime
+# grant is missing (see terraform/personal/platform_roles.tf).
+# ExpiredToken / InvalidClientTokenId -> the agent_static key was rotated; update
+# ~/.aws/credentials (or the cloud-env Setup script field).
 ```
 
 **Problem:** Python import errors
