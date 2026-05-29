@@ -173,7 +173,7 @@ class TestPreflightProductRoadmapBlock:
             patch("session_preflight.check_venv", return_value=True),
             patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),

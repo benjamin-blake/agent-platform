@@ -24,6 +24,7 @@ from pathlib import Path
 
 from scripts import platform_roadmap
 from scripts import product_roadmap as product_roadmap_module
+from scripts.aws_profile import resolve_aws_profile
 from scripts.s3_log_store import get_backend, read_jsonl
 from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull
 
@@ -45,7 +46,6 @@ TELEMETRY_ACTIVE_SESSION_FILE = ROOT / "logs" / ".telemetry-active-session.json"
 _ATHENA_DATABASE = "agent_platform"
 _ATHENA_WORKGROUP = "agent-platform-production"
 _ATHENA_OUTPUT_LOCATION = "s3://agent-platform-data-lake/athena-results/"
-_SSO_PROFILE = "agent_platform"
 _ATHENA_POLL_TIMEOUT_SECONDS = 10
 _NON_AUTOMATABLE_SOFTCAP = 250
 
@@ -256,11 +256,22 @@ def check_terraform_pending() -> bool | None:
         return None
 
 
-def check_sso_status() -> str:
-    """Non-blocking SSO check. Returns 'ok', 'expired', or 'unavailable'."""
+def check_credentials() -> str:
+    """Non-blocking credential check for the static-key assume-role chain.
+
+    Runs `aws sts get-caller-identity` with the resolved profile (or the boto3
+    default chain on Lambda/CI when resolve_aws_profile returns None). Returns
+    "ok" on a clean exit, else "unavailable". There is no "expired" state: the
+    static-key chain has no interactive login token -- the PlatformDev/PlatformAdmin
+    STS session auto-refreshes from the long-lived agent_static key.
+    """
+    profile = resolve_aws_profile()
+    cmd = ["aws", "sts", "get-caller-identity"]
+    if profile:
+        cmd += ["--profile", profile]
     try:
         result = subprocess.run(
-            ["aws", "sts", "get-caller-identity", "--profile", _SSO_PROFILE],
+            cmd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -268,60 +279,32 @@ def check_sso_status() -> str:
             timeout=10,
             cwd=ROOT,
         )
-        if result.returncode == 0:
-            return "ok"
-        stderr = result.stderr.lower()
-        if "token has expired" in stderr or "sso" in stderr or "credentials" in stderr:
-            return "expired"
-        return "unavailable"
+        return "ok" if result.returncode == 0 else "unavailable"
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "unavailable"
 
 
-def _handle_sso_startup(sso_status: str) -> str:
-    """Enforce SSO session requirement at preflight startup.
+def _handle_credentials_startup(creds_status: str) -> str:
+    """Report credential health at preflight startup -- non-fatal (Decision 60).
 
-    - "unavailable": hard-exit immediately (CLI missing or unknown profile).
-    - "expired": invoke `aws sso login` (interactive -- opens a browser tab), then re-verify.
-      Hard-exit if still not "ok" after the login attempt.
-    - "ok": return immediately.
+    The static-key model has no interactive login step: the agent_static IAM key is a
+    long-lived secret and the PlatformDev/PlatformAdmin STS sessions auto-refresh
+    from it. When credentials are unavailable we cannot "log in" to recover, so we
+    emit loud, actionable guidance and CONTINUE in degraded mode rather than exiting
+    (Decision 60: skip with actionable guidance, never silently weaken a gate).
+    Returns *creds_status* unchanged.
     """
-    if sso_status == "unavailable":
+    if creds_status != "ok":
+        profile = resolve_aws_profile() or "<default-chain>"
         print(
-            "[ERROR] AWS SSO profile unavailable (CLI not found or unknown profile). "
-            "Manual investigation required -- cannot read priority queue.",
+            "[WARN] AWS credentials unavailable (static-key assume-role chain did not resolve).\n"
+            f"       Verify the chain: aws sts get-caller-identity --profile {profile}\n"
+            "       There is no interactive login to recover; if the agent_static\n"
+            "       key was rotated, refresh ~/.aws/credentials. Continuing in DEGRADED mode:\n"
+            "       Athena-backed reads fall back to the local cache or empty results.",
             file=sys.stderr,
         )
-        sys.exit(1)
-    if sso_status == "expired":
-        # CD.2: Linux containers have no display; --use-device-code keeps login headless.
-        headless = os.environ.get("DISPLAY") is None and sys.platform != "win32"
-        login_cmd = ["aws", "sso", "login", "--profile", _SSO_PROFILE]
-        if headless:
-            login_cmd.append("--use-device-code")
-            print(
-                "[INFO] AWS SSO session expired. Invoking 'aws sso login --use-device-code' (headless device-code flow).",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "[INFO] AWS SSO session expired. Invoking 'aws sso login' (opens a browser tab).",
-                file=sys.stderr,
-            )
-        subprocess.run(
-            login_cmd,
-            check=False,
-            timeout=300,
-        )
-        sso_status = check_sso_status()
-        if sso_status != "ok":
-            print(
-                f"[ERROR] AWS SSO session still not active (status={sso_status!r}). "
-                f"Run `aws sso login --profile {_SSO_PROFILE}` manually.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    return sso_status
+    return creds_status
 
 
 def parse_last_session() -> str:
@@ -336,11 +319,13 @@ def parse_last_session() -> str:
 def _run_athena_query(sql: str) -> list[dict] | None:
     """Execute *sql* against the Athena ops views and return rows as dicts.
 
-    Returns ``None`` on any failure (timeout, expired SSO, missing CLI) so
-    callers can fall back to local file reads.  Each row is a dict keyed by
-    column name with string values (Athena ``get-query-results`` returns
+    Returns ``None`` on any failure (timeout, unavailable credentials, missing
+    CLI) so callers can fall back to local file reads.  Each row is a dict keyed
+    by column name with string values (Athena ``get-query-results`` returns
     everything as VarChar).
     """
+    profile = resolve_aws_profile()
+    profile_args = ["--profile", profile] if profile else []
     cmd_start = [
         "aws",
         "athena",
@@ -353,8 +338,7 @@ def _run_athena_query(sql: str) -> list[dict] | None:
         f"Database={_ATHENA_DATABASE}",
         "--result-configuration",
         f"OutputLocation={_ATHENA_OUTPUT_LOCATION}",
-        "--profile",
-        _SSO_PROFILE,
+        *profile_args,
         "--output",
         "text",
         "--query",
@@ -384,8 +368,7 @@ def _run_athena_query(sql: str) -> list[dict] | None:
             "get-query-execution",
             "--query-execution-id",
             execution_id,
-            "--profile",
-            _SSO_PROFILE,
+            *profile_args,
             "--output",
             "text",
             "--query",
@@ -417,8 +400,7 @@ def _run_athena_query(sql: str) -> list[dict] | None:
         "get-query-results",
         "--query-execution-id",
         execution_id,
-        "--profile",
-        _SSO_PROFILE,
+        *profile_args,
         "--output",
         "json",
     ]
@@ -497,7 +479,7 @@ def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
 def count_recommendations() -> tuple[int, int, int, list[dict]]:
     """Count open, aging (>30 days), and non-automatable recommendations.
 
-    Tries the ops_recommendations_current Athena view first when SSO is
+    Tries the ops_recommendations_current Athena view first when credentials are
     available.  Falls back to the local JSONL file if the query fails.
     """
     # Try Athena view first (authoritative source per Decision 50)
@@ -554,27 +536,8 @@ def count_recommendations() -> tuple[int, int, int, list[dict]]:
     return open_count, aging_count, non_auto_count, non_auto_details
 
 
-def read_priority_queue(max_items: int = 5) -> list[dict]:
-    """Read the priority queue from the ops_priority_queue_current Athena view.
-
-    Hard-exits with code 1 if the query returns None -- the view is the single
-    source of truth and silent fallback is prohibited (Decision 61).
-
-    Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
-    Returns [] if the view is empty.
-    """
-    rows = _run_athena_query(
-        "SELECT rec_id, rank, rationale, north_star_impact "
-        f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
-        "ORDER BY CAST(rank AS INTEGER)"
-    )
-    if rows is None:
-        print(
-            "[ERROR] ops_priority_queue_current Athena query failed -- infrastructure problem, not masking with fallback",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
+def _shape_priority_queue_rows(rows: list[dict], max_items: int) -> list[dict]:
+    """Normalise raw rows into the {rank, rec_id, rationale, north_star_impact} shape."""
     result = []
     for row in rows[:max_items]:
         try:
@@ -590,6 +553,73 @@ def read_priority_queue(max_items: int = 5) -> list[dict]:
             }
         )
     return result
+
+
+def _read_priority_queue_cache(max_items: int) -> list[dict]:
+    """Read priority-queue rows from the local read-cache (degraded-mode fallback).
+
+    Returns [] (with a loud warning) when the cache file is absent. There is no
+    in-repo producer for PRIORITY_QUEUE_FILE today, so in practice this commonly
+    degrades to empty rather than restoring rows -- acceptable under Decision 60.
+    READ-ONLY: it never restages or writes the cache (warehouse-as-source-of-truth;
+    no resurrection loop).
+    """
+    if not PRIORITY_QUEUE_FILE.exists():
+        print(
+            "[WARN] priority queue unavailable: credentials down and no local cache at "
+            f"{PRIORITY_QUEUE_FILE}; returning empty (sync after creds restored).",
+            file=sys.stderr,
+        )
+        return []
+    mtime = datetime.fromtimestamp(PRIORITY_QUEUE_FILE.stat().st_mtime, tz=timezone.utc)
+    print(
+        f"[WARN] priority queue read from local cache (creds unavailable); may be stale as of "
+        f"{mtime.isoformat()}; sync after creds restored.",
+        file=sys.stderr,
+    )
+    rows: list[dict] = []
+    for line in PRIORITY_QUEUE_FILE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            rows.append(json.loads(stripped))
+        except json.JSONDecodeError:
+            continue
+    return _shape_priority_queue_rows(rows, max_items)
+
+
+def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[dict]:
+    """Read the priority queue from the ops_priority_queue_current Athena view.
+
+    When *creds_status* is not "ok" credentials are unavailable and Athena is
+    unreachable: fall back to the local read-cache with a loud staleness note
+    (empty-with-warning when the cache is absent; never crash).
+
+    When credentials ARE "ok" but the Athena query returns None, that is a genuine
+    infrastructure fault -- hard-exit with code 1 rather than masking it with a
+    fallback (Decision 60: the view is the source of truth; never silently weaken
+    a gate).
+
+    Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
+    Returns [] if the view is empty.
+    """
+    if creds_status != "ok":
+        return _read_priority_queue_cache(max_items)
+
+    rows = _run_athena_query(
+        "SELECT rec_id, rank, rationale, north_star_impact "
+        f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
+        "ORDER BY CAST(rank AS INTEGER)"
+    )
+    if rows is None:
+        print(
+            "[ERROR] ops_priority_queue_current Athena query failed -- infrastructure problem, not masking with fallback",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return _shape_priority_queue_rows(rows, max_items)
 
 
 def print_priority_queue(items: list[dict]) -> None:
@@ -636,13 +666,13 @@ def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
     return rows
 
 
-def _check_ci_rca_liveness(sso_status: str) -> dict | None:
+def _check_ci_rca_liveness(creds_status: str) -> dict | None:
     """Return alert dict when main CI has been red with no ci-rca rec for >30 min.
 
     Calls `gh run list` to determine the latest push-to-main ci.yml result.
-    Returns None when SSO is unavailable, gh call fails, or conditions are not met.
+    Returns None when credentials are unavailable, gh call fails, or conditions are not met.
     """
-    if sso_status != "ok":
+    if creds_status != "ok":
         return None
     try:
         result = subprocess.run(
@@ -1024,8 +1054,8 @@ def check_telemetry_health() -> dict:
     2026-05-28); these queries therefore fail with TABLE_NOT_FOUND and are caught
     below, degrading to a non-fatal warning rather than raising.
 
-    Degrades gracefully when SSO is expired or Athena is unreachable -- returns
-    ``overall: "unknown"`` with a single ``athena-query`` check entry.
+    Degrades gracefully when credentials are unavailable or Athena is unreachable --
+    returns ``overall: "unknown"`` with a single ``athena-query`` check entry.
 
     Returns a dict compatible with ``print_telemetry_health()``.
     """
@@ -1037,7 +1067,7 @@ def check_telemetry_health() -> dict:
     try:
         import boto3  # noqa: PLC0415
 
-        session = boto3.Session(profile_name=_SSO_PROFILE)
+        session = boto3.Session(profile_name=resolve_aws_profile())
         client = session.client("athena", region_name="eu-west-2")
 
         # -- Session count + success rate + latest session staleness --
@@ -1115,7 +1145,7 @@ def check_telemetry_health() -> dict:
             pass  # friction patterns are informational; failure is non-critical
 
     except Exception:  # noqa: BLE001
-        # SSO expired, boto3 missing, or other connectivity failure -- degrade gracefully
+        # credentials unavailable, boto3 missing, or other connectivity failure -- degrade gracefully
         checks.append({"check": "athena-query", "value": "unavailable", "severity": "unknown"})
         return {"overall": "unknown", "checks": checks, "friction_patterns": friction_patterns}
 
@@ -1247,10 +1277,10 @@ def main() -> int:
     main_freshness = check_main_freshness()
 
     terraform_pending = check_terraform_pending()
-    sso_status = _handle_sso_startup(check_sso_status())
+    creds_status = _handle_credentials_startup(check_credentials())
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Pull ops_recommendations (and all ops tables) from Athena into local cache -- after SSO confirmed
+    # Pull ops_recommendations (and all ops tables) from Athena into local cache (best-effort)
     try:
         recommendation_sync = _sync_ops_pull()
     except (OSError, RuntimeError, ValueError) as exc:
@@ -1266,7 +1296,7 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         pass
 
-    # Outbox summary (always available, even without SSO)
+    # Outbox summary (always available, even without credentials)
     try:
         from scripts.sync_ops import outbox_summary  # noqa: PLC0415
         from scripts.sync_ops import sync as sync_ops_sync
@@ -1278,8 +1308,8 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         outbox = {}
 
-    # Drain outbox + pull fresh data if SSO is active
-    if sso_status == "ok":
+    # Drain outbox + pull fresh data if credentials are available
+    if creds_status == "ok":
         try:
             result = sync_ops_sync()
             drained = sum(result.get("drained", {}).values())
@@ -1297,7 +1327,7 @@ def main() -> int:
     ci_rca_recs = _fetch_ci_rca_recs()
     if ci_rca_recs:
         print_ci_rca_recs(ci_rca_recs)
-    priority_queue = read_priority_queue()
+    priority_queue = read_priority_queue(creds_status=creds_status)
     print_priority_queue(priority_queue)
     if not ci_rca_recs:
         print_ci_rca_recs(ci_rca_recs)
@@ -1317,7 +1347,7 @@ def main() -> int:
         "uncommitted_changes": uncommitted,
         "stash_entries": stash_entries,
         "main_freshness": main_freshness,
-        "sso_status": sso_status,
+        "creds_status": creds_status,
         "s3_log_bucket_set": s3_log_bucket_set,
         "ops_outbox": outbox,
         "terraform_pending": terraform_pending,
@@ -1326,7 +1356,7 @@ def main() -> int:
         "aging_recommendations": aging_recommendations,
         "non_automatable_recommendations": non_automatable_count,
         "priority_queue": priority_queue,
-        "priority_queue_source": "athena",
+        "priority_queue_source": "athena" if creds_status == "ok" else "cache",
         "ci_rca_recs": ci_rca_recs,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
@@ -1340,7 +1370,7 @@ def main() -> int:
     }
 
     report["non_automatable_softcap_breached"] = _check_non_automatable_softcap(non_automatable_count)
-    report["ci_rca_liveness_alert"] = _check_ci_rca_liveness(sso_status)
+    report["ci_rca_liveness_alert"] = _check_ci_rca_liveness(creds_status)
     report["forward_fix_recursion_alert"] = _check_forward_fix_recursion()
     budget_bypass_alert = _check_budget_bypass_alert()
     report["budget_bypass_alert"] = budget_bypass_alert
@@ -1384,7 +1414,7 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
     ahead = mf.get("commits_ahead", "?")
     return (
         f"Preflight OK -> {report_path}\n"
-        f"  venv={report.get('venv_ok')} sso={report.get('sso_status')} "
+        f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
         f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
         f"  open_recs={report.get('open_recommendations')} "
         f"non_automatable={report.get('non_automatable_recommendations')} "

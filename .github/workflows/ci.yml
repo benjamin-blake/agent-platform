@@ -99,10 +99,12 @@ jobs:
       run: python -m scripts.validate
 
   terraform-validate:
-    # GitHub-hosted runner (CD.21 -- self-hosted runner retired). Makes ZERO AWS
-    # calls (terraform init -backend=false + validate + fmt), so no OIDC step is
-    # added. Fires on both push and PR (no if: guard); a branch-role OIDC step here
-    # would reject PR events whose sub claim is refs/pull/*.
+    # GitHub-hosted runner (CD.21 -- self-hosted runner retired). Delegates to
+    # `python -m scripts.validate --terraform-only`, the single source of truth for
+    # terraform validation: init -backend=false + validate + fmt -check across BOTH
+    # roots (terraform/ and terraform/personal/). Makes ZERO AWS calls (no plan), so
+    # no OIDC step is added. Fires on both push and PR (no if: guard); a branch-role
+    # OIDC step here would reject PR events whose sub claim is refs/pull/*.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -120,11 +122,13 @@ jobs:
       with:
         terraform_version: ${{ steps.tfver.outputs.version }}
 
-    - name: Terraform Init
-      run: cd terraform && terraform init -backend=false
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
 
-    - name: Terraform Validate
-      run: cd terraform && terraform validate
+    - name: Install validate.py import-time deps
+      run: pip install pyyaml pydantic
 
-    - name: Terraform Format Check
-      run: cd terraform && terraform fmt -check
+    - name: Terraform validate + fmt (both roots via validate.py)
+      run: python -m scripts.validate --terraform-only

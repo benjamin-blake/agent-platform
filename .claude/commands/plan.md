@@ -19,7 +19,7 @@ Preflight runs `git fetch origin main` and emits `main_freshness` (status, commi
 
 The report is slim by design: `platform_roadmap` and `product_roadmap` carry only `next_eligible` + `strategic_pending`, and `non_automatable_details` is dropped (Decision 73 suspends per-rec review). If you need the dropped detail, call the underlying module directly (e.g., `bin/venv-python -m scripts.platform_roadmap`).
 
-Apply the exact condition-based responses (for `venv_ok`, `sso_status`, uncommitted changes, `main_freshness`, non-automatable recs, `data_quality`, etc.) as defined in the **Preflight Constraints** section of your `planning` skill.
+Apply the exact condition-based responses (for `venv_ok`, `creds_status`, uncommitted changes, `main_freshness`, non-automatable recs, `data_quality`, etc.) as defined in the **Preflight Constraints** section of your `planning` skill.
 
 The report includes `telemetry_health` (pipeline operational health) and `data_quality` (declarative check coverage and last run verdict). Together these answer: is data flowing, do we have quality assertions defined, and are those assertions passing? See the planning skill for interpretation rules.
 

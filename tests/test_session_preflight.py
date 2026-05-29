@@ -289,7 +289,7 @@ class TestFormatPreflightSummary:
     def test_summary_is_a_single_block_referencing_the_report_path(self) -> None:
         report = {
             "venv_ok": True,
-            "sso_status": "ok",
+            "creds_status": "ok",
             "branch": "agent/foo",
             "main_freshness": {"commits_behind": 3, "commits_ahead": 1},
             "open_recommendations": 12,
@@ -308,7 +308,7 @@ class TestFormatPreflightSummary:
     def test_summary_handles_missing_main_freshness(self) -> None:
         report = {
             "venv_ok": False,
-            "sso_status": "expired",
+            "creds_status": "unavailable",
             "branch": "main",
             "open_recommendations": 0,
             "non_automatable_recommendations": 0,
@@ -326,7 +326,7 @@ class TestStdoutDoesNotDumpFullJson:
             patch("session_preflight.check_venv", return_value=True),
             patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
@@ -375,7 +375,7 @@ class TestJsonOutputSchema:
                 },
             ),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value="## [2026-03-01] -- test"),
             patch("session_preflight.count_recommendations", return_value=(5, 1, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
@@ -408,7 +408,7 @@ class TestJsonOutputSchema:
             "uncommitted_changes",
             "stash_entries",
             "main_freshness",
-            "sso_status",
+            "creds_status",
             "terraform_pending",
             "last_session",
             "open_recommendations",
@@ -446,7 +446,7 @@ class TestJsonOutputSchema:
                 },
             ),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
@@ -543,7 +543,7 @@ class TestNonAutomatableRecommendations:
             patch("session_preflight.check_venv", return_value=True),
             patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch(
                 "session_preflight.count_recommendations",
@@ -975,7 +975,7 @@ class TestTelemetryHealth:
             patch("session_preflight.check_venv", return_value=True),
             patch("session_preflight.get_git_status", return_value=("main", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
+            patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
@@ -1033,7 +1033,7 @@ class TestTelemetryHealth:
 
 
 class TestReadPriorityQueueAthena:
-    """Tests for read_priority_queue() via Athena path."""
+    """Tests for read_priority_queue() -- Athena path and degraded-mode cache fallback."""
 
     def test_success_path_returns_correct_shape(self) -> None:
         """Athena rows are parsed into correctly shaped dicts with int rank."""
@@ -1054,64 +1054,92 @@ class TestReadPriorityQueueAthena:
             with pytest.raises(SystemExit):
                 _preflight.read_priority_queue()
 
-    def test_sso_login_triggered_on_expired(self) -> None:
-        """_handle_sso_startup calls interactive aws sso login on Windows (no --use-device-code)."""
-        with (
-            patch("session_preflight.subprocess.run") as mock_run,
-            patch("session_preflight.check_sso_status", return_value="ok"),
-            patch("session_preflight.sys.platform", "win32"),
-        ):
-            result = _preflight._handle_sso_startup("expired")
-        mock_run.assert_called_once_with(
-            ["aws", "sso", "login", "--profile", "agent_platform"],
-            check=False,
-            timeout=300,
+    def test_cache_fallback_returns_rows_when_creds_unavailable(self, tmp_path: Path) -> None:
+        """creds_status != 'ok' -> rows from the local cache, Athena never queried."""
+        cache = tmp_path / ".priority-queue.jsonl"
+        cache.write_text(
+            '{"rec_id": "rec-9", "rank": "1", "rationale": "cached", "north_star_impact": "high"}\n'
+            "\n"  # blank lines tolerated
+            '{"rec_id": "rec-8", "rank": "2", "rationale": "cached2", "north_star_impact": "low"}\n',
+            encoding="utf-8",
         )
-        assert result == "ok"
-
-    def test_sso_login_uses_device_code_when_headless(self) -> None:
-        """_handle_sso_startup appends --use-device-code when DISPLAY is unset and not win32."""
         with (
-            patch("session_preflight.subprocess.run") as mock_run,
-            patch("session_preflight.check_sso_status", return_value="ok"),
-            patch("session_preflight.os.environ", {"DISPLAY": None}.copy()),
-            patch("session_preflight.sys.platform", "linux"),
+            patch.object(_preflight, "PRIORITY_QUEUE_FILE", cache),
+            patch("session_preflight._run_athena_query") as mock_q,
         ):
-            # Remove DISPLAY so environ.get("DISPLAY") returns None
-            import os as _os
+            result = _preflight.read_priority_queue(creds_status="unavailable")
+        mock_q.assert_not_called()
+        assert [r["rec_id"] for r in result] == ["rec-9", "rec-8"]
+        assert result[0]["rank"] == 1
 
-            env_without_display = {k: v for k, v in _os.environ.items() if k != "DISPLAY"}
-            with patch.dict("session_preflight.os.environ", env_without_display, clear=True):
-                _preflight._handle_sso_startup("expired")
-        call_args = mock_run.call_args[0][0]
-        assert "--use-device-code" in call_args
+    def test_empty_when_cache_absent_and_creds_unavailable(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Absent cache + creds down -> [] with a loud warning, never a crash."""
+        missing = tmp_path / "does-not-exist.jsonl"
+        with patch.object(_preflight, "PRIORITY_QUEUE_FILE", missing):
+            result = _preflight.read_priority_queue(creds_status="unavailable")
+        assert result == []
+        assert "priority queue unavailable" in capsys.readouterr().err
 
-    def test_sso_login_interactive_when_display_set(self) -> None:
-        """_handle_sso_startup uses interactive browser form when DISPLAY is set."""
+
+class TestCheckCredentials:
+    """Tests for check_credentials() -- the static-key credential gate."""
+
+    def test_ok_when_returncode_zero(self) -> None:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
         with (
-            patch("session_preflight.subprocess.run") as mock_run,
-            patch("session_preflight.check_sso_status", return_value="ok"),
-            patch("session_preflight.sys.platform", "linux"),
-            patch.dict("session_preflight.os.environ", {"DISPLAY": ":0"}, clear=False),
+            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("session_preflight.subprocess.run", return_value=mock_result) as mock_run,
         ):
-            _preflight._handle_sso_startup("expired")
-        call_args = mock_run.call_args[0][0]
-        assert "--use-device-code" not in call_args
+            assert _preflight.check_credentials() == "ok"
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:3] == ["aws", "sts", "get-caller-identity"]
+        assert "--profile" in cmd and "agent_platform" in cmd
 
-    def test_sso_login_interactive_on_win32_regardless_of_display(self) -> None:
-        """_handle_sso_startup uses interactive form on win32 even if DISPLAY is unset."""
+    def test_unavailable_when_returncode_nonzero(self) -> None:
+        mock_result = MagicMock()
+        mock_result.returncode = 255
         with (
-            patch("session_preflight.subprocess.run") as mock_run,
-            patch("session_preflight.check_sso_status", return_value="ok"),
-            patch("session_preflight.sys.platform", "win32"),
+            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("session_preflight.subprocess.run", return_value=mock_result),
         ):
-            import os as _os
+            assert _preflight.check_credentials() == "unavailable"
 
-            env_without_display = {k: v for k, v in _os.environ.items() if k != "DISPLAY"}
-            with patch.dict("session_preflight.os.environ", env_without_display, clear=True):
-                _preflight._handle_sso_startup("expired")
-        call_args = mock_run.call_args[0][0]
-        assert "--use-device-code" not in call_args
+    def test_unavailable_when_cli_missing(self) -> None:
+        with (
+            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("session_preflight.subprocess.run", side_effect=FileNotFoundError),
+        ):
+            assert _preflight.check_credentials() == "unavailable"
+
+    def test_omits_profile_for_default_chain(self) -> None:
+        """resolve_aws_profile() -> None (Lambda/CI) means no --profile is passed."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with (
+            patch("session_preflight.resolve_aws_profile", return_value=None),
+            patch("session_preflight.subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            assert _preflight.check_credentials() == "ok"
+        assert "--profile" not in mock_run.call_args[0][0]
+
+
+class TestHandleCredentialsStartup:
+    """Tests for _handle_credentials_startup() -- non-fatal degraded mode (Decision 60)."""
+
+    def test_ok_returns_status_without_warning(self, capsys: pytest.CaptureFixture) -> None:
+        with patch("session_preflight.subprocess.run") as mock_run:
+            assert _preflight._handle_credentials_startup("ok") == "ok"
+        mock_run.assert_not_called()
+        assert capsys.readouterr().err == ""
+
+    def test_unavailable_is_non_fatal_and_never_logs_in(self, capsys: pytest.CaptureFixture) -> None:
+        """No SystemExit; no login subprocess invoked; returns the status unchanged."""
+        with patch("session_preflight.subprocess.run") as mock_run:
+            result = _preflight._handle_credentials_startup("unavailable")
+        assert result == "unavailable"
+        mock_run.assert_not_called()
+        assert "DEGRADED" in capsys.readouterr().err
 
 
 class TestPrintPriorityQueue:
@@ -1192,7 +1220,7 @@ class TestMainIncludesPriorityQueue:
                 return_value=False,
             ),
             patch(
-                "session_preflight.check_sso_status",
+                "session_preflight.check_credentials",
                 return_value="ok",
             ),
             patch(
@@ -1267,7 +1295,7 @@ class TestMainIncludesPriorityQueue:
                 return_value=False,
             ),
             patch(
-                "session_preflight.check_sso_status",
+                "session_preflight.check_credentials",
                 return_value="ok",
             ),
             patch(
@@ -1398,8 +1426,8 @@ class TestCiRcaLivenessAlert:
             result = _preflight._check_ci_rca_liveness("ok")
         assert result is None
 
-    def test_alert_none_when_sso_not_ok(self) -> None:
-        result = _preflight._check_ci_rca_liveness("expired")
+    def test_alert_none_when_creds_not_ok(self) -> None:
+        result = _preflight._check_ci_rca_liveness("unavailable")
         assert result is None
 
 
@@ -1426,15 +1454,15 @@ class TestForwardFixRecursion:
         assert result is None
 
 
-class TestSsoOrderingInMain:
-    """Verify that SSO startup runs before ops pull in main()."""
+class TestCredentialsOrderingInMain:
+    """Verify that the credential check runs before ops pull in main()."""
 
-    def test_sso_startup_precedes_pull(self, tmp_path: Path) -> None:
-        """_handle_sso_startup is called before _sync_ops_pull in run_preflight main()."""
+    def test_credentials_startup_precedes_pull(self, tmp_path: Path) -> None:
+        """_handle_credentials_startup is called before _sync_ops_pull in main()."""
         call_order: list[str] = []
 
-        def _track_sso(status: str) -> str:
-            call_order.append("sso")
+        def _track_creds(status: str) -> str:
+            call_order.append("creds")
             return "ok"
 
         def _track_pull() -> dict:
@@ -1454,8 +1482,8 @@ class TestSsoOrderingInMain:
             patch("session_preflight.run_log_sync", return_value={}),
             patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_sso_status", return_value="ok"),
-            patch("session_preflight._handle_sso_startup", side_effect=_track_sso),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight._handle_credentials_startup", side_effect=_track_creds),
             patch("session_preflight._sync_ops_pull", side_effect=_track_pull),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
@@ -1478,9 +1506,11 @@ class TestSsoOrderingInMain:
         ):
             _preflight.main()
 
-        assert "sso" in call_order
+        assert "creds" in call_order
         assert "pull" in call_order
-        assert call_order.index("sso") < call_order.index("pull"), f"SSO must precede pull; got order: {call_order}"
+        assert call_order.index("creds") < call_order.index("pull"), (
+            f"credential check must precede pull; got order: {call_order}"
+        )
 
 
 class TestBudgetBypassAlert:

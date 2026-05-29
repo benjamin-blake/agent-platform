@@ -330,42 +330,33 @@ class TestValidateRuffVersionAlignment:
 
 
 class TestRunTerraformChecks:
-    """Tests for run_terraform_checks() terraform pending detection."""
+    """Tests for run_terraform_checks() (full presubmit) and run_terraform_creds_free()."""
 
-    def test_warns_when_exit_code_2(self, capsys: pytest.CaptureFixture) -> None:
-        """run_terraform_checks() prints warning when terraform plan returns exit code 2."""
-        run_terraform_checks = _validate.run_terraform_checks
-
-        def mock_which(name: str) -> str | None:
-            return "/usr/bin/terraform" if name == "terraform" else None
+    def test_warns_when_personal_plan_exit_code_2(self, capsys: pytest.CaptureFixture) -> None:
+        """run_terraform_checks() warns when the terraform/personal plan returns exit code 2."""
 
         def mock_run(cmd: list, **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.stdout = ""
             result.stderr = ""
-            if "-detailed-exitcode" in cmd:
-                result.returncode = 2
-            else:
-                result.returncode = 0
+            result.returncode = 2 if "-detailed-exitcode" in cmd else 0
             return result
 
         with (
-            patch("validate.shutil.which", side_effect=mock_which),
+            patch("validate.validate_terraform_try"),
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
             patch("validate.run", side_effect=mock_run),
         ):
             failed: list[str] = []
-            run_terraform_checks(failed)
+            _validate.run_terraform_checks(failed)
 
         captured = capsys.readouterr()
         assert "WARNING: Terraform changes pending" in captured.out
+        assert "terraform/personal" in captured.out
         assert failed == []
 
     def test_no_warning_when_exit_code_0(self, capsys: pytest.CaptureFixture) -> None:
-        """run_terraform_checks() does not warn when terraform plan returns exit code 0."""
-        run_terraform_checks = _validate.run_terraform_checks
-
-        def mock_which(name: str) -> str | None:
-            return "/usr/bin/terraform"
+        """run_terraform_checks() does not warn when plan returns exit code 0."""
 
         def mock_run(cmd: list, **kwargs: object) -> MagicMock:
             result = MagicMock()
@@ -375,26 +366,68 @@ class TestRunTerraformChecks:
             return result
 
         with (
-            patch("validate.shutil.which", side_effect=mock_which),
+            patch("validate.validate_terraform_try"),
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
             patch("validate.run", side_effect=mock_run),
         ):
             failed: list[str] = []
-            run_terraform_checks(failed)
+            _validate.run_terraform_checks(failed)
 
         captured = capsys.readouterr()
         assert "WARNING" not in captured.out
         assert failed == []
 
-    def test_skips_when_terraform_not_found(self, capsys: pytest.CaptureFixture) -> None:
-        """run_terraform_checks() skips all checks when terraform is not in PATH."""
-        run_terraform_checks = _validate.run_terraform_checks
-
-        with patch("validate.shutil.which", return_value=None):
+    def test_skips_terraform_binary_steps_when_not_found(self, capsys: pytest.CaptureFixture) -> None:
+        """No terraform binary -> creds-free helper prints a skip and `run` is never invoked."""
+        with (
+            patch("validate.validate_terraform_try"),
+            patch("validate.shutil.which", return_value=None),
+            patch("validate.run", side_effect=AssertionError("run must not be called when terraform is absent")),
+        ):
             failed: list[str] = []
-            run_terraform_checks(failed)
+            _validate.run_terraform_checks(failed)
 
         captured = capsys.readouterr()
         assert "skipped" in captured.out
+        assert failed == []
+
+    def test_creds_free_covers_both_roots(self) -> None:
+        """run_terraform_creds_free() runs init -backend=false + validate + fmt for BOTH roots, no plan."""
+        calls: list[list] = []
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("validate.run", side_effect=mock_run),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed)
+
+        chdirs = {arg for cmd in calls for arg in cmd if isinstance(arg, str) and arg.startswith("-chdir=")}
+        flat = [tok for cmd in calls for tok in cmd]
+        assert "-chdir=terraform" in chdirs
+        assert "-chdir=terraform/personal" in chdirs
+        assert any("-backend=false" in cmd for cmd in calls)  # creds-free init
+        assert all("plan" not in cmd for cmd in calls)  # no creds-needing plan here
+        assert "init" in flat and "validate" in flat and "fmt" in flat
+        assert failed == []
+
+    def test_creds_free_skips_when_terraform_absent(self, capsys: pytest.CaptureFixture) -> None:
+        """run_terraform_creds_free() emits a visible skip and calls nothing when terraform is absent."""
+        with (
+            patch("validate.shutil.which", return_value=None),
+            patch("validate.run", side_effect=AssertionError("run must not be called")),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed)
+        assert "skipped" in capsys.readouterr().out
         assert failed == []
 
 
