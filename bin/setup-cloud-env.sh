@@ -2,17 +2,58 @@
 # Bootstrap a Claude Code on the web Linux container for this repo.
 #
 # Idempotent. Safe to re-run. Designed to be invoked from the "Setup script"
-# field of the cloud environment configuration:
+# field of the cloud environment configuration. On a personal Claude Code plan
+# that field is private to you, so it is the correct home for the static-key
+# credential block below (the env-var field is "visible to anyone using this
+# environment" -- never put credentials there).
+#
+# DEV environment (PlatformDev) -- paste into the "Setup script" field, filling
+# the <PLACEHOLDER> values from your local ~/.aws/credentials and ~/.aws/config:
+#
+#     set -euo pipefail
+#     mkdir -p "$HOME/.aws" && chmod 700 "$HOME/.aws"
+#
+#     cat > "$HOME/.aws/credentials" <<'EOF'
+#     [agent_static]
+#     aws_access_key_id = <PLACEHOLDER>
+#     aws_secret_access_key = <PLACEHOLDER>
+#     EOF
+#     chmod 600 "$HOME/.aws/credentials"
+#
+#     cat > "$HOME/.aws/config" <<'EOF'
+#     [profile agent_static]
+#     region = eu-west-2
+#     output = json
+#
+#     [profile agent_platform]
+#     role_arn = arn:aws:iam::<ACCOUNT_ID>:role/PlatformDev
+#     source_profile = agent_static
+#     external_id = <PLACEHOLDER>
+#     duration_seconds = 36000
+#     region = eu-west-2
+#     output = json
+#     EOF
+#     chmod 600 "$HOME/.aws/config"
 #
 #     cd /home/user/agent-platform && bash bin/setup-cloud-env.sh
 #
-# IMPORTANT: the cloud-env panel's "Setup script" field must include the `cd`
-# prefix above, because the field runs bash from a working directory that is
-# NOT the repo root. Changing the field value is a manual step (out-of-repo).
+# boto3 then resolves the agent_platform profile and assumes PlatformDev,
+# auto-refreshing the STS session from the agent_static key with no re-paste.
+# Leave the env-var field EMPTY for the dev environment.
+#
+# ADMIN environment (PlatformAdmin, used rarely for infra) -- same block but the
+# config profile is [profile agent_platform_admin] (role PlatformAdmin, its own
+# external_id), and set these in the (non-secret) env-var field:
+#     AWS_PROFILE=agent_platform_admin
+#     INSTALL_TERRAFORM=1
+#
+# IMPORTANT: the "Setup script" field must include the `cd` prefix above, because
+# the field runs bash from a working directory that is NOT the repo root.
+# Changing the field value is a manual step (out-of-repo).
 #
 # Responsibility split (post T0.2 refactor):
-#   setup-cloud-env.sh                  -- snapshot-cached installs only (venv, deps, AWS CLI)
-#   .claude/hooks/session_start_aws.sh  -- SSO cache + ~/.aws/config (runs every session)
+#   setup-cloud-env.sh                  -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform)
+#   .claude/hooks/session_start_aws.sh  -- verifies the static-key assume-role chain (runs every session)
 #
 # What it does:
 #   1. Creates .venv with python3.12.
@@ -23,10 +64,10 @@
 #   while requirements install runs in the foreground.
 #
 # What it does NOT do:
-#   - Restore AWS SSO cache (moved to .claude/hooks/session_start_aws.sh).
-#   - Write ~/.aws/config (moved to .claude/hooks/session_start_aws.sh).
+#   - Materialise ~/.aws/{credentials,config} (done by the "Setup script" field
+#     block above; .claude/hooks/session_start_aws.sh only VERIFIES them).
 #   - Install gh CLI (GitHub access is via MCP, not gh).
-#   - Install terraform (only needed when .tf is in scope; install on demand).
+#   - Install terraform unless INSTALL_TERRAFORM=1 (set only in the admin env).
 
 set -euo pipefail
 
@@ -103,6 +144,32 @@ if [ -n "$aws_install_pid" ]; then
     t0=$SECONDS
     wait "$aws_install_pid"
     log "aws-cli-install: $((SECONDS - t0))s"
+fi
+
+# 6. Terraform (opt-in via INSTALL_TERRAFORM=1) -------------------------------
+# Only the infrastructure (PlatformAdmin) cloud environment needs Terraform.
+# Version is single-sourced from config/terraform-version (also read by the
+# terraform-validate CI job in .github/workflows/ci.yml) so local
+# `terraform fmt -check` / `validate` match CI exactly.
+if [ "${INSTALL_TERRAFORM:-0}" = "1" ]; then
+    TERRAFORM_VERSION="$(cat "$REPO_ROOT/config/terraform-version")"
+    if command -v terraform >/dev/null 2>&1 && terraform version | head -1 | grep -q "v${TERRAFORM_VERSION}"; then
+        log "Terraform ${TERRAFORM_VERSION} already present"
+    else
+        log "Installing Terraform ${TERRAFORM_VERSION}"
+        t0=$SECONDS
+        (
+            tmpdir="$(mktemp -d)"
+            trap 'rm -rf "$tmpdir"' EXIT
+            curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o "$tmpdir/terraform.zip"
+            unzip -q "$tmpdir/terraform.zip" -d "$tmpdir"
+            mkdir -p "$HOME/.local/bin"
+            install -m 0755 "$tmpdir/terraform" "$HOME/.local/bin/terraform"
+        ) && log "terraform: $((SECONDS - t0))s ($(terraform version | head -1))" \
+          || log "WARNING: Terraform install failed (non-fatal); install manually if needed."
+    fi
+else
+    log "Terraform install skipped (set INSTALL_TERRAFORM=1 in the admin env to enable)"
 fi
 
 log "Done. Verify with: bin/venv-python -m scripts.session_preflight"

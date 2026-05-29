@@ -89,7 +89,7 @@ When a slash command instructs you to "apply" or "invoke" a skill, use the `Skil
 ## Operational data governance — Single Portal Invariant
 All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. IDs are allocated atomically via DynamoDB; the local JSONL files are read-only caches.
 
-Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity (SSO). If unreachable, run `aws sso login --profile agent_platform` first.
+Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity via the `agent_platform` (PlatformDev) assume-role profile. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model.
 
 ## Warehouse-as-source-of-truth invariant
 This is an append-only lakehouse. Athena (over Iceberg) is the single source of truth for all operational data. Local files have exactly two valid roles:
