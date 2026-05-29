@@ -222,7 +222,7 @@ explicit blocker for tables where a gate is not yet satisfied.
 
 ### Gate 1: Athena Infrastructure
 
-- SSO active (`sso_status: ok` in preflight)
+- Credentials available (`creds_status: ok` in preflight)
 - `_current` view exists for the table and is not stale: column count in the Glue catalog
   matches the base Iceberg table schema. A stale view returns `VIEW_IS_STALE` from Athena.
   Fix: `ALTER TABLE ... ADD COLUMNS` or recreate the view via Terraform.

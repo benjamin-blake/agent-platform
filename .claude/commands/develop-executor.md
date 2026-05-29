@@ -37,7 +37,7 @@ bin/venv-python -m scripts.ops_data_portal --file-rec \
 
 - The portal allocates the next `rec-NNN` ID atomically via DynamoDB.
 - RCA recommendations derive `automatable=false` automatically -- executor files match the boundary patterns in `config/agent/executor/capabilities.yaml` (Decision 44). The `--automatable` CLI flag has been removed; the portal formula handles it.
-- If AWS credentials are missing, the portal queues to `logs/.ops-outbox/`. Drain later with `bin/venv-python -m scripts.ops_data_portal --drain --profile company-aws-profile`.
+- If AWS credentials are missing, the portal queues to `logs/.ops-outbox/`. Drain later with `bin/venv-python -m scripts.ops_data_portal --drain --profile agent_platform`.
 
 ## 4. Stop Cleanly
 - **CRITICAL INVARIANT:** Do not attempt to repair the failure. Do not apply workarounds.

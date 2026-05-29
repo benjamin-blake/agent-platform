@@ -20,16 +20,19 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 
 ## Out-of-band IAM grants (drift -- not managed by this module)
 
-The `PlatformDev` and `PlatformAdmin` roles pre-exist the module. `PlatformDev` is now codified
-(see the CODIFIED bullet below). The items still applied out-of-band via the `platform_breakglass`
-IAM user (full admin) and NOT codified in `terraform/personal/` are listed here -- re-creating
-infra elsewhere will not restore them; reapply manually if needed.
+The `PlatformDev` and `PlatformAdmin` roles pre-exist the module and are now BOTH codified (see the
+CODIFIED bullets below). The only item still applied out-of-band via the `platform_breakglass` IAM
+user (full admin) and NOT codified in `terraform/personal/` is the redundant `AgentPlatformRuntime`
+inline policy (slated for removal) -- re-creating infra elsewhere will not restore it; reapply manually if needed.
 
-- **`PlatformDataLakeProvisioning`** (inline policy on role `PlatformAdmin`) -- grants the
-  data-plane rights `PlatformAdmin`'s base `AdminOps` policy lacks (it is an identity admin:
-  `iam:*` + lambda + secretsmanager only). Scope: Glue + Athena `Resource: "*"`; `s3:*` on
-  `agent-platform-data-lake`; `dynamodb:*` on `table/agent-platform-*`. Required so `terraform apply`
-  under `agent_platform_admin` can create the data lake, workgroup, Glue DB, and counters table.
+- **`PlatformAdmin` + `PlatformDataLakeProvisioning` (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`):**
+  `aws_iam_role.platform_admin` (import ID `PlatformAdmin`, `max_session_duration = 3600`) plus its two inline
+  policies -- `aws_iam_role_policy.platform_admin_ops` (`AdminOps`: identity admin -- `iam:*` + admin Lambda +
+  secretsmanager) and `aws_iam_role_policy.platform_admin_datalake` (`PlatformDataLakeProvisioning`: the data-plane
+  rights AdminOps lacks -- Glue + Athena `Resource: "*"`; `s3:*` on `agent-platform-data-lake`; `dynamodb:*` on
+  `table/agent-platform-*`). The datalake grant is required so `terraform apply` under `agent_platform_admin` can
+  create the data lake, workgroup, Glue DB, and counters table. IMPORT the role before apply; the trust policy MUST
+  show NO change in `plan` (lockout guard -- this is the role the apply assumes).
 - **PlatformDev runtime grant (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`):** the
   `agent_platform` (PlatformDev) runtime role is now Terraform-managed. `aws_iam_role.platform_dev`
   (imported, ID `PlatformDev`) sets `max_session_duration = 36000` (was 3600 -- the 3600 max blocked
@@ -47,9 +50,9 @@ infra elsewhere will not restore them; reapply manually if needed.
       ops set, so ops calls succeeded both before and after this change. It is now a redundant duplicate of
       the codified `DailyOps`. FOLLOW-UP: remove `AgentPlatformRuntime` via `platform_breakglass`.
 
-Follow-up: codify `PlatformDataLakeProvisioning` (still out-of-band on `PlatformAdmin`) and `PlatformAdmin`
-itself; remove the now-redundant `AgentPlatformRuntime` inline policy; author a formal Decision recording
-the PlatformDev codification.
+Follow-up (remaining): remove the now-redundant `AgentPlatformRuntime` inline policy via `platform_breakglass`
+(its grants are fully covered by the codified `DailyOps`). A formal Decision recording the static-key credential
+model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supersession) is filed via the ops portal.
 
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).

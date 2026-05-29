@@ -22,12 +22,12 @@ auto_review_and_commit: true     # Proactively trigger review and commit once VP
 ## Preflight Constraints (Workflow Step 1)
 When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`venv_ok: false`** -- Auto-activate venv and rerun preflight. If still false, STOP.
-- **`sso_status: "expired"` or `"unknown"`** -- **Interactive SSO Recovery:** Attempt `aws sso login --profile company-aws-profile`. If browser is unavailable or login fails, STOP and prompt human: "AWS SSO session expired. Please run `aws sso login --profile company-aws-profile` in your terminal and type 'retry'." (Decision 57).
+- **`creds_status: "unavailable"`** -- **Static-key recovery (non-fatal, Decision 60):** the static-key assume-role chain has no interactive login. Verify it with `aws sts get-caller-identity --profile agent_platform`; if the `agent_static` key was rotated, refresh `~/.aws/credentials`. Do NOT block -- continue in degraded mode (credential-dependent verifiers are skipped, emitting SKIPPED). Autonomous executors never attempt recovery.
 - **`outbox_synced: false`** -- Run `bin/venv-python -m scripts.sync_ops pull` to drain outbox and sync ops data (Decision 51). If fails, STOP.
 - **`uncommitted_changes` non-empty** -- Ask human: "Resume, stash, or discard?". Wait. Continue on all other conditions.
 - **`main_freshness.status == "fetch_failed"`** -- Informational. Surface: "Could not refresh `origin/main` ([error]). Step 5 code-review will diff against the stale local main ref; Scope-overlap check will be skipped." Continue.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 2 Main Divergence Check (below). Non-blocking at this step.
-- **`validate` (presubmit) non-zero exit** -- The gate has detected pre-existing blockers on the branch. File each failed check as a recommendation via the portal (`automatable: false`), surface to human with go/no-go, STOP if no-go. SSO-unavailable -> skip with actionable guidance per Decision 57; do not crash.
+- **`validate` (presubmit) non-zero exit** -- The gate has detected pre-existing blockers on the branch. File each failed check as a recommendation via the portal (`automatable: false`), surface to human with go/no-go, STOP if no-go. Credentials-unavailable -> skip with actionable guidance per Decision 60; do not crash.
 
 ## Documentation Artefact Design
 
@@ -81,7 +81,7 @@ Acceptance commands prove the code landed (e.g. `grep` or `pytest`). Verificatio
 If a VP step fails for ANY reason (including credential/environment issues), the status is FAIL.
 There is no "graceful" failure, no "local pass", no "env blocked" — only PASS or FAIL.
 If the failure is due to missing credentials or infrastructure, the agent MUST:
-1. Attempt the documented recovery (e.g., `aws sso login --profile company-aws-profile`)
+1. Attempt the documented recovery (verify the static-key chain: `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if the `agent_static` key was rotated)
 2. Re-run the VP step
 3. If still failing, mark FAIL and STOP — do not proceed, do not merge
 
@@ -93,11 +93,11 @@ Before proceeding to code review (Step 5), produce a VP compliance table in the 
 - The "Command Executed" must be the actual shell command run.
 - If ANY row is FAIL, do NOT proceed.
 - If a VP step was skipped or is awaiting a human-gated action (e.g., terraform apply), mark it BLOCKED and wait.
-- Lack of AWS SSO session is NOT a block. If you are missing an AWS SSO session, automatically run `aws sso login --profile company-aws-profile` and try again.
+- Lack of AWS credentials is NOT automatically a block. Verify the static-key chain with `aws sts get-caller-identity --profile agent_platform`; there is no interactive login to run (refresh `~/.aws/credentials` if `agent_static` was rotated).
 
 ### V3 Merge Gate
 If the Verification Plan contains V3 post-deploy steps, execute the full sequence:
-0. Confirm AWS SSO session is active with `aws sts get-caller-identity --profile company-aws-profile`. If it is not, automatically run `aws sso login --profile company-aws-profile`.
+0. Confirm credentials are active with `aws sts get-caller-identity --profile agent_platform`. There is no interactive login in the static-key model; if the chain fails, refresh `~/.aws/credentials` (rotated `agent_static`) and re-verify.
 1. Complete all pre-deploy VP steps.
 2. Present the deploy output.
 3. WAIT for human confirmation of deployment success.

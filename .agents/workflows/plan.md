@@ -24,7 +24,7 @@ Self-healing for tracked-file divergence (logs, session state, etc.) pushed by t
 git pull --rebase origin main
 ```
 
-Read `logs/.preflight-report.json`. Apply the exact condition-based responses (for `venv_ok`, `sso_status`, uncommitted changes, non-automatable recs, `data_quality`, etc.) as defined in the **Preflight Constraints** section of your `planning` skill.
+Read `logs/.preflight-report.json`. Apply the exact condition-based responses (for `venv_ok`, `creds_status`, uncommitted changes, non-automatable recs, `data_quality`, etc.) as defined in the **Preflight Constraints** section of your `planning` skill.
 
 The report includes `telemetry_health` (pipeline operational health) and `data_quality` (declarative check coverage and last run verdict). Together these answer: is data flowing, do we have quality assertions defined, and are those assertions passing? See the planning skill for interpretation rules.
 

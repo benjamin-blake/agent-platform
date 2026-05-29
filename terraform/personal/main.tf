@@ -333,48 +333,41 @@ resource "null_resource" "create_ops_tables" {
   }
 
   provisioner "local-exec" {
-    command     = <<-EOT
-      $QueryFile = [System.IO.Path]::GetTempFileName()
-      $Query = @'
-${each.value}
-'@
-      $Query | Out-File -FilePath $QueryFile -Encoding utf8
-
-      $QueryId = aws athena start-query-execution `
-        --query-string (Get-Content $QueryFile -Raw) `
-        --query-execution-context Database=${aws_glue_catalog_database.ops.name} `
-        --work-group ${aws_athena_workgroup.production.name} `
-        --region ${var.aws_region} `
-        --profile ${var.aws_profile} `
-        --query 'QueryExecutionId' `
-        --output text
-
-      if ($LASTEXITCODE -ne 0) {
-        Remove-Item $QueryFile
+    interpreter = ["bash", "-c"]
+    # SQL is passed via the environment rather than interpolated into the command string, so
+    # multi-line DDL with quotes/backticks never needs shell-escaping.
+    environment = {
+      ATHENA_SQL = each.value
+    }
+    command = <<-EOT
+      set -euo pipefail
+      QID="$(aws athena start-query-execution \
+        --query-string "$ATHENA_SQL" \
+        --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
+        --work-group ${aws_athena_workgroup.production.name} \
+        --region ${var.aws_region} \
+        --profile ${var.aws_profile} \
+        --query 'QueryExecutionId' \
+        --output text)"
+      STATUS=RUNNING
+      while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
+        sleep 2
+        STATUS="$(aws athena get-query-execution \
+          --query-execution-id "$QID" \
+          --region ${var.aws_region} \
+          --profile ${var.aws_profile} \
+          --query 'QueryExecution.Status.State' \
+          --output text)"
+      done
+      if [ "$STATUS" != "SUCCEEDED" ]; then
+        echo "Athena table creation failed with status: $STATUS" >&2
         exit 1
-      }
-
-      do {
-        Start-Sleep -Seconds 2
-        $Status = aws athena get-query-execution `
-          --query-execution-id $QueryId `
-          --region ${var.aws_region} `
-          --profile ${var.aws_profile} `
-          --query 'QueryExecution.Status.State' `
-          --output text
-      } while ($Status -eq 'RUNNING' -or $Status -eq 'QUEUED')
-
-      Remove-Item $QueryFile
-
-      if ($Status -ne 'SUCCEEDED') {
-        Write-Error "Athena table creation failed with status: $Status"
-        exit 1
-      }
+      fi
     EOT
-    interpreter = ["PowerShell", "-Command"]
     # CREATE TABLE IF NOT EXISTS returns FAILED (not SUCCEEDED) when the table already exists --
-    # expected idempotent behaviour on re-apply. Does NOT mask real failures; recheck Athena history
-    # if a table is missing. Mirrors terraform/iceberg_tables.tf.
+    # expected idempotent behaviour on re-apply (Decision 55: pre-existing idempotency, NOT a new
+    # silent-failure workaround). Does NOT mask real failures; recheck Athena history if a table is
+    # missing. Mirrors terraform/iceberg_tables.tf.
     on_failure = continue
   }
 
@@ -393,46 +386,39 @@ resource "null_resource" "create_ops_views" {
   }
 
   provisioner "local-exec" {
-    command     = <<-EOT
-      $QueryFile = [System.IO.Path]::GetTempFileName()
-      $Query = @'
-${each.value}
-'@
-      $Query | Out-File -FilePath $QueryFile -Encoding utf8
-
-      $QueryId = aws athena start-query-execution `
-        --query-string (Get-Content $QueryFile -Raw) `
-        --query-execution-context Database=${aws_glue_catalog_database.ops.name} `
-        --work-group ${aws_athena_workgroup.production.name} `
-        --region ${var.aws_region} `
-        --profile ${var.aws_profile} `
-        --query 'QueryExecutionId' `
-        --output text
-
-      if ($LASTEXITCODE -ne 0) {
-        Remove-Item $QueryFile
+    interpreter = ["bash", "-c"]
+    environment = {
+      ATHENA_SQL = each.value
+    }
+    command = <<-EOT
+      set -euo pipefail
+      QID="$(aws athena start-query-execution \
+        --query-string "$ATHENA_SQL" \
+        --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
+        --work-group ${aws_athena_workgroup.production.name} \
+        --region ${var.aws_region} \
+        --profile ${var.aws_profile} \
+        --query 'QueryExecutionId' \
+        --output text)"
+      STATUS=RUNNING
+      while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
+        sleep 2
+        STATUS="$(aws athena get-query-execution \
+          --query-execution-id "$QID" \
+          --region ${var.aws_region} \
+          --profile ${var.aws_profile} \
+          --query 'QueryExecution.Status.State' \
+          --output text)"
+      done
+      if [ "$STATUS" != "SUCCEEDED" ]; then
+        echo "Athena view creation failed with status: $STATUS" >&2
         exit 1
-      }
-
-      do {
-        Start-Sleep -Seconds 2
-        $Status = aws athena get-query-execution `
-          --query-execution-id $QueryId `
-          --region ${var.aws_region} `
-          --profile ${var.aws_profile} `
-          --query 'QueryExecution.Status.State' `
-          --output text
-      } while ($Status -eq 'RUNNING' -or $Status -eq 'QUEUED')
-
-      Remove-Item $QueryFile
-
-      if ($Status -ne 'SUCCEEDED') {
-        Write-Error "Athena view creation failed with status: $Status"
-        exit 1
-      }
+      fi
     EOT
-    interpreter = ["PowerShell", "-Command"]
-    on_failure  = continue
+    # CREATE VIEW returns FAILED (not SUCCEEDED) when the view already exists -- expected idempotent
+    # behaviour on re-apply (Decision 55: pre-existing idempotency, NOT a new silent-failure
+    # workaround). Does NOT mask real failures; recheck Athena history if a view is missing.
+    on_failure = continue
   }
 
   depends_on = [null_resource.create_ops_tables]

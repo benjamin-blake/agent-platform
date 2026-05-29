@@ -7,7 +7,7 @@ See docs/contracts/instruction-architecture.md for the full information architec
 
 ## Rules
 
-- **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. Use `aws sso login --profile agent_platform` to refresh credentials when needed.
+- **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. The static-key assume-role chain auto-refreshes; verify it with `aws sts get-caller-identity --profile agent_platform` (refresh `~/.aws/credentials` if the `agent_static` key was rotated).
 - No emojis in code, scripts, or documentation
 - Python 3.12+, type hints required, async for I/O
 - **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
@@ -94,10 +94,10 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 
 - **Region**: eu-west-2
 - **Account**: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed)
-- **Profile**: `agent_platform` (PlatformDev, runtime; SSO) -- agents use this profile for all operations. `agent_platform_admin` (PlatformAdmin) is used for provisioning (IAM + OIDC) only.
+- **Profile**: `agent_platform` (PlatformDev, runtime; static-key assume-role) -- agents use this profile for all operations. `agent_platform_admin` (PlatformAdmin) is used for provisioning (IAM + OIDC) only.
   - Environment promotion is human-triggered via GitHub Actions, not agent-initiated
-  - **Decision 57 (Interactive vs Autonomous SSO):** Interactive sessions should attempt auto-login or prompt the human for recovery. Autonomous executors (Lambda) MUST NOT attempt login; they skip SSO-dependent verifiers (emitting SKIPPED) to prevent pipeline deadlocks.
-  - `sso_status: "expired"` or `"unknown"` -- **Interactive SSO Recovery:** Attempt `aws sso login --profile agent_platform`. If browser is unavailable or login fails, STOP and prompt human: "AWS SSO session expired. Please run `aws sso login --profile agent_platform` in your terminal and type 'retry'." (Decision 57).
+  - **Credential model (static-key, supersedes Decision 57's SSO-recovery semantics):** the near-powerless `agent_static` IAM key assumes `PlatformDev`/`PlatformAdmin` via STS; sessions auto-refresh and there is no interactive login. Autonomous executors (Lambda) skip credential-dependent verifiers (emitting SKIPPED) to prevent pipeline deadlocks; they never attempt recovery.
+  - `creds_status: "unavailable"` -- **Static-key recovery (non-fatal, Decision 60):** verify the chain with `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if `agent_static` was rotated. Do NOT block -- preflight continues in degraded mode (Athena-backed reads fall back to local cache or empty).
   - See Decision 24 in `docs/DECISIONS.md` for rationale
 - **Glue database**: agent_platform
 - **Athena workgroups**:
@@ -227,7 +227,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Rec/Decision Write Portal (Critical):** Never append to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly. All writes MUST go through `python -m scripts.ops_data_portal` or the Python API.
   - **ID Authority:** IDs are allocated via DynamoDB. The local JSONL is a read-only cache. Use `ops_data_portal.sync()` to flush pending writes and rebuild.
-  - **Offline Mode:** If credentials (profile `agent_platform`) are missing, the portal queues to `logs/.ops-outbox/`. Run `aws sso login --profile agent_platform` then call `ops_data_portal.sync()` to restore.
+  - **Offline Mode:** If credentials (profile `agent_platform`) are missing, the portal queues to `logs/.ops-outbox/`. Restore the static-key chain (verify with `aws sts get-caller-identity --profile agent_platform`), then call `ops_data_portal.sync()` to drain.
   - **Deduplication:** The store uses SCD Type 2 append-only semantics; Athena views select the latest record.
   Direct file writes are caught by `validate.py` and will fail CI. Status changes (closing recs) must also use the portal.
 

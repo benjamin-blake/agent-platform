@@ -35,6 +35,12 @@ variable "platform_dev_external_id" {
   sensitive   = true
 }
 
+variable "platform_admin_external_id" {
+  description = "ExternalId for the PlatformAdmin AssumeRole trust. Supplied via gitignored terraform.personal.tfvars -- never a committed literal."
+  type        = string
+  sensitive   = true
+}
+
 variable "agent_service_account_user_name" {
   description = "IAM user (the agent_static static-key source profile) permitted to assume PlatformDev. Verify against the live role's trust policy via `terraform plan` before apply."
   type        = string

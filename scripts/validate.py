@@ -2019,25 +2019,65 @@ def run_python_checks(failed: list[str]) -> None:
         print("mypy: type errors found (informational - not blocking). Fix progressively.")
 
 
-def run_terraform_checks(failed: list[str]) -> None:
+# Both terraform roots are standalone (own provider + required_providers). terraform/ is
+# retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
+_TERRAFORM_ROOTS = ("terraform", "terraform/personal")
+
+
+def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
+    """Credential-free terraform gate: init -backend=false + validate + fmt -check per root.
+
+    -backend=false skips backend initialisation (no AWS credentials required); validate and
+    fmt are offline operations. Tool-gated on terraform presence with a visible SKIP so the
+    check degrades cleanly where terraform is absent (the terraform-validate CI job enforces it).
+    This is the single source of truth for terraform validation -- both the full presubmit tier
+    and `--terraform-only` (CI) call it; there is no parallel/duplicate validation.
+    """
     if not shutil.which("terraform"):
         print("\n=== Terraform checks skipped (terraform not found in PATH) ===")
-        print("Terraform will be validated in the separate terraform-validate CI job.")
+        print("Terraform validate/fmt run in the terraform-validate CI job.")
         return
+    for root in roots:
+        chdir = f"-chdir={root}"
+        invoke_step(
+            f"Terraform init [{root}]", ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"], failed
+        )
+        invoke_step(f"Terraform validate [{root}]", ["terraform", chdir, "validate", "-no-color"], failed)
+        invoke_step(f"Terraform fmt check [{root}]", ["terraform", chdir, "fmt", "-check", "-no-color"], failed)
+
+
+def run_terraform_checks(failed: list[str]) -> None:
+    """Full-presubmit terraform gate: creds-free checks on both roots, plus a creds-needing
+    drift check (plan -detailed-exitcode) on the applied terraform/personal root only."""
     validate_terraform_try(failed)
-    invoke_step("Terraform validate", ["terraform", "-chdir=terraform", "validate"], failed)
-    invoke_step("Terraform fmt check", ["terraform", "-chdir=terraform", "fmt", "-check"], failed)
-    # Informational: detect pending changes via detailed-exitcode (exit 2 = changes pending)
-    print("\n=== Terraform changes pending check ===")
+    run_terraform_creds_free(failed)
+    if not shutil.which("terraform"):
+        return
+    # Informational drift check on the APPLIED root only (terraform/ is no longer applied per
+    # CD.21). Creds-needing: re-init the local backend, then plan. Never blocks -- when creds or
+    # backend are unavailable the step degrades to a visible skip (Decision 60 actionable note).
+    print("\n=== Terraform changes pending check (terraform/personal, informational) ===")
+    init_res = run(
+        ["terraform", "-chdir=terraform/personal", "init", "-input=false", "-no-color", "-reconfigure"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=ROOT,
+    )
+    if init_res.returncode != 0:
+        print("Terraform plan skipped: backend/init unavailable (credentials missing) -- non-blocking.")
+        return
     result = run(
-        ["terraform", "-chdir=terraform", "plan", "-detailed-exitcode", "-no-color"],
+        ["terraform", "-chdir=terraform/personal", "plan", "-detailed-exitcode", "-no-color", "-input=false"],
         capture_output=True,
         text=True,
         encoding="utf-8",
         cwd=ROOT,
     )
     if result.returncode == 2:
-        print("WARNING: Terraform changes pending. Run `terraform apply` before merge.")
+        print("WARNING: Terraform changes pending in terraform/personal. Run `terraform apply` before merge.")
+    elif result.returncode not in (0, 2):
+        print("Terraform plan skipped or failed (credentials unavailable) -- non-blocking.")
 
 
 def run_dependency_checks() -> None:
@@ -2237,6 +2277,12 @@ def main() -> None:
         help="Report scope files lacking verifier coverage (advisory; exits 0 unconditionally).",
     )
     parser.add_argument(
+        "--terraform-only",
+        action="store_true",
+        help="Run ONLY the credential-free terraform gate (init -backend=false + validate + fmt -check) "
+        "for terraform/ and terraform/personal/. Used by the terraform-validate CI job; no AWS creds needed.",
+    )
+    parser.add_argument(
         "--ignore-budget",
         action="store_true",
         help="Skip the 5-minute fast-tier budget assertion. Emergency escape hatch only. "
@@ -2269,6 +2315,18 @@ def main() -> None:
     if args.coverage:
         run_coverage_check()
         sys.exit(0)
+
+    # --terraform-only: creds-free terraform gate for both roots (CI terraform-validate job)
+    if args.terraform_only:
+        run_terraform_creds_free(failed)
+        print("\n=== Validation Summary (scope: terraform-only) ===")
+        if not failed:
+            print("All checks passed.")
+            sys.exit(0)
+        print("Failed checks:")
+        for f in failed:
+            print(f"  - {f}")
+        sys.exit(1)
 
     # --pre: diff-aware lint/format/mypy/picked-pytest + prompt validation, with 5-min budget
     if args.pre:
