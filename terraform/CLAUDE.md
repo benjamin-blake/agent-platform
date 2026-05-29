@@ -20,23 +20,36 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 
 ## Out-of-band IAM grants (drift -- not managed by this module)
 
-Applied directly via the `platform_breakglass` IAM user (full admin); NOT codified in
-`terraform/personal/`. The `PlatformDev` and `PlatformAdmin` roles pre-exist the module, so
-re-creating infra elsewhere will not restore these policies -- reapply manually if needed.
+The `PlatformDev` and `PlatformAdmin` roles pre-exist the module. `PlatformDev` is now codified
+(see the CODIFIED bullet below). The items still applied out-of-band via the `platform_breakglass`
+IAM user (full admin) and NOT codified in `terraform/personal/` are listed here -- re-creating
+infra elsewhere will not restore them; reapply manually if needed.
 
 - **`PlatformDataLakeProvisioning`** (inline policy on role `PlatformAdmin`) -- grants the
   data-plane rights `PlatformAdmin`'s base `AdminOps` policy lacks (it is an identity admin:
   `iam:*` + lambda + secretsmanager only). Scope: Glue + Athena `Resource: "*"`; `s3:*` on
   `agent-platform-data-lake`; `dynamodb:*` on `table/agent-platform-*`. Required so `terraform apply`
   under `agent_platform_admin` can create the data lake, workgroup, Glue DB, and counters table.
-- **PlatformDev runtime grant (PENDING -- required before the ops-data migration runs):** the
-  `agent_platform` (PlatformDev) runtime role is currently permissionless. The migration needs:
-  Athena `StartQueryExecution`/`GetQueryExecution`/`GetQueryResults`/`GetWorkGroup`; S3 read-write
-  on `agent-platform-data-lake`; DynamoDB `GetItem`/`UpdateItem` on `agent-platform-counters`;
-  Glue `GetDatabase`/`GetTable`/`GetPartitions`. Grant via `platform_breakglass`; record here once applied.
+- **PlatformDev runtime grant (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`):** the
+  `agent_platform` (PlatformDev) runtime role is now Terraform-managed. `aws_iam_role.platform_dev`
+  (imported, ID `PlatformDev`) sets `max_session_duration = 36000` (was 3600 -- the 3600 max blocked
+  CC-web's 10h unattended sessions); `aws_iam_role_policy.platform_dev_runtime` codifies the `DailyOps`
+  inline policy (Athena query on `agent-platform-production`; S3 read-write on `agent-platform-data-lake`;
+  DynamoDB on `agent-platform-counters`; Glue read + table mutations). Applied via `platform_breakglass`
+  with `-target` on the two role resources (the unrelated `null_resource` Athena-DDL replacements from a
+  later main.tf edit were deliberately excluded). Trust policy verified unchanged at apply time.
+  Reconciliation at import time (the role was NOT permissionless, contrary to the prior PENDING note):
+    - A stale pre-rename `DailyOps` (dead `bblake-*` targets + a live `bedrock:InvokeModel*` grant) already
+      existed and was imported; the apply overwrote it with the agent-platform grant. Net live capability
+      dropped: `bedrock:InvokeModel*` (treated as unused -- `AgentPlatformRuntime` never granted Bedrock
+      and ops works without it; no Bedrock consumer was found for this role, but no exhaustive audit was run).
+    - A separate out-of-band `AgentPlatformRuntime` inline policy already granted the same agent-platform
+      ops set, so ops calls succeeded both before and after this change. It is now a redundant duplicate of
+      the codified `DailyOps`. FOLLOW-UP: remove `AgentPlatformRuntime` via `platform_breakglass`.
 
-Follow-up: codify these (import the roles or attach managed policies) and author a formal Decision
-once the migration completes and the ops portal is writable.
+Follow-up: codify `PlatformDataLakeProvisioning` (still out-of-band on `PlatformAdmin`) and `PlatformAdmin`
+itself; remove the now-redundant `AgentPlatformRuntime` inline policy; author a formal Decision recording
+the PlatformDev codification.
 
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
