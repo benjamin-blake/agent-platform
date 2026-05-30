@@ -1,7 +1,7 @@
 # Contract: Environment / Phase Taxonomy (Two-Axis Model)
 
-Status: canonical. Ratified by Decision 76. Cross-references: Decisions 24, 73 (platform
-promotion train); Decision 35 (apply gating, scoped by Decision 76); CDP.6 / CDP.7 (product
+Status: canonical. Ratified by Decision 77. Cross-references: Decisions 24, 73 (platform
+promotion train); Decision 35 (apply gating, scoped by Decision 77); CDP.6 / CDP.7 (product
 config-promotion, single-account); `docs/INTENT-ci-cd-architecture.md` section 6 (the canonical
 platform-axis design this contract governs the vocabulary for).
 
@@ -31,7 +31,7 @@ from re-conflating.
 
 | environment | money real? | code vs infra | apply gating | account |
 |-------------|-------------|---------------|--------------|---------|
-| sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 76) | current personal account |
+| sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 77) | current personal account |
 | SIT | no (system-integration, mocked capital) | same code path | manual apply after review | future dedicated account (not yet stood up) |
 | PROD | yes (real capital) | same code path | manual apply + second approver | future dedicated account (not yet stood up) |
 

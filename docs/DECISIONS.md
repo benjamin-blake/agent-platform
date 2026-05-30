@@ -2,11 +2,11 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
-## Decision 76: Two-Axis Environment/Phase Taxonomy + Sandbox Auto-Apply (Decided)
+## Decision 77: Two-Axis Environment/Phase Taxonomy + Sandbox Auto-Apply (Decided)
 
 **Status:** Decided
 **Date:** 2026-05-30
-**Warehouse ID:** dec-1083
+**Warehouse ID:** dec-1083 (warehouse title/number reconciliation to 77 is a follow-up via scripts.ops_data_portal; renumbered from 76 to resolve a parallel-authoring collision with the web-workflow-migration decision merged as Decision 76 in PR #10)
 
 **Problem:**
 `docs/INTENT-ci-cd-architecture.md` section 6 and Decisions 24/73 affirm a PLATFORM sandbox -> SIT
@@ -76,6 +76,31 @@ deferral), Decision 72 (RCA-as-Plan-Source / branch protection unavailable), CD.
 OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architecture.md` section 6.
 
 ---
+
+## Decision 76: Claude-Code-on-the-Web Workflow Migration; .claude as Canonical Interactive Layer (Decided)
+
+**Status:** Decided
+**Date:** 2026-05-30
+
+**Context:** `/plan` and `/implement` were authored for local dev (Windows + Git Bash): `agent/{slug}` branches, slug derived from branch name, merge via `gh` CLI with a `sleep`/`/loop` poll for CI. On Claude Code on the web the harness auto-creates a per-session branch (`claude/...`), `gh` is unavailable, and the container hibernates between turns -- a turn that ends while polling never resumes, stranding branches.
+
+**Decision:**
+1. Model: planning agent pinned to `opus[1m]` (Opus, 1M context); implement agent stays `sonnet`.
+2. Branches: the `agent/{slug}` ceremony is removed. Agents work on the harness session branch; the plan slug is derived from the task, independent of the branch name.
+3. Handoff: the planning agent merges `PLAN-{slug}.md` to `main` (PR -> fast PR-tier CI -> squash-merge via GitHub MCP) and emits a copy-paste handoff (`/implement docs/plans/PLAN-{slug}.md`); a fresh `/implement` session reads the plan from main by explicit path.
+4. PR/merge: all GitHub ops use the GitHub MCP tools; waiting for CI is event-driven via `subscribe_pr_activity` (end the turn; the webhook wakes the session), never `sleep`/`/loop`.
+5. Canonical layer: `.claude/commands/` + `.claude/skills/` are now the canonical interactive-workflow layer.
+
+**Amends / Supersedes:**
+- Amends Decision 72 ("GitHub Branch Protection Not Available"), clause 4 (`gh pr merge --squash` after CI): squash-merge policy preserved; transport changes to GitHub MCP `merge_pull_request(merge_method="squash")` because `gh` is unavailable on the web harness.
+- Amends Decision 23 ("slug derived from branch name"): slug is decoupled from the branch; the anti-contamination intent (one tracked plan per unit of work, branched from main) is satisfied by the harness per-session auto-branch model.
+- Supersedes Decision 58 ("`.agents` as canonical interactive workflow layer"): `.claude/` is now canonical; `.agents/` is demoted to legacy alongside `.github/` (no sync obligation).
+
+**Unaffected:** Decision 25 (git worktrees) is a local-dev affordance, unchanged. Decisions 60/73 (two-tier CI, forward-fix) govern the tiers this flow waits on. Decision 67 keeps plans IMPLEMENTATION-type. Decision 44 keeps executor machinery out of scope.
+
+**Deferred follow-up:** GitHub-native auto-merge (container fully out of the merge loop) is the robustness ceiling for the lost-webhook case; unblocked now the repo is public (reversing Decision 72's "permanently unavailable" premise) but needs branch protection + required status checks (CD.20, deferred).
+
+**Related:** Decision 72 (Branch Protection), 73, 60, 67, 44, 23, 25, 58, 55; CD.20, CD.21.
 
 ## Decision 75: Frame-Lock Anti-Pattern in Architectural Planning (Decided)
 

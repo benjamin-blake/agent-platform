@@ -13,7 +13,7 @@ See docs/contracts/instruction-architecture.md for the full information architec
 - **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
 - Formula evaluation: `sympy.sympify()` + `sympy.lambdify()` only -- never `eval()`/`exec()`
 - No Docker in this environment -- Lambdas use zip packaging via S3
-- **Branching:** All agent work uses `agent/{phase}-{slug}` branches. Never commit directly to `main`.
+- **Branching:** On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`); agents work on that branch. Do NOT create `agent/{slug}` branches. Never commit directly to `main`. Plans are merged to `main` via a GitHub MCP PR and handed off to `/implement` by explicit path. (Local-dev `agent/{slug}` branches remain a supported fallback in `find_plan.py`.)
 - **Context budget:** Files loaded at session start must stay concise. `ROADMAP.md` keeps only current and adjacent phases (completed phases archived to `ROADMAP_ARCHIVE.md`). `SESSION_LOG.md` keeps only the last 5 entries. `DECISIONS.md` keeps only open decisions (resolved decisions archived to `DECISIONS_ARCHIVE.md`). `strategic_review` enforces this during periodic checks.
 - **Refactoring Protocol:** When performing complex, non-contiguous edits, verify structural integrity immediately after. Never proceed to logic verification (e.g., merge or test) until the structural integrity of the edit is confirmed.
 - **Agent-First:** This repository is designed for agent consumption. Artefacts at all
@@ -144,12 +144,13 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Model registry (resolver, escalation) | [scripts/model_registry.py](../scripts/model_registry.py) |
 | Gemini CLI context file | [GEMINI.md](../GEMINI.md) |
 | Instruction architecture contract | [docs/contracts/instruction-architecture.md](../docs/contracts/instruction-architecture.md) |
-| Interactive planning workflow | [.agents/workflows/plan.md](../.agents/workflows/plan.md) |
-| Interactive implementation workflow | [.agents/workflows/implement.md](../.agents/workflows/implement.md) |
-| Antigravity skills | [.agents/skills/](../.agents/skills/) |
-| Planning / entry point (Opus) | [.github/prompts/plan.prompt.md](../.github/prompts/plan.prompt.md) (VS Code legacy -- use `.agents/workflows/` for Antigravity) |
-| Branch-specific plan files | `docs/plans/PLAN-{slug}.md` (tracked per branch) |
-| Implementation entry point | [.github/prompts/implement.prompt.md](../.github/prompts/implement.prompt.md) (VS Code legacy -- use `.agents/workflows/` for Antigravity) |
+| Interactive planning workflow | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
+| Interactive implementation workflow | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
+| Interactive workflow skills (methodology) | [.claude/skills/](../.claude/skills/) (canonical) |
+| Legacy Antigravity workflows/skills | [.agents/workflows/](../.agents/workflows/), [.agents/skills/](../.agents/skills/) (legacy -- not synced, may be stale) |
+| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical). `.github/prompts/plan.prompt.md` is VS Code legacy |
+| Branch-specific plan files | `docs/plans/PLAN-{slug}.md` (merged to main; handed off to `/implement` by path) |
+| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical). `.github/prompts/implement.prompt.md` is VS Code legacy |
 | Pre-session checks (env, recs, friction) | [scripts/session_preflight.py](../scripts/session_preflight.py) |
 | Post-session automation (validate, commit, push) | [scripts/session_postflight.py](../scripts/session_postflight.py) |
 | Subagents and Reviewers | [.github/agents/*.agent.md](../.github/agents/) (VS Code legacy -- use `.agents/skills/` for Antigravity) |
@@ -231,7 +232,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
   - **Deduplication:** The store uses SCD Type 2 append-only semantics; Athena views select the latest record.
   Direct file writes are caught by `validate.py` and will fail CI. Status changes (closing recs) must also use the portal.
 
-- **Git branching workflow:** One branch, one PR at a time. Checkout main and pull before creating a new branch. After pushing and creating PR, return to main and pull.
+- **Git branching workflow:** On Claude Code on the web the harness creates the per-session branch; do NOT create `agent/` branches. Never commit directly to `main`. Merge via a GitHub MCP PR (no local `gh`); wait for CI event-driven via `subscribe_pr_activity`, then squash-merge via `merge_pull_request`. See Decision 76.
 
 - **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `.github/prompts/develop-executor.prompt.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
 
@@ -277,7 +278,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **CI runner credential pattern (Important):** GitHub-hosted runners (CD.21) assume the OIDC role `agent-platform-github-ci-branch` (or `-pr` on pull requests) via `aws-actions/configure-aws-credentials`, which exports standard AWS credential env vars. There is no `~/.aws/config` on the runner, so code resolving a named SSO profile (`agent_platform`) must fall back to boto3's default credential chain when those env vars are present. Local and Claude-Code-on-web dev still resolve via the named profile.
 
-- **Terraform workflow integration (Important):** Plans with `.tf` files require `terraform plan` output presented to human before applying. Apply is human-gated EXCEPT the sandbox PLATFORM environment, where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, which fails closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 76 and `docs/contracts/environment-taxonomy.md`. SIT/PROD stay human-gated (and are future-state). See `plan.prompt.md` Step 4 (Infrastructure Assessment).
+- **Terraform workflow integration (Important):** Plans with `.tf` files require `terraform plan` output presented to human before applying. Apply is human-gated EXCEPT the sandbox PLATFORM environment, where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, which fails closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD stay human-gated (and are future-state). See `plan.prompt.md` Step 4 (Infrastructure Assessment).
 
 - **Lambda deployment pipeline (Important):** Any plan modifying Lambda-packaged files (`src/data/handlers/`, `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`, `config/`, or scripts/ files listed in `_LAMBDA_SCRIPTS` in `build_lambda.py`) must include: (1) `python -m scripts.build_lambda` to build the zip, (2) `--deploy` flag to upload to S3 and update Lambda function code for dispatcher and findings-processor, (3) post-deploy verification using `run_scheduled_agent.py --smoke-test NAME` when the runner exposes a smoke-test interface (detectable by grepping for `_smoke_test` or `--smoke-test`), otherwise an explicit deployment invocation (for example, `--trigger-lambda NAME` or the documented `trigger.lambda` invocation) with expected observable output. Copilot SDK model IDs (e.g., `claude-haiku-4.5`, `claude-sonnet-4.6`) differ from Bedrock format (revoked) and GitHub Models IDs (`gpt-5-mini`). See `docs/contracts/inference-provider.md` and Decision 49.
 

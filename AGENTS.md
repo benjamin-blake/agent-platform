@@ -21,7 +21,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
 - Never `eval()` or `exec()`. Use `sympy.sympify()` + `sympy.lambdify()` for formula evaluation.
 - Never raise exceptions during module import. Defer validation to explicit calls.
 - Always wrap `filemd5()` and `file()` Terraform calls on optional artifacts with `try()`.
-- Terraform apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 76 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state.
+- Terraform apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state.
 - Windows subprocess: pass `encoding='utf-8', errors='replace'` with `text=True`. Use `sys.executable` — not the string `'python'` or `'pip'`.
 - Only modify files explicitly in scope. Out-of-scope bugs become recommendations via `scripts/ops_data_portal.py`, not inline fixes.
 
@@ -29,7 +29,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
 **Hard rule: do not run `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, or any `git commit` / `git push` command while the current branch is `main`.** If you're on main, the only allowed actions are read-only commands and creating a new branch.
 
 - **See current branch**: the statusline at the bottom of the prompt shows it. It will read `WARNING: ON MAIN` if you're on main. Or run `git branch --show-current`.
-- **Create a working branch**: `git checkout main && git pull && git checkout -b agent/{slug}`.
+- **Create a working branch**: on Claude Code on the web you are already on a harness-assigned session branch (e.g. `claude/...`) -- verify with `git branch --show-current`. Do NOT create an `agent/` branch. (Local-dev fallback: `git checkout main && git pull && git checkout -b agent/{slug}`.)
 - A `PreToolUse` hook at `.claude/hooks/never_on_main.py` enforces this at the harness level: it blocks `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, and `Bash(git commit/push ...)` while on `main`. Other Bash commands (e.g. `git status`, `ls`) still run.
 
 ## Temporary Operational Constraints
@@ -112,6 +112,7 @@ If a clone or runner shows stale data, an operator may rebuild that environment'
 - Never add a check to `.github/workflows/ci.yml` without adding it to `validate.py` first -- `validate.py` is the single source of truth.
 - Manual confirmation: if `validate.py` appears to skip tests, run `pytest` directly to confirm.
 - **On CI failure**: the ci-rca agent (`.github/workflows/ci-rca.yml`) automatically files a recommendation with `source="ci_rca"` and `priority="critical"`. The next `/plan` session will surface it under "CI RCA Recs (open)". Do NOT manually patch the failure until the rec has been reviewed in a `/plan` session -- inline fixes without architectural review reproduce the workaround anti-pattern (Decision 55, Decision 72).
+- **Web merge flow (Decision 76)**: on Claude Code on the web the `gh` CLI is unavailable -- all GitHub PR/merge operations use the GitHub MCP tools (`mcp__github__*`). Open the PR via `create_pull_request`, wait for the fast PR `--pre` tier event-driven via `subscribe_pr_activity` (end the turn; the webhook wakes the session -- never `sleep`/`/loop`), then squash-merge via `merge_pull_request(merge_method="squash")`. The full tier runs post-merge on main with ci-rca on failure.
 
 ## Instruction architecture
 The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude Code is the 4th consumer. Layers:

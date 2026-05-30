@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic guard for the sandbox auto-apply pipeline (Decision 76).
+"""Deterministic guard for the sandbox auto-apply pipeline (Decision 77).
 
 Parses `terraform show -json <planfile>` output and decides whether the plan is safe to
 auto-apply in the sandbox environment without a human in the loop. The guard is the compensating

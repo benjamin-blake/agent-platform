@@ -377,7 +377,7 @@ Layers L9-L10 specify the multi-environment promotion design.
 
 ### Environments
 
-Account-family targets per Decision 76 and `docs/contracts/environment-taxonomy.md`: the platform
+Account-family targets per Decision 77 and `docs/contracts/environment-taxonomy.md`: the platform
 stays SINGLE-ACCOUNT (the current personal account, sandbox only) until the product axis reaches
 live_full approaching real capital -- that product event is the named trigger to stand up dedicated
 SIT then PROD accounts. SIT/PROD are reserved vocabulary and future-state infrastructure.

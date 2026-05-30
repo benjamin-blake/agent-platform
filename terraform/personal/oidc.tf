@@ -232,7 +232,7 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 }
 
 # ---------------------------------------------------------------------------
-# Apply role (sandbox auto-apply): refs/heads/main ONLY (Decision 76, CD.21).
+# Apply role (sandbox auto-apply): refs/heads/main ONLY (Decision 77, CD.21).
 #
 # This is the role the .github/workflows/terraform-apply-sandbox.yml workflow assumes to run
 # `terraform apply` against terraform/personal on push to main. Its blast radius is the highest of
@@ -251,7 +251,7 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 
 resource "aws_iam_role" "github_ci_apply" {
   name        = "agent-platform-github-ci-apply"
-  description = "GitHub Actions sandbox auto-apply (Decision 76): refs/heads/main ONLY via OIDC"
+  description = "GitHub Actions sandbox auto-apply (Decision 77): refs/heads/main ONLY via OIDC"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

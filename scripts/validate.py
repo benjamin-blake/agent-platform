@@ -220,6 +220,12 @@ def validate_ruff_version_alignment(failed: list[str]) -> None:
         print(f"ruff versions aligned: {req_version}")
 
 
+# CLI tools intentionally absent on the Claude Code web harness (GitHub ops use the
+# GitHub MCP tools, Decision 76). Legacy .github/prompts/.github/agents files that still
+# reference these are deep-frozen; a missing optional tool is a skip, not a failure.
+_OPTIONAL_CLI_TOOLS = {"gh"}
+
+
 def validate_cli_tools_in_prompts(failed: list[str]) -> None:
     """Scan prompt and agent files for CLI tool references and verify each is in PATH."""
     print("\n=== CLI tool verification (prompt/agent files) ===")
@@ -248,6 +254,9 @@ def validate_cli_tools_in_prompts(failed: list[str]) -> None:
 
     for tool, source_file in referenced.items():
         if shutil.which(tool) is None:
+            if tool in _OPTIONAL_CLI_TOOLS:
+                print(f"  note: optional CLI tool '{tool}' not in PATH (referenced in {source_file}); skipped (Decision 76)")
+                continue
             errors.append(f"CLI tool '{tool}' referenced in {source_file} but not found in PATH")
 
     if errors:

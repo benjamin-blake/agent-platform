@@ -185,56 +185,46 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 - Surface: "Found potential duplicate(s). Options: (1) supersede existing, (2) file both, (3) skip this one?" Wait for human.
 
 ## Commit Flows (Workflow Step 7 -- MANDATORY)
-**Once validation passes (Step 6), you MUST execute the appropriate commit flow autonomously. Do not stop to ask for permission -- the plan was already approved during /plan.**
+**Once validation passes (Step 6), execute the appropriate commit flow autonomously. Do not stop to ask permission -- the plan was approved during /plan.**
 
-CI must pass before merging (Decision 68). After `gh pr create`, pair two signals so a missed webhook doesn't strand the PR:
+This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Squash-merge after CI passes is preserved policy (Decision 72 "Branch Protection Not Available", clause 4); the transport is now the GitHub MCP `merge_pull_request` tool (Decision 76).
 
-1. **`subscribe_pr_activity(owner, repo, pullNumber)`** -- webhook events are low-latency but occasionally lost when the container hibernates between turns.
-2. **Periodic poll fallback** -- a self-wake mechanism that re-checks every ~5 minutes. The wake primitive depends on which Claude Code surface is running the workflow:
-   - **Local Claude Code (laptop/desktop)**: `/loop 5m <poll-prompt>` -- the loop skill schedules a cron tick via `CronCreate`.
-   - **Claude Code on the web (remote-execution env)**: `Bash` with `run_in_background: true` running `sleep 300` -- the completion notification wakes the session. Chain another sleep at the end of each wake-up iteration until the PR is merged or a check fails. `CronCreate` / `ScheduleWakeup` are not surfaced in the remote env, so `/loop` is a no-op there.
+### Run the full gate locally first
+The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
 
-Example poll-prompt body (used by either wake mechanism):
-> "Call `mcp__github__pull_request_read` with `method=get_check_runs` for PR <N>. If every check has `conclusion=='success'`, call `mcp__github__merge_pull_request` (squash) and stop polling. If any check failed, diagnose and STOP. If checks still running, schedule the next wake and end the turn."
+### Wait-for-CI: event-driven, never polled
+The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
+1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
+2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
+3. On wake, confirm status (`mcp__github__pull_request_read` with `method=get_status`/`get_check_runs`):
+   - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge.
+   - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
+   - **Still running** -> end the turn; a later event wakes you.
 
-Whichever signal fires first drives the merge. Stop polling on merge or on a red check.
+The slow full tier runs post-merge on `main` (Decision 73); on failure the ci-rca agent files a `priority=critical`, `source=ci_rca` rec that hard-blocks the next planning session. You do not babysit main CI.
+
+Robustness note: a genuinely lost webhook leaves the PR open (safe). The bulletproof upgrade is GitHub-native auto-merge (server-side merge on green, container fully out of the loop); unblocked now the repo is public but needs branch protection + required status checks (CD.20, deferred). See Decision 76.
 
 ### Pre-Push Rebase (applies to both flows)
-After the local commit lands but before `git push`, refresh `origin/main` and rebase. This catches the window between branch creation and push where another PR may have merged. Without this, the PR is opened against a stale base and CI may surface conflicts that would not have existed had the branch been current.
-
+After the local commit, before pushing, refresh and rebase so the PR opens against current main:
 ```bash
 git fetch origin main
-git rebase origin/main
+git rebase origin/main   # STOP on conflict; do not auto-resolve -- surface to the human
 ```
-
-Conflict handling: if `git rebase` reports conflicts, STOP. Do NOT run `git rebase --skip` or auto-resolve. Surface the conflicting files to the human and wait for direction. The agent's job ends at "rebase produced conflicts"; resolution is a human decision.
-
-If the branch had been pushed earlier in the session (rare for `/implement` but possible for STRATEGIC scoping that pushes intermediate work), the post-rebase push must use `--force-with-lease`, not `--force`. `--force-with-lease` aborts if the remote moved since your last fetch (protects against clobbering a teammate's push).
-
-### STRATEGIC Commit Flow
-```bash
-git add docs/plans/briefings/
-git commit -m "scope({slug}): add recs for {work-area-summary}"
-git fetch origin main
-git rebase origin/main   # STOP on conflict; do not auto-resolve
-git push origin HEAD
-gh pr create --title "scope({slug}): add recs for {work-area-summary}" --body "Recs filed by /implement scoping agent." --base main
-# subscribe_pr_activity + /loop 5m <poll-prompt>  (see preamble above)
-gh pr merge --squash --delete-branch   # only when CI is green
-git checkout main
-git pull origin main
-```
+If the branch was pushed earlier in the session, the post-rebase push uses `--force-with-lease` (never `--force`).
 
 ### IMPLEMENTATION Commit Flow
 ```bash
 git add -A
 git commit -m "feat({slug}): implement {brief-description}"
 git fetch origin main
-git rebase origin/main   # STOP on conflict; do not auto-resolve
-git push origin HEAD
-gh pr create --title "feat({slug}): {brief-description}" --body "Implemented by /implement agent. Verification plan passed." --base main
-# subscribe_pr_activity + /loop 5m <poll-prompt>  (see preamble above)
-gh pr merge --squash --delete-branch   # only when CI is green
-git checkout main
-git pull origin main
+git rebase origin/main   # STOP on conflict
+git push -u origin HEAD   # this session's harness branch
 ```
+Then via GitHub MCP (owner/repo from `git remote get-url origin`):
+1. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="feat({slug}): {brief-description}", body="Implemented by /implement. Verification plan passed.")`
+2. `mcp__github__subscribe_pr_activity(...)`; end the turn (see "Wait-for-CI").
+3. On green wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
+
+### STRATEGIC Commit Flow
+STRATEGIC plans are suspended (Decision 67). When restored, use the same MCP PR/subscribe/merge pattern, committing `docs/plans/briefings/` with a `scope({slug}): ...` message.

@@ -1,4 +1,4 @@
-"""Tests for scripts/terraform_apply_guard.py (Decision 76 deterministic sandbox-apply guard).
+"""Tests for scripts/terraform_apply_guard.py (Decision 77 deterministic sandbox-apply guard).
 
 The clean-create case loads a fixture captured from a REAL `terraform show -json` run
 (tests/fixtures/terraform_apply_guard/clean_create_real.json) so the guard's field paths are
