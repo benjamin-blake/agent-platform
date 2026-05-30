@@ -2,6 +2,81 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 76: Two-Axis Environment/Phase Taxonomy + Sandbox Auto-Apply (Decided)
+
+**Status:** Decided
+**Date:** 2026-05-30
+**Warehouse ID:** dec-1083
+
+**Problem:**
+`docs/INTENT-ci-cd-architecture.md` section 6 and Decisions 24/73 affirm a PLATFORM sandbox -> SIT
+-> PROD promotion train as future-state, while `docs/ROADMAP-PRODUCT.yaml` retired_items (the "Phase
+Infra-Env / Multi-account staging+production model" entry) retired a "sandbox -> staging ->
+production" model as overkill. These describe TWO DIFFERENT axes that were being conflated: a
+PLATFORM deploy axis (infrastructure) and a PRODUCT config-promotion axis (strategy lifecycle).
+Separately, Decision 35 asserts "apply is never automatic", which -- read unconditionally -- blocks
+the autonomous infrastructure-improvement substrate the North Star depends on, even for a mocked
+sandbox where no real capital is at risk.
+
+**Decision:**
+
+1. **Two-axis taxonomy (the durable fix).** Establish `docs/contracts/environment-taxonomy.md` as
+   the canonical vocabulary contract. The PLATFORM environment axis (sandbox / SIT / PROD) answers
+   "does this break infrastructure / is the money real"; the PRODUCT phase axis (research,
+   backtest_canonical, paper, live_small, live_full) answers "does this strategy deserve capital".
+   Reserved vocabulary, enforced by `scripts/validate.py:validate_environment_taxonomy`:
+   "environment" = platform axis only; product states are "phases"; "promotion" must be
+   axis-qualified.
+
+2. **Affirm the platform promotion train** (cite Decisions 24, 73). Section 6 of
+   `INTENT-ci-cd-architecture.md` is the canonical platform-axis design. SIT and PROD remain
+   future-state.
+
+3. **Scope Decision 35.** Permit sandbox auto-apply on push to main behind the deterministic guard
+   (`scripts/terraform_apply_guard.py`, fail-closed on any destroy / IAM / trust-policy change) plus
+   a subagent plan review (`.github/workflows/terraform-apply-sandbox.yml`). SIT and PROD stay
+   human-gated. This scopes -- does not overturn -- Decision 35: apply stays human-gated everywhere
+   except the mocked sandbox, where the guard + review are the compensating gate (Decision 72 /
+   CD.20: branch protection and required status checks are unavailable).
+
+4. **Product promotion stays config-only.** CDP.6 / CDP.7 remain valid for the product axis:
+   single-account, promotion-as-config-change. The ROADMAP-PRODUCT retirement is scoped to the
+   product axis ONLY and does not touch the platform train.
+
+5. **Single-account-until-live_full (load-bearing).** The platform stays SINGLE-ACCOUNT (the current
+   personal account, sandbox environment only) until the product axis reaches live_full approaching
+   real capital -- that product event is the named trigger to stand up a dedicated SIT then PROD
+   account. Affirming the train as future-state does NOT re-introduce the multi-account posture
+   CDP.7 retired.
+
+6. **Re-base Decision 24 vocabulary.** "staging" is renamed "SIT" on the platform axis. Decision
+   24's `envs/sandbox.tfvars` multi-tfvars model is superseded by the `terraform/personal/`
+   partial-backend reality (`backend-sandbox.hcl`; a future SIT/PROD is a new backend-<env>.hcl).
+
+**Rationale:**
+- The conflation was structural: the same words ("sandbox", "staging", "promotion") meant different
+  things on each axis, so one axis's retirement looked like it retired the other. A vocabulary
+  contract with lint enforcement prevents re-conflation.
+- The sandbox is mock-vs-real at one code version, not a version-skew tier; auto-applying it carries
+  no real-capital risk, and the fail-closed guard forces every destroy / IAM / trust change onto the
+  manual admin-apply path regardless.
+- Single-account-until-live_full keeps the affirmation cheap: no new accounts are stood up until a
+  concrete product event justifies them.
+
+**Constraints:**
+- The guard AND the workflow MUST fail closed: apply runs only on guard `success()`; the guard step
+  carries no `continue-on-error`; any non-zero guard exit blocks apply; apply consumes the SAME plan
+  file the guard inspected (no re-plan -- no TOCTOU).
+- The bootstrap (S3 backend migration + apply role creation) is a one-time MANUAL admin apply under
+  `agent_platform_admin`; the workflow takes over only afterwards.
+
+**Related:** Decision 24 (Multi-Environment Deployment Strategy), Decision 35 (Terraform Workflow
+Integration), Decision 73 (Two-Tier CI + promotion train), Decision 67 (Lambda + STRATEGIC
+deferral), Decision 72 (RCA-as-Plan-Source / branch protection unavailable), CD.21 (GitHub-hosted
+OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architecture.md` section 6.
+
+---
+
 ## Decision 75: Frame-Lock Anti-Pattern in Architectural Planning (Decided)
 
 **Status:** Decided

@@ -1,0 +1,136 @@
+"""Tests for scripts/terraform_apply_guard.py (Decision 76 deterministic sandbox-apply guard).
+
+The clean-create case loads a fixture captured from a REAL `terraform show -json` run
+(tests/fixtures/terraform_apply_guard/clean_create_real.json) so the guard's field paths are
+validated against the actual schema, not hand-authored guesses. The destructive / IAM / trust
+cases are synthesised to the same schema.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from scripts.terraform_apply_guard import _normalise_policy, _trust_changed, evaluate_plan, main
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "terraform_apply_guard"
+_REAL_CLEAN_CREATE = _FIXTURES / "clean_create_real.json"
+
+
+def _write(tmp_path: Path, payload: dict) -> str:
+    target = tmp_path / "plan.json"
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    return str(target)
+
+
+def _rc(rtype: str, actions: list[str], before=None, after=None, address: str | None = None) -> dict:
+    return {
+        "address": address or f"{rtype}.example",
+        "type": rtype,
+        "name": "example",
+        "change": {"actions": actions, "before": before, "after": after},
+    }
+
+
+def test_real_clean_create_passes() -> None:
+    # Real terraform show -json fixture: a single create on a non-IAM resource.
+    assert _REAL_CLEAN_CREATE.exists()
+    plan = json.loads(_REAL_CLEAN_CREATE.read_text(encoding="utf-8"))
+    assert plan["resource_changes"][0]["type"] == "terraform_data"
+    assert evaluate_plan(plan) == []
+    assert main([str(_REAL_CLEAN_CREATE)]) == 0
+
+
+def test_delete_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_s3_bucket", ["delete"], before={"id": "b"})]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_replacement_delete_create_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_dynamodb_table", ["delete", "create"])]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_replacement_create_delete_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_dynamodb_table", ["create", "delete"])]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_iam_update_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_iam_role_policy", ["update"], before={"policy": "{}"}, after={"policy": "{}"})]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_iam_create_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_iam_role", ["create"], after={"name": "r"})]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_iam_noop_passes(tmp_path: Path) -> None:
+    # IAM-sensitive type but inert action -> not blocked by the IAM rule and no trust diff.
+    plan = {"resource_changes": [_rc("aws_iam_role", ["no-op"], before={"name": "r"}, after={"name": "r"})]}
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_trust_diff_on_non_iam_resource_blocks(tmp_path: Path) -> None:
+    # The trust check applies to ANY resource type, even otherwise-allowed ones.
+    before = {"assume_role_policy": json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]})}
+    after = {"assume_role_policy": json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Deny"}]})}
+    plan = {"resource_changes": [_rc("aws_some_resource", ["update"], before=before, after=after)]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_trust_diff_key_order_normalised_passes(tmp_path: Path) -> None:
+    # Same policy, different key order -> normalised equal -> no trust finding.
+    before = {"assume_role_policy": '{"Version":"2012-10-17","Statement":[]}'}
+    after = {"assume_role_policy": '{"Statement":[],"Version":"2012-10-17"}'}
+    plan = {"resource_changes": [_rc("aws_other_resource", ["update"], before=before, after=after)]}
+    assert evaluate_plan(plan) == []
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_clean_update_passes(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("aws_s3_bucket", ["update"], before={"tags": {}}, after={"tags": {"a": "b"}})]}
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_empty_plan_passes(tmp_path: Path) -> None:
+    assert main([_write(tmp_path, {})]) == 0
+
+
+def test_malformed_json_errors(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    assert main([str(bad)]) == 1
+
+
+def test_missing_file_errors(tmp_path: Path) -> None:
+    assert main([str(tmp_path / "does_not_exist.json")]) == 1
+
+
+def test_top_level_not_object_errors(tmp_path: Path) -> None:
+    target = tmp_path / "list.json"
+    target.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    assert main([str(target)]) == 1
+
+
+def test_usage_error_no_args() -> None:
+    assert main([]) == 1
+
+
+def test_usage_error_too_many_args() -> None:
+    assert main(["a", "b"]) == 1
+
+
+def test_normalise_policy_unparseable_string() -> None:
+    assert _normalise_policy("not json {{{") == "not json {{{"
+
+
+def test_normalise_policy_non_string_passthrough() -> None:
+    assert _normalise_policy({"already": "parsed"}) == {"already": "parsed"}
+    assert _normalise_policy(None) is None
+
+
+def test_trust_changed_handles_non_dict_states() -> None:
+    assert _trust_changed(None, {"assume_role_policy": "{}"}) is False
+    assert _trust_changed({"assume_role_policy": "{}"}, None) is False

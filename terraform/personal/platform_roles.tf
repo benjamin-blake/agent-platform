@@ -219,10 +219,13 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
   })
 }
 
-# PlatformDataLakeProvisioning: the data-plane rights AdminOps lacks, so `terraform apply` under
-# agent_platform_admin can create the data lake, workgroup, Glue DB, and counters table. Scope per
-# terraform/CLAUDE.md: Glue + Athena Resource "*"; s3:* on the data lake; dynamodb:* on
-# table/agent-platform-*.
+# PlatformDataLakeProvisioning: the data-plane rights AdminOps (iam:*/lambda/secrets) lacks, so
+# `terraform apply` under agent_platform_admin can provision + manage terraform/personal's data lake.
+# Least-privilege: ENUMERATED actions (no glue:*/athena:*/s3:*/dynamodb:*) scoped to the agent-platform
+# data lake -- no Resource "*" where the action supports a resource, no legacy bblake-* ARNs. This is
+# the surface terraform apply of THIS module actually exercises: the same data-plane action set as the
+# github_ci_apply CI role (oidc.tf), minus the IAM/OIDC reconcile statements (those come from iam:* in
+# AdminOps) and minus item-level DynamoDB (counter VALUES are PlatformDev runtime's domain).
 resource "aws_iam_role_policy" "platform_admin_datalake" {
   name = "PlatformDataLakeProvisioning"
   role = aws_iam_role.platform_admin.id
@@ -231,25 +234,119 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "GlueAthenaProvisioning"
-        Effect   = "Allow"
-        Action   = ["glue:*", "athena:*"]
-        Resource = "*"
-      },
-      {
-        Sid    = "DataLakeS3"
+        # Glue catalog: create/read/update the ops database + its Iceberg tables and _current views
+        # (the null_resource Athena DDL creates them; CREATE OR REPLACE VIEW + schema evolution edit
+        # the table objects). Scoped to the catalog + the agent_platform DB + its tables.
+        Sid    = "GlueCatalog"
         Effect = "Allow"
-        Action = "s3:*"
+        Action = [
+          "glue:CreateDatabase",
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:UpdateDatabase",
+          "glue:CreateTable",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:UpdateTable",
+          "glue:DeleteTable",
+          "glue:GetPartitions",
+          "glue:BatchCreatePartition",
+        ]
         Resource = [
-          aws_s3_bucket.data_lake.arn,
-          "${aws_s3_bucket.data_lake.arn}/*",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${aws_glue_catalog_database.ops.name}",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${aws_glue_catalog_database.ops.name}/*",
         ]
       },
       {
-        Sid      = "AgentPlatformDynamoDB"
-        Effect   = "Allow"
-        Action   = "dynamodb:*"
-        Resource = ["arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/agent-platform-*"]
+        # Athena: manage the production workgroup + run the provisioning DDL queries. Scoped to the
+        # one workgroup ARN.
+        Sid    = "AthenaWorkgroupManage"
+        Effect = "Allow"
+        Action = [
+          "athena:CreateWorkGroup",
+          "athena:GetWorkGroup",
+          "athena:UpdateWorkGroup",
+          "athena:TagResource",
+          "athena:UntagResource",
+          "athena:ListTagsForResource",
+          "athena:StartQueryExecution",
+          "athena:StopQueryExecution",
+        ]
+        Resource = ["arn:aws:athena:${var.aws_region}:${var.account_id}:workgroup/${aws_athena_workgroup.production.name}"]
+      },
+      {
+        # Query status/list actions do not support workgroup-level resource constraints in IAM.
+        Sid    = "AthenaQueryStatus"
+        Effect = "Allow"
+        Action = [
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:ListWorkGroups",
+        ]
+        Resource = "*"
+      },
+      {
+        # S3 bucket configuration terraform manages (versioning, encryption, public-access-block,
+        # policy, tagging) -- read + write variants. CreateBucket included for greenfield provisioning.
+        Sid    = "DataLakeBucketManage"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketAcl",
+          "s3:GetBucketVersioning",
+          "s3:PutBucketVersioning",
+          "s3:GetEncryptionConfiguration",
+          "s3:PutEncryptionConfiguration",
+          "s3:GetBucketPublicAccessBlock",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPolicy",
+          "s3:PutBucketPolicy",
+          "s3:GetBucketTagging",
+          "s3:PutBucketTagging",
+          "s3:GetBucketOwnershipControls",
+          "s3:GetAccelerateConfiguration",
+          "s3:GetBucketRequestPayment",
+          "s3:GetBucketLogging",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetReplicationConfiguration",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketCORS",
+          "s3:GetBucketWebsite",
+        ]
+        Resource = [aws_s3_bucket.data_lake.arn]
+      },
+      {
+        # S3 object IO: Iceberg table data + Athena query results + the terraform state object (all
+        # under this one bucket). Multipart actions cover large Athena result writes.
+        Sid    = "DataLakeObjectIO"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
+      },
+      {
+        # DynamoDB: manage the counters TABLE only (create/describe/update/tag), scoped to the single
+        # table. NOT item-level (GetItem/PutItem/UpdateItem) -- counter values are PlatformDev's domain
+        # and the seed items are no longer Terraform-managed.
+        Sid    = "DynamoDBCountersTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:CreateTable",
+          "dynamodb:DescribeTable",
+          "dynamodb:UpdateTable",
+          "dynamodb:TagResource",
+          "dynamodb:UntagResource",
+          "dynamodb:ListTagsOfResource",
+        ]
+        Resource = [aws_dynamodb_table.counters.arn]
       },
     ]
   })

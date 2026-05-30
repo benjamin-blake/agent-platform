@@ -137,14 +137,14 @@ recs and surface in preflight reports, making aggregate drift visible.
 requires Athena reachability. The breach-filing path handles connectivity
 loss in three tiers, all without raising during validate.py import:
 
-1. **Local session, SSO expired:** attempt `aws sso login --profile
-   company-aws-profile` automatically. This is the Decision 57 interactive
-   recovery pattern (user approves the browser flow). On success, retry
+1. **Local / Claude-Code-on-web session:** the static-key assume-role chain
+   auto-refreshes; there is no interactive login (the Decision 57 SSO-recovery
+   pattern is superseded -- see the PROJECT_CONTEXT credential model). If the
+   `agent_static` key was rotated, refresh `~/.aws/credentials` and retry
    `file_rec` once.
-2. **CI self-hosted runner:** instance metadata credentials (Decision 68)
-   resolve without SSO refresh. No interactive recovery is attempted in CI;
-   the absence of `TTY` and presence of `CI=true` are detected and the
-   SSO-login attempt is skipped.
+2. **CI (GitHub-hosted runner, CD.21):** the OIDC role
+   (`agent-platform-github-ci-branch` / `-pr`) supplies credentials via boto3's
+   default chain without any login. No interactive recovery is attempted in CI.
 3. **Both contexts, if portal still cannot reach Athena:** the rec is queued
    to the local outbox (`logs/.ops-outbox/`) per Decision 51 and drains on
    the next successful `ops_data_portal.sync()` call.
@@ -374,11 +374,16 @@ Layers L9-L10 specify the multi-environment promotion design.
 
 ### Environments
 
-| Environment | Account Profile | Agent-Initiated Changes | "Always Green" Invariant |
-|-------------|-----------------|-------------------------|--------------------------|
-| Sandbox | `company-aws-profile` | YES (only environment agents touch) | NO - tolerates red, recovers via forward-fix |
-| SIT | `company-aws-profile-staging` (future) | NO (automated promotion only; no agent-initiated work) | YES - must always be green |
-| PROD | `company-aws-profile-production` (future) | NO (automated promotion only; no agent-initiated work) | YES - must always be green |
+Account-family targets per Decision 76 and `docs/contracts/environment-taxonomy.md`: the platform
+stays SINGLE-ACCOUNT (the current personal account, sandbox only) until the product axis reaches
+live_full approaching real capital -- that product event is the named trigger to stand up dedicated
+SIT then PROD accounts. SIT/PROD are reserved vocabulary and future-state infrastructure.
+
+| Environment | Account-family target | Agent-Initiated Changes | "Always Green" Invariant |
+|-------------|-----------------------|-------------------------|--------------------------|
+| Sandbox | current personal account (`agent_platform` runtime / `agent_platform_admin` provisioning) | YES (only environment agents touch) | NO - tolerates red, recovers via forward-fix |
+| SIT | future dedicated account (not yet stood up; gated on the live_full trigger) | NO (automated promotion only; no agent-initiated work) | YES - must always be green |
+| PROD | future dedicated account (not yet stood up; gated on the live_full trigger) | NO (automated promotion only; no agent-initiated work) | YES - must always be green |
 
 ### Promotion gates
 
