@@ -6,9 +6,9 @@ Loaded automatically when Claude reads or edits files in this directory. Univers
 Files here are bundled into Lambda zip artefacts via `scripts/build_lambda.py`. Plans modifying any handler must include the build, deploy, and post-deploy verification sequence — not just code edits. The dispatcher and findings-processor are the two Lambda functions whose code is updated.
 
 ### Required steps for Lambda-touching plans
-1. **Build**: `.venv/Scripts/python.exe -m scripts.build_lambda`
-2. **Deploy**: `.venv/Scripts/python.exe -m scripts.build_lambda --deploy` uploads to S3 and updates Lambda function code.
-3. **Smoke-test (post-deploy)**: `.venv/Scripts/python.exe -m scripts.run_scheduled_agent --smoke-test NAME` when the runner exposes it (grep for `_smoke_test` or `--smoke-test`). Otherwise an explicit `--trigger-lambda NAME` invocation with expected observable output.
+1. **Build**: `bin/venv-python -m scripts.build_lambda`
+2. **Deploy**: `bin/venv-python -m scripts.build_lambda --deploy` uploads to S3 and updates Lambda function code.
+3. **Smoke-test (post-deploy)**: `bin/venv-python -m scripts.run_scheduled_agent --smoke-test NAME` when the runner exposes it (grep for `_smoke_test` or `--smoke-test`). Otherwise an explicit `--trigger-lambda NAME` invocation with expected observable output.
 
 If any of these are missing from a plan that touches handlers here, the plan is incomplete — flag it during `/plan` Step 4 (Lambda Deployment Assessment).
 

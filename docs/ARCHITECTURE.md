@@ -53,10 +53,9 @@ The Lakehouse Trading System is a **dual-environment system** split between comp
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ AWS Infrastructure                                      │ │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │ │
-│  │  │ formulas-   │  │ formulas-   │  │ formulas-   │   │ │
-│  │  │ discovery   │→ │ staging     │→ │ production  │   │ │
-│  │  │ (SageMaker) │  │ (A/B test)  │  │ (validated) │   │ │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘   │ │
+│  │  │ agent-platform-data-lake (S3 + Iceberg)             │   │ │
+│  │  │  discovery/  →  staging/  →  production/            │   │ │
+│  │  └──────────────────────────────────────────────────   │ │
 │  │                                                         │ │
 │  │  ┌─────────────────────────────────────────────┐      │ │
 │  │  │ Glue + Iceberg: formula_lineage table       │      │ │
@@ -130,9 +129,9 @@ The Lakehouse Trading System is a **dual-environment system** split between comp
 
 **Components**:
 - **S3 Multi-Bucket Architecture**:
-  - `formulas-discovery`: Raw SageMaker outputs with initial backtest metrics
-  - `formulas-staging`: Formulas undergoing A/B testing on personal computer
-  - `formulas-production`: Statistically validated formulas for live trading
+  - `agent-platform-data-lake/discovery/`: Raw SageMaker outputs with initial backtest metrics
+  - `agent-platform-data-lake/staging/`: Formulas undergoing A/B testing
+  - `agent-platform-data-lake/production/`: Statistically validated formulas for live trading
   - `data-lake`: Iceberg tables for market data and backtest results
   - Lifecycle policies: 90 days → Glacier, deprecated deleted after 2 years
   - Encrypted at rest with AES-256 (SSE-S3)
@@ -340,7 +339,7 @@ Additionally, pre-calculated delta columns will be added:
 2. Extract features and target variable
 3. Run PySR symbolic regression on SageMaker
 4. Backtest discovered formulas
-5. Store results with lineage to S3 `formulas-discovery` bucket
+5. Store results with lineage to S3 `agent-platform-data-lake/discovery/`
 6. Append metadata to `formula_lineage` Iceberg table
 
 **Output Format** (JSONL):
@@ -397,7 +396,7 @@ Each discovered formula becomes an independent RAT model in the ensemble:
 - `RATEnsemble`: Orchestrates multiple models including formula-based ones
 
 **Process**:
-1. FormulaLoader pulls from `formulas-production` and `formulas-staging` buckets
+1. FormulaLoader pulls from `agent-platform-data-lake/production/` and `agent-platform-data-lake/staging/`
 2. Validates formula safety (sympy AST parsing, whitelist functions)
 3. Computes embedding vector for formula characteristics
 4. Stores in PostgreSQL `formula_models` table with pgvector index
@@ -810,37 +809,32 @@ python -m src.main live
 
 ### AWS SSO (Single Sign-On)
 
-This system uses AWS SSO for secure credential management, eliminating the need to store static access keys.
+This system uses a static-key assume-role chain for credential management. A near-powerless `agent_static` IAM user key assumes the `PlatformDev` role, which auto-refreshes without interactive login.
 
-**Setup**:
+**Verify**:
 ```bash
-# Login to SSO (open browser for authentication)
-aws sso login --profile company-aws-profile
-
-# Verify authentication
-aws sts get-caller-identity --profile company-aws-profile
+aws sts get-caller-identity --profile agent_platform
+# Should show an assumed-role ARN ending in .../PlatformDev/...
 ```
 
 **Credential Discovery** (automatic):
-1. boto3 checks environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-2. Falls back to SSO cache in `~/.aws/credentials` after login
-3. Uses IAM role when running on AWS compute (Lambda, etc.)
+1. boto3 uses `agent_platform` profile (assumes `PlatformDev` from `agent_static` key)
+2. Uses IAM instance role when running on AWS compute (Lambda, OIDC CI runner)
 
-**Local Development Credential Priority**:
+**Profile chain** (`~/.aws/config`):
 ```
-1. AWS_PROFILE environment variable (if set)
-2. SSO cached credentials in ~/.aws/credentials (after aws sso login)
-3. IAM instance role (if running on EC2/Lambda)
-4. Static keys in ~/.aws/credentials (legacy, not recommended)
+[profile agent_static]    # near-powerless IAM user key (long-lived)
+[profile agent_platform]  # assumes PlatformDev; auto-refreshes; 10h session
+[profile agent_platform_admin]  # assumes PlatformAdmin for Terraform
 ```
 
-**Benefits**: No static credentials to rotate, centralized access management via IAM, temporary credentials (8-12 hour session), automatic logout after session expires, full audit trail via CloudTrail.
+See `bin/setup-cloud-env.sh` for the canonical CC-web/Linux setup.
 
 ---
 
 ## Security Considerations
 
-1. **Credentials**: Use AWS SSO (`company-aws-profile` profile), never commit static keys to repository
+1. **Credentials**: Use `agent_platform` profile (static-key assume-role chain); never commit the `agent_static` key or any IAM secret to the repository
 2. **IAM Roles**: Principle of least privilege — only required permissions per environment
 3. **Encryption**: S3 at rest (AES-256 / SSE-S3), TLS in transit, pgvector data encrypted
 4. **Formula Evaluation**: sympy AST parsing — never `eval()` or `exec()` on formula strings

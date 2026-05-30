@@ -135,7 +135,7 @@ def find_plan_file() -> Path | None:
 8. Terraform validation (`terraform validate` + `fmt -check`)
 
 For AWS-touching changes, the `--integration` flag adds:
-9. SSO session check (`aws sts get-caller-identity --profile company-aws-profile`)
+9. Static-key chain check (`aws sts get-caller-identity --profile agent_platform`)
 10. Integration tests (`pytest tests/ -m integration`)
 11. Terraform plan preview
 
@@ -354,7 +354,7 @@ Human/Agent → ops_data_portal.py → DynamoDB (ID Authority)
 
 **ID Authority:** Recommendation and decision IDs are allocated atomically via DynamoDB. The local JSONL files are read-only caches, not the source of truth.
 
-**Offline/Pending Outbox:** If AWS credentials are missing, the portal automatically queues records to `logs/.ops-outbox/`. Drain via: `python scripts/ops_data_portal.py --drain --profile company-aws-profile`.
+**Offline/Pending Outbox:** If AWS credentials are missing, the portal automatically queues records to `logs/.ops-outbox/`. Drain via: `bin/venv-python -m scripts.ops_data_portal --drain --profile agent_platform`.
 
 ### OpsWriter
 

@@ -1,6 +1,6 @@
 # Getting Started Guide
 
-This guide provides setup instructions for both **Company Environment** (formula discovery on AWS) and **Personal Environment** (live trading on Docker).
+This guide provides setup instructions for the current dev environment: **Claude Code on the web** (Linux container, Ubuntu 24.04, `bash`, `bin/venv-python`, static-key assume-role chain via `agent_platform`). Local Windows/Docker setup is a legacy escape-hatch; see `bin/setup-cloud-env.sh` for the canonical CC-web/Linux setup.
 
 ---
 
@@ -80,7 +80,7 @@ This provides a single queryable timeline of all work across all workflows. The 
 export S3_LOG_BUCKET=agent-platform-agent-logs  # enables OpsWriter write-through to Iceberg
 ```
 
-Add this to your `~/.bashrc` or `~/.bash_profile`. Without it, `OpsWriter.write()` silently no-ops locally and ops tables will not receive data from local sessions. The preflight check (`python -m scripts.session_preflight`) warns when this is unset with active SSO.
+Add this to your `~/.bashrc` or `~/.bash_profile` (or set via the CC-web Setup script field). Without it, `OpsWriter.write()` silently no-ops locally and ops tables will not receive data from local sessions. The preflight check (`bin/venv-python -m scripts.session_preflight`) warns when this is unset.
 
 ---
 
@@ -95,25 +95,19 @@ The `.vscode/settings.json` file includes workspace-specific settings:
 
 ---
 
-## Choose Your Environment
+## Development Environment
 
-### Company Environment
-**Where:** Company VM
-**Purpose:** Formula discovery, research, infrastructure deployment
-**Requires:** AWS SSO access, Terraform, SageMaker permissions
-**Go to:** [Company Environment Setup](#company-environment-setup)
-
-### Personal Environment
-**Where:** Personal computer
-**Purpose:** Live trading, formula testing, circuit breakers
-**Requires:** Docker, S3 read-only access
-**Go to:** [Personal Environment Setup](#personal-environment-setup)
+**Current model:** Claude Code on the web (Linux container, Ubuntu 24.04, bash, `bin/venv-python`, Python 3.12+).
+- AWS credentials: `agent_platform` static-key assume-role chain (auto-refreshes; no browser SSO flow).
+- Setup script: `bin/setup-cloud-env.sh` (canonical CC-web/Linux). For local Linux/Mac, see `Step 1` below.
+- Formula discovery, infrastructure, and data pipeline: `agent_platform` profile + `agent-platform-data-lake` S3 bucket.
+- Live trading: Docker Compose (optional, local only).
 
 ---
 
-## Company Environment Setup
+## AWS Infrastructure Setup
 
-Use this environment for formula discovery and AWS infrastructure management.
+Use this setup for formula discovery and AWS infrastructure management.
 
 ### Prerequisites
 
@@ -155,7 +149,7 @@ region = eu-west-2
 output = json
 ```
 
-Verify (boto3/CLI assume PlatformDev automatically and auto-refresh; no `aws sso login`):
+Verify (boto3/CLI assume PlatformDev automatically and auto-refresh; no SSO browser flow needed):
 ```bash
 aws sts get-caller-identity --profile agent_platform
 # Should show an assumed-role ARN ending in .../PlatformDev/...
@@ -171,8 +165,8 @@ cd agent-platform
 
 # Create virtual environment
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1  # Windows PowerShell
-# or: source .venv/bin/activate  # Mac/Linux
+source .venv/bin/activate  # Linux/Mac
+# On CC-web use bin/venv-python directly (no activate needed per invocation)
 
 # Install packages
 pip install -r requirements.txt
@@ -200,14 +194,14 @@ cp terraform.tfvars.example terraform.tfvars
 
 # Deploy
 terraform init
-terraform plan -var="aws_profile=your-aws-profile"
-terraform apply -var="aws_profile=your-aws-profile"
+terraform plan -var="aws_profile=agent_platform"
+terraform apply -var="aws_profile=agent_platform"
 
 # Note the outputs (bucket names, Athena workgroup, etc.)
 ```
 
 **What gets created:**
-- S3 buckets: `formulas-discovery`, `formulas-staging`, `formulas-production`
+- S3 bucket: `agent-platform-data-lake` (prefixes: `discovery/`, `staging/`, `production/`)
 - Glue catalog database with Iceberg table for `formula_lineage`
 - Athena workgroups for lab and production queries
 - CloudWatch dashboards for monitoring
@@ -226,21 +220,21 @@ python -m src.main --environment=company lab
 1. Queries Athena for historical market data
 2. Runs PySR symbolic regression (may take 30-60 minutes)
 3. Backtests discovered formulas
-4. Uploads formulas with lineage to `formulas-discovery` bucket
+4. Uploads formulas with lineage to `agent-platform-data-lake/discovery/`
 5. Appends metadata to Iceberg `formula_lineage` table
 
 ### Step 6: Verify Deployment
 
 ```bash
 # Check S3 buckets exist
-aws s3 ls --profile your-aws-profile | grep formulas-
+aws s3 ls --profile agent_platform | grep agent-platform-data-lake
 
 # Query lineage table
 aws athena start-query-execution \
   --query-string "SELECT COUNT(*) FROM formula_lineage" \
   --query-execution-context Database=trading_formulas_db \
   --work-group agent-platform-lab \
-  --profile your-aws-profile
+  --profile agent_platform
 
 # Check CloudWatch dashboards
 # Navigate to: AWS Console → CloudWatch → Dashboards
@@ -260,14 +254,14 @@ python -m src.data.pipeline --dry-run --universe ftse_100 --date 2026-03-20
 aws athena start-query-execution \
   --query-string "SELECT * FROM formula_lineage ORDER BY created_at DESC LIMIT 10" \
   --work-group agent-platform-lab \
-  --profile your-aws-profile
+  --profile agent_platform
 
 # Check costs
 aws ce get-cost-and-usage \
   --time-period Start=2026-01-01,End=2026-01-31 \
   --granularity MONTHLY \
   --metrics UnblendedCost \
-  --profile your-aws-profile
+  --profile agent_platform
 ```
 
 ### Deploying Lambda Changes
@@ -297,7 +291,7 @@ On Windows, `--input (Get-Content ... -Raw)` strips embedded quotes during Power
 aws stepfunctions start-execution `
   --state-machine-arn "arn:aws:states:eu-west-2:<your-account-id>:stateMachine:agent-platform-data-pipeline" `
   --input file://$env:TEMP/sfn.json `
-  --profile your-aws-profile --region eu-west-2
+  --profile agent_platform --region eu-west-2
 ```
 
 `"date": "auto"` resolves to today's date inside the Lambda. Pass an ISO date string (e.g. `"2026-03-20"`) to reprocess a specific day.
@@ -315,7 +309,7 @@ Use this environment for live trading with discovered formulas.
 - **Python 3.12+**: `python --version`
 - **Docker & Docker Compose**: `docker --version`, `docker-compose --version`
 - **AWS CLI v2**: For S3 access to company buckets
-- **AWS SSO Configured**: Same `your-aws-profile` profile (read-only S3)
+- **AWS SSO Configured**: Same `agent_platform` profile (read-only S3)
 
 ### Step 1: Configure AWS credentials (same as Company)
 
@@ -332,7 +326,7 @@ cd agent-platform
 
 # Create virtual environment
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1  # Windows PowerShell
+source .venv/bin/activate  # Linux/Mac (use bin/venv-python on CC-web)
 
 # Install packages
 pip install -r requirements.txt
@@ -353,11 +347,10 @@ Edit `docker/.env`:
 # PostgreSQL
 POSTGRES_PASSWORD=your-secure-password
 
-# Company S3 Buckets (read-only access)
-COMPANY_S3_PRODUCTION_BUCKET=formulas-production
-COMPANY_S3_STAGING_BUCKET=formulas-staging
-COMPANY_S3_REGION=eu-west-2
-AWS_PROFILE=your-aws-profile
+# S3 data lake (agent-platform-data-lake, read via agent_platform profile)
+S3_DATA_LAKE_BUCKET=agent-platform-data-lake
+S3_REGION=eu-west-2
+AWS_PROFILE=agent_platform
 ```
 
 ### Step 4: Start Docker Services
@@ -458,7 +451,7 @@ docker-compose up -d
 # S3 bucket names must be globally unique
 # Edit terraform/terraform.tfvars and change s3_bucket_name
 # Or import existing bucket:
-terraform import aws_s3_bucket.formulas_discovery formulas-discovery
+terraform import aws_s3_bucket.data_lake agent-platform-data-lake
 ```
 
 **Problem:** SageMaker job fails with "insufficient capacity"
@@ -484,11 +477,12 @@ terraform import aws_s3_bucket.formulas_discovery formulas-discovery
 
 **Solution:**
 ```bash
-# Verify AWS SSO login
-aws sso login --profile your-aws-profile
+# Verify static-key assume-role chain
+aws sts get-caller-identity --profile agent_platform
+# If this fails, refresh ~/.aws/credentials (rotated agent_static key)
 
 # Test S3 access
-aws s3 ls s3://formulas-production/ --profile your-aws-profile
+aws s3 ls s3://agent-platform-data-lake/production/ --profile agent_platform
 
 # Check docker/.env has correct AWS_PROFILE
 ```
@@ -499,8 +493,8 @@ aws s3 ls s3://formulas-production/ --profile your-aws-profile
 ```bash
 # Check if port 5432 already in use
 docker-compose down
-netstat -ano | findstr :5432  # Windows
-lsof -i :5432  # Mac/Linux
+ss -tulnp | grep :5432  # Linux
+lsof -i :5432  # Mac
 
 # If postgres already running locally, stop it or change port in docker-compose.yml
 ```
@@ -516,7 +510,7 @@ docker-compose logs formula-sync
 docker-compose restart formula-sync
 
 # Verify S3 buckets have formulas
-aws s3 ls s3://formulas-production/ --profile your-aws-profile
+aws s3 ls s3://agent-platform-data-lake/production/ --profile agent_platform
 ```
 
 **Problem:** A/B tests never complete
@@ -565,13 +559,13 @@ docker-compose logs trading-system
 
 **Problem:** `terraform apply` fails with `Athena query failed with status: FAILED` on `null_resource.create_iceberg_tables`
 
-**Solution:** Athena Iceberg returns `FAILED` (not `SUCCEEDED`) for `CREATE TABLE IF NOT EXISTS` when the table already exists. This triggers whenever the DDL query hash changes (e.g. after adding a column to `iceberg_tables.tf`). The provisioner uses `on_failure = continue` so this should not abort apply. If it does, verify the table already exists: `aws glue get-table --database-name trading_formulas_db --name market_data --profile your-aws-profile`. Schema evolution on existing tables is handled by the daily pipeline's awswrangler writes (`schema_evolution=True`).
+**Solution:** Athena Iceberg returns `FAILED` (not `SUCCEEDED`) for `CREATE TABLE IF NOT EXISTS` when the table already exists. This triggers whenever the DDL query hash changes (e.g. after adding a column to `iceberg_tables.tf`). The provisioner uses `on_failure = continue` so this should not abort apply. If it does, verify the table already exists: `aws glue get-table --database-name trading_formulas_db --name market_data --profile agent_platform`. Schema evolution on existing tables is handled by the daily pipeline's awswrangler writes (`schema_evolution=True`).
 
 **Problem:** `terraform plan` fails with `filemd5: open .\lambda-packages\data-pipeline-extras-layer.zip: The system cannot find the file specified`
 
 **Solution:** The extras layer zip is not tracked in git. Download it from S3 before running `terraform plan`:
 ```powershell
-aws s3 cp s3://agent-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip lambda-packages/data-pipeline-extras-layer.zip --profile your-aws-profile --region eu-west-2
+aws s3 cp s3://agent-platform-data-lake/lambda-packages/data-pipeline-extras-layer.zip lambda-packages/data-pipeline-extras-layer.zip --profile agent_platform --region eu-west-2
 ```
 
 **Problem:** Pipeline returns empty data
@@ -602,8 +596,7 @@ aws sts get-caller-identity --profile agent_platform
 **Solution:**
 ```bash
 # Ensure virtual environment is activated
-.\.venv\Scripts\Activate.ps1  # Windows
-source .venv/bin/activate  # Mac/Linux
+source .venv/bin/activate  # Linux/Mac (or use bin/venv-python on CC-web)
 
 # Reinstall dependencies
 pip install -r requirements.txt
@@ -910,7 +903,7 @@ S3 ObjectCreated (agents/) → findings_processor Lambda
    aws secretsmanager put-secret-value \
      --secret-id agent-platform-github-pat \
      --secret-string "ghp_YOUR_PAT_HERE" \
-     --profile your-aws-profile
+     --profile agent_platform
    ```
 
 ### First Run
@@ -921,7 +914,7 @@ Invoke the dispatcher Lambda manually to verify the configuration:
 aws lambda invoke \
   --function-name agent-platform-scheduled-agent-dispatcher \
   --payload '{}' \
-  --profile your-aws-profile \
+  --profile agent_platform \
   output.json && cat output.json
 ```
 

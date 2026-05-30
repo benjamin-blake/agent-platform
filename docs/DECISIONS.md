@@ -199,6 +199,8 @@ The cron mechanism for cc-scheduled-agents Phase 4 is a GitHub Actions scheduled
 **Remaining Open Questions:** Q6, Q7, Q8, Q10 (deferred to Phases 4-5).
 **Related:** Decision 68 (Self-hosted EC2 runner), `docs/plans/PLAN-cc-scheduled-agents.md`
 
+> **2026-05 migration update:** The self-hosted runner substrate referenced here was retired 2026-05-28 (CD.21). cc-scheduled-agents migrated to Claude Code scheduled agents on GitHub-hosted runners; see Decision 73.
+
 ---
 
 ## Decision 70: Physical Deletion of Bootstrap Records from ops_recommendations
@@ -435,6 +437,8 @@ Migrate the surface to two named tiers:
 
 **Related:** Decision 48 (Verification Tier Design), Decision 51 (Local-First Outbox), Decision 55 (RCA-First Executor -- no rescue agents), Decision 57 (Interactive vs Autonomous SSO recovery), `docs/INTENT-validation-architecture.md`, `docs/INTENT-verification-system.md`, `docs/plans/PLAN-audit-ops-recs-dq-scalability.md` (Gap 2; Future Direction).
 
+> **2026-05 migration update:** The self-hosted EC2 runner substrate referenced in the Substrate field and migration Steps 3-5 was retired 2026-05-28 (CD.21); CI now runs on GitHub-hosted runners (`ubuntu-latest`) with OIDC. The two-tier validation model and both named tiers are unchanged; the substrate switch is transparent to the validation contract. See Decision 73.
+
 ---
 
 ## Decision 61: Scheduled-agent findings flow through ops_recommendations via the source field (Decided)
@@ -490,6 +494,8 @@ GitHub branch protection is permanently unavailable for this repository. The mer
 
 **Related:** Decision 60 (Two-tier validation architecture), Decision 68 (Self-hosted EC2 runner), PLAN-validate-two-tier.
 
+> **2026-05 migration update:** The repository was made public in 2026-05 (Decision 73 / CD.21), resolving the free-plan private-repo restriction on branch protection. Branch protection remains deferred per T2.12 security gate (CD.20); see `CLAUDE.md` T2.12 note. The repo-visibility block on `required_status_checks` is resolved.
+
 ---
 
 ## Decision 68: Self-Hosted EC2 Runner as Canonical CI Execution Environment (Decided)
@@ -515,6 +521,8 @@ SCD data transfer boundary: code execution moves to the project's EC2 instance. 
 - Zero billed CI minutes for all branch builds and scheduled agent merges.
 
 **Related:** Decision 36 (AWS Auth -- no IAM users, no OIDC), Decision 37 (Lambda scheduled agents), Decision 60 (Two-tier validation architecture), `terraform/ec2_runner.tf`, `CLAUDE.md` runner ops runbook.
+
+> **2026-05 migration update:** The self-hosted EC2 runner described here was retired 2026-05-28 per CD.21. CI migrated to GitHub-hosted runners (`ubuntu-latest`) with OIDC to the personal account; see Decision 73. The EC2 Terraform definition is retained in `terraform/ec2_runner.tf` as an architectural artefact (no longer applied).
 
 ---
 
@@ -655,6 +663,8 @@ Specific consequences:
 The presubmit tier on the self-hosted EC2 runner already has SSO credentials and runs before every merge. Tying DQ refresh to the validation lifecycle means freshness is enforced at merge time without a separate operational layer. The Session E architecture adds scheduling complexity and a separate failure mode (cron agent not running) that the presubmit model eliminates entirely.
 
 **Related:** Decision 57 (Autonomous Improvement Control Plane), Decision 60 (Two-tier validation architecture), `docs/INTENT-dq-enforcement.md` (Phase 3 Decision Registry), `docs/INTENT-validation-architecture.md`
+
+> **2026-05 migration update:** The SSO credential model and self-hosted EC2 runner referenced in the Rationale were superseded 2026-05-28 (CD.21); the presubmit DQ runner now executes on GitHub-hosted runners with OIDC. The core decision -- DQ as part of the presubmit tier, no separate Session E scheduling -- is unchanged. See Decision 73.
 
 ---
 
@@ -1328,6 +1338,8 @@ terraform/
 - Formula promotion as deployment action: Wrong abstraction — formulas are data, not code
 
 **Status:** Decided — March 2026
+
+> **2026-05 migration update:** The `company-aws-profile` credential referenced in the Agent SSO Profile Restrictions section was retired; the current model is the `agent_platform` static-key assume-role chain (Decision 73 / CD.21). The multi-environment promotion strategy (separate sandbox/staging/production AWS accounts) is architecturally superseded by the single personal-account model.
 
 ---
 

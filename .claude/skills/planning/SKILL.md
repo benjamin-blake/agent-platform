@@ -6,7 +6,7 @@ model: opus
 
 # Planning Methodology & Rules
 
-You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (GEMINI.md, docs/PROJECT_CONTEXT.md, skills) during a planning session. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
+You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (docs/PROJECT_CONTEXT.md, skills) during a planning session. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
 
 ## Behavioural Invariants
 ```yaml
@@ -259,7 +259,7 @@ N+1. Report: what was implemented, verification results.
 | [area name] | [files affected] | [why] | XS/S/M/L/XL |
 ```
 
-**Platform compatibility:** Verify shell commands are Windows-compatible. Use Python scripts for automation.
+**Platform compatibility:** Verify shell commands are Linux/bash-compatible and use `bin/venv-python` for Python invocations.
 
 ## Related-Work Check (Workflow Step 8, when ci-rca recs are open)
 
