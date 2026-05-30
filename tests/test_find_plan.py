@@ -110,6 +110,7 @@ class TestFindPlanFile:
         with (
             patch("find_plan.subprocess.run", return_value=_mock_git("agent/no-plan")),
             patch("find_plan.ROOT", tmp_path),
+            patch("find_plan.sys.argv", ["find_plan.py"]),
         ):
             rc = _find_plan.main()
 
@@ -126,9 +127,85 @@ class TestFindPlanFile:
         with (
             patch("find_plan.subprocess.run", return_value=_mock_git("agent/my-feature")),
             patch("find_plan.ROOT", tmp_path),
+            patch("find_plan.sys.argv", ["find_plan.py"]),
         ):
             rc = _find_plan.main()
 
         captured = capsys.readouterr()
         assert rc == 0
         assert str(plan) in captured.out.strip()
+
+
+class TestFindPlanFileExplicit:
+    def test_explicit_path_exists_returns_path(self, tmp_path: Path) -> None:
+        """Explicit path that exists -> returns that Path."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan = tmp_path / "docs" / "plans" / "PLAN-web-workflow.md"
+        plan.write_text("# Plan", encoding="utf-8")
+
+        with patch("find_plan.ROOT", tmp_path):
+            result = find_plan_file(explicit=str(plan))
+
+        assert result == plan
+
+    def test_explicit_path_relative_resolves_under_root(self, tmp_path: Path) -> None:
+        """Explicit relative path is resolved against ROOT."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan = tmp_path / "docs" / "plans" / "PLAN-rel.md"
+        plan.write_text("# Plan", encoding="utf-8")
+
+        with patch("find_plan.ROOT", tmp_path):
+            result = find_plan_file(explicit="docs/plans/PLAN-rel.md")
+
+        assert result == plan
+
+    def test_explicit_path_missing_returns_none(self, tmp_path: Path) -> None:
+        """Explicit path that does not exist -> returns None (no fallback)."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with patch("find_plan.ROOT", tmp_path):
+            result = find_plan_file(explicit="docs/plans/PLAN-does-not-exist.md")
+
+        assert result is None
+
+    def test_explicit_missing_does_not_fall_back_to_legacy(self, tmp_path: Path) -> None:
+        """Explicit-but-missing path must NOT fall back to PLAN.md."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with patch("find_plan.ROOT", tmp_path):
+            result = find_plan_file(explicit="docs/plans/PLAN-no-such-file.md")
+
+        assert result is None
+        assert result != legacy
+
+    def test_main_explicit_path_exists_prints_path(self, tmp_path: Path, capsys) -> None:
+        """CLI: explicit arg with existing file prints the path."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan = tmp_path / "docs" / "plans" / "PLAN-explicit.md"
+        plan.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.ROOT", tmp_path),
+            patch("find_plan.sys.argv", ["find_plan.py", str(plan)]),
+        ):
+            rc = _find_plan.main()
+
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert str(plan) in captured.out.strip()
+
+    def test_main_explicit_path_missing_prints_not_found(self, tmp_path: Path, capsys) -> None:
+        """CLI: explicit arg with missing file prints NOT_FOUND."""
+        with (
+            patch("find_plan.ROOT", tmp_path),
+            patch("find_plan.sys.argv", ["find_plan.py", "docs/plans/PLAN-ghost.md"]),
+        ):
+            rc = _find_plan.main()
+
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out.strip() == "NOT_FOUND"

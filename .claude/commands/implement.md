@@ -1,5 +1,6 @@
 ---
 description: Implements IMPLEMENTATION plans directly or scopes STRATEGIC plans into atomic recommendations for the executor. Run after /plan.
+argument-hint: [docs/plans/PLAN-slug.md]
 ---
 
 # Implement Workflow
@@ -33,7 +34,18 @@ On non-zero exit: parse each failed check from the "Failed checks:" output, file
 git branch --show-current
 ```
 If the result is `main`, STOP.
-Find the plan file by substituting the branch slug into `docs/plans/PLAN-{slug}.md` (e.g. branch `agent/foo` → `docs/plans/PLAN-foo.md`). Read the entire file. Extract Intent, Plan Type, Verification Tier, Work Areas (STRATEGIC) or Execution Steps (IMPLEMENTATION), Verification Plan, and Constraints.
+
+The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.md`). If an argument was given, resolve it:
+```bash
+bin/venv-python scripts/find_plan.py <path-from-arguments>
+```
+If no argument was given, fall back to auto-discovery:
+```bash
+bin/venv-python scripts/find_plan.py
+```
+If either command prints `NOT_FOUND`, list `docs/plans/PLAN-*.md` and ask the human which plan to implement.
+
+Read the entire plan file. Extract Intent, Plan Type, Verification Tier, Work Areas (STRATEGIC) or Execution Steps (IMPLEMENTATION), Verification Plan, and Constraints.
 **If no plan file exists, STOP.**
 Also read `docs/PROJECT_CONTEXT.md` and `docs/DECISIONS.md` before proceeding.
 
@@ -82,7 +94,7 @@ Must exit 0 before continuing. If it fails, fix the issues and re-run.
 
 ## Step 7: Commit, PR, and Merge
 **You MUST execute the commit flow autonomously once Step 6 passes. Do not stop to ask for permission.**
-Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in your `implement` skill.
+Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in your `implement` skill. All GitHub operations use the GitHub MCP tools (`mcp__github__*`) -- the `gh` CLI is not available on the web harness. Wait for CI via `subscribe_pr_activity`; never use `sleep` or `/loop`.
 
 ## Step 8: Capture Friction
 Record friction (parsing errors, ambiguous areas, bugs found) as a process event emitted to `telemetry_process_events` via the executor telemetry API. If no friction, this step is a no-op.

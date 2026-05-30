@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Single source of truth for plan file resolution.
 
-Given the current git branch, resolves to the correct PLAN-{slug}.md file,
-falls back to legacy PLAN.md, or returns None if no plan exists.
+Given an optional explicit path or the current git branch, resolves to the correct
+PLAN-{slug}.md file, falls back to legacy PLAN.md, or returns None if no plan exists.
 
 Usage:
-    python scripts/find_plan.py
+    python scripts/find_plan.py [docs/plans/PLAN-slug.md]
     # Prints the plan file path, or NOT_FOUND if no plan exists.
     # Always exits 0.
+    # With an explicit path: returns that path if it exists, NOT_FOUND otherwise (no fallback).
 """
 
 from __future__ import annotations
@@ -19,12 +20,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def find_plan_file() -> Path | None:
-    """Find plan file for current branch or fall back to legacy PLAN.md.
+def find_plan_file(explicit: str | None = None) -> Path | None:
+    """Find plan file by explicit path, current branch, or legacy fallback.
+
+    Args:
+        explicit: If provided, return this path if it exists; return None if it does not
+                  (an explicit-but-missing path never falls back to legacy).
 
     Returns:
         Path to the plan file, or None if no plan file exists.
     """
+    if explicit is not None:
+        candidate = Path(explicit)
+        if not candidate.is_absolute():
+            candidate = ROOT / candidate
+        return candidate if candidate.exists() else None
+
     result = subprocess.run(
         ["git", "branch", "--show-current"],
         capture_output=True,
@@ -47,7 +58,8 @@ def find_plan_file() -> Path | None:
 
 
 def main() -> int:
-    plan = find_plan_file()
+    explicit = sys.argv[1] if len(sys.argv) > 1 else None
+    plan = find_plan_file(explicit)
     if plan is None:
         print("NOT_FOUND")
     else:

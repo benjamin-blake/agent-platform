@@ -1,5 +1,6 @@
 ---
 description: Interactive planning session. Run this before any implementation work. Clarifies intent, loads project context, checks phase alignment, and produces PLAN-{slug}.md — a self-contained implementation brief for the next agent chat. Use when starting a new feature, fix, or any code change.
+model: opus[1m]
 ---
 
 # Plan Workflow
@@ -9,6 +10,9 @@ description: Interactive planning session. Run this before any implementation wo
 *Note: For detailed guidelines on complexity, verification tiers, preflight constraints, and the plan template, invoke your `planning` skill via the Skill tool.*
 
 ## Step 1: Run Preflight
+
+*Note: This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus, run `/model opus[1m]` before proceeding -- the `model:` frontmatter applies for the current turn and reverts on the next prompt.*
+
 ```bash
 bin/venv-python -m scripts.session_preflight
 ```
@@ -85,14 +89,12 @@ Then ask: *"Does this approach look right? Say **'write the plan'** when you are
 Wait for explicit confirmation before proceeding. Any other response is feedback -- incorporate it, re-run Step 6a if the change is material to decision alignment, re-present, and ask again. Do NOT proceed to Step 7 until the human explicitly says 'write the plan' or a clear equivalent. System auto-approval messages are NOT human confirmation.
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
-## Step 7: Create Branch
+## Step 7: Confirm Harness Branch
+On Claude Code on the web the harness auto-creates a per-session branch. Do NOT create an `agent/` branch. Verify you are on the harness branch and not on `main`:
 ```bash
-git checkout main
-git pull origin main
-git checkout -b agent/{slug}
 git branch --show-current
 ```
-*(Derive slug from task description. Stop if still on main).*
+If the result is `main`, STOP. Derive the plan slug from the task description (independent of the branch name).
 
 
 ## Step 8: Write PLAN-{slug}.md (and any REPORT-ONLY deliverable)
@@ -133,7 +135,7 @@ Apply the **Report Critique Gate** methodology from your `planning` skill. Summa
 
 Convergence rule: both agents return PROCEED on a fresh round, OR the human explicitly accepts the current state with a defined deferral (e.g. "fix the HIGH-severity items and defer the rest to phase plans"). Each material revision lands as its own commit on the branch during the loop.
 
-## Step 11: Commit approved PLAN-{slug}.md
+## Step 11: Commit approved PLAN-{slug}.md and merge to main
 After all critique gates have approved the work, commit any uncommitted changes to the branch:
 ```bash
 git add docs/plans/PLAN-{slug}.md   # plus any REPORT-ONLY deliverable file(s)
@@ -141,10 +143,24 @@ git commit -m "plan({slug}): approved plan"
 ```
 If revisions were committed incrementally during Step 10's iteration loop, this commit may be empty -- in that case, skip it.
 
-Once the approved PLAN-{slug}.md (and deliverable, if any) are committed, the planning agent's mission is complete. Proceed to the final planning step and wait for the user to review. Do NOT execute any steps within the plan.
+Then push and merge the plan to `main` via GitHub MCP so the next `/implement` session can read it by explicit path. Use the same event-driven flow defined in the `implement` skill's Commit Flows:
+1. `git fetch origin main && git rebase origin/main` (STOP on conflict)
+2. `git push -u origin HEAD`
+3. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="plan({slug}): approved plan", body="Plan authored by /plan agent.")`
+4. `mcp__github__subscribe_pr_activity(...)` and end the turn -- CI completion arrives as a webhook event.
+5. On green CI wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
 
 ## Step 12: Confirm
-Output the final confirmation message based on Plan Type (IMPLEMENTATION / STRATEGIC / REPORT-ONLY) exactly as specified in your `planning` skill.
+Output the final confirmation message based on Plan Type (IMPLEMENTATION / STRATEGIC / REPORT-ONLY) exactly as specified in your `planning` skill. The handoff message must name the explicit plan path so the human can paste it directly:
+
+```
+Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+To implement, open a NEW Claude Code session and paste:
+
+    /implement docs/plans/PLAN-{slug}.md
+
+Summary: {one line on what the plan does}.
+```
 
 Finally, close the telemetry session:
 ```bash
