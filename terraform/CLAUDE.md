@@ -7,7 +7,7 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 ## Hard rules
 - **Optional artifacts**: Always wrap `filemd5()` and `file()` calls on optional artifacts with `try()`. Bad: `source_code_hash = filemd5("build/lambda.zip")`. Good: `source_code_hash = try(filemd5("build/lambda.zip"), md5(file("module_file.tf")))`.
 - **ASCII tag values**: Plain ASCII hyphens (`-`) only in Lambda tag values. No em dashes — they fail in AWS API serialisation.
-- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply is never automatic — see `planning` skill, Step 4 (Infrastructure Assessment).
+- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
 - **IAM precedence**: If a change modifies IAM (`*.tf` IAM resources or roles attached to Lambdas), `terraform apply` must precede any Lambda code deploy.
 
 ## AWS context
@@ -25,14 +25,25 @@ CODIFIED bullets below). The only item still applied out-of-band via the `platfo
 user (full admin) and NOT codified in `terraform/personal/` is the redundant `AgentPlatformRuntime`
 inline policy (slated for removal) -- re-creating infra elsewhere will not restore it; reapply manually if needed.
 
-- **`PlatformAdmin` + `PlatformDataLakeProvisioning` (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`):**
+- **`PlatformAdmin` + `PlatformDataLakeProvisioning` (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`;
+  datalake policy narrowed to least-privilege 2026-05-30):**
   `aws_iam_role.platform_admin` (import ID `PlatformAdmin`, `max_session_duration = 3600`) plus its two inline
   policies -- `aws_iam_role_policy.platform_admin_ops` (`AdminOps`: identity admin -- `iam:*` + admin Lambda +
   secretsmanager) and `aws_iam_role_policy.platform_admin_datalake` (`PlatformDataLakeProvisioning`: the data-plane
-  rights AdminOps lacks -- Glue + Athena `Resource: "*"`; `s3:*` on `agent-platform-data-lake`; `dynamodb:*` on
-  `table/agent-platform-*`). The datalake grant is required so `terraform apply` under `agent_platform_admin` can
-  create the data lake, workgroup, Glue DB, and counters table. IMPORT the role before apply; the trust policy MUST
-  show NO change in `plan` (lockout guard -- this is the role the apply assumes).
+  rights AdminOps lacks). The datalake grant is required so `terraform apply` under `agent_platform_admin` can
+  provision + manage the data lake, workgroup, Glue DB, and counters table. It is ENUMERATED least-privilege (no
+  `glue:*`/`athena:*`/`s3:*`/`dynamodb:*` service wildcards; no legacy `bblake-platform-*` ARNs), scoped to the
+  agent-platform data lake: Glue actions on the catalog + `agent_platform` DB + its tables; Athena manage on the
+  `agent-platform-production` workgroup (+ account-level query-status reads that don't support resource scoping);
+  `s3` bucket-config + object IO on `agent-platform-data-lake` only; DynamoDB TABLE-level actions (NOT item-level
+  -- counter VALUES are PlatformDev runtime's domain) on `agent-platform-counters` only. The action set mirrors the
+  `github_ci_apply` CI role's data-plane statements. NOTE: the set includes refresh-time READS the AWS provider
+  (v5.100) issues on every `plan` -- `glue:GetTags`, `dynamodb:DescribeContinuousBackups`/`DescribeTimeToLive` --
+  which apply does not exercise but `plan` (and therefore CD) requires; do not prune them as "unused". IMPORT the
+  role before apply; the trust policy MUST show NO change in `plan` (lockout guard -- this is the role the apply
+  assumes). If a future module addition needs a new data-plane action, expect the FIRST `plan` after the apply to
+  surface it as an AccessDenied refresh read; add it (scoped) and re-apply with `-refresh=false` (state is fresh
+  from the apply), then a full `plan` converges.
 - **PlatformDev runtime grant (CODIFIED 2026-05-29 in `terraform/personal/platform_roles.tf`):** the
   `agent_platform` (PlatformDev) runtime role is now Terraform-managed. `aws_iam_role.platform_dev`
   (imported, ID `PlatformDev`) sets `max_session_duration = 36000` (was 3600 -- the 3600 max blocked

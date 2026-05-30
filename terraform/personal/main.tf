@@ -11,16 +11,22 @@
 # never a committed literal (PLAN Step 11b parameterisation invariant).
 
 terraform {
-  required_version = ">= 1.0"
+  # use_lockfile (native S3 state locking, no DynamoDB lock table) requires Terraform 1.10+.
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
   }
-  # Local backend bootstraps the data-lake bucket; an S3 backend cannot be used before the bucket
-  # it would live in exists. State + .terraform/ are gitignored (terraform/**/ patterns).
-  backend "local" {}
+  # S3 backend with native state locking (use_lockfile). The data-lake bucket was bootstrapped
+  # under the prior local backend, so the chicken-and-egg that motivated "local" no longer holds.
+  # Partial config: bucket/key/region/encrypt come from -backend-config=backend-sandbox.hcl so this
+  # block stays account-agnostic and a future backend-production.hcl is a pure config addition.
+  # One-time migration: terraform init -migrate-state -backend-config=backend-sandbox.hcl.
+  backend "s3" {
+    use_lockfile = true
+  }
 }
 
 provider "aws" {
@@ -143,9 +149,10 @@ resource "aws_s3_bucket_policy" "data_lake_https_only" {
 
 # ---------------------------------------------------------------------------
 # DynamoDB atomic counters (rec/decision ID allocation, Decision 36/37: SSO, no IAM users)
-# Seeded create-only ABOVE the work-account max + 1000 margin (Decision 50 collision guard).
-# Work maxes read 2026-05-28: recommendations=944, decisions=81. Seed floor = max + 1000.
-# Migration Step 13c re-asserts counter >= max(migrated_id) + margin monotonically afterwards.
+# Seeded ONCE at greenfield ABOVE the work-account max + 1000 margin (Decision 50 collision guard;
+# work maxes 2026-05-28: recommendations=944, decisions=81 -> floors 1944/1081). The counter VALUES
+# are app-owned runtime state (atomic UpdateItem ADD), deliberately NOT Terraform-managed -- see the
+# note below the table resource.
 # ---------------------------------------------------------------------------
 
 resource "aws_dynamodb_table" "counters" {
@@ -163,34 +170,15 @@ resource "aws_dynamodb_table" "counters" {
   }
 }
 
-resource "aws_dynamodb_table_item" "seed_recommendations" {
-  table_name = aws_dynamodb_table.counters.name
-  hash_key   = aws_dynamodb_table.counters.hash_key
-
-  item = jsonencode({
-    counter_name  = { S = "recommendations" }
-    current_value = { N = "1944" }
-  })
-
-  # Create-only: never lower an existing counter (the migration may raise it monotonically).
-  lifecycle {
-    ignore_changes = [item]
-  }
-}
-
-resource "aws_dynamodb_table_item" "seed_decisions" {
-  table_name = aws_dynamodb_table.counters.name
-  hash_key   = aws_dynamodb_table.counters.hash_key
-
-  item = jsonencode({
-    counter_name  = { S = "decisions" }
-    current_value = { N = "1081" }
-  })
-
-  lifecycle {
-    ignore_changes = [item]
-  }
-}
+# Counter seed items are intentionally NOT Terraform-managed (removed during the PLAN-public-migration
+# S3-backend bootstrap, 2026-05-30). aws_dynamodb_table_item manages a row's VALUE -- but current_value
+# is mutable runtime state the ops portal increments via atomic UpdateItem ADD on every ID allocation.
+# Terraform must not own a value another system mutates: state here is ephemeral (CD applies run from
+# fresh containers), so a fresh apply would treat the seed as "to create" and PutItem the stale floor
+# over the live counter, resetting it and reusing already-issued IDs. The greenfield seed has done its
+# job (counters are live, well past the 1944/1081 floors). The table stays Terraform-managed; the rows
+# are app-owned. A NEW environment seeds its floor once out-of-band (e.g. `aws dynamodb put-item`)
+# during that environment's bootstrap, not via Terraform.
 
 # ---------------------------------------------------------------------------
 # Iceberg ops tables + _current views.
