@@ -1,7 +1,7 @@
 ---
 name: planning
 description: Deep methodology and rules for software planning, complexity assessment, and verification tier design. Use this when running the /plan workflow or when architecting new features.
-model: opus
+model: opus[1m]
 ---
 
 # Planning Methodology & Rules
@@ -12,7 +12,7 @@ You are using this skill to augment the `/plan` workflow. Apply these deep instr
 ```yaml
 # Machine-readable invariants verified by scripts/prompt_compliance.py
 preflight_run: true                # session_preflight.py must run at Step 1
-branch_creation: true              # must create agent/{slug} branch before writing plan
+harness_branch: true               # work on the harness-assigned session branch; do NOT create agent/ branches
 decision_scout_gate: true          # @decision-scout must be invoked at Step 6a before presentation
 critique_gate: true                # @plan-critique must be invoked before completion
 report_critique_gate: report-only  # REPORT-ONLY plans must run Step 10 multi-perspective deliverable critique
@@ -192,8 +192,15 @@ Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any 
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
-The plan filename must match what find_plan.py will derive from the branch name (branch prefix agent/ is stripped, remainder is the slug).
-e.g., if plan is `docs/plans/PLAN-fix-telemetry-drift.md`, branch must be `agent/fix-telemetry-drift`.
+On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch.
+
+Verify you are on the harness branch and not on `main`:
+```bash
+git branch --show-current
+```
+If the result is `main`, STOP.
+
+Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.md`. After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
 
 ## PLAN-{slug}.md Template (Workflow Step 8)
 Use exactly this structure:
@@ -209,8 +216,8 @@ IMPLEMENTATION / STRATEGIC / REPORT-ONLY
 ## Verification Tier
 V1 / V2 / V3
 
-## Branch
-agent/{slug}
+## Plan Path
+docs/plans/PLAN-{slug}.md
 
 ## Phase
 [phase number and name from ROADMAP.md]
@@ -344,8 +351,17 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
 The human may explicitly state "skip report critique" after this step's purpose has been surfaced. This is logged in the PLAN's Known Gaps. Default is MANDATORY -- the gate fires unless explicitly waived.
 
 ## Confirmation Messages (Workflow Step 12)
-- **IMPLEMENTATION:** "Planning complete. `docs/plans/PLAN-{slug}.md` is ready and committed to branch `agent/{slug}`. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
-- **STRATEGIC:** "Planning complete. `docs/plans/PLAN-{slug}.md` is ready with Work Areas for scoping. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
-- **REPORT-ONLY:** "Planning complete. The report deliverable at `[path]` has passed the multi-perspective critique gate and is committed to branch `agent/{slug}`. Review and edit if needed. The deliverable is the substantive output -- no `/implement` required. Decide which follow-on items (e.g. per-phase implementation plans referenced from the deliverable) to start, then open a new planning session for each."
+Emit the handoff naming the explicit plan path so the human can paste it directly.
+
+- **IMPLEMENTATION / STRATEGIC:** use this block (STRATEGIC scopes into recs; IMPLEMENTATION executes directly):
+  ```
+  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+  To implement, open a NEW Claude Code session and paste:
+
+      /implement docs/plans/PLAN-{slug}.md
+
+  Summary: {one line on what the plan does}.
+  ```
+- **REPORT-ONLY:** "Planning complete. The report deliverable at `[path]` has passed the multi-perspective critique gate and is merged to `main`. Review and edit if needed. The deliverable is the substantive output -- no `/implement` required. Decide which follow-on items (e.g. per-phase implementation plans referenced from the deliverable) to start, then open a new planning session for each."
 
 **DO NOT PERFORM ANY FURTHER ACTIONS**
