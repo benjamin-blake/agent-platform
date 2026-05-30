@@ -21,7 +21,7 @@ When `scripts/executor/postflight.py` adds a new `subprocess.run` call inside an
 
 ## Acceptance command rules (when filing recommendations from tests)
 - No `pytest -k` selectors in acceptance commands — LLM-generated test names are unpredictable and rename between runs. Use `grep` to verify the test exists, then run via `pytest tests/test_file.py::ClassName`.
-- Acceptance commands must not contain `python -c` one-liners (Windows Git Bash compatibility).
+- Acceptance commands must not contain `python -c` one-liners (shell-quoting fragility).
 
 ## Namespace migration discipline
 When refactoring a monolith into a package, all `@patch("module.symbol")` calls must be updated to the new submodule locations. Enumerate via grep before refactoring; for large suites, write a bulk replacement script rather than editing by hand.

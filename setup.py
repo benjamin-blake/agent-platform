@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Set up the Lakehouse Trading System development environment."""
+"""Set up the Lakehouse Trading System development environment.
+
+DEPRECATED for Claude Code on the web (Linux container): use `bin/setup-cloud-env.sh`
+instead -- it is the canonical CC-web/Linux setup and configures the venv, AWS credentials,
+and environment variables automatically.
+
+This script is retained for local Windows/Git-Bash escape-hatch use only. The functions
+`fix_venv_activate_for_git_bash()` (Decision 27) and credential helpers are soft-deprecated
+via this header but left intact so existing callers are not broken.
+"""
 
 import re
 import shutil
@@ -124,7 +133,7 @@ def check_terraform() -> None:
 
 def configure_aws_sso() -> None:
     print()
-    print("Checking AWS CLI and SSO configuration...")
+    print("Checking AWS CLI and static-key assume-role configuration...")
     if not shutil.which("aws"):
         print("[WARNING] AWS CLI is not installed.")
         print("Install AWS CLI v2 from: https://awscli.amazonaws.com/AWSCLIV2.msi")
@@ -136,11 +145,13 @@ def configure_aws_sso() -> None:
         aws_config_text = aws_config.read_text(encoding="utf-8") if aws_config.exists() else ""
     except (OSError, UnicodeDecodeError):
         aws_config_text = ""
-    if "[profile company-aws-profile]" in aws_config_text:
-        print("[INFO] AWS SSO profile 'company-aws-profile' is configured.")
+    if "[profile agent_platform]" in aws_config_text:
+        print("[INFO] AWS profile 'agent_platform' is configured.")
+        print("[INFO] Verify: aws sts get-caller-identity --profile agent_platform")
     else:
-        print("[INFO] AWS SSO profile 'company-aws-profile' not found.")
-        print("Configure it with: aws configure sso --profile company-aws-profile")
+        print("[INFO] AWS profile 'agent_platform' not found.")
+        print("For CC-web/Linux setup, run: bin/setup-cloud-env.sh")
+        print("For local setup, add [profile agent_static] + [profile agent_platform] to ~/.aws/config")
 
 
 def create_config_files() -> None:

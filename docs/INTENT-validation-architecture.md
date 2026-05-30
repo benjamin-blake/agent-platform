@@ -77,18 +77,19 @@ Removed outright:
 
 ## Substrate
 
-The two-tier model is structurally weak without a substrate that makes "the default tier always runs in CI" cheap and reliable. GitHub Actions hosted runners are billed and constrained to ~2000 minutes/month; the current repository is approaching that cap. The proposed substrate is a **self-hosted GitHub Actions runner on EC2** with the same SSO and toolchain configuration as the developer machine.
+The two-tier model is structurally weak without a substrate that makes "the default tier always runs in CI" cheap and reliable.
 
-Required substrate properties:
+**Historical substrate (retired 2026-05-28, CD.21):** A self-hosted GitHub Actions runner on EC2 (`t3.medium`, Decision 68) with SSO credentials via instance metadata. Retired because the public-repo migration (Decision 73 / CD.21) unlocked GitHub-hosted runners with OIDC, eliminating the EC2 runner's cost and complexity.
 
-- Same Python interpreter, same `aws sso` configuration via SSM-injected creds, same `terraform`, `gh`, `docker` versions as the dev box. Drift between local and CI is the failure mode `validate.py` exists to prevent; the substrate must not reintroduce it.
-- Branch protection on `main` requires the workflow to pass before merge. The workflow calls `python -m scripts.validate` (the default presubmit tier) and nothing else.
-- Reversible in 30 seconds: a single binary registered against the repository. If the runner is deregistered, hosted runners pick up jobs again.
-- Zero billed minutes for the default presubmit tier. Pip-audit, dependency health, and the V3 harness all run on the self-hosted runner without consuming budget.
+**Current substrate (CD.21):** GitHub-hosted runners (`ubuntu-latest`) with OIDC to the personal AWS account (role `agent-platform-github-ci-branch` for branch/push, `agent-platform-github-ci-pr` for PRs). Credentials are injected by the OIDC token exchange; no SSO refresh, no instance metadata, no static keys in CI.
 
-The substrate stand-up is filed as a separate STRATEGIC plan (recommendation: "Stand up self-hosted GitHub Actions runner on EC2 with SSO substrate"). It is a prerequisite for the flag-consolidation work; without it, the default tier is too slow to run on every PR.
+Required substrate properties (unchanged from original design):
 
-The alternative -- run all validation locally and have the GitHub status check trust developer-claimed PASS -- is structurally weak (see `docs/plans/PLAN-audit-ops-recs-dq-scalability.md` Future Direction for the architect's three-point assessment: loses determinism, signalling problem, discretion creep). The local-only path is not pursued.
+- Same Python interpreter and `terraform`/`gh` versions as the dev environment. Drift between local and CI is the failure mode `validate.py` exists to prevent.
+- The workflow calls `python -m scripts.validate` (the default presubmit tier) and nothing else.
+- Zero billed minutes for the default presubmit tier (GitHub-hosted runners are free for public repositories).
+
+The alternative -- run all validation locally and have the GitHub status check trust developer-claimed PASS -- is structurally weak (see `docs/plans/PLAN-audit-ops-recs-dq-scalability.md` Future Direction: loses determinism, signalling problem, discretion creep). The local-only path is not pursued.
 
 ---
 

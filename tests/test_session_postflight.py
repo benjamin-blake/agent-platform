@@ -640,6 +640,128 @@ class TestAutoMode:
         assert '"merged"' in captured.out
 
 
+class TestCheckSsoGating:
+    """Tests for the static-key SSO-gating logic in run_auto().
+
+    Under the static-key assume-role model, run_auto() must:
+    - Never spawn an 'aws sso login' subprocess.
+    - Skip the drain (skip-and-continue) when _check_sso returns False.
+    - Proceed with the drain when _check_sso returns True.
+    """
+
+    def _close_output(self, sanity_status: str = "PASS") -> str:
+        return json.dumps(
+            {
+                "intent_achieved": True,
+                "session_log_entry": "## [2026-05-30] session",
+                "sanity_status": sanity_status,
+                "details": {},
+            }
+        )
+
+    def _push_output(self, status: str = "merged") -> str:
+        return json.dumps({"status": status, "pr_url": "https://github.com/pr/1"})
+
+    def test_no_sso_login_subprocess_spawned(self, capsys: pytest.CaptureFixture) -> None:
+        """run_auto() must never call subprocess.run(['aws', 'sso', 'login', ...])."""
+        close_out = self._close_output()
+        push_out = self._push_output()
+
+        def fake_close() -> int:
+            print(close_out)
+            return 0
+
+        def fake_push() -> int:
+            print(push_out)
+            return 0
+
+        with (
+            patch("session_postflight.run_validate", return_value=0),
+            patch("session_postflight.run_close", side_effect=fake_close),
+            patch("session_postflight.run_metrics", return_value=0),
+            patch("session_postflight.run_commit", return_value=0),
+            patch("session_postflight.run_push", side_effect=fake_push),
+            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
+            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
+            patch("session_postflight._stage_document_derived_tables"),
+            patch("subprocess.run") as mock_subprocess,
+        ):
+            _postflight.run_auto("feat: test")
+
+        # Confirm no 'aws sso login' call was made
+        for call_args in mock_subprocess.call_args_list:
+            cmd = call_args.args[0] if call_args.args else call_args.kwargs.get("args", [])
+            assert not ("sso" in cmd and "login" in cmd), f"Unexpected aws sso login call: {cmd}"
+
+    def test_false_check_sso_skips_drain_without_error(self, capsys: pytest.CaptureFixture) -> None:
+        """When check_sso returns False, drain is skipped and run_auto continues (skip-and-continue)."""
+        close_out = self._close_output()
+        push_out = self._push_output()
+
+        def fake_close() -> int:
+            print(close_out)
+            return 0
+
+        def fake_push() -> int:
+            print(push_out)
+            return 0
+
+        with (
+            patch("session_postflight.run_validate", return_value=0),
+            patch("session_postflight.run_close", side_effect=fake_close),
+            patch("session_postflight.run_metrics", return_value=0),
+            patch("session_postflight.run_commit", return_value=0),
+            patch("session_postflight.run_push", side_effect=fake_push),
+            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.sync_ops.check_sso", return_value=False),
+            patch("scripts.ops_data_portal.drain_pending") as mock_drain,
+            patch("scripts.ops_data_portal.drain_pending_decisions") as mock_drain_dec,
+            patch("session_postflight._stage_document_derived_tables"),
+        ):
+            rc = _postflight.run_auto("feat: test")
+
+        # skip-and-continue: rc must be 0 (not a blocking error)
+        assert rc == 0
+        # drain must NOT be called when credentials are unavailable
+        mock_drain.assert_not_called()
+        mock_drain_dec.assert_not_called()
+        # informational skip message emitted (not an ERROR)
+        captured = capsys.readouterr()
+        assert "skipping drain" in captured.out or "Credentials unavailable" in captured.out
+
+    def test_true_check_sso_calls_drain(self, capsys: pytest.CaptureFixture) -> None:
+        """When check_sso returns True, drain_pending is called normally."""
+        close_out = self._close_output()
+        push_out = self._push_output()
+
+        def fake_close() -> int:
+            print(close_out)
+            return 0
+
+        def fake_push() -> int:
+            print(push_out)
+            return 0
+
+        with (
+            patch("session_postflight.run_validate", return_value=0),
+            patch("session_postflight.run_close", side_effect=fake_close),
+            patch("session_postflight.run_metrics", return_value=0),
+            patch("session_postflight.run_commit", return_value=0),
+            patch("session_postflight.run_push", side_effect=fake_push),
+            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 1, "skipped": 0}) as mock_drain,
+            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
+            patch("session_postflight._stage_document_derived_tables"),
+        ):
+            rc = _postflight.run_auto("feat: test")
+
+        assert rc == 0
+        mock_drain.assert_called_once()
+
+
 class TestStageDocumentDerivedTables:
     """Tests for _stage_document_derived_tables() (neutered in Phase 0+1)."""
 

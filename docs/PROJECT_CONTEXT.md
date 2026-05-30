@@ -2,7 +2,7 @@
 
 > **Canonical project knowledge base for Claude Code.** `.github/copilot-instructions.md` is a deep-frozen fallback for the legacy GitHub Copilot CLI surface — do not edit it. Update this file only.
 
-You are a Lead Software Developer writing production-quality Python. You are operating on a Windows host with Git Bash as the shell.
+You are a Lead Software Developer writing production-quality Python. You are operating on a Linux container (Ubuntu 24.04) with bash; use `bin/venv-python` for all Python invocations (Python 3.12+).
 See docs/contracts/instruction-architecture.md for the full information architecture.
 
 ## Rules
@@ -12,7 +12,7 @@ See docs/contracts/instruction-architecture.md for the full information architec
 - Python 3.12+, type hints required, async for I/O
 - **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
 - Formula evaluation: `sympy.sympify()` + `sympy.lambdify()` only -- never `eval()`/`exec()`
-- No Docker on company VM -- Lambdas use zip packaging via S3
+- No Docker in this environment -- Lambdas use zip packaging via S3
 - **Branching:** All agent work uses `agent/{phase}-{slug}` branches. Never commit directly to `main`.
 - **Context budget:** Files loaded at session start must stay concise. `ROADMAP.md` keeps only current and adjacent phases (completed phases archived to `ROADMAP_ARCHIVE.md`). `SESSION_LOG.md` keeps only the last 5 entries. `DECISIONS.md` keeps only open decisions (resolved decisions archived to `DECISIONS_ARCHIVE.md`). `strategic_review` enforces this during periodic checks.
 - **Refactoring Protocol:** When performing complex, non-contiguous edits, verify structural integrity immediately after. Never proceed to logic verification (e.g., merge or test) until the structural integrity of the edit is confirmed.
@@ -34,7 +34,7 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 ### Recommendation & Decision Logging
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
 - **ID Authority:** Recommendation and decision IDs are allocated atomically via DynamoDB. The local JSONL files are read-only caches, not the source of truth.
-- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads from Athena (requires SSO); raises `RuntimeError` if unreachable.
+- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads from Athena (requires the agent_platform static-key chain); raises `RuntimeError` if unreachable.
 - **Offline/Pending Outbox:** If AWS credentials (profile `agent_platform`) are missing or services are unreachable, the portal automatically queues records to `logs/.ops-outbox/`. Call `ops_data_portal.sync()` once connectivity is restored to drain and compact.
 - **SCD Type 2:** The authoritative store (Athena/Iceberg) uses append-only semantics. Deduplication to the latest record happens at query time via the `ops_recommendations_current` and `ops_decisions_current` views.
 
@@ -235,7 +235,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `.github/prompts/develop-executor.prompt.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
 
-- **Venv and Version Manager:** `.python-version` (tracked) pins pyenv to 3.11.9 in this repo. Activate venv: `source .venv/Scripts/activate`. Verify: `python -c "import sys; print(sys.executable)"`. If garbled paths on activation, run `python setup.py`. If `PYENV_VERSION` env var is set (via `pyenv shell`), it overrides `.python-version` -- run `pyenv shell --unset` then re-activate. Worktrees use the main repo venv at `C:/Users/bblake/Git Repos/agent-platform/.venv`.
+- **Venv and Python:** Python 3.12+ on Linux container. Always invoke via `bin/venv-python` (wrapper auto-resolves the venv). Verify: `bin/venv-python -c "import sys; print(sys.executable)"`. If the venv is missing, run `bin/setup-cloud-env.sh` (canonical CC-web/Linux setup). Do not use `source .venv/bin/activate` -- each Bash tool invocation is independent; the wrapper handles activation.
 
 - **Import Safety Patterns (Critical):** Never raise exceptions during module import -- breaks pytest collection in CI. Defer validation to explicit `validate()` calls. BAD: `if not os.path.exists(f): raise FileNotFoundError`. GOOD: `logger.warning(...); return default`. Import optional external deps at module level with `try/except ImportError` using a sentinel class fallback. Config modules must load successfully even if config files are missing -- use lazy loading with warning logs.
 
@@ -301,7 +301,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Iceberg integer promotion (Medium):** Iceberg/engine writes may have previously promoted `int` columns to `long`/`bigint`. Attempts to re-declare these as `int` will fail with "Cannot change column type: long -> int". When writing schema/dtype overrides, detect and honor existing promoted types (use bigint/long where present).
 
-- **build_lambda S3 bucket vs Terraform bucket (Low):** Ensure `scripts/build_lambda.py` uploads to the same S3 bucket referenced by Terraform (compare against `terraform output` or repo config). A mismatch (e.g., formulas-discovery vs data-lake) causes deployed Lambdas to reference the wrong artifact bucket; validate and fail early in the build step.
+- **build_lambda S3 bucket vs Terraform bucket (Low):** Ensure `scripts/build_lambda.py` uploads to the same S3 bucket referenced by Terraform (compare against `terraform output` or repo config). A mismatch (e.g., a stale config referencing a retired bucket vs `agent-platform-data-lake`) causes deployed Lambdas to reference the wrong artifact bucket; validate and fail early in the build step.
 
 - **Pytest `-k` selector gotcha (Important):** Avoid using `-k` selectors in acceptance commands for test steps. LLM-generated test names are unpredictable and may change between runs, causing brittle or failing acceptance checks. Instead, use `grep` to verify the test exists, and run tests using the `python -m pytest tests/test_file.py::ClassName` format to ensure robust validation.
 

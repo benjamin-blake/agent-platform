@@ -663,31 +663,39 @@ def run_auto(commit_message: str, steps_total: int = 0, steps_friction: int = 0)
     run_log_housekeeping()
 
     # 7b. Drain pending outbox recs (best-effort, before compaction + sync)
+    # Static-key chain (_SSO_PROFILE = agent_platform) auto-refreshes; no interactive login needed.
+    # If _check_sso returns False the chain is offline -- skip the drain and continue (degraded mode,
+    # Dec 57/60). The outbox will drain on the next session when credentials are restored.
+    _drain_ok = True
     try:
         from scripts.sync_ops import check_sso as _check_sso  # noqa: PLC0415
 
         if not _check_sso(_SSO_PROFILE):
-            subprocess.run(["aws", "sso", "login", "--profile", _SSO_PROFILE], check=False, timeout=300)
+            print(f"[auto] Credentials unavailable ({_SSO_PROFILE}); skipping drain (degraded mode).", flush=True)
+            _drain_ok = False
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: SSO re-check before drain skipped: {exc}", file=sys.stderr)
+        _drain_ok = False
 
-    try:
-        from scripts.ops_data_portal import drain_pending  # noqa: PLC0415
+    if _drain_ok:
+        try:
+            from scripts.ops_data_portal import drain_pending  # noqa: PLC0415
 
-        drain_result = drain_pending(profile=_SSO_PROFILE)
-        if drain_result.get("drained", 0) > 0:
-            print(f"[auto] Drained {drain_result['drained']} pending rec(s)", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARNING: drain_pending skipped: {exc}", file=sys.stderr)
+            drain_result = drain_pending(profile=_SSO_PROFILE)
+            if drain_result.get("drained", 0) > 0:
+                print(f"[auto] Drained {drain_result['drained']} pending rec(s)", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: drain_pending skipped: {exc}", file=sys.stderr)
 
-    try:
-        from scripts.ops_data_portal import drain_pending_decisions  # noqa: PLC0415
+    if _drain_ok:
+        try:
+            from scripts.ops_data_portal import drain_pending_decisions  # noqa: PLC0415
 
-        dec_drain = drain_pending_decisions(profile=_SSO_PROFILE)
-        if dec_drain.get("drained", 0) > 0:
-            print(f"[auto] Drained {dec_drain['drained']} pending decision(s)", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARNING: drain_pending_decisions skipped: {exc}", file=sys.stderr)
+            dec_drain = drain_pending_decisions(profile=_SSO_PROFILE)
+            if dec_drain.get("drained", 0) > 0:
+                print(f"[auto] Drained {dec_drain['drained']} pending decision(s)", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: drain_pending_decisions skipped: {exc}", file=sys.stderr)
 
     # 8. Sync ops Iceberg tables (compact + refresh views + pull local cache)
     try:
