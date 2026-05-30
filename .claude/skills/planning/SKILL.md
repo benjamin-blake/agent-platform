@@ -351,8 +351,17 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
 The human may explicitly state "skip report critique" after this step's purpose has been surfaced. This is logged in the PLAN's Known Gaps. Default is MANDATORY -- the gate fires unless explicitly waived.
 
 ## Confirmation Messages (Workflow Step 12)
-- **IMPLEMENTATION:** "Planning complete. The plan is merged to `main` at `docs/plans/PLAN-{slug}.md`. To implement, open a NEW Claude Code session and paste:\n\n    /implement docs/plans/PLAN-{slug}.md\n\nSummary: {one line on what the plan does}."
-- **STRATEGIC:** "Planning complete. The plan is merged to `main` at `docs/plans/PLAN-{slug}.md`. To scope into recommendations, open a NEW Claude Code session and paste:\n\n    /implement docs/plans/PLAN-{slug}.md\n\nSummary: {one line on what the plan does}."
+Emit the handoff naming the explicit plan path so the human can paste it directly.
+
+- **IMPLEMENTATION / STRATEGIC:** use this block (STRATEGIC scopes into recs; IMPLEMENTATION executes directly):
+  ```
+  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+  To implement, open a NEW Claude Code session and paste:
+
+      /implement docs/plans/PLAN-{slug}.md
+
+  Summary: {one line on what the plan does}.
+  ```
 - **REPORT-ONLY:** "Planning complete. The report deliverable at `[path]` has passed the multi-perspective critique gate and is merged to `main`. Review and edit if needed. The deliverable is the substantive output -- no `/implement` required. Decide which follow-on items (e.g. per-phase implementation plans referenced from the deliverable) to start, then open a new planning session for each."
 
 **DO NOT PERFORM ANY FURTHER ACTIONS**

@@ -5,7 +5,7 @@ Given an optional explicit path or the current git branch, resolves to the corre
 PLAN-{slug}.md file, falls back to legacy PLAN.md, or returns None if no plan exists.
 
 Usage:
-    python scripts/find_plan.py [docs/plans/PLAN-slug.md]
+    bin/venv-python scripts/find_plan.py [docs/plans/PLAN-slug.md]
     # Prints the plan file path, or NOT_FOUND if no plan exists.
     # Always exits 0.
     # With an explicit path: returns that path if it exists, NOT_FOUND otherwise (no fallback).

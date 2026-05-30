@@ -195,7 +195,7 @@ The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on ma
 ### Wait-for-CI: event-driven, never polled
 The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
 1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
-2. **End your turn.** Do NOT `Bash sleep`, do NOT `/loop`, do NOT poll -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
+2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
 3. On wake, confirm status (`mcp__github__pull_request_read` with `method=get_status`/`get_check_runs`):
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge.
    - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
