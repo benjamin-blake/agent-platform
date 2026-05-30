@@ -236,7 +236,8 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
       {
         # Glue catalog: create/read/update the ops database + its Iceberg tables and _current views
         # (the null_resource Athena DDL creates them; CREATE OR REPLACE VIEW + schema evolution edit
-        # the table objects). Scoped to the catalog + the agent_platform DB + its tables.
+        # the table objects). Scoped to the catalog + the agent_platform DB + its tables. glue:GetTags
+        # is a refresh-time read the provider issues on aws_glue_catalog_database every plan.
         Sid    = "GlueCatalog"
         Effect = "Allow"
         Action = [
@@ -251,6 +252,7 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "glue:DeleteTable",
           "glue:GetPartitions",
           "glue:BatchCreatePartition",
+          "glue:GetTags",
         ]
         Resource = [
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
@@ -333,14 +335,18 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
       },
       {
-        # DynamoDB: manage the counters TABLE only (create/describe/update/tag), scoped to the single
-        # table. NOT item-level (GetItem/PutItem/UpdateItem) -- counter values are PlatformDev's domain
-        # and the seed items are no longer Terraform-managed.
+        # DynamoDB: manage the counters TABLE only, scoped to the single table. NOT item-level
+        # (GetItem/PutItem/UpdateItem) -- counter VALUES are PlatformDev runtime's domain and the seed
+        # items are no longer Terraform-managed. The Describe* reads (continuous-backups/TTL/SSE) are
+        # refresh-time reads the provider issues on aws_dynamodb_table every plan; omitting any one
+        # breaks `terraform plan` (and therefore CD) even though apply succeeds.
         Sid    = "DynamoDBCountersTable"
         Effect = "Allow"
         Action = [
           "dynamodb:CreateTable",
           "dynamodb:DescribeTable",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTimeToLive",
           "dynamodb:UpdateTable",
           "dynamodb:TagResource",
           "dynamodb:UntagResource",
