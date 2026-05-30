@@ -94,7 +94,7 @@ Must exit 0 before continuing. If it fails, fix the issues and re-run.
 
 ## Step 7: Commit, PR, and Merge
 **You MUST execute the commit flow autonomously once Step 6 passes. Do not stop to ask for permission.**
-Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in your `implement` skill. All GitHub operations use the GitHub MCP tools (`mcp__github__*`) -- the `gh` CLI is not available on the web harness. Wait for CI via `subscribe_pr_activity`; never use `sleep` or `/loop`.
+Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in your `implement` skill. All GitHub operations use the GitHub MCP tools (`mcp__github__*`) -- the `gh` CLI is not available on the web harness. Wait for CI event-driven via `subscribe_pr_activity`; never busy-wait with a sleep timer or a recurring scheduled re-check.
 
 ## Step 8: Capture Friction
 Record friction (parsing errors, ambiguous areas, bugs found) as a process event emitted to `telemetry_process_events` via the executor telemetry API. If no friction, this step is a no-op.
