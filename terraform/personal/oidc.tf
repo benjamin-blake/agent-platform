@@ -345,6 +345,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = "*"
       },
       {
+        # glue:GetTags is a refresh-time read the provider issues on aws_glue_catalog_database every
+        # plan; without it the workflow's `terraform plan` fails AccessDenied before the guard runs.
+        # Do not prune it as "unused" -- apply does not exercise it but plan (and therefore CD) does.
         Sid    = "GlueCatalog"
         Effect = "Allow"
         Action = [
@@ -357,7 +360,8 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "glue:GetPartitions",
           "glue:CreateTable",
           "glue:UpdateTable",
-          "glue:DeleteTable"
+          "glue:DeleteTable",
+          "glue:GetTags"
         ]
         Resource = [
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
@@ -366,10 +370,16 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # DescribeContinuousBackups/DescribeTimeToLive are refresh-time reads the provider issues on
+        # aws_dynamodb_table every plan (PITR + TTL status); without them `terraform plan` fails
+        # AccessDenied before the guard runs. Reads only -- the corresponding Update* writes are not
+        # granted (the counters table has no PITR/TTL config to manage). Do not prune as "unused".
         Sid    = "DynamoDBCounters"
         Effect = "Allow"
         Action = [
           "dynamodb:DescribeTable",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTimeToLive",
           "dynamodb:CreateTable",
           "dynamodb:UpdateTable",
           "dynamodb:TagResource",
