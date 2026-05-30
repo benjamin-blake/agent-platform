@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for setup.py venv activation fix."""
+"""Unit tests for setup.py."""
 
 from __future__ import annotations
 
@@ -99,3 +99,86 @@ class TestFixVenvActivateForGitBash:
 
         result = activate_file.read_text(encoding="utf-8")
         assert 'VIRTUAL_ENV="/e/dev/project/.venv"' in result
+
+
+class TestConfigureAwsSso:
+    """Tests for the configure_aws_sso function (static-key model)."""
+
+    def test_profile_found_in_config(self, tmp_path: Path, capsys: object) -> None:
+        """When agent_platform profile exists, print confirmation."""
+        aws_config = tmp_path / ".aws" / "config"
+        aws_config.parent.mkdir(parents=True)
+        aws_config.write_text("[profile agent_platform]\nregion = eu-west-2\n", encoding="utf-8")
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/aws"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            _setup.configure_aws_sso()
+
+        captured = capsys.readouterr()
+        assert "agent_platform" in captured.out
+        assert "configured" in captured.out
+
+    def test_profile_not_found_in_config(self, tmp_path: Path, capsys: object) -> None:
+        """When agent_platform profile is absent, suggest setup steps."""
+        aws_config = tmp_path / ".aws" / "config"
+        aws_config.parent.mkdir(parents=True)
+        aws_config.write_text("[profile other_profile]\nregion = us-east-1\n", encoding="utf-8")
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/aws"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            _setup.configure_aws_sso()
+
+        captured = capsys.readouterr()
+        assert "agent_platform" in captured.out
+        assert "not found" in captured.out
+        assert "bin/setup-cloud-env.sh" in captured.out
+
+    def test_aws_cli_not_installed(self, capsys: object) -> None:
+        """When aws CLI is absent, print warning."""
+        with patch("shutil.which", return_value=None):
+            _setup.configure_aws_sso()
+
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.out
+        assert "AWS CLI" in captured.out
+
+    def test_config_file_missing(self, tmp_path: Path, capsys: object) -> None:
+        """When ~/.aws/config does not exist, treat as empty (no profile found)."""
+        empty_home = tmp_path / "no_aws_dir"
+        empty_home.mkdir()
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/aws"),
+            patch("pathlib.Path.home", return_value=empty_home),
+        ):
+            _setup.configure_aws_sso()
+
+        captured = capsys.readouterr()
+        assert "not found" in captured.out
+
+    def test_config_file_unreadable(self, tmp_path: Path, capsys: object) -> None:
+        """When ~/.aws/config read_text raises OSError, treat as empty and print 'not found'."""
+        aws_config = tmp_path / ".aws" / "config"
+        aws_config.parent.mkdir(parents=True)
+        aws_config.write_text("[profile agent_platform]\n", encoding="utf-8")
+
+        original_read_text = Path.read_text
+
+        def patched_read_text(self: Path, **kwargs: object) -> str:
+            if ".aws" in str(self) and "config" in str(self):
+                raise OSError("permission denied")
+            return original_read_text(self, **kwargs)
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/aws"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch.object(Path, "read_text", patched_read_text),
+        ):
+            _setup.configure_aws_sso()
+
+        captured = capsys.readouterr()
+        assert "not found" in captured.out

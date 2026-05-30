@@ -714,7 +714,7 @@ This work is too large for a single plan. It decomposes into the following strat
 
 ## Constraints
 
-1. **All timestamps are UTC.** Producers must normalize to UTC before writing. The system runs on a Windows host (GMT/BST) and Lambdas run in UTC -- mixed timezones in the same table would produce incorrect duration calculations.
+1. **All timestamps are UTC.** Producers must normalize to UTC before writing. Development ran historically on a Windows host (GMT/BST); the system now runs on a Linux container (UTC); Lambdas run in UTC. Normalizing to UTC at write time remains mandatory regardless of the host timezone.
 
 2. **awswrangler Lambda dependency:** Iceberg compaction uses `awswrangler.athena.to_iceberg()`, available only via the AWSSDKPandas Lambda layer. Local compaction requires the `awswrangler` pip package.
 

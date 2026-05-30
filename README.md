@@ -14,7 +14,7 @@ This system implements a complete end-to-end trading pipeline split across two e
 
 ### **Personal Environment (Docker - Live Trading)**
 - **RAT Ensemble**: Retrieval-Augmented Trading with pgvector memory
-- **Formula Integration**: Dynamic loading from company S3 buckets
+- **Formula Integration**: Dynamic loading from `agent-platform-data-lake` S3 bucket
 - **A/B Testing**: Automated statistical testing before production promotion
 - **Execution Engine**: Async trading with latency penalties and circuit breakers
 - **Meta-Learning**: Automated formula weighting based on rolling performance
@@ -158,14 +158,14 @@ See detailed setup in [GETTING_STARTED.md](docs/GETTING_STARTED.md) for environm
 
 ### Company Environment Setup (Research & Formula Discovery)
 
-1. **Configure AWS SSO**:
+1. **Configure AWS credentials** (static-key assume-role):
 ```bash
-aws configure sso
-# SSO start URL: https://your-sso-portal.awsapps.com/start
-# SSO region: eu-west-2
-# Account ID: <your-account-id>
+# Add agent_static (IAM user key) to ~/.aws/credentials
+# Add agent_platform (assume-role profile) to ~/.aws/config
+# See bin/setup-cloud-env.sh for the canonical CC-web/Linux setup
 
-aws sso login --profile your-aws-profile
+aws sts get-caller-identity --profile agent_platform
+# Should show assumed-role ARN ending in .../PlatformDev/...
 ```
 
 2. **Deploy Infrastructure**:
@@ -188,7 +188,7 @@ python -m src.main --environment=company lab
 ```bash
 cp config/config.personal.yaml config/config.yaml
 cp docker/.env.example docker/.env
-# Edit .env with company S3 bucket credentials
+# Edit .env: set S3_DATA_LAKE_BUCKET=agent-platform-data-lake, AWS_PROFILE=agent_platform
 ```
 
 2. **Start Docker Services**:
@@ -209,8 +209,8 @@ python -m src.main --environment=personal live
 **Company Environment:**
 ```bash
 # Check infrastructure deployed
-aws s3 ls | grep formulas-
-# Should see: formulas-discovery, formulas-staging, formulas-production
+aws s3 ls --profile agent_platform | grep agent-platform-data-lake
+# Should see the agent-platform-data-lake bucket
 
 # Verify Iceberg table
 aws athena start-query-execution \
@@ -487,10 +487,10 @@ See [DECISIONS.md](docs/DECISIONS.md) for full context on all decisions:
 environment: company
 aws:
   region: eu-west-2
-  profile: your-aws-profile
-  s3_discovery_bucket: formulas-discovery
-  s3_staging_bucket: formulas-staging
-  s3_production_bucket: formulas-production
+  profile: agent_platform
+  s3_discovery_bucket: agent-platform-data-lake/discovery
+  s3_staging_bucket: agent-platform-data-lake/staging
+  s3_production_bucket: agent-platform-data-lake/production
   glue_database: trading_formulas_db
   athena_lab_workgroup: agent-platform-lab
 sagemaker:
@@ -504,11 +504,10 @@ lab:
 **Personal Environment** (`config/config.personal.yaml`):
 ```yaml
 environment: personal
-company:
-  s3_production_bucket: formulas-production
-  s3_staging_bucket: formulas-staging
-  s3_region: eu-west-2
-  aws_profile: your-aws-profile  # Read-only access
+aws:
+  profile: agent_platform
+  s3_agent_logs_bucket: agent-platform-data-lake
+  s3_data_lake_bucket: agent-platform-data-lake
 postgres:
   host: localhost
   port: 5432

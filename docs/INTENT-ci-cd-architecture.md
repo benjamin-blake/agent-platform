@@ -139,12 +139,15 @@ loss in three tiers, all without raising during validate.py import:
 
 1. **Local / Claude-Code-on-web session:** the static-key assume-role chain
    auto-refreshes; there is no interactive login (the Decision 57 SSO-recovery
-   pattern is superseded -- see the PROJECT_CONTEXT credential model). If the
-   `agent_static` key was rotated, refresh `~/.aws/credentials` and retry
-   `file_rec` once.
-2. **CI (GitHub-hosted runner, CD.21):** the OIDC role
+   pattern is superseded 2026-05-28 per CD.21 / Decision 73 -- see the
+   PROJECT_CONTEXT credential model). Recovery: verify `aws sts
+   get-caller-identity --profile agent_platform`; if the `agent_static` key was
+   rotated, refresh `~/.aws/credentials` and retry `file_rec` once.
+2. **CI (GitHub-hosted runner, CD.21 / Decision 73):** the OIDC role
    (`agent-platform-github-ci-branch` / `-pr`) supplies credentials via boto3's
-   default chain without any login. No interactive recovery is attempted in CI.
+   default chain without any login. The self-hosted EC2 runner (Decision 68) was
+   retired 2026-05-28. No interactive recovery is attempted in CI; the `CI=true`
+   guard remains.
 3. **Both contexts, if portal still cannot reach Athena:** the rec is queued
    to the local outbox (`logs/.ops-outbox/`) per Decision 51 and drains on
    the next successful `ops_data_portal.sync()` call.
