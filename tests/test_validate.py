@@ -106,6 +106,24 @@ class TestValidateCliToolsInPrompts:
         assert len(failed) == 1
         assert "CLI tool verification" in failed[0]
 
+    def test_optional_tool_gh_missing_is_skipped(self, tmp_path: Path) -> None:
+        """gh is optional (Decision 76); a referenced-but-missing gh does not fail the gate."""
+        prompt_dir = tmp_path / ".github" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        md = prompt_dir / "ci.prompt.md"
+        md.write_text("```bash\ngh pr view\n```\n", encoding="utf-8")
+
+        with (
+            patch("validate._KNOWN_CLI_TOOLS", {"gh"}),
+            patch("validate._OPTIONAL_CLI_TOOLS", {"gh"}),
+            patch("validate.ROOT", tmp_path),
+            patch("validate.shutil.which", return_value=None),
+        ):
+            failed: list[str] = []
+            validate_cli_tools_in_prompts(failed)
+
+        assert failed == []
+
     def test_skips_comment_lines_in_code_blocks(self, tmp_path: Path) -> None:
         """Lines starting with # inside code blocks are not treated as commands."""
         prompt_dir = tmp_path / ".github" / "prompts"
