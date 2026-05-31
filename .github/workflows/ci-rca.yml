@@ -41,7 +41,10 @@ jobs:
       - name: Checkout at failing commit
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # workflow_run: the failing commit. workflow_dispatch: head_sha is absent, so fall back
+          # to github.sha (the dispatched ref, e.g. main) -- an empty ref would silently checkout
+          # the default branch; this makes that intent explicit.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -49,9 +52,14 @@ jobs:
           python-version: '3.12'
 
       - name: Activate venv
+        # setup.py is a dev-env bootstrap utility, not a packaging script -- it defines no
+        # installable package and no [dev] extra, so `pip install -e .[dev]` is a no-op that
+        # leaves scripts.ops_data_portal unimportable and file_rec silently failing. Install the
+        # real dependencies from requirements.txt (mirrors the main-validate job).
         run: |
           python -m venv .venv
-          .venv/bin/pip install --quiet -e ".[dev]" 2>/dev/null || true
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
 
       # TODO(bedrock): When this runner migrates to GitHub-hosted (target: 90-day window),
       # replace this step and the `claude -p` invocation below with a Python entrypoint
@@ -75,10 +83,15 @@ jobs:
         id: dedup
         env:
           GH_TOKEN: ${{ github.token }}
+          # Bind event/input values to env (never interpolate ${{ }} directly into run: bodies)
+          # and sanitise the untrusted dispatch run_id to digits to prevent shell injection.
+          RUN_ID_RAW: ${{ github.event.workflow_run.id || github.event.inputs.run_id }}
+          HEAD_SHA_RAW: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_NAME_RAW: ${{ github.event.workflow_run.name }}
         run: |
-          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
-          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
-          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          RUN_ID=$(printf '%s' "$RUN_ID_RAW" | tr -cd '0-9')
+          HEAD_SHA="$HEAD_SHA_RAW"
+          WORKFLOW_NAME="$WORKFLOW_NAME_RAW"
 
           if [ -z "$HEAD_SHA" ]; then
             HEAD_SHA=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.head_sha' 2>/dev/null || echo "")
@@ -103,13 +116,14 @@ jobs:
           echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
           echo "context=${CONTEXT}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch failed run logs
         if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
           gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
             || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
             || true
@@ -121,7 +135,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
           claude -p \
             --output-format json \
             --max-turns 30 \
@@ -147,7 +161,9 @@ jobs:
           fi
 
       - name: Comment on originating PR
-        if: ${{ github.event.workflow_run.pull_requests[0] != null && github.event.workflow_run.pull_requests[0].number != '' }}
+        # Gate on the agent actually running (not dedup-skipped) so a skipped run never posts a
+        # misleading "filed unknown" comment.
+        if: ${{ steps.rca_agent.outcome == 'success' && github.event.workflow_run.pull_requests[0] != null && github.event.workflow_run.pull_requests[0].number != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
