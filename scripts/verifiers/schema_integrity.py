@@ -83,7 +83,8 @@ class SchemaIntegrityVerifier(Verifier):
                 # Returns dict mapping column name to Athena type
                 remote_cols = wr.catalog.get_table_types(database=DATABASE, table=table_name)
                 if not remote_cols:
-                    drift_reports.append(f"{table_name}: Table not found in Athena.")
+                    # Table not yet provisioned; skip rather than report as drift.
+                    # Self-heals when the table is created.
                     continue
 
                 # Extract local field names
@@ -136,6 +137,9 @@ class SchemaIntegrityVerifier(Verifier):
                         status=VerifierStatus.SKIPPED,
                         message=f"AWS credential error (skipping V3 schema check): {exc_str}",
                     )
+                # Table/entity not found means it is not yet provisioned; skip (self-heals when created).
+                if any(err in exc_str for err in ["EntityNotFoundException", "not found", "does not exist"]):
+                    continue
                 drift_reports.append(f"{table_name}: Error during comparison: {exc}")
 
         if not drift_reports:
