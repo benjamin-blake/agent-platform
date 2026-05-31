@@ -2151,6 +2151,26 @@ def run_dependency_checks() -> None:
         print("Could not check outdated packages.")
 
 
+def validate_workflow_agent_safety(failed: list[str]) -> None:
+    """Headless `claude -p` workflow steps that mask failures must assert their output.
+
+    Guards the silent-failure class behind the ci-rca "Input must be provided ... when
+    using --print" regression: a masked invocation (|| true / continue-on-error) with no
+    output assertion passes as a green no-op. See scripts/check_workflow_agent_safety.py.
+    """
+    print("\n=== Workflow agent-safety (headless claude -p) ===")
+    from scripts.check_workflow_agent_safety import check_workflow_agent_safety
+
+    violations = check_workflow_agent_safety()
+    if violations:
+        print("Workflow agent-safety violations:")
+        for v in violations:
+            print(f"  - {v}")
+        failed.append("Workflow agent-safety")
+    else:
+        print("All headless claude -p steps assert their output.")
+
+
 def validate_prompt_files(failed: list[str]) -> None:
     print("\n=== Prompt file validation ===")
     prompts_dir = ROOT / ".github" / "prompts"
@@ -2417,6 +2437,7 @@ def main() -> None:
         validate_copilot_multipliers(failed)
         validate_prompt_files(failed)
         validate_cli_tools_in_prompts(failed)
+        validate_workflow_agent_safety(failed)
         # Product-roadmap check runs in --pre: pure Python, sub-100ms, active editing surface
         validate_product_roadmap(failed)
         # CC-gate in --pre: O(lines) AST check, per rec-859 RCA earliest_viable_gate="pre" (docs/INTENT-ci-rca-methodology.md)
@@ -2466,6 +2487,7 @@ def main() -> None:
     if scope in ("prompts", "all"):
         validate_prompt_files(failed)
         validate_cli_tools_in_prompts(failed)
+        validate_workflow_agent_safety(failed)
         validate_prompt_compliance(failed)
 
     ensure_fresh_dq_results(failed)
