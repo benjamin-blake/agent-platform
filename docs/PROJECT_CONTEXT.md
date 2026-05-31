@@ -163,7 +163,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Strategic review (Opus) | [.github/prompts/strategic_review.prompt.md](../.github/prompts/strategic_review.prompt.md) |
 | CI triage protocol | [.github/prompts/implement.prompt.md](../.github/prompts/implement.prompt.md) -- Session Close Phase |
 | CI triage (standalone) | [.github/prompts/ci_triage.prompt.md](../.github/prompts/ci_triage.prompt.md) |
-| GitHub MCP config | [.vscode/mcp.json](../.vscode/mcp.json) |
+| GitHub MCP config | [.mcp.json](../.mcp.json) |
 | Session continuity log | [docs/SESSION_LOG.md](../docs/SESSION_LOG.md) |
 | Scheduled agent manifest | [.github/agents/schedule.yaml](../.github/agents/schedule.yaml) |
 | Scheduled agent dispatcher (Lambda) | [src/data/handlers/scheduled_agent_handler.py](../src/data/handlers/scheduled_agent_handler.py) |

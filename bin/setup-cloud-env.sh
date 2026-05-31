@@ -51,6 +51,27 @@
 # the field runs bash from a working directory that is NOT the repo root.
 # Changing the field value is a manual step (out-of-repo).
 #
+# GITHUB MCP (full toolset incl. Actions) -- GITHUB_MCP_PAT
+# The repo-root .mcp.json defines a `github-full` GitHub MCP server (stdio; the
+# github-mcp-server binary installed by step 7 below). It reads a GitHub PAT at
+# runtime from ~/.config/gh-mcp/token. Supply that token via the PRIVATE "Setup
+# script" field -- NOT the env-var field: a PAT is a credential and the env-var
+# field is visible to anyone using the environment. Add this next to the ~/.aws
+# block above, filling <PAT> from a fine-grained, read-only, single-repo
+# (agent-platform), short-expiry GitHub token:
+#
+#     mkdir -p "$HOME/.config/gh-mcp"
+#     cat > "$HOME/.config/gh-mcp/token" <<'EOF'
+#     <PAT>
+#     EOF
+#     chmod 600 "$HOME/.config/gh-mcp/token"
+#
+# This keeps the token out of the process environment (mirrors the ~/.aws file
+# pattern); the committed .mcp.json carries no secret. Changes apply to NEW
+# sessions. (Alternative, not used: a remote http server in .mcp.json with
+# `Authorization: Bearer ${GITHUB_MCP_PAT}` from the env-var field -- rejected
+# because it puts the credential in the process environment.)
+#
 # Responsibility split (post T0.2 refactor):
 #   setup-cloud-env.sh                  -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform)
 #   .claude/hooks/session_start_aws.sh  -- verifies the static-key assume-role chain (runs every session)
@@ -62,11 +83,13 @@
 #   4. Installs AWS CLI v2.
 #   Steps 3 and 4 are parallelised: AWS CLI download runs in the background
 #   while requirements install runs in the foreground.
+#   5. Installs the github-mcp-server binary (for the .mcp.json `github-full`
+#      MCP server -- full GitHub toolset incl. Actions: workflow runs / job logs).
 #
 # What it does NOT do:
-#   - Materialise ~/.aws/{credentials,config} (done by the "Setup script" field
-#     block above; .claude/hooks/session_start_aws.sh only VERIFIES them).
-#   - Install gh CLI (GitHub access is via MCP, not gh).
+#   - Materialise ~/.aws/{credentials,config} or ~/.config/gh-mcp/token (done by
+#     the private "Setup script" field block above; this script only consumes them).
+#   - Install gh CLI (GitHub access is via MCP -- see github-mcp-server, step 7 -- not gh).
 #   - Install terraform unless INSTALL_TERRAFORM=1 (set only in the admin env).
 
 set -euo pipefail
@@ -170,6 +193,31 @@ if [ "${INSTALL_TERRAFORM:-0}" = "1" ]; then
     fi
 else
     log "Terraform install skipped (set INSTALL_TERRAFORM=1 in the admin env to enable)"
+fi
+
+# 7. github-mcp-server (for the .mcp.json `github-full` MCP server) ------------
+# Full GitHub MCP toolset (incl. Actions: workflow runs / job logs) that the
+# platform-managed connector lacks. The PAT is read at runtime from
+# ~/.config/gh-mcp/token (written by the private Setup-script field, never here).
+# The api.github.com release API is proxy-blocked in the container, so the asset
+# is pulled from the github.com release CDN directly at a pinned version.
+GITHUB_MCP_SERVER_VERSION="1.1.2"
+gh_mcp_bin="$HOME/.local/bin/github-mcp-server"
+if "$gh_mcp_bin" --version 2>/dev/null | grep -q "Version: ${GITHUB_MCP_SERVER_VERSION}"; then
+    log "github-mcp-server ${GITHUB_MCP_SERVER_VERSION} already present"
+else
+    log "Installing github-mcp-server ${GITHUB_MCP_SERVER_VERSION}"
+    t0=$SECONDS
+    (
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+        url="https://github.com/github/github-mcp-server/releases/download/v${GITHUB_MCP_SERVER_VERSION}/github-mcp-server_Linux_x86_64.tar.gz"
+        curl -fsSL "$url" -o "$tmpdir/gh-mcp.tar.gz"
+        tar -xzf "$tmpdir/gh-mcp.tar.gz" -C "$tmpdir"
+        mkdir -p "$HOME/.local/bin"
+        install -m 0755 "$tmpdir/github-mcp-server" "$gh_mcp_bin"
+    ) && log "github-mcp-server: $((SECONDS - t0))s ($("$gh_mcp_bin" --version 2>&1 | grep Version))" \
+      || log "WARNING: github-mcp-server install failed (non-fatal); the github-full MCP server stays offline until installed."
 fi
 
 log "Done. Verify with: bin/venv-python -m scripts.session_preflight"
