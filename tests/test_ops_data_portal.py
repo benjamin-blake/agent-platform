@@ -1207,3 +1207,73 @@ class TestMigrationParams:
         mock_next_id.assert_not_called()
         _, call_rec = mock_opswriter.return_value.write.call_args[0]
         assert call_rec["id"] == "rec-008"
+
+
+class TestFetchRecFromAthena:
+    """Tests for _fetch_rec_from_athena reader path (Decision 69 / CD.8)."""
+
+    _REC_ROW = {
+        "id": "rec-042",
+        "title": "Test rec",
+        "file": "scripts/ops_data_portal.py",
+        "context": "ctx",
+        "acceptance": "grep -q x y",
+        "effort": "XS",
+        "priority": "Low",
+        "source": "planning",
+        "risk": "low",
+        "status": "open",
+        "automatable": True,
+        "last_updated_timestamp": "2026-05-01T00:00:00Z",
+        "created_timestamp": "2026-05-01T00:00:00Z",
+    }
+
+    def test_reader_path_returns_record(self) -> None:
+        """DuckDBIcebergReader success -> returns sanitised record without Athena."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = [dict(self._REC_ROW)]
+
+            from scripts.ops_data_portal import _fetch_rec_from_athena
+
+            result = _fetch_rec_from_athena("rec-042")
+
+        assert result is not None
+        assert result["id"] == "rec-042"
+        assert result["status"] == "open"
+        MockReader.return_value.current_state.assert_called_once()
+
+    def test_reader_fallback_raises_when_athena_also_unreachable(self) -> None:
+        """Reader raises -> falls back to Athena; RuntimeError if Athena also unreachable (Decision 69)."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.side_effect = RuntimeError("reader broken")
+
+            with patch("scripts.ops_data_portal.resolve_aws_profile", return_value="agent_platform"):
+                with patch("boto3.Session") as mock_session:
+                    mock_session.return_value.client.return_value.start_query_execution.side_effect = RuntimeError(
+                        "Athena unreachable"
+                    )
+                    from scripts.ops_data_portal import _fetch_rec_from_athena
+
+                    with pytest.raises(RuntimeError, match="warehouse unreachable"):
+                        _fetch_rec_from_athena("rec-042")
+
+    def test_reader_returns_none_when_row_not_found(self) -> None:
+        """Reader returns empty list -> function returns None without calling Athena."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = []
+
+            with patch("scripts.ops_data_portal.resolve_aws_profile") as mock_profile:
+                from scripts.ops_data_portal import _fetch_rec_from_athena
+
+                result = _fetch_rec_from_athena("rec-999")
+
+            mock_profile.assert_not_called()
+
+        assert result is None
+
+    def test_invalid_rec_id_raises_value_error(self) -> None:
+        """Malformed rec_id raises ValueError before any reader or Athena call (security guard)."""
+        from scripts.ops_data_portal import _fetch_rec_from_athena
+
+        with pytest.raises(ValueError, match="invalid rec_id"):
+            _fetch_rec_from_athena("'; DROP TABLE ops_recommendations; --")

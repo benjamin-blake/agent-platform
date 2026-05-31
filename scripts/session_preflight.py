@@ -27,6 +27,7 @@ from scripts import product_roadmap as product_roadmap_module
 from scripts.aws_profile import resolve_aws_profile
 from scripts.s3_log_store import get_backend, read_jsonl
 from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull
+from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader
 
 ROOT = Path(__file__).resolve().parent.parent
 PREFLIGHT_REPORT = ROOT / "logs" / ".preflight-report.json"
@@ -433,16 +434,42 @@ def _run_athena_query(sql: str) -> list[dict] | None:
 
 
 def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
-    """Query ops_recommendations_current Athena view for open recommendation counts.
+    """Return open recommendation counts from the warehouse.
 
-    Returns ``None`` if the Athena query fails, allowing the caller to fall
-    back to the local JSONL file.
+    Tries DuckDBIcebergReader first (with predicate + projection pushdown),
+    falls back to the Athena CLI on reader failure.
+
+    Returns ``None`` if both paths fail, allowing the caller to fall back to
+    the local JSONL file (graceful degradation, T2.5 exit criterion).
     """
-    sql = "SELECT id, title, context, created_timestamp, automatable FROM ops_recommendations_current WHERE status = 'open'"
-    rows = _run_athena_query(sql)
-    if rows is None:
-        return None
+    # -- DuckDB reader path --
+    try:
+        reader = _DuckDBIcebergReader()
+        rows = reader.current_state(
+            "ops_recommendations",
+            row_filter="status = 'open'",
+            selected_fields=("id", "title", "context", "created_timestamp", "automatable"),
+        )
+        if rows is not None:
+            return _tally_rec_counts(rows, source="reader")
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log  # noqa: PLC0415
 
+        _log.getLogger(__name__).warning("session_preflight._count_recommendations_athena: reader failed: %s", exc)
+
+    # -- Athena fallback --
+    sql = "SELECT id, title, context, created_timestamp, automatable FROM ops_recommendations_current WHERE status = 'open'"
+    rows_raw = _run_athena_query(sql)
+    if rows_raw is None:
+        return None
+    return _tally_rec_counts(rows_raw, source="athena")
+
+
+def _tally_rec_counts(
+    rows: list[dict],
+    source: str = "reader",
+) -> tuple[int, int, int, list[dict]]:
+    """Compute (open_count, aging_count, non_auto_count, non_auto_details) from a row list."""
     now = datetime.now(timezone.utc)
     open_count = len(rows)
     aging_count = 0
@@ -453,14 +480,25 @@ def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
         date_str = entry.get("created_timestamp", "")
         if date_str:
             try:
-                # created_timestamp is a full ISO-8601 timestamp string from Athena
-                entry_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=timezone.utc)
+                if isinstance(date_str, str):
+                    entry_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=timezone.utc)
+                else:
+                    import datetime as _dt  # noqa: PLC0415
+
+                    if hasattr(date_str, "timestamp"):
+                        entry_date = _dt.datetime.fromtimestamp(date_str.timestamp(), tz=timezone.utc)
+                    else:
+                        entry_date = now
                 if (now - entry_date).days > 30:
                     aging_count += 1
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 pass
-        # Athena returns booleans as strings "true"/"false"
-        automatable = entry.get("automatable", "true").lower() != "false"
+        # Athena returns booleans as strings "true"/"false"; reader returns Python bool or string
+        raw_auto = entry.get("automatable", True)
+        if isinstance(raw_auto, bool):
+            automatable = raw_auto
+        else:
+            automatable = str(raw_auto).lower() != "false"
         if not automatable:
             non_auto_count += 1
             if len(non_auto_details) < 10:
@@ -469,7 +507,7 @@ def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
                     {
                         "id": entry.get("id", ""),
                         "title": entry.get("title", ""),
-                        "context_excerpt": context[:200] if context else "",
+                        "context_excerpt": (context[:200] if isinstance(context, str) else ""),
                     }
                 )
 
@@ -590,23 +628,40 @@ def _read_priority_queue_cache(max_items: int) -> list[dict]:
 
 
 def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[dict]:
-    """Read the priority queue from the ops_priority_queue_current Athena view.
+    """Read the priority queue from the warehouse (DuckDB reader, Athena fallback).
 
-    When *creds_status* is not "ok" credentials are unavailable and Athena is
-    unreachable: fall back to the local read-cache with a loud staleness note
-    (empty-with-warning when the cache is absent; never crash).
+    Decision 70: priority queue uses the correlated-subquery current-state pattern
+    (all entries from the latest curator run); DuckDBIcebergReader handles this
+    internally.
 
-    When credentials ARE "ok" but the Athena query returns None, that is a genuine
-    infrastructure fault -- hard-exit with code 1 rather than masking it with a
-    fallback (Decision 60: the view is the source of truth; never silently weaken
-    a gate).
+    When *creds_status* is not "ok" credentials are unavailable: fall back to the
+    local read-cache with a staleness warning (empty-with-warning when absent; never
+    crash -- T2.5 graceful-degradation requirement).
+
+    When credentials ARE "ok" but both reader and Athena return None, that is a
+    genuine infrastructure fault -- hard-exit with code 1 rather than masking it
+    (Decision 60: source of truth; never silently weaken a gate).
 
     Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
-    Returns [] if the view is empty.
+    Returns [] if the queue is empty.
     """
     if creds_status != "ok":
         return _read_priority_queue_cache(max_items)
 
+    # -- DuckDB reader path (Decision 70: correlated subquery applied internally) --
+    try:
+        reader = _DuckDBIcebergReader()
+        reader_rows = reader.current_state("ops_priority_queue")
+        if reader_rows is not None:
+            shaped = _shape_priority_queue_rows(reader_rows, max_items)
+            shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
+            return shaped
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log  # noqa: PLC0415
+
+        _log.getLogger(__name__).warning("session_preflight.read_priority_queue: reader failed: %s", exc)
+
+    # -- Athena fallback --
     rows = _run_athena_query(
         "SELECT rec_id, rank, rationale, north_star_impact "
         f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
@@ -614,7 +669,7 @@ def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[di
     )
     if rows is None:
         print(
-            "[ERROR] ops_priority_queue_current Athena query failed -- infrastructure problem, not masking with fallback",
+            "[ERROR] ops_priority_queue_current query failed -- infrastructure problem, not masking with fallback",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -638,18 +693,33 @@ def print_priority_queue(items: list[dict]) -> None:
 
 
 def _fetch_ci_rca_recs() -> list[dict]:
-    """Return up to 5 open CI-RCA recs from Athena. Returns [] on any failure."""
+    """Return up to 5 open CI-RCA recs from the warehouse. Returns [] on any failure."""
     sql = (
+        "SELECT id, title, priority, created_timestamp "
+        "FROM {tbl} "
+        "WHERE source = ? AND status IN (?, ?) "
+        "ORDER BY created_timestamp DESC LIMIT 5"
+    )
+    try:
+        reader = _DuckDBIcebergReader()
+        rows = reader.query("ops_recommendations", sql, params=("ci_rca", "open", "in_progress"))
+        if rows is not None:
+            return rows
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Athena fallback
+    athena_sql = (
         "SELECT id, title, priority, created_timestamp "
         "FROM ops_recommendations_current "
         "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
         "ORDER BY created_timestamp DESC LIMIT 5"
     )
-    rows = _run_athena_query(sql)
-    if rows is None:
+    rows_raw = _run_athena_query(athena_sql)
+    if rows_raw is None:
         print("[WARNING] preflight: ci_rca query failed -- CI RCA Recs section may be incomplete", file=sys.stderr)
         return []
-    return rows
+    return rows_raw
 
 
 def _check_non_automatable_softcap(non_auto_count: int) -> bool:
@@ -658,12 +728,25 @@ def _check_non_automatable_softcap(non_auto_count: int) -> bool:
 
 
 def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
-    """Return ci_rca recs created after *ts*. Returns [] on any Athena failure."""
+    """Return ci_rca recs created after *ts*. Returns [] on any failure."""
+    try:
+        reader = _DuckDBIcebergReader()
+        rows = reader.query(
+            "ops_recommendations",
+            "SELECT id FROM {tbl} WHERE source = ? AND created_timestamp > ?",
+            params=("ci_rca", ts),
+        )
+        if rows is not None:
+            return rows
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Athena fallback
     sql = f"SELECT id FROM ops_recommendations_current WHERE source = 'ci_rca' AND created_timestamp > '{ts}'"
-    rows = _run_athena_query(sql)
-    if rows is None:
+    rows_raw = _run_athena_query(sql)
+    if rows_raw is None:
         return []
-    return rows
+    return rows_raw
 
 
 def _check_ci_rca_liveness(creds_status: str) -> dict | None:
@@ -732,19 +815,42 @@ def _check_ci_rca_liveness(creds_status: str) -> dict | None:
 def _check_forward_fix_recursion() -> dict | None:
     """Return alert dict when >=3 ci-rca recs targeting the same file appear in the last 24h.
 
-    Returns None when no recursion is detected or Athena is unreachable.
+    Returns None when no recursion is detected or the warehouse is unreachable.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
-    sql = (
+
+    try:
+        reader = _DuckDBIcebergReader()
+        rows = reader.query(
+            "ops_recommendations",
+            "SELECT file, COUNT(*) AS cnt FROM {tbl} "
+            "WHERE source = ? AND created_timestamp > ? "
+            "GROUP BY file HAVING COUNT(*) >= 3",
+            params=("ci_rca", cutoff),
+        )
+        if rows is not None:
+            if not rows:
+                return None
+            first = rows[0]
+            try:
+                count = int(first.get("cnt", 3))
+            except (ValueError, TypeError):
+                count = 3
+            return {"file": first.get("file", ""), "count": count, "threshold": 3}
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Athena fallback
+    athena_sql = (
         "SELECT file, COUNT(*) AS cnt "
         "FROM ops_recommendations_current "
         f"WHERE source = 'ci_rca' AND created_timestamp > '{cutoff}' "
         "GROUP BY file HAVING COUNT(*) >= 3"
     )
-    rows = _run_athena_query(sql)
-    if not rows:
+    rows_raw = _run_athena_query(athena_sql)
+    if not rows_raw:
         return None
-    first = rows[0]
+    first = rows_raw[0]
     try:
         count = int(first.get("cnt", 3))
     except (ValueError, TypeError):
@@ -755,10 +861,27 @@ def _check_forward_fix_recursion() -> dict | None:
 def _check_budget_bypass_alert() -> dict | None:
     """Return alert dict when >= 3 budget_bypass recs were filed in the last 7 days.
 
-    Returns None when count < 3 or Athena is unreachable.
+    Returns None when count < 3 or the warehouse is unreachable.
     """
     try:
-        sql = (
+        reader = _DuckDBIcebergReader()
+        rows = reader.query(
+            "ops_recommendations",
+            "SELECT id, context, created_timestamp FROM {tbl} WHERE source = ? "
+            "AND created_timestamp > (current_timestamp - INTERVAL 7 DAY) "
+            "ORDER BY created_timestamp DESC LIMIT 10",
+            params=("budget_bypass",),
+        )
+        if rows is not None:
+            if len(rows) < 3:
+                return None
+            return {"count": len(rows), "entries": rows}
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Athena fallback
+    try:
+        athena_sql = (
             "SELECT id, context, created_timestamp "
             "FROM ops_recommendations_current "
             "WHERE source = 'budget_bypass' "
@@ -766,16 +889,16 @@ def _check_budget_bypass_alert() -> dict | None:
             "ORDER BY created_timestamp DESC "
             "LIMIT 10"
         )
-        rows = _run_athena_query(sql)
-        if rows is None:
+        rows_raw = _run_athena_query(athena_sql)
+        if rows_raw is None:
             return None
-        if len(rows) < 3:
+        if len(rows_raw) < 3:
             return None
-        return {"count": len(rows), "entries": rows}
+        return {"count": len(rows_raw), "entries": rows_raw}
     except Exception:  # noqa: BLE001
         import logging as _logging  # noqa: PLC0415
 
-        _logging.getLogger(__name__).warning("_check_budget_bypass_alert: Athena query failed; degrading to None")
+        _logging.getLogger(__name__).warning("_check_budget_bypass_alert: query failed; degrading to None")
         return None
 
 

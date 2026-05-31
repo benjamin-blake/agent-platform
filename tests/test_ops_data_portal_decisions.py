@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 _VALID_FIELDS = {
     "title": "Test Decision",
     "status": "Decided",
@@ -242,3 +244,67 @@ class TestDrainPendingDecisions:
         assert result["drained"] == 1
         assert record["id"] == "dec-037"
         assert record["decision_id"] == 37
+
+
+class TestFetchDecisionFromAthena:
+    """Tests for _fetch_decision_from_athena reader path (Decision 69 / CD.8)."""
+
+    _DEC_ROW = {
+        "id": "dec-007",
+        "decision_id": 7,
+        "title": "Test decision",
+        "status": "Decided",
+        "context": "ctx",
+        "created_timestamp": "2026-05-01T00:00:00Z",
+        "last_updated_timestamp": "2026-05-01T00:00:00Z",
+    }
+
+    def test_reader_path_returns_decision(self) -> None:
+        """DuckDBIcebergReader success -> returns sanitised decision record without Athena."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = [dict(self._DEC_ROW)]
+
+            from scripts.ops_data_portal import _fetch_decision_from_athena
+
+            result = _fetch_decision_from_athena("dec-007")
+
+        assert result is not None
+        assert result["id"] == "dec-007"
+        assert result["status"] == "Decided"
+        MockReader.return_value.current_state.assert_called_once()
+
+    def test_reader_fallback_raises_when_athena_also_unreachable(self) -> None:
+        """Reader raises -> falls back to Athena; RuntimeError if Athena also unreachable (Decision 69)."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.side_effect = RuntimeError("reader broken")
+
+            with patch("scripts.ops_data_portal.resolve_aws_profile", return_value="agent_platform"):
+                with patch("boto3.Session") as mock_session:
+                    mock_session.return_value.client.return_value.start_query_execution.side_effect = RuntimeError(
+                        "Athena unreachable"
+                    )
+                    from scripts.ops_data_portal import _fetch_decision_from_athena
+
+                    with pytest.raises(RuntimeError, match="warehouse unreachable"):
+                        _fetch_decision_from_athena("dec-007")
+
+    def test_reader_returns_none_when_decision_not_found(self) -> None:
+        """Reader returns empty list -> function returns None without calling Athena."""
+        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = []
+
+            with patch("scripts.ops_data_portal.resolve_aws_profile") as mock_profile:
+                from scripts.ops_data_portal import _fetch_decision_from_athena
+
+                result = _fetch_decision_from_athena("dec-999")
+
+            mock_profile.assert_not_called()
+
+        assert result is None
+
+    def test_invalid_decision_id_raises_value_error(self) -> None:
+        """Malformed decision_id raises ValueError before any reader or Athena call."""
+        from scripts.ops_data_portal import _fetch_decision_from_athena
+
+        with pytest.raises(ValueError, match="invalid decision_id"):
+            _fetch_decision_from_athena("not-a-decision")

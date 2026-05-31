@@ -1568,3 +1568,114 @@ class TestActivateHint:
         out = capsys.readouterr().out
         assert ".venv/Scripts/activate" in out
         assert ".venv/bin/activate" not in out
+
+
+class TestReadPriorityQueueReader:
+    """Tests for read_priority_queue() -- DuckDB reader path (CD.8)."""
+
+    _PQ_ROWS = [
+        {"rec_id": "rec-10", "rank": 1, "rationale": "top", "north_star_impact": "high"},
+        {"rec_id": "rec-20", "rank": 2, "rationale": "second", "north_star_impact": "low"},
+    ]
+
+    def test_reader_path_returns_shaped_rows(self) -> None:
+        """DuckDBIcebergReader success -> rows shaped and sorted without Athena call."""
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = list(self._PQ_ROWS)
+
+            result = _preflight.read_priority_queue()
+
+        assert len(result) == 2
+        assert result[0]["rec_id"] == "rec-10"
+        assert result[0]["rank"] == 1
+
+    def test_reader_failure_falls_back_to_athena(self) -> None:
+        """Reader raises -> Athena fallback is used (success path)."""
+        athena_rows = [
+            {"rec_id": "rec-99", "rank": "1", "rationale": "athena-row", "north_star_impact": "medium"},
+        ]
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
+
+            with patch("session_preflight._run_athena_query", return_value=athena_rows):
+                result = _preflight.read_priority_queue()
+
+        assert len(result) == 1
+        assert result[0]["rec_id"] == "rec-99"
+
+    def test_reader_empty_returns_empty_list(self) -> None:
+        """Reader returns [] -> function returns [] without calling Athena."""
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = []
+
+            with patch("session_preflight._run_athena_query") as mock_q:
+                result = _preflight.read_priority_queue()
+
+        mock_q.assert_not_called()
+        assert result == []
+
+
+class TestCountRecommendationsReader:
+    """Tests for _count_recommendations_athena() -- DuckDB reader path (T2.5 graceful degradation)."""
+
+    _OPEN_ROWS = [
+        {
+            "id": "rec-001",
+            "title": "Fix thing",
+            "context": "ctx",
+            "created_timestamp": "2026-05-01T00:00:00Z",
+            "automatable": True,
+        },
+        {
+            "id": "rec-002",
+            "title": "Other thing",
+            "context": "ctx2",
+            "created_timestamp": "2026-05-01T00:00:00Z",
+            "automatable": False,
+        },
+    ]
+
+    def test_reader_path_returns_counts(self) -> None:
+        """DuckDBIcebergReader success -> counts returned without Athena call."""
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.return_value = list(self._OPEN_ROWS)
+
+            with patch("session_preflight._run_athena_query") as mock_q:
+                result = _preflight._count_recommendations_athena()
+
+        mock_q.assert_not_called()
+        assert result is not None
+        open_count, _aging, non_auto_count, _details = result
+        assert open_count == 2
+        assert non_auto_count == 1
+
+    def test_reader_failure_falls_back_to_athena(self) -> None:
+        """Reader raises -> Athena fallback is used."""
+        athena_rows = [
+            {
+                "id": "rec-003",
+                "title": "Athena rec",
+                "context": "ctx",
+                "created_timestamp": "2026-05-01T00:00:00Z",
+                "automatable": "true",
+            }
+        ]
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
+
+            with patch("session_preflight._run_athena_query", return_value=athena_rows):
+                result = _preflight._count_recommendations_athena()
+
+        assert result is not None
+        open_count, _aging, _non_auto, _details = result
+        assert open_count == 1
+
+    def test_both_paths_fail_returns_none(self) -> None:
+        """Both reader and Athena fail -> returns None (graceful degradation, T2.5)."""
+        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
+
+            with patch("session_preflight._run_athena_query", return_value=None):
+                result = _preflight._count_recommendations_athena()
+
+        assert result is None
