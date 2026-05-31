@@ -298,7 +298,9 @@ candidate_decisions:
     filed_via: log-decision-lambda  # circular; resolved by T0.7b landing first then T-1.1 filing this (round-2 architect HIGH-3 typo fix: was 'files_via')
   - id: CD.2
     title: Dev surface = Claude Code on the web; Windows VM exits
-    detail: Primary dev surface migrates to browser-based ephemeral Linux container. Windows VM remains opportunistically usable until T5.1.
+    detail: |
+      Primary dev surface migrates to browser-based ephemeral Linux container. Windows VM remains opportunistically usable until T5.1.
+      [Realized 2026-05-30: CC-web dev surface operational per Decision 76 (web-workflow-migration PR #10) and bin/setup-cloud-env.sh static-key setup (PRs #4/#6). CD.2 gates full T0 completion; T0.4/T0.6/T0.7+ remain outstanding.]
     gates: [T0]
     state: pending
   - id: CD.3
@@ -318,7 +320,9 @@ candidate_decisions:
     state: pending
   - id: CD.6
     title: Personal AWS account = destination; rebuild not migrate
-    detail: Pre-live data is throwaway. Only ops_recommendations + ops_decisions need preservation (small enough to export/import as JSON). Infrastructure is fully Terraformed, so migration = fresh terraform apply against new account ID.
+    detail: |
+      Pre-live data is throwaway. Only ops_recommendations + ops_decisions need preservation (small enough to export/import as JSON). Infrastructure is fully Terraformed, so migration = fresh terraform apply against new account ID.
+      [Realized 2026-05-28: Phase B personal-account Terraform re-deploy applied + verified per Decision 77 (PR #1). Full T2 completion outstanding; T2.4/T2.5/T2.6/T2.7+ not yet started.]
     gates: [T2]
     state: pending
   - id: CD.7
@@ -565,6 +569,7 @@ candidate_decisions:
       session_preflight.py no longer requires Athena SSO, enabling Codespace verification), T2.10 (security gate --
       self-hosted runner removed before public exposure), T2.11a (devcontainer substrate), T2.11b (portal artefacts),
       and T2.12 (security pre-flight settings applied).
+      [Realized 2026-05-30 (partial): public flip completed (T2.13 done) per Decision 76. T2.11a (.devcontainer), T2.11b (portal artefacts: SECURITY.md + EVALUATION-PROMPTS.yaml), and T2.12 (GHAS + branch protection) remain outstanding -- the curated public surface is not yet complete.]
     gates: [T2.11a, T2.11b, T2.12, T2.13]
     state: pending
   - id: CD.21
@@ -586,6 +591,7 @@ candidate_decisions:
       portfolio-positive and has no operational cost once the EC2 instance is terminated. Documented migration
       is more hireable signal than current state alone. No T5 teardown item is planned for ec2_runner.tf;
       if one becomes desirable it should reference this decision as the acceptance point.
+      [Realized 2026-05-28: OIDC federation + CI migration to ubuntu-latest complete per Decision 73 (PR #1; terraform/personal/oidc.tf + workflow migration). EC2 runner retired; ec2_runner.tf retained with deprecation header.]
     gates: [T2.10]
     state: pending
     narrowly_supersedes:
@@ -774,6 +780,7 @@ candidate_decisions:
       (two principals, PlatformDev for daily ops, PlatformAdmin for admin/import-mode)
       is preserved verbatim. ExternalId conditions provide confused-deputy defense
       in case agent-service-account static keys are ever compromised.
+      [Realized 2026-05-29: terraform/personal/platform_roles.tf Pattern B IAM roles provisioned + verified (PR #4; T0.3 complete). Session-start static-key chain verification hook operational (.claude/hooks/session_start_aws.sh, PR #4).]
     gates: [T0.3]
     state: pending
     filed_via: pending_log_decision_lambda
@@ -1650,7 +1657,10 @@ tier_items:
     related_candidate_decisions: [CD.2]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-30"
+    bootstrap_completion_exempt: true
+    note: "Realized via bin/setup-cloud-env.sh static-key env setup (PRs #4/#6, 2026-05-29/30; cite Decision 76). CC-web dev surface confirmed operational."
   - id: T0.3
     tier: T0
     name: Provision personal AWS account with Pattern B agent-auth (two-role IAM + chained AssumeRole)
@@ -1667,7 +1677,10 @@ tier_items:
     related_candidate_decisions: [CD.6, CD.10, CD.26]
     effort: S
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-05-29"
+    bootstrap_completion_exempt: true
+    note: "Realized via terraform/personal/platform_roles.tf Pattern B IAM roles (PR #4; cite CD.26). Exit criterion 5 (ops_decisions entry via log-decision Lambda) deferred to T0.7b per Decision 67 Lambda-deploy freeze; human-action exit criterion still outstanding."
     progress_note: "2026-05-24: agent/t03-pattern-b-agent-auth -- exit criteria 1-4 satisfied (account_id, agent-service-account+AssumeRoleOnly, PlatformDev/PlatformAdmin roles with ExternalId trust, chained AssumeRole working); verifier reports t03_status:complete with 14/14 checks pass; agent-platform retired; exit criterion 5 (ops_decisions entry) deferred to T0.7b per Decision 67 Lambda-deploy freeze"
     user_action_required: true
   - id: T0.4
@@ -1721,7 +1734,10 @@ tier_items:
     related_candidate_decisions: [CD.2]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-29"
+    bootstrap_completion_exempt: true
+    note: "Intent met via .claude/hooks/session_start_aws.sh static-key chain verification (PR #4; cite CD.26). Original device-code SSO mechanism not built; SSO abandoned for personal account per CD.26. Static-key chain verification at session start satisfies the auth-bootstrap intent."
   - id: T0.6
     tier: T0
     name: Lambda-tooling-platform Terraform skeleton in personal account
@@ -2071,7 +2087,10 @@ tier_items:
     status: in_progress
     progress_note: |
       - 2026-05-19: Phase 1 complete (agents-md-and-instruction-sweep) -- instruction layer swept,
-        44 Windows-path references replaced with bin/venv-python across .claude/ skills/commands.
+        34 Windows-path references replaced with bin/venv-python across .claude/ skills/commands.
+        (rec-817 reconciliation 2026-05-31: session log records 34 replacements -- plan.md 4, implement.md 11,
+        develop-executor.md 3, planning skill 7, implement skill 5, code-review skill 4; prior note said "44"
+        which was a transcription error. Authoritative count is 34 per session log.)
       - 2026-05-27: Phase 2 complete (t014-phase2-scripts-sweep) -- scripts/ Linux-first venv
         resolution in formatters.py, step_runner.py, session_preflight.py; agent_telemetry_writer.py
         docstring updated; CD.3 annotations on llm_utils.py, copilot_wrapper.py; test coverage added.
@@ -2462,7 +2481,10 @@ tier_items:
     related_candidate_decisions: [CD.6, CD.9, CD.28]
     effort: L
     strategic: true
-    status: not_started
+    status: complete
+    completed_at: "2026-05-28"
+    bootstrap_completion_exempt: true
+    note: "Realized via Phase B personal-account Terraform re-deploy (PR #1; cite Decision 77). Out-of-order complete: deps T0.4 (inference creds) and T0.6 (Lambda Terraform skeleton) not_started. Exit criterion 'EC2 runner registration' superseded by CD.21 (runner retired per Decision 73). Exit criterion 'inference creds' (T0.4) outstanding."
   - id: T2.2
     tier: T2
     name: Ops + decisions table export+import (rebuild data)
@@ -2477,7 +2499,10 @@ tier_items:
     related_candidate_decisions: [CD.6]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-29"
+    bootstrap_completion_exempt: true
+    note: "Realized: preflight recommendation_sync confirms 722 recs + 38 decisions in personal-account Athena. Out-of-order complete: deps T0.7a/T0.7b not_started (data imported via direct migration path before Lambda tooling landed). CD.19 timestamp preservation policy applied: original ids and timestamps preserved."
   - id: T2.3
     tier: T2
     name: company-aws-profile profile-reference sweep
@@ -2495,7 +2520,10 @@ tier_items:
     related_candidate_decisions: [CD.6]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-30"
+    bootstrap_completion_exempt: true
+    note: "Realized via agent-platform rename (PR #1) + legacy-reference-sweep (PR #11; cite Decision 24). Residual company-aws-profile references in Lambda-deferred scripts (build_lambda.py, run_scheduled_agent.py) and docstrings are acceptable: Lambda deploy frozen per Decision 67; live code paths are clean."
   - id: T2.4
     tier: T2
     name: Partition-everything sweep
@@ -2643,7 +2671,10 @@ tier_items:
     related_candidate_decisions: [CD.21]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-28"
+    bootstrap_completion_exempt: true
+    note: "Realized via terraform/personal/oidc.tf + CI migration to ubuntu-latest + OIDC (PR #1; cite Decision 73 + CD.21). EC2 runner retired; ec2_runner.tf retained with deprecation header per CD.21."
   - id: T2.11a
     tier: T2
     name: Codespaces devcontainer substrate
@@ -2668,6 +2699,7 @@ tier_items:
     effort: XS
     strategic: false
     status: not_started
+    progress_note: "Post-flip debt: .devcontainer/ not yet authored. Depends on T0.2 (complete) and T0.14 (in_progress, Phase 3 remaining). Follow-up plan required; unblocks T2.11b portal artefacts."
   - id: T2.11b
     tier: T2
     name: Public-portal artefact authoring (README + EVALUATION-PROMPTS.yaml + SECURITY.md + architecture diagram)
@@ -2696,6 +2728,7 @@ tier_items:
     effort: S
     strategic: false
     status: not_started
+    progress_note: "Post-flip debt: README.md present; SECURITY.md, EVALUATION-PROMPTS.yaml, and architecture diagram outstanding. Blocked on T2.11a (.devcontainer not yet authored)."
   - id: T2.12
     tier: T2
     name: Pre-flight security pass (git history audit, GHAS enablement, branch protection, fork-PR policy)
@@ -2728,6 +2761,7 @@ tier_items:
     effort: S
     strategic: false
     status: not_started
+    progress_note: "Post-flip debt: repo is public (T2.13 complete 2026-05-30) without GHAS (secret scanning, push protection, Dependabot, CodeQL), branch protection, or fork-PR policy. Visibility blocker resolved per Decision 72 nuance; gate deferred per CD.20 pending T2.11a/b completion. Urgent: public repo without security hardening."
   - id: T2.13
     tier: T2
     name: Public flip + post-flip verification
@@ -2750,7 +2784,10 @@ tier_items:
     related_candidate_decisions: [CD.20]
     effort: XS
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-05-30"
+    bootstrap_completion_exempt: true
+    note: "Realized: repo flipped public 2026-05-30 per Decision 76. Landed ahead of CD.20 planned security/portal sequence; T2.11a/b + T2.12 outstanding (GHAS, branch protection, devcontainer, portal artefacts not in place at flip time)."
 
   - id: T2.14
     tier: T2
@@ -2805,7 +2842,7 @@ tier_items:
          against telemetry_agent_turns (owned by the T3.2 causal-chain verifier item) and
          restoration of its covers globs in validate.py --coverage. Gated on CD.17
          telemetry trust (T3.2/T3.3).
-    depends_on: []
+    depends_on: [T2.13]
     files_in_scope:
       - config/agent/data_quality/ops.yaml
       - scripts/verifiers/__init__.py
