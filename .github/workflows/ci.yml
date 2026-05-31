@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      pull-requests: write   # post the green-CI wake comment (gated + continue-on-error below)
 
     steps:
     - uses: actions/checkout@v5
@@ -57,6 +58,20 @@ jobs:
       env:
         AWS_DEFAULT_REGION: eu-west-2
       run: python -m scripts.validate --pre
+
+    - name: Signal green CI (wake a watching session)
+      # The PR-activity subscription wakes a watching Claude session on comments and
+      # failures, not on clean passes -- so an all-green PR is silent. Posting a pass
+      # comment on agent (claude/*) branch PRs restores the green wake. Scoped to
+      # claude/* to avoid commenting on every human PR; continue-on-error so a comment
+      # hiccup (or perms) can never red the build.
+      if: success() && startsWith(github.head_ref, 'claude/')
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh pr comment "${{ github.event.pull_request.number }}" \
+          --body "CI green: fast tier (validate --pre) passed for ${{ github.event.pull_request.head.sha }}. Automated wake signal for a watching session; no action needed."
 
   main-validate:
     if: github.event_name == 'push'
