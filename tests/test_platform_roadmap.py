@@ -520,6 +520,16 @@ class TestCD25SchemaAmendments:
             "T0.12.5",
             "T0.12.6",
             "T0.12.7",
+            # Migration-realized items (platform-roadmap-reconciliation 2026-05-31):
+            # same circular ratification bind as the 29 items above -- T0.7b not yet built.
+            "T0.2",
+            "T0.3",
+            "T0.5",
+            "T2.1",
+            "T2.2",
+            "T2.3",
+            "T2.10",
+            "T2.13",
         }
         actual = {item.id for item in doc.tier_items if item.bootstrap_completion_exempt}
         assert actual == expected, f"missing={expected - actual} extra={actual - expected}"
