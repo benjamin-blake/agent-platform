@@ -33,6 +33,9 @@ brought forward ahead of the unbuilt query Lambda (T0.7c is a 501 stub).
 | `pyproject.toml` | Modify | Mirror the dependency additions if it pins runtime deps. |
 | `docs/contracts/read-engine.yaml` | Create | Engine-choice contract: catalog resolution, current-state qualification, snapshot pinning, predicate pushdown, the Athena escape-hatch policy, the interim direct-engine-exposure note (engine-hiding restored when T0.7c/T0.8 verbs land), and the **materialization escalation trigger** for high-row-version tables (the product-scale path). |
 | `tests/test_iceberg_reader.py` | Create | Unit tests (pushdown args, current-state qualification, priority-queue semantics, snapshot pinning) + real-warehouse parity tests (DuckDB vs Athena `_current`, row-for-row, on a pinned snapshot). |
+| `tests/test_sync_ops.py` | Modify | Cover the rerouted reader branch in `_pull_single_table` / `_rebuild_local_cache` (required by `test_coverage_checker` per-file 100% on modified lines). |
+| `tests/test_ops_data_portal*.py` | Modify | Cover the rerouted reader branch in `_fetch_rec_from_athena` / `_fetch_decision_from_athena`, including the Decision-69 raise-on-unreachable path. |
+| `tests/test_session_preflight.py` | Modify | Cover the rerouted reader branches and graceful-degradation path. |
 
 ## Bundled Recommendations
 None.
@@ -72,6 +75,8 @@ complete without a deploy.
 - [ ] Athena retained as escape-hatch fallback; `docs/contracts/read-engine.yaml` documents the
       engine choice, escape-hatch policy, interim direct-exposure note, and the materialization
       escalation trigger for high-row-version tables.
+- [ ] Reader credential resolution honours the named `agent_platform` profile when present and falls
+      back to boto3's default chain under CI OIDC; parity tests pass on the GitHub-hosted runner.
 - [ ] `duckdb` + `pyiceberg[glue,duckdb]` added to `requirements.txt`; `bin/venv-python -m scripts.validate` passes.
 
 ## Verification Plan
@@ -94,6 +99,10 @@ complete without a deploy.
   view retirement is roadmap item T2.7 (depends on T2.5).
 - Warehouse-as-source-of-truth invariant: the reader reads Iceberg snapshots; it never restages from
   a local cache (CLAUDE.md lakehouse rule). Read caches stay downstream of the warehouse.
+- **CI credential chain:** the reader's pyiceberg `GlueCatalog` / boto3 resolution MUST resolve the
+  named `agent_platform` profile when present AND fall back to boto3's default chain when it is not
+  (GitHub-hosted CI uses OIDC with no named profile). The parity tests must pass on the OIDC runner,
+  not only locally (per the CI-runner credential gotcha in PROJECT_CONTEXT).
 - Single Portal Invariant (Decision 69): portal reads source-of-truth or raises.
 - No rescue agents or workaround loops (Decision 55). On unrecoverable V3 failure, stop and RCA.
 - No emojis; ASCII hyphens; Python 3.12+, type hints, ruff line length 127; `bin/venv-python` for all
@@ -162,7 +171,10 @@ complete without a deploy.
    current-state qualification, snapshot pinning, predicate pushdown, the Athena escape-hatch policy,
    the interim direct-exposure note, and the materialization escalation trigger for high-row-version
    tables.
-7. Create `tests/test_iceberg_reader.py` with the unit tests and the real-warehouse parity tests.
+7. Create `tests/test_iceberg_reader.py` with the unit tests and the real-warehouse parity tests,
+   AND update the three existing test modules (`tests/test_sync_ops.py`,
+   `tests/test_ops_data_portal*.py`, `tests/test_session_preflight.py`) to cover the rerouted reader
+   branches and the Decision-69 raise path, so `test_coverage_checker` (VP step 7) passes.
 8. **Execute Verification Plan** -- run each step. Loop until pass. If a V3 step fails unrecoverably,
    stop and analyze root cause (Decision 55); do not patch around it.
 9. Report: what was implemented, verification results (including parity row counts), and the named
