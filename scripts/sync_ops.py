@@ -1,13 +1,16 @@
 # complexity-waiver: decision-43
-"""sync_ops -- bidirectional sync between local JSONL files and Athena ops tables.
+"""sync_ops -- bidirectional sync between local JSONL files and the Iceberg ops tables.
+
+Read path: DuckDBIcebergReader (src/common/iceberg_reader.py) is tried first.
+Athena is retained as a fallback path (CD.8/CD.15 escape-hatch clause).
 
 Provides one CLI subcommand:
-  sync   -- drain outbox then pull all tables from Athena
+  sync   -- drain outbox then pull all tables from Iceberg
 
 Internal helpers (not for direct agent use):
   drain              -- flush outbox entries to S3 via OpsWriter
-  _rebuild_local_cache -- query Athena views and overwrite local JSONL files
-  _pull_single_table -- pull a single table from Athena
+  _rebuild_local_cache -- read Iceberg current-state and overwrite local JSONL files
+  _pull_single_table -- pull a single table from Iceberg (Athena fallback)
 
 Never raises to callers. All functions catch and log exceptions internally.
 """
@@ -51,6 +54,23 @@ _SSO_PROFILE = "agent_platform"
 _SYNC_REJECTS_LOG = _LOGS_DIR / "debug" / "dq-sync-rejects.jsonl"
 _DECISIONS_SYNC_REJECTS_LOG = _LOGS_DIR / "debug" / "decisions-sync-rejects.jsonl"
 _REQUIRED_REC_FIELDS = ["title", "source", "effort", "priority"]
+
+
+def _pull_via_reader(table: str) -> list[dict] | None:
+    """Return current-state rows for *table* via DuckDBIcebergReader.
+
+    Returns None on any exception so the caller can fall back to Athena.
+    Rows are returned as plain Python dicts with all coercions deferred to
+    the existing _coerce_ops_*_row helpers (they tolerate already-typed values).
+    """
+    try:
+        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
+
+        reader = DuckDBIcebergReader()
+        return reader.current_state(table)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sync_ops._pull_via_reader: reader failed for %s, will fall back to Athena: %s", table, exc)
+        return None
 
 
 def _write_sync_reject(row: dict, reason: str) -> None:
@@ -252,17 +272,84 @@ def drain() -> dict[str, int]:
 
 
 def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
-    """Pull a single Athena table/view and overwrite the local JSONL file.
+    """Pull a single ops table and overwrite the local JSONL file.
 
+    Tries DuckDBIcebergReader first; falls back to Athena on failure (CD.8/CD.15).
     Returns number of rows pulled, or 0 on failure.
     """
+    local_rel = _TABLE_TO_LOCAL.get(table)
+    if not local_rel:
+        logger.warning("sync_ops._pull_single_table: unknown table %r", table)
+        return 0
+
+    reader_rows = _pull_via_reader(table)
+    if reader_rows is not None:
+        rows = _coerce_rows_list(table, reader_rows)
+        return _write_rows_to_local(table, rows, local_rel)
+
+    # Athena fallback (CD.8/CD.15 escape hatch)
+    logger.info("sync_ops._pull_single_table: using Athena fallback for %s", table)
+    return _pull_single_table_athena(table, profile, local_rel)
+
+
+def _coerce_rows_list(table: str, raw_rows: list[dict]) -> list[dict]:
+    """Apply per-table coercion to a list of rows returned by the reader."""
+    rows: list[dict] = []
+    rejected_count = 0
+    for row in raw_rows:
+        row.pop("_rn", None)
+        row.pop("row_num", None)
+        if table == "ops_recommendations":
+            row = _coerce_ops_rec_row(row)  # type: ignore[assignment]
+            if row is None:
+                rejected_count += 1
+                continue
+            missing = [f for f in _REQUIRED_REC_FIELDS if not row.get(f) or not str(row[f]).strip()]
+            if missing:
+                _write_sync_reject(row, f"missing/empty required fields: {missing}")
+                rejected_count += 1
+                continue
+        elif table == "ops_priority_queue":
+            row = _coerce_ops_priority_queue_row(row)
+        elif table == "ops_decisions":
+            row = _coerce_ops_decisions_row(row)
+        elif table == "ops_session_log":
+            row = _coerce_ops_session_log_row(row)
+        rows.append(row)
+    if rejected_count:
+        logger.warning(
+            "sync_ops._coerce_rows_list: rejected %d invalid rows for %s (see %s)",
+            rejected_count,
+            table,
+            _SYNC_REJECTS_LOG,
+        )
+    return rows
+
+
+def _write_rows_to_local(table: str, rows: list[dict], local_rel: str) -> int:
+    """Write *rows* to the local JSONL cache for *table*. Returns row count."""
+    local_path = _LOGS_DIR / local_rel
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    with local_path.open("w", encoding="utf-8", newline="\n") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    logger.info("sync_ops._write_rows_to_local: wrote %d rows for %s", len(rows), table)
+    return len(rows)
+
+
+def _pull_single_table_athena(table: str, profile: str, local_rel: str) -> int:
+    """Athena fallback: query the _current view and write the local JSONL file.
+
+    This is the escape-hatch path (CD.8/CD.15). Called only when the DuckDB
+    reader fails or is unavailable.
+    """
     if not check_sso(profile):
-        logger.warning("sync_ops._pull_single_table: SSO credentials not available for %s", table)
+        logger.warning("sync_ops._pull_single_table_athena: SSO credentials not available for %s", table)
         return 0
 
     view = _TABLE_TO_VIEW.get(table)
     if not view:
-        logger.warning("sync_ops._pull_single_table: unknown table %r", table)
+        logger.warning("sync_ops._pull_single_table_athena: unknown table %r", table)
         return 0
 
     try:
@@ -284,7 +371,7 @@ def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
 
         if state != "SUCCEEDED":
             reason = status_resp["QueryExecution"]["Status"].get("StateChangeReason", "unknown")
-            logger.warning("sync_ops._pull_single_table: query for %s ended with state %s: %s", table, state, reason)
+            logger.warning("sync_ops._pull_single_table_athena: query for %s ended with state %s: %s", table, state, reason)
             return 0
 
         rows: list[dict] = []
@@ -324,37 +411,28 @@ def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
                     row = _coerce_ops_session_log_row(row)
                 rows.append(row)
 
-        local_rel = _TABLE_TO_LOCAL.get(table)
-        if local_rel:
-            local_path = _LOGS_DIR / local_rel
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            with local_path.open("w", encoding="utf-8", newline="\n") as fh:
-                for row in rows:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-            if rejected_count:
-                logger.warning(
-                    "sync_ops._pull_single_table: rejected %d invalid rows for %s (see %s)",
-                    rejected_count,
-                    table,
-                    _SYNC_REJECTS_LOG,
-                )
-            logger.info("sync_ops._pull_single_table: pulled %d rows for %s", len(rows), table)
-            return len(rows)
-        return 0
+        if rejected_count:
+            logger.warning(
+                "sync_ops._pull_single_table_athena: rejected %d invalid rows for %s (see %s)",
+                rejected_count,
+                table,
+                _SYNC_REJECTS_LOG,
+            )
+        return _write_rows_to_local(table, rows, local_rel)
 
     except Exception as exc:  # noqa: BLE001
-        logger.warning("sync_ops._pull_single_table: failed for %s: %s", table, exc)
+        logger.warning("sync_ops._pull_single_table_athena: failed for %s: %s", table, exc)
         return 0
 
 
 def _rebuild_local_cache(profile: str = _SSO_PROFILE) -> dict[str, int]:
-    """Query Athena views and overwrite local JSONL files with fresh data.
+    """Read Iceberg current-state and overwrite local JSONL files with fresh data.
 
-    DESTRUCTIVE: overwrites local JSONL files with Athena state. If any S3 staging
+    DESTRUCTIVE: overwrites local JSONL files with Iceberg state. If any S3 staging
     files for ops_recommendations exist today (unstaged writes), raises RuntimeError
     to prevent silent data loss. Call sync() first to compact pending writes.
 
-    Requires valid SSO credentials. Returns empty dict if SSO is expired.
+    Read path: DuckDBIcebergReader first, Athena fallback (CD.8/CD.15).
 
     Returns:
         Dict mapping table name to number of rows pulled.
@@ -385,105 +463,33 @@ def _rebuild_local_cache(profile: str = _SSO_PROFILE) -> dict[str, int]:
     except Exception:  # noqa: BLE001
         pass  # staging guard failure is non-fatal
 
-    if not check_sso(profile):
-        logger.warning("sync_ops._rebuild_local_cache: SSO credentials not available -- skipping pull")
-        return counts
+    for table in _TABLE_TO_VIEW:
+        local_rel = _TABLE_TO_LOCAL.get(table)
+        if not local_rel:
+            continue
 
-    try:
-        import boto3 as _boto3  # noqa: PLC0415
+        reader_rows = _pull_via_reader(table)
+        if reader_rows is not None:
+            rows = _coerce_rows_list(table, reader_rows)
+            counts[table] = _write_rows_to_local(table, rows, local_rel)
+            logger.info("sync_ops._rebuild_local_cache: pulled %d rows for %s", counts[table], table)
+            continue
 
-        session = _boto3.Session(profile_name=profile)
-        athena = session.client("athena", region_name="eu-west-2")
-
-        for table, view in _TABLE_TO_VIEW.items():
-            try:
-                query = f"SELECT * FROM {_DATABASE}.{view}"
-                response = athena.start_query_execution(
-                    QueryString=query,
-                    WorkGroup=_WORKGROUP,
-                )
-                execution_id = response["QueryExecutionId"]
-
-                for _ in range(60):
-                    time.sleep(2)
-                    status_resp = athena.get_query_execution(QueryExecutionId=execution_id)
-                    state = status_resp["QueryExecution"]["Status"]["State"]
-                    if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-                        break
-
-                if state != "SUCCEEDED":
-                    reason = status_resp["QueryExecution"]["Status"].get("StateChangeReason", "unknown")
-                    logger.warning("sync_ops._rebuild_local_cache: query for %s ended with state %s: %s", table, state, reason)
-                    continue
-
-                rows: list[dict] = []
-                rejected_count = 0
-                paginator = athena.get_paginator("get_query_results")
-                header: list[str] = []
-                is_first_page = True
-
-                for page in paginator.paginate(QueryExecutionId=execution_id):
-                    page_rows = page.get("ResultSet", {}).get("Rows", [])
-                    for row_index, raw_row in enumerate(page_rows):
-                        data = [col.get("VarCharValue", "") for col in raw_row.get("Data", [])]
-                        if is_first_page and row_index == 0:
-                            header = data
-                            is_first_page = False
-                            continue
-                        if not header:
-                            continue
-                        row: dict = dict(zip(header, data))
-                        row.pop("_rn", None)
-                        row.pop("row_num", None)
-                        if table == "ops_recommendations":
-                            row = _coerce_ops_rec_row(row)  # type: ignore[assignment]
-                            if row is None:
-                                rejected_count += 1
-                                continue
-                            missing = [f for f in _REQUIRED_REC_FIELDS if not row.get(f) or not str(row[f]).strip()]
-                            if missing:
-                                _write_sync_reject(row, f"missing/empty required fields: {missing}")
-                                rejected_count += 1
-                                continue
-                        elif table == "ops_priority_queue":
-                            row = _coerce_ops_priority_queue_row(row)
-                        elif table == "ops_decisions":
-                            row = _coerce_ops_decisions_row(row)
-                        elif table == "ops_session_log":
-                            row = _coerce_ops_session_log_row(row)
-                        rows.append(row)
-
-                local_rel = _TABLE_TO_LOCAL.get(table)
-                if local_rel:
-                    local_path = _LOGS_DIR / local_rel
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    with local_path.open("w", encoding="utf-8", newline="\n") as fh:
-                        for row in rows:
-                            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    counts[table] = len(rows)
-                    if rejected_count:
-                        logger.warning(
-                            "sync_ops._rebuild_local_cache: rejected %d invalid rows for %s (see %s)",
-                            rejected_count,
-                            table,
-                            _SYNC_REJECTS_LOG,
-                        )
-                    logger.info("sync_ops._rebuild_local_cache: pulled %d rows for %s", len(rows), table)
-
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("sync_ops._rebuild_local_cache: failed for table %s: %s", table, exc)
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("sync_ops._rebuild_local_cache: boto3 error: %s", exc)
+        # Athena fallback (CD.8/CD.15 escape hatch)
+        logger.info("sync_ops._rebuild_local_cache: reader failed for %s, using Athena fallback", table)
+        if not check_sso(profile):
+            logger.warning("sync_ops._rebuild_local_cache: SSO credentials not available for Athena fallback on %s", table)
+            continue
+        counts[table] = _pull_single_table_athena(table, profile, local_rel)
 
     return counts
 
 
 def sync(profile: str = _SSO_PROFILE) -> dict[str, dict[str, int]]:
-    """Drain outbox then rebuild local cache from Athena.
+    """Drain outbox then rebuild local cache from Iceberg (DuckDB reader, Athena fallback).
 
     Drain runs first so any locally-queued entries reach S3 before pulling,
-    ensuring the pulled view includes recently-drained data.
+    ensuring the pulled snapshot includes recently-drained data.
 
     Returns:
         {"drained": {table: count}, "pulled": {table: count}}

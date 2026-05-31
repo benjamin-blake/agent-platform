@@ -1,0 +1,142 @@
+---
+# Engine-choice contract for the ops-store read layer.
+# Authoritative reference for CD.8 (engine-agnostic) and CD.15 (Athena escape-hatch).
+# Consumed by: agents, planning sessions, T0.7c query Lambda implementors.
+
+version: 1
+decisions_cited: [CD.8, CD.15, CD.16, Decision-56, Decision-69, Decision-70]
+
+default_engine:
+  name: DuckDB
+  module: src/common/iceberg_reader.py
+  class: DuckDBIcebergReader
+  rationale: >
+    In-process, zero-cost, Arrow-native. Removes Athena from the operational read
+    hot-path (722-row ops store; scales to billions-of-rows market-data path via
+    same interface). Reference implementation for the product's future T0.7c query
+    Lambda.
+
+catalog_resolution:
+  type: pyiceberg GlueCatalog
+  identifier_form: "agent_platform.<table>"
+  region: eu-west-2
+  credential_chain: >
+    resolve_aws_profile() returns the named agent_platform profile when present
+    (local / Claude-Code-on-the-web). Returns None when AWS_ACCESS_KEY_ID is set
+    in the environment (CI OIDC, Lambda execution role), letting boto3 fall
+    through to ambient credentials. No hardcoded metadata.json paths anywhere in
+    the reader.
+  catalog_properties:
+    client.region: eu-west-2
+    s3.region: eu-west-2
+    client.profile-name: "<agent_platform if resolved, else omitted>"
+    s3.profile-name: "<agent_platform if resolved, else omitted>"
+
+current_state_qualification:
+  ops_recommendations:
+    pattern: ROW_NUMBER
+    sql: >
+      SELECT * EXCLUDE(row_num) FROM (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
+        FROM <table>
+      ) WHERE row_num = 1
+    decision: Decision-56
+  ops_decisions:
+    pattern: ROW_NUMBER
+    sql: >
+      SELECT * EXCLUDE(row_num) FROM (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
+        FROM <table>
+      ) WHERE row_num = 1
+    decision: Decision-56
+  ops_priority_queue:
+    pattern: correlated_subquery
+    sql: >
+      SELECT * FROM <table>
+      WHERE queue_run_id = (
+        SELECT queue_run_id FROM <table>
+        ORDER BY last_updated_timestamp DESC LIMIT 1
+      )
+    rationale: >
+      Returns ALL entries from the latest curator run, not one row per entity.
+      Decision 70 explicitly forbids the ROW_NUMBER pattern here.
+    decision: Decision-70
+
+snapshot_pinning:
+  supported: true
+  default: latest snapshot
+  parameter: snapshot_id (int | None)
+  guarantee: >
+    Two calls with the same snapshot_id on the same table return identical bytes,
+    regardless of concurrent writes. Reproducibility proof: VP step 3.
+
+predicate_pushdown:
+  enabled: true
+  mechanism: >
+    row_filter and selected_fields are passed into pyiceberg .scan() before Arrow
+    materialisation. Partition pruning happens at the Iceberg scan level; no full
+    table scans for filtered reads.
+  verified_by: >
+    tests/test_iceberg_reader.py::TestDuckDBIcebergReader::test_scan_args_pushdown
+
+single_portal_invariant:
+  decision: Decision-69
+  rule: >
+    ops_data_portal fetch-before-update reads (_fetch_rec_from_athena,
+    _fetch_decision_from_athena) read the warehouse via DuckDBIcebergReader with
+    predicate pushdown. On reader failure they fall back to Athena. If BOTH are
+    unreachable, RuntimeError is raised -- the local JSONL cache is never read as
+    a fallback for these write-gating reads.
+
+athena_escape_hatch:
+  policy: CD.8 / CD.15
+  trigger: >
+    DuckDBIcebergReader raises any exception (credential failure, network error,
+    pyiceberg incompatibility). The fallback path runs the original Athena query
+    via boto3 and returns the same coerced row list.
+  scope: read paths only (sync_ops, ops_data_portal, session_preflight)
+  retirement: >
+    Athena _current views are retired in T2.7, after all read paths have been
+    validated on DuckDB for >= one production cycle.
+  note: >
+    No _current view deletion in this plan. View retirement depends on T2.5
+    (this plan) and the write-path swap (fast-follow plan).
+
+interim_direct_engine_exposure:
+  note: >
+    CD.8 specifies that the engine is hidden behind typed query verbs (T0.7c /
+    T0.8). Today, scripts/sync_ops.py, scripts/ops_data_portal.py, and
+    scripts/session_preflight.py call DuckDBIcebergReader directly as a pre-Lambda
+    bridge. Engine-hiding is restored when T0.7c (query Lambda) and T0.8 (typed
+    query verbs) land. Documented here to distinguish intentional interim from
+    accidental leakage.
+
+materialization_escalation_trigger:
+  description: >
+    For tables with high row-version counts (e.g., billions-of-rows market-data
+    path), full Arrow materialisation into DuckDB in-process is not viable.
+    Escalation path: use Iceberg partition pruning + S3 Select for column
+    projection, or delegate to Athena for the large-scan case.
+  threshold: >
+    Revisit when any single Iceberg table exceeds 10M rows or Arrow materialisation
+    exceeds 2 GB RAM. Monitor via DuckDB memory_usage() after each large scan.
+  current_state: >
+    Not triggered. Ops store is 722 rows (recs) / 38 rows (decisions) as of
+    2026-05-31. Market-data tables not yet provisioned.
+
+fast_follow_plans:
+  - slug: write-path-swap
+    scope: >
+      Route view refresh (CREATE OR REPLACE VIEW), to_iceberg compaction, and
+      DELETE DML off Athena/awswrangler onto DuckDB/pyiceberg.
+  - slug: current-view-retirement
+    roadmap: T2.7
+    scope: >
+      Drop ops_recommendations_current, ops_decisions_current,
+      ops_priority_queue_current Athena views once all reads are DuckDB-backed
+      for >= one production cycle.
+  - slug: query-lambda-wiring
+    roadmap: T0.7c
+    scope: >
+      Wire the T0.7c query Lambda to import src/common/iceberg_reader.py directly.
+      DuckDBIcebergReader was designed so this import works without modification.

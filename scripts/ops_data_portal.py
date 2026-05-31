@@ -361,16 +361,48 @@ def file_rec(
 
 
 def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Query ops_recommendations_current for a single record by id.
+    """Fetch a single ops_recommendations record by id from the warehouse.
+
+    Reads the current-state snapshot via DuckDBIcebergReader with predicate
+    pushdown (row_filter="id = '<rec_id>'"), falling back to Athena on reader
+    failure.
+
+    Decision 69: raises RuntimeError if the warehouse is unreachable. Never
+    falls back to the local JSONL cache.
 
     Returns the record dict (coerced and sanitised) or None if not found.
-    Raises RuntimeError if Athena is unreachable or the query fails.
     """
+    if not re.fullmatch(r"rec-\d+", rec_id):
+        raise ValueError(f"_fetch_rec_from_athena: invalid rec_id: {rec_id!r}")
+
+    from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
+
+    # -- DuckDB reader path --
+    try:
+        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
+
+        reader = DuckDBIcebergReader()
+        rows = reader.current_state(
+            "ops_recommendations",
+            row_filter=f"id = '{rec_id}'",
+        )
+        if rows:
+            coerced = _coerce_ops_rec_row(dict(rows[0]))
+            if coerced is None:
+                return None
+            return _sanitize_athena_record(coerced)
+        return None
+    except Exception as reader_exc:  # noqa: BLE001
+        logger.warning(
+            "ops_data_portal._fetch_rec_from_athena: reader failed for %s, using Athena fallback: %s",
+            rec_id,
+            reader_exc,
+        )
+
+    # -- Athena fallback (Decision 69: must raise on unreachable; never return cache) --
     import time  # noqa: PLC0415
 
     import boto3 as _boto3  # noqa: PLC0415
-
-    from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
     effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     try:
@@ -381,7 +413,7 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
             WorkGroup=_ATHENA_WORKGROUP,
         )["QueryExecutionId"]
     except Exception as exc:
-        raise RuntimeError(f"ops_data_portal._fetch_rec_from_athena: Athena unreachable: {exc}") from exc
+        raise RuntimeError(f"ops_data_portal._fetch_rec_from_athena: warehouse unreachable: {exc}") from exc
 
     deadline = time.time() + 60
     state = "RUNNING"
@@ -539,19 +571,48 @@ def file_decision(
 
 
 def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Query ops_decisions_current for a single record by id.
+    """Fetch a single ops_decisions record by id from the warehouse.
+
+    Reads the current-state snapshot via DuckDBIcebergReader with predicate
+    pushdown (row_filter="id = '<decision_id>'"), falling back to Athena on
+    reader failure.
+
+    Decision 69: raises RuntimeError if the warehouse is unreachable. Never
+    falls back to the local JSONL cache.
 
     Returns the record dict or None if not found.
-    Raises RuntimeError if Athena is unreachable or the query fails.
     """
-    import time  # noqa: PLC0415
-
-    import boto3 as _boto3  # noqa: PLC0415
-
     from scripts.sync_ops import _coerce_ops_decisions_row  # noqa: PLC0415
 
     if not re.fullmatch(r"dec-\d+", decision_id):
         raise ValueError(f"_fetch_decision_from_athena: invalid decision_id: {decision_id!r}")
+
+    # -- DuckDB reader path --
+    try:
+        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
+
+        reader = DuckDBIcebergReader()
+        rows = reader.current_state(
+            "ops_decisions",
+            row_filter=f"id = '{decision_id}'",
+        )
+        if rows:
+            rec = dict(rows[0])
+            rec.pop("row_num", None)
+            return _sanitize_athena_record(_coerce_ops_decisions_row(rec))
+        return None
+    except Exception as reader_exc:  # noqa: BLE001
+        logger.warning(
+            "ops_data_portal._fetch_decision_from_athena: reader failed for %s, using Athena fallback: %s",
+            decision_id,
+            reader_exc,
+        )
+
+    # -- Athena fallback (Decision 69: must raise on unreachable; never return cache) --
+    import time  # noqa: PLC0415
+
+    import boto3 as _boto3  # noqa: PLC0415
+
     effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
     try:
         session = _boto3.Session(profile_name=effective_profile)
@@ -561,7 +622,7 @@ def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None)
             WorkGroup=_ATHENA_WORKGROUP,
         )["QueryExecutionId"]
     except Exception as exc:
-        raise RuntimeError(f"ops_data_portal._fetch_decision_from_athena: Athena unreachable: {exc}") from exc
+        raise RuntimeError(f"ops_data_portal._fetch_decision_from_athena: warehouse unreachable: {exc}") from exc
 
     deadline = time.time() + 60
     state = "RUNNING"
