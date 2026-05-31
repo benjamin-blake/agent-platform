@@ -13,6 +13,11 @@ on:
         description: 'GitHub Actions run ID of the failed CI run to diagnose'
         required: true
         type: string
+      force_rca:
+        description: 'Force RCA even if already filed for this commit (dedup bypass)'
+        required: false
+        type: boolean
+        default: false
 
 # Only run when CI failed -- skip success and cancellation.
 # Loop guard: this workflow is NOT listed in the workflows: filter above,
@@ -29,12 +34,17 @@ jobs:
       id-token: write
       contents: read
       pull-requests: write
+      actions: read
+      statuses: write
 
     steps:
       - name: Checkout at failing commit
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # workflow_run: the failing commit. workflow_dispatch: head_sha is absent, so fall back
+          # to github.sha (the dispatched ref, e.g. main) -- an empty ref would silently checkout
+          # the default branch; this makes that intent explicit.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -42,9 +52,14 @@ jobs:
           python-version: '3.12'
 
       - name: Activate venv
+        # setup.py is a dev-env bootstrap utility, not a packaging script -- it defines no
+        # installable package and no [dev] extra, so `pip install -e .[dev]` is a no-op that
+        # leaves scripts.ops_data_portal unimportable and file_rec silently failing. Install the
+        # real dependencies from requirements.txt (mirrors the main-validate job).
         run: |
           python -m venv .venv
-          .venv/bin/pip install --quiet -e ".[dev]" 2>/dev/null || true
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
 
       # TODO(bedrock): When this runner migrates to GitHub-hosted (target: 90-day window),
       # replace this step and the `claude -p` invocation below with a Python entrypoint
@@ -64,21 +79,91 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
           aws-region: eu-west-2
 
+      - name: Dedup guard
+        id: dedup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Bind event/input values to env (never interpolate ${{ }} directly into run: bodies)
+          # and sanitise the untrusted dispatch run_id to digits to prevent shell injection.
+          RUN_ID_RAW: ${{ github.event.workflow_run.id || github.event.inputs.run_id }}
+          HEAD_SHA_RAW: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_NAME_RAW: ${{ github.event.workflow_run.name }}
+        run: |
+          RUN_ID=$(printf '%s' "$RUN_ID_RAW" | tr -cd '0-9')
+          HEAD_SHA="$HEAD_SHA_RAW"
+          WORKFLOW_NAME="$WORKFLOW_NAME_RAW"
+
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.head_sha' 2>/dev/null || echo "")
+          fi
+          if [ -z "$WORKFLOW_NAME" ]; then
+            WORKFLOW_NAME=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.name' 2>/dev/null || echo "unknown")
+          fi
+
+          WORKFLOW_SLUG=$(echo "$WORKFLOW_NAME" | tr '[:upper:]' '[:lower:]' | tr ' /' '_-' | sed 's/[^a-z0-9_-]//g')
+          CONTEXT="ci-rca/${WORKFLOW_SLUG}"
+
+          ALREADY_FILED="false"
+          if [ -n "$HEAD_SHA" ]; then
+            STATE=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/statuses" \
+              --jq ".[] | select(.context == \"${CONTEXT}\") | .state" 2>/dev/null | head -1)
+            if [ "$STATE" = "success" ]; then
+              ALREADY_FILED="true"
+              echo "Dedup: ci-rca already filed for ${WORKFLOW_NAME}@${HEAD_SHA}; skipping."
+            fi
+          fi
+
+          echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "context=${CONTEXT}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch failed run logs
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
+            || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
+            || true
+
       - name: Run ci-rca agent
+        id: rca_agent
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          AWS_PROFILE: agent_platform
+          GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
           claude -p \
             --output-format json \
             --max-turns 30 \
-            "Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}" \
+            --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" \
+            "Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log." \
             > /tmp/ci-rca-output.json 2>&1 || true
           cat /tmp/ci-rca-output.json
 
+      - name: Mark failure as RCA'd
+        id: mark_rca
+        if: steps.rca_agent.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA="${{ steps.dedup.outputs.head_sha }}"
+          CONTEXT="${{ steps.dedup.outputs.context }}"
+          if [ -n "$HEAD_SHA" ] && [ -n "$CONTEXT" ]; then
+            gh api "repos/${{ github.repository }}/statuses/${HEAD_SHA}" \
+              --method POST \
+              --field state=success \
+              --field context="${CONTEXT}" \
+              --field description="ci-rca filed a recommendation for this failure"
+          fi
+
       - name: Comment on originating PR
-        if: ${{ github.event.workflow_run.pull_requests[0] != null && github.event.workflow_run.pull_requests[0].number != '' }}
+        # Gate on the agent actually running (not dedup-skipped) so a skipped run never posts a
+        # misleading "filed unknown" comment.
+        if: ${{ steps.rca_agent.outcome == 'success' && github.event.workflow_run.pull_requests[0] != null && github.event.workflow_run.pull_requests[0].number != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

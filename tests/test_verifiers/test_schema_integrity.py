@@ -115,3 +115,75 @@ async def test_schema_integrity_severity_is_warn():
         from scripts.verifiers.harness import VerifierSeverity
 
         assert result.severity == VerifierSeverity.WARN
+
+
+@pytest.mark.asyncio
+async def test_schema_integrity_missing_table_skips_not_drifts():
+    """get_table_types returns {} for an unprovisioned table -> PASS (skip, not drift)."""
+    table_map = {
+        "ops_mock": MockOpsModel,
+        "telemetry_mock": MockTelemetryModel,
+    }
+
+    def fake_get_table_types(database: str, table: str) -> dict:
+        if table == "ops_mock":
+            return {
+                "id": "string",
+                "status": "string",
+                "created_timestamp": "timestamp",
+                "last_updated_timestamp": "timestamp",
+            }
+        return {}  # telemetry_mock not yet provisioned
+
+    with (
+        patch("boto3.Session"),
+        patch("scripts.ops_writer.OpsWriter._bucket", return_value="test-bucket"),
+        patch("awswrangler.catalog.get_table_types", side_effect=fake_get_table_types),
+        patch("scripts.verifiers.schema_integrity.MODEL_MAP", table_map),
+    ):
+        verifier = SchemaIntegrityVerifier()
+        result = await verifier.verify()
+
+    assert result.status == VerifierStatus.PASS
+    assert "telemetry_mock" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_schema_integrity_entity_not_found_skips():
+    """EntityNotFoundException raised by get_table_types -> table skipped (PASS, no drift)."""
+    table_map = {"telemetry_missing": MockTelemetryModel}
+
+    with (
+        patch("boto3.Session"),
+        patch("scripts.ops_writer.OpsWriter._bucket", return_value="test-bucket"),
+        patch(
+            "awswrangler.catalog.get_table_types",
+            side_effect=Exception("EntityNotFoundException: Table telemetry_missing not found"),
+        ),
+        patch("scripts.verifiers.schema_integrity.MODEL_MAP", table_map),
+    ):
+        verifier = SchemaIntegrityVerifier()
+        result = await verifier.verify()
+
+    assert result.status == VerifierStatus.PASS
+    assert "telemetry_missing" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_schema_integrity_credential_error_returns_skipped():
+    """A credential-related exception -> SKIPPED (not FAIL)."""
+    table_map = {"ops_mock": MockOpsModel}
+
+    with (
+        patch("boto3.Session"),
+        patch("scripts.ops_writer.OpsWriter._bucket", return_value="test-bucket"),
+        patch(
+            "awswrangler.catalog.get_table_types",
+            side_effect=Exception("credentials not found for profile agent_platform"),
+        ),
+        patch("scripts.verifiers.schema_integrity.MODEL_MAP", table_map),
+    ):
+        verifier = SchemaIntegrityVerifier()
+        result = await verifier.verify()
+
+    assert result.status == VerifierStatus.SKIPPED

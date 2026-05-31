@@ -629,7 +629,10 @@ class TestAutoMode:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.sync_ops.check_sso", return_value=True),
             patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 3, "skipped": 0}) as mock_drain,
+            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
+            patch("scripts.ops_data_portal.sync"),
             patch("session_postflight._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")

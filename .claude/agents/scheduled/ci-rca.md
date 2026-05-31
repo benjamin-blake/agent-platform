@@ -12,17 +12,19 @@ Extract the run ID from that prompt.
 
 ## Tools Allowed
 
-- `bash` (read-only operations: `gh`, `grep`, `cat`, `git log`)
-- `python -m scripts.ops_data_portal` (for `get_rec_write_guidance` and `file_rec` only)
+- `bash` (read-only operations: `grep`, `cat`, `git log`)
+- `bin/venv-python -m scripts.ops_data_portal` (for `get_rec_write_guidance` and `file_rec` only)
 
 **Never** use `Edit`, `Write`, `MultiEdit`, `git commit`, or `git push` in this agent.
 
 ## Methodology
 
-### Step 1: Fetch the failed run logs
+### Step 1: Read the pre-fetched failed run logs
+
+The workflow pre-fetches the failed run logs before invoking this agent. Read them from:
 
 ```bash
-gh run view <run-id> --log-failed
+cat /tmp/ci-rca-failed.log
 ```
 
 Read the full output. Identify the first failing step and the precise error signature.
@@ -52,7 +54,7 @@ From the log output, extract:
 Before filing the recommendation, call:
 
 ```bash
-.venv/bin/python -m scripts.ops_data_portal get_rec_write_guidance
+bin/venv-python -m scripts.ops_data_portal get_rec_write_guidance
 ```
 
 Read the output to understand the required fields and their semantics. This ensures
@@ -61,7 +63,7 @@ the rec is structurally valid and semantically precise.
 ### Step 5: File the recommendation
 
 ```bash
-.venv/bin/python -m scripts.ops_data_portal file_rec \
+bin/venv-python -m scripts.ops_data_portal file_rec \
   --source ci_rca \
   --priority critical \
   --file "<repo-relative path of the primary file implicated by the diagnosis>" \
