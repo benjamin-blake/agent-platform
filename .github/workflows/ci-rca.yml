@@ -136,13 +136,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.dedup.outputs.run_id }}"
-          claude -p \
+          # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
+          # trailing positional prompt, leaving claude with no input ("Input must be provided
+          # either through stdin or as a prompt argument when using --print").
+          PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log."
+          printf '%s' "$PROMPT" | claude -p \
             --output-format json \
             --max-turns 30 \
             --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" \
-            "Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log." \
             > /tmp/ci-rca-output.json 2>&1 || true
           cat /tmp/ci-rca-output.json
+          # The marker/dedup must reflect a real filing, not the || true-masked exit above. If no
+          # rec id appears in the output, fail this (cosmetic) run so no marker is set and the next
+          # trigger re-diagnoses (fail-open toward re-diagnosis, per Decision 74).
+          if ! grep -qE 'rec-[0-9]+' /tmp/ci-rca-output.json; then
+            echo "::error::ci-rca agent filed no recommendation (prompt/credentials issue?)"
+            exit 1
+          fi
 
       - name: Mark failure as RCA'd
         id: mark_rca
