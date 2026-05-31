@@ -73,8 +73,9 @@
 # because it puts the credential in the process environment.)
 #
 # Responsibility split (post T0.2 refactor):
-#   setup-cloud-env.sh                  -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform)
-#   .claude/hooks/session_start_aws.sh  -- verifies the static-key assume-role chain (runs every session)
+#   setup-cloud-env.sh -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform, github-mcp-server).
+#   .claude/hooks/session_start_aws.sh -- verifies the static-key assume-role chain (every session).
+#   .claude/hooks/session_start_ensure_github_mcp.sh -- self-heals github-mcp-server on stale snapshots (every session).
 #
 # What it does:
 #   1. Creates .venv with python3.12.
@@ -196,28 +197,16 @@ else
 fi
 
 # 7. github-mcp-server (for the .mcp.json `github-full` MCP server) ------------
-# Full GitHub MCP toolset (incl. Actions: workflow runs / job logs) that the
-# platform-managed connector lacks. The PAT is read at runtime from
-# ~/.config/gh-mcp/token (written by the private Setup-script field, never here).
-# The api.github.com release API is proxy-blocked in the container, so the asset
-# is pulled from the github.com release CDN directly at a pinned version.
-GITHUB_MCP_SERVER_VERSION="1.1.2"
-gh_mcp_bin="$HOME/.local/bin/github-mcp-server"
-if "$gh_mcp_bin" --version 2>/dev/null | grep -q "Version: ${GITHUB_MCP_SERVER_VERSION}"; then
-    log "github-mcp-server ${GITHUB_MCP_SERVER_VERSION} already present"
+# Idempotent install delegated to bin/ensure-github-mcp-server.sh -- the single
+# source of truth for the version pin + install logic. That script is also run
+# every session by .claude/hooks/session_start_ensure_github_mcp.sh, so a
+# container booted from a snapshot built before this step existed self-heals (the
+# binary lives outside git, so a fresh checkout alone cannot supply it).
+t0=$SECONDS
+if out="$(bash "$REPO_ROOT/bin/ensure-github-mcp-server.sh")"; then
+    log "$out ($((SECONDS - t0))s)"
 else
-    log "Installing github-mcp-server ${GITHUB_MCP_SERVER_VERSION}"
-    t0=$SECONDS
-    (
-        tmpdir="$(mktemp -d)"
-        trap 'rm -rf "$tmpdir"' EXIT
-        url="https://github.com/github/github-mcp-server/releases/download/v${GITHUB_MCP_SERVER_VERSION}/github-mcp-server_Linux_x86_64.tar.gz"
-        curl -fsSL "$url" -o "$tmpdir/gh-mcp.tar.gz"
-        tar -xzf "$tmpdir/gh-mcp.tar.gz" -C "$tmpdir"
-        mkdir -p "$HOME/.local/bin"
-        install -m 0755 "$tmpdir/github-mcp-server" "$gh_mcp_bin"
-    ) && log "github-mcp-server: $((SECONDS - t0))s ($("$gh_mcp_bin" --version 2>&1 | grep Version))" \
-      || log "WARNING: github-mcp-server install failed (non-fatal); the github-full MCP server stays offline until installed."
+    log "WARNING: github-mcp-server install failed (non-fatal); the github-full MCP server stays offline until installed."
 fi
 
 log "Done. Verify with: bin/venv-python -m scripts.session_preflight"
