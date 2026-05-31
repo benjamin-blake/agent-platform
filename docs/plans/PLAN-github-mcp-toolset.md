@@ -75,6 +75,21 @@ the mandatory risk note below, and Option B as a fully-specified alternative.
   The minimal-scope/read-only/short-expiry token is the compensating control (same
   reasoning shape as Decision 77 clause 3).
 
+## Implementation Outcome (2026-05-31)
+Implemented as **Option B** (token-file), not the Option A primary documented above --
+the operator chose the lower-leakage, convention-consistent path. Shipped form:
+- `.mcp.json`: stdio `github-full` server; a `bash -c` wrapper (not `-lc` -- no profile
+  sourcing) reads the PAT from `~/.config/gh-mcp/token` (chmod 600, written by the private
+  Setup-script field) and execs `$HOME/.local/bin/github-mcp-server stdio --toolsets all`.
+  No secret in the committed file.
+- `bin/setup-cloud-env.sh`: idempotent github-mcp-server v1.1.2 install from the github.com
+  release CDN (api.github.com release API is proxy-blocked in-container).
+- `.claude/settings.json`: allowlists the server with the bare server-prefix form
+  `mcp__github-full` (grants all its tools; the read-only PAT is the actual access control).
+Zero-context code review verdict: PROCEED (0 Critical / 0 High). Open follow-up (Medium):
+wire the VP-step-2 no-literal-token assertion into `validate.py`/CI so the CD.20 invariant
+is durable rather than review-only.
+
 ## Decisions to Cite
 - **Decision 76** -- web GitHub MCP toolset is the canonical GitHub transport; a richer
   GitHub MCP server is a direct in-domain extension. Governing rationale for *why*.
