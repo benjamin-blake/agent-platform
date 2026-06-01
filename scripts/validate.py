@@ -1970,6 +1970,30 @@ def validate_scheduled_agent_logs(failed: list[str]) -> None:
         print(f"Scheduled agent log validation passed ({len(agent_files)} file(s) checked).")
 
 
+def validate_ci_rca_trigger(failed: list[str]) -> None:
+    """Assert ci-rca.yml fires only on the authoritative main-branch CI gate.
+
+    Wires the ci-rca-filter guard from scripts/verify_ci_workflow.py into the
+    presubmit tier per Decision 60: a check is only a gate if it runs via validate.py.
+    """
+    print("\n=== ci-rca trigger gate ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.verify_ci_workflow import _check_ci_rca_filter
+
+        _check_ci_rca_filter()
+        print("  PASS: ci-rca trigger gate (main-branch gate + FILED: marker contract present)")
+    except AssertionError as exc:
+        print(f"  FAIL: {exc}")
+        failed.append("ci-rca trigger gate")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -1984,6 +2008,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_decisions_local_writes(failed)
     validate_warehouse_write_sources(failed)
     validate_invariants(failed)
+    validate_ci_rca_trigger(failed)
     validate_sloc_limits(failed)
     check_source_registry(failed)
     validate_platform_roadmap(failed)

@@ -27,7 +27,7 @@ jobs:
     # Fork-PR privilege gate (public-repo CRITICAL): ci-rca runs in the base-repo context with the
     # write-capable branch role, so a fork PR that merely fails CI must NOT trigger it. workflow_dispatch
     # (manual, privileged actor) is retained; workflow_run is gated to the same repo (non-fork).
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -143,16 +143,19 @@ jobs:
           printf '%s' "$PROMPT" | claude -p \
             --output-format json \
             --max-turns 30 \
-            --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" \
-            > /tmp/ci-rca-output.json 2>&1 || true
+            --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(git log:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" \
+            > /tmp/ci-rca-output.json 2> /tmp/ci-rca-stderr.log || true
           cat /tmp/ci-rca-output.json
-          # The marker/dedup must reflect a real filing, not the || true-masked exit above. If no
-          # rec id appears in the output, fail this (cosmetic) run so no marker is set and the next
-          # trigger re-diagnoses (fail-open toward re-diagnosis, per Decision 74).
-          if ! grep -qE 'rec-[0-9]+' /tmp/ci-rca-output.json; then
-            echo "::error::ci-rca agent filed no recommendation (prompt/credentials issue?)"
+          # Deterministic filing check: the marker/dedup must reflect a real filing, not the
+          # || true-masked exit above. The parser exits 1 when no FILED: rec-NNN marker is
+          # present, so a run that only mentions a rec id is never marked as RCA'd
+          # (fail-open toward re-diagnosis, per Decision 74).
+          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
+          if [ -z "$REC_ID" ]; then
+            echo "::error::ci-rca agent filed no recommendation (no FILED: marker in output)"
             exit 1
           fi
+          echo "rec_id=${REC_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Mark failure as RCA'd
         id: mark_rca
@@ -179,7 +182,6 @@ jobs:
         run: |
           PR_NUM="${{ github.event.workflow_run.pull_requests[0].number }}"
           RUN_ID="${{ github.event.workflow_run.id }}"
-          # Extract rec ID from agent output if present
-          REC_ID=$(grep -oE '"rec-[0-9]+"' /tmp/ci-rca-output.json | head -1 | tr -d '"' || echo "unknown")
+          REC_ID="${{ steps.rca_agent.outputs.rec_id }}"
           gh pr comment "${PR_NUM}" \
             --body "ci-rca agent diagnosed CI run ${RUN_ID} and filed ${REC_ID}. Review in the next /plan session under 'CI RCA Recs (open)'."
