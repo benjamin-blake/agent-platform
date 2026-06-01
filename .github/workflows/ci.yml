@@ -19,7 +19,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: write   # post the green-CI wake comment (gated + continue-on-error below)
 
     steps:
     - uses: actions/checkout@v5
@@ -69,20 +68,6 @@ jobs:
       env:
         AWS_DEFAULT_REGION: eu-west-2
       run: python -m scripts.validate --pre
-
-    - name: Signal green CI (wake a watching session)
-      # The PR-activity subscription wakes a watching Claude session on comments and
-      # failures, not on clean passes -- so an all-green PR is silent. Posting a pass
-      # comment on agent (claude/*) branch PRs restores the green wake. Scoped to
-      # claude/* to avoid commenting on every human PR; continue-on-error so a comment
-      # hiccup (or perms) can never red the build.
-      if: success() && startsWith(github.head_ref, 'claude/')
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        gh pr comment "${{ github.event.pull_request.number }}" \
-          --body "CI green: fast tier (validate --pre) passed for ${{ github.event.pull_request.head.sha }}. Automated wake signal for a watching session; no action needed."
 
   main-validate:
     if: github.event_name == 'push'
@@ -169,3 +154,30 @@ jobs:
 
     - name: Terraform validate + fmt (both roots via validate.py)
       run: python -m scripts.validate --terraform-only
+
+  signal-green:
+    # Gate: fires only after BOTH PR checks succeed. This captures every required
+    # PR-gating check in this workflow (pr-validate + terraform-validate). INVARIANT:
+    # if a future workflow adds a pull_request-triggered check it must be added to
+    # this needs list -- cross-workflow needs are not supported by GitHub Actions.
+    # The PR-activity subscription wakes a watching Claude session on comments and
+    # failures, not on clean check passes -- so an all-green PR is silent. Posting a
+    # pass comment on agent (claude/*) branch PRs restores the green wake only AFTER
+    # all required checks complete. Scoped to claude/* to avoid commenting on every
+    # human PR; continue-on-error so a comment hiccup can never red the build.
+    needs: [pr-validate, terraform-validate]
+    if: ${{ success() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+    - name: Signal green CI (wake a watching session)
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh pr comment "${{ github.event.pull_request.number }}" \
+          --body "CI green: all required PR checks passed for ${{ github.event.pull_request.head.sha }}. Automated wake signal for a watching session; no action needed."
