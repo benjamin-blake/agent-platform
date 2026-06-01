@@ -20,8 +20,10 @@ docs/plans/PLAN-ducklake-spike.md
 
 ## Phase
 Platform roadmap T2 (Full state migration to personal account). A pre-cursor de-risking spike for a
-candidate DuckLake adoption that would EXTEND T2.5 (the DuckDB read path) and SUPERSEDE the
-Iceberg/Glue + staging write path. Builds directly on `PLAN-duckdb-read-path-swap.md`.
+candidate DuckLake adoption: it EXTENDS T2.5 (the DuckDB read path) and, ONLY IF the spike returns
+PROCEED, would inform a later supersession of the Iceberg/Glue + staging write path via the named
+FP-A/FP-B follow-ons. This plan itself supersedes nothing and commits no format change. Builds
+directly on `PLAN-duckdb-read-path-swap.md`.
 
 ## Scope
 | File | Action | Purpose |
@@ -51,8 +53,10 @@ runs LOCALLY via `bin/venv-python`, so nothing redeploys. Execution carries a DE
 of an active deploy step; the module is exercised live via the integration tests, not via Lambda.
 
 ## Acceptance Criteria
-- [ ] `bin/venv-python -c "import duckdb"` succeeds and prints a version -- the declared-but-uninstalled
-      gap (`requirements.txt:13`) is closed and the cause of its absence in the container is fixed.
+- [ ] `bin/venv-python -c "import duckdb; print(duckdb.__version__)"` succeeds and prints the resolved
+      version -- the declared-but-uninstalled gap (`requirements.txt:13`, currently `duckdb>=1.5.3`) is
+      closed and the cause of its absence in the container is fixed. (Step 1 decides whether to keep the
+      `>=1.5.3` floor or tighten to an exact ducklake-capable pin; either choice satisfies this criterion.)
 - [ ] `INSTALL ducklake; LOAD ducklake` succeeds in a DuckDB connection (extension available under the
       session's network policy; if not, that is itself a recorded blocking finding for FP-A).
 - [ ] Loud-fail guard: the read path RAISES a clear error when `duckdb` is unavailable -- proven by a
@@ -148,13 +152,14 @@ of an active deploy step; the module is exercised live via the integration tests
   Documented aim to migrate to AWS Aurora DSQL (serverless, scale-to-zero) when serialised writes
   become a bottleneck AND DSQL's Postgres-protocol compatibility matures enough to back a DuckLake
   catalog. Recorded in the findings artefact; an FP-A obligation; NOT built here.
-- **ci-rca related-work deferral (REQUIRED -- rec-2026 is open):** rec-2026 (Low) proposes wiring four
-  `verify_ci_workflow` guards into `validate.py`. This plan satisfies none of the same-file /
-  same-Decision / same-failure-category conditions, so per the Related-Work Check a deferral rationale
-  is logged: rec-2026 is a CI-HARDENING follow-up, NOT a diagnosis of a red main CI (main CI is green
-  -- run #94, commit 611ff5c). The two Critical red-CI ci-rca recs (rec-2023, rec-2024) were verified
-  resolved and closed this session. The HARD BLOCK is intended for red-CI diagnoses, not hardenings
-  (per the human's clarification); rec-2026 is unrelated to the data-lake spike and is deferred to its
+- **ci-rca related-work deferral (REQUIRED -- rec-2026 is open):** rec-2026 (priority **Low**) proposes
+  wiring four `verify_ci_workflow` guards into `validate.py`. This plan satisfies none of the same-file /
+  same-Decision / same-failure-category conditions, so per the Related-Work Check a deferral rationale is
+  logged. Precise non-block reason: the L5 planning hard-block (Decision 73 clause 4 / F.11) keys on
+  `priority="critical"` source=`ci_rca` recs; rec-2026 is Low, so it does not trip the block. It is also
+  substantively a CI-hardening follow-up rather than a diagnosis of a red main CI (main CI is green --
+  run #94, commit 611ff5c), and the two Critical red-CI ci-rca recs (rec-2023, rec-2024) were verified
+  resolved and closed this session. rec-2026 is unrelated to the data-lake spike and is deferred to its
   own follow-up plan (FP-D).
 - **Enumerated follow-on plans (named, NOT in this scope):**
   - **FP-A DuckLake roadmap reconciliation** (V1 governance): author a candidate decision adopting
