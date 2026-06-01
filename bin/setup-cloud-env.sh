@@ -73,9 +73,10 @@
 # because it puts the credential in the process environment.)
 #
 # Responsibility split (post T0.2 refactor):
-#   setup-cloud-env.sh -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform, github-mcp-server).
+#   setup-cloud-env.sh -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform, github-mcp-server, pre-commit hook envs).
 #   .claude/hooks/session_start_aws.sh -- verifies the static-key assume-role chain (every session).
 #   .claude/hooks/session_start_ensure_github_mcp.sh -- self-heals github-mcp-server on stale snapshots (every session).
+#   .claude/hooks/session_start_precommit.sh -- re-wires the pre-commit .git hook (every session; .git/hooks does not survive a fresh clone).
 #
 # What it does:
 #   1. Creates .venv with python3.12.
@@ -84,8 +85,11 @@
 #   4. Installs AWS CLI v2.
 #   Steps 3 and 4 are parallelised: AWS CLI download runs in the background
 #   while requirements install runs in the foreground.
-#   5. Installs the github-mcp-server binary (for the .mcp.json `github-full`
+#   5. (opt-in) Installs Terraform when INSTALL_TERRAFORM=1.
+#   6. Installs the github-mcp-server binary (for the .mcp.json `github-full`
 #      MCP server -- full GitHub toolset incl. Actions: workflow runs / job logs).
+#   7. Pre-builds the pre-commit hook environments into ~/.cache/pre-commit so
+#      the hooks (detect-secrets, ruff, file hygiene) run offline in later sessions.
 #
 # What it does NOT do:
 #   - Materialise ~/.aws/{credentials,config} or ~/.config/gh-mcp/token (done by
@@ -207,6 +211,25 @@ if out="$(bash "$REPO_ROOT/bin/ensure-github-mcp-server.sh")"; then
     log "$out ($((SECONDS - t0))s)"
 else
     log "WARNING: github-mcp-server install failed (non-fatal); the github-full MCP server stays offline until installed."
+fi
+
+# 8. pre-commit hook environments (snapshot-cached) ---------------------------
+# pre-commit itself is installed via requirements-dev.txt (step 4). This pre-builds
+# the hook repos (pre-commit-hooks, ruff-pre-commit, detect-secrets) into
+# ~/.cache/pre-commit now -- while setup-time network is available -- so they are
+# baked into the snapshot and run offline in later sessions, mirroring the AWS CLI
+# and github-mcp-server caching above. The per-session .git/hooks wiring (which
+# does NOT survive a fresh clone) is re-applied by
+# .claude/hooks/session_start_precommit.sh.
+t0=$SECONDS
+if [ -x .venv/bin/pre-commit ]; then
+    if .venv/bin/pre-commit install-hooks >/dev/null 2>&1; then
+        log "pre-commit hook envs cached: $((SECONDS - t0))s"
+    else
+        log "WARNING: pre-commit install-hooks failed (non-fatal); hooks fetch lazily on first run."
+    fi
+else
+    log "WARNING: .venv/bin/pre-commit missing (requirements-dev.txt not installed?); skipping hook cache."
 fi
 
 log "Done. Verify with: bin/venv-python -m scripts.session_preflight"

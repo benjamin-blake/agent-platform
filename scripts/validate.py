@@ -117,6 +117,41 @@ def get_changed_files() -> list[str]:
     return [f for f in files if f]
 
 
+def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
+    """Run the pre-commit hook suite (detect-secrets, shape denylist, file hygiene, ruff).
+
+    pre-commit is the single home for detect-secrets and the shape-based
+    never-commit identifier denylist. Routing it through validate.py keeps
+    validate.py the single source of truth: the same hooks run in the --pre edit
+    loop, the pr-validate CI gate, and the main-validate full tier -- so a failing
+    detect-secrets result can no longer merge unseen (it reddens the authoritative
+    gate the way every other check does, instead of only the advisory pre_commit
+    workflow that push-to-main never blocked on).
+
+    no-commit-to-branch is skipped via SKIP: it is a commit-time guard already
+    covered by .claude/hooks/never_on_main.py, and it would always fail on the
+    push-to-main main-validate run (which legitimately runs on the main branch).
+    """
+    name = "pre-commit hooks"
+    if importlib.util.find_spec("pre_commit") is None:
+        print(f"\n=== {name} ===\nWARNING: pre-commit not installed; skipping (install requirements-dev.txt).")
+        return
+    cmd = [PYTHON, "-m", "pre_commit", "run", "--show-diff-on-failure", "--color", "never"]
+    if all_files:
+        cmd.append("--all-files")
+    else:
+        target = files if files is not None else get_changed_files()
+        if not target:
+            print(f"\n=== {name} ===\nNo changed files vs origin/main; skipping.")
+            return
+        cmd += ["--files", *target]
+    print(f"\n=== {name} ===")
+    env = {**os.environ, "SKIP": "no-commit-to-branch"}
+    result = run(cmd, cwd=ROOT, env=env)
+    if result.returncode != 0:
+        failed.append(name)
+
+
 def validate_requirements(failed: list[str]) -> None:
     print("\n=== Requirements validation ===")
     req_file = ROOT / "requirements.txt"
@@ -2413,6 +2448,9 @@ def main() -> None:
 
         run_lint_checks(failed, files=changed)
 
+        # pre-commit on the changed files: diff-aware detect-secrets + denylist + hygiene gate.
+        run_precommit_checks(failed, all_files=False, files=changed)
+
         changed_py = [f for f in changed if f.endswith(".py")]
         if changed_py:
             print("\n=== Type check (mypy -- informational) ===")
@@ -2492,6 +2530,10 @@ def main() -> None:
 
     ensure_fresh_dq_results(failed)
     validate_verification_harness(failed)
+
+    # Full tier: run the entire pre-commit suite across all files (detect-secrets,
+    # shape denylist, file hygiene). main-validate's authoritative full-tree gate.
+    run_precommit_checks(failed, all_files=True)
 
     print(f"\n=== Validation Summary (scope: {scope}) ===")
     if not failed:
