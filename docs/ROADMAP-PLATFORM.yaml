@@ -2745,24 +2745,29 @@ tier_items:
       the self-hosted-runner risk), workflow permissions = restrictive default.
     depends_on: [T2.10, T2.11b]
     files_in_scope:
+      - SECURITY.md    # new -- minimal private vulnerability-reporting pointer
       - .github/dependabot.yml    # new
       - .github/workflows/codeql.yml    # new -- managed CodeQL config
-      # GitHub repo settings configured via UI or Terraform GitHub provider -- not pure file edits
-      - terraform/github_repo.tf    # new, optional -- manage repo settings declaratively if desired
+      - terraform/github/main.tf    # new -- isolated GitHub-settings root module
+      - terraform/github/repo.tf    # new -- github_repository + ruleset + actions permissions
+      - terraform/github/variables.tf    # new
+      - terraform/github/.terraform.lock.hcl    # new -- committed provider lock
+      - terraform/github/README.md    # new -- human-gated apply runbook
+      - scripts/validate.py    # modified -- add terraform/github to _TERRAFORM_ROOTS
     exit_criteria:
-      - "git log --all -S audit complete for the committed account_id and bblake-* bucket names; decision recorded (accept exposure post-T2.3 dormancy OR git-filter-repo rewrite)"
-      - "ROADMAP-PLATFORM.yaml cost_projection section reviewed: bblake-* bucket name references within cost_projection.current_scale.breakdown and notes fields assessed for acceptable public exposure; redact or note as acceptable before T2.13"
-      - "CLAUDE.md operational-runbooks section reviewed before flip: Lambda dispatcher ARN templates, EC2 runner re-registration commands, EC2 Instance Connect instructions, OAuth-token rotation specifics, IAM permission-boundary detail assessed for acceptable public exposure; any sensitive operational footprint redacted or noted as acceptable"
-      - "GitHub Advanced Security enabled: secret scanning + push protection + Dependabot alerts + Dependabot security updates + CodeQL"
-      - "Branch-protection ruleset on main: PR required, status checks required (CI green), linear history, force-push blocked, deletion blocked"
-      - "Actions settings: fork-PR approval = all-outside-collaborators; workflow permissions = restrictive default"
+      - "git log --all -S audit complete; decision recorded (dec-1084): no must-rotate secrets; account-id literal parameterized at HEAD; rewrite rejected as unnecessary"
+      - "Controls-as-code committed: terraform/github/ module (GHAS + branch-protection ruleset + Actions permissions), CodeQL workflow, Dependabot config, SECURITY.md"
+      - "terraform/github validate + fmt pass in CI (scripts/validate.py _TERRAFORM_ROOTS includes terraform/github)"
+      - "Human-gated terraform apply: GHAS enabled (secret scanning + push protection), main ruleset active with admin bypass actor, CodeQL + Dependabot activated -- verified post-apply"
       - "CodeQL workflow runs green on PR + push to main"
-      - "Dependabot baseline scan complete; any critical findings filed as recs via log-rec before T2.13 flip"
-    related_candidate_decisions: [CD.20]
+      - "Dependabot baseline scan complete; any critical findings filed as recs via ops_data_portal"
+    related_candidate_decisions: [CD.20, dec-1084]
     effort: S
     strategic: false
-    status: not_started
-    progress_note: "Post-flip debt: repo is public (T2.13 complete 2026-05-30) without GHAS (secret scanning, push protection, Dependabot, CodeQL), branch protection, or fork-PR policy. Visibility blocker resolved per Decision 72 nuance; gate deferred per CD.20 pending T2.11a/b completion. Urgent: public repo without security hardening."
+    status: in_progress
+    progress_note: |
+      Post-flip debt: repo is public (T2.13 complete 2026-05-30) without GHAS (secret scanning, push protection, Dependabot, CodeQL), branch protection, or fork-PR policy. Visibility blocker resolved per Decision 72 nuance; gate deferred per CD.20 pending T2.11a/b completion. Urgent: public repo without security hardening.
+      - 2026-06-01: controls-as-code shipped (terraform/github module, CodeQL workflow, Dependabot config, SECURITY.md); git history audit accepted (no must-rotate secrets, dec-1084); account-id literal parameterized at HEAD; validate.py covers terraform/github; human-gated terraform apply pending.
   - id: T2.13
     tier: T2
     name: Public flip + post-flip verification
