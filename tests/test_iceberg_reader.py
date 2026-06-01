@@ -422,6 +422,7 @@ def _fetch_athena_current(table_view: str, profile: str = "agent_platform") -> l
     return rows
 
 
+@pytest.mark.integration
 @_skip_parity
 class TestWarehouseParity:
     """Row-for-row parity: DuckDB reader vs Athena _current view on a pinned snapshot."""
