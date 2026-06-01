@@ -75,43 +75,39 @@ class TestDuckLakeGuard:
     """Forced-missing duckdb must raise RuntimeError -- never fall back silently."""
 
     def test_require_duckdb_raises_when_module_missing(self) -> None:
-        """_require_duckdb() raises RuntimeError when duckdb is patched out of sys.modules."""
-        with patch.dict(sys.modules, {"duckdb": None}):
-            # Force re-import so the patched sys.modules is consulted
-            if "src.common.ducklake_spike" in sys.modules:
-                del sys.modules["src.common.ducklake_spike"]
-            import src.common.ducklake_spike as spike_mod
+        """_require_duckdb() raises RuntimeError when duckdb is absent from sys.modules.
 
-            # Directly test _require_duckdb with None in sys.modules
-            original = sys.modules.get("duckdb")
-            sys.modules["duckdb"] = None  # type: ignore[assignment]
-            try:
-                with pytest.raises(RuntimeError, match="duckdb"):
-                    spike_mod._require_duckdb()
-            finally:
-                if original is None:
-                    del sys.modules["duckdb"]
-                else:
-                    sys.modules["duckdb"] = original
-
-    def test_require_duckdb_raises_not_none(self) -> None:
-        """_require_duckdb() raises RuntimeError, not returns None/silently degrades."""
+        patch.dict restores sys.modules on exit, so no manual save/restore is needed.
+        Setting sys.modules["duckdb"] = None makes `import duckdb` raise
+        ModuleNotFoundError, which _require_duckdb must convert to RuntimeError.
+        """
         import src.common.ducklake_spike as spike_mod
 
-        original = sys.modules.get("duckdb")
-        sys.modules["duckdb"] = None  # type: ignore[assignment]
-        try:
-            result = None
+        with patch.dict(sys.modules, {"duckdb": None}):
+            with pytest.raises(RuntimeError, match="duckdb"):
+                spike_mod._require_duckdb()
+
+    def test_require_duckdb_does_not_return_when_module_missing(self) -> None:
+        """_require_duckdb() must raise (not return a value) when duckdb is missing.
+
+        Uses a sentinel so the assertion distinguishes a raise (correct, loud-fail)
+        from a silent return of None/any value (the regression this guards against).
+        A tautological `result is None` check would pass for both cases; the sentinel
+        + raised flag make the raise-vs-return distinction observable.
+        """
+        import src.common.ducklake_spike as spike_mod
+
+        sentinel = object()
+        returned = sentinel
+        raised = False
+        with patch.dict(sys.modules, {"duckdb": None}):
             try:
-                result = spike_mod._require_duckdb()
+                returned = spike_mod._require_duckdb()
             except RuntimeError:
-                pass
-            assert result is None, "_require_duckdb must raise, not return a value"
-        finally:
-            if original is None:
-                del sys.modules["duckdb"]
-            else:
-                sys.modules["duckdb"] = original
+                raised = True
+
+        assert raised, "_require_duckdb must raise RuntimeError when duckdb is missing"
+        assert returned is sentinel, "_require_duckdb must NOT return a value (no silent fallback)"
 
     def test_duckdb_importable_in_venv(self) -> None:
         """duckdb is importable and has a version (install-gap closed)."""
@@ -129,6 +125,37 @@ class TestDuckLakeGuard:
         import duckdb
 
         assert result is duckdb
+
+
+class TestCredentialSqlSafety:
+    """Credential values are interpolated into SET commands injection-safely."""
+
+    def test_plain_value_is_quoted(self) -> None:
+        """A normal credential value is wrapped in single quotes."""
+        import src.common.ducklake_spike as spike_mod
+
+        assert spike_mod._sql_str_literal("AKIAEXAMPLE") == "'AKIAEXAMPLE'"
+
+    def test_embedded_single_quote_is_doubled(self) -> None:
+        """A value containing a single quote cannot break out of the literal."""
+        import src.common.ducklake_spike as spike_mod
+
+        # A malicious/corrupt value with a quote + injected SET must be neutralised
+        evil = "x'; SET s3_region='hacked"
+        result = spike_mod._sql_str_literal(evil)
+        # Every embedded quote is doubled; the result is one balanced literal
+        assert result.startswith("'") and result.endswith("'")
+        assert result == "'x''; SET s3_region=''hacked'"
+        # The interior contains no lone single quote (all doubled)
+        interior = result[1:-1]
+        assert "''" in interior
+        assert interior.replace("''", "").find("'") == -1
+
+    def test_empty_value_is_quoted(self) -> None:
+        """An empty string yields an empty SQL literal, not bare quotes-less text."""
+        import src.common.ducklake_spike as spike_mod
+
+        assert spike_mod._sql_str_literal("") == "''"
 
 
 class TestDuckLakeIsolation:

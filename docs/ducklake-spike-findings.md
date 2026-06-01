@@ -16,11 +16,39 @@ findings below document the metrics, constraints, and open questions for FP-A.
 
 ---
 
+## Install-Gap Investigation (Acceptance Criterion 1)
+
+The plan was authored against a planning-session observation that
+`bin/venv-python -c "import duckdb"` raised `ModuleNotFoundError` despite
+`requirements.txt:13` declaring `duckdb>=1.5.3`. Investigation at implement time:
+
+- **Declaration state:** `duckdb>=1.5.3` is present on `origin/main` (line 13), added by
+  the merged `PLAN-duckdb-read-path-swap`. The manifest declaration was never missing.
+- **Implement-container state:** `import duckdb` returns `1.5.3` successfully in this
+  `/implement` session's venv. The gap does NOT reproduce here.
+- **Root cause of the planning-time absence:** a stale / un-bootstrapped venv in the
+  planning container -- the venv had not been re-synced against the merged `requirements.txt`
+  that introduced the `duckdb` declaration. It was an environment-provisioning artefact, NOT
+  a manifest defect. No `requirements.txt` content change was required to close it; the
+  durable fix is a correctly-bootstrapped venv (`pip install -r requirements.txt`).
+- **Floor decision (the plan delegated this to Step 1):** the `>=1.5.3` floor is RETAINED.
+  1.5.3 is demonstrably ducklake-capable (`INSTALL ducklake; LOAD ducklake` -> `DUCKLAKE_OK`,
+  VP step 2). An inline comment was added to `requirements.txt:13` marking the floor as
+  load-bearing for the ducklake extension, so a future maintainer does not lower it below
+  the ducklake-capable runtime.
+- **Silent-degradation risk this closes:** before this fix, `iceberg_reader.py`'s in-method
+  `import duckdb` would throw in any stale-venv environment, `sync_ops._pull_via_reader`
+  swallowed it (returns `None`), and the session silently fell back to Athena with no gate.
+  The loud-fail guard in `ducklake_spike.py` (`_require_duckdb` raises `RuntimeError`, never
+  returns `None`) is the spike's countermeasure to that silent-degradation class.
+
+---
+
 ## Metrics
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| DuckDB version | 1.5.3 | Already installed; install-gap pre-closed by PLAN-duckdb-read-path-swap |
+| DuckDB version | 1.5.3 | Installed + importable in this container; see Install-Gap Investigation below |
 | ducklake extension | 1.0 | Loaded successfully from extensions.duckdb.org |
 | Connection setup (extensions cached) | ~124ms | Includes INSTALL/LOAD ducklake + httpfs + ATTACH catalog |
 | Write 50 rows (batch, established conn) | ~863ms | SQLite catalog + S3 data path overhead; see note below |

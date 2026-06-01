@@ -56,11 +56,25 @@ def _require_duckdb() -> Any:
         import duckdb as _duckdb  # noqa: PLC0415
 
         return _duckdb
-    except ModuleNotFoundError as exc:
+    except ImportError as exc:
+        # Catch ImportError (parent of ModuleNotFoundError) so both a genuinely
+        # absent package and a broken install (missing shared lib) fail loud here,
+        # never silently degrading to an Athena fallback.
         raise RuntimeError(
             "DuckLake spike requires duckdb but import failed. "
             "Ensure duckdb is installed in the venv: pip install 'duckdb>=1.5.3'."
         ) from exc
+
+
+def _sql_str_literal(value: str) -> str:
+    """Return *value* as a single-quoted SQL string literal, escaping embedded quotes.
+
+    DuckDB SET commands take string literals, not bind parameters, so credential
+    values are interpolated into SQL. AWS keys/tokens are base64-family and never
+    contain single quotes, but doubling any quote (the SQL-standard escape) makes
+    the interpolation injection-safe regardless of credential content.
+    """
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _set_s3_credentials(con: Any, *, profile: str | None = None) -> None:
@@ -68,7 +82,8 @@ def _set_s3_credentials(con: Any, *, profile: str | None = None) -> None:
 
     Resolves credentials through boto3 using the same profile chain as
     iceberg_reader.py (agent_platform profile for local/web, ambient chain
-    for Lambda/CI OIDC).
+    for Lambda/CI OIDC). Credential values are passed through _sql_str_literal
+    so a quote in any value cannot break out of the SET string literal.
     """
     import boto3  # noqa: PLC0415
 
@@ -79,11 +94,11 @@ def _set_s3_credentials(con: Any, *, profile: str | None = None) -> None:
     creds = session.get_credentials().get_frozen_credentials()
     region = session.region_name or "eu-west-2"
 
-    con.execute(f"SET s3_region='{region}'")
-    con.execute(f"SET s3_access_key_id='{creds.access_key}'")
-    con.execute(f"SET s3_secret_access_key='{creds.secret_key}'")
+    con.execute(f"SET s3_region={_sql_str_literal(region)}")
+    con.execute(f"SET s3_access_key_id={_sql_str_literal(creds.access_key)}")
+    con.execute(f"SET s3_secret_access_key={_sql_str_literal(creds.secret_key)}")
     if creds.token:
-        con.execute(f"SET s3_session_token='{creds.token}'")
+        con.execute(f"SET s3_session_token={_sql_str_literal(creds.token)}")
 
 
 def _open_connection(catalog_path: Path = _DEFAULT_CATALOG, *, profile: str | None = None) -> Any:
