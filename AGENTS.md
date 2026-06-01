@@ -50,9 +50,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
   `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`) must include a
   `DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test
   (pending Decision 67 reversal)` execution step in lieu of active deployment steps.
-- **T2.12 security gate deferred (CD.20):** GHAS secret scanning + push protection, GitHub
-  branch protection with required status checks, CodeQL, Dependabot, and the fork-PR approval
-  policy are not yet enabled on the public repo. To be addressed in a follow-on session.
+- **T2.12 security gate (CD.20) -- controls-as-code shipped, apply pending:** GHAS secret scanning + push protection, branch-protection ruleset, CodeQL, Dependabot, and Actions permissions are authored in `terraform/github/` + `.github/`. Human-gated local apply required to activate -- see `terraform/github/README.md`.
 
 ## Memory policy — CLAUDE.md is canonical persistence
 Do **not** write to the auto-memory system (`~/.claude/projects/.../memory/`) in this project. The user's persistence model is git-tracked CLAUDE.md files (root + per-directory) plus structured logs (`docs/SESSION_LOG.md`, `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`).

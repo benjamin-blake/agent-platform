@@ -2066,7 +2066,8 @@ def run_python_checks(failed: list[str]) -> None:
 
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
-_TERRAFORM_ROOTS = ("terraform", "terraform/personal")
+# terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
+_TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github")
 
 
 def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
