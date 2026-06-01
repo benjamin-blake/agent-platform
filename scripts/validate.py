@@ -118,7 +118,7 @@ def get_changed_files() -> list[str]:
 
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
-    """Run the pre-commit hook suite (detect-secrets, shape denylist, file hygiene, ruff).
+    """Run the pre-commit hook suite (detect-secrets, shape denylist, file hygiene).
 
     pre-commit is the single home for detect-secrets and the shape-based
     never-commit identifier denylist. Routing it through validate.py keeps
@@ -208,51 +208,6 @@ def validate_requirements(failed: list[str]) -> None:
         failed.append("Requirements validation")
     else:
         print(f"All {len(packages)} packages in requirements.txt found on PyPI.")
-
-
-def validate_ruff_version_alignment(failed: list[str]) -> None:
-    """Ensure ruff version in requirements.txt matches .pre-commit-config.yaml."""
-    print("\n=== Ruff version alignment ===")
-    req_file = ROOT / "requirements.txt"
-    pc_file = ROOT / ".pre-commit-config.yaml"
-
-    # Extract version from requirements.txt (expects ruff==X.Y.Z)
-    req_version = None
-    if req_file.exists():
-        for line in req_file.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^ruff==([\d.]+)", line.strip())
-            if m:
-                req_version = m.group(1)
-                break
-
-    # Extract rev from .pre-commit-config.yaml (expects rev: vX.Y.Z under ruff repo)
-    pc_version = None
-    if pc_file.exists():
-        in_ruff_repo = False
-        for line in pc_file.read_text(encoding="utf-8").splitlines():
-            if "ruff-pre-commit" in line:
-                in_ruff_repo = True
-            elif in_ruff_repo and line.strip().startswith("rev:"):
-                m = re.match(r"\s*rev:\s*v?([\d.]+)", line)
-                if m:
-                    pc_version = m.group(1)
-                break
-
-    if not req_version:
-        print("WARNING: ruff not pinned in requirements.txt (expected ruff==X.Y.Z)")
-        failed.append("Ruff version alignment")
-        return
-    if not pc_version:
-        print("WARNING: ruff-pre-commit rev not found in .pre-commit-config.yaml")
-        failed.append("Ruff version alignment")
-        return
-
-    if req_version != pc_version:
-        print(f"MISMATCH: requirements.txt has ruff=={req_version} but .pre-commit-config.yaml has rev: v{pc_version}")
-        print("Update both to the same version to avoid format drift.")
-        failed.append("Ruff version alignment")
-    else:
-        print(f"ruff versions aligned: {req_version}")
 
 
 # CLI tools intentionally absent on the Claude Code web harness (GitHub ops use the
@@ -2521,7 +2476,6 @@ def main() -> None:
     if scope in ("python", "all"):
         run_dependency_checks()
         validate_requirements(failed)
-        validate_ruff_version_alignment(failed)
 
     if scope in ("prompts", "all"):
         validate_prompt_files(failed)
