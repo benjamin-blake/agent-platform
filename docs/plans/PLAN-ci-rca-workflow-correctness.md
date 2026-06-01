@@ -1,0 +1,103 @@
+# Plan
+
+## Intent
+The `ci-rca` agent is the feedback path that converts CI failures into human-reviewed recommendations -- the self-improvement loop's input signal. Restoring its *correctness* (fire only on the authoritative main-branch full-CI gate, and mark a failure "RCA'd" only when a recommendation is genuinely filed) keeps that loop honest, so the system optimises real failures rather than PR-scoped noise or phantom (never-filed) ones.
+
+## Plan Type
+IMPLEMENTATION
+
+## Verification Tier
+V3
+
+## Plan Path
+docs/plans/PLAN-ci-rca-workflow-correctness.md
+
+## Phase
+Platform tier T1 -- this plan is the 7th follow-on of **T1.13** ("CI-RCA methodology contract -- deterministic depth via structured schema + evidence bundle"). T1.13 owns RCA *depth*; this plan owns the workflow *correctness* gap that T1.13's `files_in_scope` does not cover. Product Phase 1 is complete; platform work runs in parallel.
+
+## Scope
+| File | Action | Purpose |
+|------|--------|---------|
+| `.github/workflows/ci-rca.yml` | Modify | **P1:** add `&& github.event.workflow_run.head_branch == github.event.repository.default_branch` to the `rca` job `if:` (line 30) so `workflow_run` only proceeds for main-branch CI/Canary. **P3:** replace the lossy `grep -qE 'rec-[0-9]+'` success-gate (line 152) and the inconsistent quoted-regex PR-comment extraction (line 183) with a single call to `scripts/ci_rca_filing.py`; redirect the agent's stderr away from the JSON output file so the transcript parses cleanly; add `Bash(git log:*)` to `--allowedTools` (line 146) to match the agent's documented tool contract. |
+| `scripts/ci_rca_filing.py` | Create | Deterministic, unit-testable parser. `extract_filed_rec_id(output_path) -> str | None` reads the `claude -p --output-format json` transcript and returns the rec id ONLY from the agent's terminal `FILED: rec-NNN` marker (never a bare mention). CLI: prints the id and exits 0 on a real filing; prints nothing and exits 1 otherwise (so the workflow gates on exit code). |
+| `tests/test_ci_rca_filing.py` | Create | 100% coverage of the parser: mention-only -> None; `FILED: rec-NNN` -> rec-NNN; `FILED: none` -> None; stderr-polluted/malformed JSON containing a `FILED:` line -> id (regex fallback); multiple markers -> last; CLI exit codes. |
+| `scripts/verify_ci_workflow.py` | Modify | Extend `_check_ci_rca_filter()` to also assert the `rca` job `if:` contains the main-branch gate (`head_branch` + `default_branch`). |
+| `tests/test_verify_ci_workflow.py` | Create | None exists today. Cover `_check_ci_rca_filter()` pass path (real ci-rca.yml) and fail path (synthetic dict missing the gate). |
+| `scripts/validate.py` | Modify | Wire the `ci-rca-filter` guard into the presubmit tier so the trigger gate actually enforces in CI (Decision 60 + merge protocol: a check is only a gate if it runs via `validate.py`). |
+| `tests/test_validate.py` | Modify | Cover the new wrapper: appends to `failed` when the guard raises, no-op when it passes. |
+| `.claude/agents/scheduled/ci-rca.md` | Modify | Step 6 ("Report") must emit a final line exactly `FILED: <rec_id>` (the id returned by `file_rec`), or `FILED: none` if nothing was filed. This is the single authoritative filing signal the workflow parses. |
+| `docs/ROADMAP-PLATFORM.yaml` | Modify | Add this plan as T1.13's 7th follow-on: append the plan name to `exit_criteria` (change "six" -> "seven"), add `.github/workflows/ci-rca.yml` + `scripts/ci_rca_filing.py` to T1.13 `files_in_scope`. |
+| `docs/INTENT-ci-rca-methodology.md` | Modify | Add a `PLAN-ci-rca-workflow-correctness` bullet to the "Follow-on plans" section; change "All six plans roll up under `T1.12`" -> "All seven plans roll up under `T1.13`" (corrects the known T1.12->T1.13 renumber drift in that sentence only). |
+
+## Bundled Recommendations
+None. No open `source=ci_rca` recommendations exist (0 at planning time), and the open DuckDB-cluster recs (rec-1994..rec-2006) are unrelated. The workflow-correctness gap is tracked via the T1.13 roadmap edit (per human decision), not a separate rec.
+
+## Infrastructure Dependencies
+None -- no Terraform (`.tf`) files in scope. Runtime dependencies already provisioned (no action): the `CLAUDE_CODE_OAUTH_TOKEN` repo secret and the `agent-platform-github-ci-branch` OIDC role (CD.21) that the existing ci-rca workflow already consumes. The V3 post-merge smoke (VP step 6) reuses these via the workflow's own steps.
+
+## Acceptance Criteria
+- [ ] `ci-rca.yml`'s `rca` job `if:` includes `github.event.workflow_run.head_branch == github.event.repository.default_branch`; the `workflow_dispatch` manual path is preserved unchanged.
+- [ ] Filing detection is authoritative: the "Run ci-rca agent" step succeeds (and the failure is marked RCA'd / a PR comment is posted) **only** when `scripts/ci_rca_filing.py` extracts a real rec id from the agent's `FILED:` marker. A transcript that merely mentions `rec-NNN` does NOT count as filed.
+- [ ] `scripts/ci_rca_filing.py` exists with the documented function + CLI contract and 100% test coverage.
+- [ ] `scripts/verify_ci_workflow.py::_check_ci_rca_filter` asserts the main-branch gate, and that guard runs inside `bin/venv-python -m scripts.validate` (presubmit tier).
+- [ ] `.claude/agents/scheduled/ci-rca.md` Step 6 instructs the agent to emit the `FILED: <rec_id>` marker; `--allowedTools` in the workflow matches the agent's documented tools (`git log` included).
+- [ ] T1.13 gains the 7th follow-on in `docs/ROADMAP-PLATFORM.yaml` and `docs/INTENT-ci-rca-methodology.md`.
+- [ ] `bin/venv-python -m scripts.validate` passes (lint, format, mypy, coverage, the new guard).
+
+## Verification Plan
+| # | Phase | Action | Command | Expected Outcome | Fix If |
+|---|-------|--------|---------|-------------------|--------|
+| 1 | [pre-deploy] | Parser rejects mere mentions, accepts only the marker | `bin/venv-python -m pytest tests/test_ci_rca_filing.py -v` | All cases pass: mention-only -> None (exit 1); `FILED: rec-123` -> `rec-123` (exit 0); `FILED: none` -> None; malformed-but-marked -> id; multiple markers -> last | Parser matches a bare `rec-NNN`, or chokes on stderr-polluted JSON -> harden the regex/JSON fallback in `extract_filed_rec_id` |
+| 2 | [pre-deploy] | Trigger guard asserts the main-branch gate | `bin/venv-python -m scripts.verify_ci_workflow ci-rca-filter` | Prints `OK` | `FAIL: ... missing main-branch gate` -> the `if:` edit did not land / wrong expression |
+| 3 | [pre-deploy] | Guard unit tests cover pass + fail branches | `bin/venv-python -m pytest tests/test_verify_ci_workflow.py -v` | Pass path green; missing-gate fixture raises `AssertionError` and is caught | Guard does not raise on a gate-less workflow -> assertion too weak |
+| 4 | [pre-deploy] | Guard actually runs in the merge gate (Decision 60) | `bin/venv-python -m scripts.validate` | Exits 0; output shows the ci-rca trigger-guard check running | Guard absent from validate output -> wiring in `validate.py` not reached in the presubmit scope |
+| 5 | [pre-deploy] | Full suite + coverage for all modified/new Python | `bin/venv-python -m pytest tests/test_ci_rca_filing.py tests/test_verify_ci_workflow.py tests/test_validate.py -v` | Green | Coverage gap on a new/changed file -> add cases (test_coverage_checker requires 100% for changed code) |
+| 6 | [post-deploy] | End-to-end: a main-CI failure files exactly one rec with a parseable id, and is marked RCA'd | Identify a real failed main-branch CI `run_id` (via `mcp__github-full__actions_list` filtered to workflow "CI"/"Main Canary", branch `main`, conclusion `failure`); `workflow_dispatch` the "CI RCA" workflow with that `run_id` and `force_rca=true`; then `bin/venv-python -m scripts.session_preflight` | The dispatched ci-rca run completes; the new rec appears under "CI RCA Recs (open)" with a real `rec-NNN` id; commit status `ci-rca/<workflow_slug>` = success; no blank/`unknown` id anywhere | Run marked RCA'd with no filed rec, or a blank id -> P3 not fixed; re-inspect the `FILED:` marker emission and the parser wiring. **If no historical failed main run exists**, defer this step with a note (Decision 55: do not fabricate a failure) -- VP 1-4 plus observational confirmation (the next failing PR produces no ci-rca run; the next failing main run files exactly one rec) are the standing proof. |
+| 7 | [post-deploy] | Clean up the smoke-test rec | `bin/venv-python -m scripts.ops_data_portal --update-rec <rec_id_from_step_6> --status declined --resolution "ci-rca workflow-correctness V3 smoke; not a real CI failure"` | Rec closed via the portal | Portal unreachable -> verify the `agent_platform` static-key chain (`aws sts get-caller-identity --profile agent_platform`); the close is queued to the outbox and drained on `sync` |
+
+## Constraints
+- Python 3.12+, type hints, ruff format (line length 127), no emojis, ASCII hyphens only.
+- Always invoke Python via `bin/venv-python`; bash syntax only; each Bash invocation is independent (no `source .venv/...`).
+- Never `eval`/`exec`; never raise during module import (defer validation) -- applies to `scripts/ci_rca_filing.py`.
+- The ci-rca agent proposes/executes NO autonomous fix; its sole output remains a filed recommendation (Decision 55, Decision 72). This plan only changes *when* it fires and *how its filing is detected* -- not its file-only contract.
+- No rescue agents or workaround loops (Decision 55). The `|| true` on the `claude` call is retained intentionally: on a non-filing run the parser exits 1, the step fails, no RCA marker is set, and the next main failure re-diagnoses (fail-open toward re-diagnosis, Decision 74).
+- Do NOT write to `logs/` directly; the smoke-rec cleanup uses the portal (`ops_data_portal`) only.
+- Never commit on `main`; merge via a GitHub MCP PR with event-driven CI wait, then squash-merge (Decision 76). No `sleep`/`/loop`.
+- Do not add a check to `.github/workflows/ci.yml`; add it to `validate.py` (the single source of truth) -- the full tier on main runs `validate.py` and picks the guard up automatically.
+
+## Context
+- **Why P1 (Decision 73 + 72):** the "CI" workflow runs on both `pull_request` and `push: branches:[main]` (`.github/workflows/ci.yml:6-10`). `ci-rca.yml`'s `workflow_run` trigger fires on every "CI"/"Main Canary" completion, gated only on `conclusion=='failure'` + non-fork -- **no branch gate** -- so a PR's fast-tier failure (e.g. PR #42 on `claude/charming-pasteur-VSKGo`) triggers it. Decision 73 clause 3 establishes that ci-rca fires on the **full-tier failure on `main`** (PRs use the fast tier; the full tier runs on push-to-`main`). `ROADMAP-PLATFORM.yaml` likewise says "Failed **main** CI files ... source=ci_rca rec". For `workflow_run`, `github.event.workflow_run.head_branch` is the triggering run's branch -- `main` for push-to-main and for the scheduled Canary (default branch); the PR source branch for `pull_request` runs -- so gating on `head_branch == github.event.repository.default_branch` selects exactly the main full-tier + Canary runs without hardcoding `main`.
+- **Why P3 (Decision 55):** the success gate `grep -qE 'rec-[0-9]+'` (line 152) matches ANY rec-id substring across ~30 turns of agent output (e.g. the agent reading the rec-859 case study), so a run is marked RCA'd even when nothing was filed; the PR-comment extractor (line 183) uses an inconsistent quoted regex and produced the blank id seen on PR #42. There are **0 open `ci_rca` recs** despite that "filed" comment -- direct evidence the signal is unreliable. `file_rec` already prints the allocated id to stdout (`ops_data_portal.py:1248`); routing it through an explicit `FILED:` marker + a single parser makes "marked RCA'd" <=> "a real rec was filed". After P1, the PR-comment step is largely vestigial (main pushes have no originating PR), but it is fixed to use the parser's output so it can never emit a blank id.
+- **Standing-guard discovery:** `scripts/verify_ci_workflow.py` is a VP helper from the past `ci-workflow-restructure` plan and is **not wired into `validate.py` or `ci.yml`** -- its `ci-rca-filter` guard never runs in the merge gate today. This plan wires the (extended) guard in so the trigger gate cannot silently regress. The other four guards in that module (`jobs-and-flags`, `concurrency`, `fetch-depth`, `canary`) remain unwired and are out of scope -- file a recommendation via the portal noting they should be wired in a follow-up.
+- **PyYAML quirk:** `_load()` already normalises the bare `on:` -> Python `True` key. The `if:` key parses as the string `"if"`, so `data["jobs"]["rca"]["if"]` is the correct read for the gate assertion.
+- **Decomposition note:** `.claude/agents/scheduled/ci-rca.md` is in T1.13's depth scope and will be rewritten later by `PLAN-ci-rca-prompt-rewrite`. The Step-6 `FILED:` marker edit here is surgical and forward-compatible; the later rewrite MUST preserve the marker contract (note this in the INTENT follow-on bullet).
+- **Sequencing vs PR #42:** PR #42 (ready-to-merge, branch `claude/charming-pasteur-VSKGo`) also edits `ci-rca.yml` -- action version bumps on lines ~42/77 (`actions/checkout@v6`, `configure-aws-credentials@v6`), disjoint from this plan's hunks (line 30 `if:`, lines ~131-186 filing/comment, line 146 allowedTools). Before implementing: `git fetch origin main && git rebase origin/main` so this branch sits on top of merged #42. Resolve any incidental conflict in `ci-rca.yml` by keeping both changes.
+- **Branch divergence:** at planning time the branch was 0 behind / 0 ahead of `origin/main`; no scope file had changed on main. Re-check after #42 merges (above).
+- **Gotchas to respect:** test_coverage_checker requires a test file with 100% coverage for every modified/new Python source (`ci_rca_filing.py`, `verify_ci_workflow.py`, `validate.py`); modify 1-2 files then run `ruff check --fix` before proceeding (batch-modify cascade); never split one module's imports across two blocks (ruff drops symbols); keep lines <= 127 (define intermediate vars for long f-strings).
+
+## Pre-Implementation Checklist
+- [ ] Branch confirmed not on `main` (and rebased on `origin/main` after PR #42 merges).
+- [ ] `docs/PROJECT_CONTEXT.md` read.
+- [ ] `docs/DECISIONS.md` read (Decisions 72, 73, 55, 74, 76, 60, 66).
+- [ ] All files in Scope located and readable; `.github/workflows/ci-rca.yml` line numbers re-confirmed post-rebase.
+- [ ] Acceptance Criteria understood and verifiable.
+
+## Ordered Execution Steps
+1. **Rebase first.** `git fetch origin main && git rebase origin/main` (STOP on conflict; if `ci-rca.yml` conflicts with PR #42, keep both the action bumps and this plan's edits). Re-confirm the line numbers cited below.
+2. **Create `scripts/ci_rca_filing.py`.** Implement `extract_filed_rec_id(output_path: str | Path) -> str | None`: read the file; try `json.loads`; from the `result` field (fall back to the full raw text if JSON is malformed/stderr-polluted) find the LAST line matching `^\s*FILED:\s*(rec-\d+)\s*$`; treat `FILED: none` / absent as `None`. Never match a bare `rec-NNN` outside the marker. Add a `__main__` CLI: print the id and `sys.exit(0)` on a real id, else `sys.exit(1)`. No exceptions at import; lazy/defensive file reads.
+3. **Create `tests/test_ci_rca_filing.py`** covering every case in VP step 1 (incl. CLI exit codes via `subprocess` or `runpy`/`SystemExit` capture). Run `bin/venv-python -m pytest tests/test_ci_rca_filing.py`; `ruff check --fix`.
+4. **Edit `.github/workflows/ci-rca.yml` -- P1.** On the `rca` job `if:` (line 30), add `&& github.event.workflow_run.head_branch == github.event.repository.default_branch` inside the `workflow_run` parenthesised group. Leave `workflow_dispatch ||` intact.
+5. **Edit `.github/workflows/ci-rca.yml` -- P3.** (a) In "Run ci-rca agent", redirect stderr off the JSON file (`> /tmp/ci-rca-output.json 2> /tmp/ci-rca-stderr.log`, keep `|| true`); replace the `grep`-based gate with: `REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json) || { echo "::error::ci-rca filed no recommendation (no FILED: marker)"; exit 1; }` then `echo "rec_id=${REC_ID}" >> "$GITHUB_OUTPUT"`. (b) Add `Bash(git log:*)` to `--allowedTools` (line 146). (c) In "Comment on originating PR", replace the line-183 regex with `${{ steps.rca_agent.outputs.rec_id }}`.
+6. **Edit `.claude/agents/scheduled/ci-rca.md` Step 6** to require a terminal line exactly `FILED: <rec_id>` (the id returned by `file_rec`), or `FILED: none` if nothing was filed. State that downstream tooling parses this marker as the sole filing signal.
+7. **Edit `scripts/verify_ci_workflow.py`** -- in `_check_ci_rca_filter()`, after the workflows-list asserts, read `rca_data["jobs"]["rca"]["if"]` and assert it contains both `"head_branch"` and `"default_branch"` with a clear failure message.
+8. **Create `tests/test_verify_ci_workflow.py`** covering `_check_ci_rca_filter()` pass (real workflow) and a monkeypatched/`_load`-stubbed fail (gate-less `if:`). `ruff check --fix`.
+9. **Wire the guard into `scripts/validate.py`** -- add a small `validate_ci_rca_trigger(failed)` that imports and calls `verify_ci_workflow._check_ci_rca_filter()` inside try/except `AssertionError` (append a label to `failed` on failure), and invoke it in the presubmit (`all`) scope of `main()`. Do NOT touch `ci.yml`.
+10. **Update `tests/test_validate.py`** to cover the new wrapper (raises -> appended; passes -> not appended), mocking `_check_ci_rca_filter`. `ruff check --fix`.
+11. **Edit `docs/ROADMAP-PLATFORM.yaml` T1.13** -- append `PLAN-ci-rca-workflow-correctness` to `exit_criteria` (change "six" -> "seven"); add `.github/workflows/ci-rca.yml` and `scripts/ci_rca_filing.py` to `files_in_scope`.
+12. **Edit `docs/INTENT-ci-rca-methodology.md`** -- add a `PLAN-ci-rca-workflow-correctness` bullet under "Follow-on plans" (scope: main-branch trigger gate + deterministic `FILED:` filing signal + guard wiring; note the prompt-rewrite plan must preserve the marker); change "All six plans roll up under `T1.12`" -> "All seven plans roll up under `T1.13`".
+13. **File a follow-up rec** via `bin/venv-python -m scripts.ops_data_portal` (call `get_rec_write_guidance` first) noting the four remaining `verify_ci_workflow` guards (`jobs-and-flags`, `concurrency`, `fetch-depth`, `canary`) are unwired from `validate.py` and should be wired in a follow-up.
+14. **Execute Verification Plan** -- run VP steps 1-5 (pre-deploy) and loop until green. After merge, run VP steps 6-7 (post-deploy); if no historical failed main run exists, defer step 6 with the documented note (Decision 55).
+15. **Report** -- summarise what changed, VP results, the filed follow-up rec id, and the post-merge smoke outcome (or its documented deferral).
+
+## Work Areas (STRATEGIC plans only)
+N/A -- IMPLEMENTATION plan.
