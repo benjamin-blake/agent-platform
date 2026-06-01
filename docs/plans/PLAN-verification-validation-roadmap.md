@@ -28,7 +28,7 @@ Platform tier T3 (trust loop closure) + the T0.12.5 ops-contract ratification an
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `docs/ROADMAP-PLATFORM.yaml` | Modify | Add CD.29 (validation-suite-as-graduated-asset model) + CD.30 (diff-coverage ratchet supersedes 100%-global). Expand T3.1 (typed checks kernel + graduation registry Class C contract + differential admission gate + hermeticity dependency). Add T3.6 (test-suite hermeticity audit) + T3.7 (meta-validation: mutation testing + deterministic dead-test detection + diff-coverage ratchet). Amend T0.12.5 (consolidate `acceptance`+`verification` into a single typed hard-gated `checks` field, folded into the ops_recommendations Class A contract ratification). Add CD.17 sequencing note (new T3 items precede but do not gate the reversal trigger). Add KG.13 (TIA + caching deferred to scale). |
+| `docs/ROADMAP-PLATFORM.yaml` | Modify | Add CD.29 (validation-suite-as-graduated-asset model) + CD.30 (diff-line-coverage ratchet supersedes the per-changed-file 100% gate). Expand T3.1 (typed checks kernel + graduation registry Class A governed-data contract + differential admission gate with named baseline-execution surface + hermeticity dependency). Add T3.6 (test-suite hermeticity audit) + T3.7 (meta-validation: mutation testing + deterministic dead-test detection + diff-line-coverage ratchet). Amend T0.12.5 (evolve the existing `acceptance` field into a typed hard-gated checks structure -- no rename -- and absorb the executor `verification` projection, folded into the ops_recommendations Class A contract ratification). Add CD.17 sequencing note (new T3 items precede but do not gate the reversal trigger). Add KG.13 (TIA + caching deferred to scale). |
 | `docs/plans/PLAN-verification-validation-roadmap.md` | Create | This planning artefact. |
 
 ## Bundled Recommendations
@@ -45,8 +45,8 @@ None for this plan. No `.tf` files in scope. The new tier_items describe future 
 - [ ] CD.29 and CD.30 present in `candidate_decisions[]` with required fields; all their `gates` resolve to existing tier_items.
 - [ ] CD.30 carries `narrowly_supersedes.decision_id: 48` (the 100%-coverage V2-tier minimum).
 - [ ] T3.6 and T3.7 present in `tier_items[]` with resolvable `depends_on`; T3.1 `depends_on` includes T3.6.
-- [ ] T3.1 expanded with the typed checks kernel, graduation registry (Class C contract reference), differential admission gate, and hermeticity dependency in intent + exit_criteria.
-- [ ] T0.12.5 intent + exit_criteria amended for the single typed `checks` field; `related_candidate_decisions` includes CD.29.
+- [ ] T3.1 expanded with the typed checks kernel, graduation registry (Class A governed-data contract reference), differential admission gate with named baseline-execution surface, and hermeticity dependency in intent + exit_criteria.
+- [ ] T0.12.5 intent + exit_criteria amended to evolve the existing `acceptance` field into a typed checks structure (no rename) and absorb the executor `verification` projection; `related_candidate_decisions` includes CD.29.
 - [ ] CD.17 detail carries the sequencing note (T3.6/T3.7/expanded-T3.1 precede but do not gate the reversal trigger); the trigger expression is structurally unchanged.
 - [ ] KG.13 present in `known_gaps[]`.
 - [ ] Step 9 plan-critique returns `Recommendation: PROCEED` on this PLAN artefact.
@@ -86,6 +86,7 @@ None for this plan. No `.tf` files in scope. The new tier_items describe future 
   - Decision 73: KG.13 cross-references the existing testmon upgrade note.
   - Decisions to cite: CD.12, CD.25, CD.16 + Decision 67, Decision 55, CD.27, CD.17, Decision 48/60/73, Decision 61. CD.28 demoted to awareness-only (no inference change).
 - **Conceptual mapping affirmed**: roadmap "verifiers" (T3.1, in validate.py + postflight) = the cumulative VALIDATION; the executor's per-rec `acceptance`/`verification` (step_runner) = per-rec VERIFICATION. The two are distinct questions; neither subsumes the other. T3.1's same-PR guard is the anti-gaming integrity boundary.
+- **Step 10 multi-perspective critique (round 1)**: both lenses (architect + adversarial) returned REVISE with three consensus HIGH findings, all grounded in live code: (1) CD.30 mischaracterized the coverage gate -- `test_coverage_checker.py` is per-changed-file 100% (already diff-scoped), not global; (2) `verification` is an executor projection (`jsonl_store.py`), not a Class A field, so the consolidation is an evolution of the existing `acceptance` field, not a rename; (3) `narrowly_supersedes: Decision 48` must propagate to Decision 48's V2-row text + `critique.prompt.md` at ratification. Plus MEDs: registry is Class A (row-bearing), not Class C; differential-gate baseline-execution surface must be named; the severity-required field ratifies before the executor enforces it (skew note). User chose: apply all HIGH + MED; keep the `acceptance` field name and evolve its type. All applied; re-critiqued to convergence.
 - **Main divergence**: this planning agent did not run preflight (user-authorized skip); Main Divergence Assessment not computed. Scope is a single doc file (`docs/ROADMAP-PLATFORM.yaml`); plan-critique (Step 9) reads the working-tree roadmap which includes these edits.
 
 ## Pre-Implementation Checklist

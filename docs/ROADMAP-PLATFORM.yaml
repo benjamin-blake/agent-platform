@@ -1054,8 +1054,10 @@ candidate_decisions:
           the CD.12 DQ-marker vocabulary, and is extendable only by a new candidate decision (mirrors CD.12's
           discipline). It does not consume the CD.12 marker budget.
         - Graduation lifecycle: a per-rec verification that passes and whose PR merges is promoted into the
-          cumulative suite, recorded in a graduation registry (Class C contract per CD.25,
-          docs/contracts/verification-registry.yaml) indexed by what it guards (input closure / target symbol).
+          cumulative suite, recorded in a graduation registry (Class A governed-data contract per CD.25,
+          docs/contracts/verification-registry.yaml; cross-system fields $ref into Class C invariants) indexed
+          by what it guards (input closure / target symbol). It is row-bearing governed data, hence Class A,
+          not a Class C cross-system invariant.
           Admission gate: the differential property -- a candidate must demonstrably FAIL on revert of the
           change it guards, else it guards nothing and is rejected (kills tautological tests at the door).
         - Hard-gate by default: every check has a defined consequence. In a human-out-of-loop system an
@@ -1071,10 +1073,24 @@ candidate_decisions:
           target no longer exists. Both are alarm-not-gate (CD.12) and file recs; retirement follows the CD.12
           mark-then-drop discipline (deprecate in registry, follow-on plan deletes), never auto-delete, never an
           LLM scan.
-      Consolidation discipline (lands in T0.12.5): the executor's separate `acceptance` (hard) and
-      `verification` (advisory) fields collapse into ONE typed `checks` field, hard-gated by default, with the
-      behavioural-vs-mechanical distinction preserved as the check `type`. Folded into the ops_recommendations
-      Class A contract ratification (T0.12.5) so it is not a post-ratification semantic break (CD.25).
+      Consolidation discipline (lands in T0.12.5): today `acceptance` is the Class A rec field (src/schemas/
+      rec.py, DqNotNull write_time) consumed as a hard gate (run_acceptance), while `verification` is an
+      EXECUTOR PROJECTION field (scripts/executor/jsonl_store.py, read advisory via run_verification) -- it is
+      NOT in the Class A schema. The consolidation KEEPS the Class A field name `acceptance` (no breaking
+      rename; the DQ runner, portal write-path, acceptance_lint.py, ops.yaml, and the ~36 backfilled recs are
+      untouched at the field-name level) and EVOLVES its value into a typed checks structure: a list of checks,
+      each with a `type` (a CD.29 kernel primitive -- preserves the behavioural-vs-mechanical distinction the
+      two paths encoded) and a `severity` (default required/hard-gate; transient `quarantine`, never permanent
+      advisory). The executor's advisory `verification` projection is absorbed as additional typed checks on the
+      same field. A scalar-string `acceptance` stays valid via a backward-compatible scalar-or-list union during
+      migration. Folded into the ops_recommendations Class A contract ratification (T0.12.5) so it is not a
+      post-ratification semantic break (CD.25).
+
+      Field-shape-vs-enforcement skew (MED -- both deliverable critics): the typed-checks field SHAPE (incl.
+      severity default required) ratifies at T0.12.5, but the executor cannot HARD-GATE the behavioural tier
+      until T3.6 (hermeticity) + T3.1 land. In that window a rec may carry severity: required checks the executor
+      still treats as advisory (execute_recommendation.py keeps verification advisory today). This is recorded
+      explicitly via the contract amendment_log change_class, not left as a silent gap.
     gates: [T3.1, T3.6, T3.7, T0.12.5]
     state: pending
     filed_via: pending_log_decision_lambda
@@ -1084,29 +1100,44 @@ candidate_decisions:
       - Per-rec verification graduates into validation only after the differential admission gate passes; the registry records the guard target so orphan detection (T3.7) is deterministic.
       - Hard-gate-by-default applies to the behavioural tier only after T3.6 (hermeticity); mechanical checks (command_exit_zero) are hermetic by construction and hard-gate immediately.
       - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda -- it does not re-introduce the separate-scheduled-DQ-routine that Decision 62 retired (mutation is too slow for presubmit and is advisory, not a merge gate).
+      - CD.29 changes the platform verification DEFAULT from advisory (the current run_verification behaviour) to required/hard-gate. This is a deliberate semantic change, enforced only after T3.6; no prior numbered Decision is superseded because the advisory behaviour was an executor implementation default, not a ratified decision.
+      - Precedence: when the executor's per-rec checks (executor-side) and the CI validation gate including diff-coverage (CI-side) both apply, CI is authoritative per the AGENTS.md merge protocol (remote CI is the authoritative pre-merge gate).
 
   - id: CD.30
-    title: Diff-coverage ratchet supersedes the 100%-global-coverage gate
+    title: Diff-line-coverage ratchet supersedes the per-changed-file 100%-coverage gate
     detail: |
-      The 100%-global-coverage hard gate (scripts/test_coverage_checker.py; the V2-tier minimum mandated by
-      Decision 48, retained alongside the two-tier validation structure of Decision 60 / Decision 73; F.3) is
-      replaced by a diff-coverage ratchet:
-        - Require coverage on CHANGED lines (diff coverage) for every PR.
-        - Global coverage may only ratchet UPWARD -- a PR may not lower the repo-wide percentage -- but a fixed
-          100% floor is no longer required.
-      Rationale: 100%-global is necessary-not-sufficient (100% coverage with weak assertions passes; mutation
-      testing per CD.29 / T3.7 is the real quality signal), expensive to maintain as the repo grows, and a
-      frequent source of low-value test churn. Diff-coverage is cheaper, harder to game, and scales. The
-      Decision 60 / Decision 73 two-tier validation structure is unchanged; only the coverage minimum changes.
+      The current coverage gate (scripts/test_coverage_checker.py, wired into validate.py) enforces
+      per-changed-file 100% line coverage: it runs over get_changed_source_files() and fails any CHANGED file
+      below 100%. It is already diff-scoped -- unchanged files are never measured -- so it is NOT a global gate.
+      This per-changed-file floor is the V2-tier minimum mandated by Decision 48 ("pytest with 100% coverage"),
+      operating alongside the Decision 60 / Decision 73 two-tier (--pre vs full) structure (F.3).
+
+      Replace the per-changed-file 100% FLOOR with a diff-line-coverage ratchet:
+        - Require coverage on CHANGED LINES (not whole changed files) for every PR -- a touched file may sit
+          below 100% as long as the lines the PR actually changed are covered.
+        - Global coverage may only ratchet UPWARD -- a PR may not lower the repo-wide percentage.
+      Rationale: per-changed-file 100% forces full coverage on every touched file even for lines the PR did not
+      change, a frequent source of low-value test churn (the actual cost -- NOT "expense as the repo grows,"
+      since unchanged files are already exempt). And 100% line coverage is necessary-not-sufficient (100% with
+      weak assertions passes), so mutation testing (CD.29 / T3.7) is the real quality signal. Diff-line-coverage
+      is more surgical and harder to game on the changed surface. The Decision 60 / Decision 73 two-tier
+      structure is unchanged; only the coverage minimum changes.
+
+      Propagation (HIGH -- both deliverable critics): relaxing the V2 minimum edits the V2 row of Decision 48's
+      tier table, which is also keyed off by config/agent/executor/prompts/critique.prompt.md and the planning
+      skill. At CD.30 ratification those consumers MUST be amended in lockstep (see discipline_points). This
+      roadmap edit does NOT touch DECISIONS.md or the prompt -- those land at ratification via the log-decision
+      path and a named follow-on plan.
     gates: [T3.7]
     state: pending
     filed_via: pending_log_decision_lambda
     narrowly_supersedes:
       decision_id: 48
-      clause: The 100%-coverage V2-tier minimum. The V2 tier now requires diff-coverage-on-changed-lines plus an upward-only global ratchet; Decision 48's broader verification-tier classification is otherwise preserved.
+      clause: The V2-tier minimum (per-changed-file 100% line coverage). The V2 tier now requires diff-line-coverage-on-changed-lines plus an upward-only global ratchet; Decision 48's broader V1/V2/V3 classification is otherwise preserved. Decision 48's V2-row text and critique.prompt.md must be amended in lockstep at ratification.
     discipline_points:
       - Diff-coverage threshold and the ratchet baseline are config-driven; the global baseline only moves up, never down.
-      - The ratchet is enforced in scripts/validate.py; test_coverage_checker.py is retargeted from a 100% floor to diff-coverage + ratchet, not run as a separate parallel gate.
+      - The ratchet is enforced in scripts/validate.py; test_coverage_checker.py is retargeted from the per-changed-file 100% floor to diff-line-coverage + ratchet, not run as a separate parallel gate.
+      - Lockstep consumers at ratification (follow-on plan, via log-decision for the Decision text): Decision 48 V2-row text, config/agent/executor/prompts/critique.prompt.md (V3 behavioural-acceptance language), and the planning skill's tier-classification guidance. Until amended they enforce the old per-file-100% minimum.
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -2022,14 +2053,17 @@ tier_items:
       add _contract_version Iceberg column nullable, no historical backfill, read
       paths use COALESCE.
 
-      Acceptance/verification consolidation (per CD.29): the ops_recommendations contract ratifies a SINGLE
-      typed `checks` field in place of the legacy separate `acceptance` (hard) and `verification` (advisory)
-      fields. Each check carries a `type` (a CD.29 kernel primitive -- preserves the behavioural-vs-mechanical
-      distinction the two old fields encoded) and a `severity` (default `required`/hard-gate; transient
-      `quarantine` for flakes, never permanent `advisory`). Folding this into the contract ratification here --
-      rather than as a later edit -- avoids a post-ratification semantic break (CD.25). Hard-gating the
-      behavioural tier in the executor is sequenced after T3.6 (hermeticity); the contract field SHAPE lands
-      here regardless.
+      Acceptance/verification consolidation (per CD.29): `acceptance` is the existing Class A field; the
+      executor's `verification` is an executor PROJECTION (jsonl_store.py), NOT a Class A field. This ratifies
+      EVOLVING the existing `acceptance` field's value into a typed checks structure -- no breaking rename (field
+      name stays `acceptance`; DQ runner, portal, acceptance_lint.py, ops.yaml, ~36 backfilled recs untouched at
+      the field-name level). Each check carries a `type` (CD.29 kernel primitive -- preserves the
+      behavioural-vs-mechanical distinction) and a `severity` (default `required`; transient `quarantine`, never
+      permanent `advisory`); the advisory `verification` projection is absorbed as additional typed checks. A
+      scalar-string `acceptance` stays valid via a backward-compatible scalar-or-list union during migration.
+      The contract amendment_log records this with an explicit change_class and a note on the
+      field-shape-lands-early (T0.12.5) / executor-enforcement-flips-late (T3.6) skew. Folding into the
+      ratification here avoids a post-ratification semantic break (CD.25).
     depends_on: [T-1.12, T0.12, T0.12.7]
     files_in_scope:
       - docs/contracts/ops_recommendations.yaml
@@ -2041,7 +2075,7 @@ tier_items:
       - "Every field carries description, semantics, populated_by, dq_intent (or $ref + dq_intent_local)"
       - "ops-data-store.md content fully migrated and the file deleted"
       - "_contract_version Iceberg column added to both tables; portal stamps it on new writes; historical rows remain NULL"
-      - "ops_recommendations contract ratifies a single typed `checks` field (per-check `type` + `severity`) replacing the legacy `acceptance` + `verification` fields; behavioural-vs-mechanical preserved as `type`; default severity required (CD.29)"
+      - "ops_recommendations contract evolves the existing `acceptance` field to a typed checks structure (per-check `type` + `severity`; scalar-string still valid via union) and absorbs the executor `verification` projection -- no field rename; behavioural-vs-mechanical preserved as `type`; default severity required; amendment_log records change_class + the field-shape-early/enforcement-late skew (CD.29)"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25, CD.29]
     effort: M
@@ -2962,12 +2996,16 @@ tier_items:
           that reduce per-implementation "what to verify" to harness-owned "run + compare". Closed vocabulary
           per CD.29 (orthogonal to the CD.12 DQ markers; extend only via a new CD).
         - Graduation registry: a passing per-rec verification whose PR merges is promoted into the cumulative
-          validation suite, recorded as governed data in a new Class C contract
-          docs/contracts/verification-registry.yaml (CD.25), indexed by what it guards (input closure / target
-          symbol) so downstream orphan detection (T3.7) is deterministic.
+          validation suite, recorded as governed data in a new Class A contract
+          docs/contracts/verification-registry.yaml (CD.25; row-bearing governed data, $ref into Class C
+          invariants for cross-system fields), indexed by what it guards (input closure / target symbol) so
+          downstream orphan detection (T3.7) is deterministic.
         - Differential admission gate: a candidate graduates only if it demonstrably FAILS on revert of the
           change it guards (kills tautological checks at the door). This fail-on-revert (baseline) check is
-          defined here; the executor's per-rec verify state (substrate per CD.27) reuses the same property.
+          defined here. Baseline-execution surface: the executor's per-rec verify state (substrate per CD.27)
+          checks out the pre-change tree, runs the candidate, and asserts FAIL; at CI/PR time the same property
+          runs as a validate.py step. T3.1 lands the gate logic + its unit test AND names this execution surface
+          (not just the gate's self-test).
         - Hermeticity: verifiers are authored hermetic from the start; the hard-gate wiring depends on T3.6
           (the suite-wide hermeticity audit) so the behavioural tier is only hard-gated once it is flake-free.
       Freeze override (AGENTS.md): effort grew to L with the CD.29 scope; authored as IMPLEMENTATION (STRATEGIC
@@ -2977,15 +3015,15 @@ tier_items:
     files_in_scope:
       - scripts/verifiers/    # new directory
       - scripts/verification_checks.py    # new -- typed checks kernel (closed primitive vocabulary) + comparators
-      - docs/contracts/verification-registry.yaml    # new -- Class C graduation registry contract (CD.25)
+      - docs/contracts/verification-registry.yaml    # new -- Class A graduation registry contract (CD.25)
       - scripts/validate.py
     exit_criteria:
       - "scripts/verifiers/ directory with at least 3 verifiers (telemetry_pipeline, schema_integrity, ops_pipeline)"
       - "Harness runs all verifiers in validate.py presubmit"
       - "Same-PR guard prevents author from weakening own verifier"
       - "Typed checks kernel implemented as a closed primitive vocabulary with deterministic comparators; adding a primitive requires a new CD (CD.29 discipline)"
-      - "verification-registry.yaml ratified at contract_version: 1 under the CD.25 ritual; records each graduated check's guard target"
-      - "Differential admission gate: a candidate graduates only if it fails on revert of its guarded change (verified by a unit test of the gate itself)"
+      - "verification-registry.yaml ratified at contract_version: 1 under the FULL CD.25 ritual (amendment_log with change_class, $ref discipline at chain-depth 1, bootstrap stance); records each graduated check's guard target"
+      - "Differential admission gate: a candidate graduates only if it fails on revert of its guarded change; gate logic unit-tested AND its production baseline-execution surface named (executor verify state per CD.27 / a validate.py step), with the revert-and-rerun mechanism specified"
       - "Hard-gate wiring into executor postflight is gated on T3.6 hermeticity (behavioural-tier checks hard-gate only once hermetic)"
     related_candidate_decisions: [CD.29, CD.25]
     related_intents: [verification-system]
@@ -3126,8 +3164,9 @@ tier_items:
            registry; a follow-on plan deletes), never auto-delete -- deleting a load-bearing test on a misjudgement
            is unacceptable in a human-out-of-loop system.
 
-        3. Diff-coverage ratchet (CD.30): replace the 100%-global-coverage floor with require-coverage-on-changed-
-           lines + upward-only global ratchet, enforced in validate.py; retarget scripts/test_coverage_checker.py.
+        3. Diff-line-coverage ratchet (CD.30): replace the per-changed-file 100% floor (test_coverage_checker.py
+           is already diff-scoped) with require-coverage-on-changed-LINES + upward-only global ratchet, enforced
+           in validate.py; retarget scripts/test_coverage_checker.py.
 
       Freeze override (AGENTS.md): the three mechanisms decompose into separate atomic IMPLEMENTATION plans
       (mutation runner, dead-test detector, diff-coverage ratchet + the meta-validation workflow) at /implement
@@ -3145,7 +3184,7 @@ tier_items:
       - "AST assertion-free lint runs in validate.py and blocks a test function that contains no assertion"
       - "Registry orphan detection flags graduated checks whose guard target no longer exists; coverage-uniqueness flags zero-unique-coverage tests; both file recs"
       - "Retirement path is mark-then-drop: flagged checks are marked deprecated in the registry, never auto-deleted; a follow-on plan performs deletion (CD.12 discipline)"
-      - "Diff-coverage ratchet enforced in validate.py: changed lines require coverage + global coverage non-regression; the 100% floor in test_coverage_checker.py is retargeted (CD.30)"
+      - "Diff-line-coverage ratchet enforced in validate.py: changed lines require coverage + global coverage non-regression; the per-changed-file 100% floor in test_coverage_checker.py is retargeted to diff-line-coverage + ratchet (CD.30)"
       - "Workflow touches no Lambda-packaged file (Decision 67 / CD.16 not triggered); distinguished from the Decision 62 retired separate-DQ-routine in a code comment"
     related_candidate_decisions: [CD.29, CD.30]
     effort: M
@@ -3585,6 +3624,8 @@ known_gaps:
       pytest-testmon) + content-addressed result caching is the scalability mechanism that lets "every
       verification stays confirmed" hold without re-running everything. It is NOT a pre-executor blocker:
       T4.1 sets executor concurrency = 1 and at ~100 recs/month a cached-full suite is tolerable. It becomes
-      load-bearing when T4.4 raises concurrency above 1. Precondition: T3.6 hermeticity (caching requires
-      hermetic tests). Cross-references Decision 73's existing Known Gap note that `pytest --picked` may
-      upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor concurrency rises.
+      load-bearing when T4.4 raises concurrency above 1. Preconditions: T3.6 hermeticity (caching requires
+      hermetic tests) AND the T3.1 graduation registry's per-check guard-target / input-closure metadata (TIA
+      selects by input closure, which only the registry records). Cross-references Decision 73's existing Known
+      Gap note that `pytest --picked` may upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor
+      concurrency rises.
