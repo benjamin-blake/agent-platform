@@ -12,8 +12,10 @@ import re
 import sys
 from pathlib import Path
 
-_FILED_PATTERN = re.compile(r"^\s*FILED:\s*(rec-\d+)\s*$", re.MULTILINE)
-_FILED_NONE_PATTERN = re.compile(r"^\s*FILED:\s*none\s*$", re.MULTILINE | re.IGNORECASE)
+# Single ordered scan so the LAST marker wins (honours the "multiple markers -> last"
+# contract). The `none` alternative is case-insensitive; rec ids are lowercase by the
+# agent contract (file_rec emits lowercase ids), so rec matching stays case-sensitive.
+_MARKER_PATTERN = re.compile(r"^[ \t]*FILED:[ \t]*(rec-\d+|[Nn][Oo][Nn][Ee])[ \t]*$", re.MULTILINE)
 
 
 def extract_filed_rec_id(output_path: str | Path) -> str | None:
@@ -23,8 +25,10 @@ def extract_filed_rec_id(output_path: str | Path) -> str | None:
     and extracts text from the 'result' field. Falls back to raw text on parse
     failure so stderr-polluted output is still searchable.
 
-    Returns the LAST FILED: rec-NNN match. Treats FILED: none as absent.
-    Never matches a bare rec-NNN substring outside the marker.
+    Scans all FILED: markers in document order and returns the LAST one. A
+    trailing `FILED: none` (or no marker at all) yields None; an earlier
+    `FILED: none` does NOT suppress a later `FILED: rec-NNN`. Never matches a
+    bare rec-NNN substring outside the marker.
     """
     path = Path(output_path)
     try:
@@ -34,11 +38,11 @@ def extract_filed_rec_id(output_path: str | Path) -> str | None:
 
     text = _extract_text(raw)
 
-    if _FILED_NONE_PATTERN.search(text):
+    matches = _MARKER_PATTERN.findall(text)
+    if not matches:
         return None
-
-    matches = _FILED_PATTERN.findall(text)
-    return matches[-1] if matches else None
+    last = matches[-1]
+    return None if last.lower() == "none" else last
 
 
 def _extract_text(raw: str) -> str:

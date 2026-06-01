@@ -37,6 +37,16 @@ class TestExtractFiledRecId:
         content = "FILED: rec-100\nSome stuff\nFILED: rec-200\n"
         assert extract_filed_rec_id(_write(tmp_path, content)) == "rec-200"
 
+    def test_filed_none_then_real_marker_returns_id(self, tmp_path: Path) -> None:
+        # An earlier FILED: none must NOT suppress a later real marker (last wins).
+        content = "FILED: none\nReconsidered after retry.\nFILED: rec-123\n"
+        assert extract_filed_rec_id(_write(tmp_path, content)) == "rec-123"
+
+    def test_real_marker_then_filed_none_returns_none(self, tmp_path: Path) -> None:
+        # A trailing FILED: none is the authoritative final signal -> absence.
+        content = "FILED: rec-123\nFiling rolled back.\nFILED: none\n"
+        assert extract_filed_rec_id(_write(tmp_path, content)) is None
+
     def test_marker_with_leading_whitespace(self, tmp_path: Path) -> None:
         content = "  FILED: rec-456  \n"
         assert extract_filed_rec_id(_write(tmp_path, content)) == "rec-456"
