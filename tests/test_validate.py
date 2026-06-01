@@ -21,7 +21,6 @@ validate_scheduled_agent_logs = _validate.validate_scheduled_agent_logs
 validate_cli_tools_in_prompts = _validate.validate_cli_tools_in_prompts
 validate_test_coverage = _validate.validate_test_coverage
 validate_prompt_compliance = _validate.validate_prompt_compliance
-validate_ruff_version_alignment = _validate.validate_ruff_version_alignment
 validate_invariants = _validate.validate_invariants
 validate_no_underscore_instructions = _validate.validate_no_underscore_instructions
 validate_recommendations_schema = _validate.validate_recommendations_schema
@@ -303,49 +302,6 @@ class TestLoadHelpers:
         with patch("validate.ROOT", tmp_path):
             result = _load_prompt_compliance()
         assert result is None
-
-
-class TestValidateRuffVersionAlignment:
-    """Tests for validate_ruff_version_alignment()."""
-
-    def test_passes_when_versions_match(self, tmp_path: Path) -> None:
-        req = tmp_path / "requirements.txt"
-        req.write_text("ruff==0.15.9\n", encoding="utf-8")
-        pc = tmp_path / ".pre-commit-config.yaml"
-        pc.write_text(
-            "repos:\n-   repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.15.9\n    hooks:\n    -   id: ruff\n",
-            encoding="utf-8",
-        )
-        failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
-            validate_ruff_version_alignment(failed)
-        assert failed == []
-
-    def test_fails_when_versions_differ(self, tmp_path: Path) -> None:
-        req = tmp_path / "requirements.txt"
-        req.write_text("ruff==0.15.9\n", encoding="utf-8")
-        pc = tmp_path / ".pre-commit-config.yaml"
-        pc.write_text(
-            "repos:\n-   repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.3.0\n    hooks:\n    -   id: ruff\n",
-            encoding="utf-8",
-        )
-        failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
-            validate_ruff_version_alignment(failed)
-        assert "Ruff version alignment" in failed
-
-    def test_fails_when_ruff_not_pinned(self, tmp_path: Path) -> None:
-        req = tmp_path / "requirements.txt"
-        req.write_text("pytest\n", encoding="utf-8")
-        pc = tmp_path / ".pre-commit-config.yaml"
-        pc.write_text(
-            "repos:\n-   repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.15.9\n",
-            encoding="utf-8",
-        )
-        failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
-            validate_ruff_version_alignment(failed)
-        assert "Ruff version alignment" in failed
 
 
 class TestValidateEnvironmentTaxonomy:
