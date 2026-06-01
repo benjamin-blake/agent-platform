@@ -1135,7 +1135,7 @@ candidate_decisions:
       decision_id: 48
       clause: The V2-tier minimum (per-changed-file 100% line coverage). The V2 tier now requires diff-line-coverage-on-changed-lines plus an upward-only global ratchet; Decision 48's broader V1/V2/V3 classification is otherwise preserved. Decision 48's V2-row text and critique.prompt.md must be amended in lockstep at ratification.
     discipline_points:
-      - Diff-coverage threshold and the ratchet baseline are config-driven; the global baseline only moves up, never down.
+      - Diff-coverage threshold and the ratchet baseline are config-driven; the global baseline only moves up, never down. The initial global baseline is captured at T3.7 implementation (computed from the current suite and stored in a governed config/state file); the ratchet compares each PR against that stored value.
       - The ratchet is enforced in scripts/validate.py; test_coverage_checker.py is retargeted from the per-changed-file 100% floor to diff-line-coverage + ratchet, not run as a separate parallel gate.
       - Lockstep consumers at ratification (follow-on plan, via log-decision for the Decision text): Decision 48 V2-row text, config/agent/executor/prompts/critique.prompt.md (V3 behavioural-acceptance language), and the planning skill's tier-classification guidance. Until amended they enforce the old per-file-100% minimum.
 
@@ -2064,6 +2064,14 @@ tier_items:
       The contract amendment_log records this with an explicit change_class and a note on the
       field-shape-lands-early (T0.12.5) / executor-enforcement-flips-late (T3.6) skew. Folding into the
       ratification here avoids a post-ratification semantic break (CD.25).
+
+      Consumer lockstep (MED -- round-2 adversarial critic): widening `acceptance` from a bare string to a
+      scalar-or-list union requires updating, in lockstep with the contract change, the consumers that today
+      call string methods unconditionally -- run_acceptance (scripts/executor/step_runner.py) and
+      validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command
+      (scripts/executor/acceptance_lint.py) -- and DqNotNull(write_time=True) semantics on a list value must be
+      defined (is an empty list null? a list of empty-string checks?). These are named here as required
+      lockstep scope for the T0.12.5 implementation plan; they are outside this roadmap edit's scope.
     depends_on: [T-1.12, T0.12, T0.12.7]
     files_in_scope:
       - docs/contracts/ops_recommendations.yaml
@@ -2076,6 +2084,7 @@ tier_items:
       - "ops-data-store.md content fully migrated and the file deleted"
       - "_contract_version Iceberg column added to both tables; portal stamps it on new writes; historical rows remain NULL"
       - "ops_recommendations contract evolves the existing `acceptance` field to a typed checks structure (per-check `type` + `severity`; scalar-string still valid via union) and absorbs the executor `verification` projection -- no field rename; behavioural-vs-mechanical preserved as `type`; default severity required; amendment_log records change_class + the field-shape-early/enforcement-late skew (CD.29)"
+      - "String-assuming `acceptance` consumers updated in lockstep for the scalar-or-list union (run_acceptance in step_runner.py; validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command in acceptance_lint.py); DqNotNull-on-list semantics defined (round-2 critic MED)"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25, CD.29]
     effort: M
