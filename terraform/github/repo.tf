@@ -12,9 +12,9 @@ resource "github_repository" "this" {
 
   # GitHub Advanced Security: secret scanning + push protection (T2.12 / CD.20).
   security_and_analysis {
-    advanced_security {
-      status = "enabled"
-    }
+    # advanced_security is omitted: GitHub Advanced Security is always-on for PUBLIC repos;
+    # setting it via the API errors ("always available for public repositories"). The repo
+    # went public at T2.13 (2026-05-30), so only secret scanning + push protection are managed.
     secret_scanning {
       status = "enabled"
     }
@@ -35,10 +35,12 @@ resource "github_repository" "this" {
       has_projects,
       has_wiki,
       has_discussions,
+      has_downloads,
       allow_merge_commit,
       allow_squash_merge,
       allow_rebase_merge,
       allow_auto_merge,
+      allow_update_branch,
       delete_branch_on_merge,
       archived,
     ]
