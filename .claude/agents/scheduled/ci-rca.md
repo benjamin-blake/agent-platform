@@ -85,6 +85,24 @@ Print a brief summary of:
 - Root cause classification
 - The rec ID that was filed (from the portal output)
 
+As the **final line** of your output, emit exactly one of:
+
+```
+FILED: <rec_id>
+```
+
+or, if no recommendation was filed:
+
+```
+FILED: none
+```
+
+This marker is the sole authoritative filing signal parsed by the workflow.
+Downstream tooling (`scripts/ci_rca_filing.py`) reads only this marker --
+a bare mention of a rec id elsewhere in the output does NOT count as filed.
+The `PLAN-ci-rca-prompt-rewrite` plan will later extend this step; any
+rewrite of this agent MUST preserve the `FILED:` marker contract.
+
 ## Hard Rules
 
 **Do not propose or execute any autonomous fix.**

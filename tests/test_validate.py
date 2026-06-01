@@ -27,6 +27,7 @@ validate_recommendations_schema = _validate.validate_recommendations_schema
 validate_complexity = _validate.validate_complexity
 validate_sloc_limits = _validate.validate_sloc_limits
 validate_cc_limits = _validate.validate_cc_limits
+validate_ci_rca_trigger = _validate.validate_ci_rca_trigger
 ensure_fresh_dq_results = _validate.ensure_fresh_dq_results
 run_coverage_check = _validate.run_coverage_check
 _load_coverage_checker = _validate._load_coverage_checker
@@ -2609,3 +2610,39 @@ class TestBudgetBreachRecFiling:
         ):
             # Must not raise
             _file_budget_bypass_rec(60.0, [], None)
+
+
+class TestValidateCiRcaTrigger:
+    """Tests for validate_ci_rca_trigger() -- the presubmit wrapper around _check_ci_rca_filter."""
+
+    def test_passes_when_guard_succeeds(self) -> None:
+        mock_module = MagicMock()
+        mock_module._check_ci_rca_filter = MagicMock()
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_rca_trigger(failed)
+
+        assert failed == []
+        mock_module._check_ci_rca_filter.assert_called_once()
+
+    def test_appends_to_failed_when_guard_raises(self) -> None:
+        mock_module = MagicMock()
+        mock_module._check_ci_rca_filter.side_effect = AssertionError("main-branch gate missing")
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_rca_trigger(failed)
+
+        assert len(failed) == 1
+        assert "ci-rca trigger gate" in failed[0]
+
+    def test_no_error_propagation_on_assertion(self) -> None:
+        mock_module = MagicMock()
+        mock_module._check_ci_rca_filter.side_effect = AssertionError("something wrong")
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_rca_trigger(failed)
+
+        assert failed == ["ci-rca trigger gate"]

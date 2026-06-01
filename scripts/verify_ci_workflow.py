@@ -145,6 +145,20 @@ def _check_ci_rca_filter() -> None:
     assert "CI" in workflows, f"ci-rca.yml workflows list missing 'CI': {workflows}"
     assert canary_name in workflows, f"ci-rca.yml workflows list missing {canary_name!r}: {workflows}"
 
+    rca_job_if = rca_data.get("jobs", {}).get("rca", {}).get("if", "")
+    assert "head_branch" in rca_job_if, (
+        f"ci-rca.yml rca job if: missing main-branch gate (head_branch not found): {rca_job_if!r}"
+    )
+    assert "default_branch" in rca_job_if, (
+        f"ci-rca.yml rca job if: missing main-branch gate (default_branch not found): {rca_job_if!r}"
+    )
+
+    agent_doc = Path(".claude/agents/scheduled/ci-rca.md").read_text(encoding="utf-8")
+    assert "FILED:" in agent_doc, (
+        ".claude/agents/scheduled/ci-rca.md missing FILED: marker contract -- "
+        "the prompt rewrite plan must preserve this signal for the workflow parser"
+    )
+
 
 _COMMANDS = {
     "jobs-and-flags": _check_jobs_and_flags,
