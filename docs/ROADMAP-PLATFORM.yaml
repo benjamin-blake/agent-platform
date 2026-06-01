@@ -508,6 +508,11 @@ candidate_decisions:
       substrate assumption was retired by CD.28 -- Bedrock is no longer part of the executor's LLM substrate.
       The trigger expression structure is unchanged (still keyed to T4.2 stability + grace period); only the
       underlying model-substrate assumption changed.
+      [Amendment 2026-06-01 -- verification-validation roadmap]: tier_items T3.6 (hermeticity audit) and T3.7
+      (validation-suite meta-validation) and the expanded T3.1 (typed checks kernel + graduation registry)
+      strengthen the telemetry/verification trust loop this reversal cascade depends on, but they PRECEDE and
+      do NOT gate the reversal trigger -- the trigger expression remains keyed to T4.2 / T3.2 / T3.3 only and
+      is structurally unchanged.
     gates: [T1.5, T1.6, T2.1, T3.3, T3.4, T4.1, T4.2, T4.4]    # the strategic items the freeze affects
     state: pending
     narrowly_supersedes:
@@ -1031,6 +1036,108 @@ candidate_decisions:
       - Prompt cache strategy on DeepSeek is hash-based and automatic -- no client breakpoint placement required. This simplifies Layer-3 (agent loop) compared to the Bedrock cachePoint design previously planned in INTENT.
       - Bedrock IAM policies in T0.3 (PlatformDev DailyOps `bedrock:InvokeModel`) become vestigial-but-harmless. Annotated as such in T0.3; not removed (avoids re-Terraform churn). Retirement is tracked under PLAN-retire-bedrock-code-paths in the follow-on plan inventory below.
       - Cost-projection numbers in this CD reference DeepSeek V3.2 pricing as of 2026-05-27 ($0.252 input / $0.378 output per 1M tokens; $0.0252 cache-hit input). Spot-check arithmetic at typical executor scale (100 recs/month, ~50K input + ~10K output tokens/rec, ~80% prefix cache-hit) yields ~91% cost reduction vs Bedrock-DeepSeek -- the headline ~75% figure in cost_projection is intentionally conservative; the realised savings should exceed it.
+
+  - id: CD.29
+    title: Validation suite is a graduated, deduplicated, machine-curated asset; verification graduates into validation; hard-gate by default behind a hermeticity precondition
+    detail: |
+      The repo-wide validation suite (scripts/verifiers/ wired into validate.py + executor postflight) is the
+      deduplicated union of GRADUATED per-rec verifications, not an append-only pile. Model:
+        - Per-rec verification (executor-side) and repo-wide validation (CI-side) are distinct questions --
+          "did this change do what the rec asked" vs "is the repo still sound" -- and neither subsumes the
+          other. Verification can do differential/baseline checks (fail-before/pass-after) that validation
+          structurally cannot; validation runs the full closure that per-rec verification deliberately scopes
+          down. Both are required (defence in depth).
+        - Checks are typed. A small CLOSED kernel of deterministic primitives (command_exit_zero,
+          command_output_matches, file_exists/file_absent, grep_count, test_selector, metric_under_threshold)
+          reduces "what to verify" (per-implementation judgement, authored at plan time) to "run + compare"
+          (deterministic, harness-owned). This kernel is governed by its OWN closed vocabulary, orthogonal to
+          the CD.12 DQ-marker vocabulary, and is extendable only by a new candidate decision (mirrors CD.12's
+          discipline). It does not consume the CD.12 marker budget.
+        - Graduation lifecycle: a per-rec verification that passes and whose PR merges is promoted into the
+          cumulative suite, recorded in a graduation registry (Class A governed-data contract per CD.25,
+          docs/contracts/verification-registry.yaml; cross-system fields $ref into Class C invariants) indexed
+          by what it guards (input closure / target symbol). It is row-bearing governed data, hence Class A,
+          not a Class C cross-system invariant.
+          Admission gate: the differential property -- a candidate must demonstrably FAIL on revert of the
+          change it guards, else it guards nothing and is rejected (kills tautological tests at the door).
+        - Hard-gate by default: every check has a defined consequence. In a human-out-of-loop system an
+          advisory check nothing acts on is dead weight that trains the system to tolerate red. Per-check
+          severity defaults to `required` (blocks); the only non-blocking state is a transient `quarantine`
+          for flakes that files a rec (RCA-first, Decision 55), never a permanent `advisory`.
+        - Hermeticity is the precondition. Hard-gating the behavioural tier is only safe once those checks are
+          hermetic (env-stripped, no network, deterministic) -- flakiness is precisely WHY the legacy
+          `verification` field was advisory. The hermeticity audit (T3.6) therefore precedes the hard-gate
+          consolidation.
+        - Meta-validation keeps the suite's PURPOSE honest (T3.7): mutation testing confirms graduated checks
+          kill mutants on their target; deterministic dead/redundant-test detection retires checks whose guarded
+          target no longer exists. Both are alarm-not-gate (CD.12) and file recs; retirement follows the CD.12
+          mark-then-drop discipline (deprecate in registry, follow-on plan deletes), never auto-delete, never an
+          LLM scan.
+      Consolidation discipline (lands in T0.12.5): today `acceptance` is the Class A rec field (src/schemas/
+      rec.py, DqNotNull write_time) consumed as a hard gate (run_acceptance), while `verification` is an
+      EXECUTOR PROJECTION field (scripts/executor/jsonl_store.py, read advisory via run_verification) -- it is
+      NOT in the Class A schema. The consolidation KEEPS the Class A field name `acceptance` (no breaking
+      rename; the DQ runner, portal write-path, acceptance_lint.py, ops.yaml, and the ~36 backfilled recs are
+      untouched at the field-name level) and EVOLVES its value into a typed checks structure: a list of checks,
+      each with a `type` (a CD.29 kernel primitive -- preserves the behavioural-vs-mechanical distinction the
+      two paths encoded) and a `severity` (default required/hard-gate; transient `quarantine`, never permanent
+      advisory). The executor's advisory `verification` projection is absorbed as additional typed checks on the
+      same field. A scalar-string `acceptance` stays valid via a backward-compatible scalar-or-list union during
+      migration. Folded into the ops_recommendations Class A contract ratification (T0.12.5) so it is not a
+      post-ratification semantic break (CD.25).
+
+      Field-shape-vs-enforcement skew (MED -- both deliverable critics): the typed-checks field SHAPE (incl.
+      severity default required) ratifies at T0.12.5, but the executor cannot HARD-GATE the behavioural tier
+      until T3.6 (hermeticity) + T3.1 land. In that window a rec may carry severity: required checks the executor
+      still treats as advisory (execute_recommendation.py keeps verification advisory today). This is recorded
+      explicitly via the contract amendment_log change_class, not left as a silent gap.
+    gates: [T3.1, T3.6, T3.7, T0.12.5]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - The `checks` kernel is a closed vocabulary governed by this CD; adding a 7th primitive requires a new candidate decision (mirrors CD.12's DQ-marker discipline). It is orthogonal to and does not consume the CD.12 marker budget.
+      - Verifiers and the graduation registry are platform machinery; recs touching scripts/verifiers/ or the registry are automatable: false (Decision 44).
+      - Per-rec verification graduates into validation only after the differential admission gate passes; the registry records the guard target so orphan detection (T3.7) is deterministic.
+      - Hard-gate-by-default applies to the behavioural tier only after T3.6 (hermeticity); mechanical checks (command_exit_zero) are hermetic by construction and hard-gate immediately.
+      - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda -- it does not re-introduce the separate-scheduled-DQ-routine that Decision 62 retired (mutation is too slow for presubmit and is advisory, not a merge gate).
+      - CD.29 changes the platform verification DEFAULT from advisory (the current run_verification behaviour) to required/hard-gate. This is a deliberate semantic change, enforced only after T3.6; no prior numbered Decision is superseded because the advisory behaviour was an executor implementation default, not a ratified decision.
+      - Precedence: when the executor's per-rec checks (executor-side) and the CI validation gate including diff-coverage (CI-side) both apply, CI is authoritative per the AGENTS.md merge protocol (remote CI is the authoritative pre-merge gate).
+
+  - id: CD.30
+    title: Diff-line-coverage ratchet supersedes the per-changed-file 100%-coverage gate
+    detail: |
+      The current coverage gate (scripts/test_coverage_checker.py, wired into validate.py) enforces
+      per-changed-file 100% line coverage: it runs over get_changed_source_files() and fails any CHANGED file
+      below 100%. It is already diff-scoped -- unchanged files are never measured -- so it is NOT a global gate.
+      This per-changed-file floor is the V2-tier minimum mandated by Decision 48 ("pytest with 100% coverage"),
+      operating alongside the Decision 60 / Decision 73 two-tier (--pre vs full) structure (F.3).
+
+      Replace the per-changed-file 100% FLOOR with a diff-line-coverage ratchet:
+        - Require coverage on CHANGED LINES (not whole changed files) for every PR -- a touched file may sit
+          below 100% as long as the lines the PR actually changed are covered.
+        - Global coverage may only ratchet UPWARD -- a PR may not lower the repo-wide percentage.
+      Rationale: per-changed-file 100% forces full coverage on every touched file even for lines the PR did not
+      change, a frequent source of low-value test churn (the actual cost -- NOT "expense as the repo grows,"
+      since unchanged files are already exempt). And 100% line coverage is necessary-not-sufficient (100% with
+      weak assertions passes), so mutation testing (CD.29 / T3.7) is the real quality signal. Diff-line-coverage
+      is more surgical and harder to game on the changed surface. The Decision 60 / Decision 73 two-tier
+      structure is unchanged; only the coverage minimum changes.
+
+      Propagation (HIGH -- both deliverable critics): relaxing the V2 minimum edits the V2 row of Decision 48's
+      tier table, which is also keyed off by config/agent/executor/prompts/critique.prompt.md and the planning
+      skill. At CD.30 ratification those consumers MUST be amended in lockstep (see discipline_points). This
+      roadmap edit does NOT touch DECISIONS.md or the prompt -- those land at ratification via the log-decision
+      path and a named follow-on plan.
+    gates: [T3.7]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    narrowly_supersedes:
+      decision_id: 48
+      clause: The V2-tier minimum (per-changed-file 100% line coverage). The V2 tier now requires diff-line-coverage-on-changed-lines plus an upward-only global ratchet; Decision 48's broader V1/V2/V3 classification is otherwise preserved. Decision 48's V2-row text and critique.prompt.md must be amended in lockstep at ratification.
+    discipline_points:
+      - Diff-coverage threshold and the ratchet baseline are config-driven; the global baseline only moves up, never down. The initial global baseline is captured at T3.7 implementation (computed from the current suite and stored in a governed config/state file); the ratchet compares each PR against that stored value.
+      - The ratchet is enforced in scripts/validate.py; test_coverage_checker.py is retargeted from the per-changed-file 100% floor to diff-line-coverage + ratchet, not run as a separate parallel gate.
+      - Lockstep consumers at ratification (follow-on plan, via log-decision for the Decision text): Decision 48 V2-row text, config/agent/executor/prompts/critique.prompt.md (V3 behavioural-acceptance language), and the planning skill's tier-classification guidance. Until amended they enforce the old per-file-100% minimum.
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -1945,6 +2052,26 @@ tier_items:
       governance blocks. Apply migration rule from INTENT Part 4 Invariant 2:
       add _contract_version Iceberg column nullable, no historical backfill, read
       paths use COALESCE.
+
+      Acceptance/verification consolidation (per CD.29): `acceptance` is the existing Class A field; the
+      executor's `verification` is an executor PROJECTION (jsonl_store.py), NOT a Class A field. This ratifies
+      EVOLVING the existing `acceptance` field's value into a typed checks structure -- no breaking rename (field
+      name stays `acceptance`; DQ runner, portal, acceptance_lint.py, ops.yaml, ~36 backfilled recs untouched at
+      the field-name level). Each check carries a `type` (CD.29 kernel primitive -- preserves the
+      behavioural-vs-mechanical distinction) and a `severity` (default `required`; transient `quarantine`, never
+      permanent `advisory`); the advisory `verification` projection is absorbed as additional typed checks. A
+      scalar-string `acceptance` stays valid via a backward-compatible scalar-or-list union during migration.
+      The contract amendment_log records this with an explicit change_class and a note on the
+      field-shape-lands-early (T0.12.5) / executor-enforcement-flips-late (T3.6) skew. Folding into the
+      ratification here avoids a post-ratification semantic break (CD.25).
+
+      Consumer lockstep (MED -- round-2 adversarial critic): widening `acceptance` from a bare string to a
+      scalar-or-list union requires updating, in lockstep with the contract change, the consumers that today
+      call string methods unconditionally -- run_acceptance (scripts/executor/step_runner.py) and
+      validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command
+      (scripts/executor/acceptance_lint.py) -- and DqNotNull(write_time=True) semantics on a list value must be
+      defined (is an empty list null? a list of empty-string checks?). These are named here as required
+      lockstep scope for the T0.12.5 implementation plan; they are outside this roadmap edit's scope.
     depends_on: [T-1.12, T0.12, T0.12.7]
     files_in_scope:
       - docs/contracts/ops_recommendations.yaml
@@ -1956,8 +2083,10 @@ tier_items:
       - "Every field carries description, semantics, populated_by, dq_intent (or $ref + dq_intent_local)"
       - "ops-data-store.md content fully migrated and the file deleted"
       - "_contract_version Iceberg column added to both tables; portal stamps it on new writes; historical rows remain NULL"
+      - "ops_recommendations contract evolves the existing `acceptance` field to a typed checks structure (per-check `type` + `severity`; scalar-string still valid via union) and absorbs the executor `verification` projection -- no field rename; behavioural-vs-mechanical preserved as `type`; default severity required; amendment_log records change_class + the field-shape-early/enforcement-late skew (CD.29)"
+      - "String-assuming `acceptance` consumers updated in lockstep for the scalar-or-list union (run_acceptance in step_runner.py; validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command in acceptance_lint.py); DqNotNull-on-list semantics defined (round-2 critic MED)"
       - "Step 10 multi-perspective critique converges"
-    related_candidate_decisions: [CD.25]
+    related_candidate_decisions: [CD.25, CD.29]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
@@ -2866,18 +2995,48 @@ tier_items:
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
-    name: Verifier harness foundation
-    intent: Filesystem-as-registry verifiers in scripts/verifiers/. Exit-code-as-verdict. Same-PR guard. Wire into validate.py and executor postflight as hard gate.
-    depends_on: [T2.1, T0.12.6]    # T0.12.6 (telemetry Class A contracts) added by T-1.12 per CD.25 ritual
+    name: Verifier harness foundation + typed checks kernel + graduation registry
+    intent: |
+      Filesystem-as-registry verifiers in scripts/verifiers/. Exit-code-as-verdict. Same-PR guard (an author
+      cannot weaken their own verifier). Wire into validate.py and executor postflight as hard gate. Per CD.29
+      this item also lands the foundation of the graduated-validation model:
+        - Typed `checks` kernel: a small CLOSED vocabulary of deterministic primitives (command_exit_zero,
+          command_output_matches, file_exists/file_absent, grep_count, test_selector, metric_under_threshold)
+          that reduce per-implementation "what to verify" to harness-owned "run + compare". Closed vocabulary
+          per CD.29 (orthogonal to the CD.12 DQ markers; extend only via a new CD).
+        - Graduation registry: a passing per-rec verification whose PR merges is promoted into the cumulative
+          validation suite, recorded as governed data in a new Class A contract
+          docs/contracts/verification-registry.yaml (CD.25; row-bearing governed data, $ref into Class C
+          invariants for cross-system fields), indexed by what it guards (input closure / target symbol) so
+          downstream orphan detection (T3.7) is deterministic.
+        - Differential admission gate: a candidate graduates only if it demonstrably FAILS on revert of the
+          change it guards (kills tautological checks at the door). This fail-on-revert (baseline) check is
+          defined here. Baseline-execution surface: the executor's per-rec verify state (substrate per CD.27)
+          checks out the pre-change tree, runs the candidate, and asserts FAIL; at CI/PR time the same property
+          runs as a validate.py step. T3.1 lands the gate logic + its unit test AND names this execution surface
+          (not just the gate's self-test).
+        - Hermeticity: verifiers are authored hermetic from the start; the hard-gate wiring depends on T3.6
+          (the suite-wide hermeticity audit) so the behavioural tier is only hard-gated once it is flake-free.
+      Freeze override (AGENTS.md): effort grew to L with the CD.29 scope; authored as IMPLEMENTATION (STRATEGIC
+      suspended) -- decompose into atomic IMPLEMENTATION plans (harness + kernel + registry-contract + graduation
+      gate) at /implement time.
+    depends_on: [T2.1, T0.12.6, T3.6]    # T0.12.6 telemetry Class A contracts (T-1.12 per CD.25); T3.6 hermeticity precedes hard-gate wiring
     files_in_scope:
       - scripts/verifiers/    # new directory
+      - scripts/verification_checks.py    # new -- typed checks kernel (closed primitive vocabulary) + comparators
+      - docs/contracts/verification-registry.yaml    # new -- Class A graduation registry contract (CD.25)
       - scripts/validate.py
     exit_criteria:
       - "scripts/verifiers/ directory with at least 3 verifiers (telemetry_pipeline, schema_integrity, ops_pipeline)"
       - "Harness runs all verifiers in validate.py presubmit"
       - "Same-PR guard prevents author from weakening own verifier"
+      - "Typed checks kernel implemented as a closed primitive vocabulary with deterministic comparators; adding a primitive requires a new CD (CD.29 discipline)"
+      - "verification-registry.yaml ratified at contract_version: 1 under the FULL CD.25 ritual (amendment_log with change_class, $ref discipline at chain-depth 1, bootstrap stance); records each graduated check's guard target"
+      - "Differential admission gate: a candidate graduates only if it fails on revert of its guarded change; gate logic unit-tested AND its production baseline-execution surface named (executor verify state per CD.27 / a validate.py step), with the revert-and-rerun mechanism specified"
+      - "Hard-gate wiring into executor postflight is gated on T3.6 hermeticity (behavioural-tier checks hard-gate only once hermetic)"
+    related_candidate_decisions: [CD.29, CD.25]
     related_intents: [verification-system]
-    effort: M
+    effort: L
     strategic: false
     status: not_started
   - id: T3.2
@@ -2955,6 +3114,90 @@ tier_items:
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
+    status: not_started
+
+  - id: T3.6
+    tier: T3
+    name: Test-suite hermeticity audit
+    intent: |
+      Audit the pytest suite and verifier harness for hermeticity: every test/verifier must declare its inputs
+      and be free of clock, network, filesystem-order, and test-order dependence. Hermeticity is the precondition
+      for three downstream capabilities: (a) cacheable validation -- a test whose input closure is unchanged need
+      not re-run (the basis of the deferred TIA + caching work, KG.13); (b) the executor's hermetic verify
+      (env-stripped, no-network checks the executor can hard-gate on, per CD.27); and (c) honest Codespace claims
+      (T2.11a / T2.13 promise a working environment -- only true if the suite runs green hermetically in a fresh
+      container). This item produces the audit, the fixes that make the suite hermetic, and a CI assertion that
+      new tests stay hermetic. It precedes the hard-gate consolidation (CD.29 / T0.12.5): hard-gating the
+      behavioural tier on a non-hermetic suite reproduces the flakiness that made the legacy `verification` field
+      advisory.
+    depends_on: [T2.1]
+    files_in_scope:
+      - tests/
+      - scripts/verifiers/    # verifiers authored hermetic from the start
+      - scripts/validate.py    # add a hermeticity assertion (randomised test order + network-block in the test env)
+    exit_criteria:
+      - "Audit report enumerates every non-hermetic test/verifier (clock, network, order, shared-state dependence) with a disposition (fix or quarantine)"
+      - "Full pytest suite passes under randomised test order (pytest-randomly or equivalent) and with network blocked in the test environment"
+      - "validate.py asserts the network-block + random-order invariant so new non-hermetic tests fail CI"
+      - "Hermeticity recorded as a satisfied precondition for the CD.29 hard-gate consolidation and KG.13 caching"
+    related_candidate_decisions: [CD.29]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T3.7
+    tier: T3
+    name: Validation-suite meta-validation (mutation testing + deterministic dead-test detection + diff-coverage ratchet)
+    intent: |
+      Keep the validation suite's PURPOSE honest -- it must guard functionality, not merely exist (CD.29).
+      Three mechanisms:
+
+        1. Scheduled mutation testing (mutmut), ALARM-NOT-GATE (CD.12). Runs on a GitHub Actions schedule, NOT a
+           Lambda -- avoids the Decision 67 / CD.16 Lambda-deploy freeze and touches no Lambda-packaged file.
+           Aimed NARROWLY: when a verification graduates (T3.1 registry), mutate only the lines that check claims
+           to guard and confirm it kills the mutants; a graduated check that kills nothing on-target is a
+           tautology and is flagged. Surviving mutants file a rec with source='mutation_survivor' (Decision 61 --
+           via the source field; no new findings table). An equivalent-mutant allowlist (governed file) suppresses
+           known-unkillable mutants so the scheduled run files recs only on NEW survivors (no resurrection-loop
+           noise). Distinct from the separate-scheduled-DQ-routine Decision 62 retired: mutation is too slow for
+           presubmit and is advisory, not a merge gate.
+
+        2. Deterministic dead/redundant-test detection (NEVER an LLM scan -- expensive and non-deterministic for a
+           deterministic job). Layered, cheapest-first: (a) AST assertion-free lint (a test with no assert /
+           pytest.raises / mock.assert_* / self.assert* asserts nothing) -- cheap enough to be a BLOCKING
+           validate.py check; (b) registry orphan detection -- a graduated check whose recorded guard target no
+           longer exists in the tree is flagged (deterministic by construction once the T3.1 registry records guard
+           targets); (c) coverage-uniqueness -- a test contributing zero unique covered lines is a redundancy
+           candidate; (d) mutation-on-target -- the rigorous confirmation, reserved for flagged candidates.
+           Detection files recs; RETIREMENT follows the CD.12 mark-then-drop discipline (mark deprecated in the
+           registry; a follow-on plan deletes), never auto-delete -- deleting a load-bearing test on a misjudgement
+           is unacceptable in a human-out-of-loop system.
+
+        3. Diff-line-coverage ratchet (CD.30): replace the per-changed-file 100% floor (test_coverage_checker.py
+           is already diff-scoped) with require-coverage-on-changed-LINES + upward-only global ratchet, enforced
+           in validate.py; retarget scripts/test_coverage_checker.py.
+
+      Freeze override (AGENTS.md): the three mechanisms decompose into separate atomic IMPLEMENTATION plans
+      (mutation runner, dead-test detector, diff-coverage ratchet + the meta-validation workflow) at /implement
+      time -- effort M is the umbrella estimate, not a single-plan commitment.
+    depends_on: [T3.1]
+    files_in_scope:
+      - .github/workflows/meta-validation.yml    # new -- scheduled mutation + dead-test scan (GH Actions, not Lambda)
+      - scripts/mutation_runner.py    # new -- mutmut wrapper; on-target scoping; equivalent-mutant allowlist; files recs
+      - scripts/dead_test_detector.py    # new -- AST assertion-free + coverage-uniqueness + registry-orphan + mutation-on-target
+      - scripts/test_coverage_checker.py    # retarget from 100% floor to diff-coverage + ratchet (CD.30)
+      - scripts/validate.py    # add the AST assertion-free lint as a blocking check; enforce diff-coverage ratchet
+      - config/agent/mutation_allowlist.yaml    # new -- governed equivalent-mutant allowlist
+    exit_criteria:
+      - "Scheduled GH Actions workflow runs mutation testing on graduated-check targets and files recs with source='mutation_survivor' on NEW surviving mutants only (allowlist suppresses known-equivalent)"
+      - "AST assertion-free lint runs in validate.py and blocks a test function that contains no assertion"
+      - "Registry orphan detection flags graduated checks whose guard target no longer exists; coverage-uniqueness flags zero-unique-coverage tests; both file recs"
+      - "Retirement path is mark-then-drop: flagged checks are marked deprecated in the registry, never auto-deleted; a follow-on plan performs deletion (CD.12 discipline)"
+      - "Diff-line-coverage ratchet enforced in validate.py: changed lines require coverage + global coverage non-regression; the per-changed-file 100% floor in test_coverage_checker.py is retargeted to diff-line-coverage + ratchet (CD.30)"
+      - "Workflow touches no Lambda-packaged file (Decision 67 / CD.16 not triggered); distinguished from the Decision 62 retired separate-DQ-routine in a code comment"
+    related_candidate_decisions: [CD.29, CD.30]
+    effort: M
+    strategic: false
     status: not_started
 
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
@@ -3383,3 +3626,15 @@ known_gaps:
       thin wrapper that delegates to T-1.5's RoadmapDocument schema check rather than re-asserting
       structural properties inline. Not blocking for this session; address in the T-1.5 implementation
       plan.
+  - id: KG.13
+    gap: Test Impact Analysis + result caching deferred to executor scale
+    notes: |
+      Coverage-based Test Impact Analysis (run only tests whose input closure intersects the diff; e.g.
+      pytest-testmon) + content-addressed result caching is the scalability mechanism that lets "every
+      verification stays confirmed" hold without re-running everything. It is NOT a pre-executor blocker:
+      T4.1 sets executor concurrency = 1 and at ~100 recs/month a cached-full suite is tolerable. It becomes
+      load-bearing when T4.4 raises concurrency above 1. Preconditions: T3.6 hermeticity (caching requires
+      hermetic tests) AND the T3.1 graduation registry's per-check guard-target / input-closure metadata (TIA
+      selects by input closure, which only the registry records). Cross-references Decision 73's existing Known
+      Gap note that `pytest --picked` may upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor
+      concurrency rises.
