@@ -4,6 +4,147 @@ Superseded, historical empirical, and old infrastructure decisions archived from
 
 ---
 
+## Decision 69: Ops Pipeline Consolidation -- Single-Portal Invariant Enforced at Primitive Level (Superseded by Decision 78)
+
+**Status:** Superseded by Decision 78
+**Superseded by:** Decision 78
+**Date:** 2026-05-09
+
+**Problem:**
+Five-CLI choreography (`update_rec`, `sync_ops drain`, `ops_writer --compact`, `ops_writer --refresh-views`, `sync_ops pull`) leaked internal pipeline layers to agents, enabling silent-failure composition. Root-cause analysis in `docs/INTENT-ops-pipeline-consolidation.md`. Three architectural failures composed into the 2026-05-09 incident: (1) `update_rec` read the existing record from JSONL (destructible cache) rather than from Athena (source of truth); (2) `OpsWriter.compact` swallowed credential errors as `return 0`, making failure indistinguishable from "no staging files"; (3) `sync_ops pull` overwrote the local cache destructively, silently discarding uncommitted writes.
+
+**Decision:**
+Three architectural fixes, enforced at the primitive level:
+1. `update_rec` reads existing record from Athena `ops_recommendations_current` (source of truth). Raises `RuntimeError` if Athena is unreachable; write path retains outbox for offline resilience.
+2. `OpsWriter.compact` raises `RuntimeError` on infrastructure failures (credential errors, network errors, schema mismatches). Returns `int` only for the "no staging files" success case.
+3. `ops_data_portal.sync()` is the single flush primitive -- compacts, refreshes views, pulls local cache. Agents call this instead of managing the pipeline steps.
+CLI hard-removal (`--drain` from ops_data_portal, `drain` and `pull` from sync_ops) enforces the boundary at the build level. `sync_ops.pull` renamed to `_rebuild_local_cache` (private) with a staging-file guard that refuses to run when unstaged writes exist.
+
+**Rationale:**
+Silent failures compose multiplicatively. Each individual silent-failure was benign in isolation; together they produced partial-record Iceberg writes that went undetected until the DQ runner ran. The fix must be at the primitive layer, not just in documentation or wrapper scripts.
+
+**Related:** Decision 50 (Iceberg ops data store), Decision 51 (local-first outbox), Decision 57 (SSO recovery), Decision 67 (Lambda deployment deferred)
+
+---
+
+## Decision 56: SCD Type 2 Schema Simplification for Ops Tables (Superseded by Decision 78)
+
+**Status:** Superseded by Decision 78
+**Superseded by:** Decision 78
+**Date:** 2026-04-30
+
+**Problem:**
+The ops Iceberg tables (ops_recommendations, ops_session_log, ops_execution_plans, ops_decisions, ops_priority_queue) had a proliferation of confusing date/timestamp columns: `ingested_at` (pipeline ingestion time), `trade_date` (partition key derived from ingest date, misnamed since these are ops records not trades), and `date`/`string` columns on some tables (creation date for recs, session date). This caused three problems:
+1. Callers had to know which timestamp field to use for SCD2 ordering (`ingested_at`) vs querying (`date`).
+2. Views explicitly listed all columns, drifting from the underlying tables whenever new columns were added.
+3. `trade_date` as a partition key is semantically wrong for operational metadata.
+
+**Decision:**
+Replace the old timestamp/partition scheme with clear SCD Type 2 semantics:
+- **`created_timestamp timestamp`** -- when the record was first created (maps from the caller's `date` field for recs/sessions, or from `ingested_at` for tables without a creation date field).
+- **`last_updated_timestamp timestamp`** -- when this specific version was written (replaces `ingested_at` as the SCD2 ordering column).
+- **Partition by `day(last_updated_timestamp)`** -- uses Iceberg partition transforms (spec v2), semantically correct (partition by when the version was last updated).
+- **Remove `date`/`trade_date`** columns entirely from all 5 ops tables.
+- **Views use `SELECT *`** with `ROW_NUMBER() OVER (PARTITION BY {pk} ORDER BY last_updated_timestamp DESC)` -- prevents view-table drift on schema evolution.
+- **`ops_priority_queue_current`** retains its correlated-subquery pattern (returns all entries from the latest curator run, not one row per entity).
+- **Callers are NOT modified** -- the write path maps the incoming `date` field from callers (ops_data_portal etc.) to `created_timestamp` transparently.
+
+**Rationale:**
+- Single developer context makes `SELECT *` in views acceptable (no risk of exposing unexpected columns to unknown consumers).
+- `last_updated_timestamp` is a universally understood SCD2 version key; `ingested_at` implies pipeline-specific semantics.
+- Partition transform `day(last_updated_timestamp)` is correct Iceberg v2 syntax; `trade_date` as a plain column partition was a leftover from the market_data table pattern.
+- `created_timestamp` makes the creation date queryable as a proper timestamp (timezone-aware), replacing `date string` which required string-to-date parsing.
+
+**Supersedes:** Timestamp and partition aspects of Decision 50. Decision 50 core (append-only Iceberg, ROW_NUMBER views, local-first dual write) remains in effect.
+
+**Related:** Decision 50 (Iceberg ops data store), Decision 51 (local-first outbox)
+
+---
+
+## Decision 51: Local-First Outbox + Bidirectional Sync for Ops Data (Superseded by Decision 78)
+
+**Status:** Superseded by Decision 78
+**Superseded by:** Decision 78
+**Date:** 2026-04-23
+
+**Problem:** Agent sessions lose operational writes when SSO expires (`OpsWriter.write()`
+silently no-ops) and start with stale local JSONL data because nothing pulls from Athena.
+The self-improvement loop cannot function if the system cannot reliably read its own
+history or persist new observations.
+
+**Decision:** Adopt a local-first outbox pattern:
+- **Writes:** All writes go through OpsWriter.write(). On S3 failure, entries are written
+  to a local outbox (`logs/.ops-outbox/{table}/{uuid}.jsonl`).
+- **Reads:** Agents always read local JSONL files. A `sync_ops.py` script pulls the latest
+  state from Athena `_current` views and overwrites local files.
+- **Sync:** `sync_ops.py` runs drain-then-pull. Integrated into preflight (session start),
+  postflight (session end), and executor between-rec checkpoints (drain only).
+- **Enforcement:** validate.py warns on stale outbox entries (> 24h).
+
+**Rationale:** Deterministic local reads (no network dependency for reads), no data loss
+on SSO expiry (outbox persists until drain succeeds), idempotent flush (Iceberg deduplicates
+via ingested_at), and structurally-enforced freshness via hooks in every session lifecycle phase.
+Between-rec hooks call drain() only (not full sync()) to avoid 5x Athena query cost per rec.
+
+**Supersedes:** Nothing -- additive layer on top of Decision 50.
+**Related:** Decision 50 (Iceberg ops data store), `docs/contracts/ops-data-store.md`
+
+---
+
+## Decision 50: Append-Only Ops Data Store via Iceberg (Superseded by Decision 78)
+
+**Status:** Superseded by Decision 78
+**Superseded by:** Decision 78
+
+**Decision:** All operational structured logs (recommendations, execution plans, session telemetry,
+decisions, priority queue) are stored as append-only Iceberg tables in Athena. Current state is exposed
+via ROW_NUMBER() views. Parquet + gzip, partitioned by `trade_date`. Located in
+`agent-platform-agent-logs/iceberg/`. The `OpsWriter` class in `scripts/ops_writer.py` handles
+staging uploads and Athena compaction. INSERT-only semantics (no MERGEs). Supersedes Decision 45.
+
+**Problem:**
+The dual-source JSONL+S3 pattern (Decision 45) causes: (1) merge conflicts on JSONL files when both
+local and agent branches write concurrently, (2) no structured query capability -- recommendations
+can only be analysed by parsing JSONL line by line, (3) no audit trail -- overwrite_jsonl() destroys
+prior state, losing the history of priority queue runs and recommendation status changes, (4) schema
+drift across write sites with no enforcement mechanism.
+
+**Why append-only Iceberg over alternatives:**
+- **Iceberg vs Delta Lake:** Iceberg is natively supported by Athena v3 (already provisioned). Delta
+  Lake requires additional dependencies and a separate engine configuration.
+- **Iceberg vs direct Athena INSERT:** Append-only Iceberg avoids MERGE complexity and matches the
+  existing pattern of the `market_data` table. MERGE would require primary-key enforcement that Iceberg
+  does not natively provide in Athena v3.
+- **ROW_NUMBER() views vs MERGE:** Views are read-time deduplication -- zero write overhead, no
+  locking, fully compatible with INSERT-only semantics. MERGE would require engine v3 MERGE DML
+  which has higher failure risk and is slower.
+- **Local JSONL retained in parallel:** Local JSONL files remain the source of truth for git-tracked
+  artefacts and local development. OpsWriter write-through is best-effort and does not replace local
+  writes. This allows gradual migration without breaking existing tooling.
+
+**Write architecture:**
+1. `s3_log_store.append_jsonl()` / `overwrite_jsonl()` complete their existing local/S3 writes
+2. Write-through to `OpsWriter.write(table, entry)` staged at `staging/{table}/trade_date=.../batch-{uuid}.jsonl`
+3. `session_postflight.run_auto()` calls `OpsWriter.compact_all()` at session close
+4. `compact_all()` reads staging files, builds DataFrame, calls `awswrangler.athena.to_iceberg(mode="append")`
+5. Views (`ops_*_current`) provide always-fresh current state via ROW_NUMBER() deduplication
+
+**Constraints:**
+- `awswrangler` is a Lambda-only dependency (via AWSSDKPandas layer). Local `compact()` gracefully
+  returns 0 when `awswrangler` is unavailable.
+- `OpsWriter` never raises exceptions to callers -- all failures are logged as warnings.
+- `ops_decisions` has no automated write-through yet -- write site deferred to Phase 2.
+- Local JSONL files continue to be written in parallel (no breaking change to existing tooling).
+
+**Supersedes:** Decision 45 (S3 as Authoritative Source for Cloud-Produced Logs)
+
+**Related:** Decision 48 (V3 Verification Tier), Decision 49 (Copilot SDK inference),
+`docs/contracts/ops-data-store.md`
+
+**Decision status:** Decided -- April 2026
+
+---
+
 ## Decision 47: Bedrock as Single Inference Provider for Lambda Agents (Superseded by Decision 49)
 
 **Decision:** AWS Bedrock (`bedrock-runtime` `converse` API) is the single inference provider for all Lambda-executed agent code. GitHub Models API (`github_models_client.py`) is retained for local/executor use but must not be used in Lambda. All model IDs in `schedule.yaml` must use Bedrock format (e.g., `anthropic.claude-3-5-haiku-20241022-v1:0`), not GitHub Models format (e.g., `gpt-5-mini`, `openai/gpt-4.1`).
