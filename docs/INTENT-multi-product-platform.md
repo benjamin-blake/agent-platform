@@ -4,7 +4,7 @@ This document is the architectural anchor for separating the agent-platform *sub
 
 **Status:** Architectural anchor (exploratory). Records intent and the separation model; no migration is committed, no recommendations are filed, no executor work is queued. "Host N products" is a forward-looking direction, not a scheduled change. Authoritative for *vocabulary and boundaries* the moment it lands; authoritative for *implementation* only after the open decisions in the Open Decisions section are ratified as Decision Records.
 
-**Builds on:** NS.1 (storage durable, compute interchangeable), NS.2 (account ownership reflects IP ownership), NS.4 (the repo is for agents); Decision 77 + `docs/contracts/environment-taxonomy.md` (the two-axis model -- explicitly NOT altered here); CD.31 (per-domain table format: Iceberg for large multi-engine data, DuckLake for small operational data); KG.1 (platform/product boundary, here generalized to N products).
+**Builds on:** NS.1 (storage durable, compute interchangeable -- generalized by Decision 78 to "S3 + open table format at every scale"), NS.2 (account ownership reflects IP ownership), NS.4 (the repo is for agents); Decision 77 + `docs/contracts/environment-taxonomy.md` (the two-axis model -- explicitly NOT altered here); Decision 78 (ratifies CD.31: Iceberg for market-data/product tables, DuckLake for ops/telemetry); Decision 75 (frame-lock anti-pattern -- the dependency inversion below is a conscious frame choice); Decision 67 (REPORT-ONLY framing during the executor freeze); KG.1 (platform/product boundary, here generalized to N products).
 
 **Companion documents:** `docs/contracts/environment-taxonomy.md` (account / blast-radius axis); `docs/INTENT-telemetry-system.md` (the telemetry shape the meta/domain tiering refines); `docs/contracts/instruction-architecture.md` (the 5-layer model that splits per product); `docs/ROADMAP-PLATFORM.yaml` + `docs/ROADMAP-PRODUCT.md`.
 
@@ -19,6 +19,8 @@ One move defines this architecture: **invert the dependency.** Today the platfor
 "Do not fork" is correct: forking yields N diverging copies of the substrate to maintain. "Do not host everything in one repo" is equally correct: that couples unrelated products' blast radius and -- fatally -- cannot hold day-job IP (see The Forcing Function). The resolution is neither. The substrate is packaged and consumed; products are thin repos that depend on it.
 
 This makes the platform/product seam load-bearing rather than conceptual: the package boundary *is* the seam. The seam already exists in code (`scripts/platform_roadmap.py` vs `scripts/product_roadmap.py`); this document completes the direction it implies.
+
+Treating the platform as a repo rather than an artifact is the frame this document deliberately breaks (Decision 75, frame-lock anti-pattern): the question is not "how do products share this repo" but "why is the platform a repo at all".
 
 ---
 
@@ -51,7 +53,7 @@ The substrate decomposes into three planes. Each product opts into only the plan
 |---|---|---|
 | **Substrate** | Dev-time paved road: reusable CI workflow (`validate.py` two-tier), Terraform modules, the `.claude/` harness (skills, slash commands, hooks), the AGENTS.md scaffold, the plan / implement / code-review methodology. | Nothing -- fully portable. |
 | **Automation** | Runtime services: the ops portal (`file_rec` / `update_rec`), recommendation queue, autonomous executor, scheduled agents, telemetry / meta-learning. | An account + the meta / domain egress policy (see Telemetry Tiering). |
-| **Data** | Domain lakehouse tables. Per CD.31: Iceberg for large multi-engine data, DuckLake for small operational data; each product's data plane inherits this per-domain choice. | An account + IP ownership (NS.2). |
+| **Data** | Domain lakehouse tables. Per Decision 78 (ratifying CD.31): Iceberg for market-data/product tables, DuckLake for ops/telemetry; each product's data plane inherits this per-domain choice. | An account + IP ownership (NS.2). |
 
 Per-product opt-in:
 
@@ -151,9 +153,9 @@ No step is filed as a recommendation; per the AGENTS.md Temporary Operational Co
 ## Non-Goals
 
 - **Not multiplying AWS accounts by product.** Account / blast-radius topology is the other axis, governed by `docs/contracts/environment-taxonomy.md` and Decision 77, gated by the trading capital trigger. This document is concern-separation (repo / package), not account-separation, and does not touch the reserved environment / phase vocabulary.
-- **Not a committed migration.** No recommendations filed; no executor work queued.
+- **Not a committed migration.** No recommendations filed; no executor work queued (REPORT-ONLY; consistent with Decision 67 and the AGENTS.md Temporary Operational Constraints).
 - **Not building an internal developer platform.** No developer-portal framework, no private package index, no module registry until solo-developer scale demonstrably requires them.
-- **Not re-opening CD.31.** Per-domain table-format choice (Iceberg vs DuckLake) is settled; the Data plane inherits it per product.
+- **Not re-opening the per-domain table-format choice.** Ratified as Decision 78 (originating proposal CD.31): Iceberg for market-data/product tables, DuckLake for ops/telemetry. The Data plane inherits it per product.
 
 ---
 
