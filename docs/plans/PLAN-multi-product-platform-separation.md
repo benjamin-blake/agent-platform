@@ -1,7 +1,7 @@
 # Plan
 
 ## Intent
-Capture, as a citable design record, the architecture that lets the agent-platform substrate host multiple products without forking -- so the platform can evolve as an artifact independent of the trading product, extending the North Star's "every aspect of the repository continuously improves" loop across N products rather than one.
+Capture, as a citable design record, how the platform hosts multiple products on two orthogonal axes -- a unified operational data plane keyed by `project_id` origin for same-owner products (extending the monorepo + `project_id` model), plus a packaged substrate for the one cross-IP-boundary case (the day job) -- extending the North Star's continuous-improvement loop across N products rather than one.
 
 ## Plan Type
 REPORT-ONLY
@@ -19,7 +19,7 @@ Platform-axis architecture deliberation (`docs/ROADMAP-PLATFORM.yaml`). Does not
 | File | Action | Purpose |
 |------|--------|---------|
 | docs/plans/PLAN-multi-product-platform-separation.md | Create | This REPORT-ONLY wrapper plan (the planning artefact). |
-| docs/INTENT-multi-product-platform.md | Modify | The substantive deliverable: the multi-product separation design record. Drafted earlier this session; citations refreshed to Decision 78 and the gates applied retroactively per human direction. |
+| docs/INTENT-multi-product-platform.md | Modify | The substantive deliverable: the multi-product platform topology design record. Drafted earlier this session, citations refreshed to Decision 78, then re-centered on the two-axis reconciliation (unified `project_id` data plane + IP-forced code separation) per the plan-critique gate; extends the monorepo + `project_id` INTENT. |
 
 ## Bundled Recommendations
 None. (343 open recs scanned; no genuine alignment -- the 3 keyword hits were incidental.)
@@ -58,7 +58,8 @@ N/A. No `.tf` files in scope; no Lambda-packaged files in scope. No Infrastructu
 - **Generalizes KG.1** from one product to N. Recorded as deferred Open Decision OD-5 in the deliverable; NOT edited into `docs/ROADMAP-PLATFORM.yaml` here, to keep this plan atomic and avoid editing a file `main` just touched.
 - **Deliverable pre-existed the gates.** It was committed earlier this session before the mandatory gates ran; this plan brings it through decision-scout (done), plan-critique (Step 9), and the multi-perspective report critique (Step 10) retroactively, per the human's explicit request to follow the `/plan` procedure.
 - **Merge mechanics:** Decision 76 web flow -- GitHub MCP PR, fast `--pre` tier event-driven via `subscribe_pr_activity`, squash-merge via `merge_pull_request`. The INTENT file does not exist on `main`, so no remote-edit conflict.
-- **Open questions for the Step 10 critique (non-blocking):** (1) does the deliverable overlap `docs/INTENT-aws-migration-platform-evolution.md` enough to consolidate (believed distinct: that is physical AWS migration, this is multi-product/multi-repo separation); (2) keep the KG.1 generalization deferred (OD-5) or fold the small roadmap edit in (leaning defer).
+- **Reconciliation with `docs/INTENT-aws-migration-platform-evolution.md` Part 2 (plan-critique REVISE finding, resolved):** the deliverable was re-centered on two orthogonal axes -- a unified platform data plane keyed by `project_id` origin (the migration INTENT's already-designed dimension, adopted not redesigned) and a code/repo axis that separates only where the day-job IP boundary forces it. The deliverable now EXTENDS, and does not supersede, the monorepo + `project_id` commitment; split-repo for same-owner products stays deferred. The earlier "believed distinct" framing was wrong -- the two documents answer the same question and are now explicitly reconciled, with the sibling INTENT cited in the deliverable's Builds-on / Companion documents.
+- **Open question for the Step 10 critique (non-blocking):** keep the KG.1 generalization deferred (OD-5) or fold the small roadmap edit in (leaning defer).
 
 ## Pre-Implementation Checklist
 - [x] Branch confirmed not on `main` (`claude/affectionate-davinci-wpjOD`)

@@ -1,171 +1,151 @@
-# Intent: Multi-Product Platform Separation
+# Intent: Multi-Product Platform Topology
 
-This document is the architectural anchor for separating the agent-platform *substrate* from the *trading product* so the substrate can host multiple heterogeneous products -- the trading system, a Reaper music-tooling project, and day-job dbt development -- without forking the repository. It records the separation-of-concerns model (three planes), the repo topology (what lives where), the telemetry/IP boundary rules, and the agent context-management dividend. It generalizes KG.1's platform/product boundary from a single product to N products.
+This document is the architectural anchor for how the agent-platform hosts multiple products -- the trading system, a Reaper music-tooling project, and day-job dbt development -- on a SINGLE platform operational data plane distinguished by a `project_id` origin dimension, reserving repo/package separation for the one case an IP boundary forces it (the day job). It **extends, and does not supersede,** the monorepo + `project_id` commitment in `docs/INTENT-aws-migration-platform-evolution.md` Part 2: that document established the model for same-owner products; this one carries it across the cross-employer IP boundary.
 
-**Status:** Architectural anchor (exploratory). Records intent and the separation model; no migration is committed, no recommendations are filed, no executor work is queued. "Host N products" is a forward-looking direction, not a scheduled change. Authoritative for *vocabulary and boundaries* the moment it lands; authoritative for *implementation* only after the open decisions in the Open Decisions section are ratified as Decision Records.
+**Status:** Architectural anchor (exploratory). Records intent and boundaries; no migration committed, no recommendations filed, no executor work queued. Authoritative for vocabulary and boundaries on landing; authoritative for implementation only after the Open Decisions are ratified.
 
-**Builds on:** NS.1 (storage durable, compute interchangeable -- generalized by Decision 78 to "S3 + open table format at every scale"), NS.2 (account ownership reflects IP ownership), NS.4 (the repo is for agents); Decision 77 + `docs/contracts/environment-taxonomy.md` (the two-axis model -- explicitly NOT altered here); Decision 78 (ratifies CD.31: Iceberg for market-data/product tables, DuckLake for ops/telemetry); Decision 75 (frame-lock anti-pattern -- the dependency inversion below is a conscious frame choice); Decision 67 (REPORT-ONLY framing during the executor freeze); KG.1 (platform/product boundary, here generalized to N products).
+**Builds on:** NS.1 (storage durable, compute interchangeable -- generalized by Decision 78 to "S3 + open table format at every scale"), NS.2 (account ownership reflects IP ownership), NS.4 (the repo is for agents); Decision 78 (ratifies CD.31: Iceberg for market-data/product tables, DuckLake for ops/telemetry); Decision 77 + `docs/contracts/environment-taxonomy.md` (the two-axis account model -- NOT altered here); Decision 75 (frame-lock anti-pattern -- the two-axis framing below is a conscious frame choice); Decision 67 (REPORT-ONLY framing during the executor freeze); KG.1 (platform/product boundary, generalized to N products via `project_id`).
 
-**Companion documents:** `docs/contracts/environment-taxonomy.md` (account / blast-radius axis); `docs/INTENT-telemetry-system.md` (the telemetry shape the meta/domain tiering refines); `docs/contracts/instruction-architecture.md` (the 5-layer model that splits per product); `docs/ROADMAP-PLATFORM.yaml` + `docs/ROADMAP-PRODUCT.md`.
+**Companion documents (load-bearing):**
+- `docs/INTENT-aws-migration-platform-evolution.md` Part 2 -- the monorepo + `project_id` commitment this document extends. The `project_id` dimension, the `config/project_registry.yaml` registry, the reserved `platform` value, and the two-phase `RecPayload`/`DecisionPayload` rollout originate there; this document adopts them and does NOT redesign them.
+- `docs/INTENT-telemetry-system.md` -- the telemetry shape the meta/domain tiering refines.
+- `docs/contracts/environment-taxonomy.md` -- the account / blast-radius axis (a separate concern, not altered here).
 
-**Terminology:** In this document "product" means a distinct application/domain built on the platform substrate (`trading-system`, `reaper-tools`, `dbt-daywork`), each in its own repository. Trading is product #1, not a privileged peer. This is a strict generalization of the existing singular "product" (which referred to trading). It is orthogonal to the Decision-77 product axis (the trading strategy lifecycle, research through full capital allocation), which remains a property of the trading product specifically.
-
----
-
-## North Star
-
-One move defines this architecture: **invert the dependency.** Today the platform is embedded *in* the trading product -- they are one repository, and the platform's universal rules (AGENTS.md) are trading-flavored. To host N products, the platform must become a *dependency that products import*, not a *repository that products live in*.
-
-"Do not fork" is correct: forking yields N diverging copies of the substrate to maintain. "Do not host everything in one repo" is equally correct: that couples unrelated products' blast radius and -- fatally -- cannot hold day-job IP (see The Forcing Function). The resolution is neither. The substrate is packaged and consumed; products are thin repos that depend on it.
-
-This makes the platform/product seam load-bearing rather than conceptual: the package boundary *is* the seam. The seam already exists in code (`scripts/platform_roadmap.py` vs `scripts/product_roadmap.py`); this document completes the direction it implies.
-
-Treating the platform as a repo rather than an artifact is the frame this document deliberately breaks (Decision 75, frame-lock anti-pattern): the question is not "how do products share this repo" but "why is the platform a repo at all".
+**Terminology:** "product" = a distinct application/domain the platform operates on (`trading-system`, `reaper-tools`, `dbt-daywork`), identified by `project_id`. Trading is product #1, not a privileged peer. Orthogonal to the Decision-77 product axis (the trading strategy lifecycle).
 
 ---
 
-## What This Changes
+## North Star: two orthogonal axes, not one choice
 
-Current state (June 2026): one repository, `pyproject.toml` + `src/` already package-shaped, platform and trading intertwined. KG.1 names "the product roadmap" -- singular. One product is assumed everywhere.
+Hosting a second product was being framed as a single either/or -- monorepo vs split-repo. It is two independent axes:
 
-Target state: the substrate is a versioned, importable artifact; each product is its own repository depending on it. KG.1 generalizes -- the platform roadmap stays platform-only; *each product* owns its own product roadmap in its own repo.
+1. **Data / identity axis -- unified.** The platform's operational data (ops, telemetry, recommendations, logs) lives in ONE store -- DuckLake per Decision 78 -- and every row carries a `project_id` **origin identity** naming the product the platform was operating on when it produced that row. Products are distinguished by a column, not by separate stores. Cross-product meta-learning is a query across `project_id` in one warehouse; this is what makes "benefit from every product's telemetry" hold by construction.
 
-This is a separation by **concern** (a repo / package boundary). It is NOT a separation by **blast radius** (an account boundary). Account topology -- isolation across accounts, gated by the trading product's capital-allocation trigger -- is a different axis, governed entirely by `docs/contracts/environment-taxonomy.md` and Decision 77. This document does not alter it, does not multiply accounts, and does not touch the reserved environment / phase vocabulary.
+2. **Code / repo axis -- separated only where an IP boundary forces it.** Where the product's IP is the same owner's (trading, reaper), its code lives in the monorepo and is distinguished by `project_id` -- split-repo extraction stays deferred (`docs/plans/PLAN-platform-extraction-strategy.md`). Only the cross-employer case (day-job dbt) forces an external repo and a packaged, importable substrate, because employer IP cannot enter the personal repo or the personal data plane (NS.2 in reverse).
 
----
-
-## The Forcing Function: IP Boundaries
-
-The architecture is decided by one constraint, and it is NS.2 running in reverse. NS.2 binds *your* IP to *your* account: the trading IP is yours, so it lives in the personal account. The inverse binds equally: **day-job dbt work is the employer's IP, so it must not enter the personal account or a personal repository.** Two hard walls follow:
-
-1. **No shared data plane for the day job.** Employer data lives in the employer's warehouse. It never lands in the personal lakehouse.
-2. **Data-egress wall.** The agent loop feeds code and data to *your* inference credentials (DeepSeek / Anthropic, per CD.28). Pointing that at employer code or data likely violates the employer's data-handling policy and entangles work-for-hire IP. The day-job product must use employer-sanctioned credentials inside the employer boundary.
-
-This is what forces *portable artifact* over *shared host*. The payoff: once the substrate is portable enough for the day job, it serves Reaper -- and any future product -- for free. The hardest-boundary consumer defines the interface; the easy ones inherit it.
+The earlier instinct "the platform must be a dependency products import, not a repo they live in" was right for exactly one case (the day job) and wrong as a universal rule. The frame this document fixes (Decision 75, frame-lock): the question is not "monorepo or split" but "which axis are we on -- shared data identity, or IP-forced code separation?". The seam already exists in code (`scripts/platform_roadmap.py` vs `scripts/product_roadmap.py`); `project_id` makes it a data dimension, not a repo boundary.
 
 ---
 
-## The Three-Plane Model
+## The platform data plane: one store, `project_id` origin
 
-The substrate decomposes into three planes. Each product opts into only the planes it needs.
+Axis 1 in detail. The platform operational store is a single DuckLake catalog (Decision 78) in the personal account; ops, telemetry, and recommendation rows carry a `project_id` column. This is the migration INTENT's design, adopted wholesale:
 
-| Plane | What it is | Bound to |
+- Default `project_id` is `trading-system`, injected at write time from `config/project_registry.yaml`'s `default_project_id` (never a literal in Lambda code).
+- `platform` is a **reserved** `project_id` (the registry loader refuses it) for platform-origin rows.
+- Two-phase rollout on `RecPayload`/`DecisionPayload` per T0.12; all six platform Lambdas persist `project_id`; the `query` verb filters by it, defaulting to the caller's bound project; cross-`project_id` reads are restricted to `PlatformAdmin`.
+- Principal-to-project binding lives in IAM session tags plus `src/lambdas/_shared/principal_binding.py`.
+
+The "product dimension in the ops portal" floated in earlier drafts of this document **is** this `project_id` -- it is already designed, not net-new. No second mechanism is introduced.
+
+---
+
+## The forcing function: the IP wall (why a second axis exists at all)
+
+NS.2 binds your IP to your account. Run in reverse: day-job dbt is the employer's IP, so it must not enter the personal account, the personal DuckLake, or a personal repository. Two hard walls:
+
+1. **No shared data plane for the day job.** Employer data lives in the employer's warehouse; it never lands in the personal DuckLake.
+2. **Data-egress wall.** The agent loop feeds code and data to *your* inference credentials (DeepSeek / Anthropic, CD.28). Employer code/data must use employer-sanctioned credentials inside the employer boundary.
+
+The monorepo + `project_id` model deliberately scoped the day job OUT (Part 2: "Cross-employer security boundary: irrelevant under monorepo"). This document takes the day job IN as a hosted product -- which is precisely what forces the second (code/repo) axis and the packaged substrate. For same-owner products there is no such wall, so no second axis: they stay monorepo + `project_id`.
+
+---
+
+## The three-plane model (corrected)
+
+| Plane | What it is | How products share it |
 |---|---|---|
-| **Substrate** | Dev-time paved road: reusable CI workflow (`validate.py` two-tier), Terraform modules, the `.claude/` harness (skills, slash commands, hooks), the AGENTS.md scaffold, the plan / implement / code-review methodology. | Nothing -- fully portable. |
-| **Automation** | Runtime services: the ops portal (`file_rec` / `update_rec`), recommendation queue, autonomous executor, scheduled agents, telemetry / meta-learning. | An account + the meta / domain egress policy (see Telemetry Tiering). |
-| **Data** | Domain lakehouse tables. Per Decision 78 (ratifying CD.31): Iceberg for market-data/product tables, DuckLake for ops/telemetry; each product's data plane inherits this per-domain choice. | An account + IP ownership (NS.2). |
+| **Substrate** | Portable dev-time paved road: reusable CI workflow, Terraform modules, the `.claude/` harness, the plan/implement/code-review methodology. | Same-owner products use it in-repo. The day job IMPORTS it (the only consumer that needs packaging). |
+| **Automation** | Ops portal, executor, scheduled agents, telemetry/meta-learning. | ONE shared DuckLake store, `project_id`-tagged -- NOT per-product instances. Exception: the day job runs its own local Automation in the employer boundary; only content-free meta-tier rows egress (see Telemetry Tiering). |
+| **Data** | Domain lakehouse tables. Per Decision 78 (ratifying CD.31): Iceberg for market-data/product tables, DuckLake for ops/telemetry; `project_id` origin on ops/telemetry. | Shared store, distinguished by `project_id`; genuinely-separate product/market data uses per-product prefixes/namespaces. |
 
 Per-product opt-in:
 
-| Plane | trading-system | reaper-tools | dbt-daywork |
+| Product | `project_id` | Repo | Automation | Data |
+|---|---|---|---|---|
+| trading-system | `trading-system` (default) | monorepo | shared store | shared + Iceberg market-data |
+| reaper-tools | `reaper-tools` | monorepo | shared store | shared + its own namespaces |
+| dbt-daywork | `dbt-daywork` | **external (employer org)** | own local instance; meta-only egress | employer warehouse, never the personal account |
+
+---
+
+## Telemetry tiering (how the day job benefits the shared store without IP leak)
+
+This is the reconciliation of "Automation should be cross-tenant" with the IP wall. Split every telemetry/ops field into two tiers:
+
+| Tier | Contents | Crosses into the shared `project_id` store? |
+|---|---|---|
+| **Meta** | Content-free: token counts, retry counts, latency, failure taxonomy, rec lifecycle state transitions, skill/tool success rates. | Yes -- `project_id`-tagged rows in the ONE shared DuckLake. Same-owner products write here fully; the day job MAY replicate meta-only rows (`project_id=dbt-daywork`), employer policy permitting. |
+| **Domain** | IP-bearing: dbt SQL, employer table/column names, data values, recommendation free-text titles that name employer schema. | No -- stays in the product's boundary, always. |
+
+So "Automation is cross-tenant" is true for the **meta tier** (one store, query across `project_id`) and false for the **domain tier**. Same-owner recs land in the shared store in full; day-job recs whose titles name employer schema are domain-tier -- they live in the day-job local Automation, and only their content-free lifecycle/counts cross. **Default-deny:** a field crosses the wall only if provably content-free and allowlisted; the system must be correct even if no day-job meta ever flows.
+
+---
+
+## Repo topology
+
+| Repo | `project_id`(s) | Owns | Boundary |
 |---|---|---|---|
-| Substrate | adopts | adopts | **adopts -- the only shared layer** |
-| Automation | tenant (personal account) | tenant (personal account) | own instance in employer boundary; meta-tier only may cross (see Telemetry Tiering) |
-| Data | tenant, then dedicated account at the capital trigger | tenant (personal account) | employer warehouse, never the personal account |
+| `agent-platform` (this repo, the monorepo) | `platform` (reserved), `trading-system`, `reaper-tools` | Platform substrate + trading + reaper code, distinguished by `project_id`; the shared DuckLake store; platform roadmap | personal |
+| `dbt-daywork` | `dbt-daywork` | dbt models + day-job layer-1 rules; its own local Automation | employer org + employer warehouse |
 
-The Substrate plane is the crown jewel: most reusable, least product-specific, and the only thing the day job can legally take. Extract it first.
-
----
-
-## Telemetry Tiering (Automation across the IP wall)
-
-The goal is a cross-product Automation plane -- one meta-learning surface that improves from *all* products' signal, including the day job. This collides with the egress wall. The resolution is a **two-tier telemetry split**:
-
-| Tier | Contents | Examples | Crosses the IP wall? |
-|---|---|---|---|
-| **Meta** | How the agent behaved. Product-agnostic. Content-free. | token counts, retry counts, latency, failure taxonomy, rec lifecycle state transitions, skill / tool success rates | Yes -- *may* feed a shared cross-product meta-store, subject to per-product egress policy |
-| **Domain** | What the agent worked on. IP-bearing. | dbt model SQL, employer table / column names, data values, rec *titles* that name employer schema | No -- stays in the product's boundary, always |
-
-So "Automation is fully tenant" is true for the **meta tier** and false for the **domain tier**. For trading + reaper (same owner, same account) there is no wall: share both tiers freely. For the day job:
-
-- **Default is siloed.** The day-job Automation instance runs entirely inside the employer boundary. The system must be *correct even if no day-job telemetry ever reaches the personal meta-store.*
-- **Opt-in, content-free aggregates only.** Any cross-flow is allowlisted, numeric / enumerated, and stripped of domain content (no free-text titles, no identifiers) -- and only if employer policy permits. The safe default assumption is that it permits none.
-- **Scrubbing is non-trivial.** A rec title like "fix the join in customer_revenue" leaks schema. Meta-tier egress therefore carries no free text -- only enumerated taxonomies and numbers. If a field cannot be proven content-free, it is domain-tier by default.
-
-This tiering refines `docs/INTENT-telemetry-system.md`: every telemetry field gains a `tier: meta | domain` classification, and the egress boundary is drawn at that classification, not at the product boundary.
+- **Split-repo extraction for same-owner products stays deferred** (`docs/plans/PLAN-platform-extraction-strategy.md`), per the migration INTENT. Revisit only on a concrete trigger -- e.g. independent release cadence becomes load-bearing (OD-3).
+- **Right-sizing:** the packaged substrate (git+pip / git-tagged module sources / a template repo) is built only when the external consumer (the day job) is actually onboarded. Same-owner products need no packaging.
 
 ---
 
-## Repo Topology (what lives where)
+## Tenancy mechanics
 
-| Repo | Owns | Consumes | Account / boundary |
-|---|---|---|---|
-| `agent-platform` (this repo, refactored) | The three planes as publishable artifacts: `agent-platform-core` (pip-installable -- ops portal, executor, lakehouse client, agent glue), `terraform-agent-platform/*` (TF modules, git-tagged), `.claude/` harness template + reusable CI workflow. Platform roadmap. Platform-universal layer-1 rules. | -- | personal |
-| `trading-system` | The trading product: formulas, ensembles, capital config, its product roadmap, trading layer-1 rules. | platform artifacts | personal; dedicated account at the capital trigger (per the taxonomy contract) |
-| `reaper-tools` | The Reaper product: ReaScript automation, asset catalog, render pipelines, its product roadmap + layer-1 rules. | platform artifacts | personal (tenant) |
-| `dbt-daywork` | The dbt product: models, day-job layer-1 rules. | Substrate plane only | employer org + employer warehouse |
-
-Transitional intermediate (optional): trading may remain in this repo as `products/trading/` while the substrate is extracted in place, splitting out once the package boundary is proven. The day job is external from day one -- it cannot pass through a personal repo even transiently.
-
-Right-sizing (this is a solo developer, not a platform org): `pip install git+https://...@vX` over a private package index; git-tagged module `source =` over a Terraform registry; a template repo over a developer-portal framework. Adopt the heavier form only when the lighter one demonstrably hurts.
+- **Logical tenancy via `project_id`** (the migration INTENT's design) -- not physical store fragmentation. IAM is scoped per `project_id` for blast radius; cross-`project_id` reads are `PlatformAdmin`-only.
+- **Physical separation only where IP forces it** (the day job) or where data is genuinely separate (per-product market-data Iceberg via prefixes/namespaces).
+- **Single-Portal invariant preserved** (Decision 69 / 78): all writes go through `scripts/ops_data_portal.py`; `project_id` is set at write time from the registry. No client-side `COALESCE(project_id, ...)` in any writer -- the resurrection anti-pattern the migration INTENT forbids via a presubmit AST gate.
 
 ---
 
-## Tenancy Mechanics (products that share the personal account)
+## Instruction architecture and the context-management dividend
 
-For trading + reaper co-tenanting one account (until the trading capital trigger graduates trading to its own account):
+Layer 1 (universal rules) splits into platform-universal (shipped in the harness, identical everywhere) and per-product layer-1 (trading's formula/PySR rules, Reaper's ReaScript rules, dbt's modeling conventions). In the monorepo, per-product layer-1 is selected by `project_id` context; the external day-job repo carries its own.
 
-- **Namespace isolation, not account isolation.** One Glue catalog; per-product databases (`trading`, `reaper`); S3 prefixes `s3://.../<product>/...`; separate DuckLake catalogs (separate Postgres schemas) for ops.
-- **IAM role per product** (`agent-platform-<product>-exec`), scoped to that product's prefixes and databases. The executor assumes the product's role. Per-product blast radius even inside one account.
-- **A `product` dimension in the ops warehouse.** `file_rec(product="reaper", ...)`; IDs remain atomic but namespaced; scheduled agents run per-product. This is the one substantive Automation-plane code change -- the portal is single-tenant today (`scripts/ops_data_portal.py` carries no product key).
+The dividend: a session working on Reaper loads platform-universal + Reaper layer-1, and NOT the trading product's context. Ambient context shrinks to what the task needs -- a direct advance of NS.4 (the repo is for agents). This is one of the strongest reasons to pursue the `project_id`-scoped split even before a second product is real.
 
 ---
 
-## Instruction Architecture and the Context-Management Dividend
+## Relationship to `INTENT-aws-migration-platform-evolution.md` (explicit)
 
-The 5-layer instruction contract (`docs/contracts/instruction-architecture.md`) absorbs multi-product cleanly, and doing so is itself a primary benefit.
+That document (Part 2) committed to monorepo + `project_id` for same-owner products and DEFERRED split-repo. This document does NOT reopen that. Its only additions are:
 
-Today layer 1 (universal rules, AGENTS.md) is loaded ambiently into *every* session and is trading-flavored. Under separation it splits:
+1. The cross-employer IP boundary (the day job) as a hosted product, which the monorepo model explicitly scoped out.
+2. The packaged-substrate path forced by that boundary (and only that boundary).
+3. The meta/domain telemetry tiering that lets the day job feed the shared `project_id` store without IP leak.
 
-- **Platform-universal layer 1** (branching, the lakehouse-as-source-of-truth invariant, ops governance, safety, shell conventions) ships in the harness template and is identical across products.
-- **Product layer 1** is authored per repo: trading's formula / PySR rules, Reaper's ReaScript rules, dbt's modeling conventions.
-
-The dividend: a session working on Reaper loads platform-universal + Reaper layer 1, and *not* the trading product's context. Ambient context shrinks to what the task needs. This directly serves NS.4 (the repo is for agents): smaller, sharper per-product context is a context-management win, not merely an organizational one. It is one of the strongest reasons to pursue the split even before a second product is real.
+No contradiction remains: same-owner = monorepo + `project_id` (their model); cross-employer = external repo + packaged substrate + meta-only egress (this extension). The `project_id` machinery is shared, not duplicated.
 
 ---
 
 ## Open Decisions (require ratification before implementation)
 
-1. **OD-1: Telemetry egress policy for the day job.** Default siloed; opt-in content-free aggregate meta only; gated by employer policy. Needs a Decision Record and, before any day-job adoption, written confirmation of employer data-handling and tooling policy. Until ratified, assume zero day-job egress.
-2. **OD-2: Platform licence permits day-job use.** Confirm this repo's `LICENCE` allows using the substrate at the day job without entangling personal IP or violating employer terms. Gates `dbt-daywork` entirely.
-3. **OD-3: Trading in-repo vs split-out.** Whether trading stays as `products/trading/` here or moves to its own repo, and on what trigger. Affects the migration sequence, not the end-state.
-4. **OD-4: Versioning model.** The substrate stops being a moving HEAD and becomes a semver dependency with a changelog and a deprecation policy. Define the cadence and the support window before a second product pins a version.
-5. **OD-5: KG.1 generalization.** Update KG.1 (and the planning skill's platform/product assumptions) from "the product roadmap" (singular) to N product roadmaps. A small roadmap edit, deferred until this doc is ratified.
-
-These are candidate decisions, not yet filed. This document is exploratory; filing follows ratification.
-
----
-
-## Sequencing (non-binding sketch, not yet actioned)
-
-Order is chosen so the cheapest-to-extract layer serves the hardest-boundary consumer first.
-
-1. Finish the platform / product code seam already underway (`platform_roadmap.py` vs `product_roadmap.py` is the leading edge). Prerequisite.
-2. Extract the **Substrate plane** (harness template + reusable CI workflow + Terraform modules). Cheapest, highest reuse, and the only layer the day job needs.
-3. Add the **`product` dimension** to the Automation plane (ops portal tenancy + per-product scheduled agents) and the `tier: meta | domain` telemetry classification.
-4. Onboard **Reaper** as the first full-stack second product -- dogfoods data-plane multi-tenancy in the safe personal-account zone.
-5. Onboard **dbt** Substrate-only, in the employer boundary, after OD-1 and OD-2 clear.
-
-No step is filed as a recommendation; per the AGENTS.md Temporary Operational Constraints this is a design record, not a STRATEGIC plan. The sequence is reversible; only the *direction* (toward a packaged, consumed substrate) is asserted.
-
----
+1. **OD-1: day-job meta-egress policy.** Default siloed; opt-in content-free aggregate meta only (`project_id=dbt-daywork`); gated by employer policy. Until ratified, assume zero egress.
+2. **OD-2: licence permits day-job use** of the substrate without entangling personal IP or violating employer terms. Gates `dbt-daywork` entirely.
+3. **OD-3: trigger to revisit split-repo for same-owner products.** Currently deferred per the migration INTENT; default is to stay monorepo + `project_id`. Name the trigger (e.g. independent release cadence) if/when it arises.
+4. **OD-4: substrate versioning model.** Only load-bearing once the external (day-job) consumer exists; define semver + deprecation policy then.
+5. **OD-5: KG.1 wording.** `project_id` already generalizes "which product" in the data plane; KG.1's singular "the product roadmap" wording could be generalized to N. Small roadmap edit, deferred.
 
 ## Non-Goals
 
-- **Not multiplying AWS accounts by product.** Account / blast-radius topology is the other axis, governed by `docs/contracts/environment-taxonomy.md` and Decision 77, gated by the trading capital trigger. This document is concern-separation (repo / package), not account-separation, and does not touch the reserved environment / phase vocabulary.
-- **Not a committed migration.** No recommendations filed; no executor work queued (REPORT-ONLY; consistent with Decision 67 and the AGENTS.md Temporary Operational Constraints).
-- **Not building an internal developer platform.** No developer-portal framework, no private package index, no module registry until solo-developer scale demonstrably requires them.
-- **Not re-opening the per-domain table-format choice.** Ratified as Decision 78 (originating proposal CD.31): Iceberg for market-data/product tables, DuckLake for ops/telemetry. The Data plane inherits it per product.
-
----
+- **Not split-repo for same-owner products.** Deferred per the migration INTENT; only the day-job IP boundary forces an external repo.
+- **Not fragmenting the platform operational data store per product.** It is ONE DuckLake + `project_id` origin.
+- **Not superseding `INTENT-aws-migration-platform-evolution.md`.** This extends it to the cross-boundary case.
+- **Not multiplying AWS accounts by product.** Account / blast-radius topology is the other axis, governed by Decision 77 / `environment-taxonomy.md`.
+- **Not re-opening the per-domain table-format choice.** Ratified as Decision 78 (originating proposal CD.31).
+- **Not building an internal developer platform.** No portal framework, private index, or module registry until solo-developer scale forces it.
 
 ## Constraints
 
-1. **Agent-first.** A session working on any product derives its boundaries (which planes it uses, which telemetry tier a field is, which account it binds to) from the harness template plus this document, without asking a human.
-2. **The IP wall is absolute.** No employer code, data, or domain-tier telemetry enters the personal account, the personal lakehouse, or a personal repository -- ever. The system is correct even if day-job meta-telemetry never flows.
-3. **Concern-separation only.** This document draws repo / package boundaries. It does not alter account topology, the two-axis taxonomy, or the reserved vocabulary (Decision 77 / `environment-taxonomy.md`).
-4. **The portable substrate defines the interface.** The day job -- the hardest-boundary consumer, taking Substrate only -- defines the substrate's public surface. If a capability cannot be taken across that boundary, it belongs in Automation or Data, not Substrate.
-5. **Default-deny telemetry egress.** A telemetry field crosses the IP wall only if it is provably content-free and explicitly allowlisted. Unproven fields are domain-tier.
-6. **Right-sized for one developer.** Prefer the lightest mechanism (git + pip, tagged module sources, a template repo) until it demonstrably hurts.
-7. **No fork.** The substrate is consumed as a versioned dependency, never copied. Divergence is the failure mode this architecture exists to prevent.
-8. **No emojis, no em-dashes.** Plain ASCII throughout (repo-wide; AGENTS.md).
+1. **Agent-first.** A session derives its `project_id`, the planes it uses, and its account binding from the harness plus this document, without asking a human.
+2. **The IP wall is absolute.** No employer code, data, or domain-tier telemetry enters the personal account, the personal DuckLake, or a personal repository -- ever. Correct even if no day-job meta ever flows.
+3. **One data identity, not many stores.** Products are distinguished by `project_id`, not by fragmenting the platform store. No client-side `COALESCE(project_id, ...)` (resurrection anti-pattern).
+4. **Concern-/IP-separation only.** Does not alter account topology, the Decision-77 two-axis taxonomy, or its reserved vocabulary.
+5. **Default-deny egress.** A telemetry field crosses the IP wall only if provably content-free and explicitly allowlisted.
+6. **Single Portal preserved** (Decision 69 / 78). Writes go through `scripts/ops_data_portal.py`; `project_id` is set from the registry at write time.
+7. **Right-sized for one developer.** Packaging is built only when the external consumer is onboarded.
+8. **No emojis, no em-dashes.** Plain ASCII throughout (AGENTS.md).
