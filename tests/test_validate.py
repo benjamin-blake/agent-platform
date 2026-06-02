@@ -2703,3 +2703,13 @@ class TestValidateCiWorkflowGuards:
 
         assert len(failed) == 1
         assert "jobs-and-flags" in failed[0]
+
+    def test_records_failure_on_import_error_no_propagation(self) -> None:
+        """rec-2027: an ImportError at guard-import time records a gate failure, no propagation."""
+        # Setting the module to None in sys.modules makes `import` raise ImportError.
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": None}):
+            failed: list[str] = []
+            validate_ci_workflow_guards(failed)
+
+        assert len(failed) == 1
+        assert "ci-workflow guards gate" in failed[0]

@@ -2033,6 +2033,11 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             except Exception as exc:
                 print(f"  FAIL: {label}: {exc}")
                 failed.append(f"ci-workflow guard: {label}")
+    except Exception as exc:
+        # Import or setup failure (e.g. verify_ci_workflow unimportable) must
+        # record a gate failure, not crash presubmit (rec-2027).
+        print(f"  FAIL: ci-workflow guards gate (import/setup): {exc}")
+        failed.append("ci-workflow guards gate")
     finally:
         if injected and root_str in sys.path:
             sys.path.remove(root_str)
