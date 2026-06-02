@@ -180,6 +180,12 @@ plan; the future DuckLake Lambdas (T2.17-T2.19) carry Decision 67 / CD.16 deferr
    time-travel/CDC; 51/69 JSONL-staging write path -> DuckLake writer, Decision 69 Single-Portal preserved), an
    "amends: CD.8/CD.9/CD.15" note, and `discipline_points` (NS.1 generalisation = OQ.13; FP-B carries Decision 67/
    CD.16 deferred-deploy; product D.lake stays Iceberg per KG.1).
+   **Schema note (avoids a VP step-1 failure):** `CandidateDecision` and `TierItem` are `extra="forbid"` in
+   `scripts/platform_roadmap.py`. Author the amends clause, the per-Decision supersession clauses, and the
+   not-enacted statement as `detail` prose or inside the existing `discipline_points` list -- do NOT introduce a
+   new top-level key (e.g. `amends:`). Only the existing fields are permitted (CD: id/title/detail/gates/state/
+   filed_via/supersedes_decisions/narrowly_supersedes/discipline_points; tier_item: id/tier/name/intent/depends_on/
+   files_in_scope/exit_criteria/related_candidate_decisions/effort/strategic/status[/gates/note]).
 2. **Add open_questions OQ.7-OQ.14** (flat schema; options summarised in `notes`; `resolution_tier` pointing at
    the relevant tier_item / FP-B / FP-C / "CD.31 ratification"): OQ.7 Athena hatch (no Iceberg export / no external
    reader), OQ.8 catalog backend (RDS Postgres confirm; single-AZ db.t4g.micro; RDS Proxy deferrable; IAM-auth vs
