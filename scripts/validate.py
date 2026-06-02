@@ -409,6 +409,11 @@ def validate_executor_boundary(failed: list[str]) -> None:
     Decision 44: executor machinery files (prompts, scripts, tests) must only be
     modified via /plan -> /implement, never by the autonomous executor.
     Uses _EXECUTOR_BOUNDARY_PATTERNS to classify boundary files.
+
+    Matches only the rec's `file` field -- the executor's edit target. Acceptance-command
+    text is intentionally not matched: a verification command that merely references a
+    boundary filename (e.g. `grep 'DECISIONS.md' ...`) does not modify it, so matching it
+    produced false positives.
     """
     print("\n=== Executor boundary validation ===")
     import json
@@ -438,9 +443,8 @@ def validate_executor_boundary(failed: list[str]) -> None:
             if entry.get("status") != "open" or entry.get("automatable") is not True:
                 continue
             file_field = entry.get("file", "")
-            acceptance_field = entry.get("acceptance", "")
             for pat in _EXECUTOR_BOUNDARY_PATTERNS:
-                if pat in file_field or pat in acceptance_field:
+                if pat in file_field:
                     violations.append((entry.get("id", "?"), file_field, pat))
                     break
     except OSError as e:

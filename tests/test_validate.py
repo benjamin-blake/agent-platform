@@ -1349,6 +1349,26 @@ class TestValidateExecutorBoundary:
             validate_executor_boundary(failed)
         assert "Executor boundary validation" in failed
 
+    def test_boundary_pattern_in_acceptance_only_not_flagged(self, tmp_path: Path) -> None:
+        """A boundary pattern in the acceptance command but NOT the file is not a violation.
+
+        Regression for the rec-2048 false positive: validate_executor_boundary previously
+        substring-matched boundary patterns against the acceptance command text, so a rec
+        targeting a benign file (docs/ROADMAP-PLATFORM.yaml) whose acceptance greps for a
+        string containing a boundary filename ('DECISIONS.md') was wrongly flagged. The
+        check now matches the `file` field only.
+        """
+        import copy
+
+        rec = copy.deepcopy(self._VALID_REC)
+        rec["file"] = "docs/ROADMAP-PLATFORM.yaml"
+        rec["acceptance"] = "`grep -c 'does NOT touch DECISIONS.md' docs/ROADMAP-PLATFORM.yaml`"
+        self._write_jsonl(tmp_path, [rec])
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_executor_boundary(failed)
+        assert failed == []
+
 
 # ---------------------------------------------------------------------------
 # TestValidateOutboxStaleness
