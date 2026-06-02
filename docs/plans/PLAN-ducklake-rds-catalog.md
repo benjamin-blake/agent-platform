@@ -26,6 +26,7 @@ Infrastructure" is complete and orthogonal to this platform-axis infra.
 | `terraform/personal/rds_ducklake_catalog.tf` | Create | RDS PostgreSQL `db.t4g.micro` (single-AZ, gp3, PITR) DuckLake catalog + DB subnet group + security group (5432 from a variable CIDR allow-list) + RDS-managed master-password secret; `data` sources for the default VPC/subnets; outputs (endpoint, port, db name, master-secret ARN) for T2.17 |
 | `terraform/personal/variables.tf` | Modify | Add `ducklake_catalog_ingress_cidrs` (no default - supplied via gitignored `terraform.personal.tfvars`) and optional `ducklake_catalog_db_name` / `ducklake_catalog_instance_class` knobs |
 | `docs/ROADMAP-PLATFORM.yaml` | Modify | Justify T2.16 `depends_on: [T2.1]` in exit criteria (closes rec-2050); flip T2.16 `status: not_started -> complete` on completion |
+| `terraform/personal/platform_roles.tf` | Modify (conditional, near-certain) | If the VP-3 admin IAM preflight fails - which is expected, since `platform_admin_ops` grants no `rds:*`/`ec2:*` - extend that policy with scoped RDS + EC2-networking actions; apply via `platform_breakglass` (human-gated) BEFORE the RDS apply, per the IAM-precedence rule |
 
 Active module is `terraform/personal/` (the root `terraform/*.tf` is retired work-account infra per
 `terraform/CLAUDE.md`). The roadmap's `files_in_scope: terraform/rds_ducklake_catalog.tf` names the
@@ -55,9 +56,10 @@ wrong root; the corrected path is `terraform/personal/rds_ducklake_catalog.tf`.
 - [ ] `terraform fmt -check` and `terraform validate` pass.
 - [ ] `terraform plan` presented to the human; apply executed **manually** via `agent_platform_admin`
       (human-gated, before merge); plan shows creates only - 0 destroy, 0 replace, no IAM resources.
-- [ ] DuckDB `ATTACH ... (TYPE DUCKLAKE)` against the RDS PostgreSQL catalog succeeds from local
-      DuckDB and a CREATE/INSERT/SELECT round-trip works, with the catalog living in a dedicated
-      PostgreSQL schema (separability for a future market-data catalog, OQ.14).
+- [ ] DuckDB `ATTACH 'ducklake:postgres:...'` against the RDS PostgreSQL catalog succeeds from local
+      DuckDB and a CREATE/INSERT/SELECT round-trip works, with the catalog metadata living in a
+      dedicated PostgreSQL schema (separability for a future market-data catalog, OQ.14). (The exact
+      DuckLake v1.0 postgres-catalog ATTACH option name is resolved during VP-6 - see its note.)
 - [ ] Catalog endpoint + master-secret ARN exported as Terraform outputs (consumed by T2.17).
 - [ ] Roadmap: T2.16 `depends_on: [T2.1]` justified (rec-2050) and `status` flipped to `complete`.
 
@@ -72,8 +74,14 @@ wrong root; the corrected path is `terraform/personal/rds_ducklake_catalog.tf`.
 | 6 | [post-deploy] | DuckLake ATTACH round-trip (the V3 proof) | `bin/venv-python - < scripts/verify snippet` (literal heredoc below the table) | Prints `ATTACH OK rows=1`; a Parquet file appears under `s3://agent-platform-data-lake/ducklake/` | SG ingress CIDR vs egress IP mismatch; `publicly_accessible`; wrong secret; ducklake/httpfs not loaded; META_SCHEMA option name (confirm against pinned DuckLake v1.0) |
 | 7 | [post-deploy] | Outputs for T2.17 | `cd terraform/personal && terraform output -raw ducklake_catalog_endpoint && echo && terraform output -raw ducklake_catalog_master_secret_arn` | Non-empty `host:port` and a `arn:aws:secretsmanager:...` value | Add the missing `output` blocks to the `.tf` file |
 
-**VP-6 connectivity snippet** (run from repo root; grounded in `src/common/ducklake_spike.py`
-`_open_connection`, adapted from its SQLite catalog to the RDS PostgreSQL catalog):
+**VP-6 connectivity snippet** (run from repo root; reuses the extension-load + S3-credential pattern
+from `src/common/ducklake_spike.py` `_open_connection` / `_set_s3_credentials` - prefer importing that
+helper over the hand-rolled `SET s3_*` block below). **NOTE - unverified ATTACH form:** the spike
+validated only the SQLite-catalog `(TYPE DUCKLAKE)` form; the `ducklake:postgres:` data-source prefix
+and the `META_SCHEMA` metadata-schema option below are NOT yet exercised anywhere in the repo. Resolve
+the exact DuckLake v1.0 postgres-catalog option (`META_SCHEMA` vs `METADATA_SCHEMA` vs a pre-created
+schema) against the pinned docs before asserting; the round-trip assertion is genuinely behavioural
+and will fail loudly if the option is wrong:
 ```bash
 bin/venv-python - <<'PY'
 import json, subprocess, boto3, duckdb
