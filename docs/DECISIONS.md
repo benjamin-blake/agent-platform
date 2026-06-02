@@ -2,6 +2,33 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 78: Adopt DuckLake for the operational lakehouse (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-02
+**Warehouse ID:** dec-1085
+
+**Problem:**
+The Iceberg-on-S3-metadata read path has proven operationally brittle for the ops/telemetry workload: the Athena-based reader is slow for interactive agent queries, the DuckDB-on-Iceberg snapshot read requires a full metadata scan on every invocation, and the staged CD.31 proposal formalises DuckLake v1.0 as the superior format for ops and telemetry tables -- a metadata-in-RDS-PostgreSQL + data-in-S3-Parquet open table format natively embedded in DuckDB that eliminates the Glue catalog dependency and enables sub-second DuckDB queries directly against S3 Parquet data. OQ.13 (the sole ratification-blocking open question, resolution_tier CD.31) is resolved here by generalising NS.1.
+
+**Decision:**
+1. Adopt DuckLake v1.0 for the operational lakehouse (ops and telemetry tables only). Full ratification of CD.31, enacted now including supersessions.
+2. Scope: ops_recommendations, ops_decisions, ops_priority_queue, ops_execution_plans, ops_session_log, and all telemetry tables migrate to DuckLake. Product tables (D.lake.*, market_data Iceberg tier) REMAIN Iceberg per the KG.1 platform/product boundary. Market-data DuckLake assessment is deferred to FP-C.
+3. Catalog backend: RDS PostgreSQL (db.t4g.micro, single-AZ, PITR enabled) as the DuckLake catalog metadata store -- a durable Glue-analog, NOT a query engine. DuckDB performs all computation against S3-backed Parquet data.
+4. Supersedes Decision 50 (superseded by Decision 78: append-only-Iceberg write path -> append-only-DuckLake write path; same append semantics, new format).
+5. Supersedes Decision 56 (superseded by Decision 78: SCD2 schema reproduced in DuckLake; optionally extended by ducklake_table_changes CDC and time-travel for richer audit).
+6. Supersedes Decision 51 (superseded by Decision 78: JSONL-staging write path -> DuckLake writer in FP-B). CRITICAL: the Decision 69 Single-Portal primitive-level invariant is PRESERVED -- all ops writes continue to go through scripts/ops_data_portal.py; only the underlying staging mechanism changes from local-file outbox to DuckLake writer. The JSONL-staging path physically continues until FP-B/T2.19 migrates the write path.
+7. Supersedes Decision 69 (superseded by Decision 78: JSONL outbox staging replaced by DuckLake writer in FP-B). The Single-Portal primitive-level invariant is PRESERVED, not removed. The portal abstraction layer (scripts/ops_data_portal.py) is unchanged; only the transport below it changes in FP-B.
+8. Generalises NS.1 (OQ.13 resolution): NS.1 now reads "S3 + open table format at every scale" -- Iceberg for market-data/product tables, DuckLake for ops/telemetry per this decision.
+9. Physical migration (OpsWriter replacement, DuckLake writer, SCD2 migration) is deferred to FP-B (T2.19), gated on T2.16/T2.17/T2.18. Lambda deploy deferred per Decision 67.
+
+**Rationale:**
+DuckLake v1.0 eliminates the Glue catalog dependency while preserving S3 as the durable data plane, keeping NS.1 intact. The RDS catalog is a metadata store, not a query engine -- NS.3 actively supports a small managed cloud state-store for this role. The Single-Portal invariant is preserved at the abstraction level: the portal interface (scripts/ops_data_portal.py) is unchanged; only the underlying staging transport changes in FP-B/T2.19. Iceberg remains for product/market-data tables (KG.1 boundary), ensuring no cross-domain blast radius.
+
+**Related:** CD.31 (ratified), Decision 50 (superseded by Decision 78), Decision 51 (superseded by Decision 78), Decision 56 (superseded by Decision 78), Decision 67 (Lambda deployment deferred; interim ratification path used because T-1.1 is not_started), Decision 69 (superseded by Decision 78; Single-Portal invariant PRESERVED at primitive level -- portal abstraction unchanged)
+
+---
+
 ## Decision 77: Two-Axis Environment/Phase Taxonomy + Sandbox Auto-Apply (Decided)
 
 **Status:** Decided
@@ -268,12 +295,12 @@ CI failures on feature branches require manual diagnosis today. There is no auto
 On CI failure (`workflow_run.conclusion == 'failure'`), a `workflow_run`-triggered GitHub Actions workflow (`.github/workflows/ci-rca.yml`) invokes `claude -p` headlessly on the self-hosted runner. The ci-rca agent reads the failed run logs via `gh run view <run-id> --log-failed`, identifies the root cause with evidence, and files a recommendation with `source="ci_rca"` and `priority="critical"` via `python -m scripts.ops_data_portal file_rec`. The agent does NOT propose or execute any autonomous fix. The rec is consumed via the standard `/plan` -> `/implement` flow. A new "CI RCA Recs (open)" section in `session_preflight.py` surfaces open `ci_rca` recs in every subsequent planning session.
 
 **Rationale:**
-Reuses the cc-scheduled-agents infrastructure (Decision 71) with a `workflow_run` trigger instead of cron. Reuses `ops_recommendations` as the single rec queue (Decision 50). Reuses the `source` field as a discriminator (Decision 61). Honours the no-autonomous-fix invariant (Decision 55). Preserves human-in-the-loop architectural judgment -- the ci-rca agent diagnoses and signals, the developer decides and acts via `/plan`.
+Reuses the cc-scheduled-agents infrastructure (Decision 71) with a `workflow_run` trigger instead of cron. Reuses `ops_recommendations` as the single rec queue (Decision 50, superseded by Decision 78). Reuses the `source` field as a discriminator (Decision 61). Honours the no-autonomous-fix invariant (Decision 55). Preserves human-in-the-loop architectural judgment -- the ci-rca agent diagnoses and signals, the developer decides and acts via `/plan`.
 
 **Consequences:**
 `workflow_run` workflows execute in the context of the default branch but check out at the `head_sha` of the triggering run. A PR that modifies `.claude/agents/scheduled/ci-rca.md` and itself fails CI will invoke ci-rca with that PR's potentially-modified agent file. This is intentional (the PR author gets feedback on their own changes), but a malformed agent definition in a PR can cause that PR's ci-rca run to fail.
 
-**Related:** Decision 50 (Iceberg ops store), Decision 51 (local-first outbox), Decision 55 (RCA-first executor), Decision 60 (two-tier validation), Decision 61 (source discriminator), Decision 68 (self-hosted runner), Decision 71 (cc-scheduled-agents pattern)
+**Related:** Decision 50 (Iceberg ops store, superseded by Decision 78), Decision 51 (local-first outbox, superseded by Decision 78), Decision 55 (RCA-first executor), Decision 60 (two-tier validation), Decision 61 (source discriminator), Decision 68 (self-hosted runner), Decision 71 (cc-scheduled-agents pattern)
 
 ---
 
@@ -338,29 +365,7 @@ the record's `status` first (which requires a write -- the same problem) or loos
 Pydantic model (which degrades validation for all callers). Physical DELETE is the only
 viable path for invalid bootstrap records that bypassed validation at insertion time.
 
-**Related:** Decision 69 (ops pipeline consolidation), Decision 51 (local-first outbox)
-
----
-
-## Decision 69: Ops Pipeline Consolidation -- Single-Portal Invariant Enforced at Primitive Level
-
-**Status:** Decided
-**Date:** 2026-05-09
-
-**Problem:**
-Five-CLI choreography (`update_rec`, `sync_ops drain`, `ops_writer --compact`, `ops_writer --refresh-views`, `sync_ops pull`) leaked internal pipeline layers to agents, enabling silent-failure composition. Root-cause analysis in `docs/INTENT-ops-pipeline-consolidation.md`. Three architectural failures composed into the 2026-05-09 incident: (1) `update_rec` read the existing record from JSONL (destructible cache) rather than from Athena (source of truth); (2) `OpsWriter.compact` swallowed credential errors as `return 0`, making failure indistinguishable from "no staging files"; (3) `sync_ops pull` overwrote the local cache destructively, silently discarding uncommitted writes.
-
-**Decision:**
-Three architectural fixes, enforced at the primitive level:
-1. `update_rec` reads existing record from Athena `ops_recommendations_current` (source of truth). Raises `RuntimeError` if Athena is unreachable; write path retains outbox for offline resilience.
-2. `OpsWriter.compact` raises `RuntimeError` on infrastructure failures (credential errors, network errors, schema mismatches). Returns `int` only for the "no staging files" success case.
-3. `ops_data_portal.sync()` is the single flush primitive -- compacts, refreshes views, pulls local cache. Agents call this instead of managing the pipeline steps.
-CLI hard-removal (`--drain` from ops_data_portal, `drain` and `pull` from sync_ops) enforces the boundary at the build level. `sync_ops.pull` renamed to `_rebuild_local_cache` (private) with a staging-file guard that refuses to run when unstaged writes exist.
-
-**Rationale:**
-Silent failures compose multiplicatively. Each individual silent-failure was benign in isolation; together they produced partial-record Iceberg writes that went undetected until the DQ runner ran. The fix must be at the primitive layer, not just in documentation or wrapper scripts.
-
-**Related:** Decision 50 (Iceberg ops data store), Decision 51 (local-first outbox), Decision 57 (SSO recovery), Decision 67 (Lambda deployment deferred)
+**Related:** Decision 69 (ops pipeline consolidation, superseded by Decision 78), Decision 51 (local-first outbox, superseded by Decision 78)
 
 ---
 
@@ -396,40 +401,7 @@ Replace the rescue agent layer (Decision 46) with an RCA-first model. When the e
 
 **Supersedes:** Decision 46 (Rescue Agent Architecture). The three-outcome contract and graduated autonomy gates are retired.
 
-**Related:** Decision 34 (state machine exit paths), Decision 46 (superseded), Decision 51 (outbox pattern for structured process events)
-
----
-
-## Decision 56: SCD Type 2 Schema Simplification for Ops Tables (Decided)
-
-**Status:** Decided
-**Date:** 2026-04-30
-
-**Problem:**
-The ops Iceberg tables (ops_recommendations, ops_session_log, ops_execution_plans, ops_decisions, ops_priority_queue) had a proliferation of confusing date/timestamp columns: `ingested_at` (pipeline ingestion time), `trade_date` (partition key derived from ingest date, misnamed since these are ops records not trades), and `date`/`string` columns on some tables (creation date for recs, session date). This caused three problems:
-1. Callers had to know which timestamp field to use for SCD2 ordering (`ingested_at`) vs querying (`date`).
-2. Views explicitly listed all columns, drifting from the underlying tables whenever new columns were added.
-3. `trade_date` as a partition key is semantically wrong for operational metadata.
-
-**Decision:**
-Replace the old timestamp/partition scheme with clear SCD Type 2 semantics:
-- **`created_timestamp timestamp`** — when the record was first created (maps from the caller's `date` field for recs/sessions, or from `ingested_at` for tables without a creation date field).
-- **`last_updated_timestamp timestamp`** — when this specific version was written (replaces `ingested_at` as the SCD2 ordering column).
-- **Partition by `day(last_updated_timestamp)`** — uses Iceberg partition transforms (spec v2), semantically correct (partition by when the version was last updated).
-- **Remove `date`/`trade_date`** columns entirely from all 5 ops tables.
-- **Views use `SELECT *`** with `ROW_NUMBER() OVER (PARTITION BY {pk} ORDER BY last_updated_timestamp DESC)` — prevents view-table drift on schema evolution.
-- **`ops_priority_queue_current`** retains its correlated-subquery pattern (returns all entries from the latest curator run, not one row per entity).
-- **Callers are NOT modified** — the write path maps the incoming `date` field from callers (ops_data_portal etc.) to `created_timestamp` transparently.
-
-**Rationale:**
-- Single developer context makes `SELECT *` in views acceptable (no risk of exposing unexpected columns to unknown consumers).
-- `last_updated_timestamp` is a universally understood SCD2 version key; `ingested_at` implies pipeline-specific semantics.
-- Partition transform `day(last_updated_timestamp)` is correct Iceberg v2 syntax; `trade_date` as a plain column partition was a leftover from the market_data table pattern.
-- `created_timestamp` makes the creation date queryable as a proper timestamp (timezone-aware), replacing `date string` which required string-to-date parsing.
-
-**Supersedes:** Timestamp and partition aspects of Decision 50. Decision 50 core (append-only Iceberg, ROW_NUMBER views, local-first dual write) remains in effect.
-
-**Related:** Decision 50 (Iceberg ops data store), Decision 51 (local-first outbox)
+**Related:** Decision 34 (state machine exit paths), Decision 46 (superseded), Decision 51 (outbox pattern for structured process events, superseded by Decision 78)
 
 ---
 
@@ -453,7 +425,7 @@ The control-plane intent defines the target loop: execution -> telemetry -> veri
 **Rationale:**
 The architecture review concluded that the design is unusually mature for a sole-developer system, but not fully closed operationally. The missing capability is not another isolated prompt or script; it is an explicit control-plane model that sequences telemetry trust, verification, executor RCA, workflow migration, state-machine events, and recommendation governance.
 
-**Related:** Decision 48 (verification tier), Decision 51 (local-first outbox), Decision 55 (RCA-first executor), `docs/INTENT-autonomous-improvement-control-plane.md`
+**Related:** Decision 48 (verification tier), Decision 51 (local-first outbox, superseded by Decision 78), Decision 55 (RCA-first executor), `docs/INTENT-autonomous-improvement-control-plane.md`
 
 ---
 
@@ -535,7 +507,7 @@ Migrate the surface to two named tiers:
 - *Substrate matters.* Without a cheap, deterministic CI substrate, "default tier on every PR" is unaffordable and consolidation is impossible. Self-hosted runner solves the cost problem without reintroducing the discretion problem of local-only validation.
 - *Reversible by design.* The migration is a multi-step ratchet; each step can be halted or rolled back. The convergence (deletion of legacy flags) is the moment the architecture is real.
 
-**Related:** Decision 48 (Verification Tier Design), Decision 51 (Local-First Outbox), Decision 55 (RCA-First Executor -- no rescue agents), Decision 57 (Interactive vs Autonomous SSO recovery), `docs/INTENT-validation-architecture.md`, `docs/INTENT-verification-system.md`, `docs/plans/PLAN-audit-ops-recs-dq-scalability.md` (Gap 2; Future Direction).
+**Related:** Decision 48 (Verification Tier Design), Decision 51 (Local-First Outbox, superseded by Decision 78), Decision 55 (RCA-First Executor -- no rescue agents), Decision 57 (Interactive vs Autonomous SSO recovery), `docs/INTENT-validation-architecture.md`, `docs/INTENT-verification-system.md`, `docs/plans/PLAN-audit-ops-recs-dq-scalability.md` (Gap 2; Future Direction).
 
 > **2026-05 migration update:** The self-hosted EC2 runner substrate referenced in the Substrate field and migration Steps 3-5 was retired 2026-05-28 (CD.21); CI now runs on GitHub-hosted runners (`ubuntu-latest`) with OIDC. The two-tier validation model and both named tiers are unchanged; the substrate switch is transparent to the validation contract. See Decision 73.
 
@@ -560,14 +532,14 @@ Specific consequences:
 
 **Rationale:**
 - The existing `source` field already discriminates record origins (used today for "executor-postmortem", "planning", etc.). No schema migration needed.
-- The existing outbox drain cycle (Decision 51) is already offline-resilient. A second ingestion path would duplicate the reliability mechanism.
+- The existing outbox drain cycle (Decision 51, superseded by Decision 78) is already offline-resilient. A second ingestion path would duplicate the reliability mechanism.
 - The existing `ops_priority_queue_current` view avoids the `_rn` ambiguity bug present in `ops_recommendations_current`. Building a second identical view under a different name adds maintenance burden with no benefit.
 - One fewer Iceberg table and one fewer view to keep in sync with the Terraform + OpsWriter dual-definition pattern.
 
 **Closes Open Questions:** Q4 (New table OR extend? - extend via source field), Q5 (New view risk _rn ambiguity? - no new view needed).
 **Deferred:** Q3, Q6, Q7, Q8, Q9, Q10 to Phases 2-5 per the strategic plan manifest.
 
-**Related:** `docs/plans/PLAN-cc-scheduled-agents.md` (strategic plan), `docs/plans/PLAN-cc-scheduled-agents-phase-1.md` (this implementation), Decision 51 (Local-First Outbox), Decision 50 (Iceberg ops data store)
+**Related:** `docs/plans/PLAN-cc-scheduled-agents.md` (strategic plan), `docs/plans/PLAN-cc-scheduled-agents-phase-1.md` (this implementation), Decision 51 (Local-First Outbox, superseded by Decision 78), Decision 50 (Iceberg ops data store, superseded by Decision 78)
 
 ---
 
@@ -765,86 +737,6 @@ The presubmit tier on the self-hosted EC2 runner already has SSO credentials and
 **Related:** Decision 57 (Autonomous Improvement Control Plane), Decision 60 (Two-tier validation architecture), `docs/INTENT-dq-enforcement.md` (Phase 3 Decision Registry), `docs/INTENT-validation-architecture.md`
 
 > **2026-05 migration update:** The SSO credential model and self-hosted EC2 runner referenced in the Rationale were superseded 2026-05-28 (CD.21); the presubmit DQ runner now executes on GitHub-hosted runners with OIDC. The core decision -- DQ as part of the presubmit tier, no separate Session E scheduling -- is unchanged. See Decision 73.
-
----
-
-## Decision 51: Local-First Outbox + Bidirectional Sync for Ops Data (Decided)
-
-**Status:** Decided
-**Date:** 2026-04-23
-
-**Problem:** Agent sessions lose operational writes when SSO expires (`OpsWriter.write()`
-silently no-ops) and start with stale local JSONL data because nothing pulls from Athena.
-The self-improvement loop cannot function if the system cannot reliably read its own
-history or persist new observations.
-
-**Decision:** Adopt a local-first outbox pattern:
-- **Writes:** All writes go through OpsWriter.write(). On S3 failure, entries are written
-  to a local outbox (`logs/.ops-outbox/{table}/{uuid}.jsonl`).
-- **Reads:** Agents always read local JSONL files. A `sync_ops.py` script pulls the latest
-  state from Athena `_current` views and overwrites local files.
-- **Sync:** `sync_ops.py` runs drain-then-pull. Integrated into preflight (session start),
-  postflight (session end), and executor between-rec checkpoints (drain only).
-- **Enforcement:** validate.py warns on stale outbox entries (> 24h).
-
-**Rationale:** Deterministic local reads (no network dependency for reads), no data loss
-on SSO expiry (outbox persists until drain succeeds), idempotent flush (Iceberg deduplicates
-via ingested_at), and structurally-enforced freshness via hooks in every session lifecycle phase.
-Between-rec hooks call drain() only (not full sync()) to avoid 5x Athena query cost per rec.
-
-**Supersedes:** Nothing -- additive layer on top of Decision 50.
-**Related:** Decision 50 (Iceberg ops data store), `docs/contracts/ops-data-store.md`
-
----
-
-## Decision 50: Append-Only Ops Data Store via Iceberg (Decided)
-
-**Decision:** All operational structured logs (recommendations, execution plans, session telemetry,
-decisions, priority queue) are stored as append-only Iceberg tables in Athena. Current state is exposed
-via ROW_NUMBER() views. Parquet + gzip, partitioned by `trade_date`. Located in
-`agent-platform-agent-logs/iceberg/`. The `OpsWriter` class in `scripts/ops_writer.py` handles
-staging uploads and Athena compaction. INSERT-only semantics (no MERGEs). Supersedes Decision 45.
-
-**Problem:**
-The dual-source JSONL+S3 pattern (Decision 45) causes: (1) merge conflicts on JSONL files when both
-local and agent branches write concurrently, (2) no structured query capability -- recommendations
-can only be analysed by parsing JSONL line by line, (3) no audit trail -- overwrite_jsonl() destroys
-prior state, losing the history of priority queue runs and recommendation status changes, (4) schema
-drift across write sites with no enforcement mechanism.
-
-**Why append-only Iceberg over alternatives:**
-- **Iceberg vs Delta Lake:** Iceberg is natively supported by Athena v3 (already provisioned). Delta
-  Lake requires additional dependencies and a separate engine configuration.
-- **Iceberg vs direct Athena INSERT:** Append-only Iceberg avoids MERGE complexity and matches the
-  existing pattern of the `market_data` table. MERGE would require primary-key enforcement that Iceberg
-  does not natively provide in Athena v3.
-- **ROW_NUMBER() views vs MERGE:** Views are read-time deduplication -- zero write overhead, no
-  locking, fully compatible with INSERT-only semantics. MERGE would require engine v3 MERGE DML
-  which has higher failure risk and is slower.
-- **Local JSONL retained in parallel:** Local JSONL files remain the source of truth for git-tracked
-  artefacts and local development. OpsWriter write-through is best-effort and does not replace local
-  writes. This allows gradual migration without breaking existing tooling.
-
-**Write architecture:**
-1. `s3_log_store.append_jsonl()` / `overwrite_jsonl()` complete their existing local/S3 writes
-2. Write-through to `OpsWriter.write(table, entry)` staged at `staging/{table}/trade_date=.../batch-{uuid}.jsonl`
-3. `session_postflight.run_auto()` calls `OpsWriter.compact_all()` at session close
-4. `compact_all()` reads staging files, builds DataFrame, calls `awswrangler.athena.to_iceberg(mode="append")`
-5. Views (`ops_*_current`) provide always-fresh current state via ROW_NUMBER() deduplication
-
-**Constraints:**
-- `awswrangler` is a Lambda-only dependency (via AWSSDKPandas layer). Local `compact()` gracefully
-  returns 0 when `awswrangler` is unavailable.
-- `OpsWriter` never raises exceptions to callers -- all failures are logged as warnings.
-- `ops_decisions` has no automated write-through yet -- write site deferred to Phase 2.
-- Local JSONL files continue to be written in parallel (no breaking change to existing tooling).
-
-**Supersedes:** Decision 45 (S3 as Authoritative Source for Cloud-Produced Logs)
-
-**Related:** Decision 48 (V3 Verification Tier), Decision 49 (Copilot SDK inference),
-`docs/contracts/ops-data-store.md`
-
-**Decision status:** Decided -- April 2026
 
 ---
 
