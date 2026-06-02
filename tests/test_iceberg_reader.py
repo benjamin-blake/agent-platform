@@ -9,6 +9,7 @@ vs Athena _current view row-for-row on a pinned snapshot for each ops table.
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -360,6 +361,7 @@ class TestDuckDBIcebergReader:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1)
 def _has_warehouse_credentials() -> bool:
     """Return True if pyiceberg can reach the Glue catalog and S3 data lake."""
     try:
@@ -370,10 +372,6 @@ def _has_warehouse_credentials() -> bool:
         return snap is not None
     except Exception:  # noqa: BLE001
         return False
-
-
-_warehouse_available = _has_warehouse_credentials()
-_skip_parity = pytest.mark.skipif(not _warehouse_available, reason="warehouse credentials not available")
 
 
 def _fetch_athena_current(table_view: str, profile: str = "agent_platform") -> list[dict]:
@@ -423,9 +421,18 @@ def _fetch_athena_current(table_view: str, profile: str = "agent_platform") -> l
 
 
 @pytest.mark.integration
-@_skip_parity
 class TestWarehouseParity:
     """Row-for-row parity: DuckDB reader vs Athena _current view on a pinned snapshot."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_warehouse(self, _allow_network_for_integration: None) -> None:
+        """Skip the class when warehouse credentials are unavailable.
+
+        Requests _allow_network_for_integration so the probe's own S3/Glue call
+        runs only after sockets are restored by that fixture.
+        """
+        if not _has_warehouse_credentials():
+            pytest.skip("warehouse credentials not available")
 
     def _reader(self):
         from src.common.iceberg_reader import DuckDBIcebergReader

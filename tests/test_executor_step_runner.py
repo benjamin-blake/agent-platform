@@ -1673,9 +1673,15 @@ class TestVenvPythonResolution:
 
     @pytest.fixture(autouse=True)
     def _restore_module_state(self) -> None:
+        # Snapshot the original module dict before any reloads so teardown can
+        # restore it exactly. A plain reload in teardown creates a new StepOutcome
+        # class that breaks module-level `from ... import StepOutcome` bindings in
+        # other test classes running after this one (order-dependent failure).
+        original_dict = dict(sr_mod.__dict__)
         importlib.reload(sr_mod)
         yield
-        importlib.reload(sr_mod)
+        sr_mod.__dict__.clear()
+        sr_mod.__dict__.update(original_dict)
 
     def test_linux_layout_preferred_when_both_present(self) -> None:
         with patch.object(Path, "exists", return_value=True):

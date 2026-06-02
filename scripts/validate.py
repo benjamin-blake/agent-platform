@@ -409,6 +409,11 @@ def validate_executor_boundary(failed: list[str]) -> None:
     Decision 44: executor machinery files (prompts, scripts, tests) must only be
     modified via /plan -> /implement, never by the autonomous executor.
     Uses _EXECUTOR_BOUNDARY_PATTERNS to classify boundary files.
+
+    Matches only the rec's `file` field -- the executor's edit target. Acceptance-command
+    text is intentionally not matched: a verification command that merely references a
+    boundary filename (e.g. `grep 'DECISIONS.md' ...`) does not modify it, so matching it
+    produced false positives.
     """
     print("\n=== Executor boundary validation ===")
     import json
@@ -438,9 +443,8 @@ def validate_executor_boundary(failed: list[str]) -> None:
             if entry.get("status") != "open" or entry.get("automatable") is not True:
                 continue
             file_field = entry.get("file", "")
-            acceptance_field = entry.get("acceptance", "")
             for pat in _EXECUTOR_BOUNDARY_PATTERNS:
-                if pat in file_field or pat in acceptance_field:
+                if pat in file_field:
                     violations.append((entry.get("id", "?"), file_field, pat))
                     break
     except OSError as e:
@@ -2043,6 +2047,38 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+_UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
+
+
+def _build_unit_test_cmd() -> list[str]:
+    """Return the pytest command for the 'Unit tests + coverage' step."""
+    return [
+        PYTHON,
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+        "-m",
+        "not integration",
+        "--cov=src",
+        "--cov-report=term-missing",
+        "--disable-socket",
+        "--randomly-seed=last",
+    ]
+
+
+def validate_hermeticity_flags(failed: list[str], _cmd: list[str] | None = None) -> None:
+    """Fail CI if mandatory hermeticity flags are absent from the unit-test pytest command.
+
+    Guards against accidental removal of --disable-socket or --randomly-seed=last from the
+    test invocation. Accepts an optional _cmd override for unit-testing this function itself.
+    """
+    cmd = _cmd if _cmd is not None else _build_unit_test_cmd()
+    for flag in _UNIT_TEST_HERMETICITY_FLAGS:
+        if flag not in cmd:
+            failed.append(f"hermeticity-flags: {flag!r} missing from pytest invocation")
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2072,21 +2108,8 @@ def run_python_checks(failed: list[str]) -> None:
     validate_environment_taxonomy(failed)
     validate_complexity(failed)
     validate_scheduled_agent_logs(failed)
-    invoke_step(
-        "Unit tests + coverage",
-        [
-            PYTHON,
-            "-m",
-            "pytest",
-            "tests/",
-            "-v",
-            "-m",
-            "not integration",
-            "--cov=src",
-            "--cov-report=term-missing",
-        ],
-        failed,
-    )
+    validate_hermeticity_flags(failed)
+    invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
     result = run([PYTHON, "-m", "mypy", "src/"], cwd=ROOT)
