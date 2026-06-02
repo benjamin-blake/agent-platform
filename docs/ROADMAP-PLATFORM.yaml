@@ -173,6 +173,7 @@ cost_projection:
       cloudwatch_logs: "$3-8"
       deepseek_executor_inference: "~$5 (~100 recs/month at ~$0.05 each via DeepSeek direct API, ~75% lower than the retired Bedrock path; native cache hit drops repeat-prefix cost further)"
       anthropic_escape_hatch_spillover: "$0-5 (warm-fetched Tier-2 per CD.28; usually $0 because Max x5 programmatic-pool credit absorbs the typical volume; spillover only when escape hatch activates heavily)"
+      rds_ducklake_catalog: "~$12-15/mo single-AZ db.t4g.micro + gp3 + PITR (proposed CD.31); +$10-12 if RDS Proxy added. Envelope-consistent with line_items_not_enumerated (already names VPC/NAT). Net monthly cost likely falls as the ~$35/mo EC2 runner retires per CD.21."
     line_items_not_enumerated: VPC endpoints, NAT, DynamoDB PITR, CloudTrail, Config, KMS, GH-hosted runner minutes, S3 Intelligent-Tiering monitoring fee, Step Functions state-transition cost (negligible at current scale, ~$0.025 per 1000 transitions Standard Workflow) -- realistic add-on $10-30/month at current scale.
   projected_100tb_scale:
     total_per_month_usd: 880-1750
@@ -347,12 +348,24 @@ candidate_decisions:
     state: pending
   - id: CD.8
     title: DuckDB = default operational read engine
-    detail: Embedded, sub-second, no SSO, runs anywhere. Athena retained per CD.15 conditionally; the typed query Lambda hides the engine choice from agents.
+    detail: |
+      Embedded, sub-second, no SSO, runs anywhere. Athena retained per CD.15 conditionally; the typed
+      query Lambda hides the engine choice from agents.
+      [Amendment -- CD.31]: Under the proposed DuckLake adoption (CD.31), DuckDB's native operational
+      table format transitions from Iceberg to DuckLake; the embedded-engine choice (DuckDB) is unchanged.
     gates: [T1.2, T2.5]
     state: pending
   - id: CD.9
     title: Partition every table; uniform rule
-    detail: Every Iceberg table is partitioned. Ops + telemetry use day(last_updated_timestamp). Market data uses day(trade_date). New tables inherit the partitioned template. No unpartitioned-table path.
+    detail: |
+      Every Iceberg table is partitioned. Ops + telemetry use day(last_updated_timestamp). Market data
+      uses day(trade_date). New tables inherit the partitioned template. No unpartitioned-table path.
+      [Amendment -- CD.31]: Partitioning IS available in DuckLake via ALTER TABLE ... SET PARTITIONED BY
+      (a metadata-only operation), NOT via CREATE TABLE DDL (which is unavailable in DuckLake -- the spike
+      returned a parser error; the error was correct but the conclusion "no partitioning" was wrong).
+      The "No unpartitioned-table path" absolute holds: ops DuckLake tables are partitioned via ALTER once
+      row/file count warrants. T2.4 applies the ALTER mechanism for DuckLake ops tables; the Iceberg
+      partition sweep for all other tables is otherwise unchanged.
     gates: [T2.4]
     state: pending
   - id: CD.10
@@ -480,6 +493,10 @@ candidate_decisions:
       AWS account no Athena _current views are deployed — they are an implementation detail of the old read path and
       a known bug surface (the _rn ambiguity). DuckDB queries the Iceberg snapshots directly inside the Lambda.
       Athena is retained as an escape hatch only for ad-hoc large scans where DuckDB single-node memory binds.
+      [Amendment -- CD.31]: Under the proposed DuckLake adoption (CD.31), Athena cannot read DuckLake
+      tables (no Iceberg metadata export; no external-engine reader). The Athena escape hatch transitions
+      from "Athena on Iceberg snapshots" to OQ.7 -- resolution deferred to T2.19 / FP-B. DuckDB-on-DuckLake
+      replaces DuckDB-on-Iceberg-snapshot for the operational read path.
     gates: [T0.7c, T1.2, T2.5, T2.7]    # T2.7 (was T1.8) — Athena view retirement properly lives in T2 since it depends on T2.5
     state: pending
   - id: CD.17
@@ -1138,6 +1155,95 @@ candidate_decisions:
       - Diff-coverage threshold and the ratchet baseline are config-driven; the global baseline only moves up, never down. The initial global baseline is captured at T3.7 implementation (computed from the current suite and stored in a governed config/state file); the ratchet compares each PR against that stored value.
       - The ratchet is enforced in scripts/validate.py; test_coverage_checker.py is retargeted from the per-changed-file 100% floor to diff-line-coverage + ratchet, not run as a separate parallel gate.
       - Lockstep consumers at ratification (follow-on plan, via log-decision for the Decision text): Decision 48 V2-row text, config/agent/executor/prompts/critique.prompt.md (V3 behavioural-acceptance language), and the planning skill's tier-classification guidance. Until amended they enforce the old per-file-100% minimum.
+
+  - id: CD.31
+    title: Adopt DuckLake for the operational lakehouse (ops + telemetry tables)
+    detail: |
+      This roadmap edit does NOT touch DECISIONS.md and does NOT change any numbered Decision's status.
+      The proposed supersessions of Decisions 50, 56, 51, 69 and any NS.1 generalisation land at
+      ratification via the log-decision path and the FP-B follow-on IMPLEMENTATION plan -- exactly
+      mirroring CD.30.
+
+      PROPOSAL: replace the Iceberg-based ops/telemetry write path and the DuckDB-on-Iceberg read path
+      with DuckLake v1.0 -- a metadata-in-RDS-PostgreSQL + data-in-S3-Parquet open table format natively
+      embedded in DuckDB. Scope: ops and telemetry tables ONLY (ops_recommendations, ops_decisions,
+      ops_priority_queue, ops_execution_plans, ops_session_log, and all telemetry tables). Product tables
+      (D.lake.*, market_data Iceberg tier) REMAIN Iceberg per the KG.1 platform/product boundary; a
+      market-data DuckLake assessment is deferred to FP-C.
+
+      Catalog backend: a dedicated micro RDS PostgreSQL instance -- db.t4g.micro, single-AZ, gp3 storage,
+      PITR enabled, provisioned in its own schema for clean separability (T2.16). The catalog is a durable
+      metadata store (a Glue-analog), NOT a query engine; DuckDB performs all computation against
+      S3-backed Parquet data. This framing keeps NS.1 ("compute is interchangeable; storage is durable;
+      engines do not govern the data layer") intact. Aurora DSQL was considered but dropped as unvalidated
+      against DuckLake's PG12+/SQL-92/PK-based-OCC contract. NS.3 explicitly supports a small managed
+      cloud state-store; the always-on RDS instance contradicts no existing decision.
+
+      VPC-attach for DuckLake Lambdas (to reach RDS) does NOT alter the Function-URL + AWS_IAM ingress
+      surface (CD.10 / NS.5): VPC config governs egress; the Function URL is ingress. The consequence is
+      that egress to extensions.duckdb.org is blocked by the VPC egress rules -- the DuckLake + httpfs
+      extension layer must be pre-baked into a Lambda layer (T2.17).
+
+      Doc-research findings driving OQ.7-OQ.14:
+        - DuckLake v1.0 has NO Iceberg metadata export and NO external-engine reader: Athena/Trino cannot
+          read DuckLake tables. ducklake_add_data_files() is import-only AND dangerous (ownership transfers
+          to DuckLake; compaction can delete the registered files). The CD.15 Athena escape hatch has no
+          export-based mitigation today -> OQ.7.
+        - Partitioning IS available via ALTER TABLE ... SET PARTITIONED BY (a metadata-only operation).
+          The spike's CREATE TABLE PARTITION BY parser error was the correct signal but the wrong conclusion
+          -- ALTER is the mechanism. Reconciles CD.9 (see CD.9 amendment).
+        - The catalog is the lakehouse single point of failure: snapshots are catalog rows; un-flushed
+          inlined data (default threshold 10 rows) lives only in the catalog. No catalog-format migration
+          tooling spans the lockstep spec+extension+DuckDB version bump -> OQ.9 + OQ.12.
+        - DuckLake is OCC + snapshot-isolation; even single-writer Lambda overlap can collide on
+          snapshot_id; DDL and ALTER-table writes hard-abort on conflict -> OQ.10.
+        - expire_snapshots != delete: S3 grows unless cleanup_old_files + delete_orphaned_files are also
+          scheduled. Maintenance is in-engine CALL functions -> T2.18.
+        - Un-flushed inlined data is durable only in the catalog, not in S3 -> OQ.11.
+
+      Proposed supersessions (at ratification only -- NOT enacted by this roadmap edit):
+        - Supersedes Decision 50 (append-only-Iceberg write path -> append-only-DuckLake write path;
+          same append semantics, new format).
+        - Supersedes Decision 56 (SCD2 schema reproduced in DuckLake; optionally extended by
+          ducklake_table_changes CDC and time-travel for richer audit).
+        - Supersedes Decision 51 (JSONL-staging write path -> DuckLake writer; the Decision 69
+          Single-Portal invariant is PRESERVED -- all ops writes still go through the portal, only the
+          underlying staging mechanism changes from local-file outbox to DuckLake writer).
+        - Supersedes Decision 69 (JSONL outbox staging replaced by DuckLake writer; Single-Portal
+          primitive-level invariant is preserved, not removed).
+
+      Amends (factual reconciliations -- effective on CD.31 filing, not at ratification):
+        - CD.8: DuckDB's native operational table format becomes DuckLake under this adoption; the
+          embedded-engine choice (DuckDB) is unchanged.
+        - CD.9: Partitioning IS available in DuckLake via ALTER TABLE ... SET PARTITIONED BY (metadata
+          op, not CREATE TABLE DDL). The "No unpartitioned-table path" absolute holds: ops DuckLake
+          tables are partitioned via ALTER when row/file count warrants.
+        - CD.15: Athena cannot read DuckLake. The Athena escape hatch transitions from "Athena on
+          Iceberg snapshots" to OQ.7. DuckDB-on-DuckLake replaces DuckDB-on-Iceberg-snapshot for ops.
+
+      This roadmap edit does NOT touch DECISIONS.md and does NOT change any numbered Decision's status.
+      The proposed supersessions of Decisions 50, 56, 51, 69 and any NS.1 generalisation (OQ.13:
+      "S3 + Iceberg" -> "S3 + open table format") land at ratification via the log-decision path and
+      the FP-B follow-on IMPLEMENTATION plan -- exactly mirroring CD.30.
+
+      Named follow-on plans (NOT in this scope):
+        - FP-B = T2.19: DuckLake ops write/read migration (replace OpsWriter JSONL-staging with DuckLake
+          writer preserving Decision 69; swap DuckDBIcebergReader -> DuckLake reader; adopt SCD2 via
+          current_state + optionally ducklake_table_changes CDC; resolve OQ.7 + OQ.10). V3 IMPLEMENTATION
+          plan, gated on CD.31 ratification + T2.16/T2.17/T2.18; Lambda-deploy DEFERRED per Decision 67.
+        - FP-C: market_data / product D.lake DuckLake assessment + catalog multi-tenancy decision (OQ.14).
+          Gated on a billions-of-rows scale-proof; deferred after ops catalog validates the approach.
+    gates: [T2.16, T2.17, T2.18, T2.19]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    supersedes_decisions: [50, 56, 51, 69]
+    discipline_points:
+      - "NS.1 generalisation (\"S3 + Iceberg\" -> \"S3 + open table format\") is deferred to OQ.13 and lands at ratification, not in this roadmap edit. NS.1 text is unchanged."
+      - "FP-B (T2.19) carries Decision 67 / CD.16 deferred-deploy markers: Lambda-deploy DEFERRED until per-Lambda gating (CD.16) resolves. This plan is IMPLEMENTATION and deploys nothing."
+      - "Product D.lake.* and market_data Iceberg tables REMAIN Iceberg (KG.1 platform/product boundary; independently Class-A-gated per CD.25). Market-data DuckLake assessment is deferred to FP-C."
+      - "The RDS catalog is a metadata store (Glue-analog), NOT a query engine. NS.1 governs engine-swappability, not a metastore ban. NS.3 actively supports a small managed cloud state-store."
+      - "VPC egress (to reach RDS) is orthogonal to Function-URL + AWS_IAM ingress (CD.10 / NS.5). The extension layer must be pre-baked into a Lambda layer to work around blocked egress to extensions.duckdb.org (T2.17)."
+      - "Supersession of Decisions 50/56/51/69 is proposed-at-ratification only. Until CD.31 is ratified, all four Decisions remain in force and the existing write path (JSONL-staging, Single-Portal invariant per Decision 69) continues."
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -2669,7 +2775,10 @@ tier_items:
       - "Every iceberg_tables.tf table has a PARTITIONED BY clause"
       - "scripts/schema_to_iceberg.py emits partition clause from a class-level annotation on Pydantic schema (e.g. @partition_by('day(last_updated_timestamp)'))"
       - "New-table template (e.g. cookiecutter or scaffold) includes partition declaration"
-    related_candidate_decisions: [CD.9]
+    related_candidate_decisions: [CD.9, CD.31]
+    note: |
+      Under proposed DuckLake adoption (CD.31), ops-table partitioning uses ALTER TABLE ... SET PARTITIONED
+      BY (not CREATE TABLE DDL). The Iceberg partition sweep for all other tables is otherwise unchanged.
     effort: M
     strategic: false
     status: not_started
@@ -2994,6 +3103,120 @@ tier_items:
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
+    status: not_started
+
+  - id: T2.16
+    tier: T2
+    name: RDS PostgreSQL DuckLake catalog provisioning
+    intent: |
+      Provision the RDS PostgreSQL instance that serves as the DuckLake catalog backend (a Glue-analog
+      metadata store, NOT a query engine). Single-AZ db.t4g.micro, gp3 storage, PITR enabled. Provisioned
+      in its own dedicated schema for clean separability from any future market-data catalog (OQ.14). VPC
+      security-group and IAM-auth vs Secrets-Manager credential choice resolved at implementation time (OQ.8).
+      RDS Proxy is deferrable (OQ.8). This tier item gates all DuckLake runtime work (T2.17-T2.19).
+      Terraform apply path: governed by Decision 35 (human-gate for Terraform apply) as scoped by Decision 77
+      (PLATFORM-sandbox push-to-main auto-apply behind scripts/terraform_apply_guard.py, which fails closed on
+      any destroy/IAM/trust change -- directly relevant to RDS security-group + credential/IAM-auth changes).
+    depends_on: [T2.1]
+    files_in_scope:
+      - terraform/rds_ducklake_catalog.tf    # new
+    exit_criteria:
+      - "RDS PostgreSQL instance provisioned in personal AWS account; DuckLake schema created and accessible"
+      - "Connectivity from a test Lambda (or local DuckDB) to the catalog confirmed; DuckLake extension can ATTACH"
+      - "PITR enabled; automated backup window configured"
+      - "Terraform apply governed per Decision 35 + Decision 77 (fail-closed-on-IAM guard active for security-group and credential changes)"
+      - "Catalog provisioned in its own dedicated schema (separability for future market-data catalog per OQ.14)"
+    related_candidate_decisions: [CD.31]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.17
+    tier: T2
+    name: DuckLake Lambda runtime -- VPC attach + extension layer + version pin
+    intent: |
+      Configure the ops DuckLake Lambdas (writer + reader + maintenance) for VPC-attached execution so they
+      can reach the RDS catalog (T2.16). VPC attach governs egress only; the Function-URL + AWS_IAM ingress
+      surface (CD.10 / NS.5) is unaffected. Because VPC egress blocks extensions.duckdb.org, the ducklake and
+      httpfs extensions must be pre-baked into a Lambda layer with extension_directory set, autoinstall and
+      autoload disabled, and custom_extension_repository set to a fail-closed empty or internal endpoint.
+      DuckLake + DuckDB versions pinned lockstep at the v1.0 / DuckDB 1.5.2 validated pair; version bumps
+      require a clone-rehearsal gate (OQ.12). Per-Lambda manifest per CD.24.
+    depends_on: [T2.16]
+    files_in_scope:
+      - src/lambdas/ducklake_writer/    # new
+      - src/lambdas/ducklake_reader/    # new
+      - config/lambda/ducklake_writer/manifest.yaml    # new -- CD.24 per-Lambda manifest
+      - config/lambda/ducklake_reader/manifest.yaml    # new -- CD.24 per-Lambda manifest
+      - scripts/build_lambda.py    # extend to bundle ducklake+httpfs layer
+    exit_criteria:
+      - "DuckLake Lambdas VPC-attached and able to reach RDS catalog; ATTACH succeeds in Lambda execution context"
+      - "ducklake + httpfs extensions pre-baked in Lambda layer; autoinstall + autoload disabled; custom_extension_repository set fail-closed"
+      - "DuckLake v1.0 + DuckDB 1.5.2 pinned; version-bump policy documented (OQ.12 clone-rehearsal gate)"
+      - "Function-URL + AWS_IAM ingress confirmed unaffected by VPC egress config (CD.10 / NS.5)"
+      - "Per-Lambda CD.24 manifests filed for ducklake_writer and ducklake_reader"
+      - "DEFERRED: build_lambda.py --deploy + smoke-test (pending Decision 67 / CD.16 reversal)"
+    related_candidate_decisions: [CD.31, CD.10]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.18
+    tier: T2
+    name: DuckLake maintenance pipeline replacing ops_compaction
+    intent: |
+      Implement the full DuckLake maintenance sequence as a scheduled pipeline:
+        flush_inlined_data -> merge_adjacent_files -> expire_snapshots -> cleanup_old_files
+        -> delete_orphaned_files (+ optional rewrite for compaction).
+      Replaces the existing ops_compaction Lambda. Note: expire_snapshots does NOT delete S3 objects --
+      cleanup_old_files and delete_orphaned_files must also be scheduled or S3 storage grows unboundedly.
+      Cadence mechanism (Lambda on EventBridge schedule vs GitHub Actions workflow_dispatch) is a deliberate
+      choice deferred to implementation time per CD.29 / Decision 62 (prefer the mechanism the team can
+      inspect and tune; Lambda avoids a new GH Actions surface for non-CI work).
+    depends_on: [T2.16, T2.17]
+    files_in_scope:
+      - src/lambdas/ducklake_maintenance/    # new -- or extend an existing maintenance Lambda
+      - config/lambda/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest
+    exit_criteria:
+      - "Full maintenance sequence implemented: flush -> merge -> expire -> cleanup -> delete_orphaned (+ rewrite)"
+      - "expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed stable after N maintenance cycles"
+      - "Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62"
+      - "ops_compaction Lambda retired or repurposed"
+      - "DEFERRED: build_lambda.py --deploy + smoke-test (pending Decision 67 / CD.16 reversal)"
+    related_candidate_decisions: [CD.31, CD.29]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.19
+    tier: T2
+    name: "DuckLake ops write/read migration = FP-B IMPLEMENTATION plan"
+    intent: |
+      Replace the OpsWriter JSONL-staging write path with a DuckLake writer, preserving the Decision 69
+      Single-Portal invariant (all ops writes still go through scripts/ops_data_portal.py; only the
+      underlying staging mechanism changes from local-file outbox to DuckLake writer). Swap
+      DuckDBIcebergReader -> a DuckLake reader. Adopt SCD2 via current_state + optionally
+      ducklake_table_changes CDC and time-travel for richer audit. Resolve OQ.7 (Athena escape hatch path
+      after DuckLake adoption) and OQ.10 (OCC writer-concurrency enforcement strategy). This is FP-B: a
+      full V3 IMPLEMENTATION plan (V3 because it deploys and invokes the live DuckLake write path).
+      Lambda-deploy DEFERRED per Decision 67 / CD.16 until per-Lambda gating resolves.
+    depends_on: [T2.16, T2.17, T2.18]
+    files_in_scope:
+      - scripts/ops_data_portal.py    # swap staging mechanism; preserve portal surface
+      - src/common/iceberg_reader.py    # extend or replace with DuckLake reader
+      - src/lambdas/ducklake_writer/    # implement write path
+      - src/lambdas/ducklake_reader/    # implement read path
+    exit_criteria:
+      - "All ops writes go through DuckLake writer via ops_data_portal; Decision 69 Single-Portal invariant preserved"
+      - "DuckDBIcebergReader replaced by DuckLake reader for operational read paths"
+      - "SCD2 schema reproduced in DuckLake (current_state field); CDC / time-travel optional extension documented"
+      - "OQ.7 resolved: Athena escape hatch strategy after DuckLake adoption documented + tested"
+      - "OQ.10 resolved: OCC writer-concurrency enforcement strategy (reserved-concurrency=1 / SQS FIFO / OCC retry) chosen and implemented"
+      - "Decision 69 Single-Portal invariant verified: no write path bypasses ops_data_portal"
+      - "DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test (pending Decision 67 / CD.16 reversal)"
+    related_candidate_decisions: [CD.31]
+    effort: L
+    strategic: false
     status: not_started
 
   # ----- T3: Trust loop closure -----
@@ -3540,6 +3763,101 @@ open_questions:
     question: Drift detector cadence and threshold tuning
     resolution_tier: T1.6
     notes: Hourly is starting point; tune to false-positive rate observed.
+
+  - id: OQ.7
+    question: Athena escape hatch after DuckLake adoption -- no Iceberg export path exists
+    resolution_tier: T2.19
+    notes: |
+      DuckLake v1.0 has no Iceberg metadata export and no external-engine reader: Athena and Trino cannot
+      read DuckLake tables directly. ducklake_add_data_files() is import-only AND dangerous (file ownership
+      transfers to DuckLake; compaction can delete registered files). The CD.15 Athena escape hatch
+      (ad-hoc large scans) has no export-based mitigation today. Options: (a) live without the Athena
+      escape hatch for ops/telemetry (accept DuckDB-only ad-hoc reads, adding compute if needed);
+      (b) maintain a parallel Iceberg mirror for Athena-accessible scans (write amplification, complexity);
+      (c) wait for DuckLake to add Iceberg export in a future version. Resolve at T2.19 / FP-B.
+
+  - id: OQ.8
+    question: RDS catalog backend -- sizing, RDS Proxy, and credential mechanism
+    resolution_tier: T2.16
+    notes: |
+      Catalog backend confirmed as standard RDS PostgreSQL (Aurora DSQL dropped as unvalidated against
+      DuckLake's PG12+/SQL-92/PK-based-OCC contract). Sizing: db.t4g.micro single-AZ gp3 is the proposed
+      starting point (~$12-15/mo). RDS Proxy is deferrable -- adds ~$10-12/mo and NAT complexity; worth it
+      only if Lambda cold-start connection churn causes catalog OCC collisions. Credential: IAM auth vs
+      Secrets Manager -- IAM auth is preferred (no rotation burden, per-role scoping) but needs validation
+      against the DuckLake ATTACH connection string format. Resolve at T2.16 implementation.
+
+  - id: OQ.9
+    question: Catalog durability, DR strategy, and SPOF mitigation
+    resolution_tier: T2.16
+    notes: |
+      The catalog is the lakehouse single point of failure: snapshots are catalog rows; un-flushed inlined
+      data (threshold 10 rows default) lives ONLY in the catalog -- not in S3 -- until flushed. RDS PITR
+      is the baseline DR mechanism. Questions: (a) backup cadence (default daily PITR; shorter window
+      possible via automated backup interval); (b) what happens to in-flight writes if the catalog is
+      unavailable (DuckLake hard-fails; no graceful degradation); (c) cross-AZ failover cost vs current
+      single-AZ. Ties T2.8 (single-AZ vs multi-AZ RDS decision). Resolve at T2.16; revisit at T2.19.
+
+  - id: OQ.10
+    question: OCC writer-concurrency enforcement -- reserved-concurrency vs SQS FIFO vs OCC retry
+    resolution_tier: T2.19
+    notes: |
+      DuckLake is OCC + snapshot-isolation: even single-writer Lambda overlap can collide on snapshot_id,
+      and DDL / ALTER-table writes hard-abort on conflict (no retry in DuckLake itself). Options:
+      (a) Lambda reserved-concurrency=1 (simplest; serialises all writes; reduces throughput);
+      (b) SQS FIFO queue in front of the writer Lambda (serialises at the queue; decouples caller latency
+          from write latency; adds SQS cost + infra);
+      (c) Application-level OCC retry in the writer Lambda (retry on conflict; only safe if the write is
+          idempotent or the conflict detection is precise). Resolve at T2.19 / FP-B; document the chosen
+      mechanism in the DuckLake writer Lambda design.
+
+  - id: OQ.11
+    question: Inlining flush policy -- threshold, flush timing, and catalog-as-durability acceptance
+    resolution_tier: T2.19
+    notes: |
+      DuckLake default inlining threshold is 10 rows. Un-flushed inlined data is durable only in the
+      catalog (RDS), not in S3. Options: (a) flush-on-write (call flush_inlined_data after every write;
+      eliminates catalog-only durability window; adds latency); (b) scheduled flush via T2.18 maintenance
+      pipeline (accept that the catalog holds uncommitted S3 data between maintenance cycles; rely on RDS
+      PITR for durability); (c) raise the inlining threshold to 0 (disable inlining; all data lands in S3
+      immediately; catalog holds only metadata). Trade-off: flush-on-write is safest but adds per-write
+      latency; option (c) loses the inlining optimisation for small writes. Resolve at T2.19 / FP-B.
+
+  - id: OQ.12
+    question: DuckLake version and DuckDB upgrade policy -- lockstep constraint + clone-rehearsal gate
+    resolution_tier: T2.17
+    notes: |
+      DuckLake v1.0 is lockstep with DuckDB 1.5.2: the catalog schema, the DuckLake extension, and DuckDB
+      must all upgrade together. There is no in-place catalog migration tooling across version bumps. Options
+      for upgrade path: (a) clone-rehearsal gate -- clone the catalog to a staging schema, upgrade DuckLake
+      + DuckDB there, run the full maintenance cycle, confirm data integrity, then promote; (b) blue/green
+      catalog -- provision a new catalog alongside the old one, replay writes to both during the cutover
+      window, then retire the old catalog. The version pin (v1.0 / DuckDB 1.5.2) is set at T2.17; the
+      upgrade policy is chosen at T2.17 implementation and documented in the per-Lambda manifest (CD.24).
+
+  - id: OQ.13
+    question: NS.1 generalisation -- "S3 + Iceberg" to "S3 + open table format"
+    resolution_tier: CD.31
+    notes: |
+      NS.1 currently reads "S3 + Iceberg at every scale" -- naming Iceberg specifically. Under DuckLake
+      adoption the operational tables would use DuckLake (not Iceberg). Options: (a) generalise NS.1 to
+      "S3 + open table format" (covers both Iceberg for market-data and DuckLake for ops/telemetry);
+      (b) retain "S3 + Iceberg" and treat DuckLake as an implementation detail beneath the NS.1 engine
+      principle (defensible since NS.1 governs compute-swappability, not the specific table format).
+      CD.23 precedent: NS tensions are resolved via a pending CD. NS.1 text is UNCHANGED by this roadmap
+      edit; the generalisation lands at CD.31 ratification via the log-decision path + FP-B follow-on.
+
+  - id: OQ.14
+    question: Catalog multi-tenancy -- shared ops-RDS-schema vs dedicated instance vs per-env catalog
+    resolution_tier: FP-C
+    notes: |
+      The ops catalog is provisioned in its own schema (T2.16) for clean separability. The future
+      market-data catalog (FP-C assessment) raises a multi-tenancy question: (a) shared ops-RDS-schema
+      (single RDS instance, separate schemas for ops and market-data; lowest cost; coupling risk);
+      (b) dedicated larger instance for market-data (cleaner isolation; higher cost); (c) per-environment
+      catalog (separate RDS per E.env.2 environment -- dev/staging/prod -- adds operational complexity).
+      Deferred to FP-C after the ops catalog validates the approach at billions-of-rows scale. The ops
+      catalog schema provisioned in T2.16 is designed for clean separability to support any of these paths.
 
 known_gaps:
   # Items deliberately not in the roadmap that the user / future sessions should be aware of.
