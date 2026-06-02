@@ -1970,6 +1970,15 @@ def validate_scheduled_agent_logs(failed: list[str]) -> None:
         print(f"Scheduled agent log validation passed ({len(agent_files)} file(s) checked).")
 
 
+def _ensure_root_on_path() -> bool:
+    """Inject ROOT into sys.path if absent; return True if injection was performed."""
+    root_str = str(ROOT)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+        return True
+    return False
+
+
 def validate_ci_rca_trigger(failed: list[str]) -> None:
     """Assert ci-rca.yml fires only on the authoritative main-branch CI gate.
 
@@ -1978,17 +1987,57 @@ def validate_ci_rca_trigger(failed: list[str]) -> None:
     """
     print("\n=== ci-rca trigger gate ===")
     root_str = str(ROOT)
-    injected = root_str not in sys.path
-    if injected:
-        sys.path.insert(0, root_str)
+    injected = _ensure_root_on_path()
     try:
         from scripts.verify_ci_workflow import _check_ci_rca_filter
 
         _check_ci_rca_filter()
         print("  PASS: ci-rca trigger gate (main-branch gate + FILED: marker contract present)")
-    except AssertionError as exc:
+    except Exception as exc:
         print(f"  FAIL: {exc}")
         failed.append("ci-rca trigger gate")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_ci_workflow_guards(failed: list[str]) -> None:
+    """Assert CI workflow structural invariants are met (Decision 60, CD.21).
+
+    Wires _check_jobs_and_flags, _check_fetch_depth, _check_concurrency, and
+    _check_canary from scripts/verify_ci_workflow.py into the presubmit tier.
+    Each guard failure appends a distinct label; a non-AssertionError exception
+    records a failure rather than crashing presubmit (rec-2027 pattern).
+    """
+    print("\n=== ci-workflow guards gate ===")
+    root_str = str(ROOT)
+    injected = _ensure_root_on_path()
+    try:
+        from scripts.verify_ci_workflow import (
+            _check_canary,
+            _check_concurrency,
+            _check_fetch_depth,
+            _check_jobs_and_flags,
+        )
+
+        guards = [
+            ("jobs-and-flags", _check_jobs_and_flags),
+            ("fetch-depth", _check_fetch_depth),
+            ("concurrency", _check_concurrency),
+            ("canary", _check_canary),
+        ]
+        for label, fn in guards:
+            try:
+                fn()
+                print(f"  PASS: {label}")
+            except Exception as exc:
+                print(f"  FAIL: {label}: {exc}")
+                failed.append(f"ci-workflow guard: {label}")
+    except Exception as exc:
+        # Import or setup failure (e.g. verify_ci_workflow unimportable) must
+        # record a gate failure, not crash presubmit (rec-2027).
+        print(f"  FAIL: ci-workflow guards gate (import/setup): {exc}")
+        failed.append("ci-workflow guards gate")
     finally:
         if injected and root_str in sys.path:
             sys.path.remove(root_str)
@@ -2009,6 +2058,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_warehouse_write_sources(failed)
     validate_invariants(failed)
     validate_ci_rca_trigger(failed)
+    validate_ci_workflow_guards(failed)
     validate_sloc_limits(failed)
     check_source_registry(failed)
     validate_platform_roadmap(failed)
