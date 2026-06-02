@@ -54,19 +54,16 @@ def _check_concurrency() -> None:
     data = _load(".github/workflows/ci.yml")
     jobs = data.get("jobs", {})
 
-    # terraform-validate intentionally has no ci-runner concurrency group:
-    # within a single workflow run, two jobs sharing a concurrency group
-    # cancel each other instead of queuing. The runner serialises at host
-    # level, so the cross-workflow group is only needed on pr/main jobs.
+    # CD.21: the self-hosted runner is retired; each job runs on its own
+    # isolated GitHub-hosted runner, so the ci-runner serialisation group
+    # is obsolete. Assert it is absent as an anti-regression guard.
     for job_name in ("pr-validate", "main-validate"):
         job = jobs.get(job_name)
         assert job is not None, f"Job {job_name!r} not found in ci.yml"
-        concurrency = job.get("concurrency")
-        assert concurrency is not None, f"{job_name} has no concurrency block"
-        assert concurrency.get("group") == "ci-runner", (
-            f"{job_name} concurrency.group is {concurrency.get('group')!r}, expected 'ci-runner'"
+        concurrency = job.get("concurrency") or {}
+        assert concurrency.get("group") != "ci-runner", (
+            f"{job_name} still declares obsolete concurrency.group 'ci-runner' (retired by CD.21)"
         )
-        assert concurrency.get("cancel-in-progress") is False, f"{job_name} concurrency.cancel-in-progress is not False"
 
 
 def _check_fetch_depth() -> None:
@@ -117,15 +114,7 @@ def _check_canary() -> None:
     canary_job = next(iter(jobs.values()))
 
     runs_on = canary_job.get("runs-on")
-    assert isinstance(runs_on, list), f"canary runs-on must be a list, got {type(runs_on).__name__}: {runs_on!r}"
-    assert runs_on == ["self-hosted", "linux"], f"canary runs-on is {runs_on!r}, expected ['self-hosted', 'linux']"
-
-    concurrency = canary_job.get("concurrency")
-    assert concurrency is not None, "canary job has no concurrency block"
-    assert concurrency.get("group") == "ci-runner", (
-        f"canary concurrency.group is {concurrency.get('group')!r}, expected 'ci-runner'"
-    )
-    assert concurrency.get("cancel-in-progress") is False, "canary concurrency.cancel-in-progress is not False"
+    assert runs_on == "ubuntu-latest", f"canary runs-on is {runs_on!r}, expected 'ubuntu-latest' (CD.21)"
 
     steps_text = _get_steps_text(canary_job)
     assert "scripts.validate" in steps_text, "canary steps do not reference scripts.validate"

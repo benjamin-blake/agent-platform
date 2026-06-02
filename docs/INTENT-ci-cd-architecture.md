@@ -199,7 +199,7 @@ meaningful only when paired with a build state and an owning plan.
 | L6 auto-merge pause | `scripts/session_postflight.py:run_push()` is the **primary** enforcement point (queries Athena for open ci-rca recs via `ops_data_portal` before invoking `gh pr merge`). A defence-in-depth secondary check lives in `.github/workflows/ci.yml` as a workflow-side gate. Primary fails closed; secondary catches drift if primary is bypassed. | DEFERRED -- see follow-up | TBD -- new plan required |
 | L7 ci-rca rec closure on green | The full-tier workflow on the forward-fix PR's merge to main, which closes the rec via `ops_data_portal.update_rec` after a green run. Alternative: a separate watcher in `planning-queue-governance` that queries Athena periodically. | UNBUILT | `planning-queue-governance` (primary) |
 | L8 hourly canary workflow | `.github/workflows/main-canary.yml` | BUILT (ci-workflow-restructure, 2026-05-19) | n/a |
-| L8 single-runner concurrency | `concurrency: { group: ci-runner, cancel-in-progress: false }` on both canary and PR CI workflows | BUILT (ci-workflow-restructure, 2026-05-19) | n/a |
+| L8 single-runner concurrency | `concurrency: { group: ci-runner, cancel-in-progress: false }` on both canary and PR CI workflows | BUILT 2026-05-19 (ci-workflow-restructure), RETIRED 2026-05-28 (CD.21) -- each `ubuntu-latest` job runs on its own isolated runner; no host serialisation needed | n/a |
 | L8 ci-rca liveness fallback | `scripts/session_preflight.py` Athena query for "main red but no ci-rca rec within 30 min" | DEFERRED -- see follow-up | TBD -- new plan required |
 | Budget assertion | `scripts/validate.py` (post-work check in `main()` for fast tier exit; `_FAST_TIER_BUDGET_SECONDS = 300`) | BUILT (`validate-fast-tier-reshape`, 2026-05-13) | n/a |
 | Budget breach rec filing | `scripts/validate.py` (`_file_budget_breach_rec` helper calling `ops_data_portal.file_rec` with `source="budget_breach"`; outbox fallback per Decision 51) | BUILT (`validate-fast-tier-reshape`, 2026-05-13) | n/a |
@@ -227,7 +227,7 @@ The merge/deploy pipeline is specified as ten layers.
 | **L5** | Open ci-rca rec exists | `/plan` sessions must address the rec first; no unrelated work scoped (see Section 5 for "related" definition) | Planning skill plus `session_preflight.py` enforce |
 | **L6** | Open ci-rca rec exists | PR auto-merge paused for all branches | Branches can still be opened and fast-tier validated, but not merged |
 | **L7** | `/implement` on the ci-rca rec | New branch (e.g., `agent/fix-ci-{rec-id}`), normal cycle, lands as new commit | Closes ci-rca rec on green; unblocks L5/L6 |
-| **L8** | Cron every 3 hours during sandbox-only operation (tightens to hourly when Phase Infra-Env lands SIT), with `concurrency: ci-runner` group | Full tier on `main` | Catches AWS API drift, dependency drift, time-bombs not caused by any merge |
+| **L8** | Cron every 3 hours during sandbox-only operation (tightens to hourly when Phase Infra-Env lands SIT); runs on GitHub-hosted `ubuntu-latest` (CD.21, no host serialisation needed) | Full tier on `main` | Catches AWS API drift, dependency drift, time-bombs not caused by any merge |
 | **L9** | Scheduled daily (future, Phase Infra-Env) | If sandbox `main` has been green continuously >=24h, promote to SIT | Streak resets on any ci-rca rec opening |
 | **L10** | Scheduled weekly (future, Phase Infra-Env) | If SIT `main` has been green continuously >=7d, promote to PROD | Streak resets on SIT failure |
 
@@ -496,9 +496,11 @@ sessions know what is outstanding.
   budget-breach rec filing; AWS pytest-marker audit and tag. Filed as a
   separate IMPLEMENTATION plan (proposed slug: `validate-fast-tier-reshape`).
 - **Workflow restructure** - `.github/workflows/ci.yml` PR/main split; new
-  `main-canary.yml` for hourly cron; `concurrency: ci-runner` group on canary
-  and PR CI; auto-merge pause logic in `session_postflight.py`. Filed as a
-  separate IMPLEMENTATION plan (proposed slug: `ci-workflow-restructure`).
+  `main-canary.yml` for hourly cron (BUILT 2026-05-19). The single-runner
+  concurrency group (`ci-runner`) was RETIRED 2026-05-28 per CD.21 (each
+  `ubuntu-latest` job gets its own isolated runner; no host serialisation needed).
+  Auto-merge pause logic in `session_postflight.py` remains deferred.
+  Slug: `ci-workflow-restructure`.
 - **Planning queue governance changes** - `session_preflight.py` and the
   planning skill updates to enforce ci-rca hard block, define "related work"
   per Section 5, stop surfacing non-automatable mass, add ci-rca liveness
@@ -587,29 +589,29 @@ Escalation contract:
 
 Owning follow-on plan: `planning-queue-governance`.
 
-### Single-runner concurrency and L8 sequencing
+### Single-runner concurrency and L8 sequencing (RETIRED CD.21)
 
-L8's hourly canary runs full tier on the same self-hosted EC2 t3.medium
-runner that also handles PR CI. A 28-minute canary triggered at the hour mark
+> **Retired 2026-05-28 (CD.21 / Decision 73).** The self-hosted EC2 runner was
+> replaced by GitHub-hosted `ubuntu-latest` runners. Each job runs on its own
+> isolated runner instance; there is no shared host to serialise against, so
+> the `ci-runner` concurrency group is obsolete and has been removed from both
+> `main-canary.yml` and `ci.yml`. The analysis below is preserved as history.
+
+L8's canary originally ran full tier on the same self-hosted EC2 t3.medium
+runner that also handled PR CI. A 28-minute canary triggered at the hour mark
 would queue any concurrent PR CI for the canary duration, busting the L1
 5-minute budget via queue time rather than work time.
 
-Mitigation in v1: both the L8 canary workflow and the PR CI workflow declare
-`concurrency: { group: ci-runner, cancel-in-progress: false }`. GitHub
-Actions' concurrency primitive ensures only one job per group runs at a
-time. Crucially, it does NOT cancel queued jobs; PR CI will queue behind an
-active canary up to the canary's full runtime. At 3-hour cadence: median
-~18 min x 1 run / 180 min cadence = ~10% baseline runner occupancy;
-worst-case 50 min x 1 / 180 min = ~28% worst-case overlap with PR CI.
-This is meaningfully lower than the ~30-50% worst-case overlap the original
-hourly schedule would have produced on a single t3.medium runner.
+Mitigation in v1 (now retired): both the L8 canary workflow and the PR CI
+workflow declared `concurrency: { group: ci-runner, cancel-in-progress: false }`.
+GitHub Actions' concurrency primitive ensured only one job per group ran at a
+time. At 3-hour cadence: median ~18 min x 1 run / 180 min cadence = ~10%
+baseline runner occupancy; worst-case 50 min x 1 / 180 min = ~28% worst-case
+overlap with PR CI.
 
-If canary runtime exceeds a defined threshold (35 min) consistently, the
-path forward is one of: (a) reduce the canary cadence (e.g., every 2 hours),
-(b) add a second self-hosted runner, (c) move the canary to a GitHub-hosted
-runner where billing applies. None of these mitigations are scoped in
-follow-on plans today; the path forward is captured here so future sessions
-can act when the threshold breaches.
+With GitHub-hosted runners (CD.21): each job gets its own runner; canary and
+PR CI no longer contend for a shared resource. The concurrency group is
+removed. L1 budget pressure from L8 is no longer a concern in this model.
 
 ### Budget assertion rollback risk
 

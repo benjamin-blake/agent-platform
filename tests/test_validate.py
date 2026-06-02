@@ -28,6 +28,7 @@ validate_complexity = _validate.validate_complexity
 validate_sloc_limits = _validate.validate_sloc_limits
 validate_cc_limits = _validate.validate_cc_limits
 validate_ci_rca_trigger = _validate.validate_ci_rca_trigger
+validate_ci_workflow_guards = _validate.validate_ci_workflow_guards
 ensure_fresh_dq_results = _validate.ensure_fresh_dq_results
 run_coverage_check = _validate.run_coverage_check
 _load_coverage_checker = _validate._load_coverage_checker
@@ -2646,3 +2647,59 @@ class TestValidateCiRcaTrigger:
             validate_ci_rca_trigger(failed)
 
         assert failed == ["ci-rca trigger gate"]
+
+    def test_no_error_propagation_on_runtime_error(self) -> None:
+        """rec-2027: validate_ci_rca_trigger catches non-AssertionError and records failure."""
+        mock_module = MagicMock()
+        mock_module._check_ci_rca_filter.side_effect = RuntimeError("unexpected boom")
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_rca_trigger(failed)
+
+        assert len(failed) == 1
+        assert "ci-rca trigger gate" in failed[0]
+
+
+class TestValidateCiWorkflowGuards:
+    """Tests for validate_ci_workflow_guards() -- the presubmit wrapper around four ci guards."""
+
+    def test_passes_when_all_guards_succeed(self) -> None:
+        mock_module = MagicMock()
+        for attr in ("_check_jobs_and_flags", "_check_fetch_depth", "_check_concurrency", "_check_canary"):
+            setattr(mock_module, attr, MagicMock())
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_workflow_guards(failed)
+
+        assert failed == []
+
+    def test_appends_failure_when_guard_raises_assertion(self) -> None:
+        mock_module = MagicMock()
+        mock_module._check_jobs_and_flags = MagicMock()
+        mock_module._check_fetch_depth = MagicMock()
+        mock_module._check_concurrency = MagicMock(side_effect=AssertionError("ci-runner still present"))
+        mock_module._check_canary = MagicMock()
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_workflow_guards(failed)
+
+        assert len(failed) == 1
+        assert "concurrency" in failed[0]
+
+    def test_records_failure_on_runtime_error_no_propagation(self) -> None:
+        """rec-2027: a non-AssertionError exception records a failure and does not propagate."""
+        mock_module = MagicMock()
+        mock_module._check_jobs_and_flags = MagicMock(side_effect=RuntimeError("disk full"))
+        mock_module._check_fetch_depth = MagicMock()
+        mock_module._check_concurrency = MagicMock()
+        mock_module._check_canary = MagicMock()
+
+        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
+            failed: list[str] = []
+            validate_ci_workflow_guards(failed)
+
+        assert len(failed) == 1
+        assert "jobs-and-flags" in failed[0]
