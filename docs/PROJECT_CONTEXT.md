@@ -80,13 +80,13 @@ Do not add DQ enforcement for these fields until the review is complete.
 
 Dual-environment trading system: AWS (formula discovery) + Docker (live trading).
 Phase 1 complete. Phase 2 (schema backfill) next. Phases 3-7 planned. Phase Platform (automation infrastructure) runs in parallel.
-See [docs/ROADMAP-PRODUCT.md](../docs/ROADMAP-PRODUCT.md) for product phases and [docs/ROADMAP-PLATFORM.yaml](../docs/ROADMAP-PLATFORM.yaml) for platform tier items. See [docs/DECISIONS.md](../docs/DECISIONS.md) for rationale.
+See [docs/ROADMAP-PRODUCT.yaml](../docs/ROADMAP-PRODUCT.yaml) for product phases and [docs/ROADMAP-PLATFORM.yaml](../docs/ROADMAP-PLATFORM.yaml) for platform tier items. See [docs/DECISIONS.md](../docs/DECISIONS.md) for rationale.
 
 ## Roadmap reference disambiguation
 
 Two roadmap files exist since PR #335. Apply this rule per call site:
 
-- **Product context** (phases, milestones, market features, trading capabilities, Phase 1-7 progress) -- reference `docs/ROADMAP-PRODUCT.md`
+- **Product context** (phases, milestones, market features, trading capabilities, Phase 1-7 progress) -- reference `docs/ROADMAP-PRODUCT.yaml`
 - **Platform context** (tier_items, infrastructure governance, candidate_decisions, AWS/Lambda topology, T-0 / T-1 / T-N bootstrap work) -- reference `docs/ROADMAP-PLATFORM.yaml`
 - **Both** (e.g. doc-freshness checking all roadmap content; documentation_update authoring across both; plan-critique checking phase AND tier alignment) -- reference both explicitly, with a short note explaining which dimension each addresses
 
@@ -116,7 +116,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 |-------|-----------|
 | Trading system design / data flow | [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) |
 | Development workflow / CI / telemetry | [docs/ARCHITECTURE-WORKFLOW.md](../docs/ARCHITECTURE-WORKFLOW.md) |
-| Product roadmap (phases, milestones) | [docs/ROADMAP-PRODUCT.md](../docs/ROADMAP-PRODUCT.md) |
+| Product roadmap (phases, milestones) | [docs/ROADMAP-PRODUCT.yaml](../docs/ROADMAP-PRODUCT.yaml) |
 | Platform roadmap (tier_items, infra, governance) | [docs/ROADMAP-PLATFORM.yaml](../docs/ROADMAP-PLATFORM.yaml) |
 | Technical decisions | [docs/DECISIONS.md](../docs/DECISIONS.md) |
 | Setup / deploy / troubleshoot | [docs/GETTING_STARTED.md](../docs/GETTING_STARTED.md) |
