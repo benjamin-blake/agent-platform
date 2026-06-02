@@ -1,0 +1,95 @@
+# Plan
+
+## Intent
+Make the pytest unit suite hermetic (no clock, network, filesystem-order, test-order, or shared-state dependence) and enforce this permanently in CI via randomised order and network-block, satisfying the explicit precondition for CD.29 (validation hard-gate consolidation) and CD.27 (executor hermetic verify).
+
+## Plan Type
+IMPLEMENTATION
+
+## Verification Tier
+V2
+
+## Plan Path
+docs/plans/PLAN-test-hermeticity.md
+
+## Phase
+T3 - Reliability & Observability
+
+## Scope
+| File | Action | Purpose |
+|------|--------|---------|
+| `requirements.txt` | Modify | Add `pytest-randomly>=3.15` and `pytest-socket>=0.7` |
+| `requirements-fast.txt` | Modify | Add `pytest-randomly>=3.15` and `pytest-socket>=0.7` |
+| `pyproject.toml` | Modify | Add `--randomly-seed=last`, `--disable-socket`, AND `--allow-hosts=127.0.0.1,::1` (all three) to `[tool.pytest.ini_options]` addopts. Do NOT register a `network` marker — `@pytest.mark.integration` is the SINGLE exclusion marker (see Constraints); the granular network-vs-clock-vs-order root cause lives in the audit YAML `root_cause_class`. `--allow-hosts` permits TCP to localhost for any localhost-bound fixture (e.g. moto/localstack); it is defensive — in-process DuckDB/SQLite never open the socket layer so they are unaffected either way |
+| `tests/conftest.py` | Modify | Add autouse `_allow_network_for_integration` fixture re-enabling sockets for `@pytest.mark.integration` tests only |
+| `tests/test_iceberg_reader.py` | Modify | Fix rec-2006: move the module-level `_warehouse_available = _has_warehouse_credentials()` call (line 375) off module scope. The value feeds a CLASS-LEVEL `pytest.mark.skipif` (`_skip_parity`, line 376, applied at line 426) which pytest evaluates at COLLECTION time, so a fixture value cannot feed it — ALSO convert the skip per the skipif-to-fixture mechanism in Constraints (memoized probe + autouse skip-fixture on the integration class) |
+| `tests/test_ducklake_spike.py` | Modify | Fix BOTH module-level live calls (line 59 `_creds_available = _has_spike_credentials()` and line 60 `_ducklake_available = _has_ducklake_extension()`): move off module scope. They feed a CLASS-LEVEL `pytest.mark.skipif` (`_skip_integration`, applied at lines 246/316/388) evaluated at COLLECTION time, so apply the same skipif-to-fixture conversion (see Constraints). This ALSO requires deleting the now-orphaned module-level combiner `_integration_available = _creds_available and _ducklake_available` (line 61) and the `_skip_integration` skipif object (lines 63-66), folding their combined gate into the autouse skip-fixture — leaving either behind raises `NameError`. `_has_ducklake_extension()` runs `INSTALL ducklake; LOAD ducklake` (a network download); the three classes are already `@pytest.mark.integration` (the single exclusion marker) — keep that, add no `network` marker |
+| `scripts/validate.py` | Modify | Extend "Unit tests + coverage" invocation to pass `--disable-socket --randomly-seed=last` explicitly (fail CI if hermeticity flags are absent) |
+| `tests/test_validate.py` | Modify | Add regression tests for the hermeticity assertion path (100% coverage of new validate.py lines, per Decision 48) |
+| `docs/AUDIT-test-hermeticity.yaml` | Create | Machine-readable audit report: per-test root-cause class and disposition (fix / quarantine / integration-exempt) |
+
+## Bundled Recommendations
+- **rec-2006** (fix): Move `_warehouse_available = _has_warehouse_credentials()` module-level call (line 375) in `tests/test_iceberg_reader.py` to a lazy fixture; acceptance: `! grep -qF '_warehouse_available = _has_warehouse_credentials' tests/test_iceberg_reader.py` (the module-level call-site expression is removed; the bare name `_warehouse_available` legitimately remains on line 376 as a `skipif` reference, so the acceptance MUST grep the full call-site expression, not the bare token)
+- **rec-612** (verify + close as already_implemented): Run `tests/test_scheduled_agent_handler.py` under the hermetic harness; all 42 tests pass — rec was filed before the fix was applied; close via `python -m scripts.ops_data_portal update_rec rec-612 status=already_implemented`
+
+## Infrastructure Dependencies
+None. No `.tf` files in scope.
+
+## Acceptance Criteria
+- [ ] `bin/venv-python -m pytest tests/ -m "not integration" --randomly-seed=12345 --disable-socket --allow-hosts=127.0.0.1,::1` exits 0 with zero failures
+- [ ] `bin/venv-python -m pytest tests/ -m "not integration" --randomly-seed=99999 --disable-socket --allow-hosts=127.0.0.1,::1` exits 0 (order-independence confirmed across two distinct seeds)
+- [ ] `bin/venv-python -m scripts.validate` (full suite, no flags) exits 0
+- [ ] `docs/AUDIT-test-hermeticity.yaml` exists and contains an entry for every non-hermetic test identified during the audit run, each with `root_cause_class` and `disposition` fields
+- [ ] rec-2006 closed (status=fixed) via ops portal
+- [ ] rec-612 closed (status=already_implemented) via ops portal
+- [ ] Module-level live calls removed from `tests/test_iceberg_reader.py` and `tests/test_ducklake_spike.py`
+- [ ] `ruff check tests/ scripts/validate.py` exits 0 (no new lint violations)
+
+## Verification Plan
+| # | Phase | Action | Command | Expected Outcome | Fix If |
+|---|-------|--------|---------|-----------------|--------|
+| 1 | pre-deploy | Install new packages into venv | `bin/venv-python -m pip install pytest-randomly pytest-socket --quiet && bin/venv-python -c "import pytest_randomly, pytest_socket; print('ok')"` | Prints `ok` | pip install error: check requirements.txt version pins; ensure venv active |
+| 2 | pre-deploy | Confirm socket-block flags accepted by pytest | `bin/venv-python -m pytest --co --disable-socket --allow-hosts=127.0.0.1,::1 tests/ -q 2>&1 \| head -5` | Collection succeeds (no "unrecognised arguments" error) | pytest-socket not installed or wrong version |
+| 3 | pre-deploy | Confirm random seed flag accepted | `bin/venv-python -m pytest --co --randomly-seed=12345 tests/ -q 2>&1 \| head -5` | Collection succeeds; seed line printed | pytest-randomly not installed |
+| 4 | pre-deploy | Run unit suite seed A (order test) | `bin/venv-python -m pytest tests/ -m "not integration" --randomly-seed=12345 --disable-socket --allow-hosts=127.0.0.1,::1 -q 2>&1 \| tail -5` | `N passed` with zero failures/errors | See audit YAML for per-test disposition; quarantine tests must be marked `@pytest.mark.integration` (the single exclusion marker) |
+| 5 | pre-deploy | Run unit suite seed B (order-independence) | `bin/venv-python -m pytest tests/ -m "not integration" --randomly-seed=99999 --disable-socket --allow-hosts=127.0.0.1,::1 -q 2>&1 \| tail -5` | Same pass count as seed A, zero failures | Test is order-dependent; add explicit setup/teardown isolation |
+| 6 | pre-deploy | Confirm rec-2006 fix: no module-level warehouse call | `grep -n '_warehouse_available = _has_warehouse_credentials' tests/test_iceberg_reader.py; echo "exit:$?"` | No lines printed (exit:1 means grep found nothing — that's the success signal) | Module-level call still present; move to fixture |
+| 6b | pre-deploy | Confirm ducklake fix: no module-level live calls (two `grep -F` checks, no regex alternation, so no pipe-vs-table-delimiter ambiguity) | `grep -qF '_creds_available = _has_spike_credentials' tests/test_ducklake_spike.py; echo "creds:$?"; grep -qF '_ducklake_available = _has_ducklake_extension' tests/test_ducklake_spike.py; echo "ducklake:$?"` | After fix both print exit `1` (call-site expressions gone). Sanity-check on the UNFIXED file first: both MUST print `0`, proving the check is not tautological | Either prints `0` after the fix: that module-level call-site is still present; defer it to a fixture |
+| 7 | pre-deploy | Confirm rec-612 tests pass under harness | `bin/venv-python -m pytest tests/test_scheduled_agent_handler.py --disable-socket --allow-hosts=127.0.0.1,::1 -q 2>&1 \| tail -3` | `42 passed` | Handler test mocks missing network calls; fix mock coverage |
+| 8 | pre-deploy | Full validate (full presubmit tier green) | `bin/venv-python -m scripts.validate 2>&1 \| tail -20` | All checks pass (exit 0). NOTE: do NOT grep this stdout for `--disable-socket` — `invoke_step` prints only the step name, not the command list. The flag-presence assertion is verified by the `test_validate.py` regression (VP step 11), which inspects the constructed pytest command directly | A check fails: read the failing step's output. If a non-hermetic test is surfaced by the new flags, triage it per the audit YAML disposition (fix or quarantine) |
+| 9 | pre-deploy | Audit YAML exists and is well-formed | `bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/AUDIT-test-hermeticity.yaml')); assert 'tests' in d and len(d['tests']) > 0; print(f'{len(d[\"tests\"])} entries')"` | Prints `N entries` (N > 0) | YAML missing or malformed; check file write step |
+| 10 | pre-deploy | Lint clean | `bin/venv-python -m ruff check tests/conftest.py tests/test_iceberg_reader.py tests/test_ducklake_spike.py tests/test_validate.py scripts/validate.py` | Exit 0, no violations | Fix reported ruff errors before pushing |
+| 11 | pre-deploy | New test_validate.py lines covered | `bin/venv-python -m pytest tests/test_validate.py --cov=scripts.validate --cov-report=term-missing -q 2>&1 \| grep -E "(TOTAL|validate)"` | Coverage for new hermeticity assertion lines shows 100% (no missing lines) | Add missing test cases for new code paths in validate.py |
+
+## Constraints
+- Do NOT modify any Bedrock-related test logic. CD.28 boundary: `PLAN-retire-bedrock-code-paths` owns that surface.
+- Do NOT modify `scripts/verifiers/` runtime code. Verifier modules are integration-by-design; only their unit tests (which mock live calls) are in scope.
+- **T3.6 scope boundary (partial completion):** T3.6's `files_in_scope` names `tests/`, `scripts/verifiers/`, AND `scripts/validate.py`, and its exit criteria require verifiers themselves to be hermetic-by-construction. This plan delivers ONLY the pytest-suite half (test hermeticity + CI enforcement + audit). The verifier-hermeticity portion (verifier runtime authored hermetic from the start) remains OPEN and is deferred to T3.1 / a follow-on plan. Do NOT mark T3.6 complete on the strength of this plan alone; mark it partially-satisfied and leave the verifier sub-item open.
+- T2.15 (CI verification-coverage restoration) is NOT bundled. Its three restorations are each individually gated on CD.17/T3.2/T3.3/T4.2; bundling would produce blocked work.
+- `--disable-socket` addopt MUST be accompanied by `--allow-hosts=127.0.0.1,::1`. This permits TCP connections to localhost for any localhost-bound fixture (e.g. a moto/localstack server). Note: in-process DuckDB/SQLite (`:memory:` or file-backed) never open the socket layer, so they are unaffected by `--disable-socket` with or without `--allow-hosts`; the flag is defensive coverage for future localhost-bound fixtures, not a fix for the embedded engines.
+- **skipif-to-fixture conversion mechanism (rec-2006 + ducklake):** The module-level live probes feed CLASS-LEVEL `pytest.mark.skipif` decorators, which pytest evaluates at COLLECTION time — that is why the live call fires even under `-m "not integration"`. Moving the probe off module scope is necessary, but a fixture value cannot be injected into a class-level `skipif`, so the skip itself must move too. Mechanism: (1) keep each `_has_*()` probe as a module-level function but memoize it with `functools.lru_cache(maxsize=1)` so it runs at most once, lazily (NEVER called at import); (2) replace each class-level `@skipif` with an `@pytest.fixture(autouse=True)` on the integration class that calls the memoized probe and `pytest.skip(reason)` when unavailable; (3) that autouse skip-fixture MUST request the conftest socket-reenable fixture (take it as a parameter) so the probe's own network call runs only after sockets are restored. Net effect: the live probe runs at setup time, once, and only for integration-marked tests — never in the hermetic unit lane.
+- Decision 60/73 two-tier scope distinction: the new `pyproject.toml` addopts FLAGS (`--disable-socket --allow-hosts --randomly-seed`) are GLOBAL — they apply to every pytest invocation, including the `--pre` tier's `pytest --picked` and any bare `pytest`. That is intended and desirable (hermeticity everywhere). Do NOT attempt to scope addopts to a single tier. What is presubmit-only is the new ASSERTION LOGIC added to `scripts/validate.py` (the explicit hermeticity-flag check in the "Unit tests + coverage" step), since `--pre` runs lint/format/prompts and does not own test-execution gating.
+- No rescue agents or workaround loops (Decision 55). Any test that cannot be made hermetic cheaply is quarantined via `@pytest.mark.integration` (the SINGLE exclusion marker — re-enabled for sockets by the conftest autouse fixture and filtered out of the hermetic unit run by `-m "not integration"`) + documented in the audit YAML with `disposition: quarantine` and its granular `root_cause_class`. Do NOT introduce a second `network` marker: it would require parallel wiring in the socket-reenable fixture AND in every `-m` filter (ACs, VP steps 4/5, the validate.py invocation, the `--pre` `pytest --picked` lane), and the audit YAML `root_cause_class` already carries the network-vs-clock-vs-order distinction.
+- All recommendation closes go through `python -m scripts.ops_data_portal` — never directly edit `logs/.recommendations-log.jsonl`.
+- New recs touching `scripts/verifiers/` must be filed with `automatable: false` per Decision 44.
+
+## Context
+- T2.1 (pre-condition) is complete; T3.6 is fully unblocked.
+- Decision 67/CD.16 Lambda-deploy freeze is NOT engaged: `tests/` is not Lambda-packaged.
+- CD.29 (validation hard-gate consolidation) is explicitly gated on hermeticity being in place; this plan satisfies that gate.
+- CD.27 (executor compute = Step Functions + Lambda Durable Functions) lists hermetic verify as a dependency; this plan satisfies that dependency.
+- CD.30 (unified executor telemetry) is pending on T3.7; `docs/AUDIT-test-hermeticity.yaml` is an input to that work.
+- Branch was current with main at planning time (0 commits behind).
+- `pytest-randomly` and `pytest-socket` are NOT currently in requirements.txt, requirements-fast.txt, or pyproject.toml — both must be added.
+- Current non-hermetic surface (from grep audit): ~27 test files reference live network calls (boto3/requests/urllib/yfinance/socket); 8 have clock dependence; 2 have module-level live calls (test_iceberg_reader.py + test_ducklake_spike.py); 1 has random-without-seed. Only 2 tests carry `@pytest.mark.integration` today.
+- rec-612 was filed when 37 tests in test_scheduled_agent_handler.py were failing. All 42 now pass — the fix was applied in a prior session. Close as `already_implemented` after verifying under the hermetic harness.
+
+## Pre-Implementation Checklist
+- [ ] Branch confirmed not on `main`
+- [ ] `docs/PROJECT_CONTEXT.md` read
+- [ ] `docs/DECISIONS.md` consulted (via decision-scout gate — NO_FLAGS, CITE list above)
+- [ ] All files in Scope table located and read
+- [ ] `tests/conftest.py` autouse fixture pattern understood (mirror `_clear_aws_credential_env` / `_block_llm_cli_subprocess` opt-out structure)
+- [ ] `scripts/validate.py` "Unit tests + coverage" invocation read (lines 2075-2088)
+- [ ] `pyproject.toml` `[tool.pytest.ini_options]` addopts read (current: `-v --strict-markers --tb=short --disable-warnings`)
+- [ ] rec-2006 and rec-612 retrieved from ops portal before closing
