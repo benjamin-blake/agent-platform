@@ -1,0 +1,105 @@
+# Test Hermeticity Audit
+# Machine-readable report produced by PLAN-test-hermeticity.md (2026-06-02).
+# Each entry covers a non-hermetic test class / file identified during the audit.
+# Fields:
+#   file            - relative path from repo root
+#   class           - test class name (or "module" for module-level issues)
+#   root_cause_class - live_network_call | clock_dependence | module_level_probe |
+#                      random_without_seed | filesystem_order | shared_state
+#   disposition     - fix | quarantine | integration_exempt
+#   notes           - one-line description of the fix or exemption rationale
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # Module-level live probes (fixed this session)
+  # ---------------------------------------------------------------------------
+
+  - file: tests/test_iceberg_reader.py
+    class: TestWarehouseParity
+    root_cause_class: module_level_probe
+    disposition: fix
+    notes: >-
+      _warehouse_available = _has_warehouse_credentials() ran at collection time;
+      converted to @functools.lru_cache probe + autouse skip-fixture requesting
+      _allow_network_for_integration so the probe only fires at setup, never import.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeSpikeE2E
+    root_cause_class: module_level_probe
+    disposition: fix
+    notes: >-
+      _creds_available/_ducklake_available module-level calls + _skip_integration
+      skipif object deleted; converted to @functools.lru_cache probes + per-class
+      autouse skip-fixture requesting _allow_network_for_integration.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeSerialisedWrites
+    root_cause_class: module_level_probe
+    disposition: fix
+    notes: Same module-level probe conversion as TestDuckLakeSpikeE2E.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeInlining
+    root_cause_class: module_level_probe
+    disposition: fix
+    notes: Same module-level probe conversion as TestDuckLakeSpikeE2E.
+
+  # ---------------------------------------------------------------------------
+  # Module reload / shared-state contamination (fixed this session)
+  # ---------------------------------------------------------------------------
+
+  - file: tests/test_executor_step_runner.py
+    class: TestVenvPythonResolution
+    root_cause_class: shared_state
+    disposition: fix
+    notes: >-
+      _restore_module_state fixture called importlib.reload(sr_mod) in both setup
+      AND teardown, leaving a new StepOutcome class in sr_mod after teardown.
+      Module-level `from ... import StepOutcome` in downstream tests held a stale
+      reference, causing `outcome == StepOutcome.X` to fail (different class
+      identity). Fixed: save+restore sr_mod.__dict__ instead of reload-in-teardown.
+
+  - file: tests/test_feature_engine.py
+    class: module
+    root_cause_class: shared_state
+    disposition: fix
+    notes: >-
+      src.data.feature_engine._fear_greed_cache is a module-level dict with a
+      5-minute TTL; test_fetch_fear_greed_index_returns_score_on_success caches
+      42.5, then test_fetch_fear_greed_index_retries_on_malformed_json gets the
+      cached value instead of its mock. Fixed in conftest.py autouse fixture
+      _clear_fear_greed_cache that clears the dict before each test.
+
+  # ---------------------------------------------------------------------------
+  # Integration tests (network calls, legitimately require live infrastructure)
+  # All carry @pytest.mark.integration and are excluded from the hermetic unit
+  # run via -m "not integration".  Sockets re-enabled by the conftest
+  # _allow_network_for_integration autouse fixture for their setup phase.
+  # ---------------------------------------------------------------------------
+
+  - file: tests/test_iceberg_reader.py
+    class: TestWarehouseParity
+    root_cause_class: live_network_call
+    disposition: integration_exempt
+    notes: >-
+      Requires real Glue/S3 access for parity assertions; correctly marked
+      @pytest.mark.integration and excluded from hermetic unit run.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeSpikeE2E
+    root_cause_class: live_network_call
+    disposition: integration_exempt
+    notes: Requires real S3 + DuckLake extension download; @pytest.mark.integration.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeSerialisedWrites
+    root_cause_class: live_network_call
+    disposition: integration_exempt
+    notes: Requires real S3; @pytest.mark.integration.
+
+  - file: tests/test_ducklake_spike.py
+    class: TestDuckLakeInlining
+    root_cause_class: live_network_call
+    disposition: integration_exempt
+    notes: Requires real S3; @pytest.mark.integration.

@@ -16,6 +16,7 @@ when credentials or network are unavailable.
 
 from __future__ import annotations
 
+import functools
 import sys
 import tempfile
 from pathlib import Path
@@ -28,6 +29,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1)
 def _has_spike_credentials() -> bool:
     """Return True if AWS credentials can reach the spike S3 prefix."""
     try:
@@ -43,6 +45,7 @@ def _has_spike_credentials() -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=1)
 def _has_ducklake_extension() -> bool:
     """Return True if the ducklake extension is available over the network."""
     try:
@@ -54,16 +57,6 @@ def _has_ducklake_extension() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
-
-
-_creds_available = _has_spike_credentials()
-_ducklake_available = _has_ducklake_extension()
-_integration_available = _creds_available and _ducklake_available
-
-_skip_integration = pytest.mark.skipif(
-    not _integration_available,
-    reason="AWS credentials or ducklake extension not available",
-)
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +236,18 @@ def _make_temp_catalog() -> Path:
 
 
 @pytest.mark.integration
-@_skip_integration
 class TestDuckLakeSpikeE2E:
     """Write >=50 throwaway rows to real S3, read back row-for-row identical."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_integration(self, _allow_network_for_integration: None) -> None:
+        """Skip when AWS credentials or ducklake extension are unavailable.
+
+        Requests _allow_network_for_integration so the probe's own network call
+        runs only after sockets are restored by that fixture.
+        """
+        if not _has_spike_credentials() or not _has_ducklake_extension():
+            pytest.skip("AWS credentials or ducklake extension not available")
 
     def test_e2e_write_and_read_back(self) -> None:
         """Write 50 rows to DuckLake on S3, read them all back, verify row-for-row."""
@@ -313,9 +315,14 @@ class TestDuckLakeSpikeE2E:
 
 
 @pytest.mark.integration
-@_skip_integration
 class TestDuckLakeSerialisedWrites:
     """Two sequential writers append without catalog corruption or row loss."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_integration(self, _allow_network_for_integration: None) -> None:
+        """Skip when AWS credentials or ducklake extension are unavailable."""
+        if not _has_spike_credentials() or not _has_ducklake_extension():
+            pytest.skip("AWS credentials or ducklake extension not available")
 
     def test_two_writers_no_row_loss(self) -> None:
         """Writer A writes 30 rows, writer B writes 25 rows; total must be 55."""
@@ -385,9 +392,14 @@ class TestDuckLakeSerialisedWrites:
 
 
 @pytest.mark.integration
-@_skip_integration
 class TestDuckLakeInlining:
     """Small write leaves no orphan sub-threshold S3 Parquet files (DuckLake inlining)."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_integration(self, _allow_network_for_integration: None) -> None:
+        """Skip when AWS credentials or ducklake extension are unavailable."""
+        if not _has_spike_credentials() or not _has_ducklake_extension():
+            pytest.skip("AWS credentials or ducklake extension not available")
 
     def test_small_write_is_inlined(self) -> None:
         """Writing 5 rows keeps data in catalog (inline); ducklake_data_file count == 0."""

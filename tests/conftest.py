@@ -100,6 +100,41 @@ def _patch_write_run_summary():  # type: ignore[misc]
 
 
 @pytest.fixture(autouse=True)
+def _clear_fear_greed_cache() -> None:
+    """Clear the module-level fear-greed index cache before each test.
+
+    src.data.feature_engine._fear_greed_cache is a module-level dict with a
+    5-minute TTL. If one test writes a cached value, a later test that also
+    calls _fetch_fear_greed_index() sees the cached value instead of its mock,
+    causing order-dependent failures.
+    """
+    try:
+        from src.data.feature_engine import _fear_greed_cache  # noqa: PLC0415
+
+        _fear_greed_cache.clear()
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _allow_network_for_integration(request: pytest.FixtureRequest) -> None:
+    """Re-enable sockets for @pytest.mark.integration tests.
+
+    --disable-socket in pyproject.toml addopts blocks network I/O globally.
+    Integration tests need real AWS/S3 access; this fixture selectively lifts
+    the block when the test node carries @pytest.mark.integration.
+    Integration skip-fixtures in test_iceberg_reader.py and test_ducklake_spike.py
+    must request this fixture so the probe's own network call runs only after
+    sockets are restored.
+    """
+    if "integration" not in [m.name for m in request.node.own_markers]:
+        return
+    from pytest_socket import enable_socket  # noqa: PLC0415
+
+    enable_socket()
+
+
+@pytest.fixture(autouse=True)
 def _block_llm_cli_subprocess(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard against CI/local drift where LLM CLIs exist on dev but not on Ubuntu CI runners."""
     if "integration" in [m.name for m in request.node.own_markers]:

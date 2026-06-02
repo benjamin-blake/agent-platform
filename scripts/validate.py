@@ -2043,6 +2043,38 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+_UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
+
+
+def _build_unit_test_cmd() -> list[str]:
+    """Return the pytest command for the 'Unit tests + coverage' step."""
+    return [
+        PYTHON,
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+        "-m",
+        "not integration",
+        "--cov=src",
+        "--cov-report=term-missing",
+        "--disable-socket",
+        "--randomly-seed=last",
+    ]
+
+
+def validate_hermeticity_flags(failed: list[str], _cmd: list[str] | None = None) -> None:
+    """Fail CI if mandatory hermeticity flags are absent from the unit-test pytest command.
+
+    Guards against accidental removal of --disable-socket or --randomly-seed=last from the
+    test invocation. Accepts an optional _cmd override for unit-testing this function itself.
+    """
+    cmd = _cmd if _cmd is not None else _build_unit_test_cmd()
+    for flag in _UNIT_TEST_HERMETICITY_FLAGS:
+        if flag not in cmd:
+            failed.append(f"hermeticity-flags: {flag!r} missing from pytest invocation")
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2072,21 +2104,8 @@ def run_python_checks(failed: list[str]) -> None:
     validate_environment_taxonomy(failed)
     validate_complexity(failed)
     validate_scheduled_agent_logs(failed)
-    invoke_step(
-        "Unit tests + coverage",
-        [
-            PYTHON,
-            "-m",
-            "pytest",
-            "tests/",
-            "-v",
-            "-m",
-            "not integration",
-            "--cov=src",
-            "--cov-report=term-missing",
-        ],
-        failed,
-    )
+    validate_hermeticity_flags(failed)
+    invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
     result = run([PYTHON, "-m", "mypy", "src/"], cwd=ROOT)
