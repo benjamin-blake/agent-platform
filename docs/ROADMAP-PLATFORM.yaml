@@ -1245,6 +1245,68 @@ candidate_decisions:
       - "VPC egress (to reach RDS) is orthogonal to Function-URL + AWS_IAM ingress (CD.10 / NS.5). The extension layer must be pre-baked into a Lambda layer to work around blocked egress to extensions.duckdb.org (T2.17)."
       - "Supersession of Decisions 50/56/51/69 is proposed-at-ratification only. Until CD.31 is ratified, all four Decisions remain in force and the existing write path (JSONL-staging, Single-Portal invariant per Decision 69) continues."
 
+  - id: CD.32
+    title: Multi-product platform topology (unified project_id data plane + IP-boundary-only repo axis)
+    detail: |
+      Exploratory record: docs/INTENT-multi-product-platform.md (merged PR #57). That document is
+      REPORT-ONLY and deliberately exploratory; it extends, and does not supersede, the monorepo +
+      project_id commitment in docs/INTENT-aws-migration-platform-evolution.md Part 2.
+
+      Two orthogonal axes:
+        1. Data/identity axis: a unified DuckLake operational data plane keyed by a project_id origin
+           dimension. All products (trading, reaper-tools, dbt-daywork, any future product) share one
+           operational lakehouse; product rows are distinguished by project_id. This axis is already
+           partially committed via the project_id stack below.
+        2. Code/repo axis: the split decision (monorepo vs separate private repos) is made only at the
+           cross-employer IP boundary -- not driven by data-plane topology. The two axes are orthogonal:
+           N repos can still write to one DuckLake keyed by project_id.
+
+      Open Decisions gating ratification (OD-1..OD-5 from the INTENT doc):
+        OD-1: Ratify project_id as the canonical product-discriminator in the DuckLake ops schema.
+        OD-2: Decide the egress-gate enforcement model (blocking Lambda interceptor vs application-level
+              guard vs deferred to T0.15 COALESCE gate).
+        OD-3: Decide the repo topology -- monorepo vs per-product separate private repos. The split is
+              only at the cross-employer IP boundary. Key framing: the data/identity axis stays unified
+              regardless of repo topology; per-directory CLAUDE.md is only a partial mitigation because
+              the shared operational corpus (DECISIONS.md, the roadmaps, the recs log) does not shard
+              with directory scope; the counter-cost of separate repos is extracting and duplicating the
+              co-located platform tooling.
+        OD-4: Decide rollback/freeze semantics if a product violates the egress gate post-onboarding.
+        OD-5: Update KG.1 roadmap wording from trading-specific to N-product framing. ENACTED by this
+              plan (the KG.1 edit). OD-5 is the only OD with a concrete deferred roadmap edit; the rest
+              require a ratified decision before any active work is eligible.
+
+      Build substrate to avoid duplicating (cross-reference docs/INTENT-aws-migration-platform-evolution.md
+      Part 2): T0.12a (project_id Pydantic annotations), T0.7a-c (schema backfill), T0.15 (COALESCE gate),
+      config/project_registry.yaml (product registry). These are the existing committed substrate; OD-1
+      ratification would extend them, not replace them.
+
+      Human-raised monorepo-vs-separate-private-repos open question (feeds OD-3):
+        - Per-directory CLAUDE.md scoping is only a partial mitigation: the shared operational corpus
+          (DECISIONS.md, the roadmaps, the recs log) does not shard with directory scope.
+        - Counter-cost of separate repos: extracting and duplicating the co-located platform tooling.
+        - The data/identity axis (one DuckLake, project_id keyed) is unchanged by the repo-topology
+          decision; this question only touches the code/repo axis.
+
+      Unbuilt enforcement work -- NOT eligible active tier_items; gated by OD-1/OD-2 + the unbuilt
+      project_id stack:
+        - Egress gate (application-level or Lambda interceptor)
+        - Day-job onboarding interlock
+        - COALESCE gate (T0.15, committed but not yet built)
+        - Rollback/freeze path
+
+      See KG.14 for the unbuilt enforcement substrate summary.
+    gates: []
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - "No active tier_items may be created for multi-product enforcement work until OD-1 and OD-2
+        are resolved and the project_id stack (T0.12a / T0.7a-c / T0.15) is built. Direction is tracked
+        here as known_gaps / candidate_decisions only."
+      - "The data/identity axis (one DuckLake, project_id keyed) and the code/repo axis (monorepo vs
+        separate private repos) are orthogonal. Do not conflate them when authoring plans referencing
+        this CD."
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -3864,8 +3926,19 @@ open_questions:
 known_gaps:
   # Items deliberately not in the roadmap that the user / future sessions should be aware of.
   - id: KG.1
-    gap: Trading product roadmap is in a sibling document (docs/ROADMAP-PRODUCT.md)
-    notes: This roadmap is platform-only. Product phases 2-7 (schema flattening, backfill, formula integration, A/B, circuit breakers, monitoring, weighting) remain in product roadmap.
+    gap: This platform roadmap is product-agnostic; each product owns its own product roadmap.
+    notes: |
+      The trading product's canonical roadmap is docs/ROADMAP-PRODUCT.yaml (docs/ROADMAP-PRODUCT.md is
+      superseded; retained as a recovery artefact). Prospective products (reaper-tools, dbt-daywork)
+      would own their own product roadmaps when real.
+
+      The platform/product boundary -- platform-tier concerns here vs product roadmaps elsewhere, and
+      correspondingly DuckLake for platform ops/telemetry vs Iceberg for product/market-data -- is the
+      boundary Decision 78 (CD.31) references; generalising the roadmap-location wording to N products
+      does not move that data-format boundary.
+
+      Enacts OD-5 from docs/INTENT-multi-product-platform.md. See also CD.32 (multi-product platform
+      topology candidate decision) and KG.14 (multi-product enforcement substrate unbuilt).
   - id: KG.2
     gap: 258 open recommendations not directly mapped to tier items
     notes: The recs are surgical implementation tasks. Most align loosely with one tier item (e.g. ~35 executor recs align with T4.2). Mapping is a future exercise; for now treat the recs as "implementation hints" not "tier items".
@@ -3962,3 +4035,14 @@ known_gaps:
       selects by input closure, which only the registry records). Cross-references Decision 73's existing Known
       Gap note that `pytest --picked` may upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor
       concurrency rises.
+  - id: KG.14
+    gap: Multi-product enforcement substrate is unbuilt (project_id mechanism, egress gate, COALESCE gate, day-job interlock, rollback/freeze).
+    notes: |
+      The platform can serve N products conceptually (one DuckLake ops data plane keyed by project_id)
+      but the enforcement machinery is not built. Unbuilt components: project_id as a ratified
+      discriminator in the ops schema (OD-1); egress gate preventing cross-product data leakage (OD-2);
+      COALESCE gate at T0.15; day-job onboarding interlock; rollback/freeze path (OD-4).
+
+      Tracked in CD.32 and the Build-state reality section of docs/INTENT-multi-product-platform.md.
+      Do not treat as active roadmap work; gated by OD-1/OD-2 ratification + the unbuilt project_id
+      stack (T0.12a / T0.7a-c / T0.15 / config/project_registry.yaml).
