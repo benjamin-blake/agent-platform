@@ -3179,9 +3179,17 @@ tier_items:
       Terraform apply path: governed by Decision 35 (human-gate for Terraform apply) as scoped by Decision 77
       (PLATFORM-sandbox push-to-main auto-apply behind scripts/terraform_apply_guard.py, which fails closed on
       any destroy/IAM/trust change -- directly relevant to RDS security-group + credential/IAM-auth changes).
+
+      depends_on:[T2.1] rationale (closes rec-2050): T2.1 (Full Terraform re-deploy in personal account,
+      status complete) stood up the isolated terraform/personal/ root module -- its own provider, S3 backend
+      (bucket=agent-platform-data-lake, key=tfstate/personal/sandbox/terraform.tfstate), and default-tagging
+      contract -- that this RDS resource is added to. Without T2.1, there is no terraform/personal/ root
+      module to add rds_ducklake_catalog.tf into; the work-root terraform/*.tf is retired per CD.21.
     depends_on: [T2.1]
     files_in_scope:
-      - terraform/rds_ducklake_catalog.tf    # new
+      - terraform/personal/rds_ducklake_catalog.tf    # new (path corrected from terraform/rds_ducklake_catalog.tf -- active module is terraform/personal/)
+      - terraform/personal/variables.tf               # ducklake_catalog_ingress_cidrs + db_name + instance_class vars
+      - terraform/personal/platform_roles.tf          # PlatformDuckLakeCatalogProvisioning inline policy (rds/ec2/kms/secrets) -- applied via platform_breakglass
     exit_criteria:
       - "RDS PostgreSQL instance provisioned in personal AWS account; DuckLake schema created and accessible"
       - "Connectivity from a test Lambda (or local DuckDB) to the catalog confirmed; DuckLake extension can ATTACH"
@@ -3191,7 +3199,18 @@ tier_items:
     related_candidate_decisions: [CD.31]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-03"
+    progress_note: |
+      Provisioned ducklake-catalog (db.t4g.micro, postgres 16, single-AZ, gp3, PITR=7d,
+      deletion_protection ON, RDS-managed master secret in Secrets Manager, publicly accessible
+      with SG locked to var.ducklake_catalog_ingress_cidrs, rds.force_ssl=1 enforced via custom
+      DB parameter group). ducklake_ops postgres schema pre-created out-of-band via DuckDB's
+      postgres-extension ATTACH at VP-6 time (NOT a terraform resource) for separability
+      (future market-data catalog goes in ducklake_market on same RDS, OQ.14). VP-6 ATTACH
+      round-trip via local DuckDB confirmed, including sslmode=disable rejected by server. Apply
+      was human-gated under agent_platform_admin (Decision 35); IAM extensions applied separately
+      via platform_breakglass.
 
   - id: T2.17
     tier: T2
