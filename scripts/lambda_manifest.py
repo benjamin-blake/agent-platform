@@ -152,9 +152,6 @@ def check_handler_imports(manifest: LambdaManifest, stage_dir: Path) -> list[str
         if not handler_path.exists():
             errors.append(f"{handler_rel}: not found in staged bundle")
             continue
-        module_name = handler_rel.rstrip(".py").replace("/", ".").replace("\\", ".")
-        if module_name.endswith("."):
-            module_name = module_name[:-1]
         # Derive dotted module from path relative to stage_dir
         relative = Path(handler_rel)
         parts = list(relative.with_suffix("").parts)
