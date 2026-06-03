@@ -60,7 +60,7 @@ tool -- they argue for sequencing.
 | C2 | Gazelle bulk-generates BUILD files statically | **PARTIAL (mostly holds)** | n/a (feasibility) | 0 star-imports, 0 `__import__`, only **1 file** with a real `importlib`/`spec_from_file_location` import (`validate.py`) |
 | C3 | import->distribution mapping is manageable | **PARTIAL** | **NO** (lockfile binds do-less too) | ~4-5 name mismatches = trivial; but **no lockfile**; torch 1.1 GB + pysr->Julia defeat a hermetic closure |
 | C4 | Dependency closure is a sound scope oracle | **HOLDS** | **PARTIAL** (enforced sandbox is Bazel-only; matters at concurrency > 1) | Sparse graph; closure median **0.8%**, p90 23.1%, max **33.9%** (`validate.py`). Computable with `ast`/`networkx` (installed) |
-| C5 | No dependency cycles (Bazel forbids them) | **PARTIAL (deferred-import friction, not a module-load wall)** | **NO** (`import-linter` binds do-less equally) | Module-import graph is **acyclic**; 3 cycles appear only in the static graph via function-local deferred imports (the same 104 `noqa: PLC0415` objects) |
+| C5 | No dependency cycles (Bazel forbids them) | **PARTIAL (deferred-import friction, not a module-load wall)** | **NO** (`import-linter` binds do-less equally) | Module-import graph is **acyclic**; 3 cycles appear only in the static graph via function-local deferred imports (a pervasive style; 104 imports carry inert `noqa: PLC0415` markers) |
 | C6 | Agent-file edges via frontmatter + generator | **UNBUILT / Bazel-irrelevant** | n/a | 43 agent files; cross-refs are free-form prose; 0 `responsibilities:`, 1 `depends_on`; Bazel cannot see the 287-file doc surface |
 | C7 | Incremental hybrid subtree adoption | **PARTIAL** | **YES** (Bazel-specific integration cost) | No build system exists (`setup.py` = env bootstrap; no lockfile); shared god-modules (fan-in 11-12) resist a clean cut |
 | C8 | CodeBuild + S3 cache = zero-infra serverless | **PARTIAL** | **YES** (net-new infra) | **0 CodeBuild today**; CI = GH Actions + OIDC (CD.21); torch 1.1 GB -> multi-GB ML cache blobs |
@@ -105,7 +105,10 @@ argument.
 
 **C4 -- HOLDS; one Bazel-only edge at concurrency > 1.** The first-party graph is
 sparse (121 nodes, 215 edges, avg fan-out 1.78): closure **median = 1 module (0.8%)**,
-p90 = 28 (23.1%), **max = 41 (33.9%)** for `scripts.validate`. The closure-as-scope
+p90 = 28 (23.1%), **max = 41 (33.9%)** for `scripts.validate` (absolute closure counts
+are import-resolution-dependent -- independent analyzers landed the max at 33.1% and
+28.9%; the sparse shape, the 0.8% median, and validate.py-as-max are stable across all
+three). The closure-as-scope
 idea is sound. The report's own closure numbers were computed in ~200 lines of `ast` +
 Tarjan, and `networkx 3.6.1` is already installed, so an *advisory* oracle needs no
 Bazel. The honest caveat the first draft missed: an advisory oracle is not the same as
@@ -120,14 +123,17 @@ gap.
 **C5 -- PARTIAL (re-graded; the first draft's "module-level cycles, hard blocker" was
 wrong).** The **module-import graph of all three reported cycles is acyclic.** They
 appear as cycles only in the static AST graph because that graph counts
-**function-local deferred imports** as edges -- and those are the *same objects* as
-the 104 `noqa: PLC0415` imports (the first draft double-counted them as a separate
-"cycle" finding and a separate "deferred-import" finding). Verified: the entire
-6-node `verifiers` SCC collapses by removing one late import,
+**function-local deferred imports** as edges. This deferred-import style is pervasive
+(104 imports carry `noqa: PLC0415` markers repo-wide -- inert markers, since ruff
+enables only `E/F/W/I`), but the specific cycle back-edges are a distinct,
+overlapping population, mostly unmarked -- the first draft wrongly equated the two.
+Verified: the entire 6-node `verifiers` SCC collapses by removing one late import,
 `scripts/verifiers/harness.py:151` (`from scripts.verifiers import run_all_verifiers`,
-inside `async def main()`, commented "Late import to avoid circular dependency"); the
-`ops_data_portal`/executor cycle's back-edges are all `noqa: PLC0415`
-(`jsonl_store.py:195,207,257,279`; `plan.py:474`); likewise `execute_recommendation`.
+inside `async def main()`, commented "Late import to avoid circular dependency" -- no
+noqa; `verifiers/` carries zero PLC0415 markers); the `ops_data_portal`/executor
+cycle's back-edges are likewise function-local deferred imports
+(`jsonl_store.py:195,207,257,279`, marked `noqa: PLC0415`; `plan.py:474`, commented
+"local import to avoid circularity", unmarked); likewise `execute_recommendation`.
 So the runtime imports are a DAG. What this means for Bazel is a genuine but bounded
 friction, not a wall: if Gazelle declares the deferred imports as deps (its default,
 since it parses all import statements regardless of scope) Bazel sees a cycle; if it
@@ -187,7 +193,8 @@ build tooling.
 ## Blockers (what must be true before any Bazel adoption -- mostly shared with do-less)
 
 1. **Resolve the deferred-import dilemma (C5).** The codebase stays module-acyclic via
-   104 function-local imports; under Bazel each must be declared (-> static cycle) or
+   function-local deferred imports (104 carry `noqa: PLC0415` markers); under Bazel each
+   must be declared (-> static cycle) or
    omitted (-> sandbox ImportError). This decoupling is owed to `import-linter` under
    do-less as well, so do it first either way.
 2. **A dependency lockfile (C3).** Needed by `rules_python`/`pip_parse` *and* by the
@@ -234,7 +241,7 @@ All re-measured at `ddb85a0`.
 | The conversation assumed... | The repo shows... |
 |---|---|
 | A polyglot codebase where Bazel's cross-language graph pays off | One language (Python) + Markdown; no compile step |
-| The import graph has hard module-load cycles Bazel must refuse | The module graph is acyclic; "cycles" are deferred-import artifacts (= the 104 PLC0415 imports) |
+| The import graph has hard module-load cycles Bazel must refuse | The module graph is acyclic; "cycles" are function-local deferred-import artifacts (a style; 104 imports carry inert PLC0415 markers) |
 | Bazel uniquely provides the dependency-closure oracle | The closure is already computable (`ast`/`networkx`); Bazel adds an *enforced* sandbox only, valuable at concurrency > 1 |
 | Affected-set test selection is the thing to gain | `pytest --picked` selects changed *test files*, not a reverse-closure; true TIA is roadmapped at KG.13 |
 | A clean build/packaging system to carve a subtree from | No build system; `setup.py` is an env bootstrap; no lockfile |
