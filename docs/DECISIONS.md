@@ -2,6 +2,31 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 79: Ratify per-Lambda packaging manifests + per-Lambda deploy/verify gating; lift Decision 67 Lambda-deploy clause (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-03
+**Warehouse ID:** dec-1086
+
+**Problem:**
+Blanket Lambda-deploy freeze (Decision 67) + whole-src/config copytrees in `build_lambda.py`: verification tier follows filesystem layout rather than the runtime import contract. Config bundled into inactive CLI Lambdas. Plans adding files under `src/` or `config/` incur blanket V3 + DEFERRED tax even when no Lambda handler imports the new code (T0.12 case). Lambda zips carry payload they do not need. Deploy boundary invisible to reviewers.
+
+**Decision:**
+Ratify CD.16 (per-Lambda deploy/verify gating) and CD.24 (per-Lambda packaging manifests) as the authoritative architecture. Concretely:
+
+- **Manifest = SSOT:** Each Lambda artifact owns `src/lambdas/<slug>/manifest.yaml` (Pydantic-validated `LambdaManifest` schema). The manifest lists handlers, includes, assets (runtime filesystem reads), config paths, and pip packages. No transitive resolution.
+- **Coverage invariant:** `validate_lambda_manifest_coverage` in `validate.py` fails CI if any `src/lambdas/<name>/` directory lacks a manifest.
+- **Bundle-completeness gate:** `validate_lambda_bundle_completeness` stages each active artifact into a temp dir, checks handler import-resolution, and asserts every declared `assets[]`/`config[]` path is staged. Full presubmit tier (NOT `--pre`) per Decision 73.
+- **Tier from manifest graph:** A plan modifying files named in any active manifest triggers V3 + per-Lambda deploy steps. Pure additions to `src/` or `config/` that no manifest references stay V2.
+- **Reverse ONLY Decision 67 Lambda-deploy clause:** The blanket `DEFERRED: build_lambda.py --deploy` pattern is withdrawn. Per-Lambda build/deploy/smoke-test steps are required for plans that modify active artifacts.
+- **STRATEGIC clause retained:** Decision 67's STRATEGIC-plan freeze survives via CD.17 / T4.2. Step 12d of plan-critique is unchanged.
+- **runtime_config tier declared, fetch deferred:** The `runtime_config[]` manifest field declares SSM/AppConfig paths; the fetch mechanism is a separable follow-on.
+- **Decision 44 boundary affirmed untouched:** `build_lambda.py`, `validate.py`, `lambda_manifest.py`, and the planning/critique SKILLs are NOT executor-machinery. `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py` are executor-boundary files but are only NAMED in the data-pipeline manifest's `includes`, never edited.
+
+**Related:** Decision 67 (Lambda-deploy clause LIFTED, STRATEGIC clause retained), Decision 78 (ratification-mechanism precedent), Decision 48 (deterministic tier classifier), Decision 44 (executor boundary), Decision 76 (web MCP merge flow), Decision 43 (SLOC governance), CD.13 (agent-first manifests), CD.16, CD.24 (ratified here).
+
+---
+
 ## Decision 78: Adopt DuckLake for the operational lakehouse (Decided)
 
 **Status:** Decided
@@ -598,27 +623,32 @@ SCD data transfer boundary: code execution moves to the project's EC2 instance. 
 
 ---
 
-## Decision 67: Lambda Deployment and STRATEGIC Plan Execution Deferred Pending Telemetry Readiness (Active - Temporary)
+## Decision 67: Lambda Deployment and STRATEGIC Plan Execution Deferred Pending Telemetry Readiness (Amended - Partially Active)
 
+**Status:** Amended by Decision 79 (2026-06-03). Two clauses; each has its own status.
+
+**[LAMBDA-DEPLOY CLAUSE -- LIFTED by Decision 79 / CD.16 + CD.24]**
+The blanket `DEFERRED: build_lambda.py --deploy` pattern is withdrawn. Plans are now gated per
+Lambda artifact (see Decision 79 + CD.16). Step 12b of plan-critique updated accordingly.
+The blanket DEFERRED marker is no longer acceptable in lieu of active per-Lambda deploy steps.
+
+**[STRATEGIC-PLAN CLAUSE -- RETAINED, pending CD.17 / T4.2]**
 **Status:** Active -- remove when reversal condition is met
 **Reversal condition:** Telemetry Athena tables (`telemetry_sessions`, `telemetry_process_events`,
 `telemetry_model_calls`, `telemetry_phases`, `telemetry_steps`) confirmed operational end-to-end
-with passing data quality checks AND Lambda dispatcher re-enabled per the CLAUDE.md runbook.
+with passing data quality checks AND executor re-enabled per CD.17 / T4.2.
 
-**Effect on planning:**
+**Effect on planning (STRATEGIC clause only):**
 - STRATEGIC plans are blocked. All plans must be IMPLEMENTATION type.
-- Plans touching Lambda-packaged files must include a
-  `DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test
-  (pending Decision 67 reversal)` step instead of active deployment steps.
 
-**Effect on plan-critique:** Step 12b accepts the DEFERRED marker pattern rather than
-recommending REVISE. Outputs a WARN noting the deferred deployment debt. Step 12d blocks
-STRATEGIC plans while this decision is active.
+**Effect on plan-critique (STRATEGIC clause only):** Step 12d blocks STRATEGIC plans while
+this clause is active.
 
-**Rationale:** The executor telemetry pipeline (telemetry_sessions etc.) is not yet confirmed
-operational. Running executor-mediated recs risks silent telemetry loss. Lambda dispatcher
-is separately disabled pending telemetry confirmation and scheduled-agent migration completion.
-Both gates reverse together.
+**Rationale (original, preserved):** The executor telemetry pipeline (telemetry_sessions etc.)
+is not yet confirmed operational. Running executor-mediated recs risks silent telemetry loss.
+Lambda dispatcher is separately disabled pending telemetry confirmation and scheduled-agent
+migration completion. The Lambda-deploy half reverses per Decision 79; the STRATEGIC half
+reverses when telemetry is confirmed and executor re-enabled (CD.17 / T4.2).
 
 ---
 

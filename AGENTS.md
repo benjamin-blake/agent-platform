@@ -44,12 +44,14 @@ You are a Lead Software Developer writing production-quality Python. The user is
   this window. During this window all plans must be IMPLEMENTATION type. The planning skill's
   complexity heuristic (>5 files or >8 steps) is suspended -- author the work as a single
   larger IMPLEMENTATION plan OR split it into multiple atomic IMPLEMENTATION plans yourself.
-  Restores when Decision 67 / CD.17 reverses.
-- **Lambda deployment deferred (Decision 67):** The Lambda dispatcher is disabled. Plans
-  touching Lambda-packaged files (`config/config.yaml`, `config/lambda/<name>/`, `scripts/llm_client.py`, `src/data/handlers/`,
-  `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`) must include a
-  `DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test
-  (pending Decision 67 reversal)` execution step in lieu of active deployment steps.
+  Restores when CD.17 / T4.2 reverses. (Note: Decision 67's Lambda-deploy clause was lifted by Decision 79; the STRATEGIC clause survives here.)
+- **Lambda deployment -- per-Lambda gating (Decision 79, CD.16 + CD.24):** The blanket Lambda-deploy
+  freeze from Decision 67 is lifted. Plans are gated per Lambda artifact, not blanket. Use
+  `bin/venv-python -m scripts.lambda_manifest --list-patterns` to identify Lambda-packaged files and
+  `compute_affected_artifacts(changed_files)` to determine which active artifacts require build/deploy/smoke-test.
+  Active artifacts (`status: active` in `src/lambdas/<slug>/manifest.yaml`) must include per-Lambda
+  build + deploy + smoke-test steps (V3 tier). Stub artifacts (`status: stub`) need no deploy step.
+  `config/agent/` is NOT Lambda-packaged. Decision 67's STRATEGIC-plan clause is RETAINED (see above).
 - **T2.12 security gate (CD.20) -- controls-as-code shipped, apply pending:** GHAS secret scanning + push protection, branch-protection ruleset, CodeQL, Dependabot, and Actions permissions are authored in `terraform/github/` + `.github/`. Human-gated local apply required to activate -- see `terraform/github/README.md`.
 
 ## Memory policy — CLAUDE.md is canonical persistence

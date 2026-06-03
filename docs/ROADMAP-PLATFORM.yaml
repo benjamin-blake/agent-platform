@@ -430,7 +430,8 @@ candidate_decisions:
       was a workaround for executor-telemetry trust leaking into Lambda-deploy decisions; it is not intrinsic
       to good Lambda hygiene.
     gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]
-    state: pending
+    state: ratified
+    filed_via: ops_decisions:dec-1086
     enforcement_mechanism: |
       Wiring lives in T-1.6 (CD.16 enforcement tier item). validate.py detects Lambda-modifying changes
       via a Lambda-package file-set registry; planning skill checks per-Lambda deploy steps; build_lambda.py
@@ -706,7 +707,8 @@ candidate_decisions:
           (config/lambda/<name>/ vs config/<agent-consumed>/); T-1.8 ships the per-Lambda manifest
           mechanism that consumes that structure. Both are needed.
     gates: [T-1.6, T-1.7, T-1.8]
-    state: pending
+    state: ratified
+    filed_via: ops_decisions:dec-1086
     discipline_points:
       - Manifests are committed YAML at a stable path (src/lambdas/<name>/manifest.yaml). Schema-validated by a LambdaManifest Pydantic model (parallel to RoadmapDocument per T-1.5).
       - Each manifest lists exactly: (a) handler entry-point module, (b) extra modules from src/ outside its own subtree, (c) extra paths from config/lambda/<name>/. No transitive resolution -- if module A imports B, the manifest lists both. Explicitness over cleverness.
@@ -1495,7 +1497,9 @@ tier_items:
     effort: S
     strategic: false
     bootstrap_completion_exempt: true
-    status: not_started
+    status: complete
+    completed_at: "2026-06-03"
+    progress_note: "2026-06-03: LAMBDA_FILE_PATTERNS derived from manifest union (lambda_manifest.derive_lambda_file_patterns); planning skill Step 4 updated to manifest-derived V2/V3 rule; coverage invariant gate added (validate_lambda_manifest_coverage)"
   - id: T-1.7
     tier: T-1
     name: config/ directory split into per-Lambda and agent-consumed subtrees
@@ -1520,8 +1524,11 @@ tier_items:
     related_candidate_decisions: [CD.16, CD.24]
     effort: S
     strategic: false
-    status: in_progress
-    progress_note: "2026-05-26: config/ split shipped -- lambda/ and agent/ subtrees created, build_lambda.py narrowed, planning skill Lambda trigger updated; pending criterion 4 (validate.py LAMBDA_FILE_PATTERNS from T-1.6)"
+    status: complete
+    completed_at: "2026-06-03"
+    progress_note: |
+      - 2026-05-26: config/ split shipped -- lambda/ and agent/ subtrees created, build_lambda.py narrowed, planning skill Lambda trigger updated; pending criterion 4 (validate.py LAMBDA_FILE_PATTERNS from T-1.6)
+      - 2026-06-03: criterion 4 satisfied -- LAMBDA_FILE_PATTERNS now derives from manifest union via lambda_manifest.derive_lambda_file_patterns(); all T-1.7 criteria complete
   - id: T-1.8
     tier: T-1
     name: Per-Lambda packaging manifests + bundle-completeness check
@@ -1558,7 +1565,10 @@ tier_items:
     related_candidate_decisions: [CD.16, CD.24]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-03"
+    progress_note: |
+      2026-06-03: All eight manifests shipped; copytrees retired; bundle-completeness check (validate_lambda_bundle_completeness) and schema/coverage/deploy-gating checks wired into validate.py; manifest-derived LAMBDA_FILE_PATTERNS; planning/critique skills updated. Exit criterion "files dropped must be confirmed as not-imported via the bundle-completeness check" satisfied by the STRONGER binding zero-diff equivalence test (VP Step 7) + assets[]/pip_packages[] declaration mechanism -- runtime filesystem reads (schedule.yaml, prompts, roadmaps, config.yaml) are invisible to py_compile but are explicitly declared in manifest assets[] and their staged presence is asserted by check_assets_present(); a later audit should not read the original criterion as unmet.
     note: |
       Discovered during T0.12 planning session 2026-05-19 when the V3/DEFERRED tax was about to be applied to src/schemas/
       despite no Lambda handler importing it. CD.24 + T-1.8 retire the wrong invariant; T0.12 ships as V3 + DEFERRED under
