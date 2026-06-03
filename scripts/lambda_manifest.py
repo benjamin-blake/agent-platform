@@ -82,6 +82,7 @@ def stage_bundle(manifest: LambdaManifest, stage_dir: Path, *, skip_pip: bool = 
         skip_pip: If True, skip pip install steps (fast; for list/coverage checks).
             Set False for a full build that includes pip packages.
     """
+
     def _copy_path(rel: str) -> None:
         """Copy a single path (file or directory) preserving relative structure."""
         src = ROOT / rel
@@ -111,12 +112,20 @@ def stage_bundle(manifest: LambdaManifest, stage_dir: Path, *, skip_pip: bool = 
             result = subprocess.run(
                 [
                     sys.executable,
-                    "-m", "pip", "install", pkg,
-                    "--target", str(stage_dir),
-                    "--platform", "manylinux_2_28_x86_64",
-                    "--platform", "manylinux2014_x86_64",
-                    "--implementation", "cp",
-                    "--python-version", "3.12",
+                    "-m",
+                    "pip",
+                    "install",
+                    pkg,
+                    "--target",
+                    str(stage_dir),
+                    "--platform",
+                    "manylinux_2_28_x86_64",
+                    "--platform",
+                    "manylinux2014_x86_64",
+                    "--implementation",
+                    "cp",
+                    "--python-version",
+                    "3.12",
                     "--only-binary=:all:",
                     "--quiet",
                 ],
@@ -163,6 +172,7 @@ def check_handler_imports(manifest: LambdaManifest, stage_dir: Path) -> list[str
             stderr = result.stderr.strip()
             # Extract the missing module name from ModuleNotFoundError if present
             import re as _re
+
             m = _re.search(r"ModuleNotFoundError: No module named '([^']+)'", stderr)
             if m:
                 errors.append(f"{handler_rel}: missing module '{m.group(1)}'")
@@ -353,6 +363,7 @@ def cmd_list_patterns(args: argparse.Namespace) -> int:
 def _minimal_env() -> dict[str, str]:
     """Return a minimal environment dict for subprocess calls."""
     import os
+
     keep = {"PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT"}
     return {k: v for k, v in os.environ.items() if k in keep}
 
