@@ -75,10 +75,10 @@ DEFERRED step (REPORT-ONLY, docs-only).
 ## Context
 Repo state at `ddb85a0` (rebased onto origin/main this session). Decisive evidence
 already gathered (full numbers in the INTENT doc's Quantified Findings):
-- Single-language Python (120 first-party modules / ~36.5k SLOC) + Markdown (284 files / ~70k LOC); no compiled build; the only artifact is a Lambda zip.
-- First-party import graph: 120 nodes, 213 edges, sparse (avg fan-out 1.77). Dependency closure: median 0.8%, p90 25%, max 33.3% (`scripts.validate`).
-- THREE import cycles (Bazel hard blocker): the whole `scripts/verifiers` package (6-node), an `ops_data_portal`+executor 5-node, and `execute_recommendation`<->`batch`. Plus 96 `noqa: PLC0415` function-local imports masking further latent cycles.
-- `scripts/validate.py`: 2604 lines (Decision 43 waiver records 1198 -- 2x over), the single highest-closure module, the lone `importlib`/`spec_from_file_location` user; its test is 2786 lines with 319 patch sites.
+- Single-language Python (121 first-party modules / ~36.5k SLOC) + Markdown (287 files / ~70k LOC); no compiled build; the only artifact is a Lambda zip.
+- First-party import graph: 121 nodes, 215 edges, sparse (avg fan-out 1.78). Dependency closure: median 0.8%, p90 23.1%, max 33.9% (`scripts.validate`).
+- THREE static-graph cycles that are module-acyclic at runtime -- artifacts of function-local deferred imports (the same 104 `noqa: PLC0415` objects): the `scripts/verifiers` package (6-node, collapses by removing one late import in `harness.py:151`), an `ops_data_portal`+executor 5-node, and `execute_recommendation`<->`batch`. Real Bazel friction (declare-and-cycle vs omit-and-sandbox-ImportError), but it binds `import-linter` equally -- not a Bazel-discriminating blocker.
+- `scripts/validate.py`: 2744 lines (Decision 43 waiver records 1198), the single highest-closure module (33.9%), the lone real `importlib`/`spec_from_file_location` user, 38 `validate_` functions with no registry; its test is 2950 lines with 262 `patch(` sites + 62 monkeypatch.
 - No dependency lockfile (unpinned `>=`); torch 1.1 GB and pysr->Julia defeat a clean hermetic closure.
 - Python 3.12 everywhere (durable functions need 3.13+). Coverage `fail_under=37`, scoped to `src/` only (excludes all of scripts/). No mutation or property testing. `--disable-socket` already enforces test hermeticity.
 - Decision 79 (today) chose per-Lambda manifests with "no transitive resolution" + a `validate_lambda_manifest_coverage` gate -- the repo's own direction is explicit-manifest, anti-transitive-closure.
