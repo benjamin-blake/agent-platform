@@ -32,7 +32,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`cron_review_fresh: false`** -- Note to human (non-blocking).
 - **`outbox_synced: false`** -- Run `bin/venv-python -m scripts.sync_ops pull` to drain outbox and sync data (Decision 51). If fails, STOP.
 - **`open_recommendations > 0`** -- Surface counts and ask whether to address. Wait.
-- **`non_automatable_recommendations > 0`** -- Informational. Surface counts; do not require per-rec discussion. Individual review is suspended per Decision 73 until Decision 67 reverses.
+- **`non_automatable_recommendations > 0`** -- Informational. Surface counts; do not require per-rec discussion. Individual review is suspended per Decision 73 until CD.17 / T4.2 reverses (Decision 67's Lambda-deploy clause was lifted by Decision 79; the STRATEGIC clause survives).
   - If `non_automatable_softcap_breached` is true (count > 250), surface as a planning context note.
 - **`friction_patterns` non-empty** -- Surface repeated patterns as planning context.
 - **`metrics_anomalies` non-empty** -- Surface anomalies as planning context.
@@ -122,7 +122,7 @@ apply these rules:
 
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
 **Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.
-**Lambda Deployment:** If ANY scope file is Lambda-packaged (`config/config.yaml`, `config/lambda/<name>/`, `src/data/handlers/`, `scripts/llm_client.py`, `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`), the plan MUST include build, deploy, smoke-test, and model ID validation steps. Note: `config/agent/` is NOT Lambda-packaged and does NOT trigger this assessment. If `.tf` modifies IAM, terraform apply must precede Lambda deploy.
+**Lambda Deployment:** Use the manifest-derived file patterns (`bin/venv-python -m scripts.lambda_manifest --list-patterns`) to determine which scope files are Lambda-packaged, and `compute_affected_artifacts(changed_files)` to identify which active artifact(s) are affected. For each affected active artifact (status: active in its `src/lambdas/<slug>/manifest.yaml`), the plan MUST include per-Lambda build, deploy, smoke-test, and model ID validation steps (V3). Stub artifacts (status: stub) require no deploy step -- V1 suffices. Note: `config/agent/` is NOT Lambda-packaged and does NOT trigger this assessment. If `.tf` modifies IAM, terraform apply must precede Lambda deploy. (CD.16 + Decision 79)
 
 ## Complexity Assessment (Workflow Step 4)
 - **Scope files > 5** OR **estimated steps > 8** --> suggests classifying as **STRATEGIC**.

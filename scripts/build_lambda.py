@@ -2,10 +2,12 @@
 """Build Lambda deployment packages for the data pipeline (no Docker required).
 
 Creates two zip artifacts:
-  1. data-pipeline.zip             -- application code (src/ + config/)
-  2. data-pipeline-deps-layer.zip  -- dependencies layer (yfinance, pyyaml, etc.)
+  1. data-pipeline.zip             -- application code (manifest-driven)
+  2. ops-compaction.zip            -- minimal ops compaction handler
+  3. data-pipeline-deps-layer.zip  -- dependencies layer (yfinance, pyyaml, etc.)
 
-Both zips are placed in ./lambda-packages/ and then uploaded to S3.
+Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
+whole-src/whole-config copytrees (Decision 79 / CD.24).
 """
 
 import argparse
@@ -33,7 +35,7 @@ PROD_DEPS = [
     "aiohttp>=3.8.0",
 ]
 
-
+# Retained for backward compatibility with external callers and tests.
 _LAMBDA_SCRIPTS = [
     "__init__.py",
     "aws_profile.py",
@@ -52,141 +54,109 @@ _LAMBDA_SCRIPTS = [
 
 _COPILOT_SDK_PACKAGE = "github-copilot-sdk==0.2.2"
 
-# Functions that use the full data-pipeline.zip
 _LAMBDA_FUNCTION_NAMES = [
     "agent-platform-scheduled-agent-dispatcher",
     "agent-platform-findings-processor",
 ]
 
-# ops_compaction uses a separate minimal zip (no Copilot SDK) to stay
-# under the 262 MB Lambda limit when combined with the AWSSDKPandas layer.
 _OPS_COMPACTION_FUNCTION_NAME = "agent-platform-ops-compaction"
 _OPS_COMPACTION_ZIP_KEY = "lambda-packages/ops-compaction.zip"
 
 
-def build_app_package(temp_dir: Path) -> Path:
-    """Create data-pipeline.zip with src/, config/, scheduled-agent scripts, and .github assets."""
-    app_dir = temp_dir / "app"
-    app_dir.mkdir(parents=True)
-    shutil.copytree(ROOT / "src", app_dir / "src")
-    config_dest = app_dir / "config"
-    config_dest.mkdir(parents=True)
-    if (ROOT / "config" / "config.yaml").exists():
-        shutil.copy2(ROOT / "config" / "config.yaml", config_dest / "config.yaml")
-    if (ROOT / "config" / "config.yaml.example").exists():
-        shutil.copy2(ROOT / "config" / "config.yaml.example", config_dest / "config.yaml.example")
-    lambda_subtree_src = ROOT / "config" / "lambda" / "data-pipeline"
-    if lambda_subtree_src.exists():
-        shutil.copytree(lambda_subtree_src, config_dest / "lambda" / "data-pipeline")
+def _get_lambda_file_patterns() -> list[str]:
+    """Derive LAMBDA_FILE_PATTERNS from the union of all active manifests (CD.24)."""
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.lambda_manifest import derive_lambda_file_patterns  # noqa: PLC0415
 
-    # Include scripts required by scheduled-agent Lambda handlers.
-    scripts_dest = app_dir / "scripts"
-    scripts_dest.mkdir(parents=True)
-    for name in _LAMBDA_SCRIPTS:
-        src_file = ROOT / "scripts" / name
-        if src_file.exists():
-            shutil.copy2(src_file, scripts_dest / name)
+        return derive_lambda_file_patterns()
+    except Exception:
+        return []
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
 
-    # Include schedule.yaml manifest and scheduled prompts used by Lambda handlers.
-    schedule_dest = app_dir / ".github" / "agents"
-    schedule_dest.mkdir(parents=True)
-    schedule_src = ROOT / ".github" / "agents" / "schedule.yaml"
-    if schedule_src.exists():
-        shutil.copy2(schedule_src, schedule_dest / "schedule.yaml")
 
-    prompts_src = ROOT / ".github" / "prompts" / "scheduled"
-    prompts_dest = app_dir / ".github" / "prompts" / "scheduled"
-    if prompts_src.exists():
-        shutil.copytree(prompts_src, prompts_dest)
+# Derived at import time from the union of active manifests.
+LAMBDA_FILE_PATTERNS: list[str] = _get_lambda_file_patterns()
 
-    # Include both roadmap files so scheduled agents can read them from /var/task.
-    docs_dest = app_dir / "docs"
-    docs_dest.mkdir(parents=True)
-    for roadmap_name in ("ROADMAP-PRODUCT.md", "ROADMAP-PLATFORM.yaml"):
-        roadmap_src = ROOT / "docs" / roadmap_name
-        if roadmap_src.exists():
-            shutil.copy2(roadmap_src, docs_dest / roadmap_name)
 
-    # Install Copilot SDK into the app package (includes bundled CLI binary).
-    print("  Installing Copilot SDK into app package...")
-    sdk_result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            _COPILOT_SDK_PACKAGE,
-            "--target",
-            str(app_dir),
-            "--platform",
-            "manylinux_2_28_x86_64",
-            "--platform",
-            "manylinux2014_x86_64",
-            "--implementation",
-            "cp",
-            "--python-version",
-            "3.12",
-            "--only-binary=:all:",
-            "--quiet",
-        ],
-        check=False,
-    )
-    if sdk_result.returncode != 0:
-        print(f"ERROR: Copilot SDK installation failed (exit {sdk_result.returncode})")
-        sys.exit(1)
-
-    zip_path = OUTPUT_DIR / "data-pipeline.zip"
+def _zip_staged_dir(stage_dir: Path, zip_path: Path) -> Path:
+    """Write all files in stage_dir into zip_path (ZIP_DEFLATED)."""
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in app_dir.rglob("*"):
+        for f in stage_dir.rglob("*"):
             if f.is_file():
-                arcname = str(f.relative_to(app_dir))
+                arcname = str(f.relative_to(stage_dir))
                 info = zipfile.ZipInfo(arcname)
                 if "copilot/bin/" in arcname.replace("\\", "/") and not arcname.endswith(".py"):
-                    info.external_attr = 0o755 << 16  # Unix executable
+                    info.external_attr = 0o755 << 16  # Unix executable bit
                 else:
                     info.external_attr = 0o644 << 16
                 zf.writestr(info, f.read_bytes())
     return zip_path
 
 
-def build_ops_compaction_package(temp_dir: Path) -> Path:
-    """Create ops-compaction.zip with src/ + scripts/ only (no Copilot SDK).
+def build_app_package(temp_dir: Path) -> Path:
+    """Create data-pipeline.zip from the data-pipeline manifest (manifest-driven, CD.24).
 
-    The ops_compaction Lambda has the AWSSDKPandas layer attached which is
-    ~128 MB unzipped. Including the full data-pipeline.zip (which embeds the
-    Copilot SDK binary at ~120 MB) would push the combined unzipped size past
-    the 262 MB Lambda limit. This minimal zip contains only the application
-    source and the ops-related scripts needed by ops_compaction_handler.py.
+    Retired whole-src and whole-config tree bundling in favour of explicit manifest declarations.
+    All bundled files are explicitly declared in src/lambdas/data-pipeline/manifest.yaml.
     """
+    from scripts.lambda_manifest import load, stage_bundle  # noqa: PLC0415
+
+    manifest = load(ROOT / "src" / "lambdas" / "data-pipeline" / "manifest.yaml")
+    app_dir = temp_dir / "app"
+    app_dir.mkdir(parents=True)
+
+    print("  Installing Copilot SDK into app package...")
+    stage_bundle(manifest, app_dir, skip_pip=False)
+
+    zip_path = OUTPUT_DIR / "data-pipeline.zip"
+    return _zip_staged_dir(app_dir, zip_path)
+
+
+def build_ops_compaction_package(temp_dir: Path) -> Path:
+    """Create ops-compaction.zip from the ops-compaction manifest (manifest-driven, CD.24).
+
+    Minimal zip -- no Copilot SDK to stay under the 262 MB Lambda+AWSSDKPandas limit.
+    All bundled files are explicitly declared in src/lambdas/ops-compaction/manifest.yaml.
+    """
+    from scripts.lambda_manifest import load, stage_bundle  # noqa: PLC0415
+
+    manifest = load(ROOT / "src" / "lambdas" / "ops-compaction" / "manifest.yaml")
     app_dir = temp_dir / "ops-app"
     app_dir.mkdir(parents=True)
-    shutil.copytree(ROOT / "src", app_dir / "src")
-    config_dest = app_dir / "config"
-    config_dest.mkdir(parents=True)
-    if (ROOT / "config" / "config.yaml").exists():
-        shutil.copy2(ROOT / "config" / "config.yaml", config_dest / "config.yaml")
-    if (ROOT / "config" / "config.yaml.example").exists():
-        shutil.copy2(ROOT / "config" / "config.yaml.example", config_dest / "config.yaml.example")
-    lambda_subtree_src = ROOT / "config" / "lambda" / "ops-compaction"
-    if lambda_subtree_src.exists():
-        shutil.copytree(lambda_subtree_src, config_dest / "lambda" / "ops-compaction")
 
-    scripts_dest = app_dir / "scripts"
-    scripts_dest.mkdir(parents=True)
-    for name in _LAMBDA_SCRIPTS:
-        src_file = ROOT / "scripts" / name
-        if src_file.exists():
-            shutil.copy2(src_file, scripts_dest / name)
+    stage_bundle(manifest, app_dir, skip_pip=True)
 
     zip_path = OUTPUT_DIR / "ops-compaction.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in app_dir.rglob("*"):
-            if f.is_file():
-                arcname = str(f.relative_to(app_dir))
-                info = zipfile.ZipInfo(arcname)
-                info.external_attr = 0o644 << 16
-                zf.writestr(info, f.read_bytes())
-    return zip_path
+    return _zip_staged_dir(app_dir, zip_path)
+
+
+def list_bundle(artifact_slug: str) -> None:
+    """Stage a manifest-driven bundle and emit the static file list to stdout.
+
+    Excludes __pycache__ entries and pip-installed packages (those are determined
+    by pip install and not manifest-declared paths).  Used for file-list equivalence
+    diffing against pre-change copytree baselines (VP Step 7 of CD.24 plans).
+    """
+    from scripts.lambda_manifest import load, stage_bundle  # noqa: PLC0415
+
+    manifest_path = ROOT / "src" / "lambdas" / artifact_slug / "manifest.yaml"
+    if not manifest_path.exists():
+        print(f"ERROR: manifest not found: {manifest_path.relative_to(ROOT)}", file=sys.stderr)
+        sys.exit(1)
+
+    manifest = load(manifest_path)
+    with tempfile.TemporaryDirectory(prefix=f"list-bundle-{artifact_slug}-") as tmp:
+        stage_dir = Path(tmp)
+        stage_bundle(manifest, stage_dir, skip_pip=True)
+        for f in sorted(stage_dir.rglob("*")):
+            if f.is_file() and "__pycache__" not in str(f):
+                print(str(f.relative_to(stage_dir)))
 
 
 def build_deps_layer(temp_dir: Path) -> Path:
@@ -223,7 +193,6 @@ def build_deps_layer(temp_dir: Path) -> Path:
         print(f"ERROR: Dependency installation failed (exit {pip_result.returncode})")
         sys.exit(1)
 
-    # Clean up unnecessary files to reduce layer size
     for pattern in ("*.dist-info", "__pycache__", "*.pyc", "tests", "test"):
         for path in site_packages.rglob(pattern):
             if path.is_dir():
@@ -272,7 +241,6 @@ def update_lambda_functions(bucket: str, profile: str, region: str) -> None:
     --profile.  Ref: ``docs/contracts/inference-provider.md`` for
     the packaging requirement that ``bedrock_client.py`` be bundled.
     """
-    # Map each function to its deployment zip key.
     function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _LAMBDA_FUNCTION_NAMES}
     function_zip_map[_OPS_COMPACTION_FUNCTION_NAME] = _OPS_COMPACTION_ZIP_KEY
 
@@ -362,9 +330,20 @@ def main() -> None:
         action="store_true",
         help="After S3 upload, update Lambda function code",
     )
+    parser.add_argument(
+        "--list-bundle",
+        metavar="ARTIFACT_SLUG",
+        default=None,
+        help="Stage a manifest-driven bundle and emit its static file list (skip_pip=True). "
+        "ARTIFACT_SLUG is the src/lambdas/<name>/ directory name (e.g. data-pipeline).",
+    )
     args = parser.parse_args()
 
-    print("Lambda Package Builder (No Docker Required)")
+    if args.list_bundle:
+        list_bundle(args.list_bundle)
+        return
+
+    print("Lambda Package Builder (Manifest-Driven, CD.24)")
     print()
 
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -372,12 +351,12 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="lambda-build-") as tmp:
         temp_dir = Path(tmp)
 
-        print("[1/4] Building application code package...")
+        print("[1/4] Building application code package (data-pipeline, manifest-driven)...")
         app_zip = build_app_package(temp_dir)
         app_size = round(app_zip.stat().st_size / 1024 / 1024, 2)
         print(f"  OK data-pipeline.zip ({app_size} MB)")
 
-        print("[1b/4] Building ops-compaction package (no Copilot SDK)...")
+        print("[1b/4] Building ops-compaction package (no Copilot SDK, manifest-driven)...")
         ops_zip = build_ops_compaction_package(temp_dir)
         ops_size = round(ops_zip.stat().st_size / 1024 / 1024, 2)
         print(f"  OK ops-compaction.zip ({ops_size} MB)")
@@ -393,7 +372,6 @@ def main() -> None:
         if not args.skip_upload:
             bucket = args.bucket or resolve_bucket(args.profile)
 
-            # Validate bucket exists before attempting upload
             if not validate_bucket_exists(bucket, args.profile, args.region):
                 print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
                 sys.exit(1)

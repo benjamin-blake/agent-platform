@@ -1686,6 +1686,142 @@ def validate_platform_roadmap(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_lambda_manifests(failed: list[str]) -> None:
+    """Schema-validate all src/lambdas/<name>/manifest.yaml files.
+
+    Delegates to scripts.lambda_manifest.cmd_validate. Parallel to
+    validate_platform_roadmap; runs in the full presubmit tier (NOT --pre).
+    Rejects structural drift: unknown fields, missing artifact, invalid status.
+    """
+    print("\n=== Lambda manifest schema validation ===")
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.lambda_manifest import cmd_validate  # noqa: PLC0415
+
+        rc = cmd_validate(None)
+        if rc != 0:
+            failed.append("Lambda manifest schema validation")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import lambda_manifest: {exc}")
+        failed.append("Lambda manifest schema validation")
+    except Exception as exc:
+        print(f"  FAIL: Unexpected error: {exc}")
+        failed.append("Lambda manifest schema validation")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_lambda_manifest_coverage(failed: list[str]) -> None:
+    """Every src/lambdas/<name>/ directory must have a schema-valid manifest.yaml.
+
+    Scalability gate: each new Lambda artifact added to src/lambdas/ automatically
+    fails CI until its manifest is authored. Delegates to cmd_check_coverage.
+    Runs in the full presubmit tier.
+    """
+    print("\n=== Lambda manifest coverage ===")
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.lambda_manifest import cmd_check_coverage  # noqa: PLC0415
+
+        rc = cmd_check_coverage(None)
+        if rc != 0:
+            failed.append("Lambda manifest coverage")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import lambda_manifest: {exc}")
+        failed.append("Lambda manifest coverage")
+    except Exception as exc:
+        print(f"  FAIL: Unexpected error: {exc}")
+        failed.append("Lambda manifest coverage")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_lambda_bundle_completeness(failed: list[str]) -> None:
+    """Stage each active Lambda artifact and verify handler imports + declared assets.
+
+    Delegates to scripts.lambda_manifest.cmd_check_bundles, which stages each
+    active manifest into a temp dir, checks that every handler module can be
+    imported from the staged tree, and checks that every declared assets[]/config[]
+    path is physically present in the staged bundle.
+
+    Full presubmit tier ONLY -- NOT --pre (Decision 73: the import-resolution check
+    catches missing includes that py_compile cannot see; the asset-presence check
+    catches undeclared runtime filesystem reads).
+    """
+    print("\n=== Lambda bundle completeness ===")
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.lambda_manifest import cmd_check_bundles  # noqa: PLC0415
+
+        rc = cmd_check_bundles(None)
+        if rc != 0:
+            failed.append("Lambda bundle completeness")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import lambda_manifest: {exc}")
+        failed.append("Lambda bundle completeness")
+    except Exception as exc:
+        print(f"  FAIL: Unexpected error: {exc}")
+        failed.append("Lambda bundle completeness")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_lambda_deploy_gating(failed: list[str]) -> None:
+    """Advisory per-Lambda deploy-scope check (CD.16 + Decision 79).
+
+    Calls compute_affected_artifacts() with the current branch's changed files
+    and reports which active Lambda artifacts need per-Lambda deploy/verify
+    attention in the plan. Advisory only -- never fails the build; only appends
+    to failed on import or setup errors.
+    """
+    print("\n=== Lambda deploy gating (advisory) ===")
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.lambda_manifest import compute_affected_artifacts  # noqa: PLC0415
+
+        changed = list(get_changed_files())
+        if not changed:
+            print("  No changed files detected; skipping deploy-gating scope check.")
+            return
+
+        affected = compute_affected_artifacts(changed)
+        if not affected:
+            print("  No active Lambda artifacts affected by current branch changes.")
+            return
+
+        print("  Active Lambda artifacts affected by branch changes (plan must include deploy steps):")
+        for slug, files in sorted(affected.items()):
+            print(f"    {slug}: {len(files)} file(s) changed")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import lambda_manifest: {exc}")
+        failed.append("Lambda deploy gating")
+    except Exception as exc:
+        print(f"  FAIL: Unexpected error: {exc}")
+        failed.append("Lambda deploy gating")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def validate_product_roadmap(failed: list[str]) -> None:
     """Validate docs/ROADMAP-PRODUCT.yaml against the ProductRoadmapDocument Pydantic schema.
 
@@ -2098,6 +2234,10 @@ def run_python_checks(failed: list[str]) -> None:
     validate_sloc_limits(failed)
     check_source_registry(failed)
     validate_platform_roadmap(failed)
+    validate_lambda_manifests(failed)
+    validate_lambda_manifest_coverage(failed)
+    validate_lambda_bundle_completeness(failed)
+    validate_lambda_deploy_gating(failed)
     validate_product_roadmap(failed)
     validate_pydantic_yaml_drift(failed)
     _check_graduation_guard(failed)

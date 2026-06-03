@@ -316,3 +316,26 @@ class TestBuildLambdaConfigScope:
         for src, _ in copytree_calls:
             assert not src.endswith("/config"), f"Blanket config copytree detected: {src}"
             assert "config/agent" not in src, f"Agent config must not be in Lambda zip: {src}"
+
+    def test_build_lambda_source_has_no_hardcoded_src_or_config_copytree(self):
+        """build_lambda.py source must not hardcode shutil.copytree(ROOT/"src") or ROOT/"config".
+
+        CD.24 retired the blanket whole-src and whole-config copytrees from build_lambda.py.
+        The src/ tree is still bundled, but ONLY because the data-pipeline manifest declares
+        includes: [src/] and stage_bundle (in lambda_manifest.py) walks it -- the copytree must
+        be manifest-driven, never hardcoded here. This source-level guard mirrors VP Step 4 and
+        prevents a regression that re-adds the hardcoded blanket copytree. (Asserting absence of
+        a runtime /src copytree would be wrong: stage_bundle legitimately copytrees src/ per the
+        manifest, as the binding file-list-equivalence check confirms.)
+        """
+        import re
+        from pathlib import Path
+
+        from scripts.build_lambda import __file__ as build_lambda_path
+
+        source = Path(build_lambda_path).read_text(encoding="utf-8")
+        # Strip comments and docstrings is overkill; match only actual copytree CALLS on ROOT/src|config.
+        src_copytree = re.compile(r"copytree\(\s*ROOT\s*/\s*[\"']src[\"']")
+        config_copytree = re.compile(r"copytree\(\s*ROOT\s*/\s*[\"']config[\"']")
+        assert not src_copytree.search(source), "Hardcoded shutil.copytree(ROOT/'src') must be retired (CD.24)"
+        assert not config_copytree.search(source), "Hardcoded shutil.copytree(ROOT/'config') must be retired (CD.24)"

@@ -47,6 +47,10 @@ check_claude_md_pointer_invariant = _validate.check_claude_md_pointer_invariant
 validate_hermeticity_flags = _validate.validate_hermeticity_flags
 _build_unit_test_cmd = _validate._build_unit_test_cmd
 _UNIT_TEST_HERMETICITY_FLAGS = _validate._UNIT_TEST_HERMETICITY_FLAGS
+validate_lambda_manifests = _validate.validate_lambda_manifests
+validate_lambda_manifest_coverage = _validate.validate_lambda_manifest_coverage
+validate_lambda_bundle_completeness = _validate.validate_lambda_bundle_completeness
+validate_lambda_deploy_gating = _validate.validate_lambda_deploy_gating
 
 
 class TestClaudeMdPointerInvariant:
@@ -2784,3 +2788,163 @@ class TestValidateHermeticityFlags:
         failed: list[str] = []
         validate_hermeticity_flags(failed)
         assert failed == [], "default command must contain all hermeticity flags"
+
+
+class TestValidateLambdaManifests:
+    """Tests for validate_lambda_manifests() -- schema validation wrapper."""
+
+    def test_passes_when_cmd_validate_returns_zero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_validate.return_value = 0
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifests(failed)
+        assert failed == []
+
+    def test_fails_when_cmd_validate_returns_nonzero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_validate.return_value = 1
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifests(failed)
+        assert "Lambda manifest schema validation" in failed
+
+    def test_fails_on_import_error(self) -> None:
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
+            failed: list[str] = []
+            validate_lambda_manifests(failed)
+        assert "Lambda manifest schema validation" in failed
+
+    def test_fails_on_unexpected_exception(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_validate.side_effect = RuntimeError("unexpected boom")
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifests(failed)
+        assert "Lambda manifest schema validation" in failed
+
+
+class TestValidateLambdaManifestCoverage:
+    """Tests for validate_lambda_manifest_coverage() -- coverage gate wrapper."""
+
+    def test_passes_when_cmd_check_coverage_returns_zero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_coverage.return_value = 0
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifest_coverage(failed)
+        assert failed == []
+
+    def test_fails_when_cmd_check_coverage_returns_nonzero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_coverage.return_value = 1
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifest_coverage(failed)
+        assert "Lambda manifest coverage" in failed
+
+    def test_fails_on_import_error(self) -> None:
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
+            failed: list[str] = []
+            validate_lambda_manifest_coverage(failed)
+        assert "Lambda manifest coverage" in failed
+
+    def test_fails_on_unexpected_exception(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_coverage.side_effect = RuntimeError("boom")
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_manifest_coverage(failed)
+        assert "Lambda manifest coverage" in failed
+
+
+class TestValidateLambdaBundleCompleteness:
+    """Tests for validate_lambda_bundle_completeness() -- bundle check wrapper."""
+
+    def test_passes_when_cmd_check_bundles_returns_zero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_bundles.return_value = 0
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_bundle_completeness(failed)
+        assert failed == []
+
+    def test_fails_when_cmd_check_bundles_returns_nonzero(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_bundles.return_value = 1
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_bundle_completeness(failed)
+        assert "Lambda bundle completeness" in failed
+
+    def test_fails_on_import_error(self) -> None:
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
+            failed: list[str] = []
+            validate_lambda_bundle_completeness(failed)
+        assert "Lambda bundle completeness" in failed
+
+    def test_fails_on_unexpected_exception(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.cmd_check_bundles.side_effect = RuntimeError("staging failed")
+        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
+            failed: list[str] = []
+            validate_lambda_bundle_completeness(failed)
+        assert "Lambda bundle completeness" in failed
+
+
+class TestValidateLambdaDeployGating:
+    """Tests for validate_lambda_deploy_gating() -- advisory deploy scope check."""
+
+    def test_no_changed_files_skips_silently(self) -> None:
+        mock_lm = MagicMock()
+        with (
+            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
+            patch("validate.get_changed_files", return_value=[]),
+        ):
+            failed: list[str] = []
+            validate_lambda_deploy_gating(failed)
+        assert failed == []
+        mock_lm.compute_affected_artifacts.assert_not_called()
+
+    def test_reports_affected_artifact_without_failing(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.compute_affected_artifacts.return_value = {"data-pipeline": ["src/data/handlers/fetch_handler.py"]}
+        with (
+            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
+            patch("validate.get_changed_files", return_value=["src/data/handlers/fetch_handler.py"]),
+        ):
+            failed: list[str] = []
+            validate_lambda_deploy_gating(failed)
+        assert failed == []
+        mock_lm.compute_affected_artifacts.assert_called_once_with(["src/data/handlers/fetch_handler.py"])
+
+    def test_no_affected_artifacts_is_advisory_pass(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.compute_affected_artifacts.return_value = {}
+        with (
+            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
+            patch("validate.get_changed_files", return_value=["docs/README.md"]),
+        ):
+            failed: list[str] = []
+            validate_lambda_deploy_gating(failed)
+        assert failed == []
+
+    def test_fails_on_import_error(self) -> None:
+        with (
+            patch.dict(sys.modules, {"scripts.lambda_manifest": None}),
+            patch("validate.get_changed_files", return_value=["src/some/file.py"]),
+        ):
+            failed: list[str] = []
+            validate_lambda_deploy_gating(failed)
+        assert "Lambda deploy gating" in failed
+
+    def test_fails_on_unexpected_exception(self) -> None:
+        mock_lm = MagicMock()
+        mock_lm.compute_affected_artifacts.side_effect = RuntimeError("load failed")
+        with (
+            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
+            patch("validate.get_changed_files", return_value=["src/some/file.py"]),
+        ):
+            failed: list[str] = []
+            validate_lambda_deploy_gating(failed)
+        assert "Lambda deploy gating" in failed
