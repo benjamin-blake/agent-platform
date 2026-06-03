@@ -46,3 +46,36 @@ variable "agent_service_account_user_name" {
   type        = string
   default     = "agent-service-account"
 }
+
+# ---------------------------------------------------------------------------
+# DuckLake catalog (T2.16) -- RDS PostgreSQL backend for the DuckLake v1.0
+# operational lakehouse (Decision 78 / CD.31). Ingress CIDRs are an explicit
+# allow-list with NO default; supplied via gitignored terraform.personal.tfvars.
+# ---------------------------------------------------------------------------
+
+variable "ducklake_catalog_ingress_cidrs" {
+  description = "Allow-list of CIDR blocks permitted to reach the DuckLake catalog on 5432. No default -- supplied via gitignored terraform.personal.tfvars. Must NEVER include 0.0.0.0/0."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.ducklake_catalog_ingress_cidrs) > 0
+    error_message = "ducklake_catalog_ingress_cidrs must be a non-empty allow-list."
+  }
+
+  validation {
+    condition     = !contains(var.ducklake_catalog_ingress_cidrs, "0.0.0.0/0")
+    error_message = "ducklake_catalog_ingress_cidrs must NOT include 0.0.0.0/0 -- supply an explicit egress CIDR."
+  }
+}
+
+variable "ducklake_catalog_db_name" {
+  description = "Initial PostgreSQL database name created at instance launch. The DuckLake metadata schema (e.g. ducklake_ops) lives WITHIN this database -- one RDS instance can host multiple DuckLake catalogs by schema (OQ.14 separability)."
+  type        = string
+  default     = "ducklake_catalog"
+}
+
+variable "ducklake_catalog_instance_class" {
+  description = "RDS instance class for the DuckLake catalog. db.t4g.micro is the Decision-78 baseline (burstable ARM, ~$12/mo single-AZ)."
+  type        = string
+  default     = "db.t4g.micro"
+}
