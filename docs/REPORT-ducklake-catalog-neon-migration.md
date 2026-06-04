@@ -12,6 +12,17 @@ opened as a PR.
 
 ## Revision log
 
+### Fold-in reconciliation (CD.33 ratified mid-session)
+Between report sign-off and the roadmap fold-in, **Decision 81 ratified CD.33** (`dec-1089`, merged to main),
+so CD.33 flipped `pending -> ratified`. The change-set was authored assuming CD.33 was pending (which would
+have made a direct clause 3/5/`enforcement_mechanism` body edit governance-clean). Because CD.33 is now
+ratified, the fold-in instead stages the CD.33-level changes as a single additive `[Amendment -- CD.34]`
+discipline point on CD.33 (the same pattern used for the ratified CD.31 record) and leaves CD.33's ratified
+body UNCHANGED -- consistent with "a pending CD does not enact". The inlining-everywhere change is still
+ENFORCED via the `not_started` tier-item exit criteria (T2.17/T2.18) + the OQ.11 re-resolution. Section 4.6
+and the §9 citation were updated to match. Decision numbering is unaffected: Decision 81 filed CD.33, so
+CD.34 still ratifies as Decision 82.
+
 ### v2 -> v3 (second review round: both lenses converged on one shared blocker + secondary fixes)
 - **Inlining override now landed in the enforcement surfaces (the v2 blocker, both lenses):** v2 disabled
   inlining for all tables in prose + the OQ.11 note + a CD.33 discipline point, but left the telemetry
@@ -113,8 +124,8 @@ unrecoverable. This dominates the risk section.
   PITR=7d (continuous), RDS-managed master secret in Secrets Manager (`manage_master_user_password = true`),
   publicly accessible behind a CIDR allow-list, `rds.force_ssl=1`. `ducklake_ops` schema created out-of-band
   (not a Terraform resource). `terraform/personal/rds_ducklake_catalog.tf` + three `ducklake_catalog_*` vars.
-- CD.33 (pending) -- the just-landed DuckLake ops *runtime* architecture (writer/reader/maintenance split,
-  OCC retry, `current` projection, SCD2 keys, guarded GC). Ratification (Decision 81) drafted, NOT filed.
+- CD.33 (RATIFIED by Decision 81 / `dec-1089`, landed during this session) -- the DuckLake ops *runtime*
+  architecture (writer/reader/maintenance split, OCC retry, `current` projection, SCD2 keys, guarded GC).
 - T2.17 / T2.18 / T2.19 -- `not_started`. T2.17's design assumes a private VPC the Lambdas attach to to
   reach the RDS catalog.
 - **Nothing reads or writes the catalog yet.** Live ops remain Iceberg/Athena until the T2.19 cutover (FP-B).
@@ -187,7 +198,7 @@ A new `candidate_decisions` entry **CD.34**, inserted after CD.33:
   Everything else in Decision 78/CD.31 (DuckLake adoption, S3-Parquet data plane, DuckDB engine, the
   catalog-is-a-metadata-store framing, the closed boundary) is **preserved unchanged**.
 - **`state: pending`**, `filed_via: pending_log_decision_lambda`. Does NOT edit `DECISIONS.md` while pending;
-  ratified later as a new Decision (provisionally **Decision 82**, sequenced after Decision 81 files CD.33).
+  ratified later as a new Decision (provisionally **Decision 82**, after Decision 81 ratified CD.33 as `dec-1089`).
 - **`gates: [T2.16b, T2.17, T2.18, T2.19]`**.
 - **discipline_points:** (i) narrowly amends the CD.31 catalog-backend paragraph; preserves all else;
   (ii) **inlining is disabled for ALL Neon tables (`ducklake_default_data_inlining_row_limit=0`), including
@@ -301,23 +312,26 @@ path to the public S3 API path -- acceptable for the sandbox PLATFORM env; flagg
 | churn re-drill (NEW exit) | (n/a) | "Connection-churn / OCC-commit-latency headroom **re-validated against production-shaped concurrency** at cutover (CD.34) -- the T2.16b gate proved it on an empty catalog under a synthetic burst; this mirrors the DR re-drill so the live write path's churn/OCC headroom is confirmed with real data volumes" | confirms the churn gate at cutover, not only pre-data |
 | `related_candidate_decisions: [CD.31, CD.33]` | add `CD.34` | trace |
 
-### 4.6 AMEND CD.33 (pending) -- two RDS-reference edits + one clause-(5) carve-out override + one discipline point
+### 4.6 AMEND CD.33 (RATIFIED) -- additive `[Amendment -- CD.34]` annotation only
 
-CD.33 is `state: pending`, so amending is governance-clean. The two RDS *references* in the CD.33 body are
-clause (3) + `enforcement_mechanism` (v2 correction: v1 fabricated a "clause (6)" edit and mis-modelled
-O-2/O-5/T2-e as CD.33 sub-clauses -- those labels live only in the T2.17-T2.19 exit criteria, handled in
-4.3-4.5). **In addition (v3), the inlining-everywhere decision overrides the telemetry-inlining carve-out
-that lives in clause (5) (`:1346`)** -- so clause (5) IS edited, but only that carve-out clause; the
-maintenance *architecture* (writer/reader/maintenance split, OCC retry, `current` projection, SCD2 keys, and
-the GC/merge *cadences*) is unchanged. The "runtime architecture unchanged" claim is therefore scoped to
-those, NOT to the clause-(5) carve-out:
+**Reconciliation (CD.33 ratified mid-session):** Decision 81 ratified CD.33 (`dec-1089`) DURING this work, so
+CD.33 is now `state: ratified`, not pending. A *pending* amendment (CD.34) must therefore NOT rewrite CD.33's
+ratified body -- exactly as CD.34 does not edit DECISIONS.md while pending, and exactly how the ratified CD.31
+record is amended (additive `[Amendment -- CD.31]` annotations, never a clause rewrite). So CD.33's ratified
+clause (3), clause (5) carve-out, and `enforcement_mechanism` bodies are left **UNCHANGED**, and the
+CD.33-level changes are staged as a single additive **`[Amendment -- CD.34 (pending)]` discipline point** that
+records what enacts when CD.34 ratifies (Decision 82):
 
-| CD.33 location | Before (verbatim) | After |
-|----------------|-------------------|-------|
-| clause (3) (`:1333`) | "...snapshot committed in the **RDS catalog txn**; readers see nothing until commit..." | "...snapshot committed in the **catalog txn** (Neon Postgres per CD.34); readers see nothing until commit..." |
-| **clause (5) (`:1346`)** | "...governance tables ... **Per-table: telemetry MAY keep inlining.** expire != delete..." | "...governance tables ... **inlining is disabled for ALL tables including telemetry per CD.34 (the telemetry carve-out is removed); high-write-rate tables get a higher-frequency merge.** expire != delete..." |
-| `enforcement_mechanism` (`:1379`) | "...PlatformAdmin break-glass (**catalog+S3 read**) + **daily catalog PITR-to-S3**; partition-prune smoke test..." | "...PlatformAdmin break-glass (**Neon catalog credential + S3 read**) + **daily catalog pg_dump-to-S3 (30-day retention) + freshness alarm; Neon built-in pooler (no RDS Proxy)**; partition-prune smoke test..." |
-| `discipline_points` (ADD) | (none on backend) | "Catalog backend = Neon serverless Postgres per CD.34 (narrowly amends the CD.31 backend paragraph). Consequential mechanics: inlining disabled for ALL tables (overrides the clause-(5) + OQ.11 telemetry carve-out -- a durability decision, not an architecture change); O-2 DR = daily pg_dump-to-S3 with freshness alarm; O-5 pooling = Neon built-in pooler / direct endpoint for catalog writes, app-side pool if churn exceeds OCC budget. The writer/reader/maintenance split, OCC, current projection, SCD2 keys, and GC/merge cadences are unchanged." |
+| CD.33 element | Enacts when CD.34 ratifies (recorded in the annotation; ratified body unchanged now) |
+|---------------|--------------------------------------------------------------------------------------|
+| clause (3) | "RDS catalog txn" -> "catalog txn (Neon Postgres)" |
+| clause (5) | the "Per-table: telemetry MAY keep inlining" carve-out is removed -> inlining disabled for ALL tables incl. telemetry; high-write-rate tables get a higher-frequency merge (T2.18 co-tunes the GC breaker) |
+| `enforcement_mechanism` | break-glass = Neon catalog credential + S3 read; O-2 DR = daily pg_dump-to-S3 (30d, >25h alarm); O-5 = Neon built-in pooler / direct endpoint (no RDS Proxy) |
+
+The inlining-everywhere change is meanwhile **ENFORCED (not merely annotated)** in the gated, `not_started`
+tier items -- the T2.17 (`:3323`) and T2.18 (`:3348`) inlining exit criteria and the OQ.11 (`:4017`)
+re-resolution -- which are work specs, not ratified governance text, so they are edited directly. The runtime
+architecture (split / OCC / `current` projection / SCD2 keys / GC + merge cadences) is unaffected.
 
 ### 4.7 AMEND OQ.7 / OQ.8 / OQ.9 / OQ.11 / OQ.14 (annotate)
 
@@ -449,7 +463,7 @@ Reversible, and the blast radius **right now is zero** (nothing consumes the cat
 | **Decision 35 + Decision 77** | RDS retirement is a Terraform destroy -> human-gated; trips the fail-closed auto-apply guard onto the manual admin path. The Neon TF provider is likewise carved out of auto-apply. |
 | **Decision 37** | Precedent for the "secret in Secrets Manager, Lambda runtime-fetch" auth model reused for the Neon DSN. |
 | **CD.21** | EC2 runner retired -- the cost baseline that makes the RDS the largest live line (and the stale `dominant_cost` field, 4.8). |
-| **CD.33 / Decision 81 (pending)** | Related; this report makes only consequential backend amendments (clause 3 + `enforcement_mechanism` + one discipline point) and does not reopen its runtime architecture. |
+| **CD.33 / Decision 81 (ratified, `dec-1089`)** | Related; ratified mid-session, so CD.34's CD.33-level changes are staged as an additive `[Amendment -- CD.34]` annotation (not a body rewrite -- see 4.6); the runtime architecture is untouched. |
 | **NS.1 / NS.3** | The "small managed cloud state-store" framing that already justifies a managed Postgres catalog; Neon fits it. |
 
 ---

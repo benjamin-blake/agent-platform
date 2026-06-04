@@ -1331,7 +1331,7 @@ candidate_decisions:
           GC older_than grace > max in-flight write/retry duration (pending the GC snapshot-isolation check).
       (3) Portal surface = read + write categories only; the sync category is eliminated because DuckLake's
           atomic catalog-snapshot commit removes the outbox/drain step. A write is atomic at the catalog
-          commit (Parquet staged to S3, then snapshot committed in the catalog txn (Neon Postgres per CD.34); readers see nothing
+          commit (Parquet staged to S3, then snapshot committed in the RDS catalog txn; readers see nothing
           until commit; aborted-commit Parquet reclaimed by delete_orphaned_files). No external sequencing.
           Logical write verbs (file_rec/update_rec/file_decision) + read verb (query) retained. Decision 69
           Single-Portal invariant PRESERVED -- all writes transit scripts/ops_data_portal.py; transport only.
@@ -1342,11 +1342,9 @@ candidate_decisions:
           non-destructive merge_adjacent_files (self-correcting compaction; current compacted more often);
           (b) separately-cadenced GUARDED destructive GC (expire_snapshots -> cleanup_old_files ->
           delete_orphaned_files) behind a retention floor + older_than grace + circuit breaker + own alarm.
-          OQ.11 -> c, as amended by CD.34: inlining DISABLED (inlined_rows=0) for ALL tables INCLUDING
-          telemetry (CD.34 removes the governance-only scope + the telemetry carve-out) -- every write lands
-          in S3 immediately, removing the catalog-only durability window on Neon's ~6h free-tier PITR; small
-          files paid down by a higher-frequency merge for high-write-rate tables (T2.18 co-tunes the GC
-          circuit breaker). expire != delete: cleanup + delete_orphaned must run.
+          OQ.11 -> c: inlining DISABLED (inlined_rows=0) for governance tables -- writes land in S3
+          immediately, removing the catalog-only durability window; small files paid down by daily merge.
+          Per-table: telemetry MAY keep inlining. expire != delete: cleanup + delete_orphaned must run.
       (6) Closed read/write boundary (OQ.7 -> a): every read via reader, every write via writer, nothing
           out-of-band. No Athena escape hatch (DuckLake has no Iceberg export / external reader; the closed
           boundary is the design goal). One audited+alarmed admin-account break-glass path for DR only.
@@ -1379,8 +1377,8 @@ candidate_decisions:
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
       - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
-      - "[Amendment -- CD.34]: catalog backend = Neon serverless Postgres (pending CD.34; ratified via Decision 82). Consequential mechanics folded in: clause (3) catalog txn is Neon Postgres; clause (5) inlining is disabled for ALL tables incl. telemetry (the telemetry carve-out is REMOVED -- a durability decision on Neon's ~6h free-tier PITR, not an architecture change; high-write-rate tables get a higher-frequency merge and T2.18 co-tunes the GC breaker); enforcement_mechanism O-2 DR = daily pg_dump-to-S3 (30d retention, >25h freshness alarm) and O-5 pooling = Neon built-in pooler / direct endpoint for catalog writes (no RDS Proxy). The writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, and GC/merge cadences are UNCHANGED. See docs/REPORT-ducklake-catalog-neon-migration.md."
-    enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (Neon catalog credential + S3 read) + daily catalog pg_dump-to-S3 (30-day retention, >25h freshness alarm); Neon built-in pooler (no RDS Proxy; CD.34); partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
+      - "[Amendment -- CD.34 (pending)]: CD.34 proposes migrating the catalog backend to Neon serverless Postgres. CD.33 was ratified by Decision 81 (dec-1089) WITH the RDS backend, so its body above is UNCHANGED while CD.34 is pending; the following enact only when CD.34 ratifies (Decision 82): clause (3) 'RDS catalog txn' -> 'catalog txn (Neon Postgres)'; clause (5) telemetry-inlining carve-out removed (inlining disabled for ALL tables incl. telemetry; high-write-rate tables get a higher-frequency merge, T2.18 co-tunes the GC breaker); enforcement_mechanism O-2 DR -> daily pg_dump-to-S3 (30d retention, >25h freshness alarm), O-5 pooling -> Neon built-in pooler / direct endpoint (no RDS Proxy). Tracked meanwhile in the T2.16b-T2.19 exit criteria. The runtime architecture (split/OCC/projection/SCD2 keys/GC+merge cadences) is unaffected. See docs/REPORT-ducklake-catalog-neon-migration.md."
+    enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (catalog+S3 read) + daily catalog PITR-to-S3; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
 
   - id: CD.34
     title: DuckLake catalog backend -- migrate RDS PostgreSQL to Neon serverless Postgres
@@ -1395,7 +1393,8 @@ candidate_decisions:
       BEFORE T2.17 so the Lambda runtime is built against Neon (no VPC attach for catalog reachability; Neon's
       built-in pooler) rather than RDS-in-a-VPC. Nothing consumes the catalog yet (live ops are Iceberg/Athena
       until T2.19), so present blast radius is zero. Ratified later via the log-decision path (provisionally
-      Decision 82, after Decision 81 files CD.33); this CD does NOT edit DECISIONS.md while pending.
+      Decision 82, sequenced after Decision 81 which ratified CD.33 as dec-1089); this CD does NOT edit
+      DECISIONS.md while pending.
       Consequential mechanics (folded into the gated tier items + CD.33):
       (1) Inlining DISABLED for ALL tables including telemetry (ducklake_default_data_inlining_row_limit=0),
           overriding the telemetry-inlining carve-out in CD.33 clause (5) and OQ.11 -- on Neon's ~6h free-tier
@@ -1417,7 +1416,7 @@ candidate_decisions:
     supersedes_decisions: []
     discipline_points:
       - "Narrowly amends the CD.31 catalog-backend paragraph / Decision 78 item (RDS PostgreSQL -> Neon serverless Postgres); preserves DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the metadata-store framing, and the closed boundary. CD.31/Decision 78 are paragraph-structured, not clause-numbered. Stays inside the NS.3 'small managed cloud state-store' framing that justified the catalog originally."
-      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (provisionally Decision 82, sequenced after Decision 81 files CD.33), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81."
+      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (provisionally Decision 82, after Decision 81 ratified CD.33 as dec-1089), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81. Because CD.33 is now RATIFIED, CD.34's CD.33-level changes are staged as an additive [Amendment -- CD.34] annotation on CD.33 (the CD.31 pattern), NOT a rewrite of CD.33's ratified body; they enact when CD.34 ratifies."
       - "Inlining DISABLED for ALL tables including telemetry (inlined_rows=0), overriding the telemetry carve-out in CD.33 clause (5) + OQ.11 -- a durability decision on Neon's ~6h free-tier PITR, NOT an architecture change. High-write-rate tables get a higher-frequency merge; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate."
       - "Supersedes OQ.8's RDS-Proxy/IAM-auth-preferred resolution: RDS Proxy (never provisioned; deferrable per OQ.8) -> Neon built-in pooler (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget); credential = Secrets Manager DSN (IAM DB auth is N/A against a non-AWS endpoint). Realized saving ~$12-15/mo; the +$10-12 RDS-Proxy figure was conditional, not bankable."
       - "Catalog is the lakehouse SPOF; on Neon free tier (~6h PITR) DR = a daily pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, >25h freshness alarm) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR -- rec-2063 WONTFIX while the catalog is provably unused), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
