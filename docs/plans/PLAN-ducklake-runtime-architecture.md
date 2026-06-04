@@ -10,13 +10,15 @@ structures, enriches tier_items T2.17/T2.18/T2.19, and corrects the now-stale De
 per Decision 79. The formal ratification (**Decision 81**) is drafted here for zero-context review and is
 filed via the log-decision path only after approval -- mirroring the CD.31 -> Decision 78 rhythm.
 
-**Revision status (v2):** A first zero-context review pass (decision-scout + distributed-systems
-correctness lens + adversarial ops-risk lens) returned findings that overturned two of the original
-clauses (inlining, partitioning) and added a major read-path clause (the `current` projection). Those
-resolutions, plus the SCD2 grain clarification, are folded into the clauses below and tracked durably in
-the **Review-findings ledger**. This v2 draft re-enters the same zero-context review before ratification.
-The ledger is the canonical record of what each review raised and how it was resolved -- it exists so the
-resolutions survive context compaction and are correctable, not held only in conversation.
+**Revision status (v3):** Two zero-context review rounds plus a capability-verification pass are complete and
+captured in the **Review-findings ledger** + **v2-review results** + **Capability-review results** sections
+below. v1->v2 overturned inlining (OQ.11 b->c) and partitioning and added the `current` projection. v2's
+round-2 review surfaced an idempotency self-contradiction and three DuckLake-capability assumptions; those
+are resolved here by the **ULID logical-PK write-id decision** and by **verifying every load-bearing claim
+against the official DuckLake docs** (all CONFIRMED). The ledger is the canonical record -- it exists so the
+resolutions survive context compaction and are correctable, not held only in conversation. Remaining work
+before ratification is the ops-recovery ENCODE items (break-glass O-1, catalog DR O-2, GC thresholds O-3,
+observability, RDS Proxy) into the T2.17-T2.19 exit criteria; the architecture itself is verified.
 
 ## Plan Type
 IMPLEMENTATION
@@ -82,12 +84,16 @@ None.
    handles DuckLake snapshot-id conflicts via **bounded application-level OCC retry** (backoff + jitter,
    fixed retry ceiling). On retry exhaustion the writer **fails loudly** (raises; no silent drop -- finding
    C1). Idempotency is now genuinely grounded (resolves the former HELD write-id, and findings D-2/D-4/D-12):
-   each logical write **mints a monotonic ULID once, at operation start, and reuses it on every OCC retry**;
-   the ULID is the **primary key of the `history` tables**, and the append is `INSERT ... IF NOT EXISTS` on
-   that PK, so a committed-but-unacked write that is retried de-duplicates instead of double-appending.
-   `last_updated_timestamp` is **high-precision and likewise minted once / held stable across retries** --
-   it is the SCD2 version/ordering column, not the uniqueness key. The `_prepare_record` `now()` re-stamp
-   therefore moves OUT of the retry loop (both ULID and timestamp are assigned before the loop). No
+   each logical write **mints a monotonic ULID once, at operation start, and reuses it on every OCC retry**.
+   DuckLake enforces no primary keys (verified -- capability-review C-2), so the ULID is the **logical PK of
+   `history`** and the idempotent append is `MERGE INTO history USING <delta> ON (history.ulid = delta.ulid)
+   WHEN NOT MATCHED THEN INSERT` -- a committed-but-unacked write that is retried finds the ULID already
+   present and de-duplicates instead of double-appending. `last_updated_timestamp` is **high-precision and
+   likewise minted once / held stable across retries** -- it is the SCD2 version/ordering column, not the
+   uniqueness key. The `_prepare_record` `now()` re-stamp therefore moves OUT of the retry loop (both ULID
+   and timestamp are assigned before the loop). DuckLake's OCC auto-retries non-logical conflicts internally
+   and aborts logical conflicts for app-level retry (verified C-4; watch upstream issues #233/#376 on the
+   pinned version under heavy same-table concurrency). No
    reserved-concurrency=1 and no SQS FIFO -- those serialise unnecessarily. `ducklake_maintenance` runs as
    a **singleton** (no overlapping maintenance runs; DDL / `ALTER`-table maintenance ops hard-abort on
    conflict). The singleton serialises maintenance-vs-maintenance only; the **writer-vs-`expire_snapshots`**
@@ -116,17 +122,29 @@ None.
      large ones but leaves the superseded files for the GC; it does **not** reclaim storage (finding D-6).
      `current` (high-churn upsert) needs its **own faster cadence for both merge AND `expire_snapshots`**,
      because every MERGE supersedes the prior row-version and its dead snapshots accrue quickly.
-   - **Separately-cadenced, guarded, destructive GC:** `expire_snapshots -> cleanup_old_files ->
-     delete_orphaned_files`. Each runs behind a **retention floor**, an `older_than` grace window, and a
-     **circuit breaker** (abort + alarm if it would delete more than a threshold), on a slower cadence with
-     its own alarm. `expire_snapshots` does NOT delete S3 objects -- `cleanup_old_files` +
-     `delete_orphaned_files` must also run or S3 grows unboundedly. No LLM and no agent invocation anywhere.
+   - **Separately-cadenced, guarded, destructive GC:** `ducklake_expire_snapshots(older_than=>...)` ->
+     `ducklake_cleanup_old_files(older_than=>...)` -> `ducklake_delete_orphaned_files(older_than=>...)`
+     (verified names/signatures, capability-review M-1/M-2). Each runs behind a **retention floor**, an
+     `older_than` grace window, and a **circuit breaker** (abort + alarm if it would delete more than a
+     threshold), on a slower cadence with its own alarm. CRITICAL verified nuance (M-3, finding D-3/O-3):
+     DuckLake's deletion safety is a **soft, time-based deferral** (files go to `ducklake_files_scheduled_
+     for_deletion`, "generally safe to delete ... more than a few days ago, provided there are no read
+     transactions that last that long") -- **NOT** a hard lock against in-flight transactions. So the
+     `older_than` grace MUST exceed the max in-flight reader AND writer/OCC-retry duration, and
+     `cleanup_all => true` must NEVER be used while any reader/writer may be pinned to an old snapshot.
+     `expire_snapshots`/`merge_adjacent_files` only *schedule* files; `cleanup_old_files` +
+     `delete_orphaned_files` are what actually reclaim S3, and must run or S3 grows unboundedly. No LLM and
+     no agent invocation anywhere.
 
-   **Inlining (OQ.11 -> c):** governance tables set `inlined_rows = 0` -- every write lands in S3
-   immediately, eliminating the catalog-only durability window (finding C2). The cost is many small Parquet
-   files, paid down by the daily `merge_adjacent_files`. This is a **per-table** policy: high-cardinality
-   telemetry tables MAY keep inlining ON where the small-write rate makes the durability window an
-   acceptable trade for fewer S3 round-trips.
+   **Inlining (OQ.11 -> c):** governance tables set **`ducklake_default_data_inlining_row_limit = 0`** (or
+   per-table `data_inlining_row_limit = 0`; default is 10 -- verified C-5) -- every write lands in S3
+   immediately, eliminating the catalog-only durability window (finding C2); `ducklake_flush_inlined_data`
+   is the flush primitive (a no-op safety net when the limit is 0). A T2.17 smoke test must confirm the
+   limit is honoured on the pinned version (upstream issue #921 reports it occasionally ignored). The cost
+   is many small Parquet files, paid down by the daily `ducklake_merge_adjacent_files` (which **rewrites**
+   small->large and only *schedules* the originals; storage is reclaimed by the GC above, not by merge --
+   finding D-6/M-4). Per-table policy: high-cardinality telemetry tables MAY keep inlining ON where the
+   small-write rate makes the durability window an acceptable trade for fewer S3 round-trips.
 6. **Closed read/write boundary (resolves OQ.7 -> option a).** Every read transits `ducklake_reader`;
    every write transits `ducklake_writer`; nothing reaches DuckLake out-of-band. There is **no Athena
    escape hatch** -- DuckLake has no Iceberg export and no external-engine reader, and the closed boundary
@@ -135,20 +153,23 @@ None.
    single **admin-account break-glass** path (audited, alarmed, distinct from the routine boundary) exists
    for DR when the reader/writer are themselves broken (finding H2). **Partitioning** is per-role (finding
    T2-a): `history` partitions by **`day(created_timestamp)`** (stable per rec, so date-filtered reads
-   prune); `current` is **hash-bucketed by `id`** with a fixed bucket count -- NOT partition-per-id, which
-   would explode the partition count. This prunes the serving point-lookup; a single-row MERGE prunes too,
-   but a **batch** MERGE reads the buckets its delta touches (finding D-7 -- the batch path does not prune to
-   one bucket). Applied via CD.9 `ALTER TABLE ... SET PARTITIONED BY` **at table creation** (a partition
-   only affects writes after the ALTER). A smoke test must prove a date-filtered query **actually prunes
-   partitions** on `history` AND that the `current` lookup/MERGE scan footprint is bounded (not just parses),
-   gating T2.17/T2.19.
+   prune); `current` is **`bucket(N, id)`** -- DuckLake's fixed-count Iceberg-compatible hash bucketing
+   (verified M-6), NOT partition-per-id, which would explode the partition count. This prunes the serving
+   point-lookup (id-equality predicate); a single-row MERGE prunes too, but a **batch** MERGE reads the
+   buckets its delta touches (finding D-7). Note `bucket()` is **not order-preserving** (M-7), so it prunes
+   on equality, not range -- which is exactly the `current` access pattern. Applied via CD.9 `ALTER TABLE
+   ... SET PARTITIONED BY (...)` **at table creation** -- verified (M-5) that partitioning affects ONLY data
+   written after the ALTER, so it must precede the first write. DuckLake prunes via catalog zone-maps, not
+   directory listing (M-7). A smoke test must prove a date-filtered query **actually prunes partitions** on
+   `history` AND that the `current` lookup/MERGE scan footprint is bounded (not just parses), gating
+   T2.17/T2.19.
 7. **`current` write-through projection (resolves R-4).** Reads come from a materialised `current` table,
    never from a window over `history`. `history` is the append-only source of truth; `current` is a
    derived Type-1 projection (one row per `id`, latest-wins), rebuildable from `history` as DR only (that
    rebuild is the full scan we are avoiding -- never on the read path). Each write is a single DuckLake
    transaction: `INSERT history` (append the new version) then `MERGE current` (upsert from the **in-hand
    delta -- never read back from `history`**), one atomic snapshot. The MERGE is idempotent (latest-wins
-   converges on replay); the `history` append is made idempotent by the **ULID PK + `INSERT IF NOT EXISTS`**
+   converges on replay); the `history` append is made idempotent by the **MERGE-on-ULID insert-if-not-matched**
    (clause 2), so a retried dual-write neither double-appends nor diverges. The merge logic is a **shared
    helper** parametrised on `(delta, dest table, key cols, order-by)`, imported in-process so it stays
    inside the transaction, and accepts **one-or-many rows from day one** so a future per-write -> sub-second
@@ -156,23 +177,24 @@ None.
    written transactionally -- it is NOT the `logs/*.jsonl` read-cache anti-pattern; the DR rebuild runs
    through the portal/ETL, never restaged from a local file, and is **deterministic** because latest-per-id
    orders by `(last_updated_timestamp, ULID)` and the ULID is monotonic (resolves D-12). **The single-
-   transaction dual-table atomicity and `MERGE`-through-DuckLake are SPIKE-GATED capability claims** (finding
-   D-1): if a DuckLake transaction does not wrap multi-table DML into one snapshot, or `MERGE` is unsupported
-   through DuckLake's DML layer, the fallback is in-transaction `DELETE WHERE id = ?` + `INSERT` on `current`,
-   or eventual-consistency on `current` with a reconciliation pass. Verified in the capability-review below.
+   transaction dual-table atomicity and `MERGE`-through-DuckLake are CONFIRMED** against the official docs
+   (capability-review C-1/C-2; finding D-1 closed): one `BEGIN..COMMIT` is one all-or-nothing catalog
+   snapshot across both tables -- DuckLake's headline ACID-across-tables property -- and `MERGE INTO` is the
+   documented upsert primitive. No DELETE+INSERT fallback is required (retained only as a noted alternative).
 8. **SCD2 keys + DQ invariants (no engine-enforced keys).** DuckLake/Iceberg enforces no PK/FK; enforcement
-   is application + DQ (BigQuery discipline). Keys (resolves the former HELD write-id and findings D-2/D-4):
-   the `history` **primary key is an auto-generated monotonic ULID** (one per write/version row, unique by
-   construction -- so two legitimate same-instant updates to one `rec_id` never collide, unlike a timestamp
-   grain); `rec_id` is the natural/business key; `last_updated_timestamp` is high-precision and stable-per-
-   write, used for SCD2 version ordering with the ULID as the deterministic monotonic tiebreaker. Everything
-   in the project is SCD2. Three DQ invariants: (i) **PK uniqueness** -- no two `history` rows share a ULID
-   (trivially held by generation + the `INSERT IF NOT EXISTS` append; DQ asserts it); (ii) **current-version
-   uniqueness** -- at most one `current` row per `rec_id`, enforced **structurally** by the clause-7 `current`
-   MERGE key (`rec_id`) rather than as a post-hoc check; (iii) **referential existence** -- `update_rec`
-   confirms the `rec_id` exists via a point-lookup on `current` **executed inside the write transaction's
-   snapshot** (finding D-5, closes the TOCTOU window), while `file_rec` requires the freshly DynamoDB-
-   allocated `rec_id` to NOT exist.
+   is application + DQ (BigQuery discipline) -- and DuckLake confirms it enforces **no** PK/FK/UNIQUE and has
+   no `ON CONFLICT` (capability-review C-3), so all key discipline is ours. Keys (resolves the former HELD
+   write-id and findings D-2/D-4): the `history` **logical PK is an auto-generated monotonic ULID** (one per
+   write/version row, unique by construction -- so two legitimate same-instant updates to one `rec_id` never
+   collide, unlike a timestamp grain); `rec_id` is the natural/business key; `last_updated_timestamp` is
+   high-precision and stable-per-write, used for SCD2 version ordering with the ULID as the deterministic
+   monotonic tiebreaker. Everything in the project is SCD2. Three DQ invariants: (i) **ULID uniqueness** --
+   no two `history` rows share a ULID (held by generation + the MERGE-on-ULID insert-if-not-matched append;
+   DQ asserts it, since the engine will not); (ii) **current-version uniqueness** -- at most one `current`
+   row per `rec_id`, enforced **structurally** by the clause-7 `current` MERGE key (`rec_id`); (iii)
+   **referential existence** -- `update_rec` confirms the `rec_id` exists via a point-lookup on `current`
+   **executed inside the write transaction's snapshot** (finding D-5, closes the TOCTOU window), while
+   `file_rec` requires the freshly DynamoDB-allocated `rec_id` to NOT exist.
 
 OQ.12 (version/upgrade policy) remains a T2.17 implementation detail (clone-rehearsal gate is the
 documented default); CD.33 does not pre-empt it.
@@ -200,11 +222,11 @@ ratifies conclusions whose preconditions are unspecified, unverified, or HELD** 
 ### Distributed-systems correctness lens
 | ID | Sev | Finding | Disposition |
 |----|-----|---------|-------------|
-| D-1 | CRIT | Clause 7 single-transaction dual-table atomicity (`INSERT history` + `MERGE current` = one snapshot) is an **unverified DuckLake capability** asserted RESOLVED/HIGH. If DuckLake commits per-table, `current` can be permanently stale after a crash between commits. | SPIKE-GATE (prove multi-table single-snapshot txn + `MERGE`-through-DuckLake; write the DELETE+INSERT fallback into the plan explicitly) |
+| D-1 | CRIT | Clause 7 single-transaction dual-table atomicity (`INSERT history` + `MERGE current` = one snapshot) is an unverified DuckLake capability. | **CONFIRMED** (capability-review C-1/C-2): one `BEGIN..COMMIT` is one all-or-nothing snapshot across tables (DuckLake's ACID-across-tables property), and `MERGE INTO` is supported. No fallback needed. |
 | D-2 | CRIT | Clause 2 "idempotent SCD2 appends keyed by id" is **FALSE under current code** (`ops_writer.py:220` re-stamps `last_updated_timestamp=now()` each attempt) -> a committed-but-unacked write + retry double-appends. Self-contradiction with the HELD row. | **RESOLVED** by the WRITE-ID decision: ULID minted once + `INSERT IF NOT EXISTS` on the ULID PK makes the append genuinely idempotent; re-stamp moves out of the retry loop. Idempotency is now correctly grounded, not asserted-on-faith. (Clauses 2, 7, 8.) |
-| D-3 | HIGH | Maintenance singleton serialises maintenance-vs-maintenance only, **not writer-vs-`expire_snapshots`**. GC computing its orphan set from a pre-commit snapshot can delete a Parquet an in-flight commit will reference. | ENCODE + SPIKE-GATE (require `older_than` grace > max in-flight write/retry duration; confirm GC snapshot-isolation against concurrent commits, or quiesce writes during GC) |
+| D-3 | HIGH | Maintenance singleton serialises maintenance-vs-maintenance only, **not writer-vs-`expire_snapshots`**. GC computing its orphan set from a pre-commit snapshot can delete a Parquet an in-flight commit will reference. | **CONFIRMED real + ENCODE** (capability-review M-3): DuckLake GC safety is a SOFT time-based deferral, not a hard lock -- so `older_than` grace MUST exceed max reader/writer duration and `cleanup_all=>true` is forbidden while readers/writers may be pinned. Encoded into clause 5 + T2.18. |
 | D-4 | HIGH | Grain uniqueness (i) is unsatisfiable under coarse clock + OCC retry; a stable timestamp alone collides with a legitimate same-instant update. | **RESOLVED** by the WRITE-ID decision: the monotonic ULID (not the timestamp) is the PK, unique by construction even for same-instant same-`rec_id` updates; timestamp is ordering-only with ULID tiebreak. (Clause 8.) |
-| D-5 | HIGH | Invariant (iii) `update_rec` referential check is a cross-table read gating a write -> TOCTOU unless executed *inside* the write transaction's snapshot; "current-version uniqueness structural via MERGE key" is contingent on D-1's MERGE-under-OCC semantics. | ENCODE (specify check is in-transaction) + SPIKE-GATE (via D-1) |
+| D-5 | HIGH | Invariant (iii) `update_rec` referential check is a cross-table read gating a write -> TOCTOU unless executed *inside* the write transaction's snapshot; "current-version uniqueness structural via MERGE key" depends on MERGE-under-OCC. | **ENCODE** (check runs in-transaction; clause 8) + D-1 dependency now CONFIRMED (C-1/C-2/C-4). |
 | D-6 | MED | Clause 5 framing conflates file-COUNT bounding (merge) with STORAGE bounding (GC) -- they are not substitutes. `current`'s high churn may need its **own faster expire cadence**, in tension with the "slower destructive GC". | FIX-NOW (sharpen framing) + ENCODE (current expire cadence) |
 | D-7 | MED | `current`-by-`id`: partition-per-id risks explosion; hash-bucketing helps point-lookups but a **batch MERGE scatters across buckets** so "MERGE prunes" is false for the batch path. | FIX-NOW (specify hash(id) fixed bucket count; qualify the MERGE-prune claim) |
 | D-8 | MED | Partition-prune smoke test is necessary-not-sufficient: must assert prune on **both** tables and the **MERGE** scan footprint, not just a SELECT. | ENCODE |
@@ -249,11 +271,27 @@ without a tested way back in (O-1, O-2, O-3).
    are either confirmed (ratify) or fall back (documented). The ops recovery mechanics (break-glass O-1,
    catalog DR O-2, GC thresholds O-3) remain ENCODE into T2.17-T2.19 exit criteria with concrete values.
 
-**Capability-review plan (Q3):** dispatch zero-context subagents to **verify each load-bearing claim against
-the official DuckDB + DuckLake documentation** (markdown, agent-friendly), citing the exact doc section per
-claim, and to mark each claim CONFIRMED / REFUTED / UNVERIFIABLE with the fallback to apply if refuted. If a
-subagent cannot reach the web, the fallback is direct doc fetch/search by the lead. This replaces "assume +
-spike-gate later" with "verify now, then ratify what holds."
+**Capability-review results (Q3 -- verified against official DuckLake docs at ducklake.select):** every
+load-bearing claim CONFIRMED; no fallback triggered. Citations are the authoritative basis for ratification.
+
+| ID | Claim | Verdict | Doc basis / exact API |
+|----|-------|---------|-----------------------|
+| C-1 | Single `BEGIN..COMMIT` is one all-or-nothing catalog snapshot across MULTIPLE tables | **CONFIRMED** | docs `.../transactions` ("one transaction = one snapshot", "all-or-nothing"); manifesto (ACID across tables -- the DuckLake differentiator vs Iceberg/Delta single-table) |
+| C-2 | `MERGE INTO` supported on DuckLake tables | **CONFIRMED** | docs `.../usage/upserting`; DuckDB 1.4 `MERGE INTO`. Match on ULID in the `ON` clause |
+| C-3 | No engine PK/FK/UNIQUE, no `ON CONFLICT` | **CONFIRMED** | docs `.../usage/upserting` ("does not support primary keys"). => ULID is a LOGICAL key; idempotent append = `MERGE ... WHEN NOT MATCHED THEN INSERT` on ULID; uniqueness is app+DQ |
+| C-4 | OCC with snapshot-conflict detection; concurrent writers + app retry | **CONFIRMED** | docs `.../conflict_resolution` (auto-retry non-logical; abort logical). Watch upstream issues #233/#376 under heavy same-table concurrency |
+| C-5 | Inlining configurable; `=0` disables; flush primitive exists | **CONFIRMED** | docs `.../data_inlining`: `ducklake_default_data_inlining_row_limit=0` (default 10), per-table `data_inlining_row_limit`, `ducklake_flush_inlined_data`. Issue #921: verify honoured on pinned version |
+| M-1 | `ducklake_expire_snapshots(older_than=>,versions=>,dry_run=>)`; expiry != file deletion | **CONFIRMED** | docs `.../maintenance/expire_snapshots` ("does not immediately delete files") |
+| M-2 | `ducklake_cleanup_old_files` + `ducklake_delete_orphaned_files` physically reclaim S3 | **CONFIRMED** | docs `.../maintenance/cleanup_of_files` (scheduled-for-deletion table; tracked vs untracked) |
+| M-3 | GC safety vs concurrent txns | **CONFIRMED (soft)** | docs `.../cleanup_of_files`: time-based deferral, "safe ... more than a few days ago, provided no read transactions last that long" -- NOT a hard lock. => `older_than` grace > max reader/writer duration; never `cleanup_all=>true` with pinned readers |
+| M-4 | `ducklake_merge_adjacent_files` rewrites small->large, schedules (not reclaims) | **CONFIRMED** | docs `.../maintenance/merge_adjacent_files` ("does not immediately delete the old files") |
+| M-5 | `ALTER TABLE ... SET PARTITIONED BY` affects only post-ALTER data | **CONFIRMED** | docs `.../advanced_features/partitioning` ("only affect new data written") => set before first write |
+| M-6 | `day(ts)` transform + `bucket(N, col)` fixed-count hash both supported | **CONFIRMED** | docs `.../partitioning` (identity/year/month/day/hour + `bucket(N,col)` Iceberg Murmur3) |
+| M-7 | Partition pruning skips files for filtered queries | **CONFIRMED** | docs `.../partitioning` (catalog zone-maps; `day()` prunes on range; `bucket()` prunes on equality only -- matches `current` point-lookup) |
+
+**Net:** the architecture's load-bearing DuckLake assumptions hold. The only design correction is the ULID
+is a *logical* PK enforced by MERGE+DQ (C-3), not an engine PK. Residual implementation cautions: pin a
+DuckLake version and smoke-test issues #233/#376 (concurrency) and #921 (inlining) at T2.17.
 
 **Decision numbering:** the draft ratification is **Decision 81** -- `origin/main` already took Decision 80
 (Build-Tooling Direction) via another agent; renumbered to avoid collision. Rebased onto `origin/main` after
@@ -327,7 +365,7 @@ this commit.
       - "Refines CD.15 (typed query reader) and CD.8 (DuckDB engine) and applies CD.9 partitioning; does not contradict them."
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
-      - "SPIKE-GATED capability claims verified against official DuckDB/DuckLake docs before ratification: (a) single DuckLake transaction wraps multi-table DML into one snapshot; (b) MERGE supported through DuckLake DML; (c) destructive-GC snapshot-isolation / older_than semantics vs concurrent writers. Documented fallbacks: DELETE+INSERT (a/b), write-quiesce window (c)."
+      - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
     enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID PK + INSERT-IF-NOT-EXISTS append idempotency; current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
 ```
 
@@ -423,13 +461,16 @@ Ratify CD.33 as the authoritative DuckLake ops runtime architecture:
 9. OQ.12 (version/upgrade policy) remains a T2.17 implementation detail (clone-rehearsal default), not
    pre-empted here.
 
-**Capability dependency:** clauses 4(atomicity)/6(partition prune)/7(single-txn multi-table + MERGE)/8 rest
-on DuckLake behaviours verified against the official DuckDB/DuckLake documentation by the pre-ratification
-capability-review (single-snapshot multi-table transaction; MERGE-through-DuckLake; GC snapshot-isolation /
-older_than semantics; inlined_rows=0; ALTER...SET PARTITIONED BY write-time semantics). Documented fallbacks
-apply if any claim is refuted (DELETE+INSERT for MERGE; write-quiesce window for GC). The write-id is
-RESOLVED in-design (ULID PK + stable timestamp); only the code change (move the now() re-stamp out of the
-retry loop) is a T2.17 implementation task.
+**Capability basis:** clauses 4(atomicity)/6(partition prune)/7(single-txn multi-table + MERGE)/8 were
+VERIFIED against the official DuckLake documentation (ducklake.select) before ratification: multi-table
+single-snapshot ACID transaction, MERGE INTO, no engine PK/FK (ULID is a logical key enforced by MERGE+DQ),
+OCC + application retry, `ducklake_default_data_inlining_row_limit=0` + `ducklake_flush_inlined_data`,
+`expire_snapshots`/`cleanup_old_files`/`delete_orphaned_files`/`merge_adjacent_files` semantics, and
+`ALTER ... SET PARTITIONED BY` (post-ALTER-only) with `day()`/`bucket(N,col)` transforms and pruning. The
+one verified caveat encoded into the design: DuckLake GC deletion safety is a soft time-based deferral, so
+the `older_than` grace must exceed the max in-flight reader/writer duration. The write-id is RESOLVED
+(ULID logical PK + stable high-precision timestamp); the only T2.17 code task is moving the `_prepare_record`
+`now()` re-stamp out of the OCC-retry loop.
 
 **Rationale:**
 The split is by access pattern because that is what differs operationally -- a write principal that can
