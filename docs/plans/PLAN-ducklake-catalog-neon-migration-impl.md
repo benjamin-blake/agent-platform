@@ -1,0 +1,242 @@
+# Plan
+
+## Intent
+Retire the largest live AWS cost line (the T2.16 RDS DuckLake catalog, ~$12-15/mo) and re-back the
+operational lakehouse's metadata catalog with Neon serverless Postgres ($0 free tier) BEFORE the T2.17
+Lambda runtime is built around an RDS-in-a-VPC posture -- a self-improving-platform cost + simplicity win
+(NS.3 "small managed cloud state-store") taken while the catalog's blast radius is provably zero.
+
+## Plan Type
+IMPLEMENTATION
+
+## Verification Tier
+V3 (third-party Neon provisioning via the Terraform Neon provider + AWS Secrets Manager + a live DuckDB
+ATTACH integration + a destroy of the live RDS instance; steps tagged `[pre-deploy]` / `[post-deploy]`).
+
+## Plan Path
+docs/plans/PLAN-ducklake-catalog-neon-migration-impl.md
+
+## Phase
+Platform roadmap **T2.16b** ("DuckLake catalog migration to Neon + RDS retirement", `status: not_started`,
+effort M, `depends_on: [T2.16]` which is `complete`). Enacts candidate decision **CD.34** (`state: pending`).
+Sequenced before T2.17/T2.18/T2.19 (all `not_started`). Authored by `docs/REPORT-ducklake-catalog-neon-migration.md`.
+
+## Scope
+
+**Posture decided by the human (2026-06-04), revising CD.34's pending text:** the Neon Terraform provider is
+**INCLUDED** in the Decision-77 sandbox auto-apply pipeline (NOT human-gated / NOT carved out). To make that
+safe, `terraform_apply_guard.py` is extended to be Neon-aware (policy-as-code parity for the new provider).
+The matching CD.34 + T2.16b "human-gated / excluded from auto-apply" wording is revised in this same change so
+the roadmap never describes a posture the code contradicts (the self-resolving WARN from the decision-scout
+gate).
+
+### Phase 1 -- provision Neon + prove it + make the pipeline Neon-aware (the Neon create auto-applies)
+| File | Action | Purpose |
+|------|--------|---------|
+| `terraform/personal/neon_ducklake_catalog.tf` | Create | Neon provider (`kislerdm/neon`, pinned + lockfile checksum) + `neon_project` (AWS region nearest `eu-west-2`) + `neon_database` (`ducklake_ops`) + scoped `neon_role` + IP allow-list (NEVER `0.0.0.0/0` / empty); `aws_secretsmanager_secret` + version holding the assembled Neon DSN (host/db/user/password). Provider API key read from `var.neon_api_key`. |
+| `scripts/terraform_apply_guard.py` | Modify | Add Neon-aware fail-closed policy: BLOCK (exit 2) any `neon_*` change that is not a restrictive-allow-list create -- i.e. block updates/replaces (where allow-list widening / role-credential rotation happen), and block a create whose allow-list attribute is missing/empty/contains a public CIDR (`0.0.0.0/0` or `::/0`; Neon treats empty allow-list as allow-all). Preserve ALL existing `aws_` behaviour (block any `delete`, IAM-sensitive types, trust diffs) with zero regression. |
+| `tests/test_terraform_apply_guard.py` | Modify | Add Neon cases (benign create passes; update/replace blocks; open/empty allow-list create blocks; `neon_*` delete blocks) + assert the existing `aws_` create/update/no-op/read/destroy/IAM/trust cases are unchanged. 100% coverage of the new branches. |
+| `.github/workflows/terraform-apply-sandbox.yml` | Modify | Supply `TF_VAR_neon_api_key: ${{ secrets.TF_VAR_NEON_API_KEY }}` in the job `env` block and add it to the "Assert required Terraform variables are present" fail-closed check, so `terraform plan` can initialise the Neon provider in CI (otherwise the plan step reds and blocks ALL sandbox applies). |
+| `migrations/ducklake_ops_schema.sql` | Create | Capture the previously out-of-band `ducklake_ops` schema DDL (`CREATE SCHEMA IF NOT EXISTS ducklake_ops;` + a header documenting the DuckLake `ATTACH ... (DATA_PATH ..., META_SCHEMA 'ducklake_ops')` metadata-schema contract) so Neon provisioning + any fresh-provision rollback is reproducible, not tribal. |
+| `scripts/ducklake_neon_smoke_test.py` | Create | CLI (`bin/venv-python -m scripts.ducklake_neon_smoke_test --attach|--churn-gate|--restore-drill`) reusing the `src/common/ducklake_spike.py` extension-load + S3-credential + ATTACH pattern. Fetches the Neon DSN from Secrets Manager; ATTACH + `SELECT 1` over TLS (`sslmode=require`, SNI) on the pinned DuckDB version against the DIRECT (unpooled) endpoint; the hard connection-churn/OCC-collision gate under a concurrent-writer burst; the consistent `pg_dump --serializable-deferrable` (engine-version-tagged) -> scratch Neon -> DuckDB read-your-write restore drill. Loud-fails on the hard gate (Decision 55). |
+| `tests/test_ducklake_neon_smoke_test.py` | Create | Unit tests with boto3 / duckdb / subprocess mocked; 100% coverage (no live network in unit tests -- the live proof is the `[post-deploy]` VP steps). |
+| `docs/ROADMAP-PLATFORM.yaml` | Modify | Revise the **pending** CD.34 (`detail`, `discipline_points`, `enforcement_mechanism`) and the **T2.16b** `intent` + `files_in_scope` comment + exit-criterion-1 from "human-gated / excluded from the Decision-77 auto-apply guard" to "auto-applied via the Decision-77 sandbox pipeline behind the Neon-aware fail-closed guard + subagent review". Atomic with the guard/workflow change. No `DECISIONS.md` edit (CD.34 stays pending). |
+
+### Phase 2 -- retire the RDS (irreversible; stays human-gated -- the guard fail-closes on it regardless)
+| File | Action | Purpose |
+|------|--------|---------|
+| `terraform/personal/rds_ducklake_catalog.tf` | Delete | Destroy `aws_db_instance.ducklake_catalog` (+ subnet group, SG + ingress/egress rules, parameter group, the 5 outputs): two-step `deletion_protection=false` apply THEN destroy; pre-destroy check that no snapshot named `ducklake-catalog-final-snapshot` already exists (else timestamp the identifier); final snapshot is the sole recovery artifact (`delete_automated_backups=true` wipes PITR; rec-2063 WONTFIX while the catalog is provably unused). |
+| `terraform/personal/variables.tf` | Modify | Remove `ducklake_catalog_ingress_cidrs` / `ducklake_catalog_db_name` / `ducklake_catalog_instance_class`; add `neon_api_key` (sensitive, no default) + `neon_org_id` / `neon_region_id` / `neon_catalog_allowed_ips` Neon provider vars. |
+| `terraform/personal/platform_roles.tf` | Modify | Remove `aws_iam_role_policy.platform_admin_ducklake_catalog` (the `PlatformDuckLakeCatalogProvisioning` RDS/EC2/snapshot/KMS grant) -- closes rec-2065/2066. **Sequenced AFTER the RDS destroy** (the destroy needs those `rds:*` rights; removing the grant first would AccessDenied the destroy). |
+
+## Bundled Recommendations
+Dispositioned by this migration (not separately implemented):
+- **rec-2062 / rec-2068 / rec-2069** -- close by `rds_ducklake_catalog.tf` deletion (Phase 2).
+- **rec-2065 / rec-2066** -- close by `PlatformDuckLakeCatalogProvisioning` IAM-policy removal (Phase 2).
+- **rec-2063** -- WONTFIX for this retirement (catalog provably unused at T2.16b; single-final-snapshot recovery loses nothing). The `delete_automated_backups=false` flip applies only if retirement is ever deferred past the T2.19 cutover.
+- **rec-2064** -- dispositioned: the Neon DR primitive is a logical `pg_dump`, which tolerates Neon Postgres-minor drift on restore (unlike a physical RDS snapshot).
+- **rec-2067** -- RE-FILE against the new public-endpoint Neon posture (egress least-privilege transfers, not silently closed) via `scripts/ops_data_portal.py` during implementation.
+
+## Infrastructure Dependencies
+**Created (Phase 1, auto-applies):** `neon_project`, `neon_database` (`ducklake_ops`), `neon_role` (scoped),
+the project IP allow-list, `aws_secretsmanager_secret` + `_version` (Neon DSN). The Neon provider authenticates
+via `var.neon_api_key` (CI: `TF_VAR_NEON_API_KEY` GitHub secret; local human apply: gitignored
+`terraform.personal.tfvars` or env). No new AWS IAM is required for Phase 1 -- AdminOps already grants
+`secretsmanager` create/get/put/describe.
+
+**Destroyed (Phase 2, human-gated):** `aws_db_instance.ducklake_catalog` (final snapshot retained),
+`aws_db_subnet_group.ducklake_catalog`, `aws_security_group.ducklake_catalog` + its ingress/egress rules,
+`aws_db_parameter_group.ducklake_catalog_force_ssl`, the 5 `ducklake_catalog_*` outputs, and
+`aws_iam_role_policy.platform_admin_ducklake_catalog`.
+
+**Timing / apply path (Decision 35 + Decision 77):**
+- **Phase 1** -- `terraform plan` presented in the PR; on merge to `main`, the sandbox pipeline plans
+  `terraform/personal/**`, the (now Neon-aware) guard inspects the plan JSON, the subagent review runs, and the
+  same plan file applies. The Neon resources are pure creates with a restrictive allow-list, so the guard
+  returns exit 0 (safe) and they auto-apply. The Secrets Manager DSN secret is created by Terraform from the
+  `neon_role` connection attributes.
+- **Phase 2** -- the RDS destroy (`delete` action) AND the IAM-policy removal (IAM-sensitive `delete`) EACH
+  trip the guard's fail-closed gate (exit 2), so Phase 2 routes to a **manual `agent_platform_admin` apply**,
+  human-gated, regardless of the Neon posture. **IAM-precedence is deliberately INVERTED here:** the IAM grant
+  is removed AFTER the RDS destroy (two ordered applies, or an explicit dependency), because the destroy
+  consumes `rds:DeleteDBInstance` from the grant being removed. Partial-failure rollback: if the two-step
+  destroy aborts after `deletion_protection` is flipped off, re-enable `deletion_protection` to avoid a
+  live-but-unprotected DB.
+
+**Lambda deployment assessment:** none. T2.16b deploys no Lambda (the DuckLake Lambda runtime is T2.17).
+`scripts/ducklake_neon_smoke_test.py` is an ops/dev script, not a Lambda-packaged handler. Confirm during
+implementation with `bin/venv-python -m scripts.lambda_manifest` + `compute_affected_artifacts(<changed>)`
+returning no `status: active` artifact; if so, no build/deploy/smoke-test (V3-Lambda) steps attach.
+
+## Acceptance Criteria
+- [ ] `terraform/personal/neon_ducklake_catalog.tf` declares the pinned Neon provider + `neon_project` +
+      `neon_database` `ducklake_ops` + scoped `neon_role` + a non-public IP allow-list + the Secrets Manager
+      DSN secret; `terraform validate` succeeds.
+- [ ] `terraform_apply_guard.py` fail-closes (exit 2) on a `neon_*` update/replace and on a create with an
+      open/empty allow-list, passes (exit 0) a restrictive-allow-list `neon_*` create, and is byte-for-byte
+      unchanged in its `aws_` verdicts (regression suite green).
+- [ ] `.github/workflows/terraform-apply-sandbox.yml` exports `TF_VAR_neon_api_key` and asserts it present
+      (fail-closed) before `terraform plan`.
+- [ ] `migrations/ducklake_ops_schema.sql` exists and creates the `ducklake_ops` schema.
+- [ ] `scripts/ducklake_neon_smoke_test.py` exposes `--attach` / `--churn-gate` / `--restore-drill`; its test
+      file gives 100% coverage with all network mocked.
+- [ ] `docs/ROADMAP-PLATFORM.yaml`: CD.34 + T2.16b describe the auto-apply-INCLUDED + Neon-aware-guard posture;
+      no "excluded from the Decision-77 auto-apply guard" text remains; `bin/venv-python -m scripts.platform_roadmap` validates.
+- [ ] Phase 2: `rds_ducklake_catalog.tf` deleted, `ducklake_catalog_*` vars removed, the
+      `PlatformDuckLakeCatalogProvisioning` policy removed; the live RDS instance is gone with a final snapshot retained.
+- [ ] `bin/venv-python -m scripts.validate` passes.
+
+## Verification Plan
+| # | Phase | Action | Command | Expected Outcome | Fix If |
+|---|-------|--------|---------|------------------|--------|
+| 1 | [pre-deploy] | Guard: Neon fail-closed + `aws_` no-regression | `bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q` | all pass incl. neon update/replace/open-allow-list -> BLOCK, restrictive create -> OK, `aws_` cases unchanged | guard doesn't fail-closed on a `neon_*` update or regresses an `aws_` verdict |
+| 2 | [pre-deploy] | Smoke-test module unit-tested at 100% | `bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -q && bin/venv-python -m scripts.test_coverage_checker` | tests pass; coverage check OK | un-mocked network call or uncovered branch |
+| 3 | [pre-deploy] | Roadmap schema validates with revised CD.34 + T2.16b | `bin/venv-python -m scripts.platform_roadmap` | prints `PASS` (CD.34 + T2.16b resolve) | schema / referential error in the revised entries |
+| 4 | [pre-deploy] | Roadmap posture flipped (old wording gone, new present) | `grep -q "Neon-aware" docs/ROADMAP-PLATFORM.yaml && ! grep -q "excluded from the Decision-77 auto-apply guard" docs/ROADMAP-PLATFORM.yaml && echo POSTURE_OK` | prints `POSTURE_OK` | residual "excluded from auto-apply" text or missing new marker |
+| 5 | [pre-deploy] | Workflow supplies + asserts the Neon key | `grep -q "TF_VAR_neon_api_key" .github/workflows/terraform-apply-sandbox.yml && grep -q "TF_VAR_neon_api_key:?" .github/workflows/terraform-apply-sandbox.yml && echo WORKFLOW_OK` | prints `WORKFLOW_OK` | env var or fail-closed assertion missing |
+| 6 | [pre-deploy] | Terraform fmt + validate (providers resolved) | `cd terraform/personal && terraform fmt -check -recursive && terraform init -input=false -backend=false && terraform validate` | `Success! The configuration is valid.` | HCL/provider/resource error; pin/lockfile missing |
+| 7 | [post-deploy] | Neon DuckDB ATTACH round-trip (the V3 proof) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --attach` | prints `ATTACH OK rows=1` against the Neon direct endpoint (sslmode=require, SNI, pinned DuckDB) | SNI/sslmode/secret/endpoint/`META_SCHEMA` option wrong |
+| 8 | [post-deploy] | Connection-churn / OCC gate (hard) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate` | prints `CHURN_GATE PASS` (collision rate + commit latency incl. cold-resume within CD.33's OCC budget) | exceeds budget -> implement an app-side pool, re-run (do NOT silently relax the threshold) |
+| 9 | [post-deploy] | Tested restore drill (DR proof, before any prod write) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --restore-drill` | prints `RESTORE_OK read-your-write verified` (consistent `pg_dump` -> scratch Neon -> ATTACH read) | dump consistency flag / engine-version mismatch / restore failure |
+| 10 | [post-deploy] | Neon DSN in Secrets Manager, fetchable | `aws secretsmanager get-secret-value --secret-id ducklake-neon-catalog-dsn --profile agent_platform --query ARN --output text` | prints the secret ARN | secret missing or read permission gap |
+| 11 | [post-deploy] | RDS retired with a final snapshot | `aws rds describe-db-instances --db-instance-identifier ducklake-catalog --profile agent_platform_admin 2>&1 \| grep -q DBInstanceNotFound && aws rds describe-db-snapshots --db-snapshot-identifier ducklake-catalog-final-snapshot --profile agent_platform_admin --query 'DBSnapshots[0].Status' --output text` | `DBInstanceNotFound` then `available` | instance still present, or no final snapshot (destroy not run / snapshot-name collision) |
+| 12 | [post-deploy] | DuckLake provisioning IAM grant removed | `aws iam get-role-policy --role-name PlatformAdmin --policy-name PlatformDuckLakeCatalogProvisioning --profile agent_platform_admin 2>&1 \| grep -q NoSuchEntity && echo IAM_POLICY_GONE` | prints `IAM_POLICY_GONE` | policy still attached -> run the cleanup apply (after the destroy) |
+| 13 | [pre-deploy] | Full presubmit (CI parity) | `bin/venv-python -m scripts.validate` | `PASS` | address before merge |
+
+## Constraints
+- **Apply governance (Decision 35 + Decision 77):** Phase 1 Neon resources auto-apply via the sandbox pipeline
+  behind the Neon-aware fail-closed guard + subagent review (Decision 77's sandbox carve-out of Decision 35).
+  Phase 2 (RDS destroy + IAM-policy removal) fail-closes -> manual `agent_platform_admin` apply. The guard
+  step NEVER gets `continue-on-error`; any non-zero exit blocks apply (Decision 77 fail-closed).
+- **IAM-removal ordering:** the `PlatformDuckLakeCatalogProvisioning` removal is sequenced AFTER the RDS destroy
+  (the destroy consumes `rds:DeleteDBInstance` from that grant). Use two ordered manual applies (destroy first,
+  cleanup second) -- do NOT remove the IAM grant in the same plan that destroys the RDS unless an explicit
+  dependency forces the destroy to run first.
+- **Third-party provider supply chain:** pin the `kislerdm/neon` provider to an exact published version and
+  COMMIT `terraform/personal/.terraform.lock.hcl` with its checksums. Verify the version on the Terraform
+  Registry at implementation time.
+- **Secrets:** the Neon DSN + API key live in Secrets Manager / a GitHub secret -- never a committed literal.
+  The Neon role password does NOT auto-rotate like the RDS-managed master secret did; define a quarterly,
+  calendar-reminded rotation cadence (repo convention) in the secret's description.
+- **Smoke-test honesty (Decision 55):** the churn/OCC hard gate and the restore drill loud-fail; never silently
+  degrade or relax a threshold to pass. A failed gate is a stop-and-RCA signal, not a workaround trigger.
+- **DuckLake ATTACH form is unproven in-repo:** the only committed DuckLake ATTACH (`src/common/ducklake_spike.py`)
+  uses a LOCAL SQLite catalog; the `ducklake:postgres:` data-source + `META_SCHEMA` option are NOT yet exercised.
+  Resolve the exact DuckLake-vs-pinned-DuckDB option (`META_SCHEMA` vs a pre-created schema) against the pinned
+  version during VP-7; the round-trip assertion is unchanged.
+- **Coverage:** new/modified Python (`terraform_apply_guard.py`, `ducklake_neon_smoke_test.py`) needs a test
+  file at 100% coverage -- write the smoke test mockable (boto3 / duckdb / subprocess injection points).
+- **Network:** the `[post-deploy]` smoke-test steps need egress to the Neon endpoint AND (for fresh extension
+  install) to `extensions.duckdb.org`; run them where that egress is permitted (human-run after apply).
+- **CD.34 stays pending:** this plan revises the pending candidate decision in the roadmap only; it does NOT
+  edit `DECISIONS.md`. Ratification is the future log-decision Decision 82.
+- No emojis; ASCII hyphens; ruff line length 127; `bin/venv-python` for all Python; Bash syntax only.
+- No rescue agents or workaround loops (Decision 55).
+
+## Context
+- **Prior work:** `docs/REPORT-ducklake-catalog-neon-migration.md` (architect + ops-risk zero-context review,
+  converged PROCEED over three rounds) authored the design and folded CD.34 (pending) + T2.16b (not_started)
+  into the roadmap. This plan ENACTS T2.16b.
+- **Posture pivot (2026-06-04):** the human revised CD.34's "human-gated / excluded from auto-apply" Neon
+  posture to **auto-apply-included with a Neon-aware guard** (mainstream GitOps: no manual-console snowflakes;
+  policy-as-code parity for every provider). This plan folds the matching CD.34 + T2.16b text revision in
+  atomically. The RDS-destroy + IAM-removal remain human-gated regardless (the guard fail-closes on them).
+- **Decision-scout gate (revised approach):** `FLAGS_FOUND` with one SELF-RESOLVING WARN -- CD.34/T2.16b text
+  must be revised in-scope (it is). Resolved: auto-apply is authorized by Decision 77 (not a Decision-35
+  contradiction); the Neon API key as a GitHub secret is non-AWS (no Decision 36/37 conflict); editing the
+  guard + workflow is NOT a Decision-44 executor-boundary violation (Decision 79 affirms CI tooling is not
+  executor machinery); revising a pending CD is within governance norms.
+- **Why now / blast radius:** the catalog is the lakehouse's single point of total failure, but NOTHING
+  consumes it yet (live ops remain Iceberg/Athena until the T2.19 cutover), so switching now has zero blast
+  radius and avoids building, then tearing down, an RDS-in-a-VPC + RDS-Proxy posture in T2.17.
+- **Decisions to cite:** Decision 78 / CD.31 (amended backend), Decision 81 / CD.33 (the OCC budget the churn
+  gate fits within; CD.34 disables inlining for ALL tables), Decision 35 (Phase-2 human-gate), Decision 77
+  (sandbox auto-apply guard), Decision 37 (Secrets Manager runtime-fetch), Decision 48 (V3 tier), Decision 55
+  (loud-fail), CD.21 / NS.1 / NS.3 (cost baseline + framing).
+- **Branch freshness:** 0 commits behind `origin/main` at planning time; no Scope-file divergence.
+- **Gotcha (terraform `null_resource` drift):** unrelated open rec-2061 notes the `main.tf` Athena-DDL hashes
+  drift from S3 state -- do not "fix" it here; a plan apply may surface it as a no-op create.
+
+## Pre-Implementation Checklist
+- [ ] Branch confirmed not on `main`
+- [ ] `docs/PROJECT_CONTEXT.md` read
+- [ ] `docs/DECISIONS.md` read (Decisions 35, 37, 48, 55, 77, 78 in particular)
+- [ ] `docs/REPORT-ducklake-catalog-neon-migration.md` read (the authoritative design)
+- [ ] All files in the Scope table located and readable
+- [ ] Acceptance Criteria understood and verifiable
+- [ ] `kislerdm/neon` provider exact version + region/org IDs resolved; `TF_VAR_NEON_API_KEY` GitHub secret + the gitignored tfvars entry arranged with the human
+
+## Ordered Execution Steps
+
+### Phase 1 -- provision + prove + Neon-aware pipeline
+1. **`migrations/ducklake_ops_schema.sql`** -- create the `ducklake_ops` schema DDL + the documented DuckLake
+   `META_SCHEMA` ATTACH contract header (reproducibility for provisioning + fresh rollback).
+2. **`terraform/personal/variables.tf`** -- add the Neon provider vars (`neon_api_key` sensitive no-default;
+   `neon_org_id`; `neon_region_id`; `neon_catalog_allowed_ips` with a validation rejecting `0.0.0.0/0`/empty).
+   (The `ducklake_catalog_*` var REMOVAL happens in Phase 2 with the RDS file deletion so the RDS plan stays
+   valid until destroy.)
+3. **`terraform/personal/neon_ducklake_catalog.tf`** -- declare the pinned `kislerdm/neon` provider (its own
+   `terraform { required_providers { neon = ... } }` block, merged with `main.tf`), the `neon_project` (region
+   nearest `eu-west-2`), `neon_database` `ducklake_ops`, scoped `neon_role`, the IP allow-list, and the
+   `aws_secretsmanager_secret` + `_version` assembling the DSN from the role/project attributes. Run
+   `terraform fmt`; commit `.terraform.lock.hcl` with the Neon provider checksums.
+4. **`scripts/terraform_apply_guard.py`** -- add the Neon-aware policy to `evaluate_plan()` (block non-create
+   `neon_*` actions; block create with missing/empty/public-CIDR allow-list via best-effort attribute
+   introspection with a conservative fallback). Keep `aws_` logic untouched. Run `ruff check --fix`.
+5. **`tests/test_terraform_apply_guard.py`** -- add the Neon cases + the `aws_` no-regression assertions; run
+   the file to green; confirm 100% of the new branches.
+6. **`.github/workflows/terraform-apply-sandbox.yml`** -- add `TF_VAR_neon_api_key` to `env` + the fail-closed
+   variable assertion. (No `continue-on-error` anywhere near the guard.)
+7. **`scripts/ducklake_neon_smoke_test.py`** -- implement `--attach` / `--churn-gate` / `--restore-drill`
+   reusing the spike's extension-load + S3-cred + ATTACH helpers; fetch the DSN from Secrets Manager; loud-fail
+   on the hard gate. Run `ruff check --fix`.
+8. **`tests/test_ducklake_neon_smoke_test.py`** -- mock boto3/duckdb/subprocess; 100% coverage; green.
+9. **`docs/ROADMAP-PLATFORM.yaml`** -- revise CD.34 (`detail` / `discipline_points` / `enforcement_mechanism`)
+   and T2.16b (`intent` / `files_in_scope` comment / exit-criterion-1) to the auto-apply-included + Neon-aware
+   posture; remove every "excluded from the Decision-77 auto-apply guard" / "human-gated" Neon clause. Run
+   `bin/venv-python -m scripts.platform_roadmap` to validate.
+10. **Execute the `[pre-deploy]` Verification Plan** (VP 1-6, 13). Loop until green. Commit; open the PR.
+11. **Phase-1 apply** -- present `terraform plan`; on merge the sandbox pipeline auto-applies the Neon creates
+    (guard exit 0). Then run the `[post-deploy]` VP 7-10 from a network-permitted context. **If VP-8 (churn
+    gate) fails:** implement an app-side connection pool in the smoke/runtime path and re-run -- do NOT relax
+    the threshold (Decision 55). **If VP-7/9 fails unrecoverably:** STOP and RCA; do not retire the RDS.
+
+### Phase 2 -- retire the RDS (only after Phase 1 + VP 7-10 pass)
+12. **`terraform/personal/rds_ducklake_catalog.tf`** -- pre-destroy: confirm no `ducklake-catalog-final-snapshot`
+    exists (else timestamp the identifier). Apply `deletion_protection=false` (step 1 of the two-step), then
+    delete the file and `terraform apply` to destroy (manual `agent_platform_admin`; guard fail-closes ->
+    expected). The final snapshot is retained.
+13. **`terraform/personal/variables.tf`** -- remove the three `ducklake_catalog_*` vars (now unreferenced).
+14. **`terraform/personal/platform_roles.tf`** -- remove `aws_iam_role_policy.platform_admin_ducklake_catalog`
+    (closes rec-2065/2066). Apply as the SECOND manual apply (after the destroy succeeded).
+15. **Re-file rec-2067** against the public-endpoint posture via `scripts/ops_data_portal.py`; close
+    rec-2062/2065/2066/2068/2069 with execution notes; mark rec-2063 WONTFIX and rec-2064 dispositioned.
+16. **Execute the `[post-deploy]` Verification Plan** (VP 11-12). Loop until pass. If a destroy step fails
+    unrecoverably, re-enable `deletion_protection` and stop for RCA (Decision 55) -- never leave a
+    live-but-unprotected catalog.
+17. **Report:** what was implemented, the `terraform plan`/apply summaries, the smoke-test + churn-gate +
+    restore-drill outputs, the RDS-retirement confirmation, and the rec dispositions.
+
+## Work Areas (STRATEGIC plans only)
+N/A -- IMPLEMENTATION plan (STRATEGIC classification suspended under the executor freeze; authored as a single
+larger IMPLEMENTATION plan per AGENTS.md Temporary Operational Constraints).
