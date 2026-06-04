@@ -30,16 +30,21 @@ consequential backend amendments.
 | `docs/plans/PLAN-ducklake-catalog-neon-migration.md` | Create | This planning artefact. |
 
 The report PROPOSES (does not enact) the following roadmap change-set, to be applied in the post-consensus PR:
-new candidate decision **CD.34** (pending; narrowly amends Decision 78/CD.31 backend clause); new tier item
-**T2.16b** (Neon provisioning + Secrets Manager auth + RDS retirement); surgical amendments to **T2.17**
-(drop VPC-attach + RDS Proxy), **T2.18** (catalog DR = daily pg_dump-to-S3), **T2.19** (rebuild-from-pg_dump
-+ Neon break-glass), **CD.33** (vendor-neutralise 3 RDS references; runtime architecture unchanged),
-**OQ.8 / OQ.9 / OQ.14** (re-resolve/annotate), and the **cost model** (zero the RDS line).
+new candidate decision **CD.34** (pending; narrowly amends the CD.31 catalog-backend paragraph / Decision 78
+item; mandates inlining disabled for ALL Neon tables; Terraform Neon provider, human-gated); new tier item
+**T2.16b** (Terraform-Neon provisioning + Secrets Manager DSN + smoke test + tested restore + RDS retirement);
+surgical amendments to **T2.17** (drop VPC-attach; pooler choice conditional on the smoke test), **T2.18**
+(catalog DR = daily `pg_dump`-to-S3, `cron(0 3 * * ? *)`, 30-day retention; maintenance cadences unchanged),
+**T2.19** (rebuild-from-`pg_dump` + Neon break-glass), **CD.33** (two body edits -- clause 3 + `enforcement_mechanism`
+-- plus one discipline point; runtime architecture unchanged), **OQ.7 / OQ.8 / OQ.9 / OQ.11 / OQ.14**
+(annotate), a non-destructive **`[Amendment -- CD.34]`** annotation on the **CD.31 record**, and the **cost
+model** (replace the RDS line with the Neon $0 line; flag the stale EC2-runner `dominant_cost` field).
 
 ## Bundled Recommendations
-None. (The report observes that the migration closes ~6 open RDS-module recs --
-rec-2062/2063/2064/2067/2068/2069 -- by deletion, and flags the stale `dominant_cost` EC2-runner line as a
-separate freshness rec; neither is enacted here.)
+None. (The report notes the migration closes rec-2062/2064/2068/2069 by file deletion and rec-2065/2066 when
+the RDS IAM policy is removed; the transferable concerns rec-2063 [single-copy backup on destroy] and rec-2067
+[egress least-privilege] are RE-FILED against the Neon posture, not silently closed; the stale `dominant_cost`
+EC2-runner line is flagged for same-PR correction or a freshness rec. None are enacted here.)
 
 ## Acceptance Criteria
 - [ ] `docs/REPORT-ducklake-catalog-neon-migration.md` exists with: architecture background (catalog =
@@ -69,9 +74,13 @@ separate freshness rec; neither is enacted here.)
   roadmap fold-in is a separate, human-greenlit PR after review consensus.
 - CD.34 stages `state: pending` and does NOT edit DECISIONS.md (CD.30/CD.31/CD.33 precedent); ratification
   is a future log-decision Decision (provisionally Decision 82, after Decision 81 files CD.33).
-- CD.33 amendments are surgical/consequential (vendor-neutralise RDS references) -- the runtime
-  architecture (writer/reader/maintenance split, OCC, current projection, SCD2 keys, guarded GC) is NOT
-  reopened.
+- CD.33 amendments are surgical/consequential (clause 3 + `enforcement_mechanism` + one discipline point) --
+  the runtime architecture (writer/reader/maintenance split, OCC, current projection, SCD2 keys, guarded GC)
+  is NOT reopened.
+- Human-decided posture (v2): (a) inlining disabled for ALL Neon tables (`inlined_rows=0`), overriding
+  OQ.11's telemetry carve-out; (b) catalog DR = daily `pg_dump` to a versioned S3 bucket, 30-day retention,
+  with the FIRST tested restore as a T2.16b precondition (before any production write); (c) Neon provisioned
+  via the Terraform Neon provider, human-gated (carved out of the Decision-77 auto-apply guard).
 - Any eventual RDS retirement Terraform apply is human-gated (Decision 35) and trips the Decision 77
   fail-closed guard (destroy) onto the manual `agent_platform_admin` path -- documented, not executed here.
 - Agent-first artefact design: the report uses machine-parseable before->after tables; no second narrative
