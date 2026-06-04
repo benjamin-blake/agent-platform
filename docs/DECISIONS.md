@@ -2,6 +2,103 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 81: Ratify the DuckLake ops runtime architecture (CD.33); resolve OQ.7 / OQ.10 / OQ.11 (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-04
+**Warehouse ID:** dec-1089
+
+**Problem:**
+Decision 78 adopted DuckLake for the operational lakehouse but deferred the runtime architecture and four
+open questions to T2.16-T2.19. T2.16 (RDS catalog) is complete; T2.17-T2.19 cannot proceed without a
+ratified answer to: how the ops Lambdas are decomposed, how writer concurrency is enforced against
+DuckLake's OCC (OQ.10), how inlining is flushed and where durability lives (OQ.11), whether an Athena
+escape hatch survives DuckLake's lack of an external reader (OQ.7), how current-state reads avoid full
+scans, and what the agent-facing portal surface is. CD.10's earlier six-Lambda enumeration was
+illustrative, not a settled architecture.
+
+**Decision:**
+Ratify CD.33 as the authoritative DuckLake ops runtime architecture:
+1. Three-artifact runtime split -- ducklake_writer / ducklake_reader / ducklake_maintenance -- partitioned
+   by access pattern for IAM-principal, scaling, and deploy/blast-radius isolation, NOT for concurrency.
+2. Supersede CD.10's six-Lambda enumeration. CD.10's verbs were illustrative; this decision commits only
+   to the writer/reader/maintenance path split and the closed read/write boundary. The verb/tool surface
+   behind writer and reader is deliberately left extensible and is NOT frozen by this decision.
+3. Concurrency (OQ.10): concurrent writers + bounded application-level OCC retry (backoff+jitter, fixed
+   ceiling, loud-fail on exhaustion) in ducklake_writer. Idempotency is grounded by the write-id mechanism
+   (below): a monotonic ULID minted once and reused across retries is the history logical key (DuckLake has
+   no engine PKs), and the append is `MERGE ... WHEN NOT MATCHED THEN INSERT` on it, so retries de-duplicate.
+   ducklake_maintenance runs as a singleton; the writer-vs-expire_snapshots race is closed by a GC older_than
+   grace exceeding max in-flight write duration. Reserved-concurrency=1 and SQS FIFO are rejected as
+   over-serialising.
+4. Portal surface = read + write categories; the sync category is eliminated because DuckLake's atomic
+   catalog-snapshot commit removes the outbox/drain step. Writes are atomic at the catalog commit (no
+   external sequencing); aborted commits leave orphan Parquet reclaimed by delete_orphaned_files. The
+   Decision 69 Single-Portal invariant -- as carried forward by Decision 78 (which already superseded
+   Decision 69) -- is PRESERVED: all writes transit scripts/ops_data_portal.py; only the transport changes.
+5. ducklake_writer owns the schema-enforcement gate -- the single, un-bypassable write chokepoint; schema
+   rejection and OCC-retry exhaustion fail loudly.
+6. ducklake_maintenance is two deterministic scheduled cadences with no LLM / agent invocation: a daily
+   non-destructive merge_adjacent_files (compaction; self-correcting) and a separately-cadenced GUARDED
+   destructive GC (expire_snapshots -> cleanup_old_files -> delete_orphaned_files) behind a retention floor
+   (expire 30d history / 7d current, never below the last 2 snapshots), an older_than deletion grace (>=7d),
+   and a circuit breaker (abort+page at >20% files or >10GB; weekly cadence; no scheduled cleanup_all).
+   OQ.11 resolved to option (c): inlining DISABLED (ducklake_default_data_inlining_row_limit=0) for
+   governance tables so writes land in S3 immediately, eliminating the catalog-only durability window;
+   per-table, telemetry may retain inlining.
+7. Closed read/write boundary. OQ.7 resolved: no Athena escape hatch -- every read via the reader, every
+   write via the writer, nothing out-of-band. Break-glass = the audited PlatformAdmin principal expanded to
+   catalog+S3 read for non-routine inspect/repair; catalog DR = a daily PITR export to a dedicated S3 bucket
+   with a tested restore runbook. History partitions by day(created_timestamp), current by bucket(N, id)
+   (CD.9 ALTER at creation); a partition-prune smoke test gates T2.17/T2.19.
+8. current write-through projection: reads come from a materialised Type-1 current table; each write is one
+   DuckLake transaction (INSERT history + MERGE current from the in-hand delta). history is the append-only
+   source of truth; current is rebuildable from history for DR (deterministically, ordering by
+   last_updated_timestamp then ULID). Keys (no engine-enforced PK/FK): history PK = auto-generated monotonic
+   ULID; rec_id is the natural key; last_updated_timestamp is high-precision, stable-per-write, ordering-only.
+   DQ enforces ULID PK uniqueness, current-version uniqueness (structural via the current MERGE key on
+   rec_id), and update_rec in-transaction referential existence.
+9. OQ.12 (version/upgrade policy) remains a T2.17 implementation detail (clone-rehearsal default), not
+   pre-empted here.
+
+**Capability basis:** clauses 4(atomicity)/6(partition prune)/7(single-txn multi-table + MERGE)/8 were
+VERIFIED against the official DuckLake documentation (ducklake.select) before ratification: multi-table
+single-snapshot ACID transaction, MERGE INTO, no engine PK/FK (ULID is a logical key enforced by MERGE+DQ),
+OCC + application retry, `ducklake_default_data_inlining_row_limit=0` + `ducklake_flush_inlined_data`,
+`expire_snapshots`/`cleanup_old_files`/`delete_orphaned_files`/`merge_adjacent_files` semantics, and
+`ALTER ... SET PARTITIONED BY` (post-ALTER-only) with `day()`/`bucket(N,col)` transforms and pruning. The
+one verified caveat encoded into the design: DuckLake GC deletion safety is a soft time-based deferral, so
+the `older_than` grace must exceed the max in-flight reader/writer duration. The write-id is RESOLVED
+(ULID logical PK + stable high-precision timestamp); the only T2.17 code task is moving the `_prepare_record`
+`now()` re-stamp out of the OCC-retry loop.
+
+**Rationale:**
+The split is by access pattern because that is what differs operationally -- a write principal that can
+mutate the catalog, a read principal that cannot, and a maintenance principal that runs DDL -- so isolating
+them isolates IAM blast radius and deploy risk; concurrency is handled by DuckLake's OCC, not by collapsing
+the Lambdas. OCC retry beats reserved-concurrency=1 / SQS FIFO because ops writes are idempotent id-keyed
+SCD2 appends, so a conflicted snapshot is safe to retry without serialising the whole write path. Inlining
+is disabled for governance tables because the catalog-only durability window is an unacceptable data-loss
+exposure for irreplaceable records; the resulting small files are a cheap, self-correcting cost paid down by
+daily compaction, while destructive GC is decoupled onto a slower guarded cadence so it can never race a
+slow reader or runaway a delete. current is materialised as a write-through Type-1 projection because
+"latest per id" is unprunable, so deriving it at read time forces a full scan; a single atomic DuckLake
+transaction across history+current keeps them from drifting without external orchestration. The closed
+boundary (no Athena escape hatch) is not a limitation we tolerate but the design goal: a lakehouse where
+every read and write is mediated and authorised, with one audited break-glass path for DR. The agent verb
+surface is left open precisely to avoid re-committing CD.10's mistake of enumerating a "final" surface
+prematurely.
+
+**Related:** CD.33 (ratified here), CD.10 (six-Lambda enumeration superseded; the six are status:stub mocks,
+confirming illustrative; two-principal allow-list retained; state:pending),
+Decision 78 (adopted DuckLake; deferred this runtime architecture; superseded Decision 69), Decision 79
+(per-Lambda deploy gating -- the DuckLake Lambdas deploy + smoke-test per CD.16), Decision 69 (Single-Portal
+invariant preserved as carried forward by Decision 78),
+CD.15 (typed query reader -- refined), CD.8 (DuckDB engine -- unchanged), CD.9 (partitioning via ALTER),
+CD.24 (per-Lambda manifests), OQ.7 / OQ.10 / OQ.11 (resolved), OQ.12 (left to T2.17).
+
+---
+
 ## Decision 80: Build-Tooling Direction -- defer Bazel/Pants now; do-less baseline; decompose validate.py tool-free (Decided)
 
 **Status:** Decided
