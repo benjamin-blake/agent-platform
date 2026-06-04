@@ -113,7 +113,7 @@ CPU/CUDA-per-platform gap -- and neither does Bazel/Pants. That residual
 non-hermeticity is unsolved by *every* path, so it is not a Bazel-only blocker; the
 lockfile is sequencing, not a Bazel argument.
 
-**C4 -- HOLDS; one Bazel-only edge at concurrency > 1.** The first-party graph is
+**C4 -- HOLDS (as an advisory oracle); no Bazel-only edge.** The first-party graph is
 sparse (121 nodes, 215 edges, avg fan-out 1.78): closure **median = 1 module (0.8%)**,
 p90 = 28 (23.1%), **max = 41 (33.9%)** for `scripts.validate` (absolute closure counts
 are import-resolution-dependent -- independent analyzers landed the max at 33.1% and
@@ -256,7 +256,7 @@ All re-measured at `ddb85a0`.
 |---|---|
 | A polyglot codebase where Bazel's cross-language graph pays off | One language (Python) + Markdown; no compile step |
 | The import graph has hard module-load cycles Bazel must refuse | The module graph is acyclic; "cycles" are function-local deferred-import artifacts (a style; 104 imports carry inert PLC0415 markers) |
-| Bazel uniquely provides the dependency-closure oracle | The closure is already computable (`ast`/`networkx`); Bazel adds an *enforced* sandbox only, valuable at concurrency > 1 |
+| Bazel uniquely provides the dependency-closure oracle | The closure is already computable (`ast`/`networkx`); Bazel's only extra is a *build-time* sandbox -- not a live edit-scope guard (that is a hook/IAM concern) |
 | Affected-set test selection is the thing to gain | `pytest --picked` selects changed *test files*, not a reverse-closure; true TIA is roadmapped at KG.13 |
 | A clean build/packaging system to carve a subtree from | No build system; `setup.py` is an env bootstrap; no lockfile |
 | A tests-with-teeth + monitor baseline to build on | 37% coverage scoped away from `scripts/`; no mutation/property testing (T3.6/T3.7 in flight) |
@@ -293,18 +293,24 @@ Bazel's remote-execution maturity could matter at fleet scale.
 
 ## Recommendation (phased)
 
-**Phase 0 -- do-less, now (one-time human setup, then ~zero ongoing).**
+**Phase 0 -- do-less, now -- the *immediate next* IMPLEMENTATION plan
+(`PLAN-do-less-baseline`), distinct from the separate validate.py decomposition plan so
+the "now" work has a named owner, not an open-ended deferral (one-time human setup, then
+~zero ongoing):**
 - Add **`import-linter`** contracts: forbid cycles, declare a layered architecture.
   This is the decoupling the C5 deferred-import dilemma needs anyway, and it prevents
   the validate.py registry from regressing into a `verifiers`-style deferred cycle.
 - Generate a **lockfile** (`uv pip compile` / `pip-tools`): pins the Python wheel layer
   (C3) and is a prerequisite for any future build tool. (It does not close the
   Julia/torch-platform gap -- nothing does; see C3.)
-- **Wire the revisit trigger** so "revisit later" is a control, not a hope (avoiding the
-  Decision 75 never-retrofit anti-pattern this report cites): add a preflight/CI
-  assertion that auto-files a rec to reopen Decision 80 when the executor state-machine's
-  concurrency cap is raised above 1 (the T4.1 exit-criterion surface) or a KG.13
-  tier_item is filed.
+- **Wire the revisit trigger** so "revisit later" is a control, not prose (mitigating
+  the Decision 75 never-retrofit anti-pattern this report cites). The trigger is
+  `concurrency > 1` **AND** (a KG.13 tier_item is filed **OR** a
+  `_FAST_TIER_BUDGET_SECONDS` breach recurs). Two arms are wireable **today** and should
+  be built now -- the KG.13 tier_item (queryable via `platform_roadmap`) and the budget
+  breach; the **concurrency-cap signal does not exist yet** (T4.1 is `not_started`), so
+  record an explicit owner-obligation that **T4.1 must emit it** as an exit-criterion.
+  Until then the AND-gate cannot fully arm -- do not claim the whole trigger is live.
 - **Close the edit-scope containment gap at its real layer** (not the build tool): an
   autonomous code editor (CD.27 `implement_agent`) needs a fail-closed *edit-scope*
   guard now -- a `PreToolUse` hook (cf. `never_on_main.py`) plus per-Lambda IAM, not an
@@ -407,7 +413,7 @@ the refactor removes the *label*, not the budget.
 validate fork-bomb.
 (e) **producer/consumer chains on generated artifacts need an explicit `depends_on` or
 `always`** -- e.g. `ensure_fresh_dq_results` writes `logs/debug/dq-latest.json`, which
-`_check_graduation_guard` and the DQ verifier then read. Affected-set selection keyed on
+`_check_graduation_guard` then reads (the `DataQualityVerifier` runs Athena-direct, not from the cache file). Affected-set selection keyed on
 *source* globs will not capture this (the producer's "input" is ambient AWS state, not a
 file), so a config-only diff could select the consumer and read a stale artifact. Pin
 such producers to `always` or model the dependency explicitly.
