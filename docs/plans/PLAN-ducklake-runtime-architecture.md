@@ -156,6 +156,76 @@ None.
 OQ.12 (version/upgrade policy) remains a T2.17 implementation detail (clone-rehearsal gate is the
 documented default); CD.33 does not pre-empt it.
 
+## v2-review results (round 2 -- three zero-context lenses)
+Durable capture of the second review pass (subagent transcripts are ephemeral). Disposition codes:
+FIX-NOW (unambiguous, applied in this draft) / SPIKE-GATE (demote from settled to assumption pending a
+DuckLake capability spike) / DECISION (needs the user) / ENCODE (into T2.17-T2.19 exit criteria) /
+PRESERVE (reviewer confirmed the v2 call is correct). The headline, agreed across all three lenses: **v2
+ratifies conclusions whose preconditions are unspecified, unverified, or HELD** -- recovery mechanics
+(ops), correctness properties (dist-sys), and the CD.10 framing (scout).
+
+### Governance / contradiction lens
+| ID | Sev | Finding | Disposition |
+|----|-----|---------|-------------|
+| G-1 | CRIT | Manifest path wrong: tier items reference `config/lambda/<slug>/manifest.yaml`; SSOT is `src/lambdas/<slug>/manifest.yaml` (per `scripts/lambda_manifest.py`, CD.24, the coverage gate). Pre-existing T2.17/T2.18 error the draft inherits. | FIX-NOW (correct in ROADMAP edit + Scope) |
+| G-2 | HIGH | CD.10's six Lambdas (`log_rec`/`update_rec`/`log_decision`/`query`/`list_tools`/`maintenance`) are **real shipped artifacts on disk**, not illustrative. "Supersedes illustrative enumeration" is factually wrong; `ducklake_maintenance` duplicates the existing `maintenance`/`ops-compaction` slug; CD.10 also encodes the PlatformDev/PlatformAdmin two-principal allow-list CD.33 doesn't restate. | DECISION (consolidate vs alongside?) + reframe supersede->extend/refine; preserve two-principal allow-list |
+| G-3 | HIGH | Schema has **no** CD-supersedes-CD field and is `extra=forbid`, so the T3-a "machine-readable structured supersession" resolution is unachievable as written. | FIX-NOW (accept prose-only via discipline_point, OR reuse the existing `narrowly_supersedes` dict shape; strike the impossible T3-a wording) |
+| G-4 | HIGH | OQ.11 has a pre-existing internal contradiction: `resolution_tier: T2.18` vs notes-body "Resolve at T2.19". Draft inherits it unflagged. | FIX-NOW (flag + pin the enacting tier authoritatively) |
+| G-5 | MED | Decision 69 was **already superseded by Decision 78**; only its invariant survives. Draft treats it as a live, preservable decision. | FIX-NOW (reword "preserves the Decision 69 invariant *as carried forward by Decision 78*" everywhere) |
+| G-6 | MED | V1 tier is correct for this YAML-only plan, but the draft doesn't say the V3 deploy/smoke steps are authored *into* T2.17-T2.19 yet executed by those tier items' own future plans. | FIX-NOW (one clarifying sentence) |
+| G-7 | LOW | CD.31 discipline_point (ROADMAP ~1244) "FP-B carries Decision 67 / CD.16 deferred-deploy markers" is now collateral-stale post-Decision 79. | ENCODE (note as out-of-scope recommendation) |
+| -- | PASS | DECISIONS.md non-edit invariant, schema conformance, HELD-row carriage, and all decision/CD citations (CD.8/9/15/24/30/31/32; Dec 48/67/69/78/79; OQ option letters) verified correct. | PRESERVE |
+
+### Distributed-systems correctness lens
+| ID | Sev | Finding | Disposition |
+|----|-----|---------|-------------|
+| D-1 | CRIT | Clause 7 single-transaction dual-table atomicity (`INSERT history` + `MERGE current` = one snapshot) is an **unverified DuckLake capability** asserted RESOLVED/HIGH. If DuckLake commits per-table, `current` can be permanently stale after a crash between commits. | SPIKE-GATE (prove multi-table single-snapshot txn + `MERGE`-through-DuckLake; write the DELETE+INSERT fallback into the plan explicitly) |
+| D-2 | CRIT | Clause 2 "idempotent SCD2 appends keyed by id" is **FALSE under current code** (`ops_writer.py:220` re-stamps `last_updated_timestamp=now()` each attempt) -> a committed-but-unacked write + retry double-appends. Draft **asserts** idempotency as ratified in CD.33 YAML + Decision 80 while the HELD row says don't ratify it. Self-contradiction; the "Open dependency = mechanism only" wording is wrong (it's the *safety property* that's deferred). | FIX-NOW (strike the bare "idempotent...safe" assertion from ratified text; make contingent on the HELD write-id) |
+| D-3 | HIGH | Maintenance singleton serialises maintenance-vs-maintenance only, **not writer-vs-`expire_snapshots`**. GC computing its orphan set from a pre-commit snapshot can delete a Parquet an in-flight commit will reference. | ENCODE + SPIKE-GATE (require `older_than` grace > max in-flight write/retry duration; confirm GC snapshot-isolation against concurrent commits, or quiesce writes during GC) |
+| D-4 | HIGH | Grain uniqueness (i) is unsatisfiable under coarse clock + OCC retry. The two HELD options are **not co-equal**: a stable timestamp makes retries idempotent but collides with a legitimate same-instant update; **only a monotonic per-rec version counter (or UUID write-id, timestamp = ordering-only) closes both**. | DECISION (write-id mechanism -> prefer version counter) |
+| D-5 | HIGH | Invariant (iii) `update_rec` referential check is a cross-table read gating a write -> TOCTOU unless executed *inside* the write transaction's snapshot; "current-version uniqueness structural via MERGE key" is contingent on D-1's MERGE-under-OCC semantics. | ENCODE (specify check is in-transaction) + SPIKE-GATE (via D-1) |
+| D-6 | MED | Clause 5 framing conflates file-COUNT bounding (merge) with STORAGE bounding (GC) -- they are not substitutes. `current`'s high churn may need its **own faster expire cadence**, in tension with the "slower destructive GC". | FIX-NOW (sharpen framing) + ENCODE (current expire cadence) |
+| D-7 | MED | `current`-by-`id`: partition-per-id risks explosion; hash-bucketing helps point-lookups but a **batch MERGE scatters across buckets** so "MERGE prunes" is false for the batch path. | FIX-NOW (specify hash(id) fixed bucket count; qualify the MERGE-prune claim) |
+| D-8 | MED | Partition-prune smoke test is necessary-not-sufficient: must assert prune on **both** tables and the **MERGE** scan footprint, not just a SELECT. | ENCODE |
+| D-9 | MED | Read-your-write is contingent on D-1 + the reader re-resolving the latest catalog snapshot through RDS Proxy; smoke test must be **cross-Lambda via Proxy**, not in-process. | ENCODE |
+| D-10 | LOW | VP grep step 3 may miss DEFERRED-line phrasing variants; broaden to grep `DEFERRED` within the tier items. | FIX-NOW |
+| D-11 | LOW | Ledger confidence flags conflate "finding worked in detail" with "resolution correct"; R-1/R-4 marked HIGH/RESOLVED actually rest on unverified DuckLake capability. | FIX-NOW (add capability-confidence; downgrade to spike-gated) |
+| D-12 | LOW | DR rebuild "latest-per-id" is **non-deterministic** if grain collides -> inherits D-2/D-4; not a reliable safety net until the write-id is resolved. | DECISION (via D-4) |
+| -- | PRESERVE | Inlining-off durability reasoning (C2), "expire != delete", "ALTER partition before first write", loud-fail-on-exhaustion (C1) confirmed correct. | PRESERVE |
+
+### Adversarial ops-risk lens
+| ID | Sev | Finding | Disposition |
+|----|-----|---------|-------------|
+| O-1 | CRIT | Break-glass undefined. Only on-disk break-glass is `PlatformAdmin` (provisioning/IAM), **not a data-plane catalog+S3 reader**. Closed boundary -> total inspection blackout if writer+reader both wedge. | DECISION + ENCODE (specify a dedicated read-only break-glass role + VPC attach path + audit + quarterly drill; gate boundary-final on it) |
+| O-2 | CRIT | RDS catalog is a **single point of total, irreversible loss** -- DuckLake Parquet is unreadable without it. On disk: single-AZ, 7-day PITR, no cross-region, **no catalog-rebuild-from-Parquet runbook**. "Rebuildable from history" assumes the catalog survives. | DECISION + ENCODE (multi-AZ + cross-region backup + extended retention; author+test a catalog-rebuild runbook; gate T2.19) |
+| O-3 | CRIT | Destructive-GC guardrails are slogans -- every value unspecified (retention floor, grace, breaker threshold, pager). Race: GC deletes a slow-reader-pinned or staged-uncommitted Parquet -> silently-incomplete or permanently-corrupt governance data. | ENCODE (pin concrete numbers: floor >= max reader timeout + max writer retry window; breaker = absolute count AND percent; query oldest pinned snapshot before GC) |
+| O-4 | HIGH | Observability detects liveness, not **correctness**. Missing: snapshot->S3 object-existence audit, row-count/DQ-drift, history<->current divergence alarm, break-glass-assumption alarm, maintenance deadman. | ENCODE (periodic invariant-auditor, separate from writer; divergence/missing-object alarms page) |
+| O-5 | HIGH | RDS Proxy named but **not provisioned** (no `aws_db_proxy` on disk); saturation = borrow-timeout; undefined whether that's a retry (storm risk) or loud fail. | ENCODE (provision Proxy; cap writer concurrency < connection ceiling; classify borrow-timeout retry distinctly; alarm) |
+| O-6 | HIGH | No writer rollback story (sole chokepoint -> bad deploy = total write outage); schema-migration DDL vs in-flight writes = torn write (writer validates live schema; commit lands post-ALTER). | ENCODE (versioned-alias/canary + auto-rollback; migration protocol: quiesce/additive-only/version-stamped reject) |
+| O-7 | MED | Singleton enforcement mechanism unnamed; no lock TTL vs Lambda timeout; **no maintenance deadman alarm**; a hung run blocks the next or (no lock) overlaps and races GC. | ENCODE (advisory lock w/ lease TTL > timeout; deadman + duration alarms; idempotent/resumable GC) |
+| O-8 | MED | HELD write-id is load-bearing for **data-integrity**, not just idempotency nicety; ratifying OCC-retry while it's undefined leaves the safety argument unproven. | DECISION (resolve before writer ships; or hard T2.17 gate) |
+| O-9 | LOW | `delete_automated_backups=true` + single fixed `final_snapshot_identifier` widens destroy blast radius for irreplaceable data. | ENCODE (reconsider; destroy-guard the catalog; cross-region logical dumps as backstop) |
+
+### Cross-lens synthesis -- what this means for ratification
+Both correctness and ops lenses independently conclude the **ratify-now/specify-later sequencing is the
+core flaw**. Three clauses asserted RESOLVED actually rest on unverified DuckLake capabilities (D-1, D-3,
+D-5) and must become SPIKE-GATE. The plan is internally self-contradictory on idempotency/uniqueness (D-2,
+D-4 vs the HELD row). The CD.10 framing is factually wrong (G-2). And the closed boundary is being ratified
+without a tested way back in (O-1, O-2, O-3).
+
+**Decisions the user must make (cannot be defaulted):**
+1. **CD.10 disposition (G-2):** does the DuckLake migration **consolidate/retire** the existing six ops
+   Lambda artifacts behind the writer/reader/maintenance split (the six verbs become tools behind
+   writer/reader; `maintenance`/`ops-compaction` map to `ducklake_maintenance`), or do the three sit
+   **alongside** the existing six? This changes clause 1's framing and the tier-item scope.
+2. **Write-id mechanism (D-4 / D-2 / D-12 / O-8):** monotonic per-rec **version counter** (closes
+   idempotency + grain uniqueness + deterministic DR) vs high-precision **stable timestamp** (insufficient
+   per D-4). Reviewers strongly favour the counter.
+3. **Ratification sequencing (O-1/O-2/O-3 + D-1):** split the decision -- ratify the settled clauses now and
+   **spike-gate / defer** the closed boundary + destructive GC + dual-table atomicity until the spikes pass
+   and break-glass + catalog DR + GC thresholds are concrete -- vs hold the whole CD.33/Decision 80 until
+   all of it is pinned.
+
 ## Proposed CD.33 (state: pending) -- exact YAML to insert after CD.32
 ```yaml
   - id: CD.33
