@@ -163,17 +163,17 @@ cost_projection:
     leaving cost-projection without a home. CD.6 covers it instead.)
   current_scale:
     total_per_month_usd: 45-65
-    dominant_cost: EC2 self-hosted runner (~$35/mo)
+    dominant_cost: "EC2 self-hosted runner historically (~$35/mo) -- RETIRED 2026-05-28 per CD.21; with the RDS catalog migrated to Neon ($0) per CD.34, the dominant live AWS line is CloudWatch logs / DeepSeek inference (~$5-8/mo)"
     breakdown:
       s3_storage: "<$1"
       athena_queries: "$1-5"
       dynamodb_on_demand: "$1-3"
-      ec2_runner_24_7: "~$35"
+      ec2_runner_24_7: "$0 (retired 2026-05-28 per CD.21; ~$35/mo historical, line retained as baseline)"
       secrets_manager: "~$2"
       cloudwatch_logs: "$3-8"
       deepseek_executor_inference: "~$5 (~100 recs/month at ~$0.05 each via DeepSeek direct API, ~75% lower than the retired Bedrock path; native cache hit drops repeat-prefix cost further)"
       anthropic_escape_hatch_spillover: "$0-5 (warm-fetched Tier-2 per CD.28; usually $0 because Max x5 programmatic-pool credit absorbs the typical volume; spillover only when escape hatch activates heavily)"
-      rds_ducklake_catalog: "~$12-15/mo single-AZ db.t4g.micro + gp3 + PITR (proposed CD.31); +$10-12 if RDS Proxy added. Envelope-consistent with line_items_not_enumerated (already names VPC/NAT). Net monthly cost likely falls as the ~$35/mo EC2 runner retires per CD.21."
+      ducklake_catalog_neon: "$0 (Neon serverless Postgres free tier; scale-to-zero; built-in pooler replaces RDS Proxy) per CD.34, replacing the prior RDS catalog (~$12-15/mo single-AZ db.t4g.micro + gp3 + PITR; deferrable RDS Proxy +$10-12 was never provisioned -- OQ.8). Realized saving ~$12-15/mo. Daily pg_dump-to-S3 DR is a negligible add-on. Migrated before T2.17 to avoid building RDS-in-a-VPC + NAT plumbing."
     line_items_not_enumerated: VPC endpoints, NAT, DynamoDB PITR, CloudTrail, Config, KMS, GH-hosted runner minutes, S3 Intelligent-Tiering monitoring fee, Step Functions state-transition cost (negligible at current scale, ~$0.025 per 1000 transitions Standard Workflow) -- realistic add-on $10-30/month at current scale.
   projected_100tb_scale:
     total_per_month_usd: 880-1750
@@ -1246,6 +1246,7 @@ candidate_decisions:
       - "The RDS catalog is a metadata store (Glue-analog), NOT a query engine. NS.1 governs engine-swappability, not a metastore ban. NS.3 actively supports a small managed cloud state-store."
       - "VPC egress (to reach RDS) is orthogonal to Function-URL + AWS_IAM ingress (CD.10 / NS.5). The extension layer must be pre-baked into a Lambda layer to work around blocked egress to extensions.duckdb.org (T2.17)."
       - "Supersession of Decisions 50/56/51/69 is proposed-at-ratification only. Until CD.31 is ratified, all four Decisions remain in force and the existing write path (JSONL-staging, Single-Portal invariant per Decision 69) continues."
+      - "[Amendment -- CD.34]: the catalog backend (\"a dedicated micro RDS PostgreSQL instance\") is migrated to Neon serverless Postgres per CD.34 (pending), for cost. This amends only the backend instantiation; the metadata-store framing, NS.1/NS.3 reasoning, S3-Parquet data plane, DuckDB engine, and closed boundary are unchanged. The RDS-specific text above (\"metadata-in-RDS-PostgreSQL\", \"the always-on RDS instance\", \"VPC egress to reach RDS\") is superseded by Neon (public TLS endpoint, no VPC attach for catalog reachability, Secrets Manager DSN). See docs/REPORT-ducklake-catalog-neon-migration.md."
 
   - id: CD.32
     title: Multi-product platform topology (unified project_id data plane + IP-boundary-only repo axis)
@@ -1376,7 +1377,52 @@ candidate_decisions:
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
       - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
+      - "[Amendment -- CD.34 (pending)]: CD.34 proposes migrating the catalog backend to Neon serverless Postgres. CD.33 was ratified by Decision 81 (dec-1089) WITH the RDS backend, so its body above is UNCHANGED while CD.34 is pending; the following enact only when CD.34 ratifies (Decision 82): clause (3) 'RDS catalog txn' -> 'catalog txn (Neon Postgres)'; clause (5) telemetry-inlining carve-out removed (inlining disabled for ALL tables incl. telemetry; high-write-rate tables get a higher-frequency merge, T2.18 co-tunes the GC breaker); enforcement_mechanism O-2 DR -> daily pg_dump-to-S3 (30d retention, >25h freshness alarm), O-5 pooling -> Neon built-in pooler / direct endpoint (no RDS Proxy). Tracked meanwhile in the T2.16b-T2.19 exit criteria. The runtime architecture (split/OCC/projection/SCD2 keys/GC+merge cadences) is unaffected. See docs/REPORT-ducklake-catalog-neon-migration.md."
     enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (catalog+S3 read) + daily catalog PITR-to-S3; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
+
+  - id: CD.34
+    title: DuckLake catalog backend -- migrate RDS PostgreSQL to Neon serverless Postgres
+    detail: |
+      Narrowly amends the CD.31 / Decision 78 catalog-backend paragraph ("a dedicated micro RDS PostgreSQL
+      instance") from RDS PostgreSQL to Neon serverless Postgres (free tier), provisioned via the Terraform
+      Neon provider (human-gated; excluded from the Decision-77 sandbox auto-apply guard), with the Lambda
+      connection string held in AWS Secrets Manager. Everything else in Decision 78 / CD.31 is preserved:
+      DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the catalog-as-metadata-store framing,
+      and the closed read/write boundary. Motivated by cost -- the micro RDS is the largest live AWS line
+      after the CD.21 EC2-runner retirement; Neon free tier is $0 (realized saving ~$12-15/mo). Sequenced
+      BEFORE T2.17 so the Lambda runtime is built against Neon (no VPC attach for catalog reachability; Neon's
+      built-in pooler) rather than RDS-in-a-VPC. Nothing consumes the catalog yet (live ops are Iceberg/Athena
+      until T2.19), so present blast radius is zero. Ratified later via the log-decision path (provisionally
+      Decision 82, sequenced after Decision 81 which ratified CD.33 as dec-1089); this CD does NOT edit
+      DECISIONS.md while pending.
+      Consequential mechanics (folded into the gated tier items + CD.33):
+      (1) Inlining DISABLED for ALL tables including telemetry (ducklake_default_data_inlining_row_limit=0),
+          overriding the telemetry-inlining carve-out in CD.33 clause (5) and OQ.11 -- on Neon's ~6h free-tier
+          PITR no table may be catalog-only-durable. High-write-rate tables get a higher-frequency
+          merge_adjacent_files; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate.
+      (2) Catalog DR = a daily pg_dump (single consistent snapshot, engine-version-tagged) to a dedicated
+          versioned S3 bucket (cron 03:00 UTC, 30-day retention, >25h freshness alarm) + a tested restore as a
+          T2.16b precondition BEFORE any production write. Catastrophic-case RPO ~24h; intra-6h via Neon PITR.
+      (3) Pooling = Neon built-in pooler if proven transaction-safe, else the direct endpoint for catalog
+          writes (no separate RDS Proxy); a measured T2.16b connection-churn gate (the OQ.8 churn mitigation)
+          requires churn + commit-latency within CD.33's OCC budget OR an app-side pool.
+      (4) Break-glass / OQ.7 = the audited PlatformAdmin principal reads the Neon catalog credential (Secrets
+          Manager) + S3, not an RDS/IAM grant.
+      Authored by docs/REPORT-ducklake-catalog-neon-migration.md (architect + ops-risk zero-context review,
+      converged PROCEED over three rounds).
+    gates: [T2.16b, T2.17, T2.18, T2.19]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    supersedes_decisions: []
+    discipline_points:
+      - "Narrowly amends the CD.31 catalog-backend paragraph / Decision 78 item (RDS PostgreSQL -> Neon serverless Postgres); preserves DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the metadata-store framing, and the closed boundary. CD.31/Decision 78 are paragraph-structured, not clause-numbered. Stays inside the NS.3 'small managed cloud state-store' framing that justified the catalog originally."
+      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (provisionally Decision 82, after Decision 81 ratified CD.33 as dec-1089), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81. Because CD.33 is now RATIFIED, CD.34's CD.33-level changes are staged as an additive [Amendment -- CD.34] annotation on CD.33 (the CD.31 pattern), NOT a rewrite of CD.33's ratified body; they enact when CD.34 ratifies."
+      - "Inlining DISABLED for ALL tables including telemetry (inlined_rows=0), overriding the telemetry carve-out in CD.33 clause (5) + OQ.11 -- a durability decision on Neon's ~6h free-tier PITR, NOT an architecture change. High-write-rate tables get a higher-frequency merge; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate."
+      - "Supersedes OQ.8's RDS-Proxy/IAM-auth-preferred resolution: RDS Proxy (never provisioned; deferrable per OQ.8) -> Neon built-in pooler (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget); credential = Secrets Manager DSN (IAM DB auth is N/A against a non-AWS endpoint). Realized saving ~$12-15/mo; the +$10-12 RDS-Proxy figure was conditional, not bankable."
+      - "Catalog is the lakehouse SPOF; on Neon free tier (~6h PITR) DR = a daily pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, >25h freshness alarm) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR -- rec-2063 WONTFIX while the catalog is provably unused), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
+      - "Provisioned via the Terraform Neon provider in terraform/personal/, EXPLICITLY excluded from the Decision-77 auto-apply guard (human-gated apply) -- keeps declarative state/audit for the lakehouse's single most critical stateful dependency rather than console-only. The out-of-band ducklake_ops schema DDL is captured as a versioned in-repo migration for reproducibility."
+      - "The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED; only the catalog backend + its consequential recovery/pooling mechanics change."
+    enforcement_mechanism: "Terraform Neon provider (human-gated, excluded from Decision-77 auto-apply) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot; ratified via Decision 82."
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -3291,18 +3337,57 @@ tier_items:
       was human-gated under agent_platform_admin (Decision 35); IAM extensions applied separately
       via platform_breakglass.
 
+  - id: T2.16b
+    tier: T2
+    name: DuckLake catalog migration to Neon + RDS retirement
+    intent: |
+      Migrate the DuckLake catalog backend from the T2.16 RDS PostgreSQL instance to Neon serverless Postgres
+      (free tier) per CD.34, BEFORE the T2.17 Lambda runtime is built against an RDS-in-a-VPC posture.
+      Provision a Neon project (AWS region nearest eu-west-2) via the Terraform Neon provider (human-gated;
+      excluded from the Decision-77 auto-apply guard); create the ducklake_ops database; store the Neon DSN in
+      Secrets Manager; validate a DuckDB ATTACH round-trip (sslmode=require, SNI, pooled-vs-direct endpoint);
+      pass the connection-churn gate and a tested pg_dump+restore drill; then retire the RDS instance with a
+      final snapshot. Nothing consumes the catalog yet (live ops are Iceberg/Athena until T2.19), so present
+      blast radius is zero. Terraform apply is human-gated (Decision 35); the RDS destroy trips the Decision-77
+      fail-closed guard onto the manual agent_platform_admin path. Authored by
+      docs/REPORT-ducklake-catalog-neon-migration.md.
+    depends_on: [T2.16]
+    files_in_scope:
+      - terraform/personal/neon_ducklake_catalog.tf    # new -- Neon project/role/database/IP-allowlist via the Terraform Neon provider; excluded from Decision-77 auto-apply
+      - terraform/personal/rds_ducklake_catalog.tf      # deleted on retirement
+      - terraform/personal/variables.tf                 # ducklake_catalog_* vars removed; Neon provider vars added
+      - terraform/personal/platform_roles.tf            # PlatformDuckLakeCatalogProvisioning RDS/snapshot/kms grant removed (closes rec-2065/2066)
+      - migrations/ducklake_ops_schema.sql              # new -- captures the out-of-band ducklake_ops schema DDL for reproducibility
+    exit_criteria:
+      - "Neon project provisioned via the Terraform Neon provider (declarative state); ducklake_ops reachable; DuckDB ATTACH + SELECT 1 succeeds with sslmode=require and SNI on the pinned DuckDB version (CD.34)"
+      - "Connection-churn gate (hard): the smoke test measures per-invocation connection-establishment overhead + OCC-collision rate under a concurrent-writer burst on the direct endpoint; pass = churn + commit latency within CD.33's OCC-retry budget OR an app-side pool implemented (replaces the deferred RDS Proxy; OQ.8/O-5)"
+      - "Catalog writes use the direct (unpooled) endpoint (DuckLake multi-statement txns vs transaction-mode pooling); the pooled endpoint is used only if proven transaction-safe, else read-paths only"
+      - "Neon DSN stored in Secrets Manager; Lambda runtime-fetch validated (Decision 37); a quarterly calendar-reminded rotation cadence defined (the Neon static password does not auto-rotate like the RDS-managed secret)"
+      - "ducklake_ops schema-creation DDL captured as a versioned in-repo migration so the Neon database creation here and any fresh-provision rollback are reproducible (not out-of-band)"
+      - "Tested restore BEFORE production write: a consistent (--serializable-deferrable / single-txn), engine-version-tagged pg_dump restores into a scratch Neon project and passes a DuckDB read-your-write (CD.34 / O-2)"
+      - "RDS retired: pre-destroy check that no snapshot named ducklake-catalog-final-snapshot exists (else timestamp the identifier); deletion_protection=false then destroy; final snapshot retained as the sole recovery artifact (delete_automated_backups=true wipes PITR; rec-2063 WONTFIX while the catalog is provably unused); rds_ducklake_catalog.tf deleted; human-gated (Decision 35) on the Decision-77 fail-closed destroy path; partial-failure rollback re-enables deletion_protection"
+      - "rec disposition: closes rec-2062/2068/2069 by file deletion and rec-2065/2066 via IAM-policy removal; rec-2063 (delete_automated_backups) WONTFIX for this retirement (catalog unused); rec-2064 (engine-minor drift) dispositioned (logical pg_dump tolerates Neon Postgres-minor drift); rec-2067 (egress least-privilege) re-filed against the public-endpoint posture"
+    related_candidate_decisions: [CD.34]
+    effort: M
+    strategic: false
+    status: not_started
+
   - id: T2.17
     tier: T2
-    name: DuckLake Lambda runtime -- VPC attach + extension layer + version pin
+    name: DuckLake Lambda runtime -- extension layer + version pin (Neon catalog, no VPC attach)
     intent: |
-      Configure the ops DuckLake Lambdas (writer + reader + maintenance) for VPC-attached execution so they
-      can reach the RDS catalog (T2.16). VPC attach governs egress only; the Function-URL + AWS_IAM ingress
-      surface (CD.10 / NS.5) is unaffected. Because VPC egress blocks extensions.duckdb.org, the ducklake and
-      httpfs extensions must be pre-baked into a Lambda layer with extension_directory set, autoinstall and
-      autoload disabled, and custom_extension_repository set to a fail-closed empty or internal endpoint.
-      DuckLake + DuckDB versions pinned lockstep at the v1.0 / DuckDB 1.5.2 validated pair; version bumps
-      require a clone-rehearsal gate (OQ.12). Per-Lambda manifest per CD.24.
-    depends_on: [T2.16]
+      Configure the ops DuckLake Lambdas (writer + reader + maintenance) to reach the Neon catalog (T2.16b,
+      CD.34) over TLS -- NO VPC attach is needed for catalog reachability (Neon is a public TLS endpoint). The
+      Function-URL + AWS_IAM ingress surface (CD.10 / NS.5) is unaffected. The ducklake and httpfs extensions
+      remain pre-baked into a Lambda layer (extension_directory set, autoinstall + autoload disabled,
+      custom_extension_repository fail-closed) for reproducibility + cold-start determinism -- the
+      justification shifts from "VPC egress blocks extensions.duckdb.org" to determinism. De-VPC-ing also moves
+      the S3 Parquet data-plane from a potential gateway-endpoint/private path to the public S3 API path
+      (acceptable for sandbox; noted for SIT/PROD future-state). Catalog writes use the direct (unpooled) Neon
+      endpoint (per the T2.16b connection-churn gate). DuckLake + DuckDB versions pinned lockstep at the v1.0 /
+      DuckDB 1.5.2 validated pair; version bumps require a clone-rehearsal gate (OQ.12). Per-Lambda manifest
+      per CD.24.
+    depends_on: [T2.16, T2.16b]
     files_in_scope:
       - src/lambdas/ducklake_writer/    # new
       - src/lambdas/ducklake_reader/    # new
@@ -3310,20 +3395,20 @@ tier_items:
       - src/lambdas/ducklake_reader/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
       - scripts/build_lambda.py    # extend to bundle ducklake+httpfs layer
     exit_criteria:
-      - "DuckLake Lambdas VPC-attached and able to reach RDS catalog; ATTACH succeeds in Lambda execution context"
+      - "DuckLake Lambdas reach the Neon catalog over TLS (no VPC attach for catalog reachability); ATTACH succeeds in Lambda execution context with sslmode=require + SNI on the pinned DuckDB (CD.34)"
       - "ducklake + httpfs extensions pre-baked in Lambda layer; autoinstall + autoload disabled; custom_extension_repository set fail-closed"
       - "DuckLake v1.0 + DuckDB 1.5.2 pinned; version-bump policy documented (OQ.12 clone-rehearsal gate)"
       - "Function-URL + AWS_IAM ingress confirmed unaffected by VPC egress config (CD.10 / NS.5)"
       - "Per-Lambda CD.24 manifests filed for ducklake_writer and ducklake_reader"
       - "Partition-prune smoke test: a date-filtered query against an ALTER-partitioned history table demonstrably prunes partitions (CD.9 / CD.33)"
       - "ducklake_writer fails loudly on schema-gate rejection and OCC-retry exhaustion; no silent drop (CD.33 C1)"
-      - "RDS Proxy fronts the catalog connection pool for writer/reader (CD.33 T2-e/O-5)"
+      - "Connection pooling per the T2.16b connection-churn gate: Neon built-in pooler if transaction-safe, else the direct endpoint for catalog writes with an app-side pool if churn exceeds CD.33's OCC budget (no separate RDS Proxy; CD.33 T2-e/O-5 as amended by CD.34)"
       - "OCC-retry + maintenance-singleton + commit-latency metrics emitted to CloudWatch (CD.33 T2-d)"
       - "Idempotent append verified: a retried write reuses its ULID and MERGE-on-ULID de-duplicates (no double-append); _prepare_record now()/ULID minted once, outside the OCC-retry loop (CD.33 clause 2 / D-2)"
-      - "Inlining disabled: ducklake_default_data_inlining_row_limit=0 honoured on the pinned DuckLake version (smoke-test upstream issue #921); concurrency smoke-test covers issues #233/#376 (CD.33 C-5/C-4)"
-      - "PlatformAdmin break-glass: granted catalog (RDS) + S3 read; a DuckDB catalog-attach inspect/repair runbook exists and is drilled (CD.33 O-1 / clause 6)"
+      - "Inlining disabled for ALL tables including telemetry: ducklake_default_data_inlining_row_limit=0 honoured on the pinned DuckLake version (smoke-test upstream issue #921; CD.34 overrides the governance-only scope); concurrency smoke-test covers issues #233/#376 (CD.33 C-5/C-4)"
+      - "PlatformAdmin break-glass: granted the Neon catalog credential (Secrets Manager) + S3 read; a DuckDB catalog-attach inspect/repair runbook exists and is drilled (CD.33 O-1 / clause 6; CD.34)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
-    related_candidate_decisions: [CD.31, CD.10, CD.33]
+    related_candidate_decisions: [CD.31, CD.10, CD.33, CD.34]
     effort: M
     strategic: false
     status: not_started
@@ -3345,15 +3430,16 @@ tier_items:
       - src/lambdas/ducklake_maintenance/    # new -- or extend an existing maintenance Lambda
       - src/lambdas/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
     exit_criteria:
-      - "Inlining DISABLED for governance tables (OQ.11 -> c: ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)"
+      - "Inlining DISABLED for ALL tables including telemetry (OQ.11 -> c as amended by CD.34: ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)"
       - "expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed stable after N maintenance cycles"
       - "Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62"
       - "ops_compaction Lambda retired or repurposed"
       - "Maintenance runs as two deterministic singleton cadences (daily non-destructive merge; separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)"
       - "Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2 snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB, weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)"
-      - "Catalog DR: daily PITR/snapshot export of the RDS catalog to a dedicated versioned S3 bucket (CD.33 O-2)"
+      - "Catalog DR (CD.34): a daily pg_dump of the Neon catalog (single consistent snapshot via --serializable-deferrable / single-txn, engine-version-tagged) to a dedicated versioned, lifecycle-managed S3 bucket; schedule cron(0 3 * * ? *); 30-day retention (tunable to 7); a >25h freshness alarm pages on a missed dump; on any DuckLake/DuckDB engine bump (OQ.12) re-baseline the retention window (CD.33 O-2 as amended by CD.34)"
+      - "Telemetry small-file load: disabling telemetry inlining (CD.34) shifts small writes onto compaction; high-write-rate tables get a higher-frequency merge_adjacent_files, and the guarded-GC circuit breaker (>20% files) is co-tuned for the raised dead-file rate so it does not false-positive abort+page (CD.34)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
-    related_candidate_decisions: [CD.31, CD.29, CD.33]
+    related_candidate_decisions: [CD.31, CD.29, CD.33, CD.34]
     effort: M
     strategic: false
     status: not_started
@@ -3384,12 +3470,13 @@ tier_items:
       - "OQ.10 resolved: writer-concurrency = bounded application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer + ducklake_maintenance singleton; reserved-concurrency=1 and SQS FIFO rejected as over-serialising (CD.33 clause 2)"
       - "Decision 69 Single-Portal invariant verified: no write path bypasses ops_data_portal"
       - "ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)"
-      - "Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass path (CD.33 clause 6 / OQ.7 / H2 / O-1)"
-      - "Catalog DR restore drilled: a catalog rebuilt from the daily S3 PITR export passes read-your-write before T2.19 sign-off (CD.33 O-2)"
+      - "Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass reads the Neon catalog credential (Secrets Manager) + S3 (CD.33 clause 6 / OQ.7 / H2 / O-1; CD.34)"
+      - "Catalog DR restore drilled: a catalog rebuilt from the daily S3 pg_dump (version-matched to the pinned engine) passes read-your-write before cutover sign-off; re-drills the T2.16b proof against production-shaped data (CD.33 O-2 as amended by CD.34)"
+      - "Connection-churn / OCC-commit-latency headroom re-validated against production-shaped concurrency at cutover (re-drills the T2.16b churn gate, which proved it on an empty catalog under synthetic burst; CD.34)"
       - "current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4 / C-1)"
       - "SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
-    related_candidate_decisions: [CD.31, CD.33]
+    related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false
     status: not_started
@@ -3958,6 +4045,10 @@ open_questions:
       principal (expanded to catalog+S3 read); catalog DR = daily PITR export to a dedicated S3 bucket.
       Enacted at T2.19.
 
+      Re-resolved (CD.34): break-glass = the Neon catalog credential (Secrets Manager) + S3 read; catalog DR =
+      a daily pg_dump to a dedicated versioned S3 bucket (30-day retention, >25h freshness alarm). Option (a)
+      (no Athena escape hatch) is unchanged.
+
   - id: OQ.8
     question: RDS catalog backend -- sizing, RDS Proxy, and credential mechanism
     resolution_tier: T2.16
@@ -3968,6 +4059,11 @@ open_questions:
       only if Lambda cold-start connection churn causes catalog OCC collisions. Credential: IAM auth vs
       Secrets Manager -- IAM auth is preferred (no rotation burden, per-role scoping) but needs validation
       against the DuckLake ATTACH connection string format. Resolve at T2.16 implementation.
+
+      Re-resolved (CD.34): backend = Neon serverless Postgres (not RDS); RDS Proxy -> Neon's built-in pooler
+      (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget -- T2.16b churn gate);
+      credential = Secrets Manager DSN. The "IAM-auth-preferred" note is moot (IAM DB auth is N/A against a
+      non-AWS endpoint). Realized saving ~$12-15/mo; the deferrable RDS Proxy was never provisioned.
 
   - id: OQ.9
     question: Catalog durability, DR strategy, and SPOF mitigation
@@ -3980,6 +4076,12 @@ open_questions:
       unavailable (DuckLake hard-fails; no graceful degradation); (c) cross-AZ failover cost vs current
       single-AZ. Ties T2.16 (RDS AZ posture is an implementation choice within RDS catalog provisioning;
       T2.8 covers S3/DynamoDB DR posture, not RDS). Resolve at T2.16; revisit at T2.19.
+
+      Re-resolved (CD.34): on Neon free tier (~6h PITR vs RDS 7-day continuous), DR baseline = a mandatory
+      daily pg_dump to a versioned S3 bucket (30-day retention, >25h freshness alarm) + a tested restore
+      BEFORE any production write (T2.16b). Catastrophic-case RPO ~24h (daily cadence); intra-6h recovery via
+      Neon PITR. Inlining disabled for ALL tables so nothing is catalog-only-durable. SPOF property unchanged;
+      the mitigation is the independent backup, not the provider.
 
   - id: OQ.10
     question: OCC writer-concurrency enforcement -- reserved-concurrency vs SQS FIFO vs OCC retry
@@ -4017,6 +4119,11 @@ open_questions:
       cadence. Per-table: telemetry may retain inlining. Supersedes the v1 option-(b) direction.
       Enacted at T2.18.
 
+      Re-resolved (CD.34): inlining is DISABLED for ALL tables INCLUDING telemetry (inlined_rows=0) -- this
+      SUPERSEDES the "telemetry may retain inlining" carve-out above, because on Neon's ~6h free-tier PITR no
+      table may be catalog-only-durable. High-write-rate tables get a higher-frequency merge to absorb the
+      small-file load (T2.18 co-tunes the GC circuit breaker). Enacted at T2.18.
+
   - id: OQ.12
     question: DuckLake version and DuckDB upgrade policy -- lockstep constraint + clone-rehearsal gate
     resolution_tier: T2.17
@@ -4052,6 +4159,10 @@ open_questions:
       catalog (separate RDS per E.env.2 environment -- dev/staging/prod -- adds operational complexity).
       Deferred to FP-C after the ops catalog validates the approach at billions-of-rows scale. The ops
       catalog schema provisioned in T2.16 is designed for clean separability to support any of these paths.
+
+      Note (CD.34): on Neon the multi-tenancy primitives re-map from "shared ops-RDS-schema vs dedicated
+      instance" to "shared Neon project + separate databases" vs "separate Neon projects per env" (Neon
+      branching fits per-env catalogs). The question stays open (FP-C); only the option wording updates.
 
 known_gaps:
   # Items deliberately not in the roadmap that the user / future sessions should be aware of.
