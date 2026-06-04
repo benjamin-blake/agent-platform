@@ -542,6 +542,8 @@ CD.24 (per-Lambda manifests), OQ.7 / OQ.10 / OQ.11 (resolved), OQ.12 (left to T2
       replaced with active per-Lambda build/deploy/smoke-test criteria (Decision 79); the partition-prune,
       schema-gate/loud-fail, closed-boundary/break-glass, `current`-projection, guarded-GC, and SCD2-DQ
       criteria are present.
+- [ ] **Manifest-path SSOT corrected (G-1):** no `config/lambda/ducklake_*/manifest.yaml` reference remains in
+      the tier_items; the manifest is referenced as `src/lambdas/<slug>/manifest.yaml` (the CD.24 / `lambda_manifest.py` SSOT).
 - [ ] **DECISIONS.md is UNCHANGED** until the ratification step (`git diff origin/main -- docs/DECISIONS.md`
       empty after the roadmap edits); Decision 81 is filed only after approval, via `file_decision`.
 - [ ] The **write-id decision** is recorded as RESOLVED (ULID PK + stable high-precision timestamp) in the
@@ -555,10 +557,11 @@ CD.24 (per-Lambda manifests), OQ.7 / OQ.10 / OQ.11 (resolved), OQ.12 (left to T2
 |---|-------|--------|---------|----------|--------|
 | 1 | pre | Roadmap loader accepts CD.33 + edits | `bin/venv-python -m scripts.platform_roadmap` | exits 0, no CD.33 error | conform to CandidateDecision (extra=forbid) fields |
 | 2 | pre | Governance well-formed | `bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); cds={c['id']:c for c in d['candidate_decisions']}; assert cds['CD.33']['state']=='pending' and set(cds['CD.33']['gates'])=={'T2.17','T2.18','T2.19'}; ti={t['id']:t for t in d['tier_items']}; assert all('CD.33' in ti[x]['related_candidate_decisions'] for x in ('T2.17','T2.18','T2.19')); print('GOV_OK')"` | prints `GOV_OK` | add/fix the named element |
-| 3 | pre | Stale DEFERRED markers removed | grep that no `pending Decision 67 / CD.16 reversal` remains in T2.17/T2.18/T2.19 | absent | replace remaining marker |
-| 4 | pre | OQ.11 cites option c, not b | grep OQ.11 annotation for `option (c)` and absence of `option (b)` | option (c) present | correct the annotation |
-| 5 | pre | DECISIONS.md untouched by roadmap step | `git diff --quiet origin/main -- docs/DECISIONS.md && echo NOT_ENACTED` | `NOT_ENACTED` | revert; ratification is a separate approved step |
-| 6 | pre | Full presubmit | `bin/venv-python -m scripts.validate` | PASS | address before merge |
+| 3 | pre | Stale DEFERRED markers removed | `! grep -q "pending Decision 67 / CD.16 reversal" docs/ROADMAP-PLATFORM.yaml && echo NO_STALE_MARKER` | prints `NO_STALE_MARKER` | replace remaining marker |
+| 4 | pre | OQ.11 cites option c, not b | `bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); oq={q['id']:q for q in d['open_questions']}; n=oq['OQ.11']['notes']; assert 'option (c)' in n and 'option (b)' not in n; print('OQ11_OK')"` | prints `OQ11_OK` | correct the annotation |
+| 5 | pre | Manifest-path SSOT corrected (G-1) | `! grep -qE "config/lambda/ducklake_[a-z]+/manifest\.yaml" docs/ROADMAP-PLATFORM.yaml && grep -qE "src/lambdas/ducklake_(writer\|reader\|maintenance)/manifest\.yaml" docs/ROADMAP-PLATFORM.yaml && echo MANIFEST_PATH_OK` | prints `MANIFEST_PATH_OK` | rewrite stale `config/lambda/...` manifest refs to `src/lambdas/<slug>/manifest.yaml` |
+| 6 | pre | DECISIONS.md untouched by roadmap step | `git diff --quiet origin/main -- docs/DECISIONS.md && echo NOT_ENACTED` | `NOT_ENACTED` | revert; ratification is a separate approved step |
+| 7 | pre | Full presubmit | `bin/venv-python -m scripts.validate` | PASS | address before merge |
 
 ## Constraints
 - Roadmap edits stage CD.33 as `state: pending` and ENACT nothing in DECISIONS.md (CD.30/CD.31 precedent).
