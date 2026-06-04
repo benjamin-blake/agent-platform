@@ -16,9 +16,11 @@ below. v1->v2 overturned inlining (OQ.11 b->c) and partitioning and added the `c
 round-2 review surfaced an idempotency self-contradiction and three DuckLake-capability assumptions; those
 are resolved here by the **ULID logical-PK write-id decision** and by **verifying every load-bearing claim
 against the official DuckLake docs** (all CONFIRMED). The ledger is the canonical record -- it exists so the
-resolutions survive context compaction and are correctable, not held only in conversation. Remaining work
-before ratification is the ops-recovery ENCODE items (break-glass O-1, catalog DR O-2, GC thresholds O-3,
-observability, RDS Proxy) into the T2.17-T2.19 exit criteria; the architecture itself is verified.
+resolutions survive context compaction and are correctable, not held only in conversation. The ops-recovery
+items are now decided too (O-1 PlatformAdmin break-glass, O-2 daily catalog PITR-to-S3, O-3 concrete GC
+guardrails) and folded into clauses 5/6 + the T2.17-T2.19 exit criteria. Nothing remains gating ratification
+of CD.33; the only deferred work is ENCODE-only implementation detail (O-4 correctness auditor, O-5 RDS
+Proxy provisioning, O-6 writer rollback/canary, O-7 singleton lease + deadman, O-9 catalog destroy-guard).
 
 ## Plan Type
 IMPLEMENTATION
@@ -49,7 +51,7 @@ treat them as handles, not a frozen taxonomy.
 | R-4 | dist-sys | "Latest version per id" is unprunable -- a `current` row can live in any partition -- so deriving `current` at read time forces a full-table scan. | RESOLVED | Maintain `current` as a write-through Type-1 projection; dual-write `history` (append) + `current` (MERGE upsert) in **one DuckLake catalog transaction**; reads hit `current`. (Clause 7.) | HIGH |
 | H1/R-3 | ops-risk | Maintenance lumps destructive GC (expire/cleanup/delete_orphaned) with non-destructive compaction on one cadence, with no retention floor or circuit breaker. | RESOLVED | Decompose: **daily non-destructive `merge_adjacent_files`** + a **separately-cadenced, guarded destructive GC** (retention floor, `older_than` grace window, circuit breaker, independent alarm). (Clause 5.) | HIGH |
 | R-1 | ops-risk | "Two-phase / sequencing" wording implied external orchestration (Step Functions) was needed for cross-table atomicity, and left orphan-Parquet handling vague. | RESOLVED | Single DuckLake catalog-snapshot transaction is atomic across `history`+`current`; no external sequencing. Atomicity is scoped to the **catalog-snapshot commit**; aborted-commit Parquet is GC residue reclaimed by `delete_orphaned_files`. (Clauses 3, 5, 7.) | HIGH |
-| -- | user | SCD2 grain was mis-stated as `rec_id`. Engine enforces no PK/FK (BigQuery discipline -- enforced in app + DQ). | RESOLVED | Grain is the composite `(rec_id, last_updated_timestamp)`; `rec_id` is the natural key. Three DQ invariants: (i) grain uniqueness, (ii) one current row per `rec_id` (now **structural** via the `current` MERGE key), (iii) `update_rec` referential-existence check (now a **point-lookup on `current`**). (Clause 8.) | HIGH |
+| -- | user | SCD2 grain was mis-stated as `rec_id`. Engine enforces no PK/FK (BigQuery discipline -- enforced in app + DQ). | RESOLVED (later refined by WRITE-ID row) | Initially: grain = composite `(rec_id, last_updated_timestamp)`. **Superseded by the WRITE-ID decision** -- the `history` logical key is the monotonic ULID; `rec_id` is the natural key; timestamp is ordering-only. Three DQ invariants: (i) ULID uniqueness, (ii) one current row per `rec_id` (**structural** via the `current` MERGE key), (iii) in-transaction `update_rec` referential-existence point-lookup on `current`. (Clause 8.) | HIGH |
 | C1 | dist-sys | Writes that fail the schema gate or exhaust OCC retries must fail **loudly** (surface the error), never silently drop or swallow. | ACCEPT-ENCODE | `ducklake_writer` raises on schema-gate rejection and on OCC-retry exhaustion; no silent drop. Consistent with the CLAUDE.md "never raise at import; raise on explicit calls" rule. To be pinned in T2.17 exit criteria. | MED |
 | H2 | ops-risk | The closed boundary (no Athena escape hatch) means a broken reader/writer leaves no way to inspect or repair the warehouse -- no break-glass path for DR. | ACCEPT-ENCODE | Define an **admin-account break-glass** role/path for emergency direct catalog+S3 access (DuckDB attach), audited and alarmed, distinct from the routine closed boundary. To be pinned in T2.19 / DR runbook. | MED |
 | T2-a | dist-sys | `day(last_updated_timestamp)` does not prune current-state reads because updates re-stamp the timestamp, scattering an id's versions across partitions. | RESOLVED | `history` partitions by **`day(created_timestamp)`** (stable per rec); `current` partitions/buckets by **`id`**. (Clauses 6, 7.) | HIGH |
@@ -60,7 +62,7 @@ treat them as handles, not a frozen taxonomy.
 | T3-a | decision-scout | CD.10 supersession should be machine-readable (structured), not only prose. | ACCEPT-ENCODE | Encode the supersession in CD.33's structured `supersedes`/`discipline_points` fields, not just narrative. (CD.33 YAML below.) | MED |
 | T3-b | decision-scout | Lambda manifest paths referenced must match actual `src/lambdas/<slug>/manifest.yaml` locations. | ACCEPT-ENCODE | Verify the three artifact slugs against the manifest registry before tier-item edits land. | MED |
 | T3-c | decision-scout | OQ annotation wording must be precise about "resolved direction vs. stays open until implemented". | RESOLVED | OQ annotations below use the established "Resolved direction (CD.33, pending Decision 81) ... Enacted at Tn" pattern. | HIGH |
-| **WRITE-ID** | user+dist-sys | **Write-id tiebreaker.** `_prepare_record` re-stamps `last_updated_timestamp = now()` on every attempt, breaking grain uniqueness, OCC-safe retries, and append idempotency -- all three want one stable write identity. | **RESOLVED** | **User decision: auto-generate a monotonic ULID as the `history` PK, AND keep a high-precision stable timestamp.** ULID (minted once, reused across retries) = PK + OCC idempotency key + append idempotency key (`INSERT IF NOT EXISTS`); timestamp = SCD2 ordering with ULID as monotonic tiebreaker. Closes D-2 (idempotency), D-4 (uniqueness without timestamp collision), D-12 (deterministic DR). `_prepare_record` `now()` re-stamp moves out of the retry loop. (Clauses 2, 7, 8.) | HIGH |
+| **WRITE-ID** | user+dist-sys | **Write-id tiebreaker.** `_prepare_record` re-stamps `last_updated_timestamp = now()` on every attempt, breaking grain uniqueness, OCC-safe retries, and append idempotency -- all three want one stable write identity. | **RESOLVED** | **User decision: auto-generate a monotonic ULID as the `history` logical key, AND keep a high-precision stable timestamp.** ULID (minted once, reused across retries) = logical key + OCC idempotency key + append idempotency key. Capability-review C-3 verified DuckLake enforces NO engine PK, so the idempotent append is `MERGE ... WHEN NOT MATCHED THEN INSERT` on the ULID (not an engine PK constraint); timestamp = SCD2 ordering with ULID as monotonic tiebreaker. Closes D-2 (idempotency), D-4 (uniqueness without timestamp collision), D-12 (deterministic DR). `_prepare_record` `now()` re-stamp moves out of the retry loop. (Clauses 2, 7, 8.) | HIGH |
 
 ## Scope
 | File | Action | Purpose |
@@ -124,9 +126,13 @@ None.
      because every MERGE supersedes the prior row-version and its dead snapshots accrue quickly.
    - **Separately-cadenced, guarded, destructive GC:** `ducklake_expire_snapshots(older_than=>...)` ->
      `ducklake_cleanup_old_files(older_than=>...)` -> `ducklake_delete_orphaned_files(older_than=>...)`
-     (verified names/signatures, capability-review M-1/M-2). Each runs behind a **retention floor**, an
-     `older_than` grace window, and a **circuit breaker** (abort + alarm if it would delete more than a
-     threshold), on a slower cadence with its own alarm. CRITICAL verified nuance (M-3, finding D-3/O-3):
+     (verified names/signatures, capability-review M-1/M-2). Concrete guardrail defaults (O-3, tunable):
+     `expire_older_than = 30d` for `history`, `7d` for `current`, and **never expire below the last 2
+     snapshots** (retention floor); file-deletion `older_than` grace **`>=7d`** (>> the Lambda 15-min max,
+     so >> any reader/writer/OCC-retry window); a **circuit breaker** that aborts + pages if a single run
+     would delete **`>20%` of tracked files OR `>10GB`**; **weekly** destructive cadence (vs daily
+     compaction); and **never `cleanup_all => true`** in scheduled runs (operator-invoked only). CRITICAL
+     verified nuance (M-3, finding D-3/O-3):
      DuckLake's deletion safety is a **soft, time-based deferral** (files go to `ducklake_files_scheduled_
      for_deletion`, "generally safe to delete ... more than a few days ago, provided there are no read
      transactions that last that long") -- **NOT** a hard lock against in-flight transactions. So the
@@ -149,9 +155,14 @@ None.
    every write transits `ducklake_writer`; nothing reaches DuckLake out-of-band. There is **no Athena
    escape hatch** -- DuckLake has no Iceberg export and no external-engine reader, and the closed boundary
    is the point: we control and authorise every read and write. Ad-hoc large scans live behind the reader
-   (add reader compute if DuckDB single-node memory binds) rather than via a parallel Iceberg mirror. A
-   single **admin-account break-glass** path (audited, alarmed, distinct from the routine boundary) exists
-   for DR when the reader/writer are themselves broken (finding H2). **Partitioning** is per-role (finding
+   (add reader compute if DuckDB single-node memory binds) rather than via a parallel Iceberg mirror. The
+   break-glass path (finding H2 / O-1) is the **`PlatformAdmin` principal expanded** from provisioning-only
+   to a non-routine data-plane operator: granted catalog (RDS) + S3 **read** so an operator can DuckDB-attach
+   and inspect/repair when both reader and writer are wedged -- audited and alarmed, distinct from the routine
+   boundary, no new role. A catalog-attach runbook is a T2.17/T2.19 deliverable. **Catalog DR** (O-2): a daily
+   PITR/snapshot export of the RDS catalog to a dedicated, versioned, lifecycle-managed S3 bucket, with a
+   tested restore-from-S3 runbook gating T2.19 (multi-AZ/cross-region deemed unnecessary). **Partitioning**
+   is per-role (finding
    T2-a): `history` partitions by **`day(created_timestamp)`** (stable per rec, so date-filtered reads
    prune); `current` is **`bucket(N, id)`** -- DuckLake's fixed-count Iceberg-compatible hash bucketing
    (verified M-6), NOT partition-per-id, which would explode the partition count. This prunes the serving
@@ -223,7 +234,7 @@ ratifies conclusions whose preconditions are unspecified, unverified, or HELD** 
 | ID | Sev | Finding | Disposition |
 |----|-----|---------|-------------|
 | D-1 | CRIT | Clause 7 single-transaction dual-table atomicity (`INSERT history` + `MERGE current` = one snapshot) is an unverified DuckLake capability. | **CONFIRMED** (capability-review C-1/C-2): one `BEGIN..COMMIT` is one all-or-nothing snapshot across tables (DuckLake's ACID-across-tables property), and `MERGE INTO` is supported. No fallback needed. |
-| D-2 | CRIT | Clause 2 "idempotent SCD2 appends keyed by id" is **FALSE under current code** (`ops_writer.py:220` re-stamps `last_updated_timestamp=now()` each attempt) -> a committed-but-unacked write + retry double-appends. Self-contradiction with the HELD row. | **RESOLVED** by the WRITE-ID decision: ULID minted once + `INSERT IF NOT EXISTS` on the ULID PK makes the append genuinely idempotent; re-stamp moves out of the retry loop. Idempotency is now correctly grounded, not asserted-on-faith. (Clauses 2, 7, 8.) |
+| D-2 | CRIT | Clause 2 "idempotent SCD2 appends keyed by id" is **FALSE under current code** (`ops_writer.py:220` re-stamps `last_updated_timestamp=now()` each attempt) -> a committed-but-unacked write + retry double-appends. Self-contradiction with the then-HELD row. | **RESOLVED** by the WRITE-ID decision: ULID minted once + MERGE-on-ULID insert-if-not-matched (no engine PK -- C-3) makes the append genuinely idempotent; re-stamp moves out of the retry loop. Idempotency is now correctly grounded, not asserted-on-faith. (Clauses 2, 7, 8.) |
 | D-3 | HIGH | Maintenance singleton serialises maintenance-vs-maintenance only, **not writer-vs-`expire_snapshots`**. GC computing its orphan set from a pre-commit snapshot can delete a Parquet an in-flight commit will reference. | **CONFIRMED real + ENCODE** (capability-review M-3): DuckLake GC safety is a SOFT time-based deferral, not a hard lock -- so `older_than` grace MUST exceed max reader/writer duration and `cleanup_all=>true` is forbidden while readers/writers may be pinned. Encoded into clause 5 + T2.18. |
 | D-4 | HIGH | Grain uniqueness (i) is unsatisfiable under coarse clock + OCC retry; a stable timestamp alone collides with a legitimate same-instant update. | **RESOLVED** by the WRITE-ID decision: the monotonic ULID (not the timestamp) is the PK, unique by construction even for same-instant same-`rec_id` updates; timestamp is ordering-only with ULID tiebreak. (Clause 8.) |
 | D-5 | HIGH | Invariant (iii) `update_rec` referential check is a cross-table read gating a write -> TOCTOU unless executed *inside* the write transaction's snapshot; "current-version uniqueness structural via MERGE key" depends on MERGE-under-OCC. | **ENCODE** (check runs in-transaction; clause 8) + D-1 dependency now CONFIRMED (C-1/C-2/C-4). |
@@ -239,9 +250,9 @@ ratifies conclusions whose preconditions are unspecified, unverified, or HELD** 
 ### Adversarial ops-risk lens
 | ID | Sev | Finding | Disposition |
 |----|-----|---------|-------------|
-| O-1 | CRIT | Break-glass undefined. Only on-disk break-glass is `PlatformAdmin` (provisioning/IAM), **not a data-plane catalog+S3 reader**. Closed boundary -> total inspection blackout if writer+reader both wedge. | DECISION + ENCODE (specify a dedicated read-only break-glass role + VPC attach path + audit + quarterly drill; gate boundary-final on it) |
-| O-2 | CRIT | RDS catalog is a **single point of total, irreversible loss** -- DuckLake Parquet is unreadable without it. On disk: single-AZ, 7-day PITR, no cross-region, **no catalog-rebuild-from-Parquet runbook**. "Rebuildable from history" assumes the catalog survives. | DECISION + ENCODE (multi-AZ + cross-region backup + extended retention; author+test a catalog-rebuild runbook; gate T2.19) |
-| O-3 | CRIT | Destructive-GC guardrails are slogans -- every value unspecified (retention floor, grace, breaker threshold, pager). Race: GC deletes a slow-reader-pinned or staged-uncommitted Parquet -> silently-incomplete or permanently-corrupt governance data. | ENCODE (pin concrete numbers: floor >= max reader timeout + max writer retry window; breaker = absolute count AND percent; query oldest pinned snapshot before GC) |
+| O-1 | CRIT | Break-glass undefined. Only on-disk break-glass is `PlatformAdmin` (provisioning/IAM), **not a data-plane catalog+S3 reader**. Closed boundary -> total inspection blackout if writer+reader both wedge. | **RESOLVED (user):** expand `PlatformAdmin` from provisioning-only to the non-routine break-glass principal -- grant it data-plane catalog (RDS) + S3 read so an operator can DuckDB-attach and inspect/repair when writer+reader are wedged. Audited + alarmed; no new role. ENCODE the grant + an attach runbook into T2.17/T2.19. |
+| O-2 | CRIT | RDS catalog is a **single point of total, irreversible loss** -- DuckLake Parquet is unreadable without it. On disk: single-AZ, 7-day PITR, no cross-region, **no catalog-rebuild-from-Parquet runbook**. "Rebuildable from history" assumes the catalog survives. | **RESOLVED (user):** a **daily PITR/snapshot export of the catalog to a dedicated S3 bucket** is sufficient -- no multi-AZ/cross-region needed. ENCODE: scheduled daily catalog backup to a dedicated, versioned, lifecycle-managed S3 bucket; a restore-from-S3 runbook; gate T2.19 on a tested restore. |
+| O-3 | CRIT | Destructive-GC guardrails are slogans -- every value unspecified (retention floor, grace, breaker threshold, pager). Race: GC deletes a slow-reader-pinned or staged-uncommitted Parquet -> silently-incomplete or permanently-corrupt governance data. | **RESOLVED (user delegated -> defaults):** pin tunable defaults -- history `expire_older_than=30d`, current `=7d`, never expire below the last 2 snapshots; file-deletion `older_than` grace `>=7d` (>> Lambda 15-min max, so >> any reader/writer); circuit breaker aborts+pages if a run would delete `>20%` of tracked files OR `>10GB`; weekly destructive cadence; never `cleanup_all=>true` in scheduled runs. ENCODE into clause 5 + T2.18. |
 | O-4 | HIGH | Observability detects liveness, not **correctness**. Missing: snapshot->S3 object-existence audit, row-count/DQ-drift, history<->current divergence alarm, break-glass-assumption alarm, maintenance deadman. | ENCODE (periodic invariant-auditor, separate from writer; divergence/missing-object alarms page) |
 | O-5 | HIGH | RDS Proxy named but **not provisioned** (no `aws_db_proxy` on disk); saturation = borrow-timeout; undefined whether that's a retry (storm risk) or loud fail. | ENCODE (provision Proxy; cap writer concurrency < connection ceiling; classify borrow-timeout retry distinctly; alarm) |
 | O-6 | HIGH | No writer rollback story (sole chokepoint -> bad deploy = total write outage); schema-migration DDL vs in-flight writes = torn write (writer validates live schema; commit lands post-ALTER). | ENCODE (versioned-alias/canary + auto-rollback; migration protocol: quiesce/additive-only/version-stamped reject) |
@@ -250,11 +261,17 @@ ratifies conclusions whose preconditions are unspecified, unverified, or HELD** 
 | O-9 | LOW | `delete_automated_backups=true` + single fixed `final_snapshot_identifier` widens destroy blast radius for irreplaceable data. | ENCODE (reconsider; destroy-guard the catalog; cross-region logical dumps as backstop) |
 
 ### Cross-lens synthesis -- what this means for ratification
-Both correctness and ops lenses independently conclude the **ratify-now/specify-later sequencing is the
-core flaw**. Three clauses asserted RESOLVED actually rest on unverified DuckLake capabilities (D-1, D-3,
-D-5) and must become SPIKE-GATE. The plan is internally self-contradictory on idempotency/uniqueness (D-2,
-D-4 vs the HELD row). The CD.10 framing is factually wrong (G-2). And the closed boundary is being ratified
-without a tested way back in (O-1, O-2, O-3).
+Both correctness and ops lenses originally concluded the ratify-now/specify-later sequencing was the core
+flaw: three clauses rested on unverified DuckLake capabilities (D-1, D-3, D-5), the plan was self-
+contradictory on idempotency/uniqueness (D-2, D-4 vs the then-HELD write-id), the CD.10 framing looked
+wrong (G-2), and the closed boundary lacked a tested way back in (O-1, O-2, O-3).
+
+**All of that is now resolved (see Decisions taken + Capability-review results):** the capability claims are
+VERIFIED against official docs (D-1/D-3/D-5 CONFIRMED, not spike-gated); the write-id is RESOLVED (ULID
+logical key + stable timestamp), removing the idempotency/uniqueness contradiction (D-2/D-4/D-12); G-2 is
+dismissed (the six Lambdas are verified stubs); and the recovery mechanics are decided (O-1 PlatformAdmin
+break-glass, O-2 daily catalog PITR-to-S3, O-3 concrete GC guardrails). The architecture is ratifiable; the
+remaining O-4/O-5/O-6/O-7/O-9 items are ENCODE-only exit criteria, not ratification blockers.
 
 **Decisions taken (this session):**
 1. **CD.10 disposition (G-2): DISMISSED.** The six Lambdas are `status: stub` mocks (verified) -- the
@@ -268,8 +285,13 @@ without a tested way back in (O-1, O-2, O-3).
    D-3 GC snapshot-isolation / `older_than` semantics; inlining `inlined_rows=0`; `ALTER ... SET PARTITIONED
    BY` write-time semantics; `expire`/`cleanup`/`delete_orphaned` contracts) are **verified against the
    official DuckDB/DuckLake docs by the capability-review below** before ratification, so spike-gated clauses
-   are either confirmed (ratify) or fall back (documented). The ops recovery mechanics (break-glass O-1,
-   catalog DR O-2, GC thresholds O-3) remain ENCODE into T2.17-T2.19 exit criteria with concrete values.
+   are either confirmed (ratify) or fall back (documented).
+4. **Ops-recovery mechanics (O-1/O-2/O-3): RESOLVED (user).** O-1 break-glass = expand `PlatformAdmin` to a
+   data-plane catalog+S3 reader (no new role); O-2 catalog DR = daily PITR/snapshot export to a dedicated S3
+   bucket + tested restore runbook (no multi-AZ/cross-region); O-3 GC guardrails = concrete tunable defaults
+   (see clause 5). These ENCODE as T2.17-T2.19 exit criteria; they no longer gate ratification of CD.33.
+   Remaining ENCODE-only items (no decision needed): O-4 correctness auditor, O-5 RDS Proxy provisioning,
+   O-6 writer rollback/canary, O-7 singleton lease + deadman, O-9 catalog destroy-guard.
 
 **Capability-review results (Q3 -- verified against official DuckLake docs at ducklake.select):** every
 load-bearing claim CONFIRMED; no fallback triggered. Citations are the authoritative basis for ratification.
@@ -345,10 +367,10 @@ this commit.
           INSERT history then MERGE current from the in-hand delta (no read-back). history is the append-only
           source of truth; current is rebuildable from history (DR only). Shared idempotent merge helper,
           one-or-many rows from day one (micro-batch is a config flip). current is a warehouse table, NOT the
-          logs/*.jsonl read-cache anti-pattern. SPIKE-GATED: single-txn multi-table atomicity + MERGE-through-
-          DuckLake are verified against official docs (capability-review); fallback = in-txn DELETE+INSERT.
-      (8) SCD2 keys + DQ (no engine PK/FK; BigQuery discipline): history PK = auto-generated monotonic ULID
-          (unique per write row, so same-instant same-rec_id updates never collide); rec_id is the natural
+          logs/*.jsonl read-cache anti-pattern. VERIFIED (capability-review C-1/C-2): single-txn multi-table
+          atomicity + MERGE-through-DuckLake confirmed; DELETE+INSERT retained only as a noted alternative.
+      (8) SCD2 keys + DQ (no engine PK/FK; BigQuery discipline): history logical key = auto-generated monotonic
+          ULID (unique per write row, so same-instant same-rec_id updates never collide); rec_id is the natural
           key; last_updated_timestamp is high-precision, stable-per-write, SCD2 ordering with ULID tiebreak.
           DQ invariants: ULID PK uniqueness; one current row per rec_id (structural via the current MERGE key
           on rec_id); update_rec referential existence (point-lookup on current, in-transaction) while
@@ -366,14 +388,14 @@ this commit.
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
       - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
-    enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID PK + INSERT-IF-NOT-EXISTS append idempotency; current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
+    enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (catalog+S3 read) + daily catalog PITR-to-S3; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
 ```
 
 ## Proposed OQ annotations (append to the `notes` of each; questions stay open until implemented)
 - **OQ.7** -- append: `Resolved direction (CD.33, pending Decision 81): option (a) -- no Athena escape hatch.
   The closed reader/writer boundary is the design goal; ad-hoc scans live behind ducklake_reader (scale reader
-  compute if memory binds), not a parallel Iceberg mirror. One audited admin-account break-glass path for DR.
-  Enacted at T2.19.`
+  compute if memory binds), not a parallel Iceberg mirror. Break-glass = the audited PlatformAdmin principal
+  (expanded to catalog+S3 read); catalog DR = daily PITR export to a dedicated S3 bucket. Enacted at T2.19.`
 - **OQ.10** -- append: `Resolved direction (CD.33, pending Decision 81): option (c) -- concurrent writers +
   bounded application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer (ops writes
   are idempotent SCD2 appends keyed by id); ducklake_maintenance runs as a singleton. NOT reserved-concurrency=1,
@@ -387,20 +409,25 @@ this commit.
 - **T2.17** -- add `CD.33` to `related_candidate_decisions`; add exit criteria
   `"Partition-prune smoke test: a date-filtered query against an ALTER-partitioned history table demonstrably prunes partitions (CD.9 / CD.33)"`,
   `"ducklake_writer fails loudly on schema-gate rejection and OCC-retry exhaustion; no silent drop (CD.33 C1)"`,
-  `"RDS Proxy fronts the catalog connection pool for writer/reader (CD.33 T2-e)"`,
-  `"OCC-retry + maintenance-singleton + commit-latency metrics emitted to CloudWatch (CD.33 T2-d)"`;
+  `"RDS Proxy fronts the catalog connection pool for writer/reader (CD.33 T2-e/O-5)"`,
+  `"OCC-retry + maintenance-singleton + commit-latency metrics emitted to CloudWatch (CD.33 T2-d)"`,
+  `"Idempotent append verified: a retried write reuses its ULID and MERGE-on-ULID de-duplicates (no double-append); _prepare_record now()/ULID minted once, outside the OCC-retry loop (CD.33 clause 2 / D-2)"`,
+  `"Inlining disabled: ducklake_default_data_inlining_row_limit=0 honoured on the pinned DuckLake version (smoke-test upstream issue #921); concurrency smoke-test covers issues #233/#376 (CD.33 C-5/C-4)"`,
+  `"PlatformAdmin break-glass: granted catalog (RDS) + S3 read; a DuckDB catalog-attach inspect/repair runbook exists and is drilled (CD.33 O-1 / clause 6)"`;
   **replace** the stale `"DEFERRED: build_lambda.py --deploy + smoke-test (pending Decision 67 / CD.16 reversal)"`
   with `"Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"`.
 - **T2.18** -- add `CD.33`; **replace** the inlining note to cite OQ.11 -> c (inlining DISABLED for governance
   tables; daily non-destructive merge); add exit criteria
   `"Maintenance runs as two deterministic singleton cadences (daily non-destructive merge; separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)"`,
-  `"Destructive GC behind retention floor + older_than grace + circuit breaker + independent alarm (CD.33 H1/R-3)"`;
+  `"Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2 snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB, weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)"`,
+  `"Catalog DR: daily PITR/snapshot export of the RDS catalog to a dedicated versioned S3 bucket (CD.33 O-2)"`;
   **replace** the stale DEFERRED line with the active per-Lambda build/deploy/smoke-test line for `ducklake_maintenance` (per Decision 79).
 - **T2.19** -- add `CD.33`; add exit criteria
   `"ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)"`,
-  `"Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; one audited admin break-glass path (CD.33 clause 6 / OQ.7 / H2)"`,
-  `"current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4)"`,
-  `"SCD2 DQ checks enforce grain uniqueness (rec_id, last_updated_timestamp), current-version uniqueness via current, and update_rec referential existence (CD.33 clause 8)"`,
+  `"Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass path (CD.33 clause 6 / OQ.7 / H2 / O-1)"`,
+  `"Catalog DR restore drilled: a catalog rebuilt from the daily S3 PITR export passes read-your-write before T2.19 sign-off (CD.33 O-2)"`,
+  `"current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4 / C-1)"`,
+  `"SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)"`,
   and update the OQ.10 exit criterion to name the chosen mechanism (OCC retry + maintenance singleton);
   **replace** the stale DEFERRED line with active per-Lambda build/deploy/smoke-test (per Decision 79).
 
@@ -430,8 +457,9 @@ Ratify CD.33 as the authoritative DuckLake ops runtime architecture:
    behind writer and reader is deliberately left extensible and is NOT frozen by this decision.
 3. Concurrency (OQ.10): concurrent writers + bounded application-level OCC retry (backoff+jitter, fixed
    ceiling, loud-fail on exhaustion) in ducklake_writer. Idempotency is grounded by the write-id mechanism
-   (below): a monotonic ULID minted once and reused across retries is the history PK, and the append is
-   INSERT-IF-NOT-EXISTS on it, so retries de-duplicate. ducklake_maintenance runs as a singleton; the
+   (below): a monotonic ULID minted once and reused across retries is the history logical key (DuckLake has
+   no engine PKs), and the append is `MERGE ... WHEN NOT MATCHED THEN INSERT` on it, so retries de-duplicate.
+   ducklake_maintenance runs as a singleton; the
    writer-vs-expire_snapshots race is closed by a GC older_than grace exceeding max in-flight write
    duration. Reserved-concurrency=1 and SQS FIFO are rejected as over-serialising.
 4. Portal surface = read + write categories; the sync category is eliminated because DuckLake's atomic
@@ -443,14 +471,17 @@ Ratify CD.33 as the authoritative DuckLake ops runtime architecture:
    rejection and OCC-retry exhaustion fail loudly.
 6. ducklake_maintenance is two deterministic scheduled cadences with no LLM / agent invocation: a daily
    non-destructive merge_adjacent_files (compaction; self-correcting) and a separately-cadenced GUARDED
-   destructive GC (expire_snapshots -> cleanup_old_files -> delete_orphaned_files) behind a retention floor,
-   older_than grace, and circuit breaker. OQ.11 resolved to option (c): inlining DISABLED (inlined_rows=0)
-   for governance tables so writes land in S3 immediately, eliminating the catalog-only durability window;
+   destructive GC (expire_snapshots -> cleanup_old_files -> delete_orphaned_files) behind a retention floor
+   (expire 30d history / 7d current, never below the last 2 snapshots), an older_than deletion grace (>=7d),
+   and a circuit breaker (abort+page at >20% files or >10GB; weekly cadence; no scheduled cleanup_all).
+   OQ.11 resolved to option (c): inlining DISABLED (ducklake_default_data_inlining_row_limit=0) for
+   governance tables so writes land in S3 immediately, eliminating the catalog-only durability window;
    per-table, telemetry may retain inlining.
 7. Closed read/write boundary. OQ.7 resolved: no Athena escape hatch -- every read via the reader, every
-   write via the writer, nothing out-of-band; one audited admin-account break-glass path for DR. History
-   partitions by day(created_timestamp), current by id (CD.9 ALTER at creation); a partition-prune smoke
-   test gates T2.17/T2.19.
+   write via the writer, nothing out-of-band. Break-glass = the audited PlatformAdmin principal expanded to
+   catalog+S3 read for non-routine inspect/repair; catalog DR = a daily PITR export to a dedicated S3 bucket
+   with a tested restore runbook. History partitions by day(created_timestamp), current by bucket(N, id)
+   (CD.9 ALTER at creation); a partition-prune smoke test gates T2.17/T2.19.
 8. current write-through projection: reads come from a materialised Type-1 current table; each write is one
    DuckLake transaction (INSERT history + MERGE current from the in-hand delta). history is the append-only
    source of truth; current is rebuildable from history for DR (deterministically, ordering by
