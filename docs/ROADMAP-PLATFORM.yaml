@@ -1309,6 +1309,75 @@ candidate_decisions:
         separate private repos) are orthogonal. Do not conflate them when authoring plans referencing
         this CD."
 
+  - id: CD.33
+    title: DuckLake ops runtime architecture -- writer/reader/maintenance split, OCC-retry concurrency, current projection, closed read/write boundary
+    detail: |
+      Pins the ops DuckLake runtime architecture that Decision 78 (CD.31) deferred to T2.17-T2.19.
+      Ratified by Decision 81 (this CD does NOT edit DECISIONS.md while pending; ratification lands via
+      the log-decision path = Decision 81, mirroring CD.31 -> Decision 78).
+      (1) Three-artifact split by access pattern -- ducklake_writer / ducklake_reader / ducklake_maintenance
+          -- justified by IAM-principal + scaling + deploy isolation, NOT concurrency. Supersedes CD.10's
+          six-Lambda enumeration, which was illustrative (examples of needed verbs), never canonical. CD.33
+          commits ONLY to the access-pattern split + closed boundary; the verb/tool set behind writer and
+          reader stays deliberately extensible. The invariant is path, not verb count.
+      (2) Concurrency (OQ.10 -> c): concurrent writers + bounded application-level OCC retry (backoff+jitter,
+          fixed ceiling, loud-fail on exhaustion) in the writer. Idempotency is grounded: each write mints a
+          monotonic ULID once at op start, reused across retries, as the history PK; the append is INSERT IF
+          NOT EXISTS on that PK, so a committed-but-unacked retry de-dupes (not double-append). last_updated_
+          timestamp is high-precision, stable-per-write, ordering-only. _prepare_record now() re-stamp moves
+          out of the retry loop. NOT reserved-concurrency=1, NOT SQS FIFO. ducklake_maintenance is a singleton
+          (DDL/ALTER hard-abort on conflict); the writer-vs-expire_snapshots race is closed by the clause-5
+          GC older_than grace > max in-flight write/retry duration (pending the GC snapshot-isolation check).
+      (3) Portal surface = read + write categories only; the sync category is eliminated because DuckLake's
+          atomic catalog-snapshot commit removes the outbox/drain step. A write is atomic at the catalog
+          commit (Parquet staged to S3, then snapshot committed in the RDS catalog txn; readers see nothing
+          until commit; aborted-commit Parquet reclaimed by delete_orphaned_files). No external sequencing.
+          Logical write verbs (file_rec/update_rec/file_decision) + read verb (query) retained. Decision 69
+          Single-Portal invariant PRESERVED -- all writes transit scripts/ops_data_portal.py; transport only.
+      (4) ducklake_writer owns the schema-enforcement gate: every write validated against the live table
+          schema before commit; single un-bypassable write chokepoint; schema rejection fails loudly; schema
+          evolution is a versioned maintenance DDL step, not writer-side silent coercion.
+      (5) ducklake_maintenance = TWO deterministic scheduled cadences, NO LLM / NO agent: (a) daily
+          non-destructive merge_adjacent_files (self-correcting compaction; current compacted more often);
+          (b) separately-cadenced GUARDED destructive GC (expire_snapshots -> cleanup_old_files ->
+          delete_orphaned_files) behind a retention floor + older_than grace + circuit breaker + own alarm.
+          OQ.11 -> c: inlining DISABLED (inlined_rows=0) for governance tables -- writes land in S3
+          immediately, removing the catalog-only durability window; small files paid down by daily merge.
+          Per-table: telemetry MAY keep inlining. expire != delete: cleanup + delete_orphaned must run.
+      (6) Closed read/write boundary (OQ.7 -> a): every read via reader, every write via writer, nothing
+          out-of-band. No Athena escape hatch (DuckLake has no Iceberg export / external reader; the closed
+          boundary is the design goal). One audited+alarmed admin-account break-glass path for DR only.
+          Partitioning per-role: history by day(created_timestamp) (stable -> date reads prune); current by
+          id (serving lookup + MERGE prune); applied via CD.9 ALTER at table creation. Partition-prune smoke
+          test gates T2.17/T2.19.
+      (7) current write-through projection (R-4): reads come from a materialised Type-1 current table (one
+          row per id, latest-wins), never a read-time window over history. Each write is one DuckLake txn:
+          INSERT history then MERGE current from the in-hand delta (no read-back). history is the append-only
+          source of truth; current is rebuildable from history (DR only). Shared idempotent merge helper,
+          one-or-many rows from day one (micro-batch is a config flip). current is a warehouse table, NOT the
+          logs/*.jsonl read-cache anti-pattern. VERIFIED (capability-review C-1/C-2): single-txn multi-table
+          atomicity + MERGE-through-DuckLake confirmed; DELETE+INSERT retained only as a noted alternative.
+      (8) SCD2 keys + DQ (no engine PK/FK; BigQuery discipline): history logical key = auto-generated monotonic
+          ULID (unique per write row, so same-instant same-rec_id updates never collide); rec_id is the natural
+          key; last_updated_timestamp is high-precision, stable-per-write, SCD2 ordering with ULID tiebreak.
+          DQ invariants: ULID PK uniqueness; one current row per rec_id (structural via the current MERGE key
+          on rec_id); update_rec referential existence (point-lookup on current, in-transaction) while
+          file_rec requires the DynamoDB-allocated rec_id to NOT exist.
+      OQ.12 (version/upgrade policy) is left to T2.17 implementation (clone-rehearsal default); not pre-empted.
+    gates: [T2.17, T2.18, T2.19]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    supersedes_decisions: []
+    discipline_points:
+      - "Supersedes CD.10's six-Lambda enumeration; CD.10 is state:pending so no DECISIONS.md transition. CD.10's six slugs are status:stub MOCK examples (verified on disk), which confirms they were illustrative, never canonical. The agent verb/tool surface is explicitly NOT frozen by CD.33 -- only the writer/reader/maintenance path split and the closed boundary are. CD.10's PlatformDev/PlatformAdmin two-principal allow-list is retained, not superseded."
+      - "Preserves the Decision 69 Single-Portal primitive-level invariant AS CARRIED FORWARD BY Decision 78 (Decision 69 itself was already superseded by Decision 78; only its invariant survives). Portal abstraction unchanged; transport changes."
+      - "Does NOT edit DECISIONS.md while pending; supersession + OQ.7/OQ.10/OQ.11 resolution land at ratification via the log-decision path = Decision 81."
+      - "Refines CD.15 (typed query reader) and CD.8 (DuckDB engine) and applies CD.9 partitioning; does not contradict them."
+      - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
+      - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
+      - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
+    enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (catalog+S3 read) + daily catalog PITR-to-S3; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -3237,8 +3306,8 @@ tier_items:
     files_in_scope:
       - src/lambdas/ducklake_writer/    # new
       - src/lambdas/ducklake_reader/    # new
-      - config/lambda/ducklake_writer/manifest.yaml    # new -- CD.24 per-Lambda manifest
-      - config/lambda/ducklake_reader/manifest.yaml    # new -- CD.24 per-Lambda manifest
+      - src/lambdas/ducklake_writer/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
+      - src/lambdas/ducklake_reader/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
       - scripts/build_lambda.py    # extend to bundle ducklake+httpfs layer
     exit_criteria:
       - "DuckLake Lambdas VPC-attached and able to reach RDS catalog; ATTACH succeeds in Lambda execution context"
@@ -3246,8 +3315,15 @@ tier_items:
       - "DuckLake v1.0 + DuckDB 1.5.2 pinned; version-bump policy documented (OQ.12 clone-rehearsal gate)"
       - "Function-URL + AWS_IAM ingress confirmed unaffected by VPC egress config (CD.10 / NS.5)"
       - "Per-Lambda CD.24 manifests filed for ducklake_writer and ducklake_reader"
-      - "DEFERRED: build_lambda.py --deploy + smoke-test (pending Decision 67 / CD.16 reversal)"
-    related_candidate_decisions: [CD.31, CD.10]
+      - "Partition-prune smoke test: a date-filtered query against an ALTER-partitioned history table demonstrably prunes partitions (CD.9 / CD.33)"
+      - "ducklake_writer fails loudly on schema-gate rejection and OCC-retry exhaustion; no silent drop (CD.33 C1)"
+      - "RDS Proxy fronts the catalog connection pool for writer/reader (CD.33 T2-e/O-5)"
+      - "OCC-retry + maintenance-singleton + commit-latency metrics emitted to CloudWatch (CD.33 T2-d)"
+      - "Idempotent append verified: a retried write reuses its ULID and MERGE-on-ULID de-duplicates (no double-append); _prepare_record now()/ULID minted once, outside the OCC-retry loop (CD.33 clause 2 / D-2)"
+      - "Inlining disabled: ducklake_default_data_inlining_row_limit=0 honoured on the pinned DuckLake version (smoke-test upstream issue #921); concurrency smoke-test covers issues #233/#376 (CD.33 C-5/C-4)"
+      - "PlatformAdmin break-glass: granted catalog (RDS) + S3 read; a DuckDB catalog-attach inspect/repair runbook exists and is drilled (CD.33 O-1 / clause 6)"
+      - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
+    related_candidate_decisions: [CD.31, CD.10, CD.33]
     effort: M
     strategic: false
     status: not_started
@@ -3267,14 +3343,17 @@ tier_items:
     depends_on: [T2.16, T2.17]
     files_in_scope:
       - src/lambdas/ducklake_maintenance/    # new -- or extend an existing maintenance Lambda
-      - config/lambda/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest
+      - src/lambdas/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
     exit_criteria:
-      - "Full maintenance sequence implemented: flush -> merge -> expire -> cleanup -> delete_orphaned (+ rewrite)"
+      - "Inlining DISABLED for governance tables (OQ.11 -> c: ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)"
       - "expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed stable after N maintenance cycles"
       - "Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62"
       - "ops_compaction Lambda retired or repurposed"
-      - "DEFERRED: build_lambda.py --deploy + smoke-test (pending Decision 67 / CD.16 reversal)"
-    related_candidate_decisions: [CD.31, CD.29]
+      - "Maintenance runs as two deterministic singleton cadences (daily non-destructive merge; separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)"
+      - "Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2 snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB, weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)"
+      - "Catalog DR: daily PITR/snapshot export of the RDS catalog to a dedicated versioned S3 bucket (CD.33 O-2)"
+      - "Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
+    related_candidate_decisions: [CD.31, CD.29, CD.33]
     effort: M
     strategic: false
     status: not_started
@@ -3302,10 +3381,15 @@ tier_items:
       - "DuckDBIcebergReader replaced by DuckLake reader for operational read paths"
       - "SCD2 schema reproduced in DuckLake (current_state field); CDC / time-travel optional extension documented"
       - "OQ.7 resolved: Athena escape hatch strategy after DuckLake adoption documented + tested"
-      - "OQ.10 resolved: OCC writer-concurrency enforcement strategy (reserved-concurrency=1 / SQS FIFO / OCC retry) chosen and implemented"
+      - "OQ.10 resolved: writer-concurrency = bounded application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer + ducklake_maintenance singleton; reserved-concurrency=1 and SQS FIFO rejected as over-serialising (CD.33 clause 2)"
       - "Decision 69 Single-Portal invariant verified: no write path bypasses ops_data_portal"
-      - "DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test (pending Decision 67 / CD.16 reversal)"
-    related_candidate_decisions: [CD.31]
+      - "ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)"
+      - "Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass path (CD.33 clause 6 / OQ.7 / H2 / O-1)"
+      - "Catalog DR restore drilled: a catalog rebuilt from the daily S3 PITR export passes read-your-write before T2.19 sign-off (CD.33 O-2)"
+      - "current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4 / C-1)"
+      - "SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)"
+      - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
+    related_candidate_decisions: [CD.31, CD.33]
     effort: L
     strategic: false
     status: not_started
@@ -3868,6 +3952,12 @@ open_questions:
       (b) maintain a parallel Iceberg mirror for Athena-accessible scans (write amplification, complexity);
       (c) wait for DuckLake to add Iceberg export in a future version. Resolve at T2.19 / FP-B.
 
+      Resolved direction (CD.33, pending Decision 81): option (a) -- no Athena escape hatch.
+      The closed reader/writer boundary is the design goal; ad-hoc scans live behind ducklake_reader (scale
+      reader compute if memory binds), not a parallel Iceberg mirror. Break-glass = the audited PlatformAdmin
+      principal (expanded to catalog+S3 read); catalog DR = daily PITR export to a dedicated S3 bucket.
+      Enacted at T2.19.
+
   - id: OQ.8
     question: RDS catalog backend -- sizing, RDS Proxy, and credential mechanism
     resolution_tier: T2.16
@@ -3904,6 +3994,11 @@ open_questions:
           idempotent or the conflict detection is precise). Resolve at T2.19 / FP-B; document the chosen
       mechanism in the DuckLake writer Lambda design.
 
+      Resolved direction (CD.33, pending Decision 81): option (c) -- concurrent writers + bounded
+      application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer (ops writes are
+      idempotent SCD2 appends keyed by the monotonic ULID history PK, minted once and reused across retries);
+      ducklake_maintenance runs as a singleton. NOT reserved-concurrency=1, NOT SQS FIFO. Enacted at T2.19.
+
   - id: OQ.11
     question: Inlining flush policy -- threshold, flush timing, and catalog-as-durability acceptance
     resolution_tier: T2.18
@@ -3915,6 +4010,12 @@ open_questions:
       PITR for durability); (c) raise the inlining threshold to 0 (disable inlining; all data lands in S3
       immediately; catalog holds only metadata). Trade-off: flush-on-write is safest but adds per-write
       latency; option (c) loses the inlining optimisation for small writes. Resolve at T2.19 / FP-B.
+
+      Resolved direction (CD.33, pending Decision 81): option (c) -- inlining DISABLED (inlined_rows=0) for
+      governance tables; writes land in S3 immediately (no catalog-only durability window); small files
+      compacted by a daily non-destructive merge_adjacent_files, with destructive GC on a separate guarded
+      cadence. Per-table: telemetry may retain inlining. Supersedes the v1 option-(b) direction.
+      Enacted at T2.18.
 
   - id: OQ.12
     question: DuckLake version and DuckDB upgrade policy -- lockstep constraint + clone-rehearsal gate
