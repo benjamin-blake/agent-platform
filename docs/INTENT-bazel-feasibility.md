@@ -14,17 +14,21 @@ repo, it is softened or labelled.
 
 ## Verdict
 
-**NOT RECOMMENDED for now. Revisit a build orchestrator -- Pants before Bazel --
-when the concrete triggers the repo has already written down arrive: T4.4 raising
-executor concurrency above 1, KG.13's content-addressed test caching becoming
-load-bearing, and the CD.27 ~10-artifact persona fleet making per-artifact manifest
-toil real.**
+**NOT RECOMMENDED for now. Revisit a build orchestrator -- evaluating Pants *and*
+Bazel against fleet-era remote-execution evidence -- when a *wired* trigger fires: the
+executor state-machine's concurrency cap is raised above 1 (T4.4) and either a KG.13
+test-impact/caching tier_item is filed or a measured fast-tier budget breach recurs.
+The CD.27 ~10-artifact fleet is a watch-signal, not a trigger (Decision 79 chose
+explicit manifests deliberately). The trigger must be a wired assertion, not prose --
+see Recommendation.**
 
 Single most important reason: at today's scale (T4.1 concurrency = 1), **most** of
 Bazel's value is either already obtained with installed tooling or sequenced ahead of
-need in the roadmap, while **all** of its costs are due now. The genuinely
-Bazel-*discriminating* findings are narrow -- C1/C1b (one language, sub-scale, and
-Pants would beat Bazel for pure-Python anyway). The blockers that first looked
+need in the roadmap, while **all** of its costs are due now. The
+Bazel-*discriminating* findings are C1/C1b (one language, sub-scale -- Bazel's premise
+fails) plus C7/C8 (Bazel-specific integration cost and net-new cache infra); Pants
+likely beats Bazel for pure-Python today, though a fleet-era remote-execution need
+could favour Bazel, so the tool choice is held open. The blockers that first looked
 decisive -- import cycles (C5), the missing lockfile (C3), the weak test baseline
 (C10) -- **bind the lighter do-less path equally**, so they argue for *sequencing*,
 not against build tools per se. The honest move is: adopt the do-less baseline now
@@ -59,20 +63,23 @@ tool -- they argue for sequencing.
 | C1b | Bazel is the right tool vs lighter alternatives | **FAILS (for Bazel)** | **YES** | Pure-Python -> Pants (auto dep-inference, less ceremony) dominates; do-less delivers the valuable subset |
 | C2 | Gazelle bulk-generates BUILD files statically | **PARTIAL (mostly holds)** | n/a (feasibility) | 0 star-imports, 0 `__import__`, only **1 file** with a real `importlib`/`spec_from_file_location` import (`validate.py`) |
 | C3 | import->distribution mapping is manageable | **PARTIAL** | **NO** (lockfile binds do-less too) | ~4-5 name mismatches = trivial; but **no lockfile**; torch 1.1 GB + pysr->Julia defeat a hermetic closure |
-| C4 | Dependency closure is a sound scope oracle | **HOLDS** | **PARTIAL** (enforced sandbox is Bazel-only; matters at concurrency > 1) | Sparse graph; closure median **0.8%**, p90 23.1%, max **33.9%** (`validate.py`). Computable with `ast`/`networkx` (installed) |
+| C4 | Dependency closure is a sound scope oracle | **HOLDS** | **NO** (advisory oracle needs no Bazel; Bazel's build-time sandbox is not a live edit-scope guard) | Sparse graph; closure median **0.8%**, p90 23.1%, max **33.9%** (`validate.py`). Computable with `ast`/`networkx` (installed) |
 | C5 | No dependency cycles (Bazel forbids them) | **PARTIAL (deferred-import friction, not a module-load wall)** | **NO** (`import-linter` binds do-less equally) | Module-import graph is **acyclic**; 3 cycles appear only in the static graph via function-local deferred imports (a pervasive style; 104 imports carry inert `noqa: PLC0415` markers) |
-| C6 | Agent-file edges via frontmatter + generator | **UNBUILT / Bazel-irrelevant** | n/a | 43 agent files; cross-refs are free-form prose; 0 `responsibilities:`, 1 `depends_on`; Bazel cannot see the 287-file doc surface |
+| C6 | Agent-file edges via frontmatter + generator | **UNBUILT / Bazel-irrelevant** | n/a | 43 agent files; cross-refs are free-form prose; 0 `responsibilities:`, 0 `depends_on` (frontmatter); Bazel cannot see the 287-file doc surface |
 | C7 | Incremental hybrid subtree adoption | **PARTIAL** | **YES** (Bazel-specific integration cost) | No build system exists (`setup.py` = env bootstrap; no lockfile); shared god-modules (fan-in 11-12) resist a clean cut |
 | C8 | CodeBuild + S3 cache = zero-infra serverless | **PARTIAL** | **YES** (net-new infra) | **0 CodeBuild today**; CI = GH Actions + OIDC (CD.21); torch 1.1 GB -> multi-GB ML cache blobs |
-| C9 | Lambda durable functions orchestrate the loop | **FAILS as stated** | **NO** (CD.27 loop-readiness, orthogonal to build tool) | Repo is Python **3.12** everywhere (design's stated 3.13+ prerequisite unmet); loop = **107 subprocess + 85 git** call sites to make replay-safe |
+| C9 | Lambda durable functions orchestrate the loop | **FAILS as stated** | **NO** (CD.27 loop-readiness, orthogonal to build tool) | Repo is Python **3.12** (no 3.13 anywhere; design's stated 3.13+ prerequisite unmet); loop = **107 subprocess + 85 git** call sites to make replay-safe |
 | C10 | A working tests-with-teeth + monitor baseline | **FAILS (weak baseline)** | **NO** (a gap regardless of build tooling; T3.6/T3.7 in progress) | coverage `fail_under=37`, `source=["src"]` (**excludes scripts/**); no mutation/property testing |
 
-**Discriminating vs shared, stated plainly:** only **C1, C1b** argue against *Bazel
-specifically*; **C7, C8** are Bazel-specific *costs*. **C3, C5, C10** bind the
-do-less path equally (do-less also needs a lockfile, also forbids cycles via
-`import-linter`, also wants better tests). **C9** is a readiness fact about the CD.27
-durable-functions loop, independent of any build tool. **C4** mostly holds and is the
-one place a future, concurrency-driven Bazel/Pants benefit is real (enforced sandbox).
+**Discriminating vs shared, stated plainly:** the anti-Bazel case is **C1, C1b**
+(premise fails) **plus C7, C8** (Bazel-specific integration cost and net-new cache
+infra) -- four findings, not two. **C3, C5, C10** bind the do-less path equally
+(do-less also needs a lockfile, also forbids cycles via `import-linter`, also wants
+better tests), so they sequence work rather than argue against a build tool. **C9** is
+a readiness fact about the CD.27 durable-functions loop, independent of any build tool.
+**C4** holds as an *advisory* oracle (no Bazel needed); the fail-closed *edit-scope*
+containment an autonomous fleet needs is a present hook/IAM concern that neither
+do-less-advisory nor a Bazel build-time sandbox provides (see C4 detail).
 
 ### Per-claim evidence
 
@@ -99,9 +106,12 @@ among ~27 deps (`pyyaml`->`yaml`, `psycopg2-binary`->`psycopg2`,
 `scikit-learn`->`sklearn`, `beautifulsoup4`->`bs4`) -- a trivial map. The real friction
 is the **missing lockfile** (`requirements.txt` pins floors with `>=`; only 1 `==`; no
 `poetry.lock`/`uv.lock`/`*_lock.txt`) and two non-hermetic deps -- `torch` at **1.1 GB**
-and `pysr`, which shells out to a Julia runtime `rules_python` does not manage. Note
-the lockfile is a do-less prerequisite too, so this is sequencing, not a Bazel
-argument.
+and `pysr`, which shells out to a Julia runtime no Python tool manages. Be symmetric
+here: a `uv`/`pip-tools` lockfile pins the *Python wheel* layer (real value, and a
+do-less prerequisite), but it does **not** close the Julia runtime or the torch
+CPU/CUDA-per-platform gap -- and neither does Bazel/Pants. That residual
+non-hermeticity is unsolved by *every* path, so it is not a Bazel-only blocker; the
+lockfile is sequencing, not a Bazel argument.
 
 **C4 -- HOLDS; one Bazel-only edge at concurrency > 1.** The first-party graph is
 sparse (121 nodes, 215 edges, avg fan-out 1.78): closure **median = 1 module (0.8%)**,
@@ -111,14 +121,16 @@ are import-resolution-dependent -- independent analyzers landed the max at 33.1%
 three). The closure-as-scope
 idea is sound. The report's own closure numbers were computed in ~200 lines of `ast` +
 Tarjan, and `networkx 3.6.1` is already installed, so an *advisory* oracle needs no
-Bazel. The honest caveat the first draft missed: an advisory oracle is not the same as
-a **fail-closed sandbox**. A Bazel target physically cannot read files outside its
-declared deps; a hand-rolled oracle only advises. For a *fleet of concurrent
-autonomous editors* (CD.27 personas), an enforced sandbox is a real scope boundary
-that Python conventions (the very `noqa: PLC0415` discipline) cannot guarantee. At
-T4.1 concurrency = 1 the advisory oracle suffices; the enforced-sandbox benefit is
-exactly a T4.4 (concurrency > 1) consideration -- a revisit trigger, not a present
-gap.
+Bazel. The deeper correction (surfaced by adversarial review): Bazel's sandbox is a
+*build-time* hermeticity boundary -- it does **not** guard a live code-*editing* agent.
+The scope risk for CD.27's `implement_agent` (which edits the working tree) exists at
+concurrency = 1, not just > 1, so it is a **present**, T4.1-era governance concern --
+and it is solved by neither the do-less *advisory* oracle nor a Bazel *build* sandbox.
+The repo's actual enforcement model is fail-closed `PreToolUse` hooks
+(`.claude/hooks/never_on_main.py`) plus per-Lambda IAM roles; an enforced *edit-scope*
+guard belongs there, not in a build tool. So C4 holds as an advisory context-bounding
+oracle (no Bazel needed), and live edit-containment is flagged as an orthogonal open
+gap -- not a reason to adopt Bazel.
 
 **C5 -- PARTIAL (re-graded; the first draft's "module-level cycles, hard blocker" was
 wrong).** The **module-import graph of all three reported cycles is acyclic.** They
@@ -147,7 +159,7 @@ here.)
 
 **C6 -- UNBUILT and Bazel-irrelevant.** 43 agent files (20 `.prompt.md`, 9 `.agent.md`,
 11 `SKILL.md`, 3 commands); cross-references are entirely free-form prose; **0** declare
-`responsibilities:`, **1** declares `depends_on`. The proposed schema is net-new.
+`responsibilities:`, **0** declare `depends_on` in frontmatter (the lone match is a prose mention). The proposed schema is net-new.
 Bazel provides zero leverage -- these are not Python imports, and the 287-file
 Markdown surface is invisible to any build graph.
 
@@ -167,10 +179,10 @@ bimodal: most `scripts/` targets have tiny closures, but any ML target pulls `to
 Lambda-shim-over-S3 cache is not re-proposed.)
 
 **C9 -- FAILS as stated, but orthogonal to the build-tool decision.** The design's own
-stated prerequisite is durable functions on Python 3.13+; the repo is **3.12**
-everywhere (CI matrix, ruff `target-version`, the Lambda runtime in
-`terraform/data_pipeline.tf`) -- verified; the 3.13+ requirement itself is the design's
-premise, not re-verified against AWS docs here. The current loop
+stated prerequisite is durable functions on Python 3.13+; the repo is **3.12** (CI
+matrix, ruff `target-version`, the Lambda runtime in `terraform/data_pipeline.tf`; one
+`python3.11` SNS shim) with **no 3.13 anywhere** -- verified; the 3.13+ requirement
+itself is the design's premise, not re-verified against AWS docs here. The current loop
 (`execute_recommendation.py` + `executor/`) is side-effect-dense: **107**
 `subprocess.(run|Popen|...)` call sites and **85** git command invocations to make
 replay-safe. Both gaps bind the **CD.27 durable-functions executor regardless of any
@@ -199,9 +211,11 @@ build tooling.
    do-less as well, so do it first either way.
 2. **A dependency lockfile (C3).** Needed by `rules_python`/`pip_parse` *and* by the
    do-less baseline.
-3. **A hermetic-closure story for `torch`/`pysr`/Julia (C3/C8).** `rules_python` does
-   not manage a Julia toolchain; torch at 1.1 GB fights every artifact-size ceiling.
-   This one is genuinely Bazel/Pants-specific.
+3. **A hermetic-closure story for `torch`/`pysr`/Julia (C3/C8).** No Python tool
+   manages the Julia runtime, and torch at 1.1 GB fights every artifact-size ceiling.
+   Bazel/Pants' hermeticity ambition *surfaces* this most sharply, but a do-less
+   lockfile hits the same wall (it pins wheels, not Julia) -- the gap is unsolved by
+   every path, not Bazel-only.
 4. **Python 3.13+ if durable functions are wanted (C9).** A CD.27 prerequisite,
    independent of the build tool.
 
@@ -214,7 +228,7 @@ All re-measured at `ddb85a0`.
 | Metric | Value | Source |
 |---|---|---|
 | First-party Python | 121 modules / ~36.5k SLOC (scripts 72, src 49) | `ast` analyzer |
-| Tests | 101 `test_*.py` / 43.5k LOC | `find`/`wc` |
+| Tests | 101 `test_*.py` in tests/ (102 repo-wide) / 43.5k LOC | `find`/`wc` |
 | Markdown / Terraform / JSON | 287 / 22 / 571 files | `git ls-files`/`find` |
 | Import graph | 121 nodes, 215 edges, avg fan-out 1.78, 19 packages | analyzer |
 | Dependency-closure | mean 6.8 (5.6%), median 1 (0.8%), p90 28 (23.1%), max 41 (33.9%) | analyzer |
@@ -227,7 +241,7 @@ All re-measured at `ddb85a0`.
 | Heaviest deps | torch 1.1 GB; pysr -> Julia | `du`, `requirements.txt` |
 | `validate.py` | **2744** lines (Decision 43 waiver records 1198), 38 `validate_` + 2 `check_` fns, no registry | `wc`, grep |
 | `test_validate.py` | **2950** lines; 262 `patch(` sites + 62 `monkeypatch`; loads via 1 `spec_from_file_location` | `wc`, grep |
-| Python version | 3.12 (CI, ruff target, Lambda runtime) | pyproject, workflows, terraform |
+| Python version | 3.12 (CI, ruff, Lambda); one `python3.11` shim; no 3.13 anywhere | pyproject, workflows, terraform |
 | Coverage gate | `fail_under=37`, `source=["src"]` (scripts/ excluded) | pyproject |
 | Mutation / property testing | none (`mutmut`/`cosmic-ray`/`hypothesis` absent) | `pip show` |
 | Agent loop side effects | 107 subprocess + 85 git call sites | grep |
@@ -261,16 +275,19 @@ All re-measured at `ddb85a0`.
 | Requires lockfile | Yes | Yes | Yes (`uv`/`pip-tools`) -- useful on its own |
 | Handles torch/Julia hermetically | No (Julia outside rules_python) | Partially | N/A (keeps venv) |
 | Reverse-closure test selection (TIA) | Yes | Yes | Not today; roadmapped at KG.13 (pytest-testmon) |
-| Enforced (fail-closed) scope sandbox for agents | Yes | Yes | No (advisory only) -- matters at T4.4 concurrency > 1 |
+| Build-time hermetic sandbox (NOT a live edit-scope guard) | Yes | Yes | No |
 | Content-addressed remote cache for a fleet | Yes | Yes | No -- the KG.13 value, load-bearing at concurrency > 1 |
 | Ongoing agent-maintained cost | High | Medium | ~Zero |
 
 **Conclusion:** at concurrency = 1, do-less delivers the subset that pays off now
-(cycle prevention, layering, a pinned closure) at ~zero ongoing cost. The two benefits
-that are genuinely build-tool-only -- a fail-closed sandbox and content-addressed
-fleet caching -- are the ones the roadmap itself time-orders to T4.4/KG.13. If a build
-orchestrator is then wanted, **Pants** (pure-Python, low ceremony) is the candidate,
-not Bazel.
+(cycle prevention, layering, a pinned closure) at ~zero ongoing cost. The one benefit
+that is genuinely build-tool-only -- content-addressed fleet caching with reproducible
+multi-artifact builds -- is the one the roadmap itself time-orders to T4.4/KG.13.
+(Build-time hermetic sandboxing is *not* the agent edit-scope guard it is sometimes
+sold as; that is a `PreToolUse`-hook/IAM concern, orthogonal to the build tool.) If a
+build orchestrator is then wanted, evaluate **Pants and Bazel** against fleet-era
+remote-execution evidence -- Pants leads on today's pure-Python/ceremony grounds, but
+Bazel's remote-execution maturity could matter at fleet scale.
 
 ---
 
@@ -280,32 +297,42 @@ not Bazel.
 - Add **`import-linter`** contracts: forbid cycles, declare a layered architecture.
   This is the decoupling the C5 deferred-import dilemma needs anyway, and it prevents
   the validate.py registry from regressing into a `verifiers`-style deferred cycle.
-- Generate a **lockfile** (`uv pip compile` / `pip-tools`): the C3 hermeticity, and a
-  prerequisite for any future build tool.
+- Generate a **lockfile** (`uv pip compile` / `pip-tools`): pins the Python wheel layer
+  (C3) and is a prerequisite for any future build tool. (It does not close the
+  Julia/torch-platform gap -- nothing does; see C3.)
+- **Wire the revisit trigger** so "revisit later" is a control, not a hope (avoiding the
+  Decision 75 never-retrofit anti-pattern this report cites): add a preflight/CI
+  assertion that auto-files a rec to reopen Decision 80 when the executor state-machine's
+  concurrency cap is raised above 1 (the T4.1 exit-criterion surface) or a KG.13
+  tier_item is filed.
+- **Close the edit-scope containment gap at its real layer** (not the build tool): an
+  autonomous code editor (CD.27 `implement_agent`) needs a fail-closed *edit-scope*
+  guard now -- a `PreToolUse` hook (cf. `never_on_main.py`) plus per-Lambda IAM, not an
+  advisory oracle and not a build sandbox. Flagged as a present governance item.
 - Keep the Decision 73 diff-aware CI (`pytest --picked`, ruff-on-changed) and the
   T3.6 `--disable-socket` hermeticity. (Note: `pytest --picked` is changed-test-file
   selection, *not* reverse-closure -- see Unverifiable/roadmap below.)
 - (Independent of build tooling, already roadmapped at T3.6/T3.7) raise the C10
   baseline: widen coverage `source` to include `scripts/`, pilot `hypothesis`.
 
-**Phase 1 -- reconsider a build orchestrator (Pants first) on a roadmap-defined
-trigger.** Reopen the question when any of these -- all already written in the repo --
-arrives:
-- **T4.4 raises executor concurrency above 1.** This is the documented load-bearing
-  point for **KG.13** (content-addressed result caching + input-closure test
-  selection) and for an enforced per-agent scope sandbox (C4). At concurrency = 1
-  neither pays for itself.
-- **The CD.27 fleet (~10 persona/deterministic Lambda artifacts; 8 manifests exist
-  today) makes per-artifact manifest toil real.** Decision 79's deliberate "no
-  transitive resolution" means each artifact hand-maintains its pip list -- exactly the
-  toil a Python build tool's dep-inference removes. (Counter-weight: Decision 79 chose
-  explicit manifests *on purpose*; a build tool would be re-litigating a fresh
-  decision, so treat this as a signal to watch, not a mandate.)
-- **A measured CI wall-clock regression** that `pytest --picked` cannot address
-  (measure against the existing `_FAST_TIER_BUDGET_SECONDS = 300` budget).
+**Phase 1 -- reconsider a build orchestrator on a wired, roadmap-defined trigger.**
+The trigger is `concurrency > 1` **AND** (a KG.13 test-impact/caching tier_item is filed
+**OR** a measured fast-tier budget breach recurs):
+- **Necessary condition -- T4.4 raises executor concurrency above 1.** This is the
+  documented load-bearing point for **KG.13** (content-addressed result caching +
+  input-closure test selection). At concurrency = 1 neither pays for itself.
+- **Sufficient condition -- KG.13 becomes load-bearing** (its tier_item is filed) **or**
+  a measured CI wall-clock regression `pytest --picked` cannot address recurs (against
+  the existing `_FAST_TIER_BUDGET_SECONDS = 300` budget).
+- **Watch-signal, NOT a trigger -- the CD.27 fleet** (~10 artifacts; 8 manifests today)
+  making per-artifact manifest toil real. Decision 79 chose "no transitive resolution"
+  *deliberately*, so firing on this alone would re-litigate Decision 79 -- watch it,
+  don't act on it in isolation.
 
-If triggered, time-box a **Pants** spike scoped to the *new* executor subtree only --
-never a whole-repo migration. One-time human setup; not agent-maintained until proven.
+If triggered, time-box a spike that evaluates **Pants and Bazel** (Pants leads today on
+pure-Python/ceremony; Bazel's remote-execution maturity may matter at fleet scale),
+scoped to the *new* executor subtree only -- never a whole-repo migration. One-time
+human setup; not agent-maintained until proven.
 
 **Not recommended at any phase:** a whole-repo Bazel migration; a Lambda-hosted
 validator registry (see Linkage); authoring the above as a STRATEGIC plan or executor
@@ -325,24 +352,35 @@ grew during this very assessment when the rebase pulled in Decision 79's
 `importlib` user; **38** `validate_` functions invoked imperatively with no registry).
 So decompose tool-free, as a separate **IMPLEMENTATION** plan (the freeze holds):
 
-1. A `scripts/validators/` package; normal imports replace the
-   `spec_from_file_location` path-loading.
+1. A `scripts/validators/` package; normal imports replace most of the
+   `spec_from_file_location` path-loading. (One legitimate runtime use survives by
+   design: the `validate_imports` smoke check that `exec`s executor modules to confirm
+   they import cleanly -- it stays inside its relocated check.)
 2. **`validators/base.py` (leaf): the `Check` protocol ONLY** -- `name`, `inputs`,
-   `run(ctx)`. No CLI. (The `verifiers` package put the CLI *and* the base protocol in
-   `harness.py`, which is exactly why it needed the deferred back-edge; do not repeat
-   that.)
+   `severity` (advisory vs hard-gate), and `run(ctx) -> list[Finding]`. No CLI. The
+   checks are heterogeneous (some hard-gate, some advisory/never-fail like
+   `validate_complexity`, some emit per-violation messages rather than a check-name
+   label), so the protocol must carry a severity axis and a findings-list return --
+   exactly what `verifiers/harness.py` already models (`VerifierSeverity`); reclaim it
+   rather than re-inventing a bare pass/fail. (The `verifiers` package put the CLI *and*
+   the base protocol in `harness.py`, which is why it needed the deferred back-edge; do
+   not repeat that.)
 3. **`validators/_helpers.py` (a second leaf tier):** the shared, non-protocol helpers
    every check needs -- `run()`/`invoke_step()`, `get_changed_files()`, `ROOT`,
    `_ensure_root_on_path()`, etc. "Checks import only `base`" is not literally
    implementable without this; declare `base` and `_helpers` as sibling leaves in the
    import-linter layering.
-4. `validators/checks/*.py`: one module per check (~38 + helpers), each importing only
-   `base`/`_helpers`.
+4. `validators/checks/*.py`: one module per check (~38), each importing `base`/`_helpers`
+   **plus its own domain target** (e.g. `scripts.verifiers`, `src.schemas`,
+   `scripts.lambda_manifest`) -- "leaf-only" is *not* achievable, and that is fine. The
+   forbidden edges are `checks -/-> registry` and `checks -/-> checks`, not all
+   cross-tree imports.
 5. `validators/registry.py` (and the `__main__`/CLI entrypoint): imports each check,
    builds the canonical list. `registry -> checks -> {base, _helpers}`, acyclic. This
    is the single source of truth; `validate.py` stays the thin entrypoint CI calls
    (`python -m scripts.validate`), preserving the CLAUDE.md "ci.yml first" invariant.
-6. `import-linter` enforces `checks -/-> registry` and the layering.
+6. `import-linter` enforces `checks -/-> registry`, `checks -/-> checks`, and the
+   `{base,_helpers}` leaf layering (domain imports from checks are allowed).
 7. Fix the `verifiers` deferred back-edge first as the smaller reference refactor
    (move `run_all_verifiers` out of `harness.py`).
 
@@ -353,10 +391,11 @@ So decompose tool-free, as a separate **IMPLEMENTATION** plan (the freeze holds)
 (a) **cross-tree drift detectors must declare every input tree** -- e.g. the
 `validate_invariants` mock-count check compares `executor/postflight.py` against
 `tests/test_execute_recommendation.py`; `check_source_registry` and the
-pydantic-vs-yaml drift checks span `scripts/`+`config/`; the CI-workflow guards read
-`.github/workflows/ci.yml`, not `scripts/`. A drift check declaring only one side
-passes green on the PR tier when the other side changes. These belong in `always` or
-must list all trees; do not assume single-glob coverage.
+pydantic-vs-yaml drift checks span `scripts/`+`config/`; and -- crucially, since they
+*defend the "ci.yml-first" invariant* -- `validate_ci_workflow_guards` and
+`validate_ci_rca_trigger` read `.github/workflows/ci.yml`, not `scripts/`. A drift check
+declaring only one side passes green on the PR tier when the other side changes. These
+belong in `always` or must list all trees; do not assume single-glob coverage.
 (b) plain-Python selection is not hermetic, so the **PR/edit tier is affected-derived
 (advisory) while the main tier runs everything (authoritative)** -- the existing
 PR-vs-main split. The per-check fast/full *label* disappears; latency becomes emergent.
@@ -366,12 +405,19 @@ the refactor removes the *label*, not the budget.
 (d) the registry runner must preserve `validate.py`'s recursion guards
 (`_VALIDATE_DEPTH`, `_COVERAGE_SUBPROCESS`) that break the validate -> pytest ->
 validate fork-bomb.
+(e) **producer/consumer chains on generated artifacts need an explicit `depends_on` or
+`always`** -- e.g. `ensure_fresh_dq_results` writes `logs/debug/dq-latest.json`, which
+`_check_graduation_guard` and the DQ verifier then read. Affected-set selection keyed on
+*source* globs will not capture this (the producer's "input" is ambient AWS state, not a
+file), so a config-only diff could select the consumer and read a stale artifact. Pin
+such producers to `always` or model the dependency explicitly.
 
 The real cost driver is **not** the source split: it is the **test migration**.
-`tests/test_validate.py` (2950 lines, 262 `patch(` sites) loads the monolith via
-`spec_from_file_location` and rebinds symbols off `validate.<name>`; moving each check
-to `validators/checks/X.py` invalidates every patch target. Budget the decomposition
-plan around the test rewrite.
+`tests/test_validate.py` (2950 lines, 262 `patch(` sites -- 239 of them binding off
+`validate.<symbol>`, the spec-loaded module name) rebinds those symbols; moving each
+check to `validators/checks/X.py` (and shared symbols like `ROOT`/`get_changed_files`
+to `_helpers`) invalidates every such patch target across many test classes. Budget the
+decomposition plan around the test rewrite, not the source split.
 
 **The validator registry stays a local importable package -- it is not a Lambda.**
 Validation reads the working tree/diff (local data gravity), is latency-sensitive (the
