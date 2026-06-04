@@ -1,6 +1,6 @@
 # REPORT: DuckLake catalog migration RDS -> Neon -- platform-roadmap change-set
 
-**Status:** Draft v2 for zero-context review (REPORT-ONLY)
+**Status:** Draft v3 for zero-context review (REPORT-ONLY)
 **Date:** 2026-06-04
 **Slug:** ducklake-catalog-neon-migration
 **Plan:** docs/plans/PLAN-ducklake-catalog-neon-migration.md
@@ -10,7 +10,35 @@ AWS RDS PostgreSQL instance (T2.16) to Neon serverless Postgres, and justify eac
 NOT edit the roadmap; it is the proposal that, once consensus is reached, gets folded into the roadmap and
 opened as a PR.
 
-## Revision log (v1 -> v2)
+## Revision log
+
+### v2 -> v3 (second review round: both lenses converged on one shared blocker + secondary fixes)
+- **Inlining override now landed in the enforcement surfaces (the v2 blocker, both lenses):** v2 disabled
+  inlining for all tables in prose + the OQ.11 note + a CD.33 discipline point, but left the telemetry
+  carve-out intact where it is actually enforced (CD.33 clause (5) `:1346`; OQ.11 resolution `:4017`;
+  T2.17 exit `:3323`; T2.18 exit `:3348`) and even claimed "clause 5 stands verbatim". v3 adds those four
+  edits to the change-set (4.1/4.3/4.4/4.6/4.7) and reworks the CD.33 framing so it no longer claims the
+  carve-out is untouched -- the GC/merge *cadences* are unchanged; the clause-5 telemetry-inlining carve-out
+  is explicitly overridden.
+- **rec-2063 RDS-side action dispositioned** (4.2/7): the catalog is provably unused at T2.16b, so
+  single-final-snapshot recovery on destroy is explicitly accepted; the contingency (flip
+  `delete_automated_backups=false` first) applies only if retirement is ever deferred past the T2.19 cutover.
+- **Connection-churn promoted to a measured gate** (4.2/4.3/6 R2): the direct-endpoint default reintroduces
+  the OQ.8 churn->OCC-collision risk; v3 makes "direct-endpoint churn + commit latency within CD.33's OCC
+  budget OR an app-side pool implemented" a hard T2.16b/T2.17 exit-criterion, not a non-binding "consider".
+- **Telemetry small-file load sized** (4.1/4.4/6): disabling telemetry inlining shifts small-file load onto
+  compaction; v3 requires a higher-frequency `merge_adjacent_files` cadence for high-write-rate tables (or a
+  sized inter-merge accumulation justification) at T2.18 -- honouring the disable-everywhere decision.
+- **Dump-freshness alarm + version-drift note** (4.4/6 R1): a silently-failed daily dump widens RPO; v3 adds
+  a CloudWatch freshness alarm (page if no new dump object >25h) and a re-baseline note on engine bumps.
+- **Schema DDL captured in-repo** (4.2/7): the out-of-band `ducklake_ops` schema-creation DDL is captured as
+  a versioned migration so the Neon database creation (T2.16b) and any fresh-provision rollback are
+  reproducible, not tribal.
+- **Citation-precision fixes:** OQ.11 anchor corrected to `:4017`; the maintenance-cadence figures
+  (weekly GC, expire 30d/7d) re-attributed to CD.33 `enforcement_mechanism` (`:1379`) + T2.18 exit (`:3353`),
+  not clause (5); rec-2064's concern dispositioned (logical `pg_dump` tolerates Neon Postgres-minor drift).
+
+### v1 -> v2 (first review round)
 v2 incorporates the two zero-context report-critique gates (architect/correctness + adversarial ops-risk)
 and three human judgment calls. Material changes from v1:
 - **Inlining decided (human):** `inlined_rows=0` for ALL Neon tables, including telemetry (overrides OQ.11's
@@ -163,9 +191,12 @@ A new `candidate_decisions` entry **CD.34**, inserted after CD.33:
 - **`gates: [T2.16b, T2.17, T2.18, T2.19]`**.
 - **discipline_points:** (i) narrowly amends the CD.31 catalog-backend paragraph; preserves all else;
   (ii) **inlining is disabled for ALL Neon tables (`ducklake_default_data_inlining_row_limit=0`), including
-  telemetry** -- this *amends OQ.11's per-table carve-out* so no table is ever catalog-only-durable on the
-  free tier (closes the catalog-only durability window entirely); re-enable inlining per-table later only if
-  a write-rate need arises; (iii) supersedes OQ.8's "IAM-auth-preferred" note (IAM DB auth is unavailable
+  telemetry** -- this *overrides the telemetry-inlining carve-out wherever it is enforced* (CD.33 clause (5)
+  `:1346`, the OQ.11 resolution `:4017`, and the T2.17/T2.18 inlining exit-criteria `:3323`/`:3348` -- all
+  edited in 4.3/4.4/4.6/4.7, not just described here) so no table is ever catalog-only-durable on the free
+  tier (closes the catalog-only durability window entirely). The small-file load this shifts onto compaction
+  is handled by a higher-frequency merge for high-write-rate tables (4.4). Re-enable inlining per-table later
+  only if a write-rate need arises; (iii) supersedes OQ.8's "IAM-auth-preferred" note (IAM DB auth is unavailable
   against a non-AWS endpoint -- Secrets Manager DSN is the credential mechanism); (iv) the backend swap
   reframes CD.33's catalog-recovery references (clause 3 + `enforcement_mechanism`) and the T2.17-T2.19
   catalog exit-criteria from RDS-native (snapshot/Proxy) to Neon-native (pg_dump/built-in pooler) --
@@ -202,6 +233,15 @@ Inserted between T2.16 and T2.17 (the migration must precede the Lambda runtime)
   - Endpoint decision recorded: **catalog writes use the direct (unpooled) endpoint** (DuckLake commits are
     multi-statement transactions; transaction-mode pooling can break session semantics -- advisory locks,
     prepared statements); the pooled endpoint is used only if proven transaction-safe, else read-paths only.
+  - **Connection-churn gate (hard):** the smoke test measures per-invocation connection-establishment
+    overhead AND OCC-collision rate under a simulated concurrent-writer burst on the direct endpoint, against
+    a scale-to-zero Neon compute. Pass requires **direct-endpoint churn + commit latency within CD.33's
+    OCC-retry/backoff budget, OR an app-side connection pool (or a write-safe Neon pooler) implemented**. This
+    is the replacement for the removed RDS Proxy (the OQ.8 connection-churn mitigation), not a deferred
+    "consider".
+  - **Schema reproducibility:** the out-of-band `ducklake_ops` schema-creation DDL (created out-of-band on
+    RDS at VP-6, not in version control) is captured as a versioned migration/DDL file in-repo, so the Neon
+    `ducklake_ops` database creation here -- and any fresh-provision rollback -- is reproducible, not tribal.
   - Neon DSN in Secrets Manager; runtime-fetch validated (Decision 37 pattern); a rotation cadence defined
     (quarterly, calendar-reminded -- matching the repo's Tier-1/Anthropic secret-rotation cadence) since the
     Neon static password does not auto-rotate like the RDS-managed secret did.
@@ -215,10 +255,16 @@ Inserted between T2.16 and T2.17 (the migration must precede the Lambda runtime)
     `rds_ducklake_catalog.tf` deleted. Terraform apply human-gated (Decision 35); the destroy trips the
     Decision-77 fail-closed guard -> manual `agent_platform_admin` apply. Partial-failure rollback: if the
     destroy aborts mid-apply, re-enable `deletion_protection`.
-  - rec disposition: closes rec-2062/2064/2068/2069 by file deletion; **re-files the transferable concerns**
-    rec-2063 (single-copy-backup-on-destroy -> now the Neon 6h-PITR + daily-dump posture) and rec-2067
-    (egress least-privilege -> the public-endpoint posture) against the Neon backend rather than marking them
-    silently closed; rec-2065/2066 close when the RDS IAM policy is removed.
+  - rec disposition: closes rec-2062/2068/2069 by file deletion; **rec-2063's RDS-side action is explicitly
+    dispositioned** (not just "transferred") -- its recommendation to flip `delete_automated_backups=false`
+    before cutover is **accepted-as-WONTFIX for this retirement** because the catalog is provably unused at
+    T2.16b (no ops data has been written; live ops are still Iceberg/Athena), so single-final-snapshot
+    recovery loses nothing; the flip applies only if retirement is ever deferred past the T2.19 cutover. Its
+    durability *concept* is carried by the Neon 6h-PITR + daily-dump posture. **rec-2064** (engine-minor
+    drift) is dispositioned by noting the catalog backup is a logical `pg_dump`, which tolerates Neon
+    Postgres-minor drift on restore (unlike a physical RDS snapshot) -- one more reason the logical dump is
+    the right DR primitive on a vendor-managed-minor backend. **rec-2067** (egress least-privilege) re-files
+    against the public-endpoint posture (R3). **rec-2065/2066** close when the RDS IAM policy is removed.
 - **effort:** S-M. **related_candidate_decisions:** `[CD.34]`.
 
 ### 4.3 AMEND T2.17 -- drop VPC-attach; pooler choice conditional
@@ -228,7 +274,8 @@ Inserted between T2.16 and T2.17 (the migration must precede the Lambda runtime)
 | `name` | "DuckLake Lambda runtime -- **VPC attach** + extension layer + version pin" | "DuckLake Lambda runtime -- extension layer + version pin" | Neon is a public TLS endpoint; no VPC attach to reach it |
 | `intent` | "VPC-attached execution so they can reach the **RDS catalog**...VPC egress blocks extensions.duckdb.org, so extensions must be pre-baked" | "...reach the **Neon catalog** over TLS (no VPC attach for catalog reachability). Extensions remain pre-baked for reproducibility + cold-start determinism." | Removes VPC-attach; pre-bake justification shifts from "egress blocked" to "deterministic/reproducible" |
 | exit: ATTACH | "VPC-attached and able to reach **RDS catalog**; ATTACH succeeds in Lambda" | "Able to reach the **Neon catalog** over TLS; ATTACH succeeds in Lambda (SNI + sslmode=require verified on the pinned DuckDB)" | vendor + transport correction |
-| exit: pooling | "**RDS Proxy** fronts the catalog connection pool for writer/reader (CD.33 T2-e/O-5)" | "Connection pooling resolved per the T2.16b endpoint decision: **Neon's built-in pooler if proven transaction-safe, else the direct endpoint** for catalog writes (no separate RDS Proxy). If the direct endpoint is used, re-assess Lambda connection-churn vs OCC-collision (the original OQ.8 driver) and consider an app-side pool (CD.33 T2-e/O-5 as amended by CD.34)." | Makes the pooler choice *conditional on the smoke test*, not a banked $10-12 saving |
+| exit: pooling | "**RDS Proxy** fronts the catalog connection pool for writer/reader (CD.33 T2-e/O-5)" | "Connection pooling resolved per the **T2.16b connection-churn gate (4.2)**: **Neon's built-in pooler if proven transaction-safe, else the direct endpoint** for catalog writes (no separate RDS Proxy), with an app-side pool implemented if direct-endpoint churn exceeds CD.33's OCC budget. NOT a deferred 'consider' (CD.33 T2-e/O-5 as amended by CD.34)." | Makes the pooler choice *conditional on the smoke test* and the churn mitigation a hard gate, not a banked $10-12 saving |
+| exit: inlining (`:3323`) | "Inlining disabled: `ducklake_default_data_inlining_row_limit=0` honoured..." (scoped by clause-5 "governance tables") | "Inlining disabled for **ALL tables including telemetry** (`...=0`) honoured on the pinned DuckLake version (CD.34); high-write-rate tables get a higher-frequency merge (4.4)" | lands the inlining-everywhere override where T2.17 enforces it |
 | exit: break-glass | "PlatformAdmin break-glass: granted catalog (**RDS**) + S3 read" | "PlatformAdmin break-glass: granted the **Neon catalog credential (Secrets Manager) + S3 read**" | break-glass reads Neon, not an RDS/IAM grant |
 | `related_candidate_decisions` | `[CD.31, CD.10, CD.33]` | add `CD.34` | trace |
 
@@ -239,8 +286,10 @@ path to the public S3 API path -- acceptable for the sandbox PLATFORM env; flagg
 
 | Before | After | Why |
 |--------|-------|-----|
-| "Catalog DR: daily **PITR/snapshot export of the RDS catalog** to a dedicated versioned S3 bucket (CD.33 O-2)" | "Catalog DR: a **daily `pg_dump` of the Neon catalog** (single consistent snapshot; tagged with the pinned DuckLake/DuckDB version) to a dedicated, versioned, lifecycle-managed S3 bucket. **Schedule:** EventBridge `cron(0 3 * * ? *)` (daily 03:00 UTC), consistent with the repo's existing cron conventions. **Retention:** 30-day S3 lifecycle expiration on dump objects (+ noncurrent-version expiry), matching the repo's 30-day retention convention; tunable to 7. (CD.33 O-2 as amended by CD.34.)" | Neon has no RDS snapshot API; `pg_dump` is the export primitive. The user pinned daily cadence + an explicit retention. **More important on Neon** -- free-tier PITR is ~6h, so the daily S3 dump is the real DR floor beyond 6h |
-| (note already present: maintenance cadences) | unchanged -- the CD.33 clause-5 cadences (daily `merge_adjacent_files`; weekly guarded GC; `expire` 30d history / 7d current) are **independent of the backend** and stand verbatim | the backend swap does not touch the DuckLake maintenance schedule |
+| "Catalog DR: daily **PITR/snapshot export of the RDS catalog** to a dedicated versioned S3 bucket (CD.33 O-2)" | "Catalog DR: a **daily `pg_dump` of the Neon catalog** (single consistent snapshot via `--serializable-deferrable`/single-txn; tagged with the pinned DuckLake/DuckDB version) to a dedicated, versioned, lifecycle-managed S3 bucket. **Schedule:** EventBridge `cron(0 3 * * ? *)` (daily 03:00 UTC). **Retention:** 30-day S3 lifecycle expiration (+ noncurrent-version expiry; repo convention; tunable to 7). **Freshness alarm:** a CloudWatch alarm pages if no new dump object lands in >25h (a silently-failed daily dump widens RPO from ~24h to 48h+). **Version drift:** on any DuckLake/DuckDB bump (OQ.12), re-baseline the retention window (oldest valid-restore dump = first on the new engine) or include the intermediate-upgrade path in the restore runbook. (CD.33 O-2 as amended by CD.34.)" | Neon has no RDS snapshot API; `pg_dump` is the export primitive. **More important on Neon** -- free-tier PITR is ~6h, so the daily S3 dump is the real DR floor beyond 6h |
+| inlining exit (`:3348`) | "Inlining DISABLED **for governance tables** (OQ.11 -> c: `...=0`)..." | "Inlining DISABLED for **ALL tables including telemetry** (`...=0`; CD.34)" | lands the inlining-everywhere override where T2.18 enforces it |
+| maintenance cadences | (the maintenance *cadences* -- daily `merge_adjacent_files`; weekly guarded GC; `expire` 30d history / 7d current) | **cadences unchanged** -- but note these figures are sourced from CD.33 `enforcement_mechanism` (`:1379`) + this T2.18 exit (`:3353`), NOT clause (5). The backend swap does not touch the GC/merge *schedule*; however the clause-(5) telemetry-inlining carve-out IS overridden (4.6/4.1) -- "cadences verbatim" is NOT "clause 5 verbatim" | corrects the v2 mis-attribution; separates schedule (unchanged) from the carve-out (overridden) |
+| telemetry small-file load (NEW exit) | (n/a) | "High-write-rate tables (telemetry) that previously relied on inlining now emit standalone small files; a **higher-frequency `merge_adjacent_files` cadence** is applied to them (or the inter-merge file accumulation is sized and the daily cadence justified), so disabling inlining does not degrade reads / inflate catalog metadata-row count (CD.34)" | sizes the consequence of the disable-everywhere decision |
 | `related_candidate_decisions: [CD.31, CD.29, CD.33]` | add `CD.34` | trace |
 
 ### 4.5 AMEND T2.19 -- catalog rebuild source + break-glass
@@ -251,19 +300,23 @@ path to the public S3 API path -- acceptable for the sandbox PLATFORM env; flagg
 | "...audited PlatformAdmin break-glass path" (catalog read = RDS) | break-glass catalog read = **Neon credential via Secrets Manager** | matches 4.3 |
 | `related_candidate_decisions: [CD.31, CD.33]` | add `CD.34` | trace |
 
-### 4.6 AMEND CD.33 (pending) -- two body edits + one discipline point (surgical)
+### 4.6 AMEND CD.33 (pending) -- two RDS-reference edits + one clause-(5) carve-out override + one discipline point
 
-CD.33 is `state: pending`, so amending is governance-clean. **These are the ONLY RDS references inside the
-CD.33 body** (v2 correction: v1 also listed a non-existent "clause (6)" edit and mis-modelled O-2/O-5/T2-e
-as CD.33 sub-clauses -- those labels live only in the T2.17-T2.19 exit criteria, already handled in 4.3-4.5).
-The runtime architecture (writer/reader/maintenance split, OCC retry, `current` projection, SCD2 keys,
-guarded GC) is **unchanged**:
+CD.33 is `state: pending`, so amending is governance-clean. The two RDS *references* in the CD.33 body are
+clause (3) + `enforcement_mechanism` (v2 correction: v1 fabricated a "clause (6)" edit and mis-modelled
+O-2/O-5/T2-e as CD.33 sub-clauses -- those labels live only in the T2.17-T2.19 exit criteria, handled in
+4.3-4.5). **In addition (v3), the inlining-everywhere decision overrides the telemetry-inlining carve-out
+that lives in clause (5) (`:1346`)** -- so clause (5) IS edited, but only that carve-out clause; the
+maintenance *architecture* (writer/reader/maintenance split, OCC retry, `current` projection, SCD2 keys, and
+the GC/merge *cadences*) is unchanged. The "runtime architecture unchanged" claim is therefore scoped to
+those, NOT to the clause-(5) carve-out:
 
 | CD.33 location | Before (verbatim) | After |
 |----------------|-------------------|-------|
 | clause (3) (`:1333`) | "...snapshot committed in the **RDS catalog txn**; readers see nothing until commit..." | "...snapshot committed in the **catalog txn** (Neon Postgres per CD.34); readers see nothing until commit..." |
-| `enforcement_mechanism` (`:1379`) | "...PlatformAdmin break-glass (**catalog+S3 read**) + **daily catalog PITR-to-S3**; partition-prune smoke test..." | "...PlatformAdmin break-glass (**Neon catalog credential + S3 read**) + **daily catalog pg_dump-to-S3 (30-day retention); Neon built-in pooler (no RDS Proxy)**; partition-prune smoke test..." |
-| `discipline_points` (ADD) | (none on backend) | "Catalog backend = Neon serverless Postgres per CD.34 (narrowly amends the CD.31 backend paragraph). Consequential mechanics: inlining disabled for ALL tables (amends OQ.11 carve-out); O-2 DR = daily pg_dump-to-S3; O-5 pooling = Neon built-in pooler (direct endpoint for catalog writes). CD.33's runtime architecture is unchanged by the backend swap." |
+| **clause (5) (`:1346`)** | "...governance tables ... **Per-table: telemetry MAY keep inlining.** expire != delete..." | "...governance tables ... **inlining is disabled for ALL tables including telemetry per CD.34 (the telemetry carve-out is removed); high-write-rate tables get a higher-frequency merge.** expire != delete..." |
+| `enforcement_mechanism` (`:1379`) | "...PlatformAdmin break-glass (**catalog+S3 read**) + **daily catalog PITR-to-S3**; partition-prune smoke test..." | "...PlatformAdmin break-glass (**Neon catalog credential + S3 read**) + **daily catalog pg_dump-to-S3 (30-day retention) + freshness alarm; Neon built-in pooler (no RDS Proxy)**; partition-prune smoke test..." |
+| `discipline_points` (ADD) | (none on backend) | "Catalog backend = Neon serverless Postgres per CD.34 (narrowly amends the CD.31 backend paragraph). Consequential mechanics: inlining disabled for ALL tables (overrides the clause-(5) + OQ.11 telemetry carve-out -- a durability decision, not an architecture change); O-2 DR = daily pg_dump-to-S3 with freshness alarm; O-5 pooling = Neon built-in pooler / direct endpoint for catalog writes, app-side pool if churn exceeds OCC budget. The writer/reader/maintenance split, OCC, current projection, SCD2 keys, and GC/merge cadences are unchanged." |
 
 ### 4.7 AMEND OQ.7 / OQ.8 / OQ.9 / OQ.11 / OQ.14 (annotate)
 
@@ -279,10 +332,11 @@ guarded GC) is **unchanged**:
   the S3 dump is the recovery floor beyond 6h and the only artifact if the whole Neon project is lost.
   Catastrophic-case RPO ~24h (daily cadence); intra-6h recovery via Neon PITR. SPOF property unchanged; the
   mitigation is the independent backup, not the provider."
-- **OQ.11** (`:4007,:4009`, inlining flush policy): append "Re-resolved (CD.34): on Neon, inlining is
-  **disabled for ALL tables** (`inlined_rows=0`), superseding the per-table telemetry carve-out -- every
-  write lands in S3 immediately, so no table is catalog-only-durable behind Neon's 6h free-tier PITR. The
-  durability premise shifts from RDS-PITR to Neon-PITR + daily pg_dump-to-S3."
+- **OQ.11** (`:4002-4018`; the carve-out being superseded is at `:4017`): append "Re-resolved (CD.34): on
+  Neon, inlining is **disabled for ALL tables** (`inlined_rows=0`), superseding the per-table telemetry
+  carve-out (`:4017`) -- every write lands in S3 immediately, so no table is catalog-only-durable behind
+  Neon's 6h free-tier PITR. The durability premise shifts from RDS-PITR to Neon-PITR + daily pg_dump-to-S3.
+  High-write-rate tables get a higher-frequency merge to absorb the small-file load (4.4)."
 - **OQ.14** (catalog multi-tenancy, FP-C): re-map the option wording from RDS terms ("shared ops-RDS-schema
   vs dedicated instance") to Neon primitives ("shared Neon project + separate databases" / "separate Neon
   projects per env"; Neon branching fits per-env catalogs). Question stays open; only wording updates.
@@ -333,12 +387,13 @@ Additive, governance-clean, keeps the roadmap self-consistent.
 
 | # | Risk | Severity | Mitigation (where it lands) |
 |---|------|----------|------------------------------|
-| R1 | Catalog is the lakehouse SPOF; Neon free-tier PITR is only ~6h | **High** | Inlining disabled for ALL tables (4.1) so nothing is catalog-only-durable; **mandatory daily `pg_dump` (consistent snapshot, engine-version-tagged) -> versioned S3, 30-day retention**, with a **tested restore as a T2.16b precondition** (not deferred to cutover). Catastrophic-case RPO ~24h (accepted); intra-6h recovery via Neon PITR. Gates T2.16b/T2.18/T2.19. |
-| R2 | DuckDB<->Neon connection compat: SNI on the pinned DuckDB; PgBouncer transaction-mode pooler may break catalog session semantics | **High** | T2.16b smoke test on the pinned DuckDB: verify ATTACH + a DuckLake write/commit on direct AND pooled endpoints; **default catalog writes to the direct endpoint**; hard gate on T2.16b. If direct-only, re-assess connection-churn/OCC (the original OQ.8 driver) and consider an app-side pool. |
+| R1 | Catalog is the lakehouse SPOF; Neon free-tier PITR is only ~6h | **High** | Inlining disabled for ALL tables (4.1/4.6) so nothing is catalog-only-durable; **mandatory daily `pg_dump` (consistent snapshot, engine-version-tagged) -> versioned S3, 30-day retention, + a >25h freshness alarm** (a silently-failed dump is the dominant DR risk); **tested restore as a T2.16b precondition** (not deferred to cutover). Catastrophic-case RPO ~24h (accepted); intra-6h recovery via Neon PITR. Gates T2.16b/T2.18/T2.19. |
+| R2 | DuckDB<->Neon connection compat: SNI on the pinned DuckDB; PgBouncer transaction-mode pooler may break catalog session semantics; **direct-endpoint default reintroduces the OQ.8 Lambda connection-churn -> OCC-collision risk** | **High** | T2.16b smoke test on the pinned DuckDB: verify ATTACH + a DuckLake write/commit on direct AND pooled endpoints; **default catalog writes to the direct endpoint**. **Hard churn gate (4.2):** the smoke test measures connection-establishment overhead + OCC-collision rate under a concurrent-writer burst; pass requires churn+commit-latency within CD.33's OCC budget OR an app-side pool implemented -- the churn mitigation that replaces RDS Proxy, NOT a deferred "consider". |
 | R3 | Public TLS endpoint replaces SG/VPC network privacy for irreplaceable governance metadata | Medium | `sslmode=require`; scoped Neon role (not owner); secret in Secrets Manager; break-glass via Secrets Manager not a standing grant. **Honest caveat:** Neon IP allow-listing needs a stable source IP -- but dropping VPC-attach removes a static egress IP, so the allow-list is only effective if a static egress is arranged; otherwise R3 rests on TLS + scoped-role + secret. Do NOT lean on "sandbox => acceptable": sandbox denotes money-not-real, not data-disposable. |
 | R4 | Free tier on an acquired vendor (Databricks) for irreplaceable data | Medium | The independent S3 `pg_dump` (R1) makes us provider-independent; migration is reversible (section 7). **Neon inactivity (researched):** compute scale-to-zero (auto-resume); branches >14d-old + >24h-idle auto-archive to cold storage (auto-unarchive on access, minor first-touch latency); **no project pause/delete for inactivity** -- strictly better than Supabase's ~1-week project pause. **Reevaluation trigger + owner:** the catalog owner re-evaluates if Neon changes free-tier terms or introduces project-inactivity deletion; add this as a roadmap `reevaluation_trigger`. |
 | R5 | IaC governance: Decision-77 auto-apply guard covers AWS resources, not a third-party Neon provider | Medium | **Decided (human): Terraform Neon provider**, in `terraform/personal/`, **explicitly carved out of auto-apply (human-gated apply)** -- keeps declarative state/audit/review for the critical dependency (vs console-only). The Neon API key lives in Secrets Manager. |
 | R6 | Cold-start (~300-500ms) on the catalog critical path; branch-archive resume for >24h-idle catalog; interaction with OCC commit latency | Low | Acceptable for intermittent ops/telemetry; pin the Neon region nearest `eu-west-2`. Extend the T2.16b smoke test to measure **commit latency including cold-resume** and confirm it sits inside CD.33's OCC-retry/backoff budget. The trading hot-path does NOT use this catalog (DynamoDB + Iceberg per D.fast/D.lake), so latency-sensitive paths are unaffected. |
+| R7 | Disabling telemetry inlining (the all-tables decision) shifts small-file load onto compaction -- telemetry was originally carved out for this reason | Low-Med | High-write-rate tables get a **higher-frequency `merge_adjacent_files` cadence** (or the inter-merge file accumulation is sized and daily cadence justified) at T2.18 (4.4). Net catalog-row count stays bounded because inlining-off means rows land as S3 data files, not catalog-inlined rows. Honours the disable-everywhere decision rather than reopening it. |
 
 ---
 
@@ -350,17 +405,24 @@ Reversible, and the blast radius **right now is zero** (nothing consumes the cat
   has `skip_final_snapshot = false` + `final_snapshot_identifier = "ducklake-catalog-final-snapshot"`, so
   destroy produces a final snapshot. **But `delete_automated_backups = true` wipes the automated PITR
   backups on destroy** -- so after retirement there is NO PITR fallback; the single final snapshot is the
-  only restore point. (This is exactly the concern standing rec-2063 raises; v2 does NOT cite rec-2063 as
-  *support* for rollback-safety -- it is a warning, and its concern transfers to the Neon 6h-PITR posture.)
+  only restore point. (This is exactly the concern standing rec-2063 raises; this report does NOT cite
+  rec-2063 as *support* for rollback-safety -- it is a warning.) **rec-2063's RDS-side action
+  dispositioned (v3):** its recommendation to flip `delete_automated_backups=false` before cutover is
+  **accepted-as-WONTFIX for this retirement** because the catalog is provably unused at T2.16b -- there is no
+  ops data to lose, so single-snapshot recovery is sufficient. The flip becomes mandatory only if RDS
+  retirement is ever deferred past the T2.19 cutover (when real data lives in the catalog).
 - **Destroy-time failure mode:** RDS rejects the destroy if a snapshot named `ducklake-catalog-final-snapshot`
   already exists. T2.16b adds a pre-destroy existence check (or timestamps the identifier) and, if the
   two-step destroy aborts mid-apply (e.g. after `deletion_protection` is flipped off), re-enables
   `deletion_protection` to avoid a live-but-unprotected DB.
 - **Rollback path:** restore `ducklake-catalog-final-snapshot` into a new `aws_db_instance` (re-add the
   `.tf`), repoint the Secrets Manager secret. The snapshot carries the out-of-band `ducklake_ops` schema, so
-  no re-creation is needed (a fresh-provision rollback would re-create it). Note the snapshot ages -- it is a
-  point-in-time artifact, fine while the catalog is unused but not a substitute for the Neon S3 dumps once
-  data lands.
+  no re-creation is needed; a **fresh-provision** rollback re-creates the schema from the **versioned
+  `ducklake_ops` DDL now captured in-repo at T2.16b** (4.2) -- previously this DDL was out-of-band and
+  unreproducible. Note the snapshot ages -- a point-in-time artifact, fine while the catalog is unused but
+  not a substitute for the Neon S3 dumps once data lands. (The Neon-side backup is a logical `pg_dump`, which
+  tolerates Neon Postgres-minor drift on restore -- unlike a physical RDS snapshot -- so a managed-minor bump
+  does not break recovery.)
 - **Deliberate destroy.** `deletion_protection = true` forces the two-step retire, human-gated under
   `agent_platform_admin` (Decision 35); the destroy trips the Decision-77 guard's fail-closed gate (no
   auto-apply).
@@ -403,9 +465,9 @@ Reversible, and the blast radius **right now is zero** (nothing consumes the cat
 **Sequencing:**
 ```
 CD.34 (decide, pending -> Decision 82)
-  -> T2.16b  (Terraform-provision Neon + Secrets Manager DSN + R2 smoke test + tested restore + retire RDS w/ final snapshot)
-    -> T2.17 (Lambda runtime against Neon: no VPC attach, direct endpoint, Secrets Manager DSN, inlining=0)
-      -> T2.18 (maintenance cadences [unchanged] + daily pg_dump-to-S3 DR, 30-day retention)
+  -> T2.16b  (Terraform-provision Neon + Secrets Manager DSN + smoke test [R2 + connection-churn gate] + captured ducklake_ops DDL + tested restore + retire RDS w/ final snapshot)
+    -> T2.17 (Lambda runtime against Neon: no VPC attach, direct endpoint, Secrets Manager DSN, inlining=0 all tables)
+      -> T2.18 (GC/merge cadences [unchanged] + higher-freq merge for telemetry + daily pg_dump-to-S3 DR, 30-day retention + freshness alarm)
         -> T2.19 (write/read cutover; restore re-drill from pg_dump before sign-off)
 ```
 Doing CD.34 + T2.16b before T2.17 is the whole point: it prevents building, then tearing down, the

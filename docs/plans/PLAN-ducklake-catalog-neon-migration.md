@@ -35,8 +35,9 @@ item; mandates inlining disabled for ALL Neon tables; Terraform Neon provider, h
 **T2.16b** (Terraform-Neon provisioning + Secrets Manager DSN + smoke test + tested restore + RDS retirement);
 surgical amendments to **T2.17** (drop VPC-attach; pooler choice conditional on the smoke test), **T2.18**
 (catalog DR = daily `pg_dump`-to-S3, `cron(0 3 * * ? *)`, 30-day retention; maintenance cadences unchanged),
-**T2.19** (rebuild-from-`pg_dump` + Neon break-glass), **CD.33** (two body edits -- clause 3 + `enforcement_mechanism`
--- plus one discipline point; runtime architecture unchanged), **OQ.7 / OQ.8 / OQ.9 / OQ.11 / OQ.14**
+**T2.19** (rebuild-from-`pg_dump` + Neon break-glass), **CD.33** (clause 3 + the clause-5 telemetry-carve-out override
++ `enforcement_mechanism` + one discipline point; the split/OCC/projection/keys + GC/merge cadences are
+unchanged), **OQ.7 / OQ.8 / OQ.9 / OQ.11 / OQ.14**
 (annotate), a non-destructive **`[Amendment -- CD.34]`** annotation on the **CD.31 record**, and the **cost
 model** (replace the RDS line with the Neon $0 line; flag the stale EC2-runner `dominant_cost` field).
 
@@ -74,11 +75,11 @@ EC2-runner line is flagged for same-PR correction or a freshness rec. None are e
   roadmap fold-in is a separate, human-greenlit PR after review consensus.
 - CD.34 stages `state: pending` and does NOT edit DECISIONS.md (CD.30/CD.31/CD.33 precedent); ratification
   is a future log-decision Decision (provisionally Decision 82, after Decision 81 files CD.33).
-- CD.33 amendments are surgical/consequential (clause 3 + `enforcement_mechanism` + one discipline point) --
-  the runtime architecture (writer/reader/maintenance split, OCC, current projection, SCD2 keys, guarded GC)
-  is NOT reopened.
-- Human-decided posture (v2): (a) inlining disabled for ALL Neon tables (`inlined_rows=0`), overriding
-  OQ.11's telemetry carve-out; (b) catalog DR = daily `pg_dump` to a versioned S3 bucket, 30-day retention,
+- CD.33 amendments are surgical/consequential (clause 3 + the clause-5 telemetry-carve-out override +
+  `enforcement_mechanism` + one discipline point) -- the architecture (writer/reader/maintenance split, OCC,
+  current projection, SCD2 keys) and the GC/merge cadences are NOT reopened.
+- Human-decided posture (v2): (a) inlining disabled for ALL Neon tables (`inlined_rows=0`), overriding the
+  telemetry carve-out in CD.33 clause (5) + OQ.11 (high-write-rate tables get a higher-frequency merge); (b) catalog DR = daily `pg_dump` to a versioned S3 bucket, 30-day retention,
   with the FIRST tested restore as a T2.16b precondition (before any production write); (c) Neon provisioned
   via the Terraform Neon provider, human-gated (carved out of the Decision-77 auto-apply guard).
 - Any eventual RDS retirement Terraform apply is human-gated (Decision 35) and trips the Decision 77
