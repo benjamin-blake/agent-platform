@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,12 +31,17 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
-from src.common import ducklake_spike
+from src.common import ducklake_runtime, ducklake_spike
 
 DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-neon-smoke/"
 CATALOG_ALIAS = "ops_catalog"
 META_SCHEMA = "ducklake_ops"
+
+# Function-URL endpoints for the in-Lambda invoke gates (post-deploy). Resolved from env first, then
+# terraform output. The two URLs are AWS_IAM-protected (SigV4 required; unsigned -> 403).
+WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
+READER_URL_ENV = "DUCKLAKE_READER_URL"
 
 # CD.33 OCC budget the churn gate must fit within. The DuckLake runtime uses bounded OCC retry; the
 # gate fails loud if observed collisions OR commit latency exceed these. Decision 55: these thresholds
@@ -54,34 +60,10 @@ class SmokeTestFailure(RuntimeError):
     """Raised when a hard gate fails. Loud-fail (Decision 55) -- the caller must stop and RCA."""
 
 
-def fetch_dsn(secret_id: str = DSN_SECRET_ID, *, profile: str | None = None) -> dict[str, str]:
-    """Fetch + parse the Neon DSN JSON from Secrets Manager (Decision 37 runtime-fetch).
-
-    Returns a dict with at least host / dbname / username / password (sslmode optional, defaults to
-    require). Raises RuntimeError if the secret is missing a required key.
-    """
-    import boto3  # noqa: PLC0415
-
-    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
-
-    session = boto3.Session(profile_name=resolve_aws_profile(profile))
-    client = session.client("secretsmanager")
-    resp = client.get_secret_value(SecretId=secret_id)
-    payload = json.loads(resp["SecretString"])
-    missing = [k for k in ("host", "dbname", "username", "password") if not payload.get(k)]
-    if missing:
-        raise RuntimeError(f"DSN secret {secret_id!r} is missing required keys: {missing}")
-    return payload
-
-
-def _libpq_conninfo(dsn: dict[str, str]) -> str:
-    """Return a libpq keyword/value conninfo string for the DuckLake postgres backend.
-
-    sslmode defaults to require so TLS is always enforced even if the secret omits it (the secret
-    written by Terraform always sets it; this is defence in depth).
-    """
-    sslmode = dsn.get("sslmode") or "require"
-    return f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} password={dsn['password']} sslmode={sslmode}"
+# DSN fetch + conninfo now live in ducklake_runtime (single implementation, no drift). Re-exported
+# here so existing callers/tests keep the smoke-module entrypoints.
+fetch_dsn = ducklake_runtime.fetch_dsn
+_libpq_conninfo = ducklake_runtime.libpq_conninfo
 
 
 def _open_attached(
@@ -91,33 +73,15 @@ def _open_attached(
     data_path: str = SMOKE_DATA_PATH,
     _creds: tuple[str, str, str | None, str] | None = None,
 ) -> Any:
-    """Open a DuckDB connection with ducklake/postgres/httpfs loaded and the Neon catalog ATTACHed.
+    """Open a DuckDB connection with the Neon catalog ATTACHed, delegating to ducklake_runtime.
 
-    Reuses the spike's duckdb-require + S3-credential helpers (extension-load + ATTACH pattern). The
-    ATTACH uses the DuckLake postgres data source with META_SCHEMA, over the DIRECT endpoint + TLS.
-
-    _creds: pre-fetched (access_key, secret_key, token, region) tuple; skips per-connection STS call
-    when provided (used by churn_gate to share a single credential resolution across all 8 workers).
+    One ATTACH implementation (ducklake_runtime.open_connection) backs both the dev/smoke path (here,
+    dev-mode network INSTALL: extension_directory=None) and the Lambda path (baked layer). The churn
+    gate shares a single credential resolution across workers via _creds.
     """
-    duckdb = ducklake_spike._require_duckdb()
-    con = duckdb.connect()
-    con.execute("INSTALL ducklake; LOAD ducklake")
-    con.execute("INSTALL postgres; LOAD postgres")
-    con.execute("INSTALL httpfs; LOAD httpfs")
-    if _creds is not None:
-        ak, sk, tok, region = _creds
-        con.execute(f"SET s3_region={ducklake_spike._sql_str_literal(region)}")
-        con.execute(f"SET s3_access_key_id={ducklake_spike._sql_str_literal(ak)}")
-        con.execute(f"SET s3_secret_access_key={ducklake_spike._sql_str_literal(sk)}")
-        if tok:
-            con.execute(f"SET s3_session_token={ducklake_spike._sql_str_literal(tok)}")
-    else:
-        ducklake_spike._set_s3_credentials(con, profile=profile)
-    conninfo = _libpq_conninfo(dsn)
-    con.execute(
-        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
+    return ducklake_runtime.open_connection(
+        dsn=dsn, data_path=data_path, extension_directory=None, profile=profile, _creds=_creds
     )
-    return con
 
 
 def attach_roundtrip(*, profile: str | None = None, dsn: dict[str, str] | None = None) -> int:
@@ -309,14 +273,178 @@ def restore_drill(
     return True
 
 
+# ---------------------------------------------------------------------------
+# In-Lambda invoke gates (post-deploy): SigV4-sign the AWS_IAM Function URLs.
+# ---------------------------------------------------------------------------
+
+
+def _function_url(role: str) -> str:
+    """Resolve the writer/reader Function URL from env, then terraform output. Loud-fail if absent."""
+    env_name = WRITER_URL_ENV if role == "writer" else READER_URL_ENV
+    url = os.environ.get(env_name)
+    if url:
+        return url.rstrip("/")
+    output_name = f"ducklake_{role}_function_url"
+    try:
+        result = subprocess.run(
+            ["terraform", "-chdir=terraform/personal", "output", "-raw", output_name],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().rstrip("/")
+    except FileNotFoundError:
+        pass
+    raise SmokeTestFailure(
+        f"{env_name} not set and terraform output {output_name!r} unavailable -- cannot reach the "
+        f"{role} Function URL. Set {env_name} or run from a checkout with terraform state."
+    )
+
+
+def _sigv4_invoke(
+    url: str, payload: dict[str, Any], *, profile: str | None = None, region: str = "eu-west-2", sign: bool = True
+) -> Any:
+    """POST *payload* (JSON) to a Lambda Function URL, optionally SigV4-signed (service 'lambda')."""
+    import boto3  # noqa: PLC0415
+    import requests  # noqa: PLC0415
+    from botocore.auth import SigV4Auth  # noqa: PLC0415
+    from botocore.awsrequest import AWSRequest  # noqa: PLC0415
+
+    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+    body = json.dumps(payload)
+    headers = {"Content-Type": "application/json"}
+    if sign:
+        session = boto3.Session(profile_name=resolve_aws_profile(profile))
+        creds = session.get_credentials().get_frozen_credentials()
+        aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+        SigV4Auth(creds, "lambda", region).add_auth(aws_req)
+        headers = dict(aws_req.headers)
+    return requests.post(url, data=body, headers=headers, timeout=180)
+
+
+def _ok_json(resp: Any, *, expect: int = 200) -> dict[str, Any]:
+    """Assert the Function-URL response status and return the parsed JSON body. Loud-fail otherwise."""
+    if resp.status_code != expect:
+        raise SmokeTestFailure(f"unexpected status {resp.status_code} (expected {expect}): {resp.text[:300]}")
+    return resp.json()
+
+
+def lambda_attach(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC1: ATTACH succeeds in-Lambda on baked extensions; report version + connect/commit latency."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "attach_check"}, profile=profile, region=region))
+    if body.get("version") != ducklake_runtime.PINNED_DUCKDB_VERSION or body.get("source") != "layer":
+        raise SmokeTestFailure(f"LAMBDA_ATTACH FAIL: {body}")
+    print(
+        f"LAMBDA_ATTACH OK version={body['version']} source={body['source']} "
+        f"connect_ms={body['connect_ms']} commit_ms={body['commit_ms']}"
+    )
+
+
+def lambda_ingress(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC4: unsigned -> 403, SigV4 -> 200 (AWS_IAM ingress unaffected by the no-VPC config)."""
+    url = _function_url("writer")
+    unsigned = _sigv4_invoke(url, {"action": "attach_check"}, sign=False, profile=profile, region=region)
+    signed = _sigv4_invoke(url, {"action": "attach_check"}, sign=True, profile=profile, region=region)
+    if unsigned.status_code != 403 or signed.status_code != 200:
+        raise SmokeTestFailure(f"INGRESS FAIL: unsigned={unsigned.status_code} (want 403) signed={signed.status_code} (want 200)")
+    print("INGRESS OK unsigned=403 signed=200")
+
+
+def lambda_idempotency(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC10: a retried write reuses its ULID; MERGE-on-ULID dedups to 1 history + 1 current row."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "idempotency_probe"}, profile=profile, region=region))
+    if not (body.get("ulid_reused") and body.get("history_rows") == 1 and body.get("current_rows") == 1):
+        raise SmokeTestFailure(f"IDEMPOTENCY FAIL: {body}")
+    print(f"IDEMPOTENCY OK ulid_reused=true history_rows={body['history_rows']} current_rows={body['current_rows']}")
+
+
+def lambda_partition(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC6: a date-filtered history query prunes partitions; the single-key current lookup is bounded."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "partition_probe"}, profile=profile, region=region))
+    ok = (
+        body.get("history_pruned")
+        and body.get("history_files_scanned", 1) < body.get("history_total", 0)
+        and body.get("current_partitions_scanned", 99) <= 1
+        and body.get("current_files_scanned", 1) < body.get("current_total", 0)
+    )
+    if not ok:
+        raise SmokeTestFailure(f"PARTITION FAIL: {body}")
+    print(
+        f"PARTITION OK history_pruned=true history_files_scanned={body['history_files_scanned']}"
+        f"<{body['history_total']} current_partitions_scanned<=1 "
+        f"current_files_scanned={body['current_files_scanned']}<{body['current_total']}"
+    )
+
+
+def lambda_inlining(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC11: inlining disabled -- inlined_rows=0, S3 Parquet present, concurrency probe clean."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "inlining_probe"}, profile=profile, region=region))
+    if not (body.get("inlined_rows") == 0 and body.get("s3_parquet", 0) >= 1 and body.get("occ_conflicts_handled")):
+        raise SmokeTestFailure(f"INLINING FAIL: {body}")
+    print(f"INLINING OK inlined_rows=0 s3_parquet={body['s3_parquet']} occ_conflicts_handled=true")
+
+
+def lambda_loudfail(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC7: schema-gate reject + OCC-retry exhaustion both raise loudly; no silent drop."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "loudfail_probe"}, profile=profile, region=region))
+    if not (body.get("schema_reject") == "raised" and body.get("occ_exhaust") == "raised" and body.get("silent_drop") is False):
+        raise SmokeTestFailure(f"LOUDFAIL FAIL: {body}")
+    print("LOUDFAIL OK schema_reject=raised occ_exhaust=raised silent_drop=false")
+
+
+def lambda_churn(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC8: in-region concurrent writers on the DIRECT endpoint; p95 within the CD.33 budget."""
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "churn"}, profile=profile, region=region))
+    msg = (
+        f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} "
+        f"endpoint={body['endpoint']}"
+    )
+    if not body.get("within_budget"):
+        raise SmokeTestFailure(
+            f"CHURN FAIL: collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} over the "
+            "CD.33 budget. RCA the latency (Decision 55) -- do NOT relax the budget constants."
+        )
+    print(msg)
+
+
+def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """EC1/boundary: reader returns current rows; the read role cannot write (closed boundary)."""
+    read_body = _ok_json(_sigv4_invoke(_function_url("reader"), {"action": "read_current", "limit": 5}, profile=profile, region=region))
+    probe = _ok_json(_sigv4_invoke(_function_url("reader"), {"action": "write_probe"}, profile=profile, region=region))
+    if not (read_body.get("row_count", 0) >= 1 and probe.get("write_denied") is True):
+        raise SmokeTestFailure(f"READER FAIL: read={read_body} write_probe={probe}")
+    print(f"READER OK rows={read_body['row_count']} write_denied=true")
+
+
+_LAMBDA_GATES: dict[str, Callable[..., None]] = {
+    "lambda_attach": lambda_attach,
+    "lambda_ingress": lambda_ingress,
+    "lambda_idempotency": lambda_idempotency,
+    "lambda_partition": lambda_partition,
+    "lambda_inlining": lambda_inlining,
+    "lambda_loudfail": lambda_loudfail,
+    "lambda_churn": lambda_churn,
+    "lambda_reader": lambda_reader,
+}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entrypoint. Returns the process exit code (0 ok; 1 on a loud-fail gate or usage error)."""
-    parser = argparse.ArgumentParser(prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b).")
+    parser = argparse.ArgumentParser(prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b / T2.17).")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--attach", action="store_true", help="ATTACH + SELECT 1 over TLS")
     group.add_argument("--churn-gate", action="store_true", help="connection-churn / OCC gate (loud-fail)")
     group.add_argument("--restore-drill", action="store_true", help="pg_dump -> scratch Neon -> read-your-write")
+    group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
+    group.add_argument("--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)")
+    group.add_argument("--lambda-idempotency", action="store_true", help="[post-deploy] idempotent ULID append (EC10)")
+    group.add_argument("--lambda-partition", action="store_true", help="[post-deploy] partition prune (EC6)")
+    group.add_argument("--lambda-inlining", action="store_true", help="[post-deploy] inlining disabled (EC11)")
+    group.add_argument("--lambda-loudfail", action="store_true", help="[post-deploy] schema/OCC loud-fail (EC7)")
+    group.add_argument("--lambda-churn", action="store_true", help="[post-deploy] in-region churn/latency (EC8)")
+    group.add_argument("--lambda-reader", action="store_true", help="[post-deploy] closed reader path (EC1/boundary)")
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
+    parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
     args = parser.parse_args(argv)
 
     try:
@@ -326,13 +454,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.churn_gate:
             m = churn_gate(profile=args.profile)
             print(f"CHURN_GATE PASS collision_rate={m['collision_rate']:.3f} p95_latency_ms={m['p95_latency_ms']:.1f}")
-        else:
+        elif args.restore_drill:
             restore_drill(profile=args.profile)
             print("RESTORE_OK read-your-write verified")
+        else:
+            gate = _selected_lambda_gate(args)
+            gate(profile=args.profile, region=args.region)
     except SmokeTestFailure as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def _selected_lambda_gate(args: argparse.Namespace) -> Callable[..., None]:
+    """Map the chosen --lambda-* flag to its gate function (resolved live so tests can patch it)."""
+    for flag in _LAMBDA_GATES:
+        if getattr(args, flag, False):
+            return globals()[flag]
+    raise SmokeTestFailure("no gate selected")  # pragma: no cover -- argparse mutually-exclusive guard
 
 
 if __name__ == "__main__":  # pragma: no cover

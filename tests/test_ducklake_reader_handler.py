@@ -102,6 +102,28 @@ def test_handler_partition_prune_check(monkeypatch):
     assert body["partitions_scanned"] == 1
 
 
+def test_handler_write_probe_denied(monkeypatch):
+    con = FakeCon()
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: con)
+
+    def _raise(c, rec, **kw):
+        raise RuntimeError("AccessDenied: s3:PutObject")
+
+    monkeypatch.setattr(rt, "write_scd2", _raise)
+    r = h.handler({"action": "write_probe"})
+    body = json.loads(r["body"])
+    assert body["write_denied"] is True
+    assert body["detail"] == "RuntimeError"
+
+
+def test_handler_write_probe_boundary_broken(monkeypatch):
+    con = FakeCon()
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: con)
+    monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: None)  # write SUCCEEDS (boundary broken)
+    r = h.handler({"action": "write_probe"})
+    assert json.loads(r["body"])["write_denied"] is False
+
+
 def test_handler_version_mismatch_maps_500(monkeypatch):
     def _raise():
         raise rt.VersionMismatchError("mismatch")

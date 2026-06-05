@@ -64,6 +64,19 @@ def action_partition_prune_check(event: dict[str, Any], con: Any) -> dict[str, A
     }
 
 
+def action_write_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Closed-boundary proof: a write attempt from the read-only role MUST be denied (write_denied).
+
+    The read role grants S3 GetObject only, so the DuckLake Parquet PutObject fails (AccessDenied).
+    write_denied=true => the boundary holds; write_denied=false => the read role could write (broken).
+    """
+    try:
+        rt.write_scd2(con, {"rec_id": "rec-reader-write-probe", "payload": "x"})
+        return {"ok": True, "write_denied": False}
+    except Exception as exc:  # noqa: BLE001 -- any denial (S3 AccessDenied, etc.) means the boundary holds
+        return {"ok": True, "write_denied": True, "detail": type(exc).__name__}
+
+
 def _json_safe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Coerce non-JSON-native values (datetimes) to ISO strings for the response body."""
     out: list[dict[str, Any]] = []
@@ -76,6 +89,7 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "attach_check": action_attach_check,
     "read_current": action_read_current,
     "partition_prune_check": action_partition_prune_check,
+    "write_probe": action_write_probe,
 }
 
 
