@@ -559,8 +559,20 @@ def _run_prod_build(args: argparse.Namespace) -> None:
         print("[4/4] Build complete.")
 
 
+def _resolve_ducklake_profile(profile: str) -> str:
+    """Map the generic default profile to the personal-account profile for DuckLake.
+
+    The ducklake_writer/reader functions, layers, and S3 bucket all live in the PERSONAL account
+    (agent_platform). The generic `company-aws-profile` default cannot reach them (and a same-named
+    function elsewhere would be a deploy hazard), so the ducklake path resolves it to agent_platform.
+    An explicitly-passed non-default profile is honoured unchanged.
+    """
+    return "agent_platform" if profile == "company-aws-profile" else profile
+
+
 def _run_ducklake_build(args: argparse.Namespace) -> None:
     """Build (+optionally upload/deploy) ONLY the T2.17 DuckLake artifacts (Decision 79 hygiene)."""
+    args.profile = _resolve_ducklake_profile(args.profile)
     bucket = args.bucket or resolve_bucket(args.profile)
     with tempfile.TemporaryDirectory(prefix="ducklake-build-") as tmp:
         temp_dir = Path(tmp)

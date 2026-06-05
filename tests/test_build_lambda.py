@@ -557,6 +557,33 @@ class TestUpdateLambdaFunctionsDucklakeOnly:
         assert set(targeted) == {_DUCKLAKE_WRITER_FUNCTION, _DUCKLAKE_READER_FUNCTION}
 
 
+class TestResolveDucklakeProfile:
+    def test_generic_default_maps_to_personal(self):
+        assert bl._resolve_ducklake_profile("company-aws-profile") == "agent_platform"
+
+    def test_explicit_profile_unchanged(self):
+        assert bl._resolve_ducklake_profile("agent_platform") == "agent_platform"
+        assert bl._resolve_ducklake_profile("agent_platform_admin") == "agent_platform_admin"
+
+    def test_ducklake_build_resolves_profile(self):
+        captured = {}
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
+            patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch(
+                "scripts.build_lambda.build_ducklake_extensions_layer",
+                side_effect=lambda td, **kw: captured.update(kw) or _FakePath(name="ext.zip"),
+            ),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+        ):
+            bl._run_ducklake_build(_args(skip_upload=True, profile="company-aws-profile"))
+        assert captured["profile"] == "agent_platform"  # generic default resolved to personal
+
+
 class TestRunBuilds:
     def test_run_ducklake_build_skip_upload(self):
         with (
