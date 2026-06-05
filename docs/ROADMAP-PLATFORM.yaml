@@ -1425,6 +1425,53 @@ candidate_decisions:
       - "The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED; only the catalog backend + its consequential recovery/pooling mechanics change."
     enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via Decision 82."
 
+  - id: CD.35
+    title: Agent-native Terraform CI/CD -- speculative plan, server-side convergence, gated-CD-apply via GitHub Environments, privilege-tiered bootstrap
+    detail: |
+      Closes the three gaps the T2.16b RDS->Neon migration exposed (PRs #75-#77): (1) terraform apply is
+      decoupled from validate-CI and its failures are non-sticky -- a later green run masks an earlier apply
+      failure and ci-rca never sees it; (2) no speculative terraform plan on PRs, so nobody reviews the diff or
+      the guard verdict before merging; (3) the github_ci_apply CI role cannot grant itself privileges through
+      the guarded pipeline it gates (the self-grant bootstrap), forcing manual branch-first applies. Build (DIY
+      in GitHub Actions) over buy (TFC/Atlantis/Spacelift) to preserve agent-legibility; single-account sandbox
+      only (Decision 77 clause 5; NOT a revival of Decision 24 multi-account promotion). Reconciles the
+      Decision-77 guard with the now-live CD.20 main-protection ruleset: native controls own AUTHORIZATION
+      (required checks, linear history, Environment reviewer gate), the guard narrows to plan-CONTENT policy --
+      a Decision-75 frame-challenge (the guard was partly a workaround for the absent branch protection that is
+      now live). Authored by docs/INTENT-terraform-cicd-agent-native.md (architect + adversarial-risk
+      zero-context review, converged over three rounds); the deep-dive realisation of the T2.16b retrospective
+      CI follow-on. Ratified later via the log-decision path (a numbered Decision when Wave 1 / T2.20 ships);
+      does NOT edit DECISIONS.md while pending.
+      Load-bearing design choices (from the converged review):
+      (1) Convergence anchored SERVER-SIDE: the apply job writes a durable S3 convergence record
+          (apply-identity-only write-IAM; always-run, red-on-failure) and refuses to apply against a red record
+          -- the sole hard block, unbypassable. terraform-converged is an ADVISORY PR status only (NOT a
+          required check -- required would wedge the autonomous fix-merge once a record is red, or be
+          admin-bypassed anyway given main-protection strict=false + bypass_mode=always).
+      (2) Speculative plan on PRs under a NET-NEW least-priv github_ci_plan role (tfstate read-only, fork-gated
+          -- github_ci_pr is athena/iceberg-scoped and cannot read tfstate); apply-the-saved-plan at merge
+          (terraform serial-staleness fails closed; stale ⇒ STOP, never silent re-plan).
+      (3) High-blast changes (IAM/trust/destroy -- the guard fail-closed set) route to a gated CD apply via a
+          GitHub Environment whose required reviewer gates JOB EXECUTION; the privileged role OIDC trust stays
+          pinned to refs/heads/main (an environment: claim in the OIDC sub is NOT an authorization boundary).
+          Eliminates the manual/laptop apply.
+      (4) Privilege-tiering: the CI/CD role own IAM moves to a separate terraform/bootstrap/ root applied
+          out-of-band, breaking the self-grant cycle (absorbs rec-2079).
+      (5) Apply failures wire into ci-rca; drift detection (scheduled plan, alarm-only per Decision 55) files
+          its rec directly via the ops portal. Post-apply agent re-engagement baseline = next planning session
+          (the record is authoritative); a same-turn post-merge wake is best-effort only.
+    gates: [T2.20, T2.21, T2.22, T2.23, T2.24, T2.25]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    supersedes_decisions: []
+    discipline_points:
+      - "Extends, does NOT overturn: Decision 77 (guard narrows to content-policy, still fail-closed), Decision 35 (the GitHub-Environment reviewer gate is the native implementation of human-gated apply), Decision 76 (post-merge wake best-effort with next-session re-check as the poll-free baseline), Decision 72/CD.20 (extends the live main-protection ruleset). Single-account (Decision 77 clause 5), not Decision 24 multi-account."
+      - "Anti-masking anchor is SERVER-SIDE (apply refuses on a red record), not the PR check: main-protection has strict_required_status_checks_policy=false + admin bypass_mode=always, so a required terraform-converged check would be bypassable AND would wedge the autonomous fix-merge; it is advisory only."
+      - "CI/CD pipeline files are build-tooling, not executor machinery (Decision 44 boundary untouched; Decision 79 precedent). Drift + apply failures alarm and file recs; nothing auto-remediates (Decision 55)."
+      - "Each of T2.20-T2.25 is a standalone IMPLEMENTATION plan (Decision 67 STRATEGIC suspension); none authored STRATEGIC."
+      - "Does NOT edit DECISIONS.md while pending; ratified via the log-decision path (a numbered Decision when Wave 1 / T2.20 ships), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81."
+    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; apply-identity-only write-IAM) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (OIDC sub pinned to refs/heads/main); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -3498,6 +3545,156 @@ tier_items:
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
+    strategic: false
+    status: not_started
+
+  - id: T2.20
+    tier: T2
+    name: "Terraform CI/CD: convergence substrate + apply-RCA + best-effort post-merge wake (CD.35 Wave 1)"
+    intent: |
+      Make terraform apply outcomes sticky and observed. The apply job writes a durable S3 convergence record
+      (apply-identity-only write-IAM; always-run, red-on-failure) and reads it as a server-side precondition
+      that refuses to apply against a red record -- the sole hard block. terraform-converged is an ADVISORY PR
+      status only (pass-on-absent; NOT added to main-protection required_status_checks). Wire
+      terraform-apply-sandbox into ci-rca.yml so apply failures file source=ci_rca recs. Attempt a best-effort
+      post-merge wake (resolve the PR from the merge commit SHA -- workflow_run.pull_requests[] is empty for
+      push; agent holds its subscription through apply) with next-planning-session re-check as the poll-free
+      baseline. Standalone IMPLEMENTATION plan (Decision 67). V3.
+    depends_on: [T2.12]
+    files_in_scope:
+      - .github/workflows/terraform-apply-sandbox.yml    # convergence record (if: always(), red-on-failure) + precondition read + SHA->PR wake
+      - .github/workflows/ci-rca.yml    # add terraform-apply-sandbox to the workflows: trigger
+      - terraform/personal/oidc.tf    # apply-identity-only write-IAM for the convergence record
+      - .claude/skills/implement/SKILL.md    # hold-subscription-through-apply convention for terraform PRs
+      - terraform/CLAUDE.md    # document the server-side convergence anchor + advisory status
+    exit_criteria:
+      - "A forced apply failure writes status=red via the always-run step; the NEXT apply is refused server-side against the red record"
+      - "The same forced failure files a source=ci_rca critical rec (terraform-apply-sandbox wired into ci-rca.yml)"
+      - "The advisory terraform-converged status shows red on a non-converged main and is NOT in main-protection required_status_checks"
+      - "A passing apply writes the first convergence record from absent (pass-on-absent); write-IAM proven restricted to the apply identity"
+      - "Post-merge wake proven live (PR resolved via merge SHA wakes a held subscription) OR the next-planning-session re-check baseline confirmed; no sleep/loop poll (Decision 76)"
+    related_candidate_decisions: [CD.35]
+    effort: M
+    strategic: false
+    status: not_started
+  - id: T2.21
+    tier: T2
+    name: "Terraform CI/CD: speculative plan on PRs + apply-the-saved-plan (CD.35 Wave 2)"
+    intent: |
+      Run terraform plan on infra PRs under a NET-NEW least-privilege github_ci_plan role (refs/pull/* trust,
+      tfstate/personal/* read-only, fork-gated -- github_ci_pr is athena/iceberg-scoped and cannot read
+      tfstate). Post the redacted plan diff + the guard's predicted verdict as a PR comment. Persist the
+      access-controlled plan.bin and apply THAT exact plan at merge; terraform's serial-staleness guard fails
+      closed, so a stale plan STOPS and files a rec (never silent re-plan-and-apply). Standalone IMPLEMENTATION
+      plan. V3.
+    depends_on: [T2.20]
+    files_in_scope:
+      - terraform/personal/oidc.tf    # new github_ci_plan role (PR-trusted, tfstate read-only, fork-gated)
+      - .github/workflows/terraform-apply-sandbox.yml    # PR speculative-plan job + apply-saved-plan path
+      - .claude/skills/planning/SKILL.md    # Infrastructure Assessment: speculative-plan expectations
+    exit_criteria:
+      - "An infra PR shows the redacted plan diff + the guard's predicted verdict as a comment (no plaintext secrets; sensitive suppressed)"
+      - "The merge applies the SAME plan.bin reviewed on the PR (persisted as an access-controlled artifact)"
+      - "A deliberately staled saved plan errors and files a rec -- no silent re-plan-and-apply"
+      - "A fork PR cannot read tfstate (github_ci_plan fork-gated); github_ci_pr remains athena/iceberg-scoped"
+    related_candidate_decisions: [CD.35]
+    effort: M
+    strategic: false
+    status: not_started
+  - id: T2.22
+    tier: T2
+    name: "Terraform CI/CD: gated CD apply via GitHub Environment (CD.35 Wave 3)"
+    intent: |
+      Route the guard's fail-closed set (IAM/trust/destroy) to a job declaring a tf-gated-apply GitHub
+      Environment with a required reviewer that gates JOB EXECUTION (the job does not start until a human
+      approves). The privileged apply role's OIDC trust stays pinned to refs/heads/main -- an environment:
+      claim in the OIDC sub is NOT an authorization boundary (a known GitHub footgun); the Environment, not the
+      token, gates. Retire the manual/laptop branch-first apply. No job-level environment: precedent exists, so
+      prototype one first. Standalone IMPLEMENTATION plan. V3.
+    depends_on: [T2.20]
+    files_in_scope:
+      - terraform/personal/oidc.tf    # tf-gated-apply Environment; privileged role trust pinned to refs/heads/main
+      - .github/workflows/terraform-apply-sandbox.yml    # route fail-closed plans to the environment-gated job
+      - AGENTS.md    # Safety: gated-CD-apply replaces manual branch-first
+      - docs/contracts/environment-taxonomy.md    # the gated apply path
+      - .claude/skills/implement/SKILL.md    # human-gated-action example update
+    exit_criteria:
+      - "An IAM/destroy change auto-routes to the tf-gated-apply Environment and blocks until a reviewer approves, then applies in CD (never from a laptop)"
+      - "A non-gated workflow that merely declares environment: tf-gated-apply still cannot bypass the reviewer (verified)"
+      - "The privileged apply role is assumable only from the gated job context; OIDC trust pinned to refs/heads/main"
+    related_candidate_decisions: [CD.35]
+    effort: L
+    strategic: false
+    status: not_started
+  - id: T2.23
+    tier: T2
+    name: "Terraform CI/CD: privilege-tiering / bootstrap root for the CI role's own IAM (CD.35 Wave 4)"
+    intent: |
+      Break the self-grant bootstrap: move the CI/CD role's OWN IAM (github_ci_apply's policy) and other
+      manage-the-manager resources into a separate terraform/bootstrap/ root with its own state, applied
+      out-of-band by the privileged tier (via the Wave 3 gated path). The pipeline never plans its own
+      permissions. Absorbs rec-2079 (consolidate IAMRoleReconcile + IAMPlatformRolesRead). The bootstrap state
+      bucket/lock + apply identity are provisioned once by a documented one-time admin action. Standalone
+      IMPLEMENTATION plan. V3.
+    depends_on: [T2.22]
+    files_in_scope:
+      - terraform/bootstrap/    # new root + own state for the CI/CD role's own IAM
+      - terraform/personal/oidc.tf    # remove github_ci_apply's self-referential policy (migrated to bootstrap)
+      - terraform/CLAUDE.md    # document the two-root privilege tier
+      - docs/contracts/environment-taxonomy.md    # the bootstrap tier
+    exit_criteria:
+      - "A change to github_ci_apply's own policy applies via the bootstrap tier with NO red push run on the main pipeline (self-grant cycle broken)"
+      - "rec-2079 absorbed: IAMRoleReconcile + IAMPlatformRolesRead consolidated"
+      - "The bootstrap root's state/lock + apply identity are provisioned by a documented one-time admin action, not managed by the pipeline"
+    related_candidate_decisions: [CD.35]
+    effort: L
+    strategic: false
+    status: not_started
+  - id: T2.24
+    tier: T2
+    name: "Terraform CI/CD: scheduled drift detection (alarm-only) (CD.35 Wave 5)"
+    intent: |
+      A scheduled workflow runs terraform plan for drift with explicit exit-code handling (0=no-change /
+      2=drift / 1=error / lock-acquisition-failure=skip-this-cycle), coexisting with the native S3 use_lockfile.
+      On drift: flip the convergence record red and file a rec DIRECTLY via the ops portal (drift is a
+      state-vs-code delta, not a CI-log failure that fits ci-rca's log-RCA model). Alarm only -- never
+      auto-apply (Decision 55). Standalone IMPLEMENTATION plan. V3.
+    depends_on: [T2.20]
+    files_in_scope:
+      - .github/workflows/terraform-drift.yml    # new -- scheduled plan with explicit exit-code handling
+      - scripts/ops_data_portal.py    # invoked to file the drift rec directly
+      - terraform/CLAUDE.md    # document drift detection (alarm-only)
+    exit_criteria:
+      - "An out-of-band console change is detected within one cron cycle and filed as a rec via the ops portal"
+      - "A held state lock skips the cycle without alarming (lock-acquisition-failure distinguished from a genuine error and from drift)"
+      - "Drift never triggers an auto-apply (alarm-only; Decision 55)"
+    related_candidate_decisions: [CD.35]
+    effort: S
+    strategic: false
+    status: not_started
+  - id: T2.25
+    tier: T2
+    name: "Terraform CI/CD: convention synchronization + guard narrowing + ratify CD.35 (Wave X)"
+    intent: |
+      Consolidate the apply-model convention (today duplicated across AGENTS.md:24, terraform/CLAUDE.md:10, and
+      docs/contracts/environment-taxonomy.md:35-36) into environment-taxonomy.md as the single source of truth;
+      reduce AGENTS.md + terraform/CLAUDE.md to a one-line reference; light-touch the implement skill's
+      human-gated-action example. Narrow the Decision-77 guard to plan-content policy now that native controls
+      own authorization (INTENT 5.9). Ratify CD.35 as a numbered Decision via the log-decision path. Standalone
+      IMPLEMENTATION plan. V3 (guard change) + governance.
+    depends_on: [T2.20, T2.21, T2.22, T2.23]
+    files_in_scope:
+      - docs/contracts/environment-taxonomy.md    # SoT for the apply-model convention
+      - AGENTS.md    # reduce to a one-line reference
+      - terraform/CLAUDE.md    # reduce to a one-line reference
+      - .claude/skills/implement/SKILL.md    # human-gated-action example
+      - scripts/terraform_apply_guard.py    # narrow to content-policy (authorization moves to native controls)
+    exit_criteria:
+      - "The apply-model statement lives in ONE source of truth (environment-taxonomy.md); the others reference it; prompt_compliance.py passes"
+      - "The guard is narrowed to plan-content policy; native controls (required checks + Environment) own authorization (INTENT 5.9 division verified)"
+      - "CD.35 ratified as a numbered Decision via the log-decision path (DECISIONS.md not edited until ratification)"
+    related_candidate_decisions: [CD.35]
+    effort: S
     strategic: false
     status: not_started
 
