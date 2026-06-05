@@ -32,7 +32,7 @@ decision **CD.34** (`state: pending`; ratification as Decision 82 is deferred --
 | `scripts/ducklake_neon_smoke_test.py` | Invoke (no edit) | Run `--attach` + `--churn-gate` against the live Neon DSN as the **hard pre-destroy proof gate**. Existing CLI from Phase 1. |
 | `terraform/personal/rds_ducklake_catalog.tf` | Delete | Destroy `aws_db_instance.ducklake_catalog` + subnet group + SG (+ ingress/egress rules) + parameter group + the 2 default-VPC data sources + the 5 outputs. Two-step (`deletion_protection=false` THEN destroy); final snapshot `ducklake-catalog-final-snapshot` retained as the sole recovery artifact. Closes rec-2062/2068/2069; dispositions rec-2064. |
 | `terraform/personal/variables.tf` | Modify | Remove the 3 now-unreferenced RDS vars (`ducklake_catalog_ingress_cidrs`, `ducklake_catalog_db_name`, `ducklake_catalog_instance_class`). KEEP `neon_region_id` + `neon_org_id` (Neon stack). |
-| `terraform/personal/oidc.tf` | Modify | Remove the 5 PRUNE-marked transitional `aws_iam_role_policy.github_ci_apply` Sids (`RDSDuckLakeCatalogRead`, `RDSDuckLakeCatalogParameterGroupModify`, `EC2NetworkingDescribeForRDS`, `KMSDescribeForRDS`, `SecretsManagerRDSMasterSecretRead`). KEEP `IAMPlatformRolesRead` (permanent) + `SecretsManagerDuckLakeNeonDSN` + `SecretsManagerNeonAPIKeyRead` (Neon). Closes rec-2078. **Applied AFTER the destroy.** |
+| `terraform/personal/oidc.tf` | Modify | Remove the 5 PRUNE-marked transitional `aws_iam_role_policy.github_ci_apply` Sids (`RDSDuckLakeCatalogRead`, `RDSDuckLakeCatalogParameterGroupModify`, `EC2NetworkingDescribeForRDS`, `KMSDescribeForRDS`, `SecretsManagerRDSMasterSecretRead`). KEEP `IAMPlatformRolesRead` (permanent) + `SecretsManagerDuckLakeNeonDSN` + `SecretsManagerNeonAPIKeyRead` (Neon). Closes rec-2078. **Sequenced after the destroy** -- these Sids are on the CI auto-apply role (the sandbox push-plan), NOT the manual-destroy role, so they do not gate the destroy; they must stay only until the RDS is out of state + main code, else the automated push-plan reds on RDS refresh-reads. |
 | `terraform/personal/platform_roles.tf` | Modify | Remove the entire `aws_iam_role_policy.platform_admin_ducklake_catalog` (`PlatformDuckLakeCatalogProvisioning`: RDS/EC2/KMS/snapshot/secret-tag grant). Closes rec-2065/2066. **Sequenced AFTER the destroy** -- the destroy consumes `rds:DeleteDBInstance` from this policy. |
 | `docs/ROADMAP-PLATFORM.yaml` | Modify | Flip T2.16b `status: in_progress` -> `complete` + update `progress_note` to record Phase 2 (Neon proven, RDS retired, IAM pruned, rec dispositions). No `DECISIONS.md` edit (CD.34 stays pending; ratification deferred). |
 | `logs/.recommendations-log.jsonl` (via `scripts/ops_data_portal.py`) | Disposition (portal only) | Close rec-2062/2064/2065/2066/2068/2069/2078/2080; WONTFIX rec-2063; close rec-2067 (RDS SG gone) + re-file a new rec for the Neon public-endpoint egress posture; leave rec-2079 open (follow-on). Single-Portal invariant -- never edit the JSONL directly. |
@@ -74,11 +74,20 @@ Nothing is stranded.
 **Apply path + sequencing (Decision 35 + Decision 77) -- ORDER IS LOAD-BEARING:**
 1. **Pre-destroy proof gate (hard-stop):** `--attach` + `--churn-gate` against live Neon. If either fails, STOP
    and file a rec; do NOT destroy the safety net (Decision 55).
-2. **RDS destroy** (manual `agent_platform_admin`): uses `rds:DeleteDBInstance` etc. from
-   `PlatformDuckLakeCatalogProvisioning`, which is therefore still present. RDS leaves shared S3 state.
+2. **RDS destroy** (manual `agent_platform_admin` = the **PlatformAdmin** role): the destroy is planned and run
+   under PlatformAdmin, whose `PlatformDuckLakeCatalogProvisioning` policy holds `rds:DeleteDBInstance` plus the
+   RDS/EC2/KMS describes needed to refresh + plan it -- so that policy is therefore still present. RDS leaves
+   shared S3 state.
 3. **IAM prune AFTER the destroy** (manual `agent_platform_admin`): remove the 5 `github_ci_apply` Sids and the
-   `PlatformDuckLakeCatalogProvisioning` policy. **Pruning BEFORE the destroy is PR #75 in reverse** -- the
-   apply role would lose the RDS/EC2/KMS reads it needs to *plan* the destroy.
+   `PlatformDuckLakeCatalogProvisioning` policy. **Two distinct roles, two distinct reasons -- do not conflate:**
+   (i) the `PlatformDuckLakeCatalogProvisioning` removal MUST follow the destroy because the destroy (run as
+   PlatformAdmin) consumes `rds:DeleteDBInstance` FROM that policy -- removing it first AccessDenies the destroy
+   (this is the genuine "#75 in reverse" dependency, and the only strictly load-bearing IAM ordering).
+   (ii) the 5 `github_ci_apply` Sids are on the CI auto-apply role (the sandbox push-plan), NOT the
+   manual-destroy role, so they are irrelevant to the destroy's success; they must stay only until the RDS is
+   out of state + out of main's code, because while main still declares the RDS the automated push-plan
+   refresh-reads it and would AccessDenied (the clean-green-push reason). Net order is unchanged: proof ->
+   destroy -> prune both -> merge.
 4. **Clean merge:** with shared state already matching the branch code, the post-merge sandbox push plan is a
    no-op -> guard exit 0 -> CI green on the first push (no manual re-dispatch).
 
@@ -92,9 +101,15 @@ post-retrospective CI redesign (see Follow-on).
 **Resurrection-window constraint:** between the RDS destroy (step 2, state now says RDS gone) and the Phase 2
 merge (step 4, main code still declares the RDS until then), do NOT push any other `terraform/personal/**`
 change to `main` and do NOT manually `workflow_dispatch` the sandbox-apply. A sandbox run in that window plans
-against main's code (RDS present) vs state (RDS gone) and would plan a **create** -- which the guard ALLOWS --
-re-provisioning the just-destroyed RDS. Single-developer focused execution + a prompt merge keep this window
-closed. (The IAM prune has no such risk: re-adding a policy is IAM-sensitive, so a stray run fail-closes.)
+against main's code (RDS present) vs state (RDS gone) and would plan a **create** -- which the guard ALLOWS
+(verified against `terraform_apply_guard.evaluate_plan`: it blocks `delete` / non-create `neon_*` /
+non-inert IAM-sensitive, but a pure RDS `create` returns exit 0) -- re-provisioning the just-destroyed RDS.
+(The IAM prune has no such risk: re-adding a policy is IAM-sensitive, so a stray run fail-closes.)
+**Tightening + contingency:** stage all branch code changes and get `validate.py` + the PR `--pre` tier green
+FIRST, then run the destroy + both IAM prunes and merge in one tight sequence so the window is minutes, not
+hours. If a stray sandbox run nonetheless re-provisions the RDS during the window, the contingency is to simply
+re-run the manual destroy -- the first destroy's `ducklake-catalog-final-snapshot` already exists and is
+retained, and the re-created instance is empty and discarded (timestamp the second snapshot id per VP-3).
 
 **Lambda deployment assessment (Decision 79 / CD.16 / CD.24):** the only Lambda-packaged scope file is
 `docs/ROADMAP-PLATFORM.yaml` -- `compute_affected_artifacts(<changed files>)` returns
@@ -134,11 +149,11 @@ Lambda-packaged (the `.tf`, the smoke test, and the ops portal are not bundled).
 | # | Phase | Action | Command | Expected Outcome | Fix If |
 |---|-------|--------|---------|------------------|--------|
 | 1 | [pre-destroy] | **HARD GATE** -- DuckDB ATTACH round-trip against live Neon | `bin/venv-python -m scripts.ducklake_neon_smoke_test --attach` | prints `ATTACH OK rows=1` (sslmode=require, SNI, pinned DuckDB, `META_SCHEMA 'ducklake_ops'`) | SNI/sslmode/secret/endpoint/`META_SCHEMA` wrong -> **STOP, do NOT destroy**, file a rec (Decision 55) |
-| 2 | [pre-destroy] | **HARD GATE** -- connection-churn / OCC gate against live Neon | `bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate` | prints `CHURN_GATE PASS` (collision rate + commit latency incl. cold-resume within CD.33's OCC budget) | exceeds budget -> implement an app-side pool + re-run; do NOT relax the threshold; do NOT destroy (Decision 55) |
+| 2 | [pre-destroy] | **HARD GATE** -- connection-churn / OCC gate against live Neon | `bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate` | prints `CHURN_GATE PASS collision_rate=... p95_latency_ms=...` (collision rate + commit latency incl. cold-resume within CD.33's OCC budget) | exceeds budget -> implement an app-side pool + re-run; do NOT relax the threshold; do NOT destroy (Decision 55) |
 | 3 | [pre-destroy] | Final-snapshot name is free (no collision) | `aws rds describe-db-snapshots --db-snapshot-identifier ducklake-catalog-final-snapshot --profile agent_platform_admin 2>&1 \| grep -q 'DBSnapshotNotFound' && echo SNAPSHOT_NAME_FREE` | prints `SNAPSHOT_NAME_FREE` | a snapshot already exists -> timestamp the `final_snapshot_identifier` before destroy |
 | 4 | [post-destroy] | RDS instance is gone | `aws rds describe-db-instances --db-instance-identifier ducklake-catalog --profile agent_platform_admin 2>&1 \| grep -q 'DBInstanceNotFound' && echo RDS_GONE` | prints `RDS_GONE` | instance still present -> the two-step destroy did not complete; re-check `deletion_protection` flip then destroy |
 | 5 | [post-destroy] | Final snapshot retained (the rollback artifact) | `aws rds describe-db-snapshots --db-snapshot-identifier ducklake-catalog-final-snapshot --profile agent_platform_admin --query 'DBSnapshots[0].Status' --output text` | prints `available` | no snapshot -> destroy ran with `skip_final_snapshot=true` or a name collision; STOP and RCA before merging |
-| 6 | [post-prune] | 5 transitional Sids gone from LIVE `github_ci_apply` | `aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument.Statement[].Sid' --output text \| grep -qvE 'RDSDuckLakeCatalogRead\|RDSDuckLakeCatalogParameterGroupModify\|EC2NetworkingDescribeForRDS\|KMSDescribeForRDS\|SecretsManagerRDSMasterSecretRead' && ! aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument.Statement[].Sid' --output text \| grep -qE 'RDSDuckLakeCatalog\|EC2NetworkingDescribeForRDS\|KMSDescribeForRDS\|SecretsManagerRDSMasterSecretRead' && echo SIDS_PRUNED` | prints `SIDS_PRUNED`; `IAMPlatformRolesRead` + both Neon Sids still present | any of the 5 Sids still live -> the targeted apply did not land; re-apply `-target=aws_iam_role_policy.github_ci_apply` |
+| 6 | [post-prune] | 5 transitional Sids gone from LIVE `github_ci_apply` (and the kept Sids retained) | `aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument.Statement[].Sid' --output text > /tmp/cisids.txt; ! grep -qE 'RDSDuckLakeCatalog\|EC2NetworkingDescribeForRDS\|KMSDescribeForRDS\|SecretsManagerRDSMasterSecretRead' /tmp/cisids.txt && grep -q 'IAMPlatformRolesRead' /tmp/cisids.txt && grep -q 'SecretsManagerDuckLakeNeonDSN' /tmp/cisids.txt && echo SIDS_PRUNED` | prints `SIDS_PRUNED` -- none of the 5 pruned Sids present (the `RDSDuckLakeCatalog` prefix covers BOTH `...Read` and `...ParameterGroupModify`) AND the kept `IAMPlatformRolesRead` + `SecretsManagerDuckLakeNeonDSN` still present | no `SIDS_PRUNED` -> a pruned Sid still live OR a kept Sid missing; re-apply `-target=aws_iam_role_policy.github_ci_apply` |
 | 7 | [post-prune] | `PlatformDuckLakeCatalogProvisioning` removed from live IAM | `aws iam get-role-policy --role-name PlatformAdmin --policy-name PlatformDuckLakeCatalogProvisioning --profile agent_platform_admin 2>&1 \| grep -q 'NoSuchEntity' && echo POLICY_GONE` | prints `POLICY_GONE` | policy still attached -> run the cleanup apply (it must run AFTER the destroy) |
 | 8 | [post-prune] | PRUNE markers + RDS resources gone from the tree; plan is RDS/IAM-clean | `grep -c 'PRUNE: remove with T2.16b Phase 2' terraform/personal/oidc.tf` ; then `cd terraform/personal && rm -rf .terraform/providers && terraform init -backend-config=backend-sandbox.hcl -reconfigure -input=false >/dev/null && terraform plan -input=false -no-color \| tee /tmp/p2plan.txt; grep -qE 'aws_db_instance.ducklake_catalog\|aws_security_group.ducklake_catalog\|aws_db_parameter_group.ducklake_catalog\|platform_admin_ducklake_catalog\|RDSDuckLakeCatalog' /tmp/p2plan.txt && echo PLAN_DIRTY \|\| echo PLAN_CLEAN` | grep count `0`; plan prints `PLAN_CLEAN` (at most a known rec-2061 `null_resource` no-op) | count != 0 or `PLAN_DIRTY` -> a removal was missed or live state diverged; reconcile before merge |
 | 9 | [pre-merge] | Full presubmit (CI parity) | `bin/venv-python -m scripts.validate` | `PASS` | address before merge. (On Windows the 7 known path/pyiceberg failures are BLOCKED-by-env; run on Linux/CC-web where CI is canon.) |
@@ -150,8 +165,12 @@ Lambda-packaged (the `.tf`, the smoke test, and the ops portal are not bundled).
 - **Apply governance (Decision 35 + Decision 77):** the RDS destroy AND both IAM removals fail-close the
   Decision-77 guard, so they route to **manual `agent_platform_admin` (or `platform_breakglass`) applies**,
   human-gated, run branch-first. The guard step NEVER gets `continue-on-error`.
-- **Sequencing (load-bearing):** proof gate -> RDS destroy -> IAM prune -> merge. Never prune IAM before the
-  destroy (the apply role needs the RDS/EC2/KMS reads to plan the destroy). Never let an intervening
+- **Sequencing (load-bearing):** proof gate -> RDS destroy -> IAM prune (both policies) -> merge. The
+  `PlatformDuckLakeCatalogProvisioning` removal MUST follow the destroy -- the destroy, run as PlatformAdmin,
+  consumes `rds:DeleteDBInstance` FROM that policy, so removing it first AccessDenies the destroy (the one
+  strictly load-bearing IAM ordering). The 5 `github_ci_apply` Sids are on the CI auto-apply role (the sandbox
+  push-plan), not the manual-destroy role, so they do NOT gate the destroy; keep them only until the RDS is out
+  of state + main code, or the automated push-plan reds on RDS refresh-reads. Never let an intervening
   `terraform/personal/**` push or manual dispatch hit `main` between the destroy and the merge
   (resurrection window).
 - **Smoke-test honesty (Decision 55):** the ATTACH + churn gates loud-fail. A failed gate is a stop-and-RCA
@@ -259,11 +278,14 @@ durable pointer:
 ### Phase 2c -- prune the transitional IAM (manual `agent_platform_admin`, AFTER the destroy)
 5. **Prune `github_ci_apply` Sids:** remove the 5 PRUNE-marked Sids from `aws_iam_role_policy.github_ci_apply`
    in `oidc.tf` (keep `IAMPlatformRolesRead` + both Neon Sids). Apply targeted:
-   `terraform apply -target=aws_iam_role_policy.github_ci_apply`. Run VP-6.
+   `terraform apply -target=aws_iam_role_policy.github_ci_apply`. Run VP-6. (This role is the sandbox
+   push-plan's, NOT the manual-destroy's -- the prune does not gate the destroy; it is sequenced here so that by
+   merge time the RDS is out of state and the live policy matches the pruned code, giving a clean push-plan.)
 6. **Remove `PlatformDuckLakeCatalogProvisioning`:** delete the entire
    `aws_iam_role_policy.platform_admin_ducklake_catalog` block from `platform_roles.tf`. `terraform apply`
-   (AdminOps `iam:*` covers `DeleteRolePolicy`). Run VP-7. (Ordering: this MUST be after step 4 -- the destroy
-   consumed `rds:DeleteDBInstance` from this policy.)
+   (AdminOps `iam:*` covers `DeleteRolePolicy`). Run VP-7. (Ordering: this MUST be after step 4 -- the destroy,
+   run as PlatformAdmin, consumes `rds:DeleteDBInstance` FROM this policy; removing it first AccessDenies the
+   destroy. This is the one strictly load-bearing IAM ordering.)
 7. **Confirm the tree + plan are clean (VP-8):** `grep -c 'PRUNE: remove with T2.16b Phase 2' oidc.tf` == 0; a
    branch `terraform plan` shows no RDS/`ducklake_catalog` IAM actions (at most the rec-2061 `null_resource`
    no-op). Remember the `rm -rf .terraform/providers` between the `-reconfigure` apply init and any
