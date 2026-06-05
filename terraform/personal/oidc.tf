@@ -486,6 +486,26 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
+        # Apply-time write on the DuckLake-catalog RDS parameter group only. Iterative-discovery
+        # round 2 after PR #75/#76: the post-PR-#76 sandbox-apply dispatch surfaced a codified
+        # apply_method flip (pending-reboot -> immediate) on the rds.force_ssl parameter --
+        # provider issues rds:ModifyDBParameterGroup which this role lacked. Scoped to the exact
+        # parameter-group ARN. Mirrors the ModifyDBParameterGroup action from
+        # platform_admin_ducklake_catalog Sid RDSDuckLakeCatalogManage (platform_roles.tf:423-450)
+        # restricted to this single action + this single ARN; the broader CreateDBInstance /
+        # DeleteDBInstance lifecycle remains AdminOps-only per Decision 35. Do not prune as
+        # "unused" -- post-T2.16b Phase 2, drop this whole Sid (the parameter group is gone).
+        Sid    = "RDSDuckLakeCatalogParameterGroupModify"
+        Effect = "Allow"
+        Action = [
+          "rds:ModifyDBParameterGroup",
+        ]
+        Resource = [
+          "arn:aws:rds:${var.aws_region}:${var.account_id}:pg:ducklake-catalog-pg16",
+        ]
+      },
+      {
+        # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
         # Refresh-time EC2 networking reads issued by data.aws_vpc / data.aws_subnets /
         # aws_security_group for the RDS catalog stack. Mirrors platform_admin_ducklake_catalog Sid
         # EC2NetworkingDescribe (platform_roles.tf:452-469) byte-for-byte. DescribeVpcAttribute +
