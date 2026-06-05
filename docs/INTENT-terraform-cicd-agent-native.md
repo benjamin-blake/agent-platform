@@ -7,7 +7,7 @@ Extends (does NOT overturn): Decision 77 (auto-apply guard), Decision 35 (apply 
 (async wake), Decision 72 / CD.20 (`main-protection` ruleset).
 **Design-of-record for the architecture below.** The tier_items' canonical home is `docs/ROADMAP-PLATFORM.yaml`
 (transcribed from Section 8 post-review); this doc is design rationale, NOT the source-of-record for the
-tier_items themselves (avoids the dual-surface anti-pattern).
+tier_items themselves.
 Cross-reference: the T2.16b retrospective records the failure modes; THIS doc owns the CI architecture.
 
 ---
@@ -32,27 +32,29 @@ Three gaps surfaced by the T2.16b RDS->Neon migration (the iterative-grant churn
 |---|---|---|
 | Deterministic auto-apply guard (fail-closed on destroy/IAM/trust) + LLM subagent plan review | LIVE | `scripts/terraform_apply_guard.py`, `terraform-apply-sandbox.yml` (Decision 77) |
 | `main-protection` branch ruleset, `enforcement = "active"` | LIVE | `terraform/github/repo.tf:55` -- requires `pr-validate` + `terraform-validate`, linear history, PR-required, `required_approving_review_count = 0`, `strict_required_status_checks_policy = false`, **`bypass_actors` admin `bypass_mode = "always"`** |
-| Async PR wake (`signal-green` comment + `subscribe_pr_activity`) | LIVE but **PR-scoped only** | Decision 76; `ci.yml` `signal-green` fires on `pull_request` -- there is NO post-merge/push wake surface |
+| Async PR wake (`signal-green` comment + `subscribe_pr_activity`) | LIVE but **PR-scoped only** | Decision 76; `ci.yml` `signal-green` fires on `pull_request`; there is NO post-merge/push wake surface, and agents unsubscribe at merge |
 | Native S3 state locking | LIVE | `terraform/personal/main.tf` (`use_lockfile = true`) |
-| `ci-rca` agent | LIVE but **scoped to `['CI','Main Canary']`** | `.github/workflows/ci-rca.yml` -- `terraform-apply-sandbox` is NOT in its `workflows:` trigger |
+| `ci-rca` agent | LIVE but **scoped to `['CI','Main Canary']`** and **gated on `head_branch == default_branch`** | `.github/workflows/ci-rca.yml` -- `terraform-apply-sandbox` is NOT in its `workflows:`; the gate excludes `schedule`-originated runs |
 | PR-context AWS role (`github_ci_pr`) state-read scope | **athena/* + iceberg/* only (NO `tfstate`)** | `terraform/personal/oidc.tf` -- a speculative plan cannot read state with this role |
+| `workflow_run.pull_requests[]` on push-triggered workflows | **EMPTY** | documented in `docs/plans/PLAN-ci-merge-gate-hardening.md` (ci-rca guards it with `!= ''`) -- a post-merge workflow cannot get the PR number from this field |
 | Speculative `terraform plan` on PRs | **ABSENT** | plan only runs in `terraform-apply-sandbox.yml` on push to main |
 | Durable convergence signal / required convergence check | **ABSENT** | `main-protection` requires `terraform-validate` (syntax), not apply-success |
 | GitHub Environment + required-reviewer gate for the apply | **ABSENT** (no repo precedent) | only `deploy.yml`'s `environment` *input string* exists; no job-level `environment:` object anywhere |
 | Scheduled drift detection | **ABSENT** | no cron `terraform plan` workflow |
 
 The apply-workflow's comment "Branch protection / required status checks are not available" is **stale** --
-`main-protection` is live. The controls this design needs (convergence anchor, speculative-plan role, Environment
-gate, drift, ci-rca wiring) are the genuine net-new work.
+`main-protection` is live. The controls this design needs are the genuine net-new work.
 
 ## 3. Design principles (agent-native)
 
 - **Asynchrony over raw speed.** The metric is agent-*blocking* time, not wall-clock convergence. The agent
-  merges, ends its turn, and is re-woken when the apply converges. **The wake transport is net-new (Wave 1), not
-  a free reuse of `signal-green`** (which is PR-event-scoped and cannot fire on the post-merge push): the apply
-  workflow comments back on the *merged* PR (the `ci-rca.yml` `workflow_run.pull_requests` pattern) and the agent
-  holds its subscription through apply. **The durable convergence record (5.5) is the source of truth; the wake
-  is an optimization, with "re-check convergence on the next turn" as the guaranteed fallback.**
+  merges, holds its PR subscription, ends its turn, and is re-woken when the apply converges. **The wake
+  transport is net-new (Wave 1)** -- NOT a reuse of `signal-green` (PR-event-scoped, cannot fire on the
+  post-merge push). The apply workflow **resolves the originating PR from the merge commit SHA** (GitHub "PRs
+  associated with a commit" API -- because `workflow_run.pull_requests[]` is empty for push events) and comments
+  there, which wakes the still-subscribed session. **The durable convergence record (5.5) is the source of
+  truth; the wake is an ergonomic optimisation**, with "re-check convergence on the next planning session" as
+  the Decision-76-compliant fallback (never a `sleep`/`/loop` poll).
 - **Plan anywhere, apply only in CD.** Local/web-container `plan` stays (fast, read-only). Local/manual `apply`
   is eliminated -- including for gated changes, which move to a gated *CD* apply, not a laptop apply.
 - **Native controls gate; the guard polices content.** GitHub branch-protection + Environments own
@@ -60,8 +62,9 @@ gate, drift, ci-rca wiring) are the genuine net-new work.
   in an auto-apply). A Decision-75 frame-challenge: the guard was partly a workaround for the absence of branch
   protection, which is now live.
 - **Convergence is anchored server-side.** The apply job *refuses to run* against a red convergence record --
-  unbypassable by any merge-path actor. The PR-time `terraform-converged` required check is a *secondary* signal
-  and is itself bypassable (`strict=false` + admin-bypass), so it is NOT the primary anchor.
+  unbypassable by any merge-path actor, and independent of whether any agent is watching. The PR-time
+  `terraform-converged` required check is a *secondary* signal and is itself bypassable (`strict=false` +
+  admin-bypass), so it is NOT the primary anchor.
 - **Drift alarms, never auto-remediates** (Decision 55).
 - **Privilege-tiering.** The pipeline cannot manage its own privileges; the CI/CD role's own IAM lives in a
   separate tier applied out-of-band.
@@ -73,13 +76,13 @@ PR opened ─▶ [speculative plan: NET-NEW read-only github_ci_plan role, fork-
    │                                                                                          │
    │                                                                          human/agent reviews a SPECIFIC plan
    ▼                                                                                          ▼
-required checks: pr-validate, terraform-validate, terraform-converged(reads convergence record; pass-on-absent) ─▶ squash-merge
+required checks: pr-validate, terraform-validate, terraform-converged(reads record; pass-on-absent) ─▶ squash-merge ; agent HOLDS subscription
    │
-   ├─ routine (guard PASS) ─▶ apply job: PRECONDITION reads convergence record (refuse if red) ─▶ apply the SAVED plan (stale ⇒ STOP) ─▶ write convergence record (apply-identity-only write) ─▶ comment-back on merged PR wakes agent ─▶ post-apply validation
+   ├─ routine (guard PASS) ─▶ apply job: PRECONDITION reads record (refuse if red) ─▶ apply SAVED plan (stale ⇒ STOP) ─▶ write record (apply-identity-only; ALWAYS-run, red-on-failure) ─▶ resolve PR from merge SHA + comment ─▶ wakes held subscription ─▶ post-apply validation
    │
-   └─ high-blast (guard FAIL-CLOSED: IAM/trust/destroy) ─▶ job declares Environment tf-gated-apply ─▶ required reviewer approves JOB EXECUTION ─▶ apply (privileged role; OIDC trust pinned to refs/heads/main) ─▶ write convergence record
+   └─ high-blast (guard FAIL-CLOSED: IAM/trust/destroy) ─▶ job declares Environment tf-gated-apply ─▶ required reviewer approves JOB EXECUTION ─▶ apply (privileged role; OIDC trust pinned to refs/heads/main) ─▶ write record
                                                                                                                                                           │
-cron ─▶ [drift: wrap `terraform plan`; branch exit 0/2=drift,1=error,lock-fail=skip] ─▶ drift ⇒ convergence-red + source=ci_rca rec (alarm only)
+cron ─▶ [drift: wrap `terraform plan`; 0=clean / 2=drift / 1=error / lock-fail=skip] ─▶ drift ⇒ record-red + file rec DIRECTLY via ops portal (alarm only)
 ```
 
 ## 5. Component designs
@@ -91,85 +94,83 @@ reads). The existing `github_ci_pr` role is scoped to `athena/*` + `iceberg/*` a
 this role is genuinely new (Wave 2). **Fork-PR gating is mandatory** (mirror `ci-rca.yml`'s fork/default-branch
 gate): granting `tfstate` read to a `refs/pull/*`-trusted role must not expose full infra state to fork
 contributors. The job posts the plan summary + the guard's **predicted** verdict (auto-applyable vs would-be-
-gated) as a **redacted** PR comment (`-no-color`, no raw `show -json`, suppress `sensitive`, minimise ARNs --
-the agent auto-posts, so the comment is a standing data-exposure surface). **Open question:** restrict
-speculative comments to `terraform/personal/**`, or also `terraform/github/**` (which touches repo/security
-config)?
+gated) as a **redacted** PR comment (`-no-color`, no raw `show -json`, suppress `sensitive`, minimise ARNs).
+**Open question:** restrict speculative comments to `terraform/personal/**`, or also `terraform/github/**`?
 
 ### 5.2 Apply-the-saved-plan (not re-plan-at-merge)
 The exact `plan.bin` reviewed on the PR is persisted (Actions artifact) and applied at merge. **Terraform's own
 staleness guard is load-bearing**: `terraform apply <saved-plan>` *refuses* to apply if the state serial moved
-since the plan was produced. Given `main-protection` has `strict_required_status_checks_policy = false`
-(branches merge without being up-to-date), this matters. **On staleness the run STOPS** (errors + files a rec)
--- it does NOT silently re-plan-and-apply, because a silent re-plan would apply a diff nobody reviewed (exactly
-the failure this design prevents); a human/agent re-opens with a fresh plan. The persisted `plan.bin` is
+since the plan was produced. Given `main-protection` has `strict_required_status_checks_policy = false`, this
+matters. **On staleness the run STOPS** (errors + files a rec) -- it does NOT silently re-plan-and-apply, which
+would apply a diff nobody reviewed; a human/agent re-opens with a fresh plan. The persisted `plan.bin` is
 **plaintext and may surface sensitive values**, so the artifact is access-controlled (short retention, private)
-and treated as sensitive. "What you reviewed is what applies, or nothing applies."
+and treated as sensitive.
 
 ### 5.3 Routine auto-apply, async
 Unchanged guard + LLM-review for guard-PASS plans, plus a **server-side convergence precondition** (5.5) and a
-**post-merge wake**: on apply completion the workflow **comments back on the merged PR**
-(`workflow_run.pull_requests[0]` -- the proven `ci-rca.yml` mechanism) to wake the agent, which **holds its
-subscription through apply** rather than unsubscribing at merge. This post-merge wake transport is **net-new
-(Wave 1)** -- NOT a free extension of `signal-green`. If no wake is delivered, the agent re-checks the
-convergence record on its next turn (the record, not the wake, is authoritative). The agent never `sleep`/`/loop`s
-(Decision 76).
+**post-merge wake**: on apply completion the workflow **resolves the originating PR from the merge commit SHA**
+(`GET /repos/{owner}/{repo}/commits/{sha}/pulls`) and comments on it -- NOT via `workflow_run.pull_requests[]`,
+which is empty for the push-triggered apply. The agent **holds its PR subscription through apply** (a convention
+change in the implement skill -- it no longer unsubscribes at merge for terraform PRs) so the comment wakes it.
+**Wave 1 must PROVE the wake fires** (a comment on a merged/closed PR delivering to a held subscription has no
+repo precedent); if it does not, the documented fallback is post-apply validation on the **next planning
+session** (the record, not the wake, is authoritative -- never a poll, Decision 76).
 
 ### 5.4 Gated CD apply (high-blast-radius)
 IAM/trust/destroy plans (the guard's fail-closed set) route to a job that declares a **GitHub Environment**
 (`tf-gated-apply`) with a **required reviewer**. **The Environment gates JOB EXECUTION** -- the apply job does
 not start until a human approves.
 
-**Security model (corrected):** we do **NOT** rely on an `environment:` claim in the OIDC `sub` as an
-authorization boundary. That claim is minted by *any* job merely declaring the environment, so it is not a
-sufficient control (a known GitHub footgun). The privileged apply role's OIDC trust stays **pinned to
-`refs/heads/main`** (as today). The boundary is "the privileged apply job will not execute without reviewer
-approval," enforced by the Environment protection rule -- not by the token claim. No workflow uses a job-level
-`environment:` today, so **Wave 3 prototypes one first**.
+**Security model:** we do **NOT** rely on an `environment:` claim in the OIDC `sub` as an authorization boundary
+-- that claim is minted by *any* job merely declaring the environment (a known GitHub footgun). The privileged
+apply role's OIDC trust stays **pinned to `refs/heads/main`** (as today). The boundary is "the privileged apply
+job will not execute without reviewer approval," enforced by the Environment protection rule, not the token. No
+workflow uses a job-level `environment:` today, so **Wave 3 prototypes one first** and verifies a non-gated
+workflow declaring the same environment cannot bypass the reviewer.
 
 **Single-account scope (Decision 77 clause 5):** an in-account approval gate, NOT a revival of Decision 24's
-retired multi-account promotion. **Solo-dev / agent reality:** the agent **cannot approve its own deployment**
-(it is the triggering actor), so gated changes intentionally **pause agent autonomy**. The routine/gated split
-(Section 6) is designed so the agent rarely hits the gate.
+retired multi-account promotion. **Solo-dev / agent reality:** the agent **cannot approve its own deployment**,
+so gated changes intentionally **pause agent autonomy**. The routine/gated split (Section 6) keeps the gate rare.
 
 ### 5.5 Sticky convergence signal
-The apply job writes a **convergence record** -- a small S3 object (e.g. `.../tfstate/personal/sandbox/
+The apply job writes a **convergence record** -- a small S3 object (`.../tfstate/personal/sandbox/
 convergence.json`, `{commit, status, plan_sha, ts}`) -- with **write-IAM restricted to the apply identity
-alone** (the integrity anchor; a commit status alone is spoofable). **Primary anti-masking control is
-server-side: the apply job reads this record as a precondition and refuses to apply when main is non-converged**
--- unbypassable by any merge-path actor. A PR-time **`terraform-converged`** check (added to `main-protection`
-`required_status_checks`) is a *secondary* signal that **passes-on-absent-record** (so the first *apply* writes
-the first record -- never a human seed, preserving the apply-only write-IAM invariant), and is acknowledged
-bypassable given `strict=false` + admin-bypass-`always` (Wave 1 may optionally set `strict=true` for the
-terraform path). Net: a broken apply blocks the next *apply* server-side regardless, and surfaces as a red PR
-check best-effort.
+alone** (the integrity anchor; a commit status alone is spoofable). **The record write is an always-run step
+(`if: always()`) that writes `status=red` on apply failure** -- otherwise a failed apply would skip the write
+and leave the record at its prior green value, defeating the precondition in exactly the case it must catch.
+**Primary anti-masking control is server-side: the apply job reads this record as a precondition and refuses to
+apply when main is non-converged** (an *absent* record = first-apply-allowed) -- unbypassable by any merge-path
+actor. A PR-time **`terraform-converged`** check (added to `main-protection` `required_status_checks`) is a
+*secondary* signal that **passes-on-absent-record** (so the first *apply* writes the first record -- never a
+human seed, preserving the apply-only write-IAM invariant), and is acknowledged bypassable given `strict=false`
++ admin-bypass-`always` (Wave 1 may optionally set `strict=true` for the terraform path). Net: a broken apply
+blocks the next *apply* server-side regardless, and surfaces as a red PR check best-effort.
 
 ### 5.6 Drift detection
 A scheduled workflow runs `terraform plan` for drift. **Exit-code handling is explicit** (not assumed from
 `-lock-timeout`): `terraform plan` acquires the state lock and **errors (exit 1) on a held lock -- it does not
 skip**; `-detailed-exitcode` returns 0=no-change / 2=drift / 1=error, and a lock-timeout is a 1 that collides
-with real errors. The drift job therefore **wraps the plan and distinguishes a lock-acquisition failure (skip
-this cycle, no alarm) from a genuine error (alarm) from drift (exit 2 -> alarm + rec)**. Drift ⇒ flip the
-convergence record + file a `source=ci_rca` rec. **Alarm only -- never auto-`apply`** (Decision 55). Catches
-out-of-band drift and a prior non-converged apply.
+with real errors. The drift job **wraps the plan and distinguishes a lock-acquisition failure (skip this cycle,
+no alarm) from a genuine error (alarm) from drift (exit 2 -> alarm + rec)**. Drift ⇒ flip the convergence record
++ file a rec. **Alarm only -- never auto-`apply`** (Decision 55).
 
-### 5.7 RCA wiring
-Apply-failure and drift file `source=ci_rca`, `priority=critical` recs via the existing ops portal transport.
-**This requires adding `terraform-apply-sandbox` (and the drift workflow) to `.github/workflows/ci-rca.yml`'s
-`workflows:` trigger** -- today it fires only on `['CI','Main Canary']`. ci-rca's existing fork/default-branch
-gate already fits the push-to-main apply context. (CI-surface edit owned by Waves 1 + 5.)
+### 5.7 RCA wiring (two distinct paths)
+- **Apply failures** (push-to-main `terraform-apply-sandbox`) file `source=ci_rca` recs by **adding
+  `terraform-apply-sandbox` to `.github/workflows/ci-rca.yml`'s `workflows:` trigger** (today only
+  `['CI','Main Canary']`). ci-rca's `head_branch == default_branch` gate fits push-to-main. (Wave 1.)
+- **Drift** (the `schedule`-triggered workflow) **files its rec DIRECTLY via the ops portal**, NOT through
+  ci-rca: ci-rca's `head_branch == default_branch` gate evaluates false for cron-originated `workflow_run`s
+  (their head_branch is null), so routing drift through ci-rca would silently drop the rec. (Wave 5.)
 
 ### 5.8 Privilege-tiering / bootstrap root
 The CI/CD role's *own* IAM (`github_ci_apply`'s policy) and other "manage-the-manager" resources move into a
 separate **`terraform/bootstrap/`** root with its own state, applied by the privileged tier (PlatformAdmin, via
 the gated path in 5.4) out-of-band. This breaks the self-grant cycle: the pipeline never plans its own
 permissions. **Absorbs rec-2079** (consolidate `IAMRoleReconcile` + `IAMPlatformRolesRead`). Baseline is the
-post-Phase-2 `github_ci_apply` state now on main (`oidc.tf`, #82). The bootstrap root needs its own state
-bucket/lock + an apply identity not managed by the pipeline -- **provisioned once by a documented one-time admin
-action**, then never again.
+post-Phase-2 `github_ci_apply` state now on main (`oidc.tf`, #82). The bootstrap root's state bucket/lock + apply
+identity are **provisioned once by a documented one-time admin action**, then never managed by the pipeline.
 
 ### 5.9 Guard <-> native-controls reconciliation
-With `main-protection` live and Environments added:
 - **GitHub native controls** own *authorization*: required checks (incl. `terraform-converged`), linear history,
   the Environment reviewer gate.
 - **The Decision-77 guard** narrows to *content policy*: classify a plan as auto-applyable (routine) vs gated
@@ -201,21 +202,24 @@ Each item is a **standalone IMPLEMENTATION plan** (Decision 67 STRATEGIC-suspens
 
 | Wave | Item | Depends on | Effort | Exit criteria (behavioural) | Files touched |
 |---|---|---|---|---|---|
-| **1 (first)** | **Convergence substrate + RCA wiring + post-merge wake**: apply job writes the S3 convergence record (apply-identity-only write-IAM) + reads it as a server-side precondition; `terraform-converged` PR check (pass-on-absent) added to `main-protection`; add `terraform-apply-sandbox` to `ci-rca.yml`; build the post-merge wake (apply comments back on merged PR; agent holds subscription) | -- (extends live CD.20) | M | Force an apply failure -> the NEXT apply is refused server-side (record red) AND a `source=ci_rca` rec is filed AND the next PR's `terraform-converged` is red; a passing apply writes the first record from absent; the agent is woken post-apply (or falls back to next-turn convergence re-check) | `terraform-apply-sandbox.yml`, `.github/workflows/ci-rca.yml`, `terraform/github/repo.tf`, `terraform/personal/oidc.tf`, `terraform/CLAUDE.md` |
-| **2** | **Speculative plan + apply-saved-plan**: NET-NEW `github_ci_plan` role (PR-trusted, `tfstate` read-only, fork-gated); PR plan job posts redacted diff + predicted guard verdict; persist access-controlled `plan.bin`; merge applies the saved plan; **stale ⇒ STOP + rec** | Wave 1 | M | A PR shows the redacted plan diff + verdict; the merge applies the *same* `plan.bin`; a deliberately staled plan **errors and files a rec** (no silent re-apply); fork PRs cannot read `tfstate` | `terraform/personal/oidc.tf`, `terraform-apply-sandbox.yml`, planning skill |
-| **3** | **Gated CD apply via GitHub Environment**: create `tf-gated-apply` Environment + required reviewer; route guard-fail-closed plans through a job declaring it; OIDC trust **stays pinned to `refs/heads/main`** (Environment gates execution, not the token); retire the manual branch-first convention | Wave 1 | L | An IAM/destroy change auto-routes to the Environment, blocks on approval, then applies in CD; verify a non-gated workflow declaring the same `environment:` still cannot bypass the reviewer | AGENTS.md (Safety), `docs/contracts/environment-taxonomy.md`, implement skill, `terraform/personal/oidc.tf` |
+| **1 (first)** | **Convergence substrate + apply-RCA + post-merge wake**: apply job writes the S3 convergence record (apply-identity-only write-IAM; **always-run, red-on-failure**) + reads it as a server-side precondition; `terraform-converged` PR check (pass-on-absent) added to `main-protection`; add `terraform-apply-sandbox` to `ci-rca.yml`; build the post-merge wake (resolve PR from merge SHA + comment; agent holds subscription) | -- (extends live CD.20) | M | Force an apply failure -> the record is written `red` by the always-run step -> the NEXT apply is refused server-side AND a `source=ci_rca` rec is filed AND the next PR's `terraform-converged` is red; a passing apply writes the first record from absent; **a live test proves the post-apply comment wakes the held subscription (or the next-session fallback is exercised)** | `terraform-apply-sandbox.yml`, `.github/workflows/ci-rca.yml`, `terraform/github/repo.tf`, `terraform/personal/oidc.tf`, implement skill (hold-subscription-through-apply), `terraform/CLAUDE.md` |
+| **2** | **Speculative plan + apply-saved-plan**: NET-NEW `github_ci_plan` role (PR-trusted, `tfstate` read-only, fork-gated); PR plan job posts redacted diff + predicted guard verdict; persist access-controlled `plan.bin`; merge applies the saved plan; **stale ⇒ STOP + rec** | Wave 1 | M | A PR shows the redacted plan diff + verdict; the merge applies the *same* `plan.bin`; a deliberately staled plan **errors and files a rec** (no silent re-apply); fork PRs cannot read `tfstate` | `terraform/personal/oidc.tf`, `terraform-apply-sandbox.yml`, planning skill (Infra assessment) |
+| **3** | **Gated CD apply via GitHub Environment**: create `tf-gated-apply` Environment + required reviewer; route guard-fail-closed plans through a job declaring it; OIDC trust **stays pinned to `refs/heads/main`** (Environment gates execution, not the token); retire the manual branch-first convention | Wave 1 | L | An IAM/destroy change auto-routes to the Environment, blocks on approval, then applies in CD; a non-gated workflow declaring the same `environment:` still cannot bypass the reviewer | AGENTS.md (Safety), `docs/contracts/environment-taxonomy.md`, implement skill, `terraform/personal/oidc.tf` |
 | **4** | **Privilege-tiering / bootstrap root**: `terraform/bootstrap/` root + own state for the CI/CD role's own IAM; migrate `github_ci_apply` policy; absorb rec-2079; one-time admin provisioning of the bootstrap state/identity | Wave 3 | L | A change to `github_ci_apply`'s own policy applies via the bootstrap tier with NO red push run on the main pipeline | `terraform/CLAUDE.md`, `docs/contracts/environment-taxonomy.md`, `terraform/personal/oidc.tf` |
-| **5** | **Drift detection**: scheduled `terraform plan` with explicit exit-code handling (0/2=drift, 1=error, lock-fail=skip); drift -> convergence-red + `source=ci_rca` rec; add the drift workflow to `ci-rca.yml`; alarm-only | Wave 1 | S | An out-of-band console change is detected within one cron cycle and filed as a rec; a held lock skips the cycle without alarming; no auto-apply | new drift workflow, `.github/workflows/ci-rca.yml`, `terraform/CLAUDE.md` |
-| **X (cross-cutting)** | **Convention synchronization + guard narrowing + decision**: consolidate the apply-model convention to `docs/contracts/environment-taxonomy.md` as SoT (refresh its stale Section 6 re committed lockfiles); reduce the other 5 surfaces to a one-line reference; narrow the guard to content-policy (5.9); ratify CD.NN as a numbered Decision | Waves 1-4 | S | All **six** instruction surfaces agree and reference one SoT; `prompt_compliance.py` passes; Decision N logged | `docs/contracts/environment-taxonomy.md`, AGENTS.md, `terraform/CLAUDE.md`, planning skill, implement skill, `src/data/handlers/CLAUDE.md`, `scripts/terraform_apply_guard.py` |
+| **5** | **Drift detection**: scheduled `terraform plan` with explicit exit-code handling (0=clean/2=drift/1=error/lock-fail=skip); drift -> record-red + a rec filed **directly via the ops portal** (NOT ci-rca, whose gate drops cron runs); alarm-only | Wave 1 | S | An out-of-band console change is detected within one cron cycle and filed as a rec via the portal; a held lock skips the cycle without alarming; no auto-apply | new drift workflow, `scripts/ops_data_portal.py` (invoke), `terraform/CLAUDE.md` |
+| **X (cross-cutting)** | **Convention synchronization + guard narrowing + decision**: consolidate the apply-model convention to `docs/contracts/environment-taxonomy.md` as SoT; reduce AGENTS.md + terraform/CLAUDE.md to a one-line reference; light-touch the implement skill's human-gated-action example; narrow the guard to content-policy (5.9); ratify CD.NN as a numbered Decision | Waves 1-4 | S | The apply-model statement lives in ONE SoT, the others reference it; `prompt_compliance.py` passes; Decision N logged | `docs/contracts/environment-taxonomy.md`, AGENTS.md, `terraform/CLAUDE.md`, implement skill, `scripts/terraform_apply_guard.py` |
 
 ## 9. Instruction-surface synchronization
 
-The "manual branch-first apply" convention is currently written across **six** surfaces -- itself drift-by-design:
-`AGENTS.md` (Safety), `terraform/CLAUDE.md`, `docs/contracts/environment-taxonomy.md`, the **planning** skill,
-the **implement** skill, `src/data/handlers/CLAUDE.md`. Wave X **consolidates the canonical statement into
-`docs/contracts/environment-taxonomy.md`** (source of truth) and reduces the other five to a one-line reference.
-All six appear in the Section-8 "Files touched" columns (Waves 3 + X). These edits are executed by the Waves'
-IMPLEMENTATION plans -- NOT in this REPORT-ONLY session.
+The apply-model convention ("apply is human-gated EXCEPT the sandbox auto-apply...") lives in **three** surfaces
+today, duplicated -- itself drift-by-design: `AGENTS.md:24` (Safety), `terraform/CLAUDE.md:10`, and
+`docs/contracts/environment-taxonomy.md:35-36` (the per-environment table). A **fourth** surface, the implement
+skill (`SKILL.md:95`), carries only a *tangential* mention ("awaiting a human-gated action e.g. terraform apply
+-> mark BLOCKED") that needs a light touch when the gated path changes. (The planning skill and
+`src/data/handlers/CLAUDE.md` carry an unrelated IAM-precedence rule -- "apply before Lambda deploy" -- NOT this
+convention; they are out of scope.) Wave X **consolidates the canonical statement into
+`docs/contracts/environment-taxonomy.md`** (source of truth) and reduces AGENTS.md + terraform/CLAUDE.md to a
+one-line reference (agent-first collocation rule). Edits execute in the Waves' IMPLEMENTATION plans -- NOT here.
 
 ## 10. Decision logging
 
@@ -226,22 +230,21 @@ security model (5.4), and the rejected guard-self-grant-exception.
 
 ## 11. Risks / known gaps / open questions
 
-- **Convergence-record write-authority (primary integrity anchor).** The anti-masking property rests on the S3
-  record's write-IAM being apply-identity-only AND the apply-side precondition. Wave 1 acceptance must prove
-  both the write-restriction and the server-side refusal.
-- **Post-merge wake is net-new and unproven.** The comment-back-on-merged-PR transport has no precedent for
-  *waking a held subscription* post-merge; Wave 1 must demonstrate it, with poll-on-next-turn as the guaranteed
-  fallback. Do not ship "absorbs apply latency without a human" until the transport is proven.
-- **Speculative-plan exposure.** Even redacted, plans leak topology into PR comments; the `github_ci_plan` role
-  must be genuinely least-priv and fork-gated. Open: plan-comment `terraform/github/**` too, or only
+- **Convergence-record integrity (primary anchor).** Rests on apply-identity-only write-IAM, the always-run
+  red-on-failure write (5.5), AND the server-side apply precondition. Wave 1 acceptance must prove all three.
+- **Post-merge wake is net-new and unproven.** Resolving the PR from the merge SHA is mechanical, but **a
+  comment on a merged/closed PR waking a held subscription has no repo precedent** -- Wave 1 must demonstrate it
+  live, with next-planning-session re-check as the guaranteed (poll-free) fallback. Do not claim "absorbs apply
+  latency without a human" until proven.
+- **Speculative-plan exposure.** Even redacted, plans leak topology into PR comments; `github_ci_plan` must be
+  genuinely least-priv and fork-gated. Open: plan-comment `terraform/github/**` too, or only
   `terraform/personal/**`?
-- **Environment gating has no repo precedent.** No job-level `environment:` exists today; Wave 3 must prototype
-  one and verify a non-gated workflow declaring the same environment cannot bypass the reviewer.
-- **`terraform-converged` is bypassable** (`strict=false` + admin-bypass-`always`). It is a secondary signal;
-  the server-side apply precondition is the real anchor. Wave 1 may set `strict=true` for the terraform path if
-  the PR-level gate must bind.
-- **Bootstrap-root chicken-and-egg.** Its state bucket/lock + apply identity are provisioned by a documented
-  one-time admin action, then never managed by the pipeline.
+- **Environment gating has no repo precedent.** No job-level `environment:` exists; Wave 3 prototypes one and
+  proves a non-gated workflow declaring the same environment cannot bypass the reviewer.
+- **`terraform-converged` is bypassable** (`strict=false` + admin-bypass-`always`). Secondary signal; the
+  server-side apply precondition is the real anchor. Wave 1 may set `strict=true` for the terraform path.
+- **Bootstrap-root chicken-and-egg.** State bucket/lock + apply identity provisioned by a documented one-time
+  admin action, then never managed by the pipeline.
 - **Lock contention.** Drift cron + auto-apply + gated apply share one S3 lockfile; the drift job's explicit
   lock-fail=skip handling (5.6) is required so a stuck apply does not cascade.
 
