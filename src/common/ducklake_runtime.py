@@ -1,0 +1,597 @@
+"""DuckLake operational-lakehouse runtime (T2.17 / CD.33, Decision 81).
+
+Single ATTACH/connection authority plus the CD.33 write/read primitives shared by the
+ducklake_writer and ducklake_reader Lambdas and the Neon smoke test. There is exactly ONE
+ATTACH implementation: the dev/smoke path installs extensions over the network, the Lambda
+path loads them from a baked layer (extension_directory + autoload/autoinstall off +
+custom_extension_repository fail-closed). An `extension_directory` argument selects the mode.
+
+Design invariants (CD.33):
+  - Idempotent append: the history table is keyed by a monotonic ULID minted ONCE per write,
+    OUTSIDE the OCC-retry loop, and reused on every retry. MERGE-on-ULID insert-if-not-matched
+    de-duplicates, so a retried write never double-appends (no engine PK; the ULID is a logical
+    key enforced by MERGE).
+  - SCD2 derivations minted once: `created_timestamp` is stamped at first insert and CARRIED
+    unchanged on update (never re-stamped); `last_updated_timestamp` is minted once with the
+    ULID and is stable across retries.
+  - Schema gate + OCC exhaustion LOUD-FAIL (Decision 55): a rejected field or an exhausted
+    retry budget raises; there is never a silent drop or an Athena fallback.
+  - Version lockstep (OQ.12): DuckDB is pinned to PINNED_DUCKDB_VERSION; a runtime assert fails
+    loudly on mismatch. A bump follows the clone-rehearsal policy in the catalog-operations
+    runbook.
+
+Field semantics (input vs derived, derivation rules, partition transforms) are sourced from
+config/lambda/ducklake/field_semantics.yaml -- the single contract the schema gate, the
+derivation engine, and the tests all read.
+"""
+
+from __future__ import annotations
+
+import os
+import random
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import yaml
+
+from src.common import ducklake_spike
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PINNED_DUCKDB_VERSION = "1.5.3"  # lockstep with DuckLake v1.0 (OQ.12); Lambda layer pins ==1.5.3
+
+DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
+CATALOG_ALIAS = "ops_catalog"
+META_SCHEMA = "ducklake_ops"
+
+# Representative SCD2 smoke-table pair (real ops_* business schema is T2.19).
+SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-runtime-smoke/"
+SMOKE_HISTORY_TABLE = "ducklake_smoke_history"
+SMOKE_CURRENT_TABLE = "ducklake_smoke_current"
+
+# Baked extensions in the Lambda layer: (LOAD/INSTALL name, on-disk file stem). DuckDB publishes
+# the Postgres extension binary as `postgres_scanner.duckdb_extension` even though it INSTALLs and
+# LOADs under the name `postgres` (verified against v1.5.3/linux_amd64).
+BAKED_EXTENSIONS: tuple[tuple[str, str], ...] = (
+    ("ducklake", "ducklake"),
+    ("httpfs", "httpfs"),
+    ("postgres", "postgres_scanner"),
+)
+
+# Default location DuckDB looks for baked extensions inside the Lambda (the layer unpacks to /opt).
+LAMBDA_EXTENSION_DIRECTORY = "/opt/duckdb_extensions"
+
+# OCC retry budget (CD.33): bounded application-level retry with backoff + jitter, loud-fail on
+# exhaustion. NOT a knob to loosen so a gate passes (Decision 55).
+OCC_MAX_ATTEMPTS = 5
+OCC_BASE_BACKOFF_S = 0.05
+OCC_MAX_BACKOFF_S = 1.0
+
+# Substrings of a Postgres/DuckLake error that indicate an optimistic-concurrency / serialization
+# collision (the expected, retryable contention signal) rather than a hard failure.
+_OCC_COLLISION_MARKERS = (
+    "could not serialize",
+    "deadlock detected",
+    "concurrent update",
+    "conflict",
+    "transaction conflict",
+    "write-write",
+)
+
+# CloudWatch metric namespace for OCC-retry + commit-latency emission (EC9).
+CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
+
+_FIELD_SEMANTICS_ENV = "DUCKLAKE_FIELD_SEMANTICS_PATH"
+_DEFAULT_FIELD_SEMANTICS_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "lambda" / "ducklake" / "field_semantics.yaml"
+)
+
+# SQL-type -> Python type for the schema gate's input-field validation.
+_PY_TYPE_FOR_SQL: dict[str, type] = {
+    "VARCHAR": str,
+    "TIMESTAMP WITH TIME ZONE": datetime,
+}
+
+
+# ---------------------------------------------------------------------------
+# Exceptions -- all loud-fail (Decision 55)
+# ---------------------------------------------------------------------------
+
+
+class DuckLakeRuntimeError(RuntimeError):
+    """Base for all DuckLake runtime loud-fail conditions."""
+
+
+class VersionMismatchError(DuckLakeRuntimeError):
+    """Raised when the live DuckDB version differs from the pinned lockstep version (OQ.12)."""
+
+
+class SchemaGateError(DuckLakeRuntimeError):
+    """Raised when a write record fails the schema gate (unknown/derived/missing/mis-typed field)."""
+
+
+class OCCRetryExhaustedError(DuckLakeRuntimeError):
+    """Raised when the bounded OCC-retry budget is exhausted (CD.33). Stop-and-RCA, never relax."""
+
+
+# ---------------------------------------------------------------------------
+# Write identity (minted once, outside the OCC-retry loop)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WriteIdentity:
+    """The deterministic identity minted ONCE per write op, reused on every OCC retry.
+
+    ulid: monotonic ULID, the history logical PK + idempotency dedup key.
+    timestamp: high-precision write timestamp, stable across retries (SCD2 ordering).
+    """
+
+    ulid: str
+    timestamp: datetime
+
+
+@dataclass(frozen=True)
+class WriteResult:
+    """Outcome of a write_scd2 call. occ_retries + commit_ms drive the CloudWatch metrics."""
+
+    ulid: str
+    rec_id: str
+    occ_retries: int
+    commit_ms: float
+    created_timestamp: datetime
+    last_updated_timestamp: datetime
+
+
+def mint_write_identity(*, now: datetime | None = None) -> WriteIdentity:
+    """Mint the ULID + timestamp ONCE for a write op. Call OUTSIDE the OCC-retry loop (CD.33).
+
+    The ULID embeds the same instant as `timestamp` (ULID.from_datetime), so the history PK and
+    the SCD2 ordering key are coherent. On retry the SAME WriteIdentity is reused -- never re-minted.
+    """
+    from ulid import ULID  # noqa: PLC0415
+
+    moment = now or datetime.now(timezone.utc)
+    return WriteIdentity(ulid=str(ULID.from_datetime(moment)), timestamp=moment)
+
+
+# ---------------------------------------------------------------------------
+# Version assertion (OQ.12 lockstep)
+# ---------------------------------------------------------------------------
+
+
+def assert_duckdb_version(duckdb_module: Any = None) -> str:
+    """Assert the live DuckDB equals the pinned version. Loud-fail on mismatch (OQ.12).
+
+    Returns the asserted version string. Pass `duckdb_module` to inject a fake in tests.
+    """
+    duckdb_module = duckdb_module if duckdb_module is not None else ducklake_spike._require_duckdb()
+    actual = getattr(duckdb_module, "__version__", None)
+    if actual != PINNED_DUCKDB_VERSION:
+        raise VersionMismatchError(
+            f"DuckDB version mismatch: runtime has {actual!r}, pinned {PINNED_DUCKDB_VERSION!r}. "
+            "DuckLake v1.0 is lockstep with DuckDB 1.5.3 (OQ.12). Follow the clone-rehearsal "
+            "version-bump policy in docs/runbooks/ducklake-catalog-operations.md before bumping."
+        )
+    return actual
+
+
+# ---------------------------------------------------------------------------
+# DSN fetch + conninfo (moved here from the smoke test -- single implementation)
+# ---------------------------------------------------------------------------
+
+
+def fetch_dsn(secret_id: str = DSN_SECRET_ID, *, profile: str | None = None) -> dict[str, str]:
+    """Fetch + parse the Neon DSN JSON from Secrets Manager (Decision 37 runtime-fetch).
+
+    Returns a dict with at least host / dbname / username / password (sslmode optional, defaults
+    to require). Raises RuntimeError if the secret is missing a required key.
+    """
+    import boto3  # noqa: PLC0415
+
+    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+    session = boto3.Session(profile_name=resolve_aws_profile(profile))
+    client = session.client("secretsmanager")
+    resp = client.get_secret_value(SecretId=secret_id)
+    payload = _parse_secret_string(resp["SecretString"])
+    missing = [k for k in ("host", "dbname", "username", "password") if not payload.get(k)]
+    if missing:
+        raise RuntimeError(f"DSN secret {secret_id!r} is missing required keys: {missing}")
+    return payload
+
+
+def _parse_secret_string(secret_string: str) -> dict[str, str]:
+    """Parse the Secrets Manager SecretString JSON into a dict."""
+    import json  # noqa: PLC0415
+
+    return json.loads(secret_string)
+
+
+def libpq_conninfo(dsn: dict[str, str]) -> str:
+    """Return a libpq keyword/value conninfo string for the DuckLake postgres backend.
+
+    sslmode defaults to require so TLS is always enforced even if the secret omits it (the
+    Terraform-written secret always sets it; this is defence in depth).
+    """
+    sslmode = dsn.get("sslmode") or "require"
+    return (
+        f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} "
+        f"password={dsn['password']} sslmode={sslmode}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Connection authority -- the single ATTACH (dev INSTALL vs Lambda baked layer)
+# ---------------------------------------------------------------------------
+
+
+def open_connection(
+    *,
+    dsn: dict[str, str],
+    data_path: str = SMOKE_DATA_PATH,
+    extension_directory: str | None = None,
+    profile: str | None = None,
+    _creds: tuple[str, str, str | None, str] | None = None,
+) -> Any:
+    """Open a DuckDB connection with ducklake/httpfs/postgres loaded and the Neon catalog ATTACHed.
+
+    extension_directory:
+      - None  -> dev/smoke mode: network INSTALL + LOAD of each extension.
+      - set   -> Lambda baked mode: LOAD from the directory with autoload/autoinstall DISABLED and
+                 custom_extension_repository EMPTY (fail-closed: no network INSTALL at runtime).
+
+    Inlining is disabled (ducklake_default_data_inlining_row_limit=0) on every connection so S3
+    Parquet is written immediately for ALL tables (EC11 / smoke #921). The ATTACH targets the Neon
+    DIRECT endpoint over TLS (sslmode=require, enforced by libpq_conninfo).
+    """
+    duckdb = ducklake_spike._require_duckdb()
+    assert_duckdb_version(duckdb)
+    con = duckdb.connect()
+
+    if extension_directory is not None:
+        con.execute(f"SET extension_directory={ducklake_spike._sql_str_literal(extension_directory)}")
+        con.execute("SET autoinstall_known_extensions=false")
+        con.execute("SET autoload_known_extensions=false")
+        con.execute("SET custom_extension_repository=''")
+        for load_name, _stem in BAKED_EXTENSIONS:
+            con.execute(f"LOAD {load_name}")
+    else:
+        for load_name, _stem in BAKED_EXTENSIONS:
+            con.execute(f"INSTALL {load_name}; LOAD {load_name}")
+
+    if _creds is not None:
+        ak, sk, tok, region = _creds
+        con.execute(f"SET s3_region={ducklake_spike._sql_str_literal(region)}")
+        con.execute(f"SET s3_access_key_id={ducklake_spike._sql_str_literal(ak)}")
+        con.execute(f"SET s3_secret_access_key={ducklake_spike._sql_str_literal(sk)}")
+        if tok:
+            con.execute(f"SET s3_session_token={ducklake_spike._sql_str_literal(tok)}")
+    else:
+        ducklake_spike._set_s3_credentials(con, profile=profile)
+
+    # Inlining off for ALL tables (CD.34 / EC11): write S3 Parquet immediately, never inline rows.
+    con.execute("SET ducklake_default_data_inlining_row_limit=0")
+
+    conninfo = libpq_conninfo(dsn)
+    con.execute(
+        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} "
+        f"(DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
+    )
+    return con
+
+
+# ---------------------------------------------------------------------------
+# Field-semantics contract -- the single source the gate + derivations + tests read
+# ---------------------------------------------------------------------------
+
+
+def _field_semantics_path() -> Path:
+    """Resolve the field-semantics YAML path (env override for Lambda-bundle relocation)."""
+    override = os.environ.get(_FIELD_SEMANTICS_ENV)
+    return Path(override) if override else _DEFAULT_FIELD_SEMANTICS_PATH
+
+
+@lru_cache(maxsize=4)
+def _load_field_semantics_cached(path_str: str) -> dict[str, Any]:
+    return yaml.safe_load(Path(path_str).read_text(encoding="utf-8"))
+
+
+def load_field_semantics(path: str | Path | None = None) -> dict[str, Any]:
+    """Load + cache the field-semantics contract. Pass `path` to override (tests)."""
+    resolved = Path(path) if path is not None else _field_semantics_path()
+    return _load_field_semantics_cached(str(resolved))
+
+
+# ---------------------------------------------------------------------------
+# Schema gate -- loud-fail on unknown / derived / missing / mis-typed input fields
+# ---------------------------------------------------------------------------
+
+
+def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None) -> None:
+    """Validate a caller-supplied write record against the contract. Loud-fail (Decision 55).
+
+    Rejects (raises SchemaGateError):
+      - any key not present in the contract (unknown field),
+      - any key whose role is `derived` (the caller must not supply derived values),
+      - any required (`nullable: false`) input field that is missing, null, or empty,
+      - any input field whose value is not the contract's declared SQL type.
+    """
+    semantics = semantics if semantics is not None else load_field_semantics()
+    fields: dict[str, Any] = semantics["fields"]
+
+    for key in record:
+        spec = fields.get(key)
+        if spec is None:
+            raise SchemaGateError(f"unknown field {key!r}: not in the field-semantics contract")
+        if spec["role"] == "derived":
+            raise SchemaGateError(
+                f"field {key!r} is derived: the runtime mints it; the caller must not supply it"
+            )
+
+    for name, spec in fields.items():
+        if spec["role"] != "input":
+            continue
+        nullable = bool(spec.get("nullable", True))
+        present = name in record
+        value = record.get(name)
+        if not nullable and (not present or value is None):
+            raise SchemaGateError(f"required input field {name!r} is missing or null")
+        if present and value is not None:
+            expected = _PY_TYPE_FOR_SQL.get(spec["sql_type"])
+            if expected is not None and not isinstance(value, expected):
+                raise SchemaGateError(
+                    f"field {name!r} expected {expected.__name__}, got {type(value).__name__}"
+                )
+            if expected is str and not nullable and value == "":
+                raise SchemaGateError(f"required input field {name!r} is empty")
+
+
+# ---------------------------------------------------------------------------
+# Table DDL -- CREATE + partition transforms BEFORE first write (post-ALTER-only, M-5)
+# ---------------------------------------------------------------------------
+
+_SCD2_COLUMNS = (
+    "ulid VARCHAR NOT NULL, "
+    "rec_id VARCHAR NOT NULL, "
+    "payload VARCHAR, "
+    "created_timestamp TIMESTAMP WITH TIME ZONE NOT NULL, "
+    "last_updated_timestamp TIMESTAMP WITH TIME ZONE NOT NULL"
+)
+
+
+def create_scd2_tables(con: Any, *, force_recreate: bool = False) -> None:
+    """Create the history + current smoke tables and apply partition transforms BEFORE first write.
+
+    Partition transforms are post-ALTER-only (CD.33 M-5): they MUST be applied before any row lands.
+    `force_recreate=True` drops both tables first (idempotent re-run of the table-DDL smoke path,
+    satisfying the Lambda `force_{param}` convention). Re-ALTER on an already-partitioned table is
+    idempotent in DuckLake 1.5.3, so the non-force path converges too.
+    """
+    history = f"{CATALOG_ALIAS}.{SMOKE_HISTORY_TABLE}"
+    current = f"{CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
+
+    if force_recreate:
+        con.execute(f"DROP TABLE IF EXISTS {history}")
+        con.execute(f"DROP TABLE IF EXISTS {current}")
+
+    con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({_SCD2_COLUMNS})")
+    con.execute(f"CREATE TABLE IF NOT EXISTS {current} ({_SCD2_COLUMNS})")
+
+    # Partition transforms BEFORE first write: history by day(created_timestamp) for date-range
+    # pruning; current by bucket(8, rec_id) to bound the single-key lookup/MERGE scan footprint.
+    con.execute(f"ALTER TABLE {history} SET PARTITIONED BY (day(created_timestamp))")
+    con.execute(f"ALTER TABLE {current} SET PARTITIONED BY (bucket(8, rec_id))")
+
+
+# ---------------------------------------------------------------------------
+# The shared write primitive -- history MERGE-on-ULID + current write-through, bounded OCC retry
+# ---------------------------------------------------------------------------
+
+_MERGE_HISTORY = (
+    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_HISTORY_TABLE} AS t "
+    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
+    "? AS last_updated_timestamp) AS s "
+    "ON t.ulid = s.ulid "
+    "WHEN NOT MATCHED THEN INSERT VALUES "
+    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
+)
+
+_MERGE_CURRENT = (
+    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} AS t "
+    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
+    "? AS last_updated_timestamp) AS s "
+    "ON t.rec_id = s.rec_id "
+    "WHEN MATCHED THEN UPDATE SET ulid = s.ulid, payload = s.payload, "
+    "last_updated_timestamp = s.last_updated_timestamp "
+    "WHEN NOT MATCHED THEN INSERT VALUES "
+    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
+)
+
+_SELECT_EXISTING_CREATED = (
+    f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} WHERE rec_id = ?"
+)
+
+
+def is_occ_collision(exc: Exception) -> bool:
+    """True if *exc* looks like an optimistic-concurrency / serialization collision (retryable)."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _OCC_COLLISION_MARKERS)
+
+
+def _occ_backoff(attempt: int, *, sleep: Callable[[float], None] = time.sleep) -> None:
+    """Sleep with exponential backoff + full jitter before the next OCC retry."""
+    ceiling = min(OCC_MAX_BACKOFF_S, OCC_BASE_BACKOFF_S * (2 ** (attempt - 1)))
+    sleep(random.uniform(0.0, ceiling))
+
+
+def write_scd2(
+    con: Any,
+    record: dict[str, Any],
+    *,
+    identity: WriteIdentity | None = None,
+    semantics: dict[str, Any] | None = None,
+    max_attempts: int = OCC_MAX_ATTEMPTS,
+    metric_sink: Optional[Callable[[str, float], None]] = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> WriteResult:
+    """Write one SCD2 record: history MERGE-on-ULID append + current write-through, one transaction.
+
+    Idempotency (CD.33 D-2): the ULID + timestamp are minted ONCE here, OUTSIDE the retry loop, and
+    reused on every attempt. MERGE-on-ULID de-duplicates the history append, so a retried write
+    never double-appends. `created_timestamp` is carried unchanged from the existing current row on
+    update, and minted (= identity.timestamp) on first insert -- never re-stamped.
+
+    Concurrency (CD.33): a serialization collision is retried with bounded backoff+jitter up to
+    `max_attempts`; exhaustion raises OCCRetryExhaustedError (loud-fail, Decision 55). A non-OCC
+    error propagates immediately -- never swallowed.
+
+    Emits OccRetryCount + CommitLatencyMs via `metric_sink` (EC9) when provided.
+    """
+    semantics = semantics if semantics is not None else load_field_semantics()
+    schema_gate(record, semantics)  # loud-fail before any catalog work
+
+    identity = identity if identity is not None else mint_write_identity()
+    rec_id = record["rec_id"]
+    payload = record.get("payload")
+
+    occ_retries = 0
+    start = time.perf_counter()
+    attempt = 0
+    created_ts: datetime = identity.timestamp
+
+    while True:
+        attempt += 1
+        try:
+            con.execute("BEGIN TRANSACTION")
+            existing = con.execute(_SELECT_EXISTING_CREATED, [rec_id]).fetchall()
+            created_ts = existing[0][0] if existing else identity.timestamp
+            params = [identity.ulid, rec_id, payload, created_ts, identity.timestamp]
+            con.execute(_MERGE_HISTORY, params)
+            con.execute(_MERGE_CURRENT, params)
+            con.execute("COMMIT")
+            break
+        except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
+            _safe_rollback(con)
+            if is_occ_collision(exc):
+                if attempt < max_attempts:
+                    occ_retries += 1
+                    _occ_backoff(attempt, sleep=sleep)
+                    continue
+                commit_ms = (time.perf_counter() - start) * 1000.0
+                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
+                raise OCCRetryExhaustedError(
+                    f"OCC retry budget exhausted after {attempt} attempts for rec_id={rec_id!r} "
+                    f"(ulid={identity.ulid}). Stop and RCA the contention (Decision 55) -- do NOT "
+                    "relax the budget."
+                ) from exc
+            raise  # non-OCC hard failure: loud-fail immediately
+
+    commit_ms = (time.perf_counter() - start) * 1000.0
+    _emit_write_metrics(metric_sink, occ_retries, commit_ms)
+    return WriteResult(
+        ulid=identity.ulid,
+        rec_id=rec_id,
+        occ_retries=occ_retries,
+        commit_ms=commit_ms,
+        created_timestamp=created_ts,
+        last_updated_timestamp=identity.timestamp,
+    )
+
+
+def _safe_rollback(con: Any) -> None:
+    """Roll back the current transaction, swallowing a 'no active transaction' error only."""
+    try:
+        con.execute("ROLLBACK")
+    except Exception:  # noqa: BLE001 -- rollback failure must not mask the original error
+        pass
+
+
+def _emit_write_metrics(
+    metric_sink: Optional[Callable[[str, float], None]], occ_retries: int, commit_ms: float
+) -> None:
+    """Emit the OccRetryCount + CommitLatencyMs metrics through the sink, if provided."""
+    if metric_sink is None:
+        return
+    metric_sink("OccRetryCount", float(occ_retries))
+    metric_sink("CommitLatencyMs", commit_ms)
+
+
+# ---------------------------------------------------------------------------
+# Read primitive
+# ---------------------------------------------------------------------------
+
+
+def read_current(
+    con: Any, *, rec_id: str | None = None, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """Return rows from the current write-through projection (latest version per rec_id).
+
+    `rec_id` filters to a single record (the bucket-partitioned single-key lookup). `limit` bounds
+    the row count. Returns a list of column-keyed dicts.
+    """
+    sql = (
+        "SELECT ulid, rec_id, payload, created_timestamp, last_updated_timestamp "
+        f"FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
+    )
+    params: list[Any] = []
+    if rec_id is not None:
+        sql += " WHERE rec_id = ?"
+        params.append(rec_id)
+    sql += " ORDER BY rec_id"
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    cursor = con.execute(sql, params) if params else con.execute(sql)
+    col_names = [desc[0] for desc in cursor.description]
+    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# CloudWatch metric emission (EC9)
+# ---------------------------------------------------------------------------
+
+
+def emit_metric(
+    name: str,
+    value: float,
+    *,
+    namespace: str = CLOUDWATCH_NAMESPACE,
+    unit: str = "None",
+    profile: str | None = None,
+    client: Any = None,
+) -> None:
+    """Emit a single CloudWatch metric datum. Best-effort: a metrics failure must not fail a write.
+
+    Pass `client` to inject a CloudWatch client (tests / a shared client). In the Lambda the ambient
+    execution-role credentials are used (no profile).
+    """
+    try:
+        if client is None:
+            import boto3  # noqa: PLC0415
+
+            from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+            session = boto3.Session(profile_name=resolve_aws_profile(profile))
+            client = session.client("cloudwatch")
+        client.put_metric_data(
+            Namespace=namespace,
+            MetricData=[{"MetricName": name, "Value": float(value), "Unit": unit}],
+        )
+    except Exception:  # noqa: BLE001 -- metrics are observability, never a write-blocking failure
+        pass
+
+
+def make_metric_sink(*, namespace: str = CLOUDWATCH_NAMESPACE, client: Any = None, profile: str | None = None) -> Callable[[str, float], None]:
+    """Build a metric_sink(name, value) closure for write_scd2 that emits to CloudWatch."""
+
+    def _sink(name: str, value: float) -> None:
+        unit = "Milliseconds" if name.endswith("Ms") else "Count"
+        emit_metric(name, value, namespace=namespace, unit=unit, client=client, profile=profile)
+
+    return _sink
