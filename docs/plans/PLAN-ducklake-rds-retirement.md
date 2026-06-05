@@ -124,7 +124,8 @@ Lambda-packaged (the `.tf`, the smoke test, and the ops portal are not bundled).
 
 ## Acceptance Criteria
 - [ ] `scripts.ducklake_neon_smoke_test --attach` prints `ATTACH OK rows=1` and `--churn-gate` prints
-      `CHURN_GATE PASS` against the live Neon catalog BEFORE any destroy step runs.
+      `CHURN_GATE PASS collision_rate=... p95_latency_ms=...` against the live Neon catalog BEFORE any destroy
+      step runs.
 - [ ] `terraform/personal/rds_ducklake_catalog.tf` is deleted; the 3 `ducklake_catalog_*` vars are removed from
       `variables.tf`; the live RDS instance `ducklake-catalog` is gone with `ducklake-catalog-final-snapshot`
       retained (`available`).
