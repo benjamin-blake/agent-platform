@@ -54,8 +54,18 @@ variable "agent_service_account_user_name" {
 # ---------------------------------------------------------------------------
 
 variable "ducklake_catalog_ingress_cidrs" {
-  description = "Allow-list of CIDR blocks permitted to reach the DuckLake catalog on 5432. No default -- supplied via gitignored terraform.personal.tfvars. Must NEVER include 0.0.0.0/0."
+  description = <<-EOT
+    Allow-list of CIDR blocks permitted to reach the DuckLake RDS catalog on 5432. Must NEVER include 0.0.0.0/0.
+
+    TEMPORARY DEFAULT (T2.16b / CD.34, Phase 1): the sandbox auto-apply workflow injects only 4 TF_VAR_* and
+    does not pull the gitignored tfvars, so a no-default value reds `terraform plan` in CI and blocks ALL
+    sandbox applies (the state on 2026-06-03 after the RDS merge). The default below EQUALS the currently
+    deployed value (pulled from state) so the RDS plans as a no-op -- a divergent value would show
+    ingress-rule deletes, which the Decision-77 guard fail-closes on. This whole variable is removed in
+    Phase 2 together with rds_ducklake_catalog.tf.
+  EOT
   type        = list(string)
+  default     = ["20.0.202.217/32"]
 
   validation {
     condition     = length(var.ducklake_catalog_ingress_cidrs) > 0
@@ -78,4 +88,26 @@ variable "ducklake_catalog_instance_class" {
   description = "RDS instance class for the DuckLake catalog. db.t4g.micro is the Decision-78 baseline (burstable ARM, ~$12/mo single-AZ)."
   type        = string
   default     = "db.t4g.micro"
+}
+
+# ---------------------------------------------------------------------------
+# DuckLake catalog -- Neon serverless Postgres backend (T2.16b / CD.34, pending).
+#
+# The Neon provider API key is NOT a variable: the provider reads it from a Secrets Manager secret
+# (`neon-api-key`) created out-of-band in Phase 0 (see neon_ducklake_catalog.tf). Making it a var
+# would either commit a literal or, if Terraform-managed, create a provider->resource cycle.
+#
+# There is no neon_org_id: this is a personal Neon account (no organization).
+#
+# There is no neon_catalog_allowed_ips: Neon IP-Allow is a Scale-plan feature (unavailable on the
+# free tier this migration targets) and egress here is dynamic (CC-web + GitHub-hosted runners +
+# Lambda), so no static allow-list is maintainable. The free-tier posture rests on compensating
+# controls -- enforced TLS (sslmode=require) + a scoped non-owner neon_role + the DSN in Secrets
+# Manager -- and the Neon-aware apply guard fail-closes on any neon_* update/replace/delete.
+# ---------------------------------------------------------------------------
+
+variable "neon_region_id" {
+  description = "Neon region_id for the DuckLake catalog project. Default aws-eu-west-2 (Neon AWS Europe/London) co-locates with the eu-west-2 data lake. Verified against Neon's supported-regions list at implementation time."
+  type        = string
+  default     = "aws-eu-west-2"
 }

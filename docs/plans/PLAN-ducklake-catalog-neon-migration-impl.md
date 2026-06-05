@@ -23,6 +23,37 @@ Sequenced before T2.17/T2.18/T2.19 (all `not_started`). Authored by `docs/REPORT
 
 ## Scope
 
+> **Implementation Reconciliation (2026-06-05) -- BINDING; overrides the plan body where they conflict.**
+> Applied from the human's verified corrections + facts checked live this session:
+> 1. **Neon API key from Secrets Manager, not a var.** No `var.neon_api_key`. The provider reads
+>    `data.aws_secretsmanager_secret_version.neon_api_key` (`secret_id = "neon-api-key"`), an out-of-band
+>    secret (NOT Terraform-managed -- avoids a provider->resource cycle). Supersedes the plan's
+>    `var.neon_api_key`, **Step 6 (workflow edit) is DROPPED, VP-5 is DROPPED, Acceptance-criterion-3 is DROPPED.**
+> 2. **No org.** Personal Neon account -- `neon_org_id` is NOT added and NOT set on `neon_project`.
+> 3. **`neon_region_id` = `aws-eu-west-2`** (verified: Neon's London region is exactly `aws-eu-west-2`).
+> 4. **Gap 1 fix (sandbox pipeline already RED on main):** `ducklake_catalog_ingress_cidrs` gets a temporary
+>    `default = ["20.0.202.217/32"]` (equals deployed state -> RDS plans as a no-op). Removed entirely in Phase 2.
+>    **Phase 1 touches the workflow zero times** -- the 4 existing `TF_VAR_*` suffice (key via SM, CIDR via default).
+> 5. **Gap 2/3 fix (CI apply role can't create the DSN secret / IAM-sensitive grant):** a one-time **Phase 0**
+>    (manual, admin container, BEFORE Phase 1 merges): (a) `aws secretsmanager create-secret --name neon-api-key`
+>    out-of-band; (b) add a scoped `secretsmanager` statement to `aws_iam_role_policy.github_ci_apply`
+>    (`terraform/personal/oidc.tf`) on the DSN secret ARN (`...:secret:ducklake-neon-catalog-dsn-*`) + read on
+>    `...:secret:neon-api-key-*`; (c) `terraform apply -target=aws_iam_role_policy.github_ci_apply`. The plan's
+>    "No new AWS IAM is required for Phase 1" line is WRONG for the CI apply role -- corrected here.
+> 6. **R3 resolved (human decision: compensating controls, drop var):** Neon IP-Allow is Scale-plan-only
+>    (verified) so unavailable on the free tier, and egress is dynamic -- no static allow-list is feasible.
+>    So **`neon_catalog_allowed_ips` is NOT added**, `allowed_ips` is omitted in the `.tf`, and the Neon-aware
+>    guard rule is: **block any `neon_*` update/replace/delete; ALLOW a `neon_*` create** on the strength of
+>    compensating controls (TLS `sslmode=require` + scoped non-owner `neon_role` + DSN in Secrets Manager).
+>    Supersedes the plan's "block a create with missing/empty/public allow-list" rule and **revises VP-1 +
+>    Acceptance-criterion-2** accordingly. CD.34 + T2.16b are revised to this posture in the same change.
+> 7. **`required_providers`:** Terraform allows ONE block per module, so the `kislerdm/neon` pin lives in
+>    `terraform/personal/main.tf` (not a second `terraform{}` block in `neon_ducklake_catalog.tf`). The committed
+>    `.terraform.lock.hcl` pins aws 5.100.0 + null 3.3.0 + neon 0.13.0 (linux_amd64 + darwin_amd64 + darwin_arm64).
+> 8. **This PR = Phase 0 code + Phase 1 only.** Phase 2 (RDS destroy + `ducklake_catalog_*` var removal +
+>    `PlatformDuckLakeCatalogProvisioning` removal) is a SEPARATE later change, gated on the live post-deploy
+>    VP 7-10 passing (Neon proven), per the plan's own sequencing.
+
 **Posture decided by the human (2026-06-04), revising CD.34's pending text:** the Neon Terraform provider is
 **INCLUDED** in the Decision-77 sandbox auto-apply pipeline (NOT human-gated / NOT carved out). To make that
 safe, `terraform_apply_guard.py` is extended to be Neon-aware (policy-as-code parity for the new provider).
@@ -61,9 +92,12 @@ Dispositioned by this migration (not separately implemented):
 ## Infrastructure Dependencies
 **Created (Phase 1, auto-applies):** `neon_project`, `neon_database` (`ducklake_ops`), `neon_role` (scoped),
 the project IP allow-list, `aws_secretsmanager_secret` + `_version` (Neon DSN). The Neon provider authenticates
-via `var.neon_api_key` (CI: `TF_VAR_NEON_API_KEY` GitHub secret; local human apply: gitignored
-`terraform.personal.tfvars` or env). No new AWS IAM is required for Phase 1 -- AdminOps already grants
-`secretsmanager` create/get/put/describe.
+from a Secrets Manager secret (`neon-api-key`, out-of-band; Reconciliation #1) -- NOT a `var`/GitHub secret.
+**Correction (Reconciliation #5 / Gap 2):** Phase 1 DOES require new AWS IAM -- the CI apply role
+(`agent-platform-github-ci-apply`) has no `secretsmanager` permissions, so it cannot create the DSN secret.
+Phase 0 adds a scoped `secretsmanager` statement to that role (`oidc.tf`) and applies it manually with
+`-target` before Phase 1 merges. (The plan's original "AdminOps already grants secretsmanager" reasoned about
+the manual admin role, not the CI apply role.)
 
 **Destroyed (Phase 2, human-gated):** `aws_db_instance.ducklake_catalog` (final snapshot retained),
 `aws_db_subnet_group.ducklake_catalog`, `aws_security_group.ducklake_catalog` + its ingress/egress rules,
@@ -105,11 +139,12 @@ the workflow are not bundled).
 - [ ] `terraform/personal/neon_ducklake_catalog.tf` declares the pinned Neon provider + `neon_project` +
       `neon_database` `ducklake_ops` + scoped `neon_role` + a non-public IP allow-list + the Secrets Manager
       DSN secret; `terraform validate` succeeds.
-- [ ] `terraform_apply_guard.py` fail-closes (exit 2) on a `neon_*` update/replace and on a create with an
-      open/empty allow-list, passes (exit 0) a restrictive-allow-list `neon_*` create, and is byte-for-byte
-      unchanged in its `aws_` verdicts (regression suite green).
-- [ ] `.github/workflows/terraform-apply-sandbox.yml` exports `TF_VAR_neon_api_key` and asserts it present
-      (fail-closed) before `terraform plan`.
+- [ ] `terraform_apply_guard.py` fail-closes (exit 2) on a `neon_*` update/replace/delete, passes (exit 0) a
+      `neon_*` create/no-op/read (compensating-controls posture per Reconciliation #6 -- no allow-list rule),
+      and is unchanged in its `aws_` verdicts (regression suite green).
+- [ ] ~~`.github/workflows/terraform-apply-sandbox.yml` exports `TF_VAR_neon_api_key`~~ -- **DROPPED**
+      (Reconciliation #1/#4): the key is in Secrets Manager and the CIDR resolves via its temporary default,
+      so Phase 1 does not touch the workflow.
 - [ ] `migrations/ducklake_ops_schema.sql` exists and creates the `ducklake_ops` schema.
 - [ ] `scripts/ducklake_neon_smoke_test.py` exposes `--attach` / `--churn-gate` / `--restore-drill`; its test
       file gives 100% coverage with all network mocked.
@@ -123,11 +158,11 @@ the workflow are not bundled).
 ## Verification Plan
 | # | Phase | Action | Command | Expected Outcome | Fix If |
 |---|-------|--------|---------|------------------|--------|
-| 1 | [pre-deploy] | Guard: Neon fail-closed + `aws_` no-regression | `bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q` | all pass incl. neon update/replace/open-allow-list -> BLOCK, restrictive create -> OK, `aws_` cases unchanged | guard doesn't fail-closed on a `neon_*` update or regresses an `aws_` verdict |
+| 1 | [pre-deploy] | Guard: Neon fail-closed + `aws_` no-regression | `bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q` | all pass incl. neon update/replace/delete -> BLOCK, neon create/no-op/read -> OK (compensating-controls posture per Reconciliation #6), `aws_` cases unchanged | guard doesn't fail-closed on a `neon_*` update or regresses an `aws_` verdict |
 | 2 | [pre-deploy] | Smoke-test module unit-tested at 100% | `bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -q && bin/venv-python -m scripts.test_coverage_checker` | tests pass; coverage check OK | un-mocked network call or uncovered branch |
 | 3 | [pre-deploy] | Roadmap schema validates with revised CD.34 + T2.16b | `bin/venv-python -m scripts.platform_roadmap` | prints `PASS` (CD.34 + T2.16b resolve) | schema / referential error in the revised entries |
 | 4 | [pre-deploy] | Roadmap posture FULLY flipped (every stale variant gone + new wording present) | `[ "$(grep -ciE 'excluded from .{0,15}decision-77' docs/ROADMAP-PLATFORM.yaml)" = "0" ] && grep -qE "Neon-aware" docs/ROADMAP-PLATFORM.yaml && echo POSTURE_OK` | prints `POSTURE_OK` | ANY `excluded from ...Decision-77` variant survives (catches "the"/"sandbox"/no-article forms at the CD.34 detail/discipline_points/enforcement_mechanism + T2.16b intent/comment/exit lines), or the new Neon-aware-guard wording is absent. Also manually confirm no Neon-clause `human-gated` text remains while PRESERVING the legitimate Phase-2 RDS-destroy `human-gated (Decision 35)` usage |
-| 5 | [pre-deploy] | Workflow supplies + asserts the Neon key | `grep -q "TF_VAR_neon_api_key" .github/workflows/terraform-apply-sandbox.yml && grep -q "TF_VAR_neon_api_key:?" .github/workflows/terraform-apply-sandbox.yml && echo WORKFLOW_OK` | prints `WORKFLOW_OK` | env var or fail-closed assertion missing |
+| 5 | ~~DROPPED~~ | ~~Workflow supplies + asserts the Neon key~~ | n/a | **DROPPED (Reconciliation #1/#4):** the key comes from Secrets Manager, not `TF_VAR_neon_api_key`; the CIDR resolves via its temporary default. Phase 1 touches the workflow zero times -- the 4 existing `TF_VAR_*` suffice. | n/a |
 | 6 | [pre-deploy] | Terraform fmt + validate (providers resolved) | `cd terraform/personal && terraform fmt -check -recursive && terraform init -input=false -backend=false && terraform validate` | `Success! The configuration is valid.` | HCL/provider/resource error; pin/lockfile missing |
 | 7 | [post-deploy] | Neon DuckDB ATTACH round-trip (the V3 proof) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --attach` | prints `ATTACH OK rows=1` against the Neon direct endpoint (sslmode=require, SNI, pinned DuckDB) | SNI/sslmode/secret/endpoint/`META_SCHEMA` option wrong |
 | 8 | [post-deploy] | Connection-churn / OCC gate (hard) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate` | prints `CHURN_GATE PASS` (collision rate + commit latency incl. cold-resume within CD.33's OCC budget) | exceeds budget -> implement an app-side pool, re-run (do NOT silently relax the threshold) |

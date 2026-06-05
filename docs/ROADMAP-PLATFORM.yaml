@@ -1385,7 +1385,8 @@ candidate_decisions:
     detail: |
       Narrowly amends the CD.31 / Decision 78 catalog-backend paragraph ("a dedicated micro RDS PostgreSQL
       instance") from RDS PostgreSQL to Neon serverless Postgres (free tier), provisioned via the Terraform
-      Neon provider (human-gated; excluded from the Decision-77 sandbox auto-apply guard), with the Lambda
+      Neon provider (auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard +
+      subagent review -- NOT carved out), with the Lambda
       connection string held in AWS Secrets Manager. Everything else in Decision 78 / CD.31 is preserved:
       DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the catalog-as-metadata-store framing,
       and the closed read/write boundary. Motivated by cost -- the micro RDS is the largest live AWS line
@@ -1420,9 +1421,9 @@ candidate_decisions:
       - "Inlining DISABLED for ALL tables including telemetry (inlined_rows=0), overriding the telemetry carve-out in CD.33 clause (5) + OQ.11 -- a durability decision on Neon's ~6h free-tier PITR, NOT an architecture change. High-write-rate tables get a higher-frequency merge; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate."
       - "Supersedes OQ.8's RDS-Proxy/IAM-auth-preferred resolution: RDS Proxy (never provisioned; deferrable per OQ.8) -> Neon built-in pooler (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget); credential = Secrets Manager DSN (IAM DB auth is N/A against a non-AWS endpoint). Realized saving ~$12-15/mo; the +$10-12 RDS-Proxy figure was conditional, not bankable."
       - "Catalog is the lakehouse SPOF; on Neon free tier (~6h PITR) DR = a daily pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, >25h freshness alarm) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR -- rec-2063 WONTFIX while the catalog is provably unused), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
-      - "Provisioned via the Terraform Neon provider in terraform/personal/, EXPLICITLY excluded from the Decision-77 auto-apply guard (human-gated apply) -- keeps declarative state/audit for the lakehouse's single most critical stateful dependency rather than console-only. The out-of-band ducklake_ops schema DDL is captured as a versioned in-repo migration for reproducibility."
+      - "Provisioned via the Terraform Neon provider in terraform/personal/, auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (policy-as-code parity for the new provider; NOT carved out). The guard blocks any neon_* update/replace/delete (the mutation surface -- allow-list widening, credential rotation, project deletion) and allows a neon_* create on the strength of compensating controls -- enforced TLS (sslmode=require) + a scoped non-owner neon_role + the DSN in Secrets Manager -- NOT an IP allow-list (Neon IP-Allow is Scale-plan-only, unavailable on the free tier, and egress here is dynamic; REPORT R3). Keeps declarative state/audit for the lakehouse's single most critical stateful dependency rather than console-only. The out-of-band ducklake_ops schema DDL is captured as a versioned in-repo migration for reproducibility."
       - "The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED; only the catalog backend + its consequential recovery/pooling mechanics change."
-    enforcement_mechanism: "Terraform Neon provider (human-gated, excluded from Decision-77 auto-apply) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot; ratified via Decision 82."
+    enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via Decision 82."
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -3343,23 +3344,33 @@ tier_items:
     intent: |
       Migrate the DuckLake catalog backend from the T2.16 RDS PostgreSQL instance to Neon serverless Postgres
       (free tier) per CD.34, BEFORE the T2.17 Lambda runtime is built against an RDS-in-a-VPC posture.
-      Provision a Neon project (AWS region nearest eu-west-2) via the Terraform Neon provider (human-gated;
-      excluded from the Decision-77 auto-apply guard); create the ducklake_ops database; store the Neon DSN in
+      Provision a Neon project (Neon region aws-eu-west-2, co-located with the eu-west-2 data lake) via the
+      Terraform Neon provider (auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed
+      guard + subagent review); create the ducklake_ops database; store the Neon DSN in
       Secrets Manager; validate a DuckDB ATTACH round-trip (sslmode=require, SNI, pooled-vs-direct endpoint);
       pass the connection-churn gate and a tested pg_dump+restore drill; then retire the RDS instance with a
       final snapshot. Nothing consumes the catalog yet (live ops are Iceberg/Athena until T2.19), so present
-      blast radius is zero. Terraform apply is human-gated (Decision 35); the RDS destroy trips the Decision-77
-      fail-closed guard onto the manual agent_platform_admin path. Authored by
+      blast radius is zero. The Neon provision auto-applies behind the Neon-aware guard (which blocks any
+      neon_* update/replace/delete and allows a create on compensating controls -- TLS + scoped neon_role +
+      Secrets Manager DSN, no IP allow-list); the RDS destroy (Phase 2) stays human-gated (Decision 35) -- it
+      trips the Decision-77 fail-closed guard onto the manual agent_platform_admin path. A one-time Phase 0
+      (manual, admin container) precedes Phase 1: create the out-of-band neon-api-key secret + grant the CI
+      apply role secretsmanager rights (oidc.tf) and apply that IAM statement with -target. Authored by
       docs/REPORT-ducklake-catalog-neon-migration.md.
     depends_on: [T2.16]
     files_in_scope:
-      - terraform/personal/neon_ducklake_catalog.tf    # new -- Neon project/role/database/IP-allowlist via the Terraform Neon provider; excluded from Decision-77 auto-apply
-      - terraform/personal/rds_ducklake_catalog.tf      # deleted on retirement
-      - terraform/personal/variables.tf                 # ducklake_catalog_* vars removed; Neon provider vars added
-      - terraform/personal/platform_roles.tf            # PlatformDuckLakeCatalogProvisioning RDS/snapshot/kms grant removed (closes rec-2065/2066)
-      - migrations/ducklake_ops_schema.sql              # new -- captures the out-of-band ducklake_ops schema DDL for reproducibility
+      - terraform/personal/neon_ducklake_catalog.tf    # new (Phase 1) -- Neon project/scoped role/database + Secrets Manager DSN via the Terraform Neon provider; auto-applied behind the Neon-aware Decision-77 guard (no IP allow-list -- compensating controls)
+      - terraform/personal/main.tf                      # Phase 1 -- kislerdm/neon pin added to required_providers (one block per module)
+      - terraform/personal/.terraform.lock.hcl          # new (Phase 1) -- committed lockfile pinning the third-party neon provider checksums (supply-chain control)
+      - terraform/personal/oidc.tf                       # Phase 0 -- scoped secretsmanager grant on the CI apply role (DSN secret + neon-api-key read); applied manually with -target before Phase 1 merges
+      - scripts/terraform_apply_guard.py                 # Phase 1 -- Neon-aware fail-closed policy (block any neon_* update/replace/delete; allow create)
+      - scripts/ducklake_neon_smoke_test.py              # new (Phase 1) -- --attach/--churn-gate/--restore-drill live gates
+      - migrations/ducklake_ops_schema.sql              # new (Phase 1) -- captures the out-of-band ducklake_ops schema DDL for reproducibility
+      - terraform/personal/variables.tf                 # Phase 1 adds neon_region_id + a temporary ducklake_catalog_ingress_cidrs default (sandbox-workflow no-default fix); Phase 2 removes the ducklake_catalog_* vars
+      - terraform/personal/rds_ducklake_catalog.tf      # deleted on retirement (Phase 2)
+      - terraform/personal/platform_roles.tf            # PlatformDuckLakeCatalogProvisioning RDS/snapshot/kms grant removed (Phase 2; closes rec-2065/2066)
     exit_criteria:
-      - "Neon project provisioned via the Terraform Neon provider (declarative state); ducklake_ops reachable; DuckDB ATTACH + SELECT 1 succeeds with sslmode=require and SNI on the pinned DuckDB version (CD.34)"
+      - "Neon project provisioned via the Terraform Neon provider (declarative state), auto-applied via the Decision-77 sandbox pipeline behind the Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, NOT an IP allow-list since Neon IP-Allow is Scale-plan-only and egress is dynamic); ducklake_ops reachable; DuckDB ATTACH + SELECT 1 succeeds with sslmode=require and SNI on the pinned DuckDB version (CD.34)"
       - "Connection-churn gate (hard): the smoke test measures per-invocation connection-establishment overhead + OCC-collision rate under a concurrent-writer burst on the direct endpoint; pass = churn + commit latency within CD.33's OCC-retry budget OR an app-side pool implemented (replaces the deferred RDS Proxy; OQ.8/O-5)"
       - "Catalog writes use the direct (unpooled) endpoint (DuckLake multi-statement txns vs transaction-mode pooling); the pooled endpoint is used only if proven transaction-safe, else read-paths only"
       - "Neon DSN stored in Secrets Manager; Lambda runtime-fetch validated (Decision 37); a quarterly calendar-reminded rotation cadence defined (the Neon static password does not auto-rotate like the RDS-managed secret)"
@@ -3370,7 +3381,8 @@ tier_items:
     related_candidate_decisions: [CD.34]
     effort: M
     strategic: false
-    status: not_started
+    status: in_progress
+    progress_note: "2026-06-05: Phase 0+1 shipped -- kislerdm/neon provider + project (aws-eu-west-2) + scoped ducklake_ops role/database + Secrets Manager DSN (terraform/personal/neon_ducklake_catalog.tf, lockfile pinned), Neon-aware apply guard (blocks neon_* update/replace/delete, allows create on compensating controls), ducklake_ops migration DDL, smoke-test CLI (--attach/--churn-gate/--restore-drill, 100% mocked cov), CD.34/T2.16b posture revised to auto-apply-included. Phase 0 oidc.tf CI-apply-role secretsmanager grant added. Schema-DDL-captured exit-criterion met; live Neon apply + RDS retirement (Phase 2) pending."
 
   - id: T2.17
     tier: T2

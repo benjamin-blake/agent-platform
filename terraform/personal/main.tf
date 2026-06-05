@@ -18,6 +18,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Third-party Neon provider for the DuckLake catalog (T2.16b / CD.34). Pinned to an exact
+    # published version; checksums committed in .terraform.lock.hcl (supply-chain control). Terraform
+    # allows only ONE required_providers block per module, so the Neon pin lives here rather than in
+    # neon_ducklake_catalog.tf. Verify the version on the Terraform Registry before bumping.
+    neon = {
+      source  = "kislerdm/neon"
+      version = "0.13.0"
+    }
   }
   # S3 backend with native state locking (use_lockfile). The data-lake bucket was bootstrapped
   # under the prior local backend, so the chicken-and-egg that motivated "local" no longer holds.

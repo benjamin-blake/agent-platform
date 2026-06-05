@@ -425,6 +425,41 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "iam:TagOpenIDConnectProvider"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"]
+      },
+      {
+        # DuckLake Neon catalog DSN secret (T2.16b / CD.34): the apply role creates + manages the
+        # Secrets Manager secret holding the assembled Neon DSN (neon_ducklake_catalog.tf). NOTE the
+        # "-*" suffix -- Secrets Manager appends a random 6-char suffix to every secret ARN, so a
+        # name-prefix ARN must end in "-*". aws_secretsmanager_secret is NOT in the guard's
+        # IAM_SENSITIVE_TYPES, so this create returns guard exit 0 and auto-applies. DescribeSecret /
+        # GetResourcePolicy are refresh-time reads the AWS provider issues on every plan -- do not
+        # prune them as "unused" (the glue:GetTags / dynamodb:Describe* convention above).
+        Sid    = "SecretsManagerDuckLakeNeonDSN"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:GetResourcePolicy",
+          "secretsmanager:TagResource",
+          "secretsmanager:UntagResource"
+        ]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:ducklake-neon-catalog-dsn-*"]
+      },
+      {
+        # Neon provider API key secret (created out-of-band in Phase 0). The apply role reads it at
+        # plan + apply time to initialise the Neon provider (the
+        # data.aws_secretsmanager_secret_version.neon_api_key data source in neon_ducklake_catalog.tf).
+        # Read-only -- the key's lifecycle is human-owned, not Terraform-managed.
+        Sid    = "SecretsManagerNeonAPIKeyRead"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
       }
     ]
   })

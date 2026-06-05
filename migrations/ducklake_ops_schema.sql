@@ -1,0 +1,30 @@
+-- DuckLake operational catalog -- Neon Postgres metadata schema (T2.16b / CD.34, pending).
+--
+-- Captures the previously out-of-band `ducklake_ops` metadata-schema DDL so the Neon catalog
+-- provisioning here -- and any fresh-provision rollback -- is reproducible, not tribal. The prior
+-- RDS catalog created this schema out-of-band (not version-controlled); this file is its canonical,
+-- version-controlled source.
+--
+-- WHAT THIS IS: DuckLake stores its catalog metadata (table / version / snapshot pointers, and -- with
+-- inlining disabled per CD.34 -- nothing else) in a Postgres SCHEMA inside the catalog database. The
+-- schema name is supplied to DuckDB via the META_SCHEMA option on ATTACH. By convention this schema is
+-- `ducklake_ops`, and it lives inside the Neon database also named `ducklake_ops` (the database and the
+-- META_SCHEMA share the name; META_SCHEMA names the schema, not the database).
+--
+-- ATTACH CONTRACT (the form the T2.16b smoke test + the T2.17 Lambda runtime use; run against the Neon
+-- DIRECT (unpooled) endpoint over TLS, sslmode=require, with SNI on the pinned DuckDB version):
+--
+--   ATTACH 'ducklake:postgres:dbname=ducklake_ops host=<neon-direct-host> user=ducklake_ops
+--           password=<from-secrets-manager> sslmode=require'
+--     AS ops_catalog (DATA_PATH 's3://agent-platform-data-lake/ducklake/', META_SCHEMA 'ducklake_ops');
+--
+-- The Terraform Neon provider creates the project / scoped role / database but cannot execute SQL, so
+-- this schema is created post-provision: either by the first DuckLake ATTACH when the role holds CREATE,
+-- or by running this file explicitly against the `ducklake_ops` database. Creating it explicitly is the
+-- reproducible path and removes any dependence on first-ATTACH side effects.
+--
+-- RUN:
+--   psql "postgresql://ducklake_ops:<password>@<neon-direct-host>/ducklake_ops?sslmode=require" \
+--     -f migrations/ducklake_ops_schema.sql
+
+CREATE SCHEMA IF NOT EXISTS ducklake_ops;
