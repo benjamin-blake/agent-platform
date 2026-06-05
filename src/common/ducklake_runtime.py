@@ -88,9 +88,7 @@ _OCC_COLLISION_MARKERS = (
 CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
 
 _FIELD_SEMANTICS_ENV = "DUCKLAKE_FIELD_SEMANTICS_PATH"
-_DEFAULT_FIELD_SEMANTICS_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "lambda" / "ducklake" / "field_semantics.yaml"
-)
+_DEFAULT_FIELD_SEMANTICS_PATH = Path(__file__).resolve().parents[2] / "config" / "lambda" / "ducklake" / "field_semantics.yaml"
 
 # SQL-type -> Python type for the schema gate's input-field validation.
 _PY_TYPE_FOR_SQL: dict[str, type] = {
@@ -221,10 +219,7 @@ def libpq_conninfo(dsn: dict[str, str]) -> str:
     Terraform-written secret always sets it; this is defence in depth).
     """
     sslmode = dsn.get("sslmode") or "require"
-    return (
-        f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} "
-        f"password={dsn['password']} sslmode={sslmode}"
-    )
+    return f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} password={dsn['password']} sslmode={sslmode}"
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +276,7 @@ def open_connection(
 
     conninfo = libpq_conninfo(dsn)
     con.execute(
-        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} "
-        f"(DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
+        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
     )
     return con
 
@@ -331,9 +325,7 @@ def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None)
         if spec is None:
             raise SchemaGateError(f"unknown field {key!r}: not in the field-semantics contract")
         if spec["role"] == "derived":
-            raise SchemaGateError(
-                f"field {key!r} is derived: the runtime mints it; the caller must not supply it"
-            )
+            raise SchemaGateError(f"field {key!r} is derived: the runtime mints it; the caller must not supply it")
 
     for name, spec in fields.items():
         if spec["role"] != "input":
@@ -346,9 +338,7 @@ def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None)
         if present and value is not None:
             expected = _PY_TYPE_FOR_SQL.get(spec["sql_type"])
             if expected is not None and not isinstance(value, expected):
-                raise SchemaGateError(
-                    f"field {name!r} expected {expected.__name__}, got {type(value).__name__}"
-                )
+                raise SchemaGateError(f"field {name!r} expected {expected.__name__}, got {type(value).__name__}")
             if expected is str and not nullable and value == "":
                 raise SchemaGateError(f"required input field {name!r} is empty")
 
@@ -414,9 +404,7 @@ _MERGE_CURRENT = (
     "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
 )
 
-_SELECT_EXISTING_CREATED = (
-    f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} WHERE rec_id = ?"
-)
+_SELECT_EXISTING_CREATED = f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} WHERE rec_id = ?"
 
 
 def is_occ_collision(exc: Exception) -> bool:
@@ -513,9 +501,7 @@ def _safe_rollback(con: Any) -> None:
         pass
 
 
-def _emit_write_metrics(
-    metric_sink: Optional[Callable[[str, float], None]], occ_retries: int, commit_ms: float
-) -> None:
+def _emit_write_metrics(metric_sink: Optional[Callable[[str, float], None]], occ_retries: int, commit_ms: float) -> None:
     """Emit the OccRetryCount + CommitLatencyMs metrics through the sink, if provided."""
     if metric_sink is None:
         return
@@ -528,18 +514,13 @@ def _emit_write_metrics(
 # ---------------------------------------------------------------------------
 
 
-def read_current(
-    con: Any, *, rec_id: str | None = None, limit: int | None = None
-) -> list[dict[str, Any]]:
+def read_current(con: Any, *, rec_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     """Return rows from the current write-through projection (latest version per rec_id).
 
     `rec_id` filters to a single record (the bucket-partitioned single-key lookup). `limit` bounds
     the row count. Returns a list of column-keyed dicts.
     """
-    sql = (
-        "SELECT ulid, rec_id, payload, created_timestamp, last_updated_timestamp "
-        f"FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
-    )
+    sql = f"SELECT ulid, rec_id, payload, created_timestamp, last_updated_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
     params: list[Any] = []
     if rec_id is not None:
         sql += " WHERE rec_id = ?"
@@ -587,7 +568,9 @@ def emit_metric(
         pass
 
 
-def make_metric_sink(*, namespace: str = CLOUDWATCH_NAMESPACE, client: Any = None, profile: str | None = None) -> Callable[[str, float], None]:
+def make_metric_sink(
+    *, namespace: str = CLOUDWATCH_NAMESPACE, client: Any = None, profile: str | None = None
+) -> Callable[[str, float], None]:
     """Build a metric_sink(name, value) closure for write_scd2 that emits to CloudWatch."""
 
     def _sink(name: str, value: float) -> None:

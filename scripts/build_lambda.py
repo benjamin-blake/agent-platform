@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+# complexity-waiver: decision-43 -- build orchestrator: prod (data-pipeline/ops-compaction) + the T2.17
+# DuckLake build path (2 function zips + deps + extensions layer builders) legitimately exceed 500 SLOC.
 """Build Lambda deployment packages for the data pipeline (no Docker required).
 
-Creates two zip artifacts:
+Creates these zip artifacts:
   1. data-pipeline.zip             -- application code (manifest-driven)
   2. ops-compaction.zip            -- minimal ops compaction handler
   3. data-pipeline-deps-layer.zip  -- dependencies layer (yfinance, pyyaml, etc.)
+  4. ducklake-{writer,reader}.zip  -- T2.17 DuckLake runtime functions (--ducklake-only)
+  5. ducklake-{deps,extensions}-layer.zip -- duckdb==1.5.3 + baked extensions (--ducklake-only)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
 whole-src/whole-config copytrees (Decision 79 / CD.24).
@@ -286,13 +290,22 @@ def build_ducklake_deps_layer(temp_dir: Path) -> Path:
     # tags newest-first so each dep resolves to its best available wheel.
     pip_result = subprocess.run(
         [
-            sys.executable, "-m", "pip", "install",
-            "--requirement", str(req_file),
-            "--target", str(site_packages),
-            "--platform", "manylinux_2_28_x86_64",
-            "--platform", "manylinux2014_x86_64",
-            "--implementation", "cp",
-            "--python-version", "3.12",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--requirement",
+            str(req_file),
+            "--target",
+            str(site_packages),
+            "--platform",
+            "manylinux_2_28_x86_64",
+            "--platform",
+            "manylinux2014_x86_64",
+            "--implementation",
+            "cp",
+            "--python-version",
+            "3.12",
             "--only-binary=:all:",
             "--quiet",
         ],
@@ -343,7 +356,10 @@ def _try_s3_extension(bucket: str, stem: str, profile: str, region: str) -> byte
         dest = Path(td) / f"{stem}.duckdb_extension"
         result = subprocess.run(
             ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, "--profile", profile],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0 and dest.exists():
             return dest.read_bytes()
@@ -557,9 +573,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
 
         print("[2/4] Building ducklake-deps + ducklake-extensions layers...")
         deps_layer = build_ducklake_deps_layer(temp_dir)
-        ext_layer = build_ducklake_extensions_layer(
-            temp_dir, bucket=bucket, profile=args.profile, region=args.region
-        )
+        ext_layer = build_ducklake_extensions_layer(temp_dir, bucket=bucket, profile=args.profile, region=args.region)
         print(f"  OK ducklake-deps-layer.zip ({round(deps_layer.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-extensions-layer.zip ({round(ext_layer.stat().st_size / 1024 / 1024, 2)} MB)")
 

@@ -516,7 +516,8 @@ def test_function_url_from_env(monkeypatch):
 def test_function_url_from_terraform(monkeypatch):
     monkeypatch.delenv(smoke.READER_URL_ENV, raising=False)
     monkeypatch.setattr(
-        smoke.subprocess, "run",
+        smoke.subprocess,
+        "run",
         lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="https://reader.url\n", stderr=""),
     )
     assert smoke._function_url("reader") == "https://reader.url"
@@ -624,19 +625,33 @@ def test_lambda_idempotency_fails(monkeypatch):
 
 
 def test_lambda_partition_ok(monkeypatch, capsys):
-    _patch_gate(monkeypatch, {
-        "history_pruned": True, "history_files_scanned": 1, "history_total": 3,
-        "current_partitions_scanned": 1, "current_files_scanned": 1, "current_total": 4,
-    })
+    _patch_gate(
+        monkeypatch,
+        {
+            "history_pruned": True,
+            "history_files_scanned": 1,
+            "history_total": 3,
+            "current_partitions_scanned": 1,
+            "current_files_scanned": 1,
+            "current_total": 4,
+        },
+    )
     smoke.lambda_partition()
     assert "PARTITION OK history_pruned=true" in capsys.readouterr().out
 
 
 def test_lambda_partition_fails(monkeypatch):
-    _patch_gate(monkeypatch, {
-        "history_pruned": False, "history_files_scanned": 3, "history_total": 3,
-        "current_partitions_scanned": 2, "current_files_scanned": 4, "current_total": 4,
-    })
+    _patch_gate(
+        monkeypatch,
+        {
+            "history_pruned": False,
+            "history_files_scanned": 3,
+            "history_total": 3,
+            "current_partitions_scanned": 2,
+            "current_files_scanned": 4,
+            "current_total": 4,
+        },
+    )
     with pytest.raises(smoke.SmokeTestFailure, match="PARTITION FAIL"):
         smoke.lambda_partition()
 

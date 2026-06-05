@@ -82,9 +82,15 @@ def test_handler_attach_check(monkeypatch):
 def test_handler_read_current(monkeypatch):
     con = FakeCon()
     monkeypatch.setattr(h, "_open_reader_connection", lambda: con)
-    rows = [{"ulid": "01A", "rec_id": "rec-1", "payload": "p",
-             "created_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc),
-             "last_updated_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)}]
+    rows = [
+        {
+            "ulid": "01A",
+            "rec_id": "rec-1",
+            "payload": "p",
+            "created_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "last_updated_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        }
+    ]
     monkeypatch.setattr(rt, "read_current", lambda c, rec_id=None, limit=None: rows)
     r = h.handler({"action": "read_current", "rec_id": "rec-1", "limit": 10})
     body = json.loads(r["body"])

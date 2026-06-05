@@ -43,9 +43,14 @@ class FakeCon:
 
 
 def _result(**kw):
-    base = dict(ulid="01ULID", rec_id="rec-1", occ_retries=0, commit_ms=1.0,
-                created_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
-                last_updated_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    base = dict(
+        ulid="01ULID",
+        rec_id="rec-1",
+        occ_retries=0,
+        commit_ms=1.0,
+        created_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        last_updated_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
     base.update(kw)
     return rt.WriteResult(**base)
 
@@ -119,7 +124,7 @@ def test_handler_write(monkeypatch):
     con = FakeCon()
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result(ulid="01W", rec_id=rec["rec_id"]))
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     r = h.handler({"action": "write", "record": {"rec_id": "rec-9", "payload": "p"}})
     body = json.loads(r["body"])
     assert body["ulid"] == "01W"
@@ -132,18 +137,20 @@ def test_handler_write_with_force_recreate(monkeypatch):
     flags = {}
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: flags.update(f=force_recreate))
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result())
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     h.handler({"action": "write", "record": {"rec_id": "r"}, "force_recreate_tables": True})
     assert flags["f"] is True
 
 
 def test_handler_idempotency_probe(monkeypatch):
-    con = FakeCon(fetchone_map={"FROM ops_catalog.ducklake_smoke_history": (1,), "FROM ops_catalog.ducklake_smoke_current": (1,)})
+    con = FakeCon(
+        fetchone_map={"FROM ops_catalog.ducklake_smoke_history": (1,), "FROM ops_catalog.ducklake_smoke_current": (1,)}
+    )
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "mint_write_identity", lambda: rt.WriteIdentity("01ID", datetime(2026, 1, 1, tzinfo=timezone.utc)))
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result(ulid="01ID"))
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     r = h.handler({"action": "idempotency_probe"})
     body = json.loads(r["body"])
     assert body["ulid_reused"] is True
@@ -152,8 +159,12 @@ def test_handler_idempotency_probe(monkeypatch):
 
 
 def test_handler_partition_probe(monkeypatch):
-    con = FakeCon(fetchone_map={"ducklake_list_files('ops_catalog', 'ducklake_smoke_history')": (4,),
-                                "ducklake_list_files('ops_catalog', 'ducklake_smoke_current')": (8,)})
+    con = FakeCon(
+        fetchone_map={
+            "ducklake_list_files('ops_catalog', 'ducklake_smoke_history')": (4,),
+            "ducklake_list_files('ops_catalog', 'ducklake_smoke_current')": (8,),
+        }
+    )
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result())
@@ -172,7 +183,7 @@ def test_handler_inlining_probe(monkeypatch):
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result())
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     monkeypatch.setattr(h, "_count_files", lambda c, t: 2)
     monkeypatch.setattr(h, "_count_inlined_rows", lambda c, t: 0)
     monkeypatch.setattr(h, "_concurrency_probe", lambda w: True)
@@ -229,7 +240,7 @@ def test_handler_schema_gate_error_maps_422(monkeypatch):
         raise rt.SchemaGateError("bad field")
 
     monkeypatch.setattr(rt, "write_scd2", _raise)
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     r = h.handler({"action": "write", "record": {"rec_id": "r"}})
     assert r["statusCode"] == 422
     assert json.loads(r["body"])["error_type"] == "schema_gate"
@@ -243,7 +254,7 @@ def test_handler_occ_exhausted_maps_503(monkeypatch):
         raise rt.OCCRetryExhaustedError("exhausted")
 
     monkeypatch.setattr(rt, "write_scd2", _raise)
-    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: (lambda n, v: None))
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
     r = h.handler({"action": "write", "record": {"rec_id": "r"}})
     assert r["statusCode"] == 503
     assert json.loads(r["body"])["error_type"] == "occ_exhausted"

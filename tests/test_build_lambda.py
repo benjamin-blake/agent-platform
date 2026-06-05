@@ -36,12 +36,18 @@ def _args(**kw):
     import argparse
 
     ns = argparse.Namespace(
-        skip_upload=True, bucket="", profile="agent_platform", region="eu-west-2",
-        deploy=False, ducklake_only=False, list_bundle=None,
+        skip_upload=True,
+        bucket="",
+        profile="agent_platform",
+        region="eu-west-2",
+        deploy=False,
+        ducklake_only=False,
+        list_bundle=None,
     )
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
+
 
 pytestmark = pytest.mark.unit
 
@@ -532,7 +538,9 @@ class TestTryS3Extension:
         assert out == b"DATA"
 
     def test_failure_returns_none(self):
-        with patch("scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=1, stdout="", stderr="x")):
+        with patch(
+            "scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=1, stdout="", stderr="x")
+        ):
             assert bl._try_s3_extension("bucket", "ducklake", "profile", "region") is None
 
 
@@ -553,7 +561,10 @@ class TestRunBuilds:
     def test_run_ducklake_build_skip_upload(self):
         with (
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
-            patch("scripts.build_lambda.build_ducklake_function_package", side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")]),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
             patch("scripts.build_lambda.assert_within_size_limit") as mock_assert,
@@ -566,7 +577,10 @@ class TestRunBuilds:
     def test_run_ducklake_build_upload_and_deploy(self):
         with (
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
-            patch("scripts.build_lambda.build_ducklake_function_package", side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")]),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
             patch("scripts.build_lambda.assert_within_size_limit"),
@@ -634,7 +648,9 @@ class TestRunBuilds:
 
 class TestResolveBucket:
     def test_terraform_output_used(self):
-        with patch("scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=0, stdout="tf-bucket\n")):
+        with patch(
+            "scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=0, stdout="tf-bucket\n")
+        ):
             assert bl.resolve_bucket("p") == "tf-bucket"
 
     def test_empty_output_falls_back(self):

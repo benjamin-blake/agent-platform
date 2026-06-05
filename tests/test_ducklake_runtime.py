@@ -433,9 +433,7 @@ def test_occ_retry_exhaustion_raises():
     con = FakeCon(created_lookup=[], occ_fail_times=99)  # always collide
     wid = rt.mint_write_identity()
     with pytest.raises(rt.OCCRetryExhaustedError, match="exhausted"):
-        rt.write_scd2(
-            con, {"rec_id": "rec-1"}, identity=wid, semantics=_SEMANTICS, max_attempts=3, sleep=lambda s: None
-        )
+        rt.write_scd2(con, {"rec_id": "rec-1"}, identity=wid, semantics=_SEMANTICS, max_attempts=3, sleep=lambda s: None)
     # ULID still minted once across all exhausted attempts
     assert {p[0] for p in con.merge_history_params()} == {wid.ulid}
 

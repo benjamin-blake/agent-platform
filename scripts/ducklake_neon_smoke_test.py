@@ -288,7 +288,10 @@ def _function_url(role: str) -> str:
     try:
         result = subprocess.run(
             ["terraform", "-chdir=terraform/personal", "output", "-raw", output_name],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().rstrip("/")
@@ -346,7 +349,9 @@ def lambda_ingress(*, profile: str | None = None, region: str = "eu-west-2") -> 
     unsigned = _sigv4_invoke(url, {"action": "attach_check"}, sign=False, profile=profile, region=region)
     signed = _sigv4_invoke(url, {"action": "attach_check"}, sign=True, profile=profile, region=region)
     if unsigned.status_code != 403 or signed.status_code != 200:
-        raise SmokeTestFailure(f"INGRESS FAIL: unsigned={unsigned.status_code} (want 403) signed={signed.status_code} (want 200)")
+        raise SmokeTestFailure(
+            f"INGRESS FAIL: unsigned={unsigned.status_code} (want 403) signed={signed.status_code} (want 200)"
+        )
     print("INGRESS OK unsigned=403 signed=200")
 
 
@@ -387,7 +392,9 @@ def lambda_inlining(*, profile: str | None = None, region: str = "eu-west-2") ->
 def lambda_loudfail(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """EC7: schema-gate reject + OCC-retry exhaustion both raise loudly; no silent drop."""
     body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "loudfail_probe"}, profile=profile, region=region))
-    if not (body.get("schema_reject") == "raised" and body.get("occ_exhaust") == "raised" and body.get("silent_drop") is False):
+    if not (
+        body.get("schema_reject") == "raised" and body.get("occ_exhaust") == "raised" and body.get("silent_drop") is False
+    ):
         raise SmokeTestFailure(f"LOUDFAIL FAIL: {body}")
     print("LOUDFAIL OK schema_reject=raised occ_exhaust=raised silent_drop=false")
 
@@ -395,10 +402,7 @@ def lambda_loudfail(*, profile: str | None = None, region: str = "eu-west-2") ->
 def lambda_churn(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """EC8: in-region concurrent writers on the DIRECT endpoint; p95 within the CD.33 budget."""
     body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "churn"}, profile=profile, region=region))
-    msg = (
-        f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} "
-        f"endpoint={body['endpoint']}"
-    )
+    msg = f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} endpoint={body['endpoint']}"
     if not body.get("within_budget"):
         raise SmokeTestFailure(
             f"CHURN FAIL: collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} over the "
@@ -409,7 +413,9 @@ def lambda_churn(*, profile: str | None = None, region: str = "eu-west-2") -> No
 
 def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """EC1/boundary: reader returns current rows; the read role cannot write (closed boundary)."""
-    read_body = _ok_json(_sigv4_invoke(_function_url("reader"), {"action": "read_current", "limit": 5}, profile=profile, region=region))
+    read_body = _ok_json(
+        _sigv4_invoke(_function_url("reader"), {"action": "read_current", "limit": 5}, profile=profile, region=region)
+    )
     probe = _ok_json(_sigv4_invoke(_function_url("reader"), {"action": "write_probe"}, profile=profile, region=region))
     if not (read_body.get("row_count", 0) >= 1 and probe.get("write_denied") is True):
         raise SmokeTestFailure(f"READER FAIL: read={read_body} write_probe={probe}")
@@ -430,13 +436,17 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entrypoint. Returns the process exit code (0 ok; 1 on a loud-fail gate or usage error)."""
-    parser = argparse.ArgumentParser(prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b / T2.17).")
+    parser = argparse.ArgumentParser(
+        prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b / T2.17)."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--attach", action="store_true", help="ATTACH + SELECT 1 over TLS")
     group.add_argument("--churn-gate", action="store_true", help="connection-churn / OCC gate (loud-fail)")
     group.add_argument("--restore-drill", action="store_true", help="pg_dump -> scratch Neon -> read-your-write")
     group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
-    group.add_argument("--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)")
+    group.add_argument(
+        "--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)"
+    )
     group.add_argument("--lambda-idempotency", action="store_true", help="[post-deploy] idempotent ULID append (EC10)")
     group.add_argument("--lambda-partition", action="store_true", help="[post-deploy] partition prune (EC6)")
     group.add_argument("--lambda-inlining", action="store_true", help="[post-deploy] inlining disabled (EC11)")

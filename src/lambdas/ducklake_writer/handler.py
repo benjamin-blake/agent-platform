@@ -32,9 +32,7 @@ class WriterActionError(rt.DuckLakeRuntimeError):
 def _open_writer_connection() -> Any:
     """Open a write-scoped baked-extension connection to the Neon catalog (loud-fail on version)."""
     dsn = rt.fetch_dsn()
-    return rt.open_connection(
-        dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY
-    )
+    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY)
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +121,7 @@ def action_partition_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
     history_scanned = _count_files_for_predicate(
         con, rt.SMOKE_HISTORY_TABLE, f"created_timestamp < TIMESTAMP '{cutoff.isoformat()}'"
     )
-    current_scanned = _count_files_for_predicate(
-        con, rt.SMOKE_CURRENT_TABLE, "rec_id = 'rec-part-0'"
-    )
+    current_scanned = _count_files_for_predicate(con, rt.SMOKE_CURRENT_TABLE, "rec_id = 'rec-part-0'")
     return {
         "ok": True,
         "history_pruned": history_scanned < history_total,
@@ -272,24 +268,19 @@ def _count_files_for_predicate(con: Any, table: str, predicate: str) -> int:
     """Approximate the file count a predicate scans via the partition-pruned file listing."""
     try:
         rows = con.execute(
-            f"SELECT count(*) FROM ducklake_list_files('{rt.CATALOG_ALIAS}', '{table}') "
-            f"WHERE {predicate}"
+            f"SELECT count(*) FROM ducklake_list_files('{rt.CATALOG_ALIAS}', '{table}') WHERE {predicate}"
         ).fetchone()
         return int(rows[0]) if rows else 0
     except Exception:  # noqa: BLE001
         # Fall back to a row-level count of the filtered query (functional prune evidence).
-        rows = con.execute(
-            f"SELECT count(*) FROM {rt.CATALOG_ALIAS}.{table} WHERE {predicate}"
-        ).fetchone()
+        rows = con.execute(f"SELECT count(*) FROM {rt.CATALOG_ALIAS}.{table} WHERE {predicate}").fetchone()
         return int(rows[0]) if rows else 0
 
 
 def _count_inlined_rows(con: Any, table: str) -> int:
     """Return the number of inlined (not-yet-flushed) rows; 0 when inlining is disabled."""
     try:
-        rows = con.execute(
-            f"SELECT count(*) FROM ducklake_list_inlined_data('{rt.CATALOG_ALIAS}', '{table}')"
-        ).fetchone()
+        rows = con.execute(f"SELECT count(*) FROM ducklake_list_inlined_data('{rt.CATALOG_ALIAS}', '{table}')").fetchone()
         return int(rows[0]) if rows else 0
     except Exception:  # noqa: BLE001 -- absent when inlining off; live VP confirms
         return 0
