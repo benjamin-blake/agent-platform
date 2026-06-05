@@ -364,3 +364,46 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
     ]
   })
 }
+
+# ---------------------------------------------------------------------------
+# DuckLake break-glass (CD.33 O-1 / Decision 81): an EXPLICIT, auditable PlatformAdmin grant to
+# attach the DuckLake catalog read-only for inspect/repair -- the Neon DSN secret + S3 read on the
+# ducklake-* data prefixes. AdminOps (secretsmanager GetSecretValue *) and PlatformDataLakeProvisioning
+# (s3 GetObject on the bucket) already cover these capabilities broadly; this dedicated, narrowly-scoped
+# policy is the NAMED surface the catalog-operations runbook (Section 1) points to so the break-glass
+# read is auditable rather than implicit. See docs/runbooks/ducklake-catalog-operations.md.
+# ---------------------------------------------------------------------------
+resource "aws_iam_role_policy" "platform_admin_ducklake_breakglass" {
+  name = "DuckLakeBreakGlass"
+  role = aws_iam_role.platform_admin.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "NeonCatalogDsnRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = [aws_secretsmanager_secret.ducklake_neon_catalog_dsn.arn]
+      },
+      {
+        # Read the DuckLake Parquet data files for catalog inspect/repair (smoke + future ops prefixes).
+        Sid      = "DuckLakeDataRead"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/ducklake-*"]
+      },
+      {
+        Sid      = "DuckLakeDataList"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = [aws_s3_bucket.data_lake.arn]
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["ducklake-*"]
+          }
+        }
+      },
+    ]
+  })
+}
