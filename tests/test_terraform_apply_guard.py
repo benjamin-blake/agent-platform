@@ -94,6 +94,81 @@ def test_clean_update_passes(tmp_path: Path) -> None:
     assert main([_write(tmp_path, plan)]) == 0
 
 
+# ---------------------------------------------------------------------------
+# Neon-aware policy (T2.16b / CD.34): a neon_* change auto-applies only as a pure create / no-op /
+# read; an update blocks; delete + replace are caught by the existing delete rule.
+# ---------------------------------------------------------------------------
+
+
+def test_neon_create_passes(tmp_path: Path) -> None:
+    # The provisioning path. Compensating controls (TLS + scoped role + Secrets Manager DSN), not an
+    # IP allow-list, carry the posture, so a bare create is safe; sensitive/unknown after-values are
+    # irrelevant to the verdict (the guard never introspects neon attributes).
+    plan = {"resource_changes": [_rc("neon_project", ["create"], after={"name": "ducklake-catalog"})]}
+    assert evaluate_plan(plan) == []
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_neon_database_and_role_create_pass(tmp_path: Path) -> None:
+    plan = {
+        "resource_changes": [
+            _rc("neon_role", ["create"], after={"name": "ducklake_ops"}),
+            _rc("neon_database", ["create"], after={"name": "ducklake_ops"}),
+        ]
+    }
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_neon_noop_passes(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("neon_project", ["no-op"], before={"name": "p"}, after={"name": "p"})]}
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_neon_read_passes(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("neon_project", ["read"], after={"name": "p"})]}
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_neon_update_blocks(tmp_path: Path) -> None:
+    # An update is where an allow-list widening / credential rotation / project-setting change lands.
+    plan = {"resource_changes": [_rc("neon_project", ["update"], before={"name": "p"}, after={"name": "p2"})]}
+    findings = evaluate_plan(plan)
+    assert len(findings) == 1
+    assert findings[0]["type"] == "neon_project"
+    assert "neon_*" in findings[0]["reason"]
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_neon_replace_blocks(tmp_path: Path) -> None:
+    # Replace (delete+create) is caught by the delete rule -- credential/endpoint churn is unsafe.
+    plan = {"resource_changes": [_rc("neon_role", ["delete", "create"])]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_neon_delete_blocks(tmp_path: Path) -> None:
+    plan = {"resource_changes": [_rc("neon_database", ["delete"], before={"name": "ducklake_ops"})]}
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_neon_create_alongside_aws_secret_create_passes(tmp_path: Path) -> None:
+    # The DSN secret (aws_secretsmanager_secret) creates alongside the neon resources -- both safe.
+    plan = {
+        "resource_changes": [
+            _rc("neon_project", ["create"], after={"name": "ducklake-catalog"}),
+            _rc("aws_secretsmanager_secret", ["create"], after={"name": "ducklake-neon-catalog-dsn"}),
+        ]
+    }
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_aws_verdicts_unchanged_by_neon_rule(tmp_path: Path) -> None:
+    # Regression guard: the aws_ side is unchanged. A non-neon update still passes, an aws destroy
+    # still blocks, and an IAM create still blocks -- the neon rule never alters an aws verdict.
+    assert main([_write(tmp_path, {"resource_changes": [_rc("aws_s3_bucket", ["update"], before={}, after={})]})]) == 0
+    assert main([_write(tmp_path, {"resource_changes": [_rc("aws_s3_bucket", ["delete"], before={"id": "b"})]})]) == 2
+    assert main([_write(tmp_path, {"resource_changes": [_rc("aws_iam_role", ["create"], after={"name": "r"})]})]) == 2
+
+
 def test_empty_plan_passes(tmp_path: Path) -> None:
     assert main([_write(tmp_path, {})]) == 0
 
