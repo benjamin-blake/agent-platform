@@ -205,13 +205,20 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
         Resource = "*"
       },
       {
+        # Tag/Untag/Update/GetResourcePolicy complete the secret-management set so AdminOps can fully
+        # manage TAGGED secrets it creates (e.g. the DuckLake Neon DSN). Creating a secret with tags
+        # requires secretsmanager:TagResource even when the tags are passed inline to CreateSecret.
         Sid    = "SecretsManagerAdmin"
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue",
           "secretsmanager:PutSecretValue",
           "secretsmanager:CreateSecret",
+          "secretsmanager:UpdateSecret",
           "secretsmanager:DescribeSecret",
+          "secretsmanager:GetResourcePolicy",
+          "secretsmanager:TagResource",
+          "secretsmanager:UntagResource",
         ]
         Resource = "*"
       },

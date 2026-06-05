@@ -51,15 +51,21 @@ provider "neon" {
 
 # ---------------------------------------------------------------------------
 # Neon project -- the catalog. Free tier: 0.5 GB storage, 100 CU-hours/mo, scale-to-zero. pg_version
-# 16 matches the prior RDS engine. No org_id (personal account). No allowed_ips (free-tier posture --
-# see APPLY POSTURE above). The project auto-creates a default branch + endpoint; the scoped role and
-# the catalog database below live on that default branch.
+# 16 matches the prior RDS engine. org_id is required by Neon's org-based model (every account, incl.
+# personal, has a default organization) -- it is an identifier, not a secret. No allowed_ips (free-tier
+# posture -- see APPLY POSTURE above). The project auto-creates a default branch + endpoint; the scoped
+# role and the catalog database below live on that default branch.
 # ---------------------------------------------------------------------------
 
 resource "neon_project" "ducklake_catalog" {
   name       = "ducklake-catalog"
+  org_id     = var.neon_org_id
   region_id  = var.neon_region_id
   pg_version = 16
+
+  # Free-plan PITR ceiling is 21600s (6h); the provider's 24h (86400) default is rejected on free.
+  # This is the ~6h free-tier history window the DR design accounts for (daily pg_dump covers >6h).
+  history_retention_seconds = 21600
 }
 
 # Scoped, non-owner role for catalog access. Distinct from the project's auto-created owner role so the
