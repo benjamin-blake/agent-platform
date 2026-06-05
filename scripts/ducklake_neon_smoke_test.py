@@ -84,18 +84,35 @@ def _libpq_conninfo(dsn: dict[str, str]) -> str:
     return f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} password={dsn['password']} sslmode={sslmode}"
 
 
-def _open_attached(dsn: dict[str, str], *, profile: str | None = None, data_path: str = SMOKE_DATA_PATH) -> Any:
+def _open_attached(
+    dsn: dict[str, str],
+    *,
+    profile: str | None = None,
+    data_path: str = SMOKE_DATA_PATH,
+    _creds: tuple[str, str, str | None, str] | None = None,
+) -> Any:
     """Open a DuckDB connection with ducklake/postgres/httpfs loaded and the Neon catalog ATTACHed.
 
     Reuses the spike's duckdb-require + S3-credential helpers (extension-load + ATTACH pattern). The
     ATTACH uses the DuckLake postgres data source with META_SCHEMA, over the DIRECT endpoint + TLS.
+
+    _creds: pre-fetched (access_key, secret_key, token, region) tuple; skips per-connection STS call
+    when provided (used by churn_gate to share a single credential resolution across all 8 workers).
     """
     duckdb = ducklake_spike._require_duckdb()
     con = duckdb.connect()
     con.execute("INSTALL ducklake; LOAD ducklake")
     con.execute("INSTALL postgres; LOAD postgres")
     con.execute("INSTALL httpfs; LOAD httpfs")
-    ducklake_spike._set_s3_credentials(con, profile=profile)
+    if _creds is not None:
+        ak, sk, tok, region = _creds
+        con.execute(f"SET s3_region={ducklake_spike._sql_str_literal(region)}")
+        con.execute(f"SET s3_access_key_id={ducklake_spike._sql_str_literal(ak)}")
+        con.execute(f"SET s3_secret_access_key={ducklake_spike._sql_str_literal(sk)}")
+        if tok:
+            con.execute(f"SET s3_session_token={ducklake_spike._sql_str_literal(tok)}")
+    else:
+        ducklake_spike._set_s3_credentials(con, profile=profile)
     conninfo = _libpq_conninfo(dsn)
     con.execute(
         f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
@@ -120,7 +137,13 @@ def _is_occ_collision(exc: Exception) -> bool:
     return any(marker in msg for marker in _OCC_COLLISION_MARKERS)
 
 
-def _single_writer_commit(writer_id: int, dsn: dict[str, str], *, profile: str | None = None) -> dict[str, Any]:
+def _single_writer_commit(
+    writer_id: int,
+    dsn: dict[str, str],
+    *,
+    profile: str | None = None,
+    _creds: tuple[str, str, str | None, str] | None = None,
+) -> dict[str, Any]:
     """One churn iteration: a FRESH connection (connection-churn) + a contended write burst.
 
     Returns {"latency_ms": float, "collided": bool}. A non-OCC error propagates (a hard failure must
@@ -128,7 +151,7 @@ def _single_writer_commit(writer_id: int, dsn: dict[str, str], *, profile: str |
     """
     start = time.perf_counter()
     collided = False
-    con = _open_attached(dsn, profile=profile)
+    con = _open_attached(dsn, profile=profile, _creds=_creds)
     try:
         con.execute(f"CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.churn_probe (writer INTEGER, seq INTEGER)")
         for seq in range(CHURN_WRITES_PER_WRITER):
@@ -149,10 +172,11 @@ def _run_churn_burst(
     profile: str | None = None,
     writers: int = CHURN_WRITERS,
     worker: Callable[..., dict[str, Any]] = _single_writer_commit,
+    _creds: tuple[str, str, str | None, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Run *writers* concurrent churn iterations and return their per-writer result dicts."""
     with ThreadPoolExecutor(max_workers=writers) as pool:
-        futures = [pool.submit(worker, i, dsn, profile=profile) for i in range(writers)]
+        futures = [pool.submit(worker, i, dsn, profile=profile, _creds=_creds) for i in range(writers)]
         return [f.result() for f in futures]
 
 
@@ -177,8 +201,24 @@ def _evaluate_churn(results: list[dict[str, Any]]) -> tuple[bool, dict[str, floa
 
 def churn_gate(*, profile: str | None = None, dsn: dict[str, str] | None = None) -> dict[str, float]:
     """Run the connection-churn / OCC gate. Loud-fail (Decision 55) if outside CD.33's OCC budget."""
+    import boto3  # noqa: PLC0415
+
+    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
     dsn = dsn or fetch_dsn(profile=profile)
-    results = _run_churn_burst(dsn, profile=profile)
+    # Pre-warm: absorb Neon scale-to-zero cold-resume cost and pre-create the probe table
+    # so concurrent writers only INSERT (avoids a concurrent-CREATE race on a fresh catalog).
+    con = _open_attached(dsn, profile=profile)
+    try:
+        con.execute(f"CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.churn_probe (writer INTEGER, seq INTEGER)")
+    finally:
+        con.close()
+    # Pre-fetch credentials once so the 8 concurrent workers share a single STS assume-role
+    # resolution instead of each making an independent call (8x parallel STS serializes badly).
+    _session = boto3.Session(profile_name=resolve_aws_profile(profile))
+    _fc = _session.get_credentials().get_frozen_credentials()
+    _creds: tuple[str, str, str | None, str] = (_fc.access_key, _fc.secret_key, _fc.token, _session.region_name or "eu-west-2")
+    results = _run_churn_burst(dsn, profile=profile, _creds=_creds)
     passed, metrics = _evaluate_churn(results)
     if not passed:
         raise SmokeTestFailure(
