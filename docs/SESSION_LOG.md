@@ -9,6 +9,27 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-05] - close-out: T2.16b Phase 2 retirement, rec-2061 CRLF structural fix, VP-10 PASS
+
+**Mode:** Close-out follow-up to the same-day Phase 2 retirement session below.
+**Goal:** Land the structural fix for rec-2061 (CRLF/LF line-ending drift in null_resource.create_ops_tables/views trigger md5) and verify VP-10 (clean-green post-merge sandbox-apply push run) without a manual workflow_dispatch.
+**Outcome:** SUCCESS - VP-10 PASS on push run 27031330988 (merge SHA dfcbf84) for PR #83; the T2.16b Phase 2 retirement (PR #82, merge SHA 5bc1adb) is now fully in its desired terminal state (RDS gone, IAM pruned, state stable, push pipeline auto-applies cleanly).
+**Key actions:**
+- Diagnosed VP-10 failure on PR #82's post-merge push run 27030322681 as line-ending drift: terraform/personal/main.tf used `triggers = { query_hash = md5(each.value) }` where `each.value` is a heredoc Athena DDL. The earlier same-day Phase 2 terraform applies ran from Windows (this implementer's local) and wrote CRLF-md5 hashes to S3 state; the post-merge CI run on Linux read LF-stripped heredocs from the checkout, recomputed LF-md5, saw 6 phantom null_resource replacements, and the Decision-77 fail-closed guard correctly blocked.
+- Drafted precise instructions for a CC-web Linux agent to (a) wrap each `md5(each.value)` with `replace(each.value, "\r\n", "\n")` in both null_resource blocks and (b) apply manually from CC-web Linux under agent_platform_admin so the new normalized hashes write to state from the Linux side. The agent did exactly that: PR #83 opened from branch agent/ducklake-line-ending-fix @ 86fdab6, merge SHA dfcbf84. Pre-merge plan: 6 to add, 0 to change, 6 to destroy (no scope creep); apply 6 added, 6 destroyed; post-apply re-plan exit 0 ("No changes"); post-merge push run 27031330988 conclusion success (guard step that BLOCKED on run 27030322681 for SHA 5bc1adb is now green).
+- One side-incident worth noting (per the CC-web agent's report): the agent's first plan attempt used `benjaminblake94@gmail.com` for var.owner_email, which produced 11 spurious tag-change side-effects vs the GitHub no-reply identity in state (`217728084+benjamin-blake@users.noreply.github.com`). They corrected the tfvars to match state and the second plan was clean. Lesson worth surfacing for the retrospective Follow-on: owner_email is a load-bearing tag for the personal module; the gitignored tfvars file is the authoritative source and any agent provisioning a fresh CC-web checkout MUST mirror the state's value.
+- No new commits filed against `docs/plans/PLAN-ducklake-rds-retirement.md` -- the plan was already complete on main; this close-out is recorded ONLY here (SESSION_LOG) so the plan stays a snapshot of the original IMPLEMENTATION intent. The structural fix is recorded as part of PR #83's own commit history (`fix(personal-tf): CRLF-stable trigger md5...`) and is durable.
+- Terraform version note from the CC-web agent: container has `1.10.5`; this implementer's local has `1.14.3`. No `1.14`-specific syntax was used. md5 + replace are standard Terraform built-ins available since 0.12; the CRLF-stable trigger pattern is portable.
+**Anomalies:**
+- The plan's explicit `Decision 76` directive "the push run reds -> diagnose, do NOT papier over with a dispatch" was honoured: VP-10 was made green by a structural fix (PR #83 + CC-web Linux apply), not by a workflow_dispatch escalation. This is the first cycle that resolved this drift class without a dispatch.
+- Two structural follow-on items adjacent to this session (CRLF-aware trigger pattern + Windows-vs-Linux apply hygiene) reinforce the plan's existing Follow-on item 4 about cross-platform CI / local divergence; recommend bundling them in the retrospective.
+**Next:**
+- T2.16b is closed. T2.17 (DuckLake Lambda runtime against the Neon catalog) is the next phase per ROADMAP-PLATFORM.yaml; nothing else from PLAN-ducklake-rds-retirement.md is outstanding.
+- rec-2079 (post-Phase-2 IAM Sid consolidation) remains open as the only deliberately-deferred follow-on from this plan.
+- The retrospective + CI structural redesign (plan's Follow-on items) remain queued as separate plans.
+
+---
+
 ## [2026-06-05] - implement: agent/ducklake-rds-retirement (T2.16b Phase 2, VP-2 disposition recorded; destroy not yet executed)
 
 **Mode:** Implementation (T2.16b Phase 2, PLAN-ducklake-rds-retirement.md).
