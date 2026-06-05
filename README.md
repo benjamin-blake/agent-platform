@@ -31,7 +31,7 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 | Autonomous Executor | [partial] | Step Functions + Lambda recommendation-queue consumer; executor freeze active pending CD.17 / T4.2 reversal |
 | Scheduled Agents | [partial] | Lambda dispatcher disabled May 2026; migrating to Claude Code scheduled-agent model |
 | Lambda Tooling Platform | [planned - T0.7+] | Per-Lambda manifests, Function URL auth, Step Functions state machine per rec |
-| DuckLake Lakehouse | [planned - T2.12+] | DuckDB + DuckLake catalog on Neon replacing the Athena-only ops query path |
+| DuckLake Lakehouse | [planned - T2.16+] | DuckDB + DuckLake catalog on Neon replacing the Athena-only ops query path |
 | Verification / Validation Kernel | [planned - T3.1+] | Cross-session test harness with VP results tracked in ops telemetry |
 
 ## Documentation Model
@@ -39,7 +39,7 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 | Content Type | Current Form | End-state |
 |--------------|-------------|-----------|
 | Agent-instruction files | Markdown (CLAUDE.md, AGENTS.md) | Stays markdown per CD.20 / CD.23 - canonical agent artefacts |
-| Operational decisions, recommendations, session logs | Append-only lakehouse (primary); markdown / JSONL cache (derivative) | Governed lakehouse per T5.4 / T1.9 - local files become read-only snapshots |
+| Operational decisions, recommendations, session logs | Append-only lakehouse (primary); markdown / JSONL cache (derivative) | Governed lakehouse per T5.4 / T1.5 - local files become read-only snapshots |
 | Plans | Markdown (docs/plans/PLAN-*.md) | Schema-validated YAML (docs/plans/PLAN-*.yaml) per T1.11 |
 | Briefing and INTENT-* docs | Markdown (docs/INTENT-*.md, docs/contracts/) | Non-authoritative; retiring per T5.5; content migrates to canonical YAML or is deleted |
 | Human portal files | Markdown (README.md, AGENTS.md, SECURITY.md) | Stays markdown per CD.20 / CD.23 - portal files declare projection status |
