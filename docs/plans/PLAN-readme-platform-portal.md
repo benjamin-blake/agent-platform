@@ -41,7 +41,7 @@ None.
 |---|-------|--------|---------|------------------|--------|
 | 1 | static | Projection disclaimer present at top of README | `grep -c "projection" README.md` | Output >= 1 | Add projection disclaimer as first substantive sentence |
 | 2 | static | No internal ops table names in README | `grep -E "ops_decisions\|ops_recommendations\|ops_session_log\|ops_priority_queue\|telemetry_" README.md` | No output (exit 1 = pass) | Replace table names with tier-item references (T5.4, etc.) |
-| 3 | static | All links point to durable targets only | `grep -oE "\[([^\]]+)\]\(([^)]+)\)" README.md \| grep -vE "(CLAUDE\.md\|AGENTS\.md\|ROADMAP-PLATFORM\.yaml\|ROADMAP-PRODUCT\.yaml\|SECURITY\.md\|^src/\|^scripts/\|^#\|http)"` | No output (no non-durable links) | Replace offending links with durable targets or remove |
+| 3 | static | All links point to durable targets only | `grep -oE "\[([^\]]+)\]\(([^)]+)\)" README.md \| grep -vE "(CLAUDE\.md\|AGENTS\.md\|ROADMAP-PLATFORM\.yaml\|ROADMAP-PRODUCT\.yaml\|SECURITY\.md\|src/\|scripts/\|^#\|http)"` | No output (no non-durable links) | Replace offending links with durable targets or remove |
 | 4 | static | All five NS principles present | `grep -c "NS\." README.md` | Output >= 5 | Add missing principles from ROADMAP-PLATFORM.yaml:136-152 |
 | 5 | static | Platform / product boundary explicit | `grep -qi "platform repo" README.md && grep -qi "ROADMAP-PRODUCT" README.md && echo PASS` | PASS | Add platform/product boundary section |
 | 6 | static | Validate passes (markdown, prompt-compliance, format) | `bin/venv-python -m scripts.validate --pre` | Exit 0 | Fix any reported lint/format issues |
