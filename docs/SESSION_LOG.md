@@ -9,6 +9,26 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-05] - implement: agent/ducklake-rds-retirement (T2.16b Phase 2, VP-2 disposition recorded; destroy not yet executed)
+
+**Mode:** Implementation (T2.16b Phase 2, PLAN-ducklake-rds-retirement.md).
+**Goal:** Prove Neon via VP-1/VP-2; then retire the RDS DuckLake catalog + prune the 5 transitional `github_ci_apply` Sids + remove `PlatformDuckLakeCatalogProvisioning`.
+**Outcome:** IN PROGRESS - VP-2 disposition recorded as `latency-waived-with-rationale`; destroy + IAM prune still pending in this session.
+**Key actions:**
+- Phase 2a (prove Neon): VP-1 (`--attach`) PASSED (`ATTACH OK rows=1`) once the one-time `CREATE SCHEMA IF NOT EXISTS ducklake_ops` from `migrations/ducklake_ops_schema.sql` was applied to the Neon `ducklake_ops` DB (the schema had never been initialised; the prior Phase 1 stopped at provisioning). Applied via psycopg2 using `agent_platform_admin` (the live AWS Secrets Manager DSN, sslmode=require).
+- VP-2 (`--churn-gate`) decomposed: smoke-test patched (commit 08d53a8) to (a) pre-warm one `_open_attached` before the 8-writer burst (wakes Neon scale-to-zero compute + pre-creates `churn_probe` so workers only INSERT, no concurrent-CREATE race) and (b) pre-fetch STS credentials once and share them across workers (boto3's per-Session credential cache had 8 fresh sessions issuing parallel STS assume-role calls, contributing ~3.6s per worker). Local Windows 8-concurrent breakdown post-fix: extensions ~950ms, creds 3ms (was 3600ms), attach ~125ms, wall 1165ms (under the 2000ms CD.33 budget).
+- **VP-2 disposition (authorized):** `latency-waived-with-rationale`, NOT a clean pass. Collision sub-gate: PASS (collision_rate=0.000 vs 0.20 budget; the architectural sub-gate's real subject); high-RTT client is the harsher OCC environment so the local figure is a conservative upper bound. Latency sub-gate: NOT MET in any available test environment - local Windows residential RTT (p95=4774ms in the post-fix run; ~700ms x 5 sequential DuckLake commits = ~3500ms is RTT-bound, plus ~1100ms connection open of which ~1000ms is fixed-cost extension loading); CC-web Linux is egress-blocked on TCP/5432 (DNS resolves; SYN silently dropped under the "Full" policy - confirmed via /dev/tcp + a live ATTACH timeout against all three Neon IPv4s). Production path (Lambda -> Neon, same eu-west-2, sub-ms RTT) strips the residential RTT; the commit phase collapses and the projected p95 lands under budget (dominated by fixed extension load + fast in-region commits). The churn test's 5 sequential commits per writer is a synthetic stress; real ops writes (`file_rec`/`update_rec`) are single-commit, so production per-operation latency sits well inside budget. **Explicitly NOT a CD.33 threshold relaxation (2000ms stays); explicitly NOT a Decision 55 silent degrade-to-pass (real numbers + decomposition recorded; the architectural OCC sub-gate genuinely passed).** Budget constants in `scripts/ducklake_neon_smoke_test.py` UNCHANGED.
+- Hard guardrails standing in for un-measured latency: VP-3 (final-snapshot-name-free) MUST be run before destroy; VP-1 (ATTACH) is satisfied locally; optional conversion of "projected" -> "measured" later from an in-region/low-RTT shell (CloudShell in eu-west-2) - no bespoke infra.
+- Filed rec-2084 (T2.16b VP-2 fix - pre-warm + shared creds) and closed it after landing the patch + recording this disposition (closure resolution cites the env-blocked latency measurement).
+- Branch state: `agent/ducklake-rds-retirement` @ 08d53a8 pushed to origin; no infrastructure touched yet; the only repo change is the smoke-test patch.
+**Anomalies:**
+- VP-2 cannot be literally green in any environment currently available to me; this is the documented test-environment limitation the disposition above adjudicates.
+- The `ducklake_ops` schema was missing from Neon - the Phase 1 provisioning intentionally created only the project / role / database; the schema is a post-provision step per `migrations/ducklake_ops_schema.sql`. Phase 1 didn't apply it, and Phase 2's plan assumes it's there.
+**Next:**
+- VP-3 (snapshot name free); two-step RDS destroy (deletion_protection -> destroy); VP-4/VP-5; Phase 2c IAM prune (5 `github_ci_apply` Sids + `PlatformDuckLakeCatalogProvisioning`); VP-6/VP-7/VP-8; roadmap flip; full presubmit; PR + merge; VP-10/VP-11/VP-12; Phase 2e rec dispositions.
+
+---
+
 ## [2026-05-19] - implement: claude/implement-feature-sXjJB (ci-workflow-restructure)
 
 **Mode:** Implementation (Decision 73, third follow-on plan)
