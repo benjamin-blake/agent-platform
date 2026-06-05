@@ -306,6 +306,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
       },
       {
+        # s3:GetBucketAcl + s3:GetBucketOwnershipControls are refresh-time reads the AWS provider
+        # issues on aws_s3_bucket every plan; without them `terraform plan` fails AccessDenied
+        # before the guard runs. Mirrors the platform_admin_datalake (AdminOps-side) grant, which
+        # already includes them. Covers the gap rec-1985 flagged. Do not prune as "unused".
         Sid    = "DataLakeBucketManage"
         Effect = "Allow"
         Action = [
@@ -323,7 +327,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "s3:GetReplicationConfiguration",
           "s3:GetBucketObjectLockConfiguration",
           "s3:GetBucketCORS",
-          "s3:GetBucketWebsite"
+          "s3:GetBucketWebsite",
+          "s3:GetBucketAcl",
+          "s3:GetBucketOwnershipControls"
         ]
         Resource = [aws_s3_bucket.data_lake.arn]
       },
@@ -425,6 +431,102 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "iam:TagOpenIDConnectProvider"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"]
+      },
+      {
+        # Refresh-time IAM reads on the PlatformDev + PlatformAdmin roles (both imported and managed
+        # by platform_roles.tf). Without these, the AWS provider's per-aws_iam_role plan walk fails
+        # AccessDenied before the guard runs. Read-only by design: the platform roles must NOT be
+        # CI-mutable; genuine mutation of these roles goes via agent_platform_admin per Decision 35.
+        # The four actions are the IAM read-quartet AWS provider 5.x issues on every aws_iam_role
+        # plan. Do not prune as "unused" -- apply does not exercise these but plan (and therefore
+        # CD) does (same convention as glue:GetTags and dynamodb:Describe* above).
+        Sid    = "IAMPlatformRolesRead"
+        Effect = "Allow"
+        Action = [
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+        ]
+        Resource = [
+          "arn:aws:iam::${var.account_id}:role/PlatformDev",
+          "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
+        ]
+      },
+      {
+        # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
+        # Refresh-time RDS reads required while the RDS-backed DuckLake catalog stack exists. Mirrors
+        # platform_admin_ducklake_catalog Sid RDSDescribe (platform_roles.tf:400-417) byte-for-byte;
+        # the mirror is authoritative. Resource "*" because Describe-class RDS APIs do not support
+        # resource-level scoping. Do not prune as "unused" -- apply does not exercise these but plan
+        # (and therefore CD) does. When T2.16b Phase 2 deletes rds_ducklake_catalog.tf, delete this Sid.
+        Sid    = "RDSDuckLakeCatalogRead"
+        Effect = "Allow"
+        Action = [
+          "rds:DescribeDBInstances",
+          "rds:DescribeDBSubnetGroups",
+          "rds:DescribeDBSnapshots",
+          "rds:DescribeDBClusterSnapshots",
+          "rds:DescribeDBParameterGroups",
+          "rds:DescribeDBParameters",
+          "rds:DescribeDBClusterParameterGroups",
+          "rds:DescribeDBClusters",
+          "rds:DescribeOptionGroups",
+          "rds:DescribeDBInstanceAutomatedBackups",
+          "rds:DescribeDBLogFiles",
+          "rds:ListTagsForResource",
+        ]
+        Resource = "*"
+      },
+      {
+        # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
+        # Refresh-time EC2 networking reads issued by data.aws_vpc / data.aws_subnets /
+        # aws_security_group for the RDS catalog stack. Mirrors platform_admin_ducklake_catalog Sid
+        # EC2NetworkingDescribe (platform_roles.tf:452-469) byte-for-byte. DescribeVpcAttribute +
+        # DescribeAvailabilityZones are refresh-time reads even with multi_az = false (AWS provider
+        # 5.100). Resource "*" because Describe-class EC2 APIs do not support resource-level scoping.
+        # Do not prune as "unused".
+        Sid    = "EC2NetworkingDescribeForRDS"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeVpcs",
+          "ec2:DescribeVpcAttribute",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules",
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeTags",
+        ]
+        Resource = "*"
+      },
+      {
+        # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
+        # Refresh-time kms:DescribeKey on the AWS-managed aws/rds + aws/secretsmanager keys (the RDS
+        # provider calls DescribeKey directly at plan time to validate encryption). Mirrors the READ
+        # subset of platform_admin_ducklake_catalog Sid KMSMetadataForRDS (platform_roles.tf:500-515);
+        # explicitly EXCLUDES kms:CreateGrant -- the CI apply role refresh-reads catalog metadata,
+        # it does not provision new grants (that goes via agent_platform_admin per Decision 35).
+        # Resource "*" because pinning per-account key UUIDs drifts; widening is acceptable here
+        # because the only granted action is read-only metadata. Do not prune as "unused".
+        Sid    = "KMSDescribeForRDS"
+        Effect = "Allow"
+        Action = [
+          "kms:DescribeKey",
+        ]
+        Resource = "*"
+      },
+      {
+        # PRUNE: remove with T2.16b Phase 2 (rds_ducklake_catalog.tf deletion).
+        # Refresh-time DescribeSecret on the RDS-managed master-user secret. manage_master_user_password
+        # = true on the catalog DB instance (rds_ducklake_catalog.tf:166) auto-creates a secret under
+        # the `rds!` name prefix; the provider DescribeSecret-reads it on every plan. Read-only by
+        # design: GetSecretValue is NOT granted -- the master credential is not a CI input. Mirrors
+        # the SecretsManagerNeonAPIKeyRead Sid below for the read-only-secret pattern (single
+        # DescribeSecret action, ARN-pinned, no value access). Do not prune as "unused".
+        Sid      = "SecretsManagerRDSMasterSecretRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:DescribeSecret"]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:rds!*"]
       },
       {
         # DuckLake Neon catalog DSN secret (T2.16b / CD.34): the apply role creates + manages the
