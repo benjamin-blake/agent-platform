@@ -325,7 +325,11 @@ resource "null_resource" "create_ops_tables" {
   for_each = local.create_ops_table_queries
 
   triggers = {
-    query_hash = md5(each.value)
+    # CRLF-stable: normalise line endings before hashing so terraform plan
+    # produces the same query_hash whether the checkout is LF (Linux/CI)
+    # or CRLF (Windows). Without this the hash drifts each time an apply
+    # runs from a different OS (rec-2061 known drift; fixed structurally).
+    query_hash = md5(replace(each.value, "\r\n", "\n"))
   }
 
   provisioner "local-exec" {
@@ -378,7 +382,11 @@ resource "null_resource" "create_ops_views" {
   for_each = local.create_ops_view_queries
 
   triggers = {
-    query_hash = md5(each.value)
+    # CRLF-stable: normalise line endings before hashing so terraform plan
+    # produces the same query_hash whether the checkout is LF (Linux/CI)
+    # or CRLF (Windows). Without this the hash drifts each time an apply
+    # runs from a different OS (rec-2061 known drift; fixed structurally).
+    query_hash = md5(replace(each.value, "\r\n", "\n"))
   }
 
   provisioner "local-exec" {
