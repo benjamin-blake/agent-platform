@@ -111,3 +111,9 @@ variable "neon_region_id" {
   type        = string
   default     = "aws-eu-west-2"
 }
+
+variable "neon_org_id" {
+  description = "Neon organization ID owning the DuckLake catalog project. Neon's org-based model requires org_id on project creation (it is an identifier, not a secret -- it appears in console URLs). Default is the personal-account default organization."
+  type        = string
+  default     = "org-winter-night-78488109"
+}
