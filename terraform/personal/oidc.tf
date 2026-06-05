@@ -334,6 +334,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = [aws_s3_bucket.data_lake.arn]
       },
       {
+        # athena:ListTagsForResource is the canonical (provider 5.x) refresh-time tag-read on
+        # aws_athena_workgroup; without it `terraform plan` fails AccessDenied before the guard
+        # runs. athena:GetTags (legacy alias) is retained for compatibility. Surfaced by the
+        # post-PR-#75 iterative-discovery round (terraform/CLAUDE.md "Out-of-band IAM grants").
+        # Do not prune as "unused" -- apply does not exercise it but plan does.
         Sid    = "AthenaWorkgroup"
         Effect = "Allow"
         Action = [
@@ -346,6 +351,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "athena:UpdateWorkGroup",
           "athena:TagResource",
           "athena:GetTags",
+          "athena:ListTagsForResource",
           "athena:UntagResource"
         ]
         Resource = "*"
