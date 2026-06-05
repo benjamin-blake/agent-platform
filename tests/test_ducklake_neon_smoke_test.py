@@ -175,7 +175,7 @@ def test_is_occ_collision_true_and_false():
 
 def test_single_writer_commit_clean(monkeypatch):
     con = FakeCon()
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     out = smoke._single_writer_commit(0, _DSN)
     assert out["collided"] is False
     assert con.closed is True
@@ -184,7 +184,7 @@ def test_single_writer_commit_clean(monkeypatch):
 
 def test_single_writer_commit_counts_occ_collision(monkeypatch):
     con = FakeCon(raise_on={"INSERT": Exception("could not serialize access due to concurrent update")})
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     out = smoke._single_writer_commit(1, _DSN)
     assert out["collided"] is True
     assert con.closed is True
@@ -192,7 +192,7 @@ def test_single_writer_commit_counts_occ_collision(monkeypatch):
 
 def test_single_writer_commit_reraises_non_occ(monkeypatch):
     con = FakeCon(raise_on={"INSERT": ValueError("hard failure -- not a collision")})
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     with pytest.raises(ValueError, match="hard failure"):
         smoke._single_writer_commit(2, _DSN)
     assert con.closed is True
@@ -206,7 +206,7 @@ def test_single_writer_commit_reraises_non_occ(monkeypatch):
 def test_run_churn_burst_invokes_worker_per_writer():
     seen = []
 
-    def fake_worker(i, dsn, profile=None):
+    def fake_worker(i, dsn, profile=None, _creds=None):
         seen.append(i)
         return {"latency_ms": 1.0, "collided": False}
 
@@ -253,23 +253,60 @@ def test_evaluate_churn_empty_passes():
 # ---------------------------------------------------------------------------
 
 
+def _stub_churn_gate_prelude(monkeypatch):
+    """Stub the pre-warm + STS-prefetch prelude that churn_gate runs before the burst.
+
+    churn_gate now opens one connection (pre-warm) and resolves AWS credentials once before
+    spawning the 8 concurrent workers (STS-contention fix). Tests mock both to keep the unit
+    test offline.
+    """
+    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: FakeCon())
+
+    class _FrozenCreds:
+        access_key = "ak"  # pragma: allowlist secret
+        secret_key = "sk"  # pragma: allowlist secret
+        token = None
+
+    class _Session:
+        region_name = "eu-west-2"
+
+        def __init__(self, profile_name=None):
+            pass
+
+        def get_credentials(self):
+            return types.SimpleNamespace(get_frozen_credentials=lambda: _FrozenCreds())
+
+    import boto3
+
+    monkeypatch.setattr(boto3, "Session", _Session)
+
+
 def test_churn_gate_pass_returns_metrics(monkeypatch):
+    _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
-        smoke, "_run_churn_burst", lambda dsn, profile=None: [{"latency_ms": 5.0, "collided": False} for _ in range(8)]
+        smoke,
+        "_run_churn_burst",
+        lambda dsn, profile=None, _creds=None: [{"latency_ms": 5.0, "collided": False} for _ in range(8)],
     )
     metrics = smoke.churn_gate(dsn=_DSN)
     assert metrics["collision_rate"] == 0.0
 
 
 def test_churn_gate_fetches_dsn_when_absent(monkeypatch):
+    _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
-    monkeypatch.setattr(smoke, "_run_churn_burst", lambda dsn, profile=None: [{"latency_ms": 5.0, "collided": False}])
+    monkeypatch.setattr(
+        smoke, "_run_churn_burst", lambda dsn, profile=None, _creds=None: [{"latency_ms": 5.0, "collided": False}]
+    )
     assert smoke.churn_gate()["collision_rate"] == 0.0
 
 
 def test_churn_gate_loud_fails(monkeypatch):
+    _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
-        smoke, "_run_churn_burst", lambda dsn, profile=None: [{"latency_ms": 1.0, "collided": True} for _ in range(8)]
+        smoke,
+        "_run_churn_burst",
+        lambda dsn, profile=None, _creds=None: [{"latency_ms": 1.0, "collided": True} for _ in range(8)],
     )
     with pytest.raises(smoke.SmokeTestFailure, match="CHURN_GATE FAIL"):
         smoke.churn_gate(dsn=_DSN)

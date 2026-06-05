@@ -48,49 +48,6 @@ variable "agent_service_account_user_name" {
 }
 
 # ---------------------------------------------------------------------------
-# DuckLake catalog (T2.16) -- RDS PostgreSQL backend for the DuckLake v1.0
-# operational lakehouse (Decision 78 / CD.31). Ingress CIDRs are an explicit
-# allow-list with NO default; supplied via gitignored terraform.personal.tfvars.
-# ---------------------------------------------------------------------------
-
-variable "ducklake_catalog_ingress_cidrs" {
-  description = <<-EOT
-    Allow-list of CIDR blocks permitted to reach the DuckLake RDS catalog on 5432. Must NEVER include 0.0.0.0/0.
-
-    TEMPORARY DEFAULT (T2.16b / CD.34, Phase 1): the sandbox auto-apply workflow injects only 4 TF_VAR_* and
-    does not pull the gitignored tfvars, so a no-default value reds `terraform plan` in CI and blocks ALL
-    sandbox applies (the state on 2026-06-03 after the RDS merge). The default below EQUALS the currently
-    deployed value (pulled from state) so the RDS plans as a no-op -- a divergent value would show
-    ingress-rule deletes, which the Decision-77 guard fail-closes on. This whole variable is removed in
-    Phase 2 together with rds_ducklake_catalog.tf.
-  EOT
-  type        = list(string)
-  default     = ["20.0.202.217/32"]
-
-  validation {
-    condition     = length(var.ducklake_catalog_ingress_cidrs) > 0
-    error_message = "ducklake_catalog_ingress_cidrs must be a non-empty allow-list."
-  }
-
-  validation {
-    condition     = !contains(var.ducklake_catalog_ingress_cidrs, "0.0.0.0/0")
-    error_message = "ducklake_catalog_ingress_cidrs must NOT include 0.0.0.0/0 -- supply an explicit egress CIDR."
-  }
-}
-
-variable "ducklake_catalog_db_name" {
-  description = "Initial PostgreSQL database name created at instance launch. The DuckLake metadata schema (e.g. ducklake_ops) lives WITHIN this database -- one RDS instance can host multiple DuckLake catalogs by schema (OQ.14 separability)."
-  type        = string
-  default     = "ducklake_catalog"
-}
-
-variable "ducklake_catalog_instance_class" {
-  description = "RDS instance class for the DuckLake catalog. db.t4g.micro is the Decision-78 baseline (burstable ARM, ~$12/mo single-AZ)."
-  type        = string
-  default     = "db.t4g.micro"
-}
-
-# ---------------------------------------------------------------------------
 # DuckLake catalog -- Neon serverless Postgres backend (T2.16b / CD.34, pending).
 #
 # The Neon provider API key is NOT a variable: the provider reads it from a Secrets Manager secret
