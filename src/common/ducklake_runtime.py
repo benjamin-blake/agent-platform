@@ -51,7 +51,7 @@ CATALOG_ALIAS = "ops_catalog"
 META_SCHEMA = "ducklake_ops"
 
 # Representative SCD2 smoke-table pair (real ops_* business schema is T2.19).
-SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-runtime-smoke/"
+SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-neon-smoke/"
 SMOKE_HISTORY_TABLE = "ducklake_smoke_history"
 SMOKE_CURRENT_TABLE = "ducklake_smoke_current"
 
@@ -241,6 +241,11 @@ def open_connection(
       - None  -> dev/smoke mode: network INSTALL + LOAD of each extension.
       - set   -> Lambda baked mode: LOAD from the directory with autoload/autoinstall DISABLED and
                  custom_extension_repository EMPTY (fail-closed: no network INSTALL at runtime).
+
+    The ATTACH validates DATA_PATH against the catalog's stored value and fails loud on mismatch
+    (no silent rebind). DuckLake pins the data_path at catalog-init; OVERRIDE_DATA_PATH is only a
+    per-session override and does NOT persist, so relocating the catalog means reinitialising it --
+    see docs/runbooks/ducklake-catalog-operations.md.
 
     Inlining is disabled (ducklake_default_data_inlining_row_limit=0) on every connection so S3
     Parquet is written immediately for ALL tables (EC11 / smoke #921). The ATTACH targets the Neon

@@ -18,7 +18,12 @@ catalog:
   dsn_secret_arn_output: ducklake_neon_catalog_dsn_secret_arn
   meta_schema: ducklake_ops
   catalog_alias: ops_catalog
-  data_path: s3://agent-platform-data-lake/ducklake-runtime-smoke/
+  data_path: s3://agent-platform-data-lake/ducklake-neon-smoke/
+  data_path_relocation: |
+    Fixed at catalog-init and stored in the Neon metadata. DuckLake's OVERRIDE_DATA_PATH
+    is a per-session override ONLY -- it does NOT persist the stored value (verified live).
+    Relocating the catalog therefore requires reinitialising it (drop the meta_schema and
+    re-ATTACH at the new path), not an override. Code aligns to the stored path, never the reverse.
   pinned_duckdb_version: "1.5.3"
   pinned_ducklake_version: "v1.0"
   extension_platform: linux_amd64
@@ -65,7 +70,7 @@ For an ad-hoc inspect from a Python REPL (read-only):
 ```python
 from src.common import ducklake_runtime as rt
 dsn = rt.fetch_dsn(profile="agent_platform_admin")
-con = rt.open_connection(dsn=dsn, data_path="s3://agent-platform-data-lake/ducklake-runtime-smoke/")
+con = rt.open_connection(dsn=dsn, data_path="s3://agent-platform-data-lake/ducklake-neon-smoke/")
 # Inspect catalog metadata (snapshots, files, schema) -- READ ONLY.
 print(con.execute("SELECT * FROM ducklake_snapshots('ops_catalog')").fetchall())
 print(con.execute("SELECT count(*) FROM ducklake_list_files('ops_catalog', 'ducklake_smoke_history')").fetchone())

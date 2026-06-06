@@ -192,17 +192,81 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
         Resource = "*"
       },
       {
+        # Full create+manage lifecycle so AdminOps can provision NEW Lambda infrastructure from
+        # terraform/personal (T2.17 ducklake_writer/reader are the first Lambdas created via this
+        # module): function + layer-version + function-URL create/read/update/delete + tagging. The
+        # prior set was deploy-only (UpdateFunctionCode/Invoke/Get) and could not create functions,
+        # publish layer versions, or create Function URLs.
         Sid    = "LambdaAdminManagement"
         Effect = "Allow"
         Action = [
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
           "lambda:UpdateFunctionCode",
           "lambda:UpdateFunctionConfiguration",
-          "lambda:InvokeFunctionUrl",
-          "lambda:InvokeFunction",
           "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:GetRuntimeManagementConfig",
+          "lambda:GetPolicy",
           "lambda:ListFunctions",
+          "lambda:ListVersionsByFunction",
+          "lambda:InvokeFunction",
+          "lambda:InvokeFunctionUrl",
+          "lambda:CreateFunctionUrlConfig",
+          "lambda:GetFunctionUrlConfig",
+          "lambda:UpdateFunctionUrlConfig",
+          "lambda:DeleteFunctionUrlConfig",
+          "lambda:PublishLayerVersion",
+          "lambda:GetLayerVersion",
+          "lambda:DeleteLayerVersion",
+          "lambda:ListLayerVersions",
+          "lambda:TagResource",
+          "lambda:UntagResource",
+          "lambda:ListTags",
         ]
         Resource = "*"
+      },
+      {
+        # CloudWatch Logs lifecycle for the Lambda log groups this module creates
+        # (/aws/lambda/agent-platform-*). DescribeLogGroups does not support resource scoping (it is
+        # a list operation), so it sits on "*"; the mutating actions are scoped to the agent-platform
+        # Lambda log-group prefix.
+        Sid    = "LambdaLogGroupManagement"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:TagResource",
+          "logs:UntagResource",
+          "logs:ListTagsForResource",
+          "logs:TagLogGroup",
+          "logs:UntagLogGroup",
+          "logs:ListTagsLogGroup",
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/agent-platform-*"
+      },
+      {
+        Sid      = "LambdaLogGroupDescribe"
+        Effect   = "Allow"
+        Action   = "logs:DescribeLogGroups"
+        Resource = "*"
+      },
+      {
+        # Read access to the Lambda log groups + their streams so AdminOps can diagnose runtime
+        # failures (post-deploy smoke-gate RCA) without escalating to break-glass.
+        Sid    = "LambdaLogGroupRead"
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogStreams",
+          "logs:GetLogEvents",
+          "logs:FilterLogEvents",
+        ]
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/agent-platform-*",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/agent-platform-*:log-stream:*",
+        ]
       },
       {
         # Tag/Untag/Update/GetResourcePolicy complete the secret-management set so AdminOps can fully

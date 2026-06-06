@@ -445,14 +445,19 @@ class TestBuildDucklakeDepsLayer:
                 out = bl.build_ducklake_deps_layer(tmp_path)
         assert out == tmp_path / "ducklake-deps-layer.zip"
         cmd = captured["cmd"]
-        assert f"duckdb=={PINNED_DUCKDB_VERSION}" in (tmp_path / "requirements-ducklake.txt").read_text()
+        reqs = (tmp_path / "requirements-ducklake.txt").read_text()
+        assert f"duckdb=={PINNED_DUCKDB_VERSION}" in reqs
+        # Transitive deps that duckdb/python-ulid import but do not auto-install for py3.12 must be
+        # pinned explicitly, or the write/read paths ModuleNotFoundError at runtime.
+        assert "typing_extensions" in reqs  # python-ulid imports `from typing_extensions import Self`
+        assert "pytz" in reqs  # duckdb lazily imports pytz for tz-aware TIMESTAMP conversion
         assert "manylinux_2_28_x86_64" in cmd
-        # dist-info dir was cleaned (rmtree) and foo.py landed in the zip.
+        # dist-info is PRESERVED (not stripped): duckdb>=1.3 reads its version via importlib.metadata.
         import zipfile
 
         names = zipfile.ZipFile(out).namelist()
         assert any(n.endswith("foo.py") for n in names)
-        assert not any("dist-info" in n for n in names)
+        assert any("dist-info" in n for n in names)
 
     def test_pip_failure_exits(self, tmp_path):
         with patch("scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=1)):

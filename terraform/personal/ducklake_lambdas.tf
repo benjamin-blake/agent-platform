@@ -23,8 +23,8 @@
 # smoke DATA_PATH. Production ops writes still transit scripts/ops_data_portal.py (T2.19 cutover).
 
 locals {
-  ducklake_smoke_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake-runtime-smoke/"
-  ducklake_smoke_data_prefix = "ducklake-runtime-smoke"
+  ducklake_smoke_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake-neon-smoke/"
+  ducklake_smoke_data_prefix = "ducklake-neon-smoke"
   ducklake_writer_function   = "agent-platform-ducklake-writer"
   ducklake_reader_function   = "agent-platform-ducklake-reader"
   ducklake_extension_dir     = "/opt/duckdb_extensions"

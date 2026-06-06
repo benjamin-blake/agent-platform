@@ -55,6 +55,14 @@ DUCKLAKE_DEPS = [
     f"duckdb=={PINNED_DUCKDB_VERSION}",
     "psycopg2-binary>=2.9.0",
     "python-ulid>=2.2.0",
+    # python-ulid imports `from typing_extensions import Self` unconditionally, but its dependency
+    # marker only requires typing_extensions on python<3.11. Building for 3.12 therefore skips it,
+    # so the write path ImportErrors at runtime (ModuleNotFoundError: typing_extensions). Pin it.
+    "typing_extensions>=4.0",
+    # duckdb lazily imports pytz when it converts tz-aware Python datetimes to/from its TIMESTAMP
+    # types (the SCD2 path binds UTC-aware ULID timestamps). duckdb declares no hard pytz dep, so it
+    # must be bundled explicitly or the write/read paths raise InvalidInputException at runtime.
+    "pytz>=2024.1",
     "pyyaml>=6.0",
 ]
 
@@ -315,7 +323,11 @@ def build_ducklake_deps_layer(temp_dir: Path) -> Path:
         print(f"ERROR: DuckLake deps installation failed (exit {pip_result.returncode})")
         sys.exit(1)
 
-    for pattern in ("*.dist-info", "__pycache__", "*.pyc", "tests", "test"):
+    # Do NOT strip *.dist-info: duckdb>=1.3 reads its own version via importlib.metadata at import
+    # time (duckdb/_version.py -> importlib.metadata.version("duckdb")), which needs the dist-info
+    # METADATA present. Removing it raises PackageNotFoundError on a clean Lambda runtime (no other
+    # duckdb metadata on the path), surfacing as an ImportError. The size saved is trivial.
+    for pattern in ("__pycache__", "*.pyc", "tests", "test"):
         for path in site_packages.rglob(pattern):
             if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)

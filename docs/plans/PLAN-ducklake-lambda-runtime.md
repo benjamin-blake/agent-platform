@@ -99,7 +99,9 @@ single source the schema gate, the derivation engine, and the verification asser
 
 Representative SCD2 smoke-table pair (real `ops_*` business schema is T2.19): `ducklake_smoke_history` (append
 source of truth) + `ducklake_smoke_current` (Type-1 write-through projection), in META_SCHEMA `ducklake_ops`,
-DATA_PATH `s3://agent-platform-data-lake/ducklake-runtime-smoke/`.
+DATA_PATH `s3://agent-platform-data-lake/ducklake-neon-smoke/` (the live catalog's init-pinned path;
+the data_path is fixed at catalog-init and DuckLake's OVERRIDE_DATA_PATH does not persist, so code
+aligns to the stored path).
 
 | Field | Role | Deterministic derivation | Key / partition role | Nullable | Verified by |
 |-------|------|--------------------------|----------------------|----------|-------------|

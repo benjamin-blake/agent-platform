@@ -34,7 +34,9 @@ from uuid import uuid4
 from src.common import ducklake_runtime, ducklake_spike
 
 DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
-SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-neon-smoke/"
+# Single source of truth: the runtime owns the canonical smoke DATA_PATH. A divergent literal here
+# re-introduces drift and can bind the shared catalog to the wrong path on direct pre-checks.
+SMOKE_DATA_PATH = ducklake_runtime.SMOKE_DATA_PATH
 CATALOG_ALIAS = "ops_catalog"
 META_SCHEMA = "ducklake_ops"
 
