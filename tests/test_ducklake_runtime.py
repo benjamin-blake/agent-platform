@@ -210,6 +210,7 @@ def test_open_connection_dev_mode_installs(monkeypatch):
     assert any(s.startswith("ATTACH 'ducklake:postgres:") for s in sqls)
     assert any("META_SCHEMA 'ducklake_ops'" in s for s in sqls)
     assert any("ducklake_default_data_inlining_row_limit=0" in s for s in sqls)
+    assert any(s == "SET threads=1" for s in sqls)
 
 
 def test_open_connection_baked_mode_failclosed(monkeypatch):
@@ -223,6 +224,7 @@ def test_open_connection_baked_mode_failclosed(monkeypatch):
     assert any("custom_extension_repository=''" in s for s in sqls)
     assert any(s == "LOAD postgres" for s in sqls)
     assert not any("INSTALL" in s for s in sqls)  # fail-closed: no network INSTALL
+    assert any(s == "SET threads=1" for s in sqls)  # vCPU-starvation fix applies on the baked path too
 
 
 def test_open_connection_with_shared_creds(monkeypatch):
