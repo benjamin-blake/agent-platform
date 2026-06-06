@@ -219,17 +219,40 @@ def test_loudfail_probe_reports_not_raised_when_gates_broken(monkeypatch):
     assert out["occ_exhaust"] == "not_raised"
 
 
+def _churn_result(**kw) -> dict:
+    """Default mock return value for _churn_one_writer (all attribution fields)."""
+    base = {
+        "latency_ms": 10.0,
+        "collided": False,
+        "connect_ms": 3.0,
+        "commit_ms": 5.0,
+        "occ_retries": 0,
+        "wall_ms": 10.0,
+        "cpu_ms": 8.0,
+    }
+    base.update(kw)
+    return base
+
+
 def test_handler_churn(monkeypatch):
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
     monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
     monkeypatch.setattr(rt, "open_connection", lambda **kw: FakeCon())
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
-    monkeypatch.setattr(h, "_churn_one_writer", lambda i, dsn, creds: {"latency_ms": 10.0, "collided": False})
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
+    monkeypatch.setattr(h, "_churn_one_writer", lambda i, dsn, creds: _churn_result())
     r = h.handler({"action": "churn", "writers": 4})
     body = json.loads(r["body"])
     assert body["endpoint"] == "direct"
     assert body["collision_rate"] == 0.0
     assert body["within_budget"] is True
+    assert "breakdown" in body
+    bd = body["breakdown"]
+    assert bd["writers"] == 4
+    assert bd["total_occ_retries"] == 0
+    assert "p95_connect_ms" in bd
+    assert "p95_cpu_ms" in bd
+    assert "wall_cpu_ratio" in bd
 
 
 def test_handler_schema_gate_error_maps_422(monkeypatch):
@@ -361,6 +384,12 @@ def test_churn_one_writer(monkeypatch):
     out = h._churn_one_writer(0, {"host": "h"}, ("ak", "sk", None, "r"))  # pragma: allowlist secret
     assert out["collided"] is False
     assert con.closed is True
+    assert "connect_ms" in out
+    assert "commit_ms" in out
+    assert "wall_ms" in out
+    assert "cpu_ms" in out
+    assert out["occ_retries"] == 0
+    assert out["commit_ms"] == round(_result().commit_ms * rt.CHURN_WRITES_PER_WRITER, 2)
 
 
 def test_churn_one_writer_counts_occ(monkeypatch):
@@ -373,6 +402,21 @@ def test_churn_one_writer_counts_occ(monkeypatch):
     monkeypatch.setattr(rt, "write_scd2", _raise)
     out = h._churn_one_writer(0, {"host": "h"}, ("ak", "sk", None, "r"))  # pragma: allowlist secret
     assert out["collided"] is True
+    assert out["commit_ms"] == 0.0
+    assert out["occ_retries"] == 0
+    assert "wall_ms" in out
+    assert "cpu_ms" in out
+
+
+def test_churn_constants_imported_from_runtime():
+    assert rt.COMMIT_LATENCY_BUDGET_MS == 2000.0
+    assert rt.OCC_COLLISION_RATE_BUDGET == 0.20
+    assert rt.CHURN_WRITERS == 8
+    assert rt.CHURN_WRITES_PER_WRITER == 5
+    assert not hasattr(h, "COMMIT_LATENCY_BUDGET_MS")
+    assert not hasattr(h, "OCC_COLLISION_RATE_BUDGET")
+    assert not hasattr(h, "CHURN_WRITERS")
+    assert not hasattr(h, "CHURN_WRITES_PER_WRITER")
 
 
 def test_frozen_creds(monkeypatch):

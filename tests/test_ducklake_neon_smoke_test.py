@@ -686,10 +686,44 @@ def test_lambda_churn_ok(monkeypatch, capsys):
     assert "CHURN OK collision_rate=0.0 p95_commit_ms=500.0 endpoint=direct" in capsys.readouterr().out
 
 
+def test_lambda_churn_ok_with_breakdown(monkeypatch, capsys):
+    _patch_gate(
+        monkeypatch,
+        {
+            "collision_rate": 0.0,
+            "p95_commit_ms": 500.0,
+            "endpoint": "direct",
+            "within_budget": True,
+            "breakdown": {
+                "p95_connect_ms": 120.0,
+                "p95_commit_ms": 380.0,
+                "p95_cpu_ms": 200.0,
+                "wall_cpu_ratio": 2.5,
+                "total_occ_retries": 0,
+            },
+        },
+    )
+    smoke.lambda_churn()
+    out = capsys.readouterr().out
+    assert "CHURN OK" in out
+    assert "p95_connect_ms=120.0" in out
+    assert "wall_cpu_ratio=2.5" in out
+    assert "total_occ_retries=0" in out
+
+
 def test_lambda_churn_over_budget_fails(monkeypatch):
     _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 5000.0, "endpoint": "direct", "within_budget": False})
     with pytest.raises(smoke.SmokeTestFailure, match="CHURN FAIL"):
         smoke.lambda_churn()
+
+
+def test_churn_constants_imported_from_runtime():
+    from src.common import ducklake_runtime
+
+    assert smoke.OCC_COLLISION_RATE_BUDGET == ducklake_runtime.OCC_COLLISION_RATE_BUDGET
+    assert smoke.COMMIT_LATENCY_BUDGET_MS == ducklake_runtime.COMMIT_LATENCY_BUDGET_MS
+    assert smoke.CHURN_WRITERS == ducklake_runtime.CHURN_WRITERS
+    assert smoke.CHURN_WRITES_PER_WRITER == ducklake_runtime.CHURN_WRITES_PER_WRITER
 
 
 def test_lambda_reader_ok(monkeypatch, capsys):
