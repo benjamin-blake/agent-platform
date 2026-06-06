@@ -84,6 +84,13 @@ _OCC_COLLISION_MARKERS = (
     "write-write",
 )
 
+# CD.33 churn gate budget (single source -- rec-2091; ducklake_writer and smoke test import from here).
+# Values are CD.33 / Decision 55 / Decision 81 invariants -- never relax without a Decision superseding CD.33.
+COMMIT_LATENCY_BUDGET_MS = 2000.0  # p95 commit latency ceiling (in-Lambda, DIRECT endpoint)
+OCC_COLLISION_RATE_BUDGET = 0.20  # max fraction of churn writers that hit an OCC collision
+CHURN_WRITERS = 8  # concurrent fresh-connection writers in the churn burst (EC8)
+CHURN_WRITES_PER_WRITER = 5  # writes per writer per churn iteration
+
 # CloudWatch metric namespace for OCC-retry + commit-latency emission (EC9).
 CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
 
@@ -254,6 +261,10 @@ def open_connection(
     duckdb = ducklake_spike._require_duckdb()
     assert_duckdb_version(duckdb)
     con = duckdb.connect()
+    # Limit DuckDB's internal thread pool to 1. The churn gate runs 8 Python threads, each with its
+    # own connection; DuckDB's background parallelism compounds vCPU starvation on constrained Lambda
+    # allocations. Our caller provides the concurrency -- DuckDB does not need to add its own.
+    con.execute("SET threads=1")
 
     if extension_directory is not None:
         con.execute(f"SET extension_directory={ducklake_spike._sql_str_literal(extension_directory)}")

@@ -217,7 +217,7 @@ resource "aws_lambda_function" "ducklake_writer" {
   handler       = "src.lambdas.ducklake_writer.handler.handler"
   architectures = ["x86_64"]
   timeout       = 120
-  memory_size   = 1024
+  memory_size   = 3008 # Branch P (EC8 RCA): vCPU starvation -- wall_cpu_ratio=31.73 at 1024MB; raised to 3008 (account max, ~1.7 vCPU) to reduce starvation and bring p95 closer to the 2000ms CD.33 budget.
 
   s3_bucket        = aws_s3_bucket.data_lake.id
   s3_key           = "lambda-packages/ducklake-writer.zip"

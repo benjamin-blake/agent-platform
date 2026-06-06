@@ -32,6 +32,12 @@ from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from src.common import ducklake_runtime, ducklake_spike
+from src.common.ducklake_runtime import (
+    CHURN_WRITERS,
+    CHURN_WRITES_PER_WRITER,
+    COMMIT_LATENCY_BUDGET_MS,
+    OCC_COLLISION_RATE_BUDGET,
+)
 
 DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 # Single source of truth: the runtime owns the canonical smoke DATA_PATH. A divergent literal here
@@ -45,17 +51,8 @@ META_SCHEMA = "ducklake_ops"
 WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 READER_URL_ENV = "DUCKLAKE_READER_URL"
 
-# CD.33 OCC budget the churn gate must fit within. The DuckLake runtime uses bounded OCC retry; the
-# gate fails loud if observed collisions OR commit latency exceed these. Decision 55: these thresholds
-# are a stop signal, never a knob to loosen so the gate passes.
-OCC_COLLISION_RATE_BUDGET = 0.20  # max fraction of writer iterations that hit an OCC collision
-COMMIT_LATENCY_BUDGET_MS = 2000.0  # max p95 commit latency incl. Neon cold-resume
-CHURN_WRITERS = 8  # concurrent fresh-connection writers in the burst
-CHURN_WRITES_PER_WRITER = 5
-
-# Substrings of a Postgres/DuckLake error that indicate an optimistic-concurrency / serialization
-# collision (the expected, retryable contention signal) rather than a hard failure.
-_OCC_COLLISION_MARKERS = ("could not serialize", "deadlock detected", "concurrent update", "occ", "conflict")
+# CD.33 OCC budget: re-exported from ducklake_runtime (single source -- rec-2091). Decision 55:
+# these are stop signals, never knobs to loosen so the gate passes.
 
 
 class SmokeTestFailure(RuntimeError):
@@ -98,9 +95,8 @@ def attach_roundtrip(*, profile: str | None = None, dsn: dict[str, str] | None =
 
 
 def _is_occ_collision(exc: Exception) -> bool:
-    """True if *exc* looks like an optimistic-concurrency / serialization collision (retryable)."""
-    msg = str(exc).lower()
-    return any(marker in msg for marker in _OCC_COLLISION_MARKERS)
+    """Delegate to ducklake_runtime.is_occ_collision (single implementation -- rec-2091)."""
+    return ducklake_runtime.is_occ_collision(exc)
 
 
 def _single_writer_commit(
@@ -404,7 +400,16 @@ def lambda_loudfail(*, profile: str | None = None, region: str = "eu-west-2") ->
 def lambda_churn(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """EC8: in-region concurrent writers on the DIRECT endpoint; p95 within the CD.33 budget."""
     body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "churn"}, profile=profile, region=region))
-    msg = f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} endpoint={body['endpoint']}"
+    bd = body.get("breakdown", {})
+    msg = (
+        f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} "
+        f"endpoint={body['endpoint']} "
+        f"p95_connect_ms={bd.get('p95_connect_ms', 'n/a')} "
+        f"p95_commit_ms_detail={bd.get('p95_commit_ms', 'n/a')} "
+        f"p95_cpu_ms={bd.get('p95_cpu_ms', 'n/a')} "
+        f"wall_cpu_ratio={bd.get('wall_cpu_ratio', 'n/a')} "
+        f"total_occ_retries={bd.get('total_occ_retries', 'n/a')}"
+    )
     if not body.get("within_budget"):
         raise SmokeTestFailure(
             f"CHURN FAIL: collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} over the "

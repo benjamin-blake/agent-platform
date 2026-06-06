@@ -210,6 +210,7 @@ def test_open_connection_dev_mode_installs(monkeypatch):
     assert any(s.startswith("ATTACH 'ducklake:postgres:") for s in sqls)
     assert any("META_SCHEMA 'ducklake_ops'" in s for s in sqls)
     assert any("ducklake_default_data_inlining_row_limit=0" in s for s in sqls)
+    assert any(s == "SET threads=1" for s in sqls)
 
 
 def test_open_connection_baked_mode_failclosed(monkeypatch):
@@ -223,6 +224,7 @@ def test_open_connection_baked_mode_failclosed(monkeypatch):
     assert any("custom_extension_repository=''" in s for s in sqls)
     assert any(s == "LOAD postgres" for s in sqls)
     assert not any("INSTALL" in s for s in sqls)  # fail-closed: no network INSTALL
+    assert any(s == "SET threads=1" for s in sqls)  # vCPU-starvation fix applies on the baked path too
 
 
 def test_open_connection_with_shared_creds(monkeypatch):
@@ -343,6 +345,18 @@ def test_create_scd2_tables_force_recreate_drops_first():
     creates = [i for i, s in enumerate(sqls) if s.startswith("CREATE TABLE")]
     assert len(drops) == 2
     assert min(drops) < min(creates)  # drops precede creates
+
+
+# ---------------------------------------------------------------------------
+# churn gate budget constants (rec-2091: single source in ducklake_runtime)
+# ---------------------------------------------------------------------------
+
+
+def test_churn_budget_constants_values():
+    assert rt.COMMIT_LATENCY_BUDGET_MS == 2000.0
+    assert rt.OCC_COLLISION_RATE_BUDGET == 0.20
+    assert rt.CHURN_WRITERS == 8
+    assert rt.CHURN_WRITES_PER_WRITER == 5
 
 
 # ---------------------------------------------------------------------------

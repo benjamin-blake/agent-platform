@@ -9,6 +9,55 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-06] - implement: ducklake-churn-latency-rca (T2.17 EC8 Branch P partial, VP-13 BLOCKED on Lambda quota)
+
+**Mode:** Implementation (PLAN-ducklake-churn-latency-rca.md, V3 tier).
+**Goal:** Root-cause the EC8 churn-gate p95 latency (superseding rec-2084's "latency-waived" projection) and reduce p95 below the CD.33 2000ms budget.
+**Outcome:** PARTIAL - Phase 1 instrumentation shipped + rec-2091 consolidation complete; Branch P capped at account Lambda memory limit (3008MB). VP-13 FAIL after 3 attempts. Blocker: Lambda memory quota needs increase to >=6144MB.
+
+**Phase 1 attribution at 1024MB (VP-12):**
+
+| Metric | Value | Interpretation |
+|--------|-------|---------------|
+| p95_connect_ms | 9256ms | Cold LOAD+ATTACH; CPU-starvation-inflated |
+| p95_commit_ms | 15622ms | 5 sequential writes; CPU-starvation-inflated |
+| p95_wall_ms | 24130ms | End-to-end per writer |
+| p95_cpu_ms | 862ms | ACTUAL CPU work needed per thread |
+| wall_cpu_ratio | 31.73 | Definitive vCPU starvation; Branch P trigger |
+| total_occ_retries | 0 | OCC not a factor; Branch O skipped |
+
+**Dominant term:** vCPU starvation (wall/cpu ratio 31.73x). p95_cpu_ms=862ms is already within budget; the ONLY issue is scheduling delay from 8 threads on ~0.58 vCPU at 1024MB.
+
+**Branch P fixes applied:**
+
+| Step | Change | p95_wall | wall_cpu_ratio | Status |
+|------|--------|----------|----------------|--------|
+| 0 | 1024MB baseline | 24130ms | 31.73 | FAIL |
+| 1 | 3008MB (account max) | 8780ms | 10.35 | FAIL |
+| 2 | 3008MB + SET threads=1 | 7395ms | 9.57 | FAIL |
+
+**Blocker:** Account Lambda memory limit is 3008MB (~1.7 vCPU). Budget requires p95_wall <=2000ms with p95_cpu ~737-961ms, implying wall_cpu_ratio <=2.08-2.72, which requires >=6 vCPU (~10608MB). Lambda quota increase to >=6144MB (ideally 10240MB) is needed.
+
+**What shipped:**
+- rec-2091 consolidated: COMMIT_LATENCY_BUDGET_MS / OCC_COLLISION_RATE_BUDGET / CHURN_WRITERS / CHURN_WRITES_PER_WRITER moved from handler.py + smoke_test.py into `src/common/ducklake_runtime.py` as single source.
+- `_churn_one_writer` instrumented with per-stage breakdown (connect_ms, commit_ms, cpu_ms, wall_ms, occ_retries, wall_cpu_ratio).
+- Phase 1 CloudWatch metrics emitted: ChurnP95ConnectMs, ChurnP95CommitMs, ChurnP95CpuMs, ChurnWallCpuRatio, ChurnTotalOccRetries.
+- Lambda memory_size raised 1024 -> 3008MB (ducklake_writer only, in tf + applied via AWS CLI).
+- DuckDB `SET threads=1` applied to all connections (eliminates DuckDB background thread proliferation, freed ~16% wall latency).
+- 154 unit tests pass; pre-validate passes.
+
+**VP-13 FAIL disposition (Decision 55):** Budget NOT relaxed (2000ms stays); no degrade-to-pass. Stopping per Decision 55 and filing a blocker recommendation for the Lambda quota increase. The next session must request the AWS Service Quotas increase (Lambda max memory: 3008 -> 10240MB) and then re-run VP-13.
+
+**Supersedes rec-2084:** The prior "latency-waived-with-rationale" projection was based on a local/dev measurement. The live Lambda measurement at 1024MB showed p95=24130ms (12x over budget). The Neon RTT is NOT the bottleneck; pure vCPU starvation is. rec-2084's projection is falsified.
+
+**Next:**
+- Human: request Lambda memory quota increase (eu-west-2, service: Lambda, quota: "Maximum memory allocation", target: >=6144MB, ideally 10240MB) via AWS Service Quotas console.
+- Once quota increased: re-run `--lambda-churn` (VP-13); expected p95 ~1345ms at 10240MB (wall_cpu_ratio ~1.4).
+- After VP-13 passes: VP-14 (writer regression sweep), VP-15 (reader gate), close rec-2091, roadmap bookkeeping, code review, PR.
+- rec-2091 closure: pending VP-13 pass.
+
+---
+
 ## [2026-06-05] - close-out: T2.16b Phase 2 retirement, rec-2061 CRLF structural fix, VP-10 PASS
 
 **Mode:** Close-out follow-up to the same-day Phase 2 retirement session below.

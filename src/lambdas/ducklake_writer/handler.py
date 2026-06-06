@@ -175,22 +175,17 @@ def action_loudfail_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
     }
 
 
-CHURN_WRITERS = 8
-CHURN_WRITES_PER_WRITER = 5
-OCC_COLLISION_RATE_BUDGET = 0.20
-COMMIT_LATENCY_BUDGET_MS = 2000.0
-
-
 def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
     """In-region concurrent-writer burst; report collision rate + p95 commit latency (EC8).
 
     Self-contained: each writer opens its OWN baked-extension connection to the Neon DIRECT
     endpoint (no dev-mode network INSTALL), so the gate measures the real in-region Lambda->Neon
-    connect+commit latency. Loud-fail classification only -- a non-OCC error propagates.
+    connect+commit latency. Per-stage attribution breakdown (connect, commit, wall, cpu) is included
+    in the response for Phase-1 RCA. Loud-fail classification only -- a non-OCC error propagates.
     """
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
-    writers = int(event.get("writers", CHURN_WRITERS))
+    writers = int(event.get("writers", rt.CHURN_WRITERS))
     dsn = rt.fetch_dsn()
     creds = _frozen_creds()
     # Pre-create the tables once so concurrent writers only write (avoids a CREATE race).
@@ -206,30 +201,82 @@ def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
     collisions = sum(1 for r in results if r["collided"])
     collision_rate = collisions / len(results) if results else 0.0
     p95 = _p95([r["latency_ms"] for r in results])
-    within = collision_rate <= OCC_COLLISION_RATE_BUDGET and p95 <= COMMIT_LATENCY_BUDGET_MS
+    within = collision_rate <= rt.OCC_COLLISION_RATE_BUDGET and p95 <= rt.COMMIT_LATENCY_BUDGET_MS
+
+    breakdown = {
+        "p95_connect_ms": round(_p95([r["connect_ms"] for r in results]), 2),
+        "p95_commit_ms": round(_p95([r["commit_ms"] for r in results]), 2),
+        "p95_wall_ms": round(p95, 2),
+        "p95_cpu_ms": round(_p95([r["cpu_ms"] for r in results]), 2),
+        "total_occ_retries": sum(r["occ_retries"] for r in results),
+        "wall_cpu_ratio": round(
+            sum(r["wall_ms"] for r in results) / max(sum(r["cpu_ms"] for r in results), 0.001),
+            2,
+        ),
+        "writers": writers,
+    }
+
+    # Emit per-stage breakdown to CloudWatch for Phase-1 RCA observability (EC9 extension).
+    sink = rt.make_metric_sink()
+    sink("ChurnP95ConnectMs", breakdown["p95_connect_ms"])
+    sink("ChurnP95CommitMs", breakdown["p95_commit_ms"])
+    sink("ChurnP95CpuMs", breakdown["p95_cpu_ms"])
+    sink("ChurnWallCpuRatio", breakdown["wall_cpu_ratio"])
+    sink("ChurnTotalOccRetries", float(breakdown["total_occ_retries"]))
+
     return {
         "ok": True,
         "collision_rate": round(collision_rate, 3),
         "p95_commit_ms": round(p95, 1),
         "endpoint": "direct",
         "within_budget": within,
+        "breakdown": breakdown,
     }
 
 
 def _churn_one_writer(writer_id: int, dsn: dict[str, Any], creds: Any) -> dict[str, Any]:
-    """One churn iteration: a fresh baked connection + a contended write burst. Classify OCC only."""
-    start = time.perf_counter()
+    """One churn iteration: a fresh baked connection + a contended write burst. Classify OCC only.
+
+    Returns a per-stage attribution dict for Phase-1 RCA (EC8):
+      connect_ms  -- time for open_connection (LOAD+ATTACH, the cold-start cost)
+      commit_ms   -- aggregate commit_ms across all write_scd2 calls (includes OCC retries + backoff)
+      occ_retries -- total OCC retries across all writes
+      wall_ms     -- total wall-clock elapsed time (= latency_ms for backward compat)
+      cpu_ms      -- thread CPU time; wall_ms / cpu_ms >> 1 signals vCPU starvation (Branch P trigger)
+      collided    -- True if any write exhausted its OCC budget
+    """
+    wall_start = time.perf_counter()
+    cpu_start = time.thread_time()
     collided = False
+    aggregate_commit_ms = 0.0
+    total_occ_retries = 0
+
+    connect_start = time.perf_counter()
     con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+    connect_ms = (time.perf_counter() - connect_start) * 1000.0
+
     try:
-        for seq in range(CHURN_WRITES_PER_WRITER):
+        for seq in range(rt.CHURN_WRITES_PER_WRITER):
             try:
-                rt.write_scd2(con, {"rec_id": f"rec-churn-{writer_id}-{seq}", "payload": "c"})
+                result = rt.write_scd2(con, {"rec_id": f"rec-churn-{writer_id}-{seq}", "payload": "c"})
+                aggregate_commit_ms += result.commit_ms
+                total_occ_retries += result.occ_retries
             except rt.OCCRetryExhaustedError:
                 collided = True
     finally:
         con.close()
-    return {"latency_ms": (time.perf_counter() - start) * 1000.0, "collided": collided}
+
+    wall_ms = (time.perf_counter() - wall_start) * 1000.0
+    cpu_ms = (time.thread_time() - cpu_start) * 1000.0
+    return {
+        "latency_ms": wall_ms,
+        "collided": collided,
+        "connect_ms": round(connect_ms, 2),
+        "commit_ms": round(aggregate_commit_ms, 2),
+        "occ_retries": total_occ_retries,
+        "wall_ms": round(wall_ms, 2),
+        "cpu_ms": round(cpu_ms, 2),
+    }
 
 
 def _frozen_creds() -> tuple[str, str, str | None, str]:
