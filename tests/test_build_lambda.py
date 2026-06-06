@@ -1,17 +1,53 @@
 """Tests for build_lambda module."""
 
+import gzip
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import scripts.build_lambda as bl
 from scripts.build_lambda import (
+    _DUCKLAKE_READER_FUNCTION,
+    _DUCKLAKE_WRITER_FUNCTION,
     _LAMBDA_FUNCTION_NAMES,
     _LAMBDA_SCRIPTS,
     _OPS_COMPACTION_FUNCTION_NAME,
     _OPS_COMPACTION_ZIP_KEY,
+    PINNED_DUCKDB_VERSION,
+    assert_within_size_limit,
     update_lambda_functions,
     validate_bucket_exists,
 )
+
+
+class _FakePath:
+    """Minimal Path double exposing .name + .stat().st_size for size-assert tests."""
+
+    def __init__(self, size=100, name="x.zip"):
+        self._size = size
+        self.name = name
+
+    def stat(self):
+        return types.SimpleNamespace(st_size=self._size)
+
+
+def _args(**kw):
+    import argparse
+
+    ns = argparse.Namespace(
+        skip_upload=True,
+        bucket="",
+        profile="agent_platform",
+        region="eu-west-2",
+        deploy=False,
+        ducklake_only=False,
+        list_bundle=None,
+    )
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
+
 
 pytestmark = pytest.mark.unit
 
@@ -339,3 +375,352 @@ class TestBuildLambdaConfigScope:
         config_copytree = re.compile(r"copytree\(\s*ROOT\s*/\s*[\"']config[\"']")
         assert not src_copytree.search(source), "Hardcoded shutil.copytree(ROOT/'src') must be retired (CD.24)"
         assert not config_copytree.search(source), "Hardcoded shutil.copytree(ROOT/'config') must be retired (CD.24)"
+
+
+# ---------------------------------------------------------------------------
+# T2.17 DuckLake build additions: size assert, layer builders, ducklake deploy
+# ---------------------------------------------------------------------------
+
+
+class TestSizeAssert:
+    def test_under_limit_ok(self):
+        assert_within_size_limit(_FakePath(size=100))  # no raise
+
+    def test_at_limit_ok(self):
+        assert_within_size_limit(_FakePath(size=bl.LAMBDA_SIZE_LIMIT_BYTES))
+
+    def test_over_limit_exits(self):
+        with pytest.raises(SystemExit) as exc:
+            assert_within_size_limit(_FakePath(size=bl.LAMBDA_SIZE_LIMIT_BYTES + 1, name="big.zip"))
+        assert exc.value.code == 1
+
+
+class TestPinnedConstants:
+    def test_pinned_duckdb_version(self):
+        assert PINNED_DUCKDB_VERSION == "1.5.3"
+
+    def test_ducklake_deps_pin_exact(self):
+        assert f"duckdb=={PINNED_DUCKDB_VERSION}" in bl.DUCKLAKE_DEPS
+
+    def test_postgres_published_as_scanner(self):
+        stems = dict(bl.DUCKLAKE_EXTENSIONS)
+        assert stems["postgres"] == "postgres_scanner"
+
+    def test_ducklake_function_zip_keys(self):
+        assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_WRITER_FUNCTION] == "lambda-packages/ducklake-writer.zip"
+        assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_READER_FUNCTION] == "lambda-packages/ducklake-reader.zip"
+
+
+class TestBuildDucklakeFunctionPackage:
+    def test_builds_from_manifest(self, tmp_path):
+        with (
+            patch("scripts.lambda_manifest.load", return_value=MagicMock()) as mock_load,
+            patch("scripts.lambda_manifest.stage_bundle") as mock_stage,
+            patch("scripts.build_lambda._zip_staged_dir", return_value=tmp_path / "ducklake-writer.zip") as mock_zip,
+        ):
+            out = bl.build_ducklake_function_package(tmp_path, "ducklake_writer", "ducklake-writer.zip")
+        assert out == tmp_path / "ducklake-writer.zip"
+        mock_load.assert_called_once()
+        mock_stage.assert_called_once()
+        mock_zip.assert_called_once()
+
+
+class TestBuildDucklakeDepsLayer:
+    def test_pip_args_pin_duckdb_and_stages(self, tmp_path):
+        from pathlib import Path
+
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            # Emulate pip --target: stage a package file + a dist-info dir to exercise cleanup + zip.
+            target = Path(cmd[cmd.index("--target") + 1])
+            (target / "foo.py").write_text("x=1", encoding="utf-8")
+            (target / "foo.dist-info").mkdir()
+            (target / "foo.dist-info" / "METADATA").write_text("m", encoding="utf-8")
+            return types.SimpleNamespace(returncode=0)
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            with patch("scripts.build_lambda.OUTPUT_DIR", tmp_path):
+                out = bl.build_ducklake_deps_layer(tmp_path)
+        assert out == tmp_path / "ducklake-deps-layer.zip"
+        cmd = captured["cmd"]
+        reqs = (tmp_path / "requirements-ducklake.txt").read_text()
+        assert f"duckdb=={PINNED_DUCKDB_VERSION}" in reqs
+        # Transitive deps that duckdb/python-ulid import but do not auto-install for py3.12 must be
+        # pinned explicitly, or the write/read paths ModuleNotFoundError at runtime.
+        assert "typing_extensions" in reqs  # python-ulid imports `from typing_extensions import Self`
+        assert "pytz" in reqs  # duckdb lazily imports pytz for tz-aware TIMESTAMP conversion
+        assert "manylinux_2_28_x86_64" in cmd
+        # dist-info is PRESERVED (not stripped): duckdb>=1.3 reads its version via importlib.metadata.
+        import zipfile
+
+        names = zipfile.ZipFile(out).namelist()
+        assert any(n.endswith("foo.py") for n in names)
+        assert any("dist-info" in n for n in names)
+
+    def test_pip_failure_exits(self, tmp_path):
+        with patch("scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=1)):
+            with patch("scripts.build_lambda.OUTPUT_DIR", tmp_path):
+                with pytest.raises(SystemExit):
+                    bl.build_ducklake_deps_layer(tmp_path)
+
+
+class TestBuildDucklakeExtensionsLayer:
+    def test_stages_three_extensions(self, tmp_path):
+        with patch("scripts.build_lambda._fetch_extension_bytes", return_value=b"EXTDATA"):
+            with patch("scripts.build_lambda.OUTPUT_DIR", tmp_path):
+                out = bl.build_ducklake_extensions_layer(tmp_path, bucket="b", profile="p", region="r")
+        import zipfile
+
+        names = zipfile.ZipFile(out).namelist()
+        for stem in ("ducklake", "httpfs", "postgres_scanner"):
+            assert any(f"duckdb_extensions/v1.5.3/linux_amd64/{stem}.duckdb_extension" == n for n in names)
+
+
+class TestFetchExtensionBytes:
+    def test_prefers_s3_fallback(self):
+        with patch("scripts.build_lambda._try_s3_extension", return_value=b"S3RAW"):
+            out = bl._fetch_extension_bytes("ducklake", bucket="b", profile="p", region="r")
+        assert out == b"S3RAW"
+
+    def test_falls_back_to_url_with_ua(self):
+        payload = gzip.compress(b"RAWEXT")
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return payload
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=0):
+            captured["headers"] = req.headers
+            return _Resp()
+
+        with patch("scripts.build_lambda._try_s3_extension", return_value=None):
+            with patch("scripts.build_lambda.urllib.request.urlopen", side_effect=fake_urlopen):
+                out = bl._fetch_extension_bytes("ducklake", bucket="b", profile="p", region="r")
+        assert out == b"RAWEXT"
+        # browser UA present (the CDN 403s the default urllib UA)
+        assert any("mozilla" in str(v).lower() for v in captured["headers"].values())
+
+    def test_no_bucket_goes_straight_to_url(self):
+        payload = gzip.compress(b"X")
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return payload
+
+        with patch("scripts.build_lambda.urllib.request.urlopen", return_value=_Resp()):
+            out = bl._fetch_extension_bytes("httpfs", bucket=None, profile="p", region="r")
+        assert out == b"X"
+
+
+class TestTryS3Extension:
+    def test_success_reads_bytes(self, tmp_path):
+        def fake_run(cmd, **kw):
+            # Emulate `aws s3 cp <s3uri> <dest> ...` writing the dest file (cmd[4] is the local dest).
+            dest = cmd[4]
+            from pathlib import Path
+
+            Path(dest).write_bytes(b"DATA")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            out = bl._try_s3_extension("bucket", "ducklake", "profile", "region")
+        assert out == b"DATA"
+
+    def test_failure_returns_none(self):
+        with patch(
+            "scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=1, stdout="", stderr="x")
+        ):
+            assert bl._try_s3_extension("bucket", "ducklake", "profile", "region") is None
+
+
+class TestUpdateLambdaFunctionsDucklakeOnly:
+    def test_only_ducklake_updates_two_functions(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.side_effect = [types.SimpleNamespace(returncode=0), types.SimpleNamespace(returncode=0)]
+            update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True)
+        assert mock_run.call_count == 2
+        targeted = []
+        for c in mock_run.call_args_list:
+            cmd = c[0][0]
+            targeted.append(cmd[cmd.index("--function-name") + 1])
+        assert set(targeted) == {_DUCKLAKE_WRITER_FUNCTION, _DUCKLAKE_READER_FUNCTION}
+
+
+class TestResolveDucklakeProfile:
+    def test_generic_default_maps_to_personal(self):
+        assert bl._resolve_ducklake_profile("company-aws-profile") == "agent_platform"
+
+    def test_explicit_profile_unchanged(self):
+        assert bl._resolve_ducklake_profile("agent_platform") == "agent_platform"
+        assert bl._resolve_ducklake_profile("agent_platform_admin") == "agent_platform_admin"
+
+    def test_ducklake_build_resolves_profile(self):
+        captured = {}
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
+            patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch(
+                "scripts.build_lambda.build_ducklake_extensions_layer",
+                side_effect=lambda td, **kw: captured.update(kw) or _FakePath(name="ext.zip"),
+            ),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+        ):
+            bl._run_ducklake_build(_args(skip_upload=True, profile="company-aws-profile"))
+        assert captured["profile"] == "agent_platform"  # generic default resolved to personal
+
+
+class TestRunBuilds:
+    def test_run_ducklake_build_skip_upload(self):
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
+            patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
+            patch("scripts.build_lambda.assert_within_size_limit") as mock_assert,
+            patch("scripts.build_lambda.upload_to_s3") as mock_upload,
+        ):
+            bl._run_ducklake_build(_args(skip_upload=True))
+        assert mock_assert.call_count == 4
+        assert mock_upload.call_count == 0
+
+    def test_run_ducklake_build_upload_and_deploy(self):
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch(
+                "scripts.build_lambda.build_ducklake_function_package",
+                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip")],
+            ),
+            patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+            patch("scripts.build_lambda.validate_bucket_exists", return_value=True),
+            patch("scripts.build_lambda.upload_to_s3") as mock_upload,
+            patch("scripts.build_lambda.update_lambda_functions") as mock_update,
+        ):
+            bl._run_ducklake_build(_args(skip_upload=False, deploy=True))
+        assert mock_upload.call_count == 4
+        mock_update.assert_called_once()
+        assert mock_update.call_args.kwargs.get("only_ducklake") is True
+
+    def test_run_ducklake_build_bucket_missing_exits(self):
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch("scripts.build_lambda.build_ducklake_function_package", side_effect=[_FakePath(), _FakePath()]),
+            patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath()),
+            patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath()),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+            patch("scripts.build_lambda.validate_bucket_exists", return_value=False),
+        ):
+            with pytest.raises(SystemExit):
+                bl._run_ducklake_build(_args(skip_upload=False))
+
+    def test_run_prod_build_skip_upload_warns_on_large_layer(self):
+        big = _FakePath(size=260 * 1024 * 1024, name="deps.zip")  # > 250 MB WARN, < 262 MB hard
+        with (
+            patch("scripts.build_lambda.build_app_package", return_value=_FakePath(name="dp.zip")),
+            patch("scripts.build_lambda.build_ops_compaction_package", return_value=_FakePath(name="ops.zip")),
+            patch("scripts.build_lambda.build_deps_layer", return_value=big),
+            patch("scripts.build_lambda.assert_within_size_limit") as mock_assert,
+            patch("scripts.build_lambda.upload_to_s3") as mock_upload,
+        ):
+            bl._run_prod_build(_args(skip_upload=True))
+        assert mock_assert.call_count == 3
+        assert mock_upload.call_count == 0
+
+    def test_run_prod_build_bucket_missing_exits(self):
+        with (
+            patch("scripts.build_lambda.build_app_package", return_value=_FakePath(name="dp.zip")),
+            patch("scripts.build_lambda.build_ops_compaction_package", return_value=_FakePath(name="ops.zip")),
+            patch("scripts.build_lambda.build_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch("scripts.build_lambda.validate_bucket_exists", return_value=False),
+        ):
+            with pytest.raises(SystemExit):
+                bl._run_prod_build(_args(skip_upload=False))
+
+    def test_run_prod_build_upload_and_deploy(self):
+        with (
+            patch("scripts.build_lambda.build_app_package", return_value=_FakePath(name="dp.zip")),
+            patch("scripts.build_lambda.build_ops_compaction_package", return_value=_FakePath(name="ops.zip")),
+            patch("scripts.build_lambda.build_deps_layer", return_value=_FakePath(name="deps.zip")),
+            patch("scripts.build_lambda.assert_within_size_limit"),
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch("scripts.build_lambda.validate_bucket_exists", return_value=True),
+            patch("scripts.build_lambda.upload_to_s3") as mock_upload,
+            patch("scripts.build_lambda.update_lambda_functions") as mock_update,
+        ):
+            bl._run_prod_build(_args(skip_upload=False, deploy=True))
+        assert mock_upload.call_count == 3
+        mock_update.assert_called_once()
+
+
+class TestResolveBucket:
+    def test_terraform_output_used(self):
+        with patch(
+            "scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=0, stdout="tf-bucket\n")
+        ):
+            assert bl.resolve_bucket("p") == "tf-bucket"
+
+    def test_empty_output_falls_back(self):
+        with patch("scripts.build_lambda.subprocess.run", return_value=types.SimpleNamespace(returncode=0, stdout="")):
+            assert bl.resolve_bucket("p") == "agent-platform-data-lake"
+
+    def test_terraform_missing_falls_back(self):
+        with patch("scripts.build_lambda.subprocess.run", side_effect=FileNotFoundError):
+            assert bl.resolve_bucket("p") == "agent-platform-data-lake"
+
+
+class TestMainDispatch:
+    def test_main_ducklake_only_routes(self):
+        with (
+            patch("scripts.build_lambda._run_ducklake_build") as mock_dl,
+            patch("scripts.build_lambda._run_prod_build") as mock_prod,
+            patch("sys.argv", ["build_lambda", "--ducklake-only", "--skip-upload"]),
+        ):
+            bl.main()
+        mock_dl.assert_called_once()
+        mock_prod.assert_not_called()
+
+    def test_main_default_routes_prod(self):
+        with (
+            patch("scripts.build_lambda._run_ducklake_build") as mock_dl,
+            patch("scripts.build_lambda._run_prod_build") as mock_prod,
+            patch("sys.argv", ["build_lambda", "--skip-upload"]),
+        ):
+            bl.main()
+        mock_prod.assert_called_once()
+        mock_dl.assert_not_called()
+
+    def test_main_list_bundle_short_circuits(self):
+        with (
+            patch("scripts.build_lambda.list_bundle") as mock_lb,
+            patch("scripts.build_lambda._run_prod_build") as mock_prod,
+            patch("sys.argv", ["build_lambda", "--list-bundle", "data-pipeline"]),
+        ):
+            bl.main()
+        mock_lb.assert_called_once_with("data-pipeline")
+        mock_prod.assert_not_called()

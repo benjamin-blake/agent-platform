@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -32,6 +32,7 @@ class LambdaManifest(BaseModel):
     functions: list[str] = []  # AWS Lambda function names backed by this artifact
     handlers: list[str] = []  # entry-point .py file paths (relative to repo root)
     includes: list[str] = []  # src/ or scripts/ paths staged wholesale (dirs or files)
+    excludes: list[str] = []  # paths under an includes[] dir to NOT stage / NOT mark affected
     assets: list[str] = []  # non-import files/dirs bundled verbatim, read at runtime
     config: list[str] = []  # config/lambda/<name>/ paths
     pip_packages: list[str] = []  # pip-installable packages (e.g. "github-copilot-sdk==0.2.2")
@@ -70,11 +71,41 @@ def load_all() -> dict[str, LambdaManifest]:
     return manifests
 
 
+def _is_excluded(rel_path: str, excludes: list[str]) -> bool:
+    """True if *rel_path* (repo-relative) equals or is nested under any excludes[] entry."""
+    norm = rel_path.replace("\\", "/").rstrip("/")
+    for ex in excludes:
+        ex_norm = ex.replace("\\", "/").rstrip("/")
+        if norm == ex_norm or norm.startswith(ex_norm + "/"):
+            return True
+    return False
+
+
+def _copytree_ignore(excludes: list[str]) -> "Callable[[str, list[str]], set[str]]":
+    """Build a shutil.copytree `ignore` callable that drops excludes[] entries during a dir copy."""
+
+    def _ignore(dir_path: str, names: list[str]) -> set[str]:
+        ignored: set[str] = set()
+        base = Path(dir_path)
+        for name in names:
+            try:
+                rel = (base / name).resolve().relative_to(ROOT.resolve())
+            except ValueError:
+                continue
+            if _is_excluded(str(rel), excludes):
+                ignored.add(name)
+        return ignored
+
+    return _ignore
+
+
 def stage_bundle(manifest: LambdaManifest, stage_dir: Path, *, skip_pip: bool = True) -> None:
     """Stage all manifest-declared files into stage_dir.
 
     Replicates the file-set that the old copytree approach produced, driven
-    entirely from the manifest rather than from filesystem layout.
+    entirely from the manifest rather than from filesystem layout. Paths listed in
+    manifest.excludes are skipped during the includes copy (a wildcard `includes: - src/`
+    no longer drags excluded subtrees into the zip).
 
     Args:
         manifest: Loaded LambdaManifest.
@@ -85,12 +116,15 @@ def stage_bundle(manifest: LambdaManifest, stage_dir: Path, *, skip_pip: bool = 
 
     def _copy_path(rel: str) -> None:
         """Copy a single path (file or directory) preserving relative structure."""
+        if _is_excluded(rel, manifest.excludes):
+            return
         src = ROOT / rel
         dst = stage_dir / rel
         if not src.exists():
             return
         if src.is_dir():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
+            ignore = _copytree_ignore(manifest.excludes) if manifest.excludes else None
+            shutil.copytree(src, dst, dirs_exist_ok=True, ignore=ignore)
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
@@ -218,6 +252,10 @@ def compute_affected_artifacts(changed_files: list[str]) -> dict[str, list[str]]
             manifest_paths.add(p.rstrip("/"))
         matches = []
         for changed in changed_files:
+            # A changed file under an excludes[] entry does NOT mark this artifact affected,
+            # even if it falls under a broad includes[] prefix (e.g. src/).
+            if _is_excluded(changed, manifest.excludes):
+                continue
             for mp in manifest_paths:
                 if changed == mp or changed.startswith(mp + "/") or changed.startswith(mp + "\\"):
                     matches.append(changed)
@@ -249,6 +287,9 @@ def derive_lambda_file_patterns() -> list[str]:
             continue
         for p in manifest.handlers + manifest.includes + manifest.assets + manifest.config:
             clean = p.rstrip("/")
+            # A path this manifest excludes is not one of its file patterns.
+            if _is_excluded(clean, manifest.excludes):
+                continue
             src = ROOT / clean
             if src.is_dir():
                 patterns.add(clean + "/")

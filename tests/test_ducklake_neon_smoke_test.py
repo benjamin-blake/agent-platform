@@ -129,14 +129,31 @@ def test_dsn_uri_default_and_explicit_sslmode():
 # ---------------------------------------------------------------------------
 
 
-def test_open_attached_composes_attach(monkeypatch):
+def test_open_attached_delegates_to_runtime(monkeypatch):
+    """_open_attached now delegates to ducklake_runtime.open_connection (single ATTACH impl)."""
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con)
-    monkeypatch.setattr(smoke.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
-    monkeypatch.setattr(smoke.ducklake_spike, "_set_s3_credentials", lambda c, profile=None: None)
+    captured = {}
 
-    out = smoke._open_attached(_DSN, profile=None)
+    def fake_open(**kwargs):
+        captured.update(kwargs)
+        return con
+
+    monkeypatch.setattr(smoke.ducklake_runtime, "open_connection", fake_open)
+    out = smoke._open_attached(_DSN, profile="agent_platform")
     assert out is con
+    assert captured["dsn"] is _DSN
+    assert captured["extension_directory"] is None  # dev/smoke mode = network INSTALL
+    assert captured["profile"] == "agent_platform"
+    assert captured["data_path"] == smoke.SMOKE_DATA_PATH
+
+
+def test_open_attached_real_attach_composition(monkeypatch):
+    """Through the real runtime: dev-mode INSTALL + a single ATTACH with META_SCHEMA."""
+    con = FakeCon()
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    monkeypatch.setattr(smoke.ducklake_runtime.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
+    monkeypatch.setattr(smoke.ducklake_runtime.ducklake_spike, "_set_s3_credentials", lambda c, profile=None: None)
+    smoke._open_attached(_DSN, profile=None)
     attach_sql = [s for s in con.executed if s.startswith("ATTACH")]
     assert len(attach_sql) == 1
     assert "ducklake:postgres:" in attach_sql[0]
@@ -474,3 +491,243 @@ def test_main_loud_fail_returns_1(monkeypatch, capsys):
 def test_main_requires_a_mode():
     with pytest.raises(SystemExit):
         smoke.main([])
+
+
+# ---------------------------------------------------------------------------
+# In-Lambda invoke gates (T2.17) -- URL resolution, SigV4 invoke, gate assertions
+# ---------------------------------------------------------------------------
+
+
+class _Resp:
+    def __init__(self, status_code, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_function_url_from_env(monkeypatch):
+    monkeypatch.setenv(smoke.WRITER_URL_ENV, "https://writer.lambda-url/")
+    assert smoke._function_url("writer") == "https://writer.lambda-url"
+
+
+def test_function_url_from_terraform(monkeypatch):
+    monkeypatch.delenv(smoke.READER_URL_ENV, raising=False)
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="https://reader.url\n", stderr=""),
+    )
+    assert smoke._function_url("reader") == "https://reader.url"
+
+
+def test_function_url_missing_raises(monkeypatch):
+    monkeypatch.delenv(smoke.WRITER_URL_ENV, raising=False)
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    with pytest.raises(smoke.SmokeTestFailure, match="cannot reach"):
+        smoke._function_url("writer")
+
+
+def test_sigv4_invoke_signs(monkeypatch):
+    captured = {}
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        captured["headers"] = headers
+        return _Resp(200, {"ok": True})
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    class _FC:
+        access_key = "ak"  # pragma: allowlist secret
+        secret_key = "sk"  # pragma: allowlist secret
+        token = None
+
+    class _Session:
+        def __init__(self, profile_name=None):
+            pass
+
+        def get_credentials(self):
+            return types.SimpleNamespace(get_frozen_credentials=lambda: _FC())
+
+    import boto3
+
+    monkeypatch.setattr(boto3, "Session", _Session)
+    resp = smoke._sigv4_invoke("https://x", {"action": "attach_check"}, sign=True)
+    assert resp.status_code == 200
+    assert "Authorization" in captured["headers"]  # SigV4 added an Authorization header
+
+
+def test_sigv4_invoke_unsigned(monkeypatch):
+    captured = {}
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        captured["headers"] = headers
+        return _Resp(403)
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    resp = smoke._sigv4_invoke("https://x", {"action": "attach_check"}, sign=False)
+    assert resp.status_code == 403
+    assert "Authorization" not in captured["headers"]
+
+
+def test_ok_json_status_mismatch_raises():
+    with pytest.raises(smoke.SmokeTestFailure, match="unexpected status"):
+        smoke._ok_json(_Resp(500, text="boom"))
+
+
+def _patch_gate(monkeypatch, payload, status=200):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(status, payload))
+
+
+def test_lambda_attach_ok(monkeypatch, capsys):
+    _patch_gate(monkeypatch, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+    smoke.lambda_attach()
+    assert "LAMBDA_ATTACH OK version=1.5.3 source=layer" in capsys.readouterr().out
+
+
+def test_lambda_attach_wrong_version_fails(monkeypatch):
+    _patch_gate(monkeypatch, {"version": "1.5.2", "source": "layer", "connect_ms": 1, "commit_ms": 1})
+    with pytest.raises(smoke.SmokeTestFailure, match="LAMBDA_ATTACH FAIL"):
+        smoke.lambda_attach()
+
+
+def test_lambda_ingress_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://w")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200 if kw.get("sign", True) else 403))
+    smoke.lambda_ingress()
+    assert "INGRESS OK unsigned=403 signed=200" in capsys.readouterr().out
+
+
+def test_lambda_ingress_fails_when_unsigned_allowed(monkeypatch):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://w")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200))  # unsigned also 200
+    with pytest.raises(smoke.SmokeTestFailure, match="INGRESS FAIL"):
+        smoke.lambda_ingress()
+
+
+def test_lambda_idempotency_ok(monkeypatch, capsys):
+    _patch_gate(monkeypatch, {"ulid_reused": True, "history_rows": 1, "current_rows": 1})
+    smoke.lambda_idempotency()
+    assert "IDEMPOTENCY OK ulid_reused=true history_rows=1 current_rows=1" in capsys.readouterr().out
+
+
+def test_lambda_idempotency_fails(monkeypatch):
+    _patch_gate(monkeypatch, {"ulid_reused": True, "history_rows": 2, "current_rows": 1})
+    with pytest.raises(smoke.SmokeTestFailure, match="IDEMPOTENCY FAIL"):
+        smoke.lambda_idempotency()
+
+
+def test_lambda_partition_ok(monkeypatch, capsys):
+    _patch_gate(
+        monkeypatch,
+        {
+            "history_pruned": True,
+            "history_files_scanned": 1,
+            "history_total": 3,
+            "current_partitions_scanned": 1,
+            "current_files_scanned": 1,
+            "current_total": 4,
+        },
+    )
+    smoke.lambda_partition()
+    assert "PARTITION OK history_pruned=true" in capsys.readouterr().out
+
+
+def test_lambda_partition_fails(monkeypatch):
+    _patch_gate(
+        monkeypatch,
+        {
+            "history_pruned": False,
+            "history_files_scanned": 3,
+            "history_total": 3,
+            "current_partitions_scanned": 2,
+            "current_files_scanned": 4,
+            "current_total": 4,
+        },
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="PARTITION FAIL"):
+        smoke.lambda_partition()
+
+
+def test_lambda_inlining_ok(monkeypatch, capsys):
+    _patch_gate(monkeypatch, {"inlined_rows": 0, "s3_parquet": 2, "occ_conflicts_handled": True})
+    smoke.lambda_inlining()
+    assert "INLINING OK inlined_rows=0 s3_parquet=2" in capsys.readouterr().out
+
+
+def test_lambda_inlining_fails(monkeypatch):
+    _patch_gate(monkeypatch, {"inlined_rows": 5, "s3_parquet": 0, "occ_conflicts_handled": True})
+    with pytest.raises(smoke.SmokeTestFailure, match="INLINING FAIL"):
+        smoke.lambda_inlining()
+
+
+def test_lambda_loudfail_ok(monkeypatch, capsys):
+    _patch_gate(monkeypatch, {"schema_reject": "raised", "occ_exhaust": "raised", "silent_drop": False})
+    smoke.lambda_loudfail()
+    assert "LOUDFAIL OK schema_reject=raised occ_exhaust=raised silent_drop=false" in capsys.readouterr().out
+
+
+def test_lambda_loudfail_fails(monkeypatch):
+    _patch_gate(monkeypatch, {"schema_reject": "not_raised", "occ_exhaust": "raised", "silent_drop": False})
+    with pytest.raises(smoke.SmokeTestFailure, match="LOUDFAIL FAIL"):
+        smoke.lambda_loudfail()
+
+
+def test_lambda_churn_ok(monkeypatch, capsys):
+    _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 500.0, "endpoint": "direct", "within_budget": True})
+    smoke.lambda_churn()
+    assert "CHURN OK collision_rate=0.0 p95_commit_ms=500.0 endpoint=direct" in capsys.readouterr().out
+
+
+def test_lambda_churn_over_budget_fails(monkeypatch):
+    _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 5000.0, "endpoint": "direct", "within_budget": False})
+    with pytest.raises(smoke.SmokeTestFailure, match="CHURN FAIL"):
+        smoke.lambda_churn()
+
+
+def test_lambda_reader_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+
+    def fake_invoke(url, payload, **kw):
+        if payload["action"] == "read_current":
+            return _Resp(200, {"row_count": 3})
+        return _Resp(200, {"write_denied": True})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    smoke.lambda_reader()
+    assert "READER OK rows=3 write_denied=true" in capsys.readouterr().out
+
+
+def test_lambda_reader_boundary_broken_fails(monkeypatch):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+
+    def fake_invoke(url, payload, **kw):
+        if payload["action"] == "read_current":
+            return _Resp(200, {"row_count": 3})
+        return _Resp(200, {"write_denied": False})  # boundary broken
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    with pytest.raises(smoke.SmokeTestFailure, match="READER FAIL"):
+        smoke.lambda_reader()
+
+
+def test_main_lambda_attach_dispatch(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "lambda_attach", lambda profile=None, region="eu-west-2": print("LAMBDA_ATTACH OK stub"))
+    assert smoke.main(["--lambda-attach"]) == 0
+    assert "LAMBDA_ATTACH OK" in capsys.readouterr().out
+
+
+def test_main_lambda_gate_loud_fail_returns_1(monkeypatch, capsys):
+    def _boom(profile=None, region="eu-west-2"):
+        raise smoke.SmokeTestFailure("READER FAIL: boundary")
+
+    monkeypatch.setattr(smoke, "lambda_reader", _boom)
+    assert smoke.main(["--lambda-reader"]) == 1
+    assert "READER FAIL" in capsys.readouterr().err

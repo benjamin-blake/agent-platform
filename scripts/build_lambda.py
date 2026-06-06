@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
+# complexity-waiver: decision-43 -- build orchestrator: prod (data-pipeline/ops-compaction) + the T2.17
+# DuckLake build path (2 function zips + deps + extensions layer builders) legitimately exceed 500 SLOC.
 """Build Lambda deployment packages for the data pipeline (no Docker required).
 
-Creates two zip artifacts:
+Creates these zip artifacts:
   1. data-pipeline.zip             -- application code (manifest-driven)
   2. ops-compaction.zip            -- minimal ops compaction handler
   3. data-pipeline-deps-layer.zip  -- dependencies layer (yfinance, pyyaml, etc.)
+  4. ducklake-{writer,reader}.zip  -- T2.17 DuckLake runtime functions (--ducklake-only)
+  5. ducklake-{deps,extensions}-layer.zip -- duckdb==1.5.3 + baked extensions (--ducklake-only)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
 whole-src/whole-config copytrees (Decision 79 / CD.24).
 """
 
 import argparse
+import gzip
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = ROOT / "lambda-packages"
+
+# AWS Lambda hard ceiling on a function zip / layer (terraform CLAUDE.md). Exceeding it must FAIL
+# the build, not warn -- an oversize artifact is rejected at deploy time anyway.
+LAMBDA_SIZE_LIMIT_BYTES = 262144000  # 262 MB
+LAMBDA_SIZE_WARN_BYTES = 250 * 1024 * 1024  # early warning before the hard ceiling
+
+# DuckLake lockstep pin (OQ.12): the layer pins duckdb exactly; ducklake_runtime asserts equality.
+PINNED_DUCKDB_VERSION = "1.5.3"
 
 PROD_DEPS = [
     "numpy>=1.24.0",
@@ -34,6 +48,41 @@ PROD_DEPS = [
     "scikit-learn>=1.3.0",
     "aiohttp>=3.8.0",
 ]
+
+# DuckLake deps layer (ducklake-deps): duckdb pinned exactly, plus the runtime's import-time deps.
+# pyyaml is required by ducklake_runtime.load_field_semantics; boto3 is provided by the Lambda base.
+DUCKLAKE_DEPS = [
+    f"duckdb=={PINNED_DUCKDB_VERSION}",
+    "psycopg2-binary>=2.9.0",
+    "python-ulid>=2.2.0",
+    # python-ulid imports `from typing_extensions import Self` unconditionally, but its dependency
+    # marker only requires typing_extensions on python<3.11. Building for 3.12 therefore skips it,
+    # so the write path ImportErrors at runtime (ModuleNotFoundError: typing_extensions). Pin it.
+    "typing_extensions>=4.0",
+    # duckdb lazily imports pytz when it converts tz-aware Python datetimes to/from its TIMESTAMP
+    # types (the SCD2 path binds UTC-aware ULID timestamps). duckdb declares no hard pytz dep, so it
+    # must be bundled explicitly or the write/read paths raise InvalidInputException at runtime.
+    "pytz>=2024.1",
+    "pyyaml>=6.0",
+]
+
+# DuckLake extensions baked into the ducklake-extensions layer: (LOAD name, published file stem).
+# DuckDB publishes the Postgres extension binary as postgres_scanner.duckdb_extension even though it
+# LOADs as `postgres` (verified against v1.5.3/linux_amd64).
+DUCKLAKE_EXTENSIONS = (("ducklake", "ducklake"), ("httpfs", "httpfs"), ("postgres", "postgres_scanner"))
+DUCKLAKE_EXT_PLATFORM = "linux_amd64"
+DUCKLAKE_EXT_URL_BASE = f"https://extensions.duckdb.org/v{PINNED_DUCKDB_VERSION}/{DUCKLAKE_EXT_PLATFORM}"
+# Vendored fallback prefix (raw .duckdb_extension files), seeded when egress to the CDN is blocked.
+DUCKLAKE_EXT_S3_PREFIX = f"ducklake-extensions/v{PINNED_DUCKDB_VERSION}"
+# The DuckDB CDN 403s the default urllib User-Agent; a browser UA returns 200.
+_EXT_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+_DUCKLAKE_WRITER_FUNCTION = "agent-platform-ducklake-writer"
+_DUCKLAKE_READER_FUNCTION = "agent-platform-ducklake-reader"
+_DUCKLAKE_FUNCTION_ZIP_KEYS = {
+    _DUCKLAKE_WRITER_FUNCTION: "lambda-packages/ducklake-writer.zip",
+    _DUCKLAKE_READER_FUNCTION: "lambda-packages/ducklake-reader.zip",
+}
 
 # Retained for backward compatibility with external callers and tests.
 _LAMBDA_SCRIPTS = [
@@ -207,6 +256,153 @@ def build_deps_layer(temp_dir: Path) -> Path:
     return zip_path
 
 
+def assert_within_size_limit(zip_path: Path) -> None:
+    """Hard-fail the build if *zip_path* exceeds the 262 MB Lambda ceiling (terraform CLAUDE.md).
+
+    Replaces the prior non-fatal WARN: an oversize artifact is rejected at deploy time, so the build
+    must stop here rather than ship a zip that cannot be deployed.
+    """
+    size = zip_path.stat().st_size
+    if size > LAMBDA_SIZE_LIMIT_BYTES:
+        mb = round(size / 1024 / 1024, 2)
+        print(
+            f"ERROR: {zip_path.name} is {mb} MB ({size} bytes), over the "
+            f"{LAMBDA_SIZE_LIMIT_BYTES} byte (262 MB) Lambda zip/layer limit. Build failed.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def build_ducklake_function_package(temp_dir: Path, slug: str, zip_name: str) -> Path:
+    """Build a DuckLake function zip from its manifest (deps live in the layer, not the zip)."""
+    from scripts.lambda_manifest import load, stage_bundle  # noqa: PLC0415
+
+    manifest = load(ROOT / "src" / "lambdas" / slug / "manifest.yaml")
+    app_dir = temp_dir / slug
+    app_dir.mkdir(parents=True)
+    stage_bundle(manifest, app_dir, skip_pip=True)  # pip_packages empty; duckdb/ulid come from the layer
+    return _zip_staged_dir(app_dir, OUTPUT_DIR / zip_name)
+
+
+def build_ducklake_deps_layer(temp_dir: Path) -> Path:
+    """Create ducklake-deps-layer.zip (duckdb==1.5.3 + psycopg2-binary + python-ulid + pyyaml)."""
+    site_packages = temp_dir / "ducklake-deps" / "python" / "lib" / "python3.12" / "site-packages"
+    site_packages.mkdir(parents=True)
+
+    req_file = temp_dir / "requirements-ducklake.txt"
+    req_file.write_text("\n".join(DUCKLAKE_DEPS), encoding="utf-8")
+
+    print("  Installing DuckLake deps to Lambda layer structure...")
+    # duckdb 1.5.3 publishes a manylinux_2_28 wheel (no manylinux2014/2_17 wheel above 1.2.2);
+    # Lambda python3.12 runs on Amazon Linux 2023 (glibc 2.34), compatible with 2_28. Offer both
+    # tags newest-first so each dep resolves to its best available wheel.
+    pip_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--requirement",
+            str(req_file),
+            "--target",
+            str(site_packages),
+            "--platform",
+            "manylinux_2_28_x86_64",
+            "--platform",
+            "manylinux2014_x86_64",
+            "--implementation",
+            "cp",
+            "--python-version",
+            "3.12",
+            "--only-binary=:all:",
+            "--quiet",
+        ],
+        check=False,
+    )
+    if pip_result.returncode != 0:
+        print(f"ERROR: DuckLake deps installation failed (exit {pip_result.returncode})")
+        sys.exit(1)
+
+    # Do NOT strip *.dist-info: duckdb>=1.3 reads its own version via importlib.metadata at import
+    # time (duckdb/_version.py -> importlib.metadata.version("duckdb")), which needs the dist-info
+    # METADATA present. Removing it raises PackageNotFoundError on a clean Lambda runtime (no other
+    # duckdb metadata on the path), surfacing as an ImportError. The size saved is trivial.
+    for pattern in ("__pycache__", "*.pyc", "tests", "test"):
+        for path in site_packages.rglob(pattern):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+
+    zip_path = OUTPUT_DIR / "ducklake-deps-layer.zip"
+    layer_dir = temp_dir / "ducklake-deps"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in layer_dir.rglob("*"):
+            if f.is_file():
+                zf.write(f, f.relative_to(layer_dir))
+    return zip_path
+
+
+def _fetch_extension_bytes(stem: str, *, bucket: str | None, profile: str, region: str) -> bytes:
+    """Return the raw .duckdb_extension bytes for *stem*.
+
+    Prefers the vendored S3 fallback (raw, pre-gunzipped) when present; otherwise fetches the .gz
+    from the DuckDB CDN with a browser User-Agent (the CDN 403s the default urllib UA) and gunzips.
+    """
+    if bucket is not None:
+        raw = _try_s3_extension(bucket, stem, profile, region)
+        if raw is not None:
+            print(f"    {stem}: from S3 fallback s3://{bucket}/{DUCKLAKE_EXT_S3_PREFIX}/")
+            return raw
+    url = f"{DUCKLAKE_EXT_URL_BASE}/{stem}.duckdb_extension.gz"
+    print(f"    {stem}: fetching {url}")
+    req = urllib.request.Request(url, headers=_EXT_FETCH_HEADERS)
+    with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 -- pinned https host
+        return gzip.decompress(resp.read())
+
+
+def _try_s3_extension(bucket: str, stem: str, profile: str, region: str) -> bytes | None:
+    """Try to read the vendored raw extension from S3; return None if absent/unreadable."""
+    import tempfile as _tf  # noqa: PLC0415
+
+    key = f"{DUCKLAKE_EXT_S3_PREFIX}/{stem}.duckdb_extension"
+    with _tf.TemporaryDirectory() as td:
+        dest = Path(td) / f"{stem}.duckdb_extension"
+        result = subprocess.run(
+            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, "--profile", profile],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode == 0 and dest.exists():
+            return dest.read_bytes()
+    return None
+
+
+def build_ducklake_extensions_layer(
+    temp_dir: Path, *, bucket: str | None = None, profile: str = "agent_platform", region: str = "eu-west-2"
+) -> Path:
+    """Create ducklake-extensions-layer.zip staging the 3 pinned extensions under /opt.
+
+    Layout: duckdb_extensions/v{ver}/linux_amd64/{ducklake,httpfs,postgres_scanner}.duckdb_extension
+    so the runtime sets extension_directory=/opt/duckdb_extensions and LOADs them with no network.
+    """
+    ext_root = temp_dir / "ducklake-ext" / "duckdb_extensions" / f"v{PINNED_DUCKDB_VERSION}" / DUCKLAKE_EXT_PLATFORM
+    ext_root.mkdir(parents=True)
+
+    print("  Staging DuckLake extensions (prefer S3 fallback, else CDN)...")
+    for _load_name, stem in DUCKLAKE_EXTENSIONS:
+        raw = _fetch_extension_bytes(stem, bucket=bucket, profile=profile, region=region)
+        (ext_root / f"{stem}.duckdb_extension").write_bytes(raw)
+
+    zip_path = OUTPUT_DIR / "ducklake-extensions-layer.zip"
+    layer_dir = temp_dir / "ducklake-ext"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in layer_dir.rglob("*"):
+            if f.is_file():
+                zf.write(f, f.relative_to(layer_dir))
+    return zip_path
+
+
 def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
     """Upload package to S3."""
     s3_key = f"lambda-packages/{zip_path.name}"
@@ -226,7 +422,7 @@ def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None
     )
 
 
-def update_lambda_functions(bucket: str, profile: str, region: str) -> None:
+def update_lambda_functions(bucket: str, profile: str, region: str, *, only_ducklake: bool = False) -> None:
     """Update Lambda function code to point at the latest S3 ZIPs.
 
     Uses ``aws lambda update-function-code`` with --s3-bucket and
@@ -236,13 +432,21 @@ def update_lambda_functions(bucket: str, profile: str, region: str) -> None:
     (no Copilot SDK) to stay under the 262 MB combined-with-layers
     size limit imposed by the attached AWSSDKPandas layer.
 
+    ``only_ducklake`` scopes the deploy to the two DuckLake functions (T2.17), leaving the prod
+    functions untouched (Decision 79 affected-artifact hygiene).
+
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
     --profile.  Ref: ``docs/contracts/inference-provider.md`` for
     the packaging requirement that ``bedrock_client.py`` be bundled.
     """
-    function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _LAMBDA_FUNCTION_NAMES}
-    function_zip_map[_OPS_COMPACTION_FUNCTION_NAME] = _OPS_COMPACTION_ZIP_KEY
+    if only_ducklake:
+        # Scope the deploy to the two DuckLake functions ONLY: data-pipeline + ops-compaction are
+        # NOT redeployed by a T2.17 deploy (Decision 79 affected-artifact hygiene).
+        function_zip_map = dict(_DUCKLAKE_FUNCTION_ZIP_KEYS)
+    else:
+        function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _LAMBDA_FUNCTION_NAMES}
+        function_zip_map[_OPS_COMPACTION_FUNCTION_NAME] = _OPS_COMPACTION_ZIP_KEY
 
     for fn_name, s3_key in function_zip_map.items():
         print(f"  Updating {fn_name}...")
@@ -276,14 +480,21 @@ def update_lambda_functions(bucket: str, profile: str, region: str) -> None:
 
 
 def resolve_bucket(profile: str) -> str:
-    """Resolve S3 bucket from Terraform output, falling back to default."""
-    result = subprocess.run(
-        ["terraform", "-chdir=terraform", "output", "-raw", "s3_formulas_discovery_bucket"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=ROOT,
-    )
+    """Resolve S3 bucket from Terraform output, falling back to default.
+
+    Falls back to the well-known data-lake bucket when terraform is unavailable (e.g. a CC-web
+    container without the terraform binary) or the output is empty.
+    """
+    try:
+        result = subprocess.run(
+            ["terraform", "-chdir=terraform", "output", "-raw", "s3_formulas_discovery_bucket"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=ROOT,
+        )
+    except FileNotFoundError:
+        return "agent-platform-data-lake"
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
     return "agent-platform-data-lake"
@@ -319,6 +530,98 @@ def validate_bucket_exists(bucket: str, profile: str, region: str) -> bool:
     return result.returncode == 0
 
 
+def _run_prod_build(args: argparse.Namespace) -> None:
+    """Build (+optionally upload/deploy) the data-pipeline + ops-compaction prod artifacts."""
+    with tempfile.TemporaryDirectory(prefix="lambda-build-") as tmp:
+        temp_dir = Path(tmp)
+
+        print("[1/4] Building application code package (data-pipeline, manifest-driven)...")
+        app_zip = build_app_package(temp_dir)
+        print(f"  OK data-pipeline.zip ({round(app_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+
+        print("[1b/4] Building ops-compaction package (no Copilot SDK, manifest-driven)...")
+        ops_zip = build_ops_compaction_package(temp_dir)
+        print(f"  OK ops-compaction.zip ({round(ops_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+
+        print("[2/4] Installing dependencies for Lambda layer...")
+        layer_zip = build_deps_layer(temp_dir)
+        layer_size = round(layer_zip.stat().st_size / 1024 / 1024, 2)
+        print(f"  OK data-pipeline-deps-layer.zip ({layer_size} MB)")
+        if layer_zip.stat().st_size > LAMBDA_SIZE_WARN_BYTES:
+            print(f"  WARN Layer size {layer_size} MB exceeds 250 MB. Approaching the 262 MB hard limit.")
+
+        for artifact in (app_zip, ops_zip, layer_zip):
+            assert_within_size_limit(artifact)
+
+        if not args.skip_upload:
+            bucket = args.bucket or resolve_bucket(args.profile)
+            if not validate_bucket_exists(bucket, args.profile, args.region):
+                print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
+                sys.exit(1)
+            print(f"[3/4] Uploading to s3://{bucket}/lambda-packages/...")
+            for artifact in (app_zip, ops_zip, layer_zip):
+                upload_to_s3(artifact, bucket, args.profile, args.region)
+            print("  OK Uploaded to S3")
+            if args.deploy:
+                print("[3b/4] Updating Lambda function code...")
+                update_lambda_functions(bucket, args.profile, args.region)
+                print("  OK Lambda functions updated")
+        else:
+            print("[3/4] Skipping S3 upload (--skip-upload)")
+        print("[4/4] Build complete.")
+
+
+def _resolve_ducklake_profile(profile: str) -> str:
+    """Map the generic default profile to the personal-account profile for DuckLake.
+
+    The ducklake_writer/reader functions, layers, and S3 bucket all live in the PERSONAL account
+    (agent_platform). The generic `company-aws-profile` default cannot reach them (and a same-named
+    function elsewhere would be a deploy hazard), so the ducklake path resolves it to agent_platform.
+    An explicitly-passed non-default profile is honoured unchanged.
+    """
+    return "agent_platform" if profile == "company-aws-profile" else profile
+
+
+def _run_ducklake_build(args: argparse.Namespace) -> None:
+    """Build (+optionally upload/deploy) ONLY the T2.17 DuckLake artifacts (Decision 79 hygiene)."""
+    args.profile = _resolve_ducklake_profile(args.profile)
+    bucket = args.bucket or resolve_bucket(args.profile)
+    with tempfile.TemporaryDirectory(prefix="ducklake-build-") as tmp:
+        temp_dir = Path(tmp)
+
+        print("[1/4] Building ducklake-writer.zip + ducklake-reader.zip (manifest-driven)...")
+        writer_zip = build_ducklake_function_package(temp_dir, "ducklake_writer", "ducklake-writer.zip")
+        reader_zip = build_ducklake_function_package(temp_dir, "ducklake_reader", "ducklake-reader.zip")
+        print(f"  OK ducklake-writer.zip ({round(writer_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+        print(f"  OK ducklake-reader.zip ({round(reader_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+
+        print("[2/4] Building ducklake-deps + ducklake-extensions layers...")
+        deps_layer = build_ducklake_deps_layer(temp_dir)
+        ext_layer = build_ducklake_extensions_layer(temp_dir, bucket=bucket, profile=args.profile, region=args.region)
+        print(f"  OK ducklake-deps-layer.zip ({round(deps_layer.stat().st_size / 1024 / 1024, 2)} MB)")
+        print(f"  OK ducklake-extensions-layer.zip ({round(ext_layer.stat().st_size / 1024 / 1024, 2)} MB)")
+
+        artifacts = (writer_zip, reader_zip, deps_layer, ext_layer)
+        for artifact in artifacts:
+            assert_within_size_limit(artifact)
+
+        if not args.skip_upload:
+            if not validate_bucket_exists(bucket, args.profile, args.region):
+                print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
+                sys.exit(1)
+            print(f"[3/4] Uploading to s3://{bucket}/lambda-packages/...")
+            for artifact in artifacts:
+                upload_to_s3(artifact, bucket, args.profile, args.region)
+            print("  OK Uploaded to S3")
+            if args.deploy:
+                print("[3b/4] Updating DuckLake Lambda function code (only the two T2.17 functions)...")
+                update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True)
+                print("  OK DuckLake Lambda functions updated")
+        else:
+            print("[3/4] Skipping S3 upload (--skip-upload)")
+        print("[4/4] DuckLake build complete.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build Lambda deployment packages")
     parser.add_argument("--skip-upload", action="store_true", help="Build zips only, skip S3 upload")
@@ -329,6 +632,12 @@ def main() -> None:
         "--deploy",
         action="store_true",
         help="After S3 upload, update Lambda function code",
+    )
+    parser.add_argument(
+        "--ducklake-only",
+        action="store_true",
+        help="Build/upload/deploy ONLY the T2.17 DuckLake artifacts (2 zips + 2 layers + 2 "
+        "functions); leave data-pipeline/ops-compaction untouched (Decision 79).",
     )
     parser.add_argument(
         "--list-bundle",
@@ -345,58 +654,16 @@ def main() -> None:
 
     print("Lambda Package Builder (Manifest-Driven, CD.24)")
     print()
-
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="lambda-build-") as tmp:
-        temp_dir = Path(tmp)
-
-        print("[1/4] Building application code package (data-pipeline, manifest-driven)...")
-        app_zip = build_app_package(temp_dir)
-        app_size = round(app_zip.stat().st_size / 1024 / 1024, 2)
-        print(f"  OK data-pipeline.zip ({app_size} MB)")
-
-        print("[1b/4] Building ops-compaction package (no Copilot SDK, manifest-driven)...")
-        ops_zip = build_ops_compaction_package(temp_dir)
-        ops_size = round(ops_zip.stat().st_size / 1024 / 1024, 2)
-        print(f"  OK ops-compaction.zip ({ops_size} MB)")
-
-        print("[2/4] Installing dependencies for Lambda layer...")
-        layer_zip = build_deps_layer(temp_dir)
-        layer_size = round(layer_zip.stat().st_size / 1024 / 1024, 2)
-        print(f"  OK data-pipeline-deps-layer.zip ({layer_size} MB)")
-
-        if layer_size > 250:
-            print(f"  WARN Layer size {layer_size} MB exceeds 250 MB limit. Consider splitting.")
-
-        if not args.skip_upload:
-            bucket = args.bucket or resolve_bucket(args.profile)
-
-            if not validate_bucket_exists(bucket, args.profile, args.region):
-                print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
-                sys.exit(1)
-
-            print(f"[3/4] Uploading to s3://{bucket}/lambda-packages/...")
-            upload_to_s3(app_zip, bucket, args.profile, args.region)
-            upload_to_s3(ops_zip, bucket, args.profile, args.region)
-            upload_to_s3(layer_zip, bucket, args.profile, args.region)
-            print("  OK Uploaded to S3")
-
-            if args.deploy:
-                print("[3b/4] Updating Lambda function code...")
-                update_lambda_functions(bucket, args.profile, args.region)
-                print("  OK Lambda functions updated")
-        else:
-            print("[3/4] Skipping S3 upload (--skip-upload)")
-
-        print("[4/4] Build complete.")
+    if args.ducklake_only:
+        _run_ducklake_build(args)
+    else:
+        _run_prod_build(args)
 
     print()
     print("Build Complete")
     print("  Artifacts in: lambda-packages/")
-    print(f"    data-pipeline.zip           ({app_size} MB)")
-    print(f"    ops-compaction.zip           ({ops_size} MB)")
-    print(f"    data-pipeline-deps-layer.zip ({layer_size} MB)")
     print("  Next: terraform apply")
 
 
