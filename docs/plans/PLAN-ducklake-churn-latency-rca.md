@@ -87,7 +87,7 @@ unlike the original T2.17 apply this does NOT route to the manual `agent_platfor
 | 13 | [post-deploy] | EC8 churn within budget | `bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-churn --profile agent_platform` | Prints `CHURN OK ... within_budget` with `p95_commit_ms <= 2000.0`; exit 0 | Apply the next decision-tree branch (P -> C -> O); if none fits, SECONDARY escape hatch |
 | 14 | [post-deploy] | Writer EC gates (regression) | `for g in attach ingress idempotency partition inlining loudfail; do bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-$g --profile agent_platform || exit 1; done` | Each prints OK; exit 0 | Fix the regressing gate before re-attempting churn |
 | 15 | [post-deploy] | Reader gate (closed boundary, post-rebuild) | `bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-reader --profile agent_platform` | `READER OK rows>=1 write_denied=true` | Reader rebuild/deploy or boundary regression -- fix |
-| 16 | [post-deploy] | Branch C only: pooler transaction-safety proof | `DUCKLAKE_USE_POOLER=1 bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-idempotency --profile agent_platform && DUCKLAKE_USE_POOLER=1 bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-loudfail --profile agent_platform` | Both pass through the pooled endpoint (multi-statement DuckLake txns hold; no silent drop) | If either fails, the pooler is transaction-UNSAFE -- do NOT adopt it; revert the DSN change and rely on Branch P |
+| 16 | [post-deploy] | Branch C only: pooler transaction-safety proof (after the Branch-C feasibility precheck confirms a pooled-host attribute exists) | `DUCKLAKE_USE_POOLER=1 bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-idempotency --profile agent_platform && DUCKLAKE_USE_POOLER=1 bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-loudfail --profile agent_platform` | Both pass through the pooled endpoint (multi-statement DuckLake txns hold; no silent drop) | If either fails, the pooler is transaction-UNSAFE -- do NOT adopt it; revert the DSN change and rely on Branch P |
 
 ## Constraints
 - **Do NOT relax the budget (Decision 55 / CD.33 / Decision 81).** The 2000ms p95 and 0.20 collision-rate
@@ -149,10 +149,14 @@ Apply branches in order P -> C -> O until VP-13 reports `p95_commit_ms <= 2000.0
   until under budget. Lowest risk, no code rebuild for the memory change itself. Stop at the smallest step
   that meets budget.
 - **Branch C (commit RTT / catalog serialization).** Trigger: `commit_ms` dominates and is NOT CPU-bound
-  even after Branch P gives adequate vCPU. Fix: run the pooler transaction-safety proof (VP-16). If SAFE,
-  expose `host_pooler` in the DSN secret (`neon_ducklake_catalog.tf`) and select it in `open_connection`
-  via an opt-in (e.g. `DUCKLAKE_USE_POOLER`/DSN field); re-run VP-13. If UNSAFE, revert and do not adopt
-  the pooler -- record the proof result and continue to Branch O.
+  even after Branch P gives adequate vCPU. **Feasibility precheck (do FIRST):** confirm the Neon provider
+  surfaces a pooled-host attribute on `neon_project.ducklake_catalog` (e.g. a `*_pooler`/connection-pooler
+  host) -- the current `neon_ducklake_catalog.tf` only references `database_host` (the DIRECT endpoint), and
+  the pooler is free-tier-constrained. If no pooler-host attribute is exposed, Branch C is INFEASIBLE as
+  written -- record that and skip to Branch O. If exposed: run the pooler transaction-safety proof (VP-16).
+  If SAFE, expose the pooled host in the DSN secret (`neon_ducklake_catalog.tf`) and select it in
+  `open_connection` via an opt-in (e.g. `DUCKLAKE_USE_POOLER`/DSN field); re-run VP-13. If UNSAFE, revert
+  and do not adopt the pooler -- record the proof result and continue to Branch O.
 - **Branch O (OCC backoff waste).** Trigger: `occ_retries > 0` with a large `occ_backoff_ms` share. Fix:
   tune the OCC backoff SCHEDULE (`OCC_BASE_BACKOFF_S`/`OCC_MAX_BACKOFF_S`/jitter, e.g. decorrelated jitter)
   in `ducklake_runtime.py` so contended-but-successful writes sleep less -- WITHOUT changing
