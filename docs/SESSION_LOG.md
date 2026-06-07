@@ -9,6 +9,31 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-07] - implement: ducklake-maintenance (T2.18 FP-A -- DuckLake maintenance pipeline)
+
+**Mode:** Implementation (PLAN-ducklake-maintenance.md, V3 tier). FP-A slice only; FP-B pending.
+**Goal:** Stand up the scheduled DuckLake table-maintenance Lambda (daily merge + weekly guarded GC with circuit breaker) to bound S3 storage growth, satisfying T2.18 FP-A acceptance criteria.
+
+**What shipped (pre-deploy):**
+- `src/common/ducklake_maintenance.py`: maintenance primitives (flush_inlined_data, merge_adjacent_files, expire_snapshots, cleanup_old_files, delete_orphaned_files, rewrite), circuit breaker (pre-destructive dry-run check; trips on >20% files or >10 GiB), run_merge / run_gc orchestrators, guardrail constants, T2.19 expansion forward pointer.
+- `src/lambdas/ducklake_maintenance/handler.py`: Lambda entrypoint dispatching action=merge/gc/breaker_probe; loud-fail maps to 4xx/5xx; metrics emitted to DuckLakeMaintenance namespace.
+- `src/lambdas/ducklake_maintenance/manifest.yaml`: CD.24 per-Lambda manifest (status: active).
+- `terraform/personal/ducklake_maintenance.tf`: Lambda function + IAM role + inline policy (S3 RW+Delete on smoke prefix, DSN read, DuckLakeMaintenance CloudWatch metrics) + log group + 2 EventBridge rules/targets/permissions (daily merge cron(0 4 * * ? *), weekly GC cron(0 5 ? * SUN *)) + reserved_concurrent_executions=1 + Function URL (AWS_IAM) + circuit-breaker alarm (alarm_actions=[] FP-A, no SNS topic in terraform/personal/).
+- `scripts/build_lambda.py`: extended --ducklake-only to build/deploy 3 functions (writer + reader + maintenance); updated docstring + artifact list.
+- `scripts/ducklake_neon_smoke_test.py`: added --lambda-maintenance-merge/gc/breaker gates; extended _function_url() to support maintenance role; MAINTENANCE_URL_ENV constant.
+- `tests/test_ducklake_maintenance.py` + `tests/test_ducklake_maintenance_handler.py`: 56 unit tests, all green.
+- `tests/test_build_lambda.py`: updated for 3-function ducklake build (mock side_effect lists + assertion counts); `_DUCKLAKE_MAINTENANCE_FUNCTION` import added.
+- `docs/runbooks/ducklake-catalog-operations.md`: Section 3 added (cadences, guardrail constants, circuit breaker reading, manual invoke, singleton constraint, T2.19 forward pointer).
+- `docs/ROADMAP-PLATFORM.yaml`: T2.18 status flipped not_started -> in_progress; progress_note records FP-A criteria met (cadence mechanism, deterministic cadences, guardrail pins) and FP-B remainder.
+
+**VP status:** Pre-deploy steps (1-6) pass. Step 4 (terraform plan) and Steps 7-13 (human-gated apply + post-deploy) require the human to apply `terraform -chdir=terraform/personal apply` via agent_platform_admin. Apply is HUMAN-GATED (new IAM role trips the Decision-77 fail-closed guard).
+
+**CALL signatures verified (live DuckDB 1.5.3 / DuckLake v1.0):** All maintenance functions are table functions (not CALL procedures); use `SELECT * FROM` / `FROM` syntax. flush_inlined_data uses named keyword args (table_name=, schema_name=); merge_adjacent_files uses positional (catalog, table, schema=schema); expire/cleanup/orphan are catalog-wide with older_than= keyword arg. cleanup_all=False enforced in all scheduled calls.
+
+**FP-B remainder (T2.18 stays open):** (1) catalog DR (daily pg_dump -> S3, >25h freshness alarm); (2) telemetry small-file co-tuning; (3) shared SNS topic for alarm fan-out.
+
+---
+
 ## [2026-06-07] - implement: t2-17-ec8-invocation-fanout (T2.17 EC8 frame correction -- invocation fan-out, complete)
 
 **Mode:** Implementation (PLAN-t2-17-ec8-invocation-fanout.md, V3 tier).

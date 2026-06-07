@@ -2,8 +2,8 @@
 
 ```yaml
 runbook: ducklake-catalog-operations
-tier: T2.17
-decisions: [81, 78, 37, 35, 77]
+tier: T2.17-T2.18
+decisions: [81, 78, 37, 35, 77, 79, 62, 39]
 exit_criteria: [EC3, EC12]
 sections:
   - id: 1
@@ -12,6 +12,9 @@ sections:
   - id: 2
     title: OQ.12 DuckLake/DuckDB version-bump clone-rehearsal policy
     control: OQ.12
+  - id: 3
+    title: Maintenance pipeline -- cadences, guardrails, circuit breaker, manual invoke
+    control: CD.33 clause 5-6 / Decision 81 clause 6
 catalog:
   backend: Neon serverless Postgres (DIRECT endpoint, sslmode=require)
   dsn_secret: ducklake-neon-catalog-dsn
@@ -128,3 +131,123 @@ version_bump_surfaces:
 The pinned-version assert means a half-applied bump fails CLOSED (the runtime refuses to attach on a
 mismatch) rather than silently writing with an incompatible engine. To roll back, revert the four surfaces
 to the prior pin and redeploy the prior layer; the cloned catalog used for rehearsal is discarded.
+
+## Section 3 -- Maintenance pipeline (T2.18 / CD.33 clause 5-6 / Decision 81 clause 6)
+
+### Cadences
+
+```yaml
+maintenance_cadences:
+  daily_merge:
+    schedule: "cron(0 4 * * ? *)"    # 04:00 UTC
+    action: merge
+    description: "Non-destructive: flush_inlined_data + merge_adjacent_files only"
+    destructive: false
+    mechanism: EventBridge rule -> agent-platform-ducklake-maintenance Lambda (action=merge)
+  weekly_gc:
+    schedule: "cron(0 5 ? * SUN *)"  # 05:00 UTC Sunday
+    action: gc
+    description: "Guarded destructive: full 5-step sequence with circuit breaker"
+    destructive: true
+    mechanism: EventBridge rule -> agent-platform-ducklake-maintenance Lambda (action=gc)
+```
+
+Cadence mechanism rationale: EventBridge-scheduled Lambda per Decision 62 / CD.29 -- a single
+deterministic Lambda needs no Step Functions state machine (Decision 39), and the Lambda posture
+is consistent with T2.17 (writer/reader). A new GH Actions surface for non-CI scheduled work
+would be a new ingress surface without benefit (CD.29).
+
+Table scope (T2.18 FP-A): `ducklake_smoke_history` + `ducklake_smoke_current`. Expansion to the
+full `ducklake_ops` catalog and all `ops_*` business tables is a T2.19 exit criterion -- the code
+carries an explicit forward-pointer constant (`src/common/ducklake_maintenance.py::MAINTENANCE_SCOPE_NOTE`).
+
+### Guardrail constants (CD.33 H1/R-3/O-3/M-3 / Decision 81 clause 6)
+
+```yaml
+guardrails:
+  snapshot_retain_days: 30        # expire_snapshots: older_than = now - 30 days
+  file_cleanup_grace_days: 7      # cleanup_old_files + delete_orphaned_files: older_than = now - 7 days
+  snapshot_floor: 2               # never expire below the 2 most-recent snapshots
+  gc_breaker_file_fraction: 0.20  # abort if would-delete > 20% of tracked files
+  gc_breaker_bytes: 10_737_418_240  # 10 GiB -- abort if would-delete > 10 GiB
+  cleanup_all_in_scheduled_runs: never  # NEVER pass cleanup_all=True in scheduled runs
+```
+
+These are module-level constants in `src/common/ducklake_maintenance.py`. They are tunable knobs
+but NEVER relaxed to make a gate pass (Decision 55). Changing them requires a Decision superseding CD.33.
+
+### Circuit breaker (CD.33 H1)
+
+The circuit breaker runs PRE-DESTRUCTIVE (before any `CALL` that deletes S3 objects):
+
+1. Aggregate all tracked files across scoped tables (via `ducklake_list_files`).
+2. Dry-run `ducklake_cleanup_old_files` + `ducklake_delete_orphaned_files` to count would-be deletions.
+3. If `(would_delete / total) > 20%` OR `would_delete_bytes > 10 GiB`, raise `DuckLakeMaintenanceError`
+   and abort (no destructive call is issued).
+4. On abort, emit `MaintenanceBreakerTrip=1` to the `DuckLakeMaintenance` CloudWatch namespace.
+
+**Reading the alarm (FP-A):** the `ducklake-maintenance-circuit-breaker` CloudWatch alarm fires
+when `MaintenanceBreakerTrip >= 1` in a 5-minute window. In T2.18 FP-A, `alarm_actions = []` --
+no SNS page fan-out exists yet. You must CHECK the alarm state manually or via the CloudWatch
+console. FP-B wires the alarm to a shared personal-account SNS topic.
+
+When the breaker fires, do NOT raise the threshold to pass. RCA the file accumulation:
+- Is the expiry cutoff too recent (< 30 days)?
+- Did a previous cleanup run fail silently, leaving many expired-but-not-cleaned files?
+- Is there a bug in the orphan path producing large volumes of orphaned files?
+
+### Manual invoke runbook
+
+```bash
+# Invoke daily merge manually (safe, non-destructive):
+aws lambda invoke \
+  --function-name agent-platform-ducklake-maintenance \
+  --payload '{"action":"merge"}' \
+  --profile agent_platform \
+  --region eu-west-2 \
+  /tmp/merge-response.json && cat /tmp/merge-response.json
+
+# Invoke weekly GC manually (guarded, emits metrics):
+aws lambda invoke \
+  --function-name agent-platform-ducklake-maintenance \
+  --payload '{"action":"gc"}' \
+  --profile agent_platform \
+  --region eu-west-2 \
+  /tmp/gc-response.json && cat /tmp/gc-response.json
+
+# Forced-threshold breaker probe (VP step 11 / diagnostic):
+aws lambda invoke \
+  --function-name agent-platform-ducklake-maintenance \
+  --payload '{"action":"breaker_probe"}' \
+  --profile agent_platform \
+  --region eu-west-2 \
+  /tmp/breaker-response.json && cat /tmp/breaker-response.json
+# Expect: statusCode=500, breaker_tripped=true (if any deletable files exist).
+
+# Check singleton concurrency (reserved_concurrent_executions must be 1):
+aws lambda get-function-concurrency \
+  --function-name agent-platform-ducklake-maintenance \
+  --profile agent_platform
+
+# Check EventBridge schedule rules:
+aws events list-rules \
+  --name-prefix agent-platform-ducklake-maintenance \
+  --profile agent_platform
+```
+
+### Singleton constraint (Decision 81 clause 6)
+
+`reserved_concurrent_executions = 1` is set on the maintenance Lambda. This is intentional: the
+maintenance pipeline must not run concurrently with itself (overlapping GC passes on the same
+catalog could corrupt the cleanup state). This differs from the ducklake_writer Lambda (Decision
+81 clause 3), which has NO reserved concurrency so its OCC model is not artificially constrained.
+The distinction is documented in `terraform/personal/ducklake_maintenance.tf` to pre-empt a
+reviewer keyword-collision flag.
+
+### T2.19 expansion forward pointer
+
+The maintenance scope for T2.18 FP-A is `ducklake_smoke_*`. At T2.19, the scope GENERALISES to
+the full `ducklake_ops` catalog and all real `ops_*` business tables. The code carries an explicit
+constant (`MAINTENANCE_SCOPE_NOTE` in `src/common/ducklake_maintenance.py`) with the expansion
+instructions. No code change is needed in the primitives themselves -- the table list is passed
+in at call time.

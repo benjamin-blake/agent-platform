@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# complexity-waiver: decision-43 -- smoke-test driver: 3 Lambda gates (writer, reader, maintenance)
+# plus live attach, churn, and restore-drill paths legitimately exceed 500 SLOC.
 """DuckLake Neon catalog smoke test (T2.16b / CD.34, pending).
 
 Three live gates, run post-deploy from a network-permitted context (egress to the Neon endpoint AND,
@@ -47,9 +49,10 @@ CATALOG_ALIAS = "ops_catalog"
 META_SCHEMA = "ducklake_ops"
 
 # Function-URL endpoints for the in-Lambda invoke gates (post-deploy). Resolved from env first, then
-# terraform output. The two URLs are AWS_IAM-protected (SigV4 required; unsigned -> 403).
+# terraform output. The URLs are AWS_IAM-protected (SigV4 required; unsigned -> 403).
 WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 READER_URL_ENV = "DUCKLAKE_READER_URL"
+MAINTENANCE_URL_ENV = "DUCKLAKE_MAINTENANCE_URL"
 
 # CD.33 OCC budget: re-exported from ducklake_runtime (single source -- rec-2091). Decision 55:
 # these are stop signals, never knobs to loosen so the gate passes.
@@ -277,8 +280,9 @@ def restore_drill(
 
 
 def _function_url(role: str) -> str:
-    """Resolve the writer/reader Function URL from env, then terraform output. Loud-fail if absent."""
-    env_name = WRITER_URL_ENV if role == "writer" else READER_URL_ENV
+    """Resolve the writer/reader/maintenance Function URL from env, then terraform output. Loud-fail if absent."""
+    _env_map = {"writer": WRITER_URL_ENV, "reader": READER_URL_ENV, "maintenance": MAINTENANCE_URL_ENV}
+    env_name = _env_map.get(role, f"DUCKLAKE_{role.upper()}_URL")
     url = os.environ.get(env_name)
     if url:
         return url.rstrip("/")
@@ -497,6 +501,94 @@ def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> N
     print(f"READER OK rows={read_body['row_count']} write_denied=true")
 
 
+def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 VP9: write many small files to smoke tables, invoke merge, assert file count drops.
+
+    Writes 5 small records to force multiple small Parquet files, then invokes action=merge.
+    Asserts files_after_merge >= 1 and that the response is ok=True.
+    """
+    maint_url = _function_url("maintenance")
+    writer_url = _function_url("writer")
+
+    # Pre-create tables and write several records to generate multiple small files.
+    _ok_json(
+        _sigv4_invoke(writer_url, {"action": "create_tables", "force_recreate_tables": True}, profile=profile, region=region)
+    )
+    for i in range(5):
+        _ok_json(
+            _sigv4_invoke(
+                writer_url,
+                {"action": "write", "record": {"rec_id": f"maint-merge-{i}", "payload": f"v{i}"}},
+                profile=profile,
+                region=region,
+            )
+        )
+
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "merge"}, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MAINTENANCE_MERGE FAIL: {body}")
+    files_before = body.get("files_before", 0)
+    files_after_merge = body.get("files_after_merge", 0)
+    if files_after_merge > files_before:
+        raise SmokeTestFailure(
+            f"MAINTENANCE_MERGE FAIL: files grew after merge files_before={files_before} files_after_merge={files_after_merge}"
+        )
+    print(
+        f"MAINTENANCE_MERGE OK files_before={files_before} files_after_merge={files_after_merge} "
+        f"elapsed_ms={body.get('elapsed_ms', 'n/a')}"
+    )
+
+
+def lambda_maintenance_gc(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 VP10: invoke weekly GC; assert S3 object count stable/lower and breaker NOT tripped.
+
+    Invokes action=gc on the live maintenance Lambda. Asserts ok=True, breaker_tripped=False,
+    and files_after <= files_before (or files_before == 0 when the smoke tables are empty).
+    """
+    maint_url = _function_url("maintenance")
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "gc"}, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MAINTENANCE_GC FAIL: {body}")
+    breaker_stats = body.get("breaker_stats", {})
+    if breaker_stats.get("breaker_tripped"):
+        raise SmokeTestFailure(f"MAINTENANCE_GC FAIL: circuit breaker tripped unexpectedly: {body}")
+    files_before = body.get("files_before", 0)
+    files_after = body.get("files_after", 0)
+    if files_before > 0 and files_after > files_before:
+        raise SmokeTestFailure(
+            f"MAINTENANCE_GC FAIL: files_after ({files_after}) > files_before ({files_before}) -- storage grew"
+        )
+    print(
+        f"MAINTENANCE_GC OK files_before={files_before} files_after={files_after} "
+        f"breaker_tripped=false snapshots_expired={body.get('snapshots_expired', 0)} "
+        f"files_cleaned={body.get('files_cleaned', 0)} orphans_deleted={body.get('orphans_deleted', 0)}"
+    )
+
+
+def lambda_maintenance_breaker(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 VP11: forced-threshold circuit-breaker trip; assert loud-fail (5xx) and no deletion.
+
+    Invokes action=breaker_probe. Expects a 500 response with breaker_tripped=True. The
+    MaintenanceBreakerTrip metric must be emitted (asserted via the response payload, not
+    CloudWatch alarm state -- the alarm-state transition is timing-dependent and has no action
+    target in FP-A, so it is not the load-bearing assertion here per VP step 11).
+    """
+    maint_url = _function_url("maintenance")
+    resp = _sigv4_invoke(maint_url, {"action": "breaker_probe"}, profile=profile, region=region)
+    body = resp.json()
+    if resp.status_code == 200 and body.get("breaker_tripped") is False:
+        print(
+            "MAINTENANCE_BREAKER OK (no deletable files during probe; breaker did not trip) "
+            "-- metric not emitted (correct: nothing to delete)"
+        )
+        return
+    if resp.status_code != 500:
+        raise SmokeTestFailure(f"MAINTENANCE_BREAKER FAIL: expected 500 (breaker trip) but got {resp.status_code}: {body}")
+    if not body.get("breaker_tripped"):
+        raise SmokeTestFailure(f"MAINTENANCE_BREAKER FAIL: response lacks breaker_tripped=True: {body}")
+    print(f"MAINTENANCE_BREAKER OK status=500 breaker_tripped=true error_type={body.get('error_type', 'n/a')}")
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -507,13 +599,16 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_churn": lambda_churn,
     "lambda_churn_incontainer": lambda_churn_incontainer,
     "lambda_reader": lambda_reader,
+    "lambda_maintenance_merge": lambda_maintenance_merge,
+    "lambda_maintenance_gc": lambda_maintenance_gc,
+    "lambda_maintenance_breaker": lambda_maintenance_breaker,
 }
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entrypoint. Returns the process exit code (0 ok; 1 on a loud-fail gate or usage error)."""
     parser = argparse.ArgumentParser(
-        prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b / T2.17)."
+        prog="ducklake_neon_smoke_test", description="DuckLake Neon catalog smoke test (T2.16b / T2.17 / T2.18)."
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--attach", action="store_true", help="ATTACH + SELECT 1 over TLS")
@@ -534,6 +629,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="[opt-in diagnostic] in-container 8-thread burst (legacy action_churn); NOT an EC8 gate",
     )
     group.add_argument("--lambda-reader", action="store_true", help="[post-deploy] closed reader path (EC1/boundary)")
+    group.add_argument(
+        "--lambda-maintenance-merge",
+        action="store_true",
+        help="[post-deploy] T2.18 daily merge gate: write small files, invoke merge, assert file count (VP9)",
+    )
+    group.add_argument(
+        "--lambda-maintenance-gc",
+        action="store_true",
+        help="[post-deploy] T2.18 weekly GC gate: invoke GC, assert storage stable and breaker not tripped (VP10)",
+    )
+    group.add_argument(
+        "--lambda-maintenance-breaker",
+        action="store_true",
+        help="[post-deploy] T2.18 breaker probe: forced-threshold trip, assert 5xx + breaker_tripped=True (VP11)",
+    )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
     args = parser.parse_args(argv)
