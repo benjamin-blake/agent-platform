@@ -78,7 +78,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "ducklake_catalog_dr" {
     }
 
     noncurrent_version_expiration {
-      noncurrent_days = 1
+      # Retain >=7 days of prior versions (matches FILE_CLEANUP_GRACE_DAYS). Daily dumps use
+      # unique timestamped keys so overwrites are not expected, but versioning still protects
+      # against an accidental overwrite/partial-failure: keep the immediately-preceding version
+      # restorable for a week before permanent deletion (code-review H1).
+      noncurrent_days = 7
     }
 
     abort_incomplete_multipart_upload {
