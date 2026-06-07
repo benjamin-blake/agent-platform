@@ -472,7 +472,7 @@ def test_churn_one_writer_counts_occ(monkeypatch):
 def test_churn_constants_imported_from_runtime():
     assert rt.COMMIT_LATENCY_BUDGET_MS == 2000.0
     assert rt.OCC_COLLISION_RATE_BUDGET == 0.20
-    assert rt.CHURN_WRITERS == 8
+    assert rt.CHURN_WRITERS == 4  # Decision 82: N steered 8->4; budget VALUES (above) unchanged
     assert rt.CHURN_WRITES_PER_WRITER == 5
     assert not hasattr(h, "COMMIT_LATENCY_BUDGET_MS")
     assert not hasattr(h, "OCC_COLLISION_RATE_BUDGET")

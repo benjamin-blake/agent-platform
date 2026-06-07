@@ -355,7 +355,7 @@ def test_create_scd2_tables_force_recreate_drops_first():
 def test_churn_budget_constants_values():
     assert rt.COMMIT_LATENCY_BUDGET_MS == 2000.0
     assert rt.OCC_COLLISION_RATE_BUDGET == 0.20
-    assert rt.CHURN_WRITERS == 8
+    assert rt.CHURN_WRITERS == 4  # Decision 82: N steered 8->4; budget VALUES (above) unchanged
     assert rt.CHURN_WRITES_PER_WRITER == 5
 
 

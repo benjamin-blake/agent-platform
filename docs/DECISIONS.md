@@ -25,21 +25,36 @@ Decision 81. This is a Decision-75 measurement-subject frame correction, not a b
 - Gate term: per-invocation wall p95 (`latency_ms`) -- the same term `action_churn` used. Switching the
   comparison to `commit_ms` (which excludes connect/cold-start) would be an implicit relaxation; wall
   is the pinned term.
-- `CHURN_WRITERS = 8` unchanged; `OCC_MAX_ATTEMPTS` unchanged.
+- `OCC_MAX_ATTEMPTS` unchanged.
 - Loud-fail semantics intact (Decision 81 clause 3): schema-gate reject and OCC-retry exhaustion still raise.
 
 **What changes:**
-- EC8 gate: smoke-test fans out `CHURN_WRITERS=8` concurrent `_sigv4_invoke({"action":"churn_single"})`
-  calls. One setup invocation (`setup:true`) pre-creates tables to avoid a CREATE race. The N bodies are
+- Concurrency level N steered `CHURN_WRITERS = 8 -> 4` (human steer, 2026-06-07). N is the fan-out
+  width, NOT a budget VALUE; the 2000ms / 0.20 ceilings are untouched. Empirical basis below.
+- EC8 gate: smoke-test fans out `CHURN_WRITERS=4` concurrent `_sigv4_invoke({"action":"churn_single"})`
+  calls. A pre-warm phase first issues N concurrent `attach_check` invocations to bring N containers out
+  of cold-start (cold-start is already covered by EC1 `lambda_attach`; EC8 measures warm steady-state).
+  One setup invocation (`setup:true`) then pre-creates tables to avoid a CREATE race. The N bodies are
   aggregated into collision_rate + p95 wall + attribution breakdown (connect/commit/cpu/wall_cpu_ratio).
 - Handler: new `action_churn_single` dispatches on `"churn_single"` -- setup path calls
-  `create_scd2_tables(force_recreate=True)`; normal path runs one `_churn_one_writer` and returns
-  per-stage attribution. Connectionless action (manages its own connection like `action_churn`).
+  `create_scd2_tables(force_recreate=True)`; normal path runs ONE connect + ONE write
+  (`_churn_one_single_write`, the production-representative single-commit unit, with a unique
+  `writer_id` per invocation) and returns per-stage attribution. Connectionless action.
 - The legacy `action_churn` (in-container 8-thread burst) is retained as an opt-in stress diagnostic
   via `--lambda-churn-incontainer`. A budget miss from that path is informational only, not a gate failure.
 - `ducklake_writer` memory_size stays at 3008MB as baseline headroom (NOT reverted). Comment updated.
 - The Lambda quota-increase requirement (filed as a blocker rec at PR #89) is WITHDRAWN; the frame
   correction removes the need for >3008MB to pass EC8.
+
+**Empirical basis for N=8 -> N=4 (2026-06-07 live runs, warm containers, DIRECT endpoint):**
+- Single warm invocation: wall 1078ms (connect 393ms + commit 681ms) -- well within budget.
+- N=8 fan-out (post pre-warm): wall p95 2805ms FAIL. Degradation is concurrent-Neon saturation on the
+  DIRECT endpoint -- 8 simultaneous ATTACHes inflate connect p95 393->1585ms and 8 simultaneous catalog
+  writes inflate commit p95 681->2285ms. Not a DuckLake code defect; OCC sub-gate still passes (0.0).
+- N=4 fan-out: wall p95 1160-1512ms across 3 runs, collision_rate 0.0 -- PASS with margin.
+- N=4 remains a faithful OCC + multi-invocation concurrency exercise (CD.33 clause 3) on the unpooled
+  DIRECT endpoint; if higher burst width is later required, the Neon pooled endpoint (pgBouncer) is the
+  documented lever, tracked separately -- not a budget change.
 
 **Rationale:**
 Production ops writes (`file_rec`/`update_rec`) are independent single-commit Lambda invocations, each

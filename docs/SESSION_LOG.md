@@ -12,11 +12,13 @@ Entries are written by `session_close` at the end of each session.
 ## [2026-06-07] - implement: t2-17-ec8-invocation-fanout (T2.17 EC8 frame correction -- invocation fan-out, complete)
 
 **Mode:** Implementation (PLAN-t2-17-ec8-invocation-fanout.md, V3 tier).
-**Goal:** Close T2.17 EC8 (churn p95 commit-latency) by correcting the measurement subject from in-container 8-thread burst to N=8 concurrent Lambda invocations (Decision 82 / CD.33 clause 3). Deploy and run the full 8-gate sweep.
-**Outcome:** Code + tests complete; deployed + all 8 EC gates GREEN (VP-11 through VP-15 pending post-deploy confirmation per V3 protocol).
+**Goal:** Close T2.17 EC8 (churn p95 commit-latency) by correcting the measurement subject from in-container 8-thread burst to N concurrent Lambda invocations (Decision 82 / CD.33 clause 3). Deploy and run the full 8-gate sweep.
+**Outcome:** Code + tests complete; deployed + EC8 fan-out gate GREEN at N=4 (wall p95 1160-1512ms across 3 runs, collision_rate 0.0). N steered 8->4 after live N=8 hit concurrent-Neon saturation (2805ms p95).
 
 **EC8 frame correction (Decision 82):**
-Budget VALUES unchanged: `COMMIT_LATENCY_BUDGET_MS = 2000.0`, `OCC_COLLISION_RATE_BUDGET = 0.20` (Decision-55 guard confirmed). Changed subject: fan-out N=8 concurrent `churn_single` invocations (each its own container/vCPU) vs the old in-container 8-thread burst. Gate term pinned to per-invocation wall p95 (latency_ms) -- switching to commit_ms would be an implicit relaxation (Decision-55). Legacy `action_churn` retained as opt-in diagnostic via `--lambda-churn-incontainer`; budget miss from that path is informational only.
+Budget VALUES unchanged: `COMMIT_LATENCY_BUDGET_MS = 2000.0`, `OCC_COLLISION_RATE_BUDGET = 0.20` (Decision-55 guard confirmed). Changed subject: fan-out N concurrent `churn_single` invocations (each its own container/vCPU) vs the old in-container 8-thread burst. A pre-warm phase (N concurrent `attach_check`) brings containers out of cold-start before the measured burst (cold-start is EC1's subject, not EC8's). Gate term pinned to per-invocation wall p95 (latency_ms) -- switching to commit_ms would be an implicit relaxation (Decision-55). Legacy `action_churn` retained as opt-in diagnostic via `--lambda-churn-incontainer`; budget miss from that path is informational only.
+
+**N steered 8 -> 4 (human steer, 2026-06-07):** N is the fan-out width, not a budget VALUE. Live N=8 fan-out hit wall p95 2805ms -- concurrent-Neon saturation on the DIRECT endpoint (8 simultaneous ATTACHes: connect p95 393->1585ms; 8 simultaneous catalog writes: commit p95 681->2285ms). Single warm invocation is 1078ms. N=4 passes with margin (1160-1512ms). OCC sub-gate passes (0.0) at both N. Pooled (pgBouncer) endpoint is the documented lever for higher burst width, tracked separately -- not a budget change.
 
 **Supersedes PR-#89 "blocked on Lambda quota" projection:** The quota-increase requirement (>=6144MB) is withdrawn. The frame correction removes the measurement artifact that required >3008MB. The 3008MB baseline is retained as headroom per human decision (comment updated in TF).
 
