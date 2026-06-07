@@ -4,11 +4,11 @@
 """Build Lambda deployment packages for the data pipeline (no Docker required).
 
 Creates these zip artifacts:
-  1. data-pipeline.zip             -- application code (manifest-driven)
-  2. ops-compaction.zip            -- minimal ops compaction handler
-  3. data-pipeline-deps-layer.zip  -- dependencies layer (yfinance, pyyaml, etc.)
-  4. ducklake-{writer,reader}.zip  -- T2.17 DuckLake runtime functions (--ducklake-only)
-  5. ducklake-{deps,extensions}-layer.zip -- duckdb==1.5.3 + baked extensions (--ducklake-only)
+  1. data-pipeline.zip                      -- application code (manifest-driven)
+  2. ops-compaction.zip                     -- minimal ops compaction handler
+  3. data-pipeline-deps-layer.zip           -- dependencies layer (yfinance, pyyaml, etc.)
+  4. ducklake-{writer,reader,maintenance}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
+  5. ducklake-{deps,extensions}-layer.zip   -- duckdb==1.5.3 + baked extensions (--ducklake-only)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
 whole-src/whole-config copytrees (Decision 79 / CD.24).
@@ -79,9 +79,11 @@ _EXT_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 _DUCKLAKE_WRITER_FUNCTION = "agent-platform-ducklake-writer"
 _DUCKLAKE_READER_FUNCTION = "agent-platform-ducklake-reader"
+_DUCKLAKE_MAINTENANCE_FUNCTION = "agent-platform-ducklake-maintenance"
 _DUCKLAKE_FUNCTION_ZIP_KEYS = {
     _DUCKLAKE_WRITER_FUNCTION: "lambda-packages/ducklake-writer.zip",
     _DUCKLAKE_READER_FUNCTION: "lambda-packages/ducklake-reader.zip",
+    _DUCKLAKE_MAINTENANCE_FUNCTION: "lambda-packages/ducklake-maintenance.zip",
 }
 
 # Retained for backward compatibility with external callers and tests.
@@ -589,11 +591,13 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="ducklake-build-") as tmp:
         temp_dir = Path(tmp)
 
-        print("[1/4] Building ducklake-writer.zip + ducklake-reader.zip (manifest-driven)...")
+        print("[1/4] Building ducklake-writer.zip + ducklake-reader.zip + ducklake-maintenance.zip (manifest-driven)...")
         writer_zip = build_ducklake_function_package(temp_dir, "ducklake_writer", "ducklake-writer.zip")
         reader_zip = build_ducklake_function_package(temp_dir, "ducklake_reader", "ducklake-reader.zip")
+        maintenance_zip = build_ducklake_function_package(temp_dir, "ducklake_maintenance", "ducklake-maintenance.zip")
         print(f"  OK ducklake-writer.zip ({round(writer_zip.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-reader.zip ({round(reader_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+        print(f"  OK ducklake-maintenance.zip ({round(maintenance_zip.stat().st_size / 1024 / 1024, 2)} MB)")
 
         print("[2/4] Building ducklake-deps + ducklake-extensions layers...")
         deps_layer = build_ducklake_deps_layer(temp_dir)
@@ -601,7 +605,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
         print(f"  OK ducklake-deps-layer.zip ({round(deps_layer.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-extensions-layer.zip ({round(ext_layer.stat().st_size / 1024 / 1024, 2)} MB)")
 
-        artifacts = (writer_zip, reader_zip, deps_layer, ext_layer)
+        artifacts = (writer_zip, reader_zip, maintenance_zip, deps_layer, ext_layer)
         for artifact in artifacts:
             assert_within_size_limit(artifact)
 
@@ -614,7 +618,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
                 upload_to_s3(artifact, bucket, args.profile, args.region)
             print("  OK Uploaded to S3")
             if args.deploy:
-                print("[3b/4] Updating DuckLake Lambda function code (only the two T2.17 functions)...")
+                print("[3b/4] Updating DuckLake Lambda function code (writer + reader + maintenance)...")
                 update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True)
                 print("  OK DuckLake Lambda functions updated")
         else:
@@ -636,8 +640,8 @@ def main() -> None:
     parser.add_argument(
         "--ducklake-only",
         action="store_true",
-        help="Build/upload/deploy ONLY the T2.17 DuckLake artifacts (2 zips + 2 layers + 2 "
-        "functions); leave data-pipeline/ops-compaction untouched (Decision 79).",
+        help="Build/upload/deploy ONLY the DuckLake artifacts (3 zips + 2 layers + 3 "
+        "functions: writer, reader, maintenance); leave data-pipeline/ops-compaction untouched (Decision 79).",
     )
     parser.add_argument(
         "--list-bundle",

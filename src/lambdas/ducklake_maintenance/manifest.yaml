@@ -1,0 +1,29 @@
+artifact: ducklake-maintenance.zip
+functions:
+  - agent-platform-ducklake-maintenance
+handlers:
+  - src/lambdas/ducklake_maintenance/handler.py
+includes:
+  - src/__init__.py
+  - src/common/ducklake_runtime.py
+  - src/common/ducklake_maintenance.py
+  - src/common/ducklake_spike.py  # transitive: ducklake_runtime.open_connection imports ducklake_spike
+  - src/common/__init__.py
+  - src/lambdas/ducklake_maintenance/__init__.py
+  - src/lambdas/__init__.py
+  - scripts/__init__.py
+  - scripts/aws_profile.py
+assets: []
+config: []
+pip_packages: []
+runtime_config: []
+status: active
+notes: >-
+  T2.18 DuckLake maintenance singleton Lambda (CD.33 / Decision 81). Implements the daily
+  non-destructive merge cadence (action=merge) and weekly guarded destructive GC with circuit
+  breaker (action=gc). reserved_concurrent_executions=1 (singleton per Decision 81 clause 6 --
+  the maintenance pipeline must not run concurrently; this differs from the writer's OCC
+  concurrency model per Decision 81 clause 3). duckdb==1.5.3 + psycopg2-binary + python-ulid
+  live in the ducklake-deps layer; the ducklake/httpfs/postgres extensions live in the
+  ducklake-extensions layer. Function URL is AWS_IAM for the post-deploy smoke-test invoke gates.
+  Table scope: ducklake_smoke_* (T2.18 FP-A; generalises to ops_* at T2.19).
