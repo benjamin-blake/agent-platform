@@ -17,6 +17,7 @@ whole-src/whole-config copytrees (Decision 79 / CD.24).
 
 import argparse
 import gzip
+import os
 import shutil
 import subprocess
 import sys
@@ -457,48 +458,65 @@ def build_pgclient_layer(
     if bucket is None:
         print("  pgclient layer: no bucket specified -- skipping S3 fetch (local dev mode)")
     else:
-        for filename, dest_dir in (
-            ("pg_dump16", opt_bin / "pg_dump"),
-            ("libpq.so.5", opt_lib / "libpq.so.5"),
-        ):
-            print(f"  pgclient: fetching {filename} from s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/...")
-            raw = _try_s3_pgclient(bucket, filename, profile, region)
-            if raw is None:
-                print(
-                    f"  ERROR: {filename} not found in s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/. "
-                    "Seed the binary first: aws s3 cp <local-pg_dump16> "
-                    f"s3://<bucket>/{DUCKLAKE_PGCLIENT_S3_PREFIX}/{filename} --profile {profile}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            dest_path = opt_bin / "pg_dump" if filename.startswith("pg_dump") else opt_lib / "libpq.so.5"
-            dest_path.write_bytes(raw)
-            dest_path.chmod(0o755)
-            print(f"  OK {filename} staged to {dest_path.relative_to(temp_dir / 'pgclient')}")
+        # Single vendored bundle: bin/pg_dump + lib/<libpq + full transitive .so closure>
+        # (ldap/lber/sasl/krb5 family/com_err/keyutils/libevent/libselinux/pcre2). The common
+        # libs (libcrypto/libssl/libz/libzstd/liblz4) are provided by the AL2023 Lambda base and
+        # deliberately NOT bundled, to avoid overriding the runtime's crypto on the global lib path.
+        bundle_name = "pgclient-bundle.tar.gz"
+        print(f"  pgclient: fetching {bundle_name} from s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/...")
+        raw = _try_s3_pgclient(bucket, bundle_name, profile, region)
+        if raw is None:
+            print(
+                f"  ERROR: {bundle_name} not found in s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/. "
+                "Seed it first: a gzip tarball with bin/pg_dump + lib/<libpq.so.5 + its transitive "
+                "shared-library closure>, built from RHEL9/AL2023-ABI (glibc 2.34) RPMs. See the "
+                "catalog-DR runbook (Section 4) for the closure-build procedure.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-        # Symlink libpq.so -> libpq.so.5 so pg_dump's SONAME resolve works.
-        libpq_link = opt_lib / "libpq.so"
-        if not libpq_link.exists():
-            libpq_link.symlink_to("libpq.so.5")
+        import io as _io  # noqa: PLC0415
+        import tarfile as _tarfile  # noqa: PLC0415
 
-        # Fail-closed version assert: pg_dump --version must report PG major 16.
+        n_files = 0
+        with _tarfile.open(fileobj=_io.BytesIO(raw), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if not member.isfile() or not (member.name.startswith("bin/") or member.name.startswith("lib/")):
+                    continue
+                target = temp_dir / "pgclient" / member.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                target.write_bytes(extracted.read())
+                target.chmod(0o755)
+                n_files += 1
+
         pg_dump_bin = opt_bin / "pg_dump"
+        if not pg_dump_bin.exists():
+            print(f"  ERROR: {bundle_name} did not contain bin/pg_dump", file=sys.stderr)
+            sys.exit(1)
+
+        # Fail-closed version assert: pg_dump --version must report PG major 16, with the bundled
+        # libs on the loader path (proves the closure links before the layer ships).
+        version_env = {**os.environ, "LD_LIBRARY_PATH": str(opt_lib)}
         version_result = subprocess.run(
             [str(pg_dump_bin), "--version"],
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=version_env,
         )
         if version_result.returncode != 0 or f"pg_dump (PostgreSQL) {PINNED_PG_MAJOR}" not in version_result.stdout:
             actual = version_result.stdout.strip() or version_result.stderr.strip()
             print(
                 f"ERROR: pg_dump version assertion failed. Expected PG{PINNED_PG_MAJOR}, got: {actual!r}. "
-                "Re-seed the S3 binary with a PG16 build.",
+                "Re-seed the S3 bundle with a PG16 build + complete lib closure.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        print(f"  OK pg_dump --version reports PG{PINNED_PG_MAJOR}")
+        print(f"  OK pg_dump --version reports PG{PINNED_PG_MAJOR} ({n_files} bundled files)")
 
     layer_root = temp_dir / "pgclient"
     zip_path = OUTPUT_DIR / "ducklake-pgclient-layer.zip"

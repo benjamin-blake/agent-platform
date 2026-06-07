@@ -201,6 +201,10 @@ resource "aws_lambda_function" "ducklake_catalog_dr" {
 
   layers = [
     aws_lambda_layer_version.ducklake_pgclient.arn,
+    # ducklake-deps supplies PyYAML (+ boto3): catalog_dr.py imports src.common.ducklake_runtime
+    # (for emit_metric / PINNED_DUCKDB_VERSION / fetch_dsn), whose module-level `import yaml` fails
+    # without it. duckdb is imported lazily and never exercised by the DR path (no connection opened).
+    aws_lambda_layer_version.ducklake_deps.arn,
   ]
 
   environment {

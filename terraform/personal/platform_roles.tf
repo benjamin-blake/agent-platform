@@ -462,6 +462,22 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
         Resource = ["arn:aws:s3:::agent-platform-ducklake-catalog-dr"]
       },
       {
+        # T2.18 FP-B: read DR dump objects (smoke-gate head_object verification + restore-drill
+        # readback). Object-level read on the DR bucket only; the DR Lambda's own role writes them.
+        Sid    = "CatalogDrObjectRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          "arn:aws:s3:::agent-platform-ducklake-catalog-dr",
+          "arn:aws:s3:::agent-platform-ducklake-catalog-dr/*",
+        ]
+      },
+      {
         # T2.18 FP-B: manage the shared SNS alerts topic + its email subscription (Decision 39).
         # Scoped to the alerts topic ARN and its subscription ARNs. The provisioning role creates
         # and configures the topic; alarms publish to it at runtime (no publish grant needed here).

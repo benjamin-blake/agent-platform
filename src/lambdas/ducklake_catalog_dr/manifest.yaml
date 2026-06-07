@@ -25,6 +25,9 @@ notes: >-
   (ducklake-neon-catalog-dsn, Decision 37). Uploads engine-version-tagged dump to the
   dedicated DR S3 bucket. Emits CatalogDumpSuccess metric to CloudWatch DuckLakeCatalogDR
   namespace. pg_dump is a native binary in the pgclient layer -- NOT a pip wheel.
+  Layers: ducklake-pgclient (pg_dump + libpq) AND ducklake-deps (PyYAML + boto3); the
+  latter is required because catalog_dr.py imports ducklake_runtime, whose module-level
+  import of yaml fails otherwise. duckdb is imported lazily and never exercised here.
   Scheduled cron(0 3 * * ? *); Function URL (AWS_IAM) for smoke invocation.
   T2.19 carry: the restore drill (T2.16b) uses plain-SQL format (psql); FP-B produces
   --format=custom dumps (pg_restore); the T2.19 restore-drill gate must be updated.
