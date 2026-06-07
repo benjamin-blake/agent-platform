@@ -680,39 +680,109 @@ def test_lambda_loudfail_fails(monkeypatch):
         smoke.lambda_loudfail()
 
 
-def test_lambda_churn_ok(monkeypatch, capsys):
-    _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 500.0, "endpoint": "direct", "within_budget": True})
-    smoke.lambda_churn()
-    assert "CHURN OK collision_rate=0.0 p95_commit_ms=500.0 endpoint=direct" in capsys.readouterr().out
+def _churn_single_body(**kw) -> dict:
+    """Default per-invocation churn_single response body for fan-out lambda_churn tests."""
+    base = {
+        "ok": True,
+        "latency_ms": 500.0,
+        "collided": False,
+        "connect_ms": 120.0,
+        "commit_ms": 380.0,
+        "cpu_ms": 200.0,
+        "occ_retries": 0,
+        "wall_ms": 500.0,
+    }
+    base.update(kw)
+    return base
 
 
-def test_lambda_churn_ok_with_breakdown(monkeypatch, capsys):
-    _patch_gate(
-        monkeypatch,
-        {
-            "collision_rate": 0.0,
-            "p95_commit_ms": 500.0,
-            "endpoint": "direct",
-            "within_budget": True,
-            "breakdown": {
-                "p95_connect_ms": 120.0,
-                "p95_commit_ms": 380.0,
-                "p95_cpu_ms": 200.0,
-                "wall_cpu_ratio": 2.5,
-                "total_occ_retries": 0,
-            },
-        },
-    )
+def _patch_fanout_churn(monkeypatch, per_invocation_body=None):
+    """Patch _function_url + _sigv4_invoke for the fan-out lambda_churn (including pre-warm phase).
+
+    Handles three payload types: attach_check (pre-warm), churn_single setup=True, churn_single normal.
+    """
+    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+    body = per_invocation_body or _churn_single_body()
+
+    def fake_invoke(url, payload, **kw):
+        if payload.get("action") == "attach_check":
+            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+        if payload.get("setup"):
+            return _Resp(200, {"ok": True, "setup": True})
+        return _Resp(200, body)
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+
+
+def test_lambda_churn_fanout_ok(monkeypatch, capsys):
+    _patch_fanout_churn(monkeypatch)
     smoke.lambda_churn()
     out = capsys.readouterr().out
-    assert "CHURN OK" in out
+    assert "CHURN OK collision_rate=0.0 p95_commit_ms=500.0 endpoint=direct" in out
+    assert "within_budget=True" in out
+    assert "wall_cpu_ratio=2.5" in out
+
+
+def test_lambda_churn_fanout_n_concurrent_calls(monkeypatch):
+    """CHURN_WRITERS pre-warm + 1 setup + CHURN_WRITERS fan-out calls are issued in order."""
+    call_payloads: list[dict] = []
+    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+
+    def fake_invoke(url, payload, **kw):
+        call_payloads.append(dict(payload))
+        if payload.get("action") == "attach_check":
+            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+        if payload.get("setup"):
+            return _Resp(200, {"ok": True, "setup": True})
+        return _Resp(200, _churn_single_body())
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    smoke.lambda_churn()
+    prewarm_calls = [p for p in call_payloads if p.get("action") == "attach_check"]
+    setup_calls = [p for p in call_payloads if p.get("setup")]
+    normal_calls = [p for p in call_payloads if not p.get("setup") and p.get("action") != "attach_check"]
+    assert len(prewarm_calls) == smoke.CHURN_WRITERS
+    assert len(setup_calls) == 1
+    assert len(normal_calls) == smoke.CHURN_WRITERS
+    assert all(p.get("action") == "churn_single" for p in normal_calls)
+    assert sorted(p.get("writer_id") for p in normal_calls) == list(range(smoke.CHURN_WRITERS))
+
+
+def test_lambda_churn_fanout_aggregation_breakdown(monkeypatch, capsys):
+    """Aggregated breakdown fields are computed correctly from N per-invocation bodies."""
+    _patch_fanout_churn(monkeypatch, _churn_single_body(connect_ms=120.0, cpu_ms=200.0, wall_ms=500.0))
+    smoke.lambda_churn()
+    out = capsys.readouterr().out
     assert "p95_connect_ms=120.0" in out
     assert "wall_cpu_ratio=2.5" in out
     assert "total_occ_retries=0" in out
 
 
-def test_lambda_churn_over_budget_fails(monkeypatch):
-    _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 5000.0, "endpoint": "direct", "within_budget": False})
+def test_lambda_churn_fanout_collision_rate_loudfail(monkeypatch):
+    """Collision rate over budget triggers SmokeTestFailure."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+    idx = [0]
+
+    def fake_invoke(url, payload, **kw):
+        if payload.get("action") == "attach_check":
+            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+        if payload.get("setup"):
+            return _Resp(200, {"ok": True, "setup": True})
+        collided = idx[0] < (smoke.CHURN_WRITERS // 2 + 1)
+        idx[0] += 1
+        return _Resp(200, _churn_single_body(collided=collided))
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    with pytest.raises(smoke.SmokeTestFailure, match="CHURN FAIL"):
+        smoke.lambda_churn()
+
+
+def test_lambda_churn_fanout_latency_loudfail(monkeypatch):
+    """p95 wall latency over budget triggers SmokeTestFailure."""
+    _patch_fanout_churn(
+        monkeypatch,
+        _churn_single_body(latency_ms=smoke.COMMIT_LATENCY_BUDGET_MS + 1.0, wall_ms=smoke.COMMIT_LATENCY_BUDGET_MS + 1.0),
+    )
     with pytest.raises(smoke.SmokeTestFailure, match="CHURN FAIL"):
         smoke.lambda_churn()
 
@@ -724,6 +794,45 @@ def test_churn_constants_imported_from_runtime():
     assert smoke.COMMIT_LATENCY_BUDGET_MS == ducklake_runtime.COMMIT_LATENCY_BUDGET_MS
     assert smoke.CHURN_WRITERS == ducklake_runtime.CHURN_WRITERS
     assert smoke.CHURN_WRITES_PER_WRITER == ducklake_runtime.CHURN_WRITES_PER_WRITER
+
+
+def test_lambda_churn_incontainer_prints_breakdown(monkeypatch, capsys):
+    """lambda_churn_incontainer prints diagnostic breakdown and does NOT raise on over-budget."""
+    _patch_gate(
+        monkeypatch,
+        {
+            "collision_rate": 0.0,
+            "p95_commit_ms": 8780.0,
+            "within_budget": False,
+            "endpoint": "direct",
+            "breakdown": {
+                "wall_cpu_ratio": 10.35,
+                "p95_connect_ms": 900.0,
+                "p95_cpu_ms": 850.0,
+                "total_occ_retries": 0,
+            },
+        },
+    )
+    smoke.lambda_churn_incontainer()  # must NOT raise
+    out = capsys.readouterr().out
+    assert "CHURN_INCONTAINER" in out
+    assert "wall_cpu_ratio=10.35" in out
+    assert "within_budget=False" in out
+
+
+def test_lambda_churn_incontainer_budget_pass_still_no_raise(monkeypatch, capsys):
+    """lambda_churn_incontainer does not raise even when within_budget=True (always diagnostic)."""
+    _patch_gate(monkeypatch, {"collision_rate": 0.0, "p95_commit_ms": 500.0, "within_budget": True, "breakdown": {}})
+    smoke.lambda_churn_incontainer()
+    assert "CHURN_INCONTAINER" in capsys.readouterr().out
+
+
+def test_main_lambda_churn_incontainer_dispatch(monkeypatch, capsys):
+    monkeypatch.setattr(
+        smoke, "lambda_churn_incontainer", lambda profile=None, region="eu-west-2": print("CHURN_INCONTAINER ok")
+    )
+    assert smoke.main(["--lambda-churn-incontainer"]) == 0
+    assert "CHURN_INCONTAINER" in capsys.readouterr().out
 
 
 def test_lambda_reader_ok(monkeypatch, capsys):

@@ -2,6 +2,59 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 82: EC8 churn gate measures production invocation fan-out, not in-container thread contention (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-07
+
+**Problem:**
+T2.17 EC8 (churn commit-latency) was red after PR #89's Branch-P investigation. The gate was implemented
+as `action_churn` -- 8 `ThreadPoolExecutor` writers inside ONE Lambda container. Measured wall/cpu ratio
+was 31.73x at 1024MB and 10.35x at 3008MB (account max). p95_cpu_ms ~862ms is already inside the
+2000ms CD.33 budget; the ONLY failing term is scheduling delay from over-subscribing 8 CPU-bound DuckDB
+engines onto <2 vCPU. Reaching budget in that model required ~6 vCPU (~10240MB), blocked by an AWS
+account-age Lambda max-memory quota cap.
+
+**Decision:**
+Correct the EC8 measurement SUBJECT from "8 writers inside one container" to "N concurrent Lambda
+invocations, each its own container/vCPU" -- the production write model ratified by CD.33 clause 3 /
+Decision 81. This is a Decision-75 measurement-subject frame correction, not a budget relaxation.
+
+**What is unchanged (NOT a Decision-55 relaxation):**
+- Budget VALUES: `COMMIT_LATENCY_BUDGET_MS = 2000.0` and `OCC_COLLISION_RATE_BUDGET = 0.20` are UNCHANGED.
+- Gate term: per-invocation wall p95 (`latency_ms`) -- the same term `action_churn` used. Switching the
+  comparison to `commit_ms` (which excludes connect/cold-start) would be an implicit relaxation; wall
+  is the pinned term.
+- `CHURN_WRITERS = 8` unchanged; `OCC_MAX_ATTEMPTS` unchanged.
+- Loud-fail semantics intact (Decision 81 clause 3): schema-gate reject and OCC-retry exhaustion still raise.
+
+**What changes:**
+- EC8 gate: smoke-test fans out `CHURN_WRITERS=8` concurrent `_sigv4_invoke({"action":"churn_single"})`
+  calls. One setup invocation (`setup:true`) pre-creates tables to avoid a CREATE race. The N bodies are
+  aggregated into collision_rate + p95 wall + attribution breakdown (connect/commit/cpu/wall_cpu_ratio).
+- Handler: new `action_churn_single` dispatches on `"churn_single"` -- setup path calls
+  `create_scd2_tables(force_recreate=True)`; normal path runs one `_churn_one_writer` and returns
+  per-stage attribution. Connectionless action (manages its own connection like `action_churn`).
+- The legacy `action_churn` (in-container 8-thread burst) is retained as an opt-in stress diagnostic
+  via `--lambda-churn-incontainer`. A budget miss from that path is informational only, not a gate failure.
+- `ducklake_writer` memory_size stays at 3008MB as baseline headroom (NOT reverted). Comment updated.
+- The Lambda quota-increase requirement (filed as a blocker rec at PR #89) is WITHDRAWN; the frame
+  correction removes the need for >3008MB to pass EC8.
+
+**Rationale:**
+Production ops writes (`file_rec`/`update_rec`) are independent single-commit Lambda invocations, each
+its own container/vCPU. The 8-threads-in-one-container harness was harsher than and unrepresentative of
+production, and CPU-starved in a way production never will. The architecturally-meaningful OCC-collision
+sub-gate is preserved (and arguably exercised more faithfully) by N truly-concurrent invocations hitting
+the same Neon catalog simultaneously. The concurrency model is OCC + multiple invocations per CD.33
+clause 3; reserved-concurrency=1 or SQS FIFO are not the model.
+
+**References:** CD.33 (production concurrency model, authoritative), Decision 81, Decision 75 (frame-
+correction precedent), Decision 55 (no budget relax), Decision 79 (per-Lambda V3 gating). Catalog
+authority: CD.34 (Neon), not Decision 78 clause 3.
+
+---
+
 ## Decision 81: Ratify the DuckLake ops runtime architecture (CD.33); resolve OQ.7 / OQ.10 / OQ.11 (Decided)
 
 **Status:** Decided

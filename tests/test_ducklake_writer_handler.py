@@ -255,6 +255,67 @@ def test_handler_churn(monkeypatch):
     assert "wall_cpu_ratio" in bd
 
 
+def test_handler_churn_single_normal(monkeypatch):
+    """action_churn_single (normal, no setup) calls _churn_one_single_write and returns attribution."""
+    seen_ids: list[int] = []
+    monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
+    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
+    monkeypatch.setattr(h, "_churn_one_single_write", lambda i, dsn, creds: seen_ids.append(i) or _churn_result())
+    r = h.handler({"action": "churn_single", "writer_id": 3})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body["ok"] is True
+    assert seen_ids == [3]
+    assert "latency_ms" in body
+    assert "collided" in body
+    assert "connect_ms" in body
+    assert "commit_ms" in body
+    assert "cpu_ms" in body
+    assert "occ_retries" in body
+
+
+def test_churn_one_single_write(monkeypatch):
+    """_churn_one_single_write opens a connection, writes ONCE, and returns attribution dict."""
+    con = FakeCon()
+    monkeypatch.setattr(rt, "open_connection", lambda **kw: con)
+    monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result(commit_ms=200.0, occ_retries=0))
+    out = h._churn_one_single_write(5, {"host": "h"}, ("ak", "sk", None, "r"))  # pragma: allowlist secret
+    assert out["collided"] is False
+    assert con.closed is True
+    assert out["commit_ms"] == 200.0
+    assert out["occ_retries"] == 0
+    assert "connect_ms" in out
+    assert "wall_ms" in out
+    assert "cpu_ms" in out
+
+
+def test_churn_one_single_write_occ(monkeypatch):
+    """_churn_one_single_write marks collided=True when OCCRetryExhaustedError is raised."""
+    con = FakeCon()
+    monkeypatch.setattr(rt, "open_connection", lambda **kw: con)
+    monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: (_ for _ in ()).throw(rt.OCCRetryExhaustedError("x")))
+    out = h._churn_one_single_write(0, {"host": "h"}, ("ak", "sk", None, "r"))  # pragma: allowlist secret
+    assert out["collided"] is True
+    assert con.closed is True
+
+
+def test_handler_churn_single_setup(monkeypatch):
+    """action_churn_single with setup=True pre-creates tables and returns {"ok":true,"setup":true}."""
+    con = FakeCon()
+    monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
+    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
+    monkeypatch.setattr(rt, "open_connection", lambda **kw: con)
+    create_calls: list[bool] = []
+    monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: create_calls.append(force_recreate))
+    r = h.handler({"action": "churn_single", "setup": True})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body["ok"] is True
+    assert body["setup"] is True
+    assert create_calls == [True]
+    assert con.closed is True
+
+
 def test_handler_schema_gate_error_maps_422(monkeypatch):
     con = FakeCon()
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
