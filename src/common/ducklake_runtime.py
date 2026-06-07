@@ -88,7 +88,7 @@ _OCC_COLLISION_MARKERS = (
 # Values are CD.33 / Decision 55 / Decision 81 invariants -- never relax without a Decision superseding CD.33.
 COMMIT_LATENCY_BUDGET_MS = 2000.0  # p95 commit latency ceiling (in-Lambda, DIRECT endpoint)
 OCC_COLLISION_RATE_BUDGET = 0.20  # max fraction of churn writers that hit an OCC collision
-CHURN_WRITERS = 8  # concurrent fresh-connection writers in the churn burst (EC8)
+CHURN_WRITERS = 4  # concurrent invocation fan-out for EC8 (Decision 82: N steered 8->4; budget VALUES above unchanged)
 CHURN_WRITES_PER_WRITER = 5  # writes per writer per churn iteration
 
 # CloudWatch metric namespace for OCC-retry + commit-latency emission (EC9).

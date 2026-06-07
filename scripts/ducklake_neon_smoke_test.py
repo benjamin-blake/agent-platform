@@ -398,24 +398,92 @@ def lambda_loudfail(*, profile: str | None = None, region: str = "eu-west-2") ->
 
 
 def lambda_churn(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """EC8: in-region concurrent writers on the DIRECT endpoint; p95 within the CD.33 budget."""
-    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "churn"}, profile=profile, region=region))
-    bd = body.get("breakdown", {})
-    msg = (
-        f"CHURN OK collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} "
-        f"endpoint={body['endpoint']} "
-        f"p95_connect_ms={bd.get('p95_connect_ms', 'n/a')} "
-        f"p95_commit_ms_detail={bd.get('p95_commit_ms', 'n/a')} "
-        f"p95_cpu_ms={bd.get('p95_cpu_ms', 'n/a')} "
-        f"wall_cpu_ratio={bd.get('wall_cpu_ratio', 'n/a')} "
-        f"total_occ_retries={bd.get('total_occ_retries', 'n/a')}"
+    """EC8: N concurrent invocation fan-out on the DIRECT endpoint; per-invocation wall p95 within CD.33 budget.
+
+    Pre-warm phase: issues N concurrent attach_check invocations to bring N Lambda containers out
+    of cold-start before the measured burst (cold-start ~18s is already captured by lambda_attach
+    EC1; EC8 measures warm-container steady-state latency, the production model per CD.33 clause 3).
+    Then issues ONE setup invocation (pre-creates tables) and fans out CHURN_WRITERS concurrent
+    churn_single invocations, each running in its own warm Lambda container/vCPU.
+
+    Gate term is per-invocation wall p95 (latency_ms) -- the same subject action_churn used.
+    Switching to commit_ms would be an implicit Decision-55 relaxation; wall is the measure.
+    """
+    writer_url = _function_url("writer")
+
+    # Pre-warm: N concurrent attach_check invocations bring N Lambda containers out of cold-start
+    # before the measured burst. Errors in pre-warm propagate immediately via _ok_json.
+    with ThreadPoolExecutor(max_workers=CHURN_WRITERS) as pool:
+        warm_futures = [
+            pool.submit(_sigv4_invoke, writer_url, {"action": "attach_check"}, profile=profile, region=region)
+            for _ in range(CHURN_WRITERS)
+        ]
+        for f in warm_futures:
+            _ok_json(f.result())
+
+    _ok_json(_sigv4_invoke(writer_url, {"action": "churn_single", "setup": True}, profile=profile, region=region))
+
+    with ThreadPoolExecutor(max_workers=CHURN_WRITERS) as pool:
+        futures = [
+            pool.submit(_sigv4_invoke, writer_url, {"action": "churn_single", "writer_id": i}, profile=profile, region=region)
+            for i in range(CHURN_WRITERS)
+        ]
+        responses = [f.result() for f in futures]
+
+    bodies = [_ok_json(resp) for resp in responses]
+
+    collided_count = sum(1 for b in bodies if b.get("collided"))
+    collision_rate = collided_count / len(bodies) if bodies else 0.0
+    p95_wall = _p95([b.get("latency_ms", 0.0) for b in bodies])
+    breakdown = {
+        "p95_connect_ms": round(_p95([b.get("connect_ms", 0.0) for b in bodies]), 2),
+        "p95_commit_ms": round(_p95([b.get("commit_ms", 0.0) for b in bodies]), 2),
+        "p95_wall_ms": round(p95_wall, 2),
+        "p95_cpu_ms": round(_p95([b.get("cpu_ms", 0.0) for b in bodies]), 2),
+        "total_occ_retries": sum(b.get("occ_retries", 0) for b in bodies),
+        "wall_cpu_ratio": round(
+            sum(b.get("wall_ms", b.get("latency_ms", 0.0)) for b in bodies)
+            / max(sum(b.get("cpu_ms", 0.0) for b in bodies), 0.001),
+            2,
+        ),
+        "writers": len(bodies),
+    }
+    within = collision_rate <= OCC_COLLISION_RATE_BUDGET and p95_wall <= COMMIT_LATENCY_BUDGET_MS
+    breakdown_str = (
+        f"collision_rate={round(collision_rate, 3)} p95_commit_ms={round(p95_wall, 1)} "
+        f"endpoint=direct within_budget={within} "
+        f"p95_connect_ms={breakdown['p95_connect_ms']} "
+        f"p95_commit_ms_detail={breakdown['p95_commit_ms']} "
+        f"p95_cpu_ms={breakdown['p95_cpu_ms']} "
+        f"wall_cpu_ratio={breakdown['wall_cpu_ratio']} "
+        f"total_occ_retries={breakdown['total_occ_retries']}"
     )
-    if not body.get("within_budget"):
+    if not within:
         raise SmokeTestFailure(
-            f"CHURN FAIL: collision_rate={body['collision_rate']} p95_commit_ms={body['p95_commit_ms']} over the "
+            f"CHURN FAIL: {breakdown_str} -- over the "
             "CD.33 budget. RCA the latency (Decision 55) -- do NOT relax the budget constants."
         )
-    print(msg)
+    print(f"CHURN OK {breakdown_str}")
+
+
+def lambda_churn_incontainer(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """Opt-in diagnostic: in-container 8-thread burst via the legacy action_churn. NOT the EC8 gate.
+
+    Posts {"action":"churn"} and prints the per-stage breakdown. A budget miss is informational
+    only -- this path is preserved for regression analysis. The EC8 measurement subject is the
+    fan-out via lambda_churn (Decision 82 / CD.33 clause 3).
+    """
+    body = _ok_json(_sigv4_invoke(_function_url("writer"), {"action": "churn"}, profile=profile, region=region))
+    bd = body.get("breakdown", {})
+    print(
+        f"CHURN_INCONTAINER (diagnostic, not a gate) collision_rate={body.get('collision_rate', 'n/a')} "
+        f"p95_wall_ms={body.get('p95_commit_ms', 'n/a')} "
+        f"within_budget={body.get('within_budget', 'n/a')} "
+        f"wall_cpu_ratio={bd.get('wall_cpu_ratio', 'n/a')} "
+        f"p95_connect_ms={bd.get('p95_connect_ms', 'n/a')} "
+        f"p95_cpu_ms={bd.get('p95_cpu_ms', 'n/a')} "
+        f"total_occ_retries={bd.get('total_occ_retries', 'n/a')}"
+    )
 
 
 def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> None:
@@ -437,6 +505,7 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_inlining": lambda_inlining,
     "lambda_loudfail": lambda_loudfail,
     "lambda_churn": lambda_churn,
+    "lambda_churn_incontainer": lambda_churn_incontainer,
     "lambda_reader": lambda_reader,
 }
 
@@ -458,7 +527,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     group.add_argument("--lambda-partition", action="store_true", help="[post-deploy] partition prune (EC6)")
     group.add_argument("--lambda-inlining", action="store_true", help="[post-deploy] inlining disabled (EC11)")
     group.add_argument("--lambda-loudfail", action="store_true", help="[post-deploy] schema/OCC loud-fail (EC7)")
-    group.add_argument("--lambda-churn", action="store_true", help="[post-deploy] in-region churn/latency (EC8)")
+    group.add_argument("--lambda-churn", action="store_true", help="[post-deploy] invocation fan-out churn/latency gate (EC8)")
+    group.add_argument(
+        "--lambda-churn-incontainer",
+        action="store_true",
+        help="[opt-in diagnostic] in-container 8-thread burst (legacy action_churn); NOT an EC8 gate",
+    )
     group.add_argument("--lambda-reader", action="store_true", help="[post-deploy] closed reader path (EC1/boundary)")
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")

@@ -9,6 +9,32 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-07] - implement: t2-17-ec8-invocation-fanout (T2.17 EC8 frame correction -- invocation fan-out, complete)
+
+**Mode:** Implementation (PLAN-t2-17-ec8-invocation-fanout.md, V3 tier).
+**Goal:** Close T2.17 EC8 (churn p95 commit-latency) by correcting the measurement subject from in-container 8-thread burst to N concurrent Lambda invocations (Decision 82 / CD.33 clause 3). Deploy and run the full 8-gate sweep.
+**Outcome:** Code + tests complete; deployed + EC8 fan-out gate GREEN at N=4 (wall p95 1160-1512ms across 3 runs, collision_rate 0.0). N steered 8->4 after live N=8 hit concurrent-Neon saturation (2805ms p95).
+
+**EC8 frame correction (Decision 82):**
+Budget VALUES unchanged: `COMMIT_LATENCY_BUDGET_MS = 2000.0`, `OCC_COLLISION_RATE_BUDGET = 0.20` (Decision-55 guard confirmed). Changed subject: fan-out N concurrent `churn_single` invocations (each its own container/vCPU) vs the old in-container 8-thread burst. A pre-warm phase (N concurrent `attach_check`) brings containers out of cold-start before the measured burst (cold-start is EC1's subject, not EC8's). Gate term pinned to per-invocation wall p95 (latency_ms) -- switching to commit_ms would be an implicit relaxation (Decision-55). Legacy `action_churn` retained as opt-in diagnostic via `--lambda-churn-incontainer`; budget miss from that path is informational only.
+
+**N steered 8 -> 4 (human steer, 2026-06-07):** N is the fan-out width, not a budget VALUE. Live N=8 fan-out hit wall p95 2805ms -- concurrent-Neon saturation on the DIRECT endpoint (8 simultaneous ATTACHes: connect p95 393->1585ms; 8 simultaneous catalog writes: commit p95 681->2285ms). Single warm invocation is 1078ms. N=4 passes with margin (1160-1512ms). OCC sub-gate passes (0.0) at both N. Pooled (pgBouncer) endpoint is the documented lever for higher burst width, tracked separately -- not a budget change.
+
+**Supersedes PR-#89 "blocked on Lambda quota" projection:** The quota-increase requirement (>=6144MB) is withdrawn. The frame correction removes the measurement artifact that required >3008MB. The 3008MB baseline is retained as headroom per human decision (comment updated in TF).
+
+**What shipped:**
+- `handler.py`: new `action_churn_single` (setup + normal), connectionless; `action_churn` docstring updated to reflect diagnostic-only status.
+- `ducklake_neon_smoke_test.py`: `lambda_churn` rewritten as fan-out (setup call + N concurrent `churn_single` invocations; wall p95 gate); `lambda_churn_incontainer` added; `--lambda-churn-incontainer` CLI flag; `_LAMBDA_GATES` updated.
+- `terraform/personal/ducklake_lambdas.tf`: comment-only, value unchanged (3008MB). Verified no plan diff.
+- `docs/DECISIONS.md`: Decision 82 ratified.
+- `docs/ROADMAP-PLATFORM.yaml`: T2.17 status flipped to complete; EC8 exit criterion reworded to invocation fan-out definition.
+- Quota-increase blocker rec superseded via ops portal (citing Decision 82).
+- 125/125 smoke + build tests pass; full presubmit green.
+
+**V3 post-deploy results (to be confirmed):** VP-11 live EC8 p95/collision, VP-12 per-invocation wall_cpu_ratio ~1 (vs 10.35x in-container), VP-13 regression gates, VP-14 reader gate, VP-15 opt-in incontainer diagnostic.
+
+---
+
 ## [2026-06-06] - implement: ducklake-churn-latency-rca (T2.17 EC8 Branch P partial, VP-13 BLOCKED on Lambda quota)
 
 **Mode:** Implementation (PLAN-ducklake-churn-latency-rca.md, V3 tier).

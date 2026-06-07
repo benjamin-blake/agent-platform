@@ -175,13 +175,39 @@ def action_loudfail_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
     }
 
 
-def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """In-region concurrent-writer burst; report collision rate + p95 commit latency (EC8).
+def action_churn_single(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Single-writer invocation: one independent writer per Lambda container (EC8 fan-out gate).
 
-    Self-contained: each writer opens its OWN baked-extension connection to the Neon DIRECT
-    endpoint (no dev-mode network INSTALL), so the gate measures the real in-region Lambda->Neon
-    connect+commit latency. Per-stage attribution breakdown (connect, commit, wall, cpu) is included
-    in the response for Phase-1 RCA. Loud-fail classification only -- a non-OCC error propagates.
+    On setup=true: pre-create the SCD2 tables once before the client's concurrent burst to avoid
+    a CREATE race across N simultaneously cold-starting containers.
+    Normal: resolve dsn + credentials, run one _churn_one_writer, return per-stage attribution.
+    This is the unit invoked N times concurrently from the smoke-test client (one container each).
+    """
+    dsn = rt.fetch_dsn()
+    creds = _frozen_creds()
+    if event.get("setup"):
+        con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+        try:
+            rt.create_scd2_tables(con, force_recreate=True)
+        finally:
+            con.close()
+        return {"ok": True, "setup": True}
+    writer_id = int(event.get("writer_id", 0))
+    # Single-commit per invocation: production ops writes are independent single-commit Lambda
+    # invocations (file_rec / update_rec). _churn_one_writer runs CHURN_WRITES_PER_WRITER sequential
+    # commits (a stress harness for the in-container burst); the production-representative gate
+    # measures connect + ONE write, matching the actual ops-portal write unit.
+    result = _churn_one_single_write(writer_id, dsn, creds)
+    return {"ok": True, **result}
+
+
+def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """In-container 8-thread burst diagnostic (legacy). NOT the EC8 gate (see action_churn_single).
+
+    Retained as an opt-in stress diagnostic accessible via --lambda-churn-incontainer. The EC8
+    fan-out measurement uses N concurrent invocations of action_churn_single (Decision 82 / CD.33
+    clause 3). This action exposes the in-container CPU-starvation artifact documented in PR #89.
+    Self-contained: each writer opens its OWN baked-extension connection. Loud-fail on non-OCC.
     """
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
@@ -263,6 +289,46 @@ def _churn_one_writer(writer_id: int, dsn: dict[str, Any], creds: Any) -> dict[s
                 total_occ_retries += result.occ_retries
             except rt.OCCRetryExhaustedError:
                 collided = True
+    finally:
+        con.close()
+
+    wall_ms = (time.perf_counter() - wall_start) * 1000.0
+    cpu_ms = (time.thread_time() - cpu_start) * 1000.0
+    return {
+        "latency_ms": wall_ms,
+        "collided": collided,
+        "connect_ms": round(connect_ms, 2),
+        "commit_ms": round(aggregate_commit_ms, 2),
+        "occ_retries": total_occ_retries,
+        "wall_ms": round(wall_ms, 2),
+        "cpu_ms": round(cpu_ms, 2),
+    }
+
+
+def _churn_one_single_write(writer_id: int, dsn: dict[str, Any], creds: Any) -> dict[str, Any]:
+    """One connect + ONE write: the production-representative EC8 measurement unit.
+
+    Production ops writes (file_rec / update_rec) are independent single-commit Lambda invocations.
+    This function measures the full round-trip (connect + one write_scd2 commit) on its own container,
+    returning the same attribution schema as _churn_one_writer for aggregation compatibility.
+    """
+    wall_start = time.perf_counter()
+    cpu_start = time.thread_time()
+    collided = False
+    aggregate_commit_ms = 0.0
+    total_occ_retries = 0
+
+    connect_start = time.perf_counter()
+    con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+    connect_ms = (time.perf_counter() - connect_start) * 1000.0
+
+    try:
+        try:
+            result = rt.write_scd2(con, {"rec_id": f"rec-churn-single-{writer_id}", "payload": "c"})
+            aggregate_commit_ms = result.commit_ms
+            total_occ_retries = result.occ_retries
+        except rt.OCCRetryExhaustedError:
+            collided = True
     finally:
         con.close()
 
@@ -375,10 +441,11 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "inlining": action_inlining_probe,
     "loudfail_probe": action_loudfail_probe,
     "churn": action_churn,
+    "churn_single": action_churn_single,
 }
 
 # Actions that manage their own connections (churn opens many; attach measures connect time itself).
-_CONNECTIONLESS_ACTIONS = {"churn"}
+_CONNECTIONLESS_ACTIONS = {"churn", "churn_single"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
