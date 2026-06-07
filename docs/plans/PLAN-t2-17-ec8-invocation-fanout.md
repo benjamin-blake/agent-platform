@@ -21,7 +21,8 @@ docs/plans/PLAN-t2-17-ec8-invocation-fanout.md
 
 ## Phase
 Platform tier T2.17 -- "DuckLake Lambda runtime -- extension layer + version pin (Neon catalog, no VPC
-attach)" (currently `next_eligible`). 7/8 post-deploy EC gates green at PR #87; EC8 (churn) is the single
+attach)" (YAML `status: not_started`; surfaced as `next_eligible` in the preflight roadmap view -- this plan
+flips it to `complete`). 7/8 post-deploy EC gates green at PR #87; EC8 (churn) is the single
 remaining red criterion. PR #89 shipped Phase-1 attribution and stopped at VP-13 per Decision 55. This plan
 resolves EC8 via the SECONDARY escape hatch (concurrency-model frame correction) that
 `PLAN-ducklake-churn-latency-rca.md` documented as requiring human sign-off -- now granted.
@@ -98,6 +99,11 @@ No new IAM roles/policies. The writer/reader roles are unchanged, so this stays 
 - **Do NOT relax the budget (Decision 55 / CD.33 / Decision 81).** The 2000ms p95 and 0.20 collision-rate
   constants keep their VALUES. This plan changes WHAT EC8 measures (production invocation fan-out), not the
   threshold. No "degrade-to-pass," no silent threshold edit (VP-1 grep-guards this).
+- **Pin the budget-comparison term (implicit-relaxation guard).** The fan-out gate applies the 2000ms budget
+  to per-invocation `latency_ms` (wall) p95 -- the identical term the in-container `action_churn` used.
+  Silently switching the budget to the `commit_ms` breakdown term (which excludes connect/cold-start) would
+  be an implicit relaxation and is forbidden. The breakdown still surfaces `connect_ms`/`commit_ms`
+  separately for attribution, but the gate term is wall p95.
 - **This is a Decision-75 frame correction, ratified by human sign-off** (the SECONDARY escape hatch in
   `PLAN-ducklake-churn-latency-rca.md`). It MUST be recorded as a Decision before the gate is reported
   green -- the gate is not silently redefined.
@@ -171,8 +177,13 @@ No new IAM roles/policies. The writer/reader roles are unchanged, so this stays 
    (c) aggregate the N bodies -- `collision_rate = collided/N`, `p95` of `latency_ms`, breakdown p95s
    (connect/commit/cpu) + per-invocation `wall_cpu_ratio`; (d) evaluate vs `COMMIT_LATENCY_BUDGET_MS` /
    `OCC_COLLISION_RATE_BUDGET` and loud-fail (`SmokeTestFailure`) on breach, matching the existing
-   message/no-relax wording. Add a `--lambda-churn-incontainer` arg that posts the legacy `{"action":"churn"}`
-   and prints its breakdown WITHOUT gating the sweep. Run VP-3.
+   message/no-relax wording. **Pin the budget-comparison term:** apply the budget to per-invocation
+   `latency_ms` (wall) p95 -- the SAME term the in-container `action_churn` gated on -- NOT the more lenient
+   `commit_ms` breakdown term. Switching to `commit_ms` would be an implicit Decision-55 relaxation; keep the
+   subject "per-invocation wall latency" so "within_budget" means the same thing across both paths. Add a
+   `--lambda-churn-incontainer` arg (wired into the argparse mutually-exclusive gate group AND the
+   `_LAMBDA_GATES`/`main` dispatch, alongside the other `--lambda-*` gates) that posts the legacy
+   `{"action":"churn"}` and prints its breakdown WITHOUT gating the sweep. Run VP-3.
 3. **Tests.** Update `tests/test_ducklake_writer_handler.py` (action_churn_single + setup; retain
    action_churn diagnostic coverage) and `tests/test_ducklake_neon_smoke_test.py` (mock `_sigv4_invoke` to
    return N bodies; assert N concurrent calls, aggregation, loud-fail, opt-in dispatch). 100% of new lines.
