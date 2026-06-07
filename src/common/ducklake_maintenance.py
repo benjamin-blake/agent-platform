@@ -39,6 +39,7 @@ CALL signature notes (verified against live DuckDB 1.5.3 / DuckLake v1.0):
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -49,6 +50,12 @@ from src.common.ducklake_runtime import CATALOG_ALIAS, SMOKE_CURRENT_TABLE, SMOK
 # ---------------------------------------------------------------------------
 
 GC_TABLE_SCOPE: tuple[str, ...] = (SMOKE_HISTORY_TABLE, SMOKE_CURRENT_TABLE)
+
+# HOT_TABLE_SCOPE: higher-frequency merge cadence for high-write-rate tables (T2.18 FP-B, CD.34).
+# Scoped to ducklake_smoke_* for T2.18 (same as GC_TABLE_SCOPE). At T2.19, this EXPANDS to the
+# real high-write-rate ops_* tables (ops_recommendations, ops_decisions) once the DuckLake writer
+# is the live write path. Wiring the numeric tuning + real tables is a T2.19 exit criterion.
+HOT_TABLE_SCOPE: tuple[str, ...] = (SMOKE_HISTORY_TABLE, SMOKE_CURRENT_TABLE)
 
 MAINTENANCE_SCOPE_NOTE = (
     "T2.18 FP-A: scope is ducklake_smoke_* only. "
@@ -67,8 +74,14 @@ SNAPSHOT_RETAIN_DAYS: int = 30
 FILE_CLEANUP_GRACE_DAYS: int = 7
 SNAPSHOT_FLOOR: int = 2
 
-GC_BREAKER_FILE_FRACTION: float = 0.20
-GC_BREAKER_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GiB
+_DEFAULT_GC_BREAKER_FILE_FRACTION: float = 0.20
+_DEFAULT_GC_BREAKER_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GiB
+
+# Env-tunable thresholds (FP-B co-tuning mechanism, CD.34 / Decision 81 clause 6).
+# The constants below are the effective defaults -- sourced from env when set so the Lambda can
+# be tuned without a code deploy. Changing them to make a gate pass is a Decision-55 violation.
+GC_BREAKER_FILE_FRACTION: float = float(os.environ.get("GC_BREAKER_FILE_FRACTION", _DEFAULT_GC_BREAKER_FILE_FRACTION))
+GC_BREAKER_BYTES: int = int(os.environ.get("GC_BREAKER_BYTES", _DEFAULT_GC_BREAKER_BYTES))
 
 # CloudWatch metric namespace for maintenance metrics (CD.33 T2-d).
 MAINTENANCE_CLOUDWATCH_NAMESPACE = "DuckLakeMaintenance"
@@ -401,6 +414,37 @@ def run_merge(
         "tables": list(tables),
         "files_before": files_before,
         "files_after_merge": files_after_merge,
+    }
+
+
+def run_hot_merge(
+    con: Any,
+    tables: tuple[str, ...] | list[str] = HOT_TABLE_SCOPE,
+    *,
+    catalog: str = CATALOG_ALIAS,
+    schema: str = "main",
+) -> dict[str, Any]:
+    """Higher-frequency merge-only cadence for high-write-rate tables (T2.18 FP-B / CD.34).
+
+    Runs merge_adjacent_files ONLY -- no snapshot expiry, no cleanup, no orphan deletion.
+    Bounds the small-file COUNT between weekly GC passes without reclaiming storage (that is
+    the weekly GC cadence's job). Safe to invoke frequently.
+
+    Table scope: HOT_TABLE_SCOPE (ducklake_smoke_* for T2.18). At T2.19, this expands to the
+    real high-write-rate ops_* tables -- wiring is a T2.19 exit criterion.
+
+    Returns a stats dict so the smoke gate (VP12) can assert files_after <= files_before and
+    confirm no destructive calls were issued.
+    """
+    files_before = sum(_count_files(con, catalog, t) for t in tables)
+    merge_adjacent_files(con, tables, catalog=catalog, schema=schema)
+    files_after = sum(_count_files(con, catalog, t) for t in tables)
+    return {
+        "ok": True,
+        "action": "hot_merge",
+        "tables": list(tables),
+        "files_before": files_before,
+        "files_after": files_after,
     }
 
 

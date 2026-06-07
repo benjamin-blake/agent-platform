@@ -3512,16 +3512,27 @@ tier_items:
     strategic: false
     status: in_progress
     progress_note: |
-      FP-A landed 2026-06-07: ducklake_maintenance Lambda (daily merge + weekly guarded GC with circuit
-      breaker, singleton reserved_concurrent_executions=1), EventBridge schedules, IAM role, CloudWatch
+      FP-A landed 2026-06-07 (PR #93): ducklake_maintenance Lambda (daily merge + weekly guarded GC with
+      circuit breaker, singleton reserved_concurrent_executions=1), EventBridge schedules, IAM role, CloudWatch
       alarm (alarm_actions=[] FP-A), manifest (CD.24), build_lambda --ducklake-only extended to 3 functions,
       smoke-test VP gates (lambda-maintenance-merge/gc/breaker). Table scope: ducklake_smoke_* only.
-      Criteria met this session: cadence mechanism chosen+documented (Lambda+EventBridge, Decision 62); two
-      deterministic singleton cadences implemented (CD.33 clause 5); all GC guardrails pinned (30d/7d/floor-2/
-      >20%-or->10GiB breaker/weekly/no-cleanup_all; CD.33 H1/R-3/O-3/M-3). Pending (FP-B): (1) catalog DR
-      (daily pg_dump -> S3, >25h freshness alarm); (2) telemetry small-file co-tuning (higher-frequency merge
-      + GC breaker co-tune); (3) SNS alarm_actions wiring; (4) ops_compaction Lambda retirement; (5) deploy
-      + post-deploy smoke gate confirmation (VP7-13, human-gated terraform apply).
+      FP-B landed 2026-06-07: Criteria closed this session:
+        (1) Catalog DR (CD.34 O-2): ducklake_catalog_dr Lambda + pgclient layer (pg_dump 16 + libpq.so),
+            daily cron(0 3 * * ? *), --format=custom --serializable-deferrable, engine-version-tagged S3 key +
+            metadata (PG16 + duckdb 1.5.3), dedicated versioned+SSE+lifecycle DR bucket, CatalogDumpSuccess
+            metric, loud-fail on non-zero pg_dump exit (Decision 55).
+        (2) SNS alert wiring (Decision 39): shared personal-account SNS topic (agent-platform-alerts) created;
+            both circuit-breaker alarm and DR freshness alarm wired to it. Email subscription via gitignored tfvars.
+        (3) Co-tuning mechanism (CD.34): hot_merge cadence (cron every 6h, action=hot_merge,
+            merge-only/no-GC), HOT_TABLE_SCOPE (smoke-scoped), GC_BREAKER_FILE_FRACTION/GC_BREAKER_BYTES
+            env-configurable on the maintenance Lambda. Numeric tuning + real high-write tables carry to T2.19.
+        (4) ops_compaction deprecation marker + manifest notes + T2.19-gated decommission runbook
+            (Section 5 of ducklake-catalog-operations.md). No behavioural change.
+      Remaining (carry to T2.19):
+        - ops_compaction retirement (live Iceberg write path until T2.19 cutover, Decision 78 clause 7)
+        - Final co-tuning numeric thresholds (real high-write-rate tables not yet in DuckLake)
+        - T2.19 restore-drill gate update (pg_restore for --format=custom; existing drill uses psql/plain-SQL)
+        - Deploy + post-deploy smoke gates (VP7-14; human-gated terraform apply pending)
 
   - id: T2.19
     tier: T2

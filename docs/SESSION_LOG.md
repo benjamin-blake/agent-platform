@@ -9,6 +9,34 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-07] - implement: ducklake-maintenance-fpb (T2.18 FP-B -- catalog DR, SNS alerts, co-tuning)
+
+**Mode:** Implementation (PLAN-ducklake-maintenance-fpb.md, V3 tier). FP-B slice.
+**Goal:** Complete T2.18 by shipping catalog DR (pg_dump -> S3), SNS alarm wiring, and the co-tuning mechanism (hot_merge + env-configurable breaker thresholds).
+
+**What shipped (pre-deploy):**
+- `src/common/catalog_dr.py`: DR primitives (build_pg_dump_cmd with --format=custom + --serializable-deferrable, build_dr_key engine-version-tagged, build_dr_object_metadata, CatalogDrError loud-fail, run_catalog_dump orchestrator). dsn_uri() exported to eliminate drift with smoke test.
+- `src/lambdas/ducklake_catalog_dr/handler.py` + `__init__.py`: DR Lambda entrypoint, DSN from Secrets Manager, force_* event fields, 5xx on CatalogDrError.
+- `src/lambdas/ducklake_catalog_dr/manifest.yaml`: CD.24 manifest (status: active).
+- `src/common/ducklake_maintenance.py`: HOT_TABLE_SCOPE constant (smoke-scoped + T2.19 forward-pointer), run_hot_merge orchestrator (merge-only, no destructive calls), env-sourced GC_BREAKER_FILE_FRACTION + GC_BREAKER_BYTES defaults.
+- `src/lambdas/ducklake_maintenance/handler.py`: action_hot_merge dispatch, env-threshold reading (_ENV_GC_BREAKER_FILE_FRACTION/_ENV_GC_BREAKER_BYTES), hot_merge added to _ACTIONS.
+- `terraform/personal/sns_alerts.tf`: shared aws_sns_topic.alerts + email subscription (var.alerts_email gitignored) + output.
+- `terraform/personal/ducklake_catalog_dr.tf`: DR Lambda + pgclient layer + DR bucket (versioned/SSE/PAB/lifecycle) + IAM role + log group + EventBridge cron(0 3) rule/target/permission + Function URL (AWS_IAM) + >25h freshness alarm wired to SNS.
+- `terraform/personal/ducklake_maintenance.tf`: breaker alarm alarm_actions/ok_actions wired to SNS; hot_merge EventBridge rule/target/permission added; GC_BREAKER_* env vars added to Lambda.
+- `src/data/handlers/ops_compaction_handler.py`: deprecation marker (module docstring).
+- `src/lambdas/ops-compaction/manifest.yaml`: deprecation notes line added.
+- `scripts/ducklake_neon_smoke_test.py`: --lambda-catalog-dr gate (dump object + engine-tag + metric assert) + --lambda-maintenance-hot-merge gate (merge-only, files_after <= files_before). CATALOG_DR_URL_ENV constant. _dsn_uri() delegates to catalog_dr.dsn_uri() (single impl).
+- `scripts/build_lambda.py`: build_pgclient_layer (S3 fetch + pg_dump --version assert), catalog-dr zip in _run_ducklake_build (4 zips + 3 layers), DUCKLAKE_CATALOG_DR_FUNCTION added to _DUCKLAKE_FUNCTION_ZIP_KEYS.
+- `tests/test_catalog_dr.py`: unit tests -- pg_dump flags, key/metadata, metric payload, loud-fail-on-failure (no metric on failed dump), no S3 upload on failure.
+- `tests/test_ducklake_maintenance.py`: HOT_TABLE_SCOPE, run_hot_merge (merge-only, no destructive calls), env-sourced threshold tests.
+- `tests/test_ducklake_maintenance_handler.py`: action_hot_merge dispatch, env threshold pass-through, hot_merge in actions list.
+- `docs/runbooks/ducklake-catalog-operations.md`: Sections 4 (catalog DR, SNS wiring, co-tuning, restore-drill carry) + 5 (T2.19-gated ops_compaction decommission runbook). Section 3 circuit-breaker note updated (alarm now wired to SNS). T2.19 hot_merge expansion forward-pointer added.
+- `docs/ROADMAP-PLATFORM.yaml`: T2.18 progress_note updated with FP-B criteria closed + T2.19 carry items. Status remains in_progress.
+
+**VP status:** Pre-deploy steps VP1-6 run next (unit tests + manifest validate + terraform plan). Steps VP7-14 are human-gated (terraform apply via agent_platform_admin + post-deploy Lambda invocations).
+
+---
+
 ## [2026-06-07] - implement: ducklake-maintenance (T2.18 FP-A -- DuckLake maintenance pipeline)
 
 **Mode:** Implementation (PLAN-ducklake-maintenance.md, V3 tier). FP-A slice only; FP-B pending.

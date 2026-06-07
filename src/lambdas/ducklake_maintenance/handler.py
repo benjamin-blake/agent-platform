@@ -26,8 +26,15 @@ from src.common import ducklake_runtime as rt
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
 EXTENSION_DIRECTORY = os.environ.get("DUCKLAKE_EXTENSION_DIRECTORY", rt.LAMBDA_EXTENSION_DIRECTORY)
 
-# Table scope: ducklake_smoke_* (T2.18 FP-A only -- see MAINTENANCE_SCOPE_NOTE for T2.19 expansion).
+# GC circuit-breaker thresholds: sourced from env when set (FP-B co-tuning, CD.34).
+# Env overrides the module-level defaults but NOT the forced_* event fields (which take precedence).
+# Tuning these to pass a gate is a Decision-55 violation.
+_ENV_GC_BREAKER_FILE_FRACTION: float = float(os.environ.get("GC_BREAKER_FILE_FRACTION", maint.GC_BREAKER_FILE_FRACTION))
+_ENV_GC_BREAKER_BYTES: int = int(os.environ.get("GC_BREAKER_BYTES", maint.GC_BREAKER_BYTES))
+
+# Table scope: ducklake_smoke_* (T2.18 FP-A/B only -- see MAINTENANCE_SCOPE_NOTE for T2.19 expansion).
 _SCOPE_TABLES = maint.GC_TABLE_SCOPE
+_HOT_SCOPE_TABLES = maint.HOT_TABLE_SCOPE
 
 # Forced-threshold breaker_probe: set these to guaranteed-trip values. The probe writes many small
 # files before invoking so the dry-run count lands above the threshold, then checks that the
@@ -86,8 +93,8 @@ def action_gc(event: dict[str, Any], con: Any) -> dict[str, Any]:
     if event.get("force_recreate_tables"):
         rt.create_scd2_tables(con, force_recreate=True)
 
-    file_fraction = float(event.get("force_file_fraction", maint.GC_BREAKER_FILE_FRACTION))
-    byte_budget = int(event.get("force_byte_budget", maint.GC_BREAKER_BYTES))
+    file_fraction = float(event.get("force_file_fraction", _ENV_GC_BREAKER_FILE_FRACTION))
+    byte_budget = int(event.get("force_byte_budget", _ENV_GC_BREAKER_BYTES))
 
     t0 = time.perf_counter()
     result = maint.run_gc(con, _SCOPE_TABLES, file_fraction=file_fraction, byte_budget=byte_budget)
@@ -101,6 +108,29 @@ def action_gc(event: dict[str, Any], con: Any) -> dict[str, Any]:
     _emit_maintenance_metric("FilesCleaned", float(result["files_cleaned"]))
     _emit_maintenance_metric("OrphansDeleted", float(result["orphans_deleted"]))
     _emit_maintenance_metric("MaintenanceBreakerTrip", 0.0)
+    return result
+
+
+def action_hot_merge(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Higher-frequency merge-only cadence (T2.18 FP-B / CD.34).
+
+    Invokes merge_adjacent_files ONLY over HOT_TABLE_SCOPE. No snapshot expiry, no file
+    deletion. Bounds the small-file COUNT between weekly GC passes without reclaiming storage.
+    Table scope is ducklake_smoke_* for T2.18; expands to real high-write-rate ops_* at T2.19.
+
+    Accepts force_recreate_tables=True (re-creates the smoke tables, idempotent re-run).
+    """
+    if event.get("force_recreate_tables"):
+        rt.create_scd2_tables(con, force_recreate=True)
+
+    t0 = time.perf_counter()
+    result = maint.run_hot_merge(con, _HOT_SCOPE_TABLES)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    result["elapsed_ms"] = round(elapsed_ms, 2)
+
+    _emit_maintenance_metric("HotMergeDurationMs", elapsed_ms)
+    _emit_maintenance_metric("FilesBeforeHotMerge", float(result["files_before"]))
+    _emit_maintenance_metric("FilesAfterHotMerge", float(result["files_after"]))
     return result
 
 
@@ -134,6 +164,7 @@ def action_breaker_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
 _ACTIONS: dict[str, Any] = {
     "merge": action_merge,
     "gc": action_gc,
+    "hot_merge": action_hot_merge,
     "breaker_probe": action_breaker_probe,
 }
 

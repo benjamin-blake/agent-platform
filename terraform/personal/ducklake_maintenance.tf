@@ -22,9 +22,9 @@
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the 3 function code pointers from S3)
 #
-# FP-B note: alarm_actions = [] -- no SNS topic exists in terraform/personal/ yet.
-# FP-B creates one shared personal-account SNS topic and wires it as the alarm_actions target
-# for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm (Decision 81 / plan).
+# FP-B (2026-06-07): shared SNS topic (sns_alerts.tf) created and wired as the alarm_actions
+# target for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm.
+# Also added: hot_merge EventBridge rule/target/permission + env-tunable breaker thresholds.
 
 locals {
   ducklake_maintenance_function = "agent-platform-ducklake-maintenance"
@@ -144,6 +144,11 @@ resource "aws_lambda_function" "ducklake_maintenance" {
     variables = {
       DUCKLAKE_DATA_PATH           = local.ducklake_smoke_data_path
       DUCKLAKE_EXTENSION_DIRECTORY = local.ducklake_extension_dir
+      # FP-B env-tunable GC circuit-breaker thresholds (CD.34 co-tuning mechanism).
+      # FP-A defaults retained as the shipped values; change ONLY via a Decision superseding CD.33.
+      # Tuning to pass a gate is a Decision-55 violation.
+      GC_BREAKER_FILE_FRACTION = "0.20"
+      GC_BREAKER_BYTES         = "10737418240" # 10 GiB
     }
   }
 
@@ -227,10 +232,43 @@ resource "aws_lambda_permission" "ducklake_maintenance_gc" {
 }
 
 # ---------------------------------------------------------------------------
+# EventBridge hot_merge rule: higher-frequency merge cadence (T2.18 FP-B / CD.34).
+# Runs merge_adjacent_files ONLY over HOT_TABLE_SCOPE (no GC/deletion).
+# Cadence: every 6h -- bounds small-file COUNT between weekly GC passes.
+# T2.19 forward pointer: the real high-write-rate ops_* tables are wired at T2.19.
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "ducklake_maintenance_hot_merge" {
+  name                = "agent-platform-ducklake-maintenance-hot-merge"
+  description         = "Higher-frequency DuckLake merge-only cadence (T2.18 FP-B / CD.34). cron every 6h."
+  schedule_expression = "cron(0 */6 * * ? *)"
+  state               = "ENABLED"
+
+  tags = {
+    Name    = "DuckLake Maintenance Hot Merge Schedule"
+    Purpose = "T2.18 FP-B higher-frequency merge-only cadence"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "ducklake_maintenance_hot_merge" {
+  rule      = aws_cloudwatch_event_rule.ducklake_maintenance_hot_merge.name
+  target_id = "ducklake-maintenance-hot-merge"
+  arn       = aws_lambda_function.ducklake_maintenance.arn
+  input     = jsonencode({ action = "hot_merge" })
+}
+
+resource "aws_lambda_permission" "ducklake_maintenance_hot_merge" {
+  statement_id  = "AllowEventBridgeHotMerge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ducklake_maintenance.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ducklake_maintenance_hot_merge.arn
+}
+
+# ---------------------------------------------------------------------------
 # Circuit-breaker CloudWatch metric alarm.
 # Fires when MaintenanceBreakerTrip >= 1 in a 5-minute window.
-# alarm_actions = [] -- no SNS topic in terraform/personal/ yet.
-# FP-B: wire alarm_actions to the shared SNS topic created in FP-B.
+# alarm_actions wired to shared SNS topic (FP-B / Decision 39).
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "ducklake_maintenance_breaker" {
@@ -244,10 +282,8 @@ resource "aws_cloudwatch_metric_alarm" "ducklake_maintenance_breaker" {
   statistic           = "Sum"
   threshold           = 1
 
-  # FP-B: wire alarm_actions to the shared SNS topic (created in FP-B alongside the catalog-DR
-  # freshness alarm). No aws_sns_topic exists in terraform/personal/ in this slice.
-  alarm_actions = []
-  ok_actions    = []
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
 
   treat_missing_data = "notBreaching"
 

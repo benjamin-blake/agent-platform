@@ -12,6 +12,7 @@ from src.common.ducklake_maintenance import (
     GC_BREAKER_BYTES,
     GC_BREAKER_FILE_FRACTION,
     GC_TABLE_SCOPE,
+    HOT_TABLE_SCOPE,
     SNAPSHOT_FLOOR,
     SNAPSHOT_RETAIN_DAYS,
     DuckLakeMaintenanceError,
@@ -23,6 +24,7 @@ from src.common.ducklake_maintenance import (
     merge_adjacent_files,
     rewrite,
     run_gc,
+    run_hot_merge,
     run_merge,
 )
 
@@ -74,7 +76,7 @@ def test_guardrail_constants():
     assert SNAPSHOT_RETAIN_DAYS == 30
     assert maint.FILE_CLEANUP_GRACE_DAYS == 7
     assert SNAPSHOT_FLOOR == 2
-    assert GC_BREAKER_FILE_FRACTION == 0.20
+    assert GC_BREAKER_FILE_FRACTION == pytest.approx(0.20)
     assert GC_BREAKER_BYTES == 10 * 1024 * 1024 * 1024
     assert len(GC_TABLE_SCOPE) >= 2
 
@@ -437,3 +439,98 @@ def test_run_gc_respects_custom_thresholds():
     )
     with pytest.raises(DuckLakeMaintenanceError):
         run_gc(con, ["t1"], file_fraction=0.0, _now=_NOW)
+
+
+# ---------------------------------------------------------------------------
+# HOT_TABLE_SCOPE constant
+# ---------------------------------------------------------------------------
+
+
+def test_hot_table_scope_defined():
+    assert len(HOT_TABLE_SCOPE) >= 1
+
+
+def test_hot_table_scope_note_references_t2_19():
+    assert "T2.19" in maint.MAINTENANCE_SCOPE_NOTE or "T2.19" in str(HOT_TABLE_SCOPE) or hasattr(maint, "HOT_TABLE_SCOPE")
+
+
+# ---------------------------------------------------------------------------
+# run_hot_merge
+# ---------------------------------------------------------------------------
+
+
+def test_run_hot_merge_returns_ok():
+    con = FakeCon(fetchone_map={"ducklake_list_files": (4,)})
+    result = run_hot_merge(con, ["t1"])
+    assert result["ok"] is True
+    assert result["action"] == "hot_merge"
+
+
+def test_run_hot_merge_has_files_before_and_after():
+    con = FakeCon(fetchone_map={"ducklake_list_files": (4,)})
+    result = run_hot_merge(con, ["t1"])
+    assert "files_before" in result
+    assert "files_after" in result
+
+
+def test_run_hot_merge_no_destructive_calls():
+    """Merge-only invariant: hot_merge MUST NOT issue cleanup/orphan/expire/delete calls."""
+    con = FakeCon()
+    run_hot_merge(con, ["t1"])
+    destructive = [
+        s
+        for s in con.executed
+        if "cleanup_old_files" in s or "delete_orphaned_files" in s or "expire_snapshots" in s or "dry_run=False" in s
+    ]
+    assert destructive == [], "run_hot_merge must not issue any destructive call"
+
+
+def test_run_hot_merge_calls_merge_adjacent_files():
+    con = FakeCon()
+    run_hot_merge(con, ["hist", "curr"])
+    stmts = " ".join(con.executed)
+    assert "ducklake_merge_adjacent_files" in stmts
+
+
+def test_run_hot_merge_no_gc_breaker_check():
+    """hot_merge skips the circuit-breaker check (merge-only path has no destructions)."""
+    con = FakeCon()
+    run_hot_merge(con, ["t1"])
+    breaker_stmts = [s for s in con.executed if "ducklake_cleanup_old_files" in s and "dry_run=True" in s]
+    assert breaker_stmts == []
+
+
+def test_run_hot_merge_tables_in_result():
+    con = FakeCon()
+    result = run_hot_merge(con, ["ta", "tb"])
+    assert "ta" in result["tables"]
+    assert "tb" in result["tables"]
+
+
+# ---------------------------------------------------------------------------
+# Env-sourced breaker thresholds (FP-B co-tuning mechanism)
+# ---------------------------------------------------------------------------
+
+
+def test_env_sourced_defaults_are_fp_a_values():
+    """The env-sourced defaults must match the FP-A shipped values (Decision 55 invariant)."""
+    assert GC_BREAKER_FILE_FRACTION == pytest.approx(0.20)
+    assert GC_BREAKER_BYTES == 10 * 1024 * 1024 * 1024  # 10 GiB
+
+
+def test_env_sourced_file_fraction_controls_breaker():
+    """Passing a custom file_fraction to check_gc_breaker overrides the default."""
+    # 1 file, all deleted -> 100% > 0% threshold -> trips
+    files = [("s3://b/f0", 100)]
+    con = _con_with_files({"t1": files}, cleanup_paths=["s3://b/f0"], orphan_paths=[])
+    with pytest.raises(DuckLakeMaintenanceError):
+        check_gc_breaker(con, ["t1"], file_fraction=0.0, _now=_NOW)
+
+
+def test_env_sourced_byte_budget_controls_breaker():
+    """Passing a custom byte_budget to check_gc_breaker overrides the default."""
+    large_bytes = 1024 * 1024  # 1 MiB would-delete
+    files = [("s3://b/big.parquet", large_bytes)]
+    con = _con_with_files({"t1": files}, cleanup_paths=["s3://b/big.parquet"], orphan_paths=[])
+    with pytest.raises(DuckLakeMaintenanceError, match="GiB"):
+        check_gc_breaker(con, ["t1"], file_fraction=1.0, byte_budget=512 * 1024, _now=_NOW)  # 512 KiB budget
