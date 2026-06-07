@@ -27,7 +27,7 @@ resource "aws_sns_topic" "alerts" {
 
   tags = {
     Name    = "Agent Platform Alerts"
-    Purpose = "Shared personal-account alarm page-out topic (T2.18 FP-B / Decision 39)"
+    Purpose = "Shared personal-account alarm page-out topic - T2.18 FP-B / Decision 39"
   }
 }
 

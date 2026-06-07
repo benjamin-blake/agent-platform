@@ -33,7 +33,7 @@ resource "aws_s3_bucket" "ducklake_catalog_dr" {
 
   tags = {
     Name    = "DuckLake Catalog DR"
-    Purpose = "T2.18 FP-B catalog disaster-recovery dump storage (CD.34)"
+    Purpose = "T2.18 FP-B catalog disaster-recovery dump storage - CD.34"
   }
 }
 
@@ -286,7 +286,7 @@ resource "aws_cloudwatch_metric_alarm" "ducklake_catalog_dr_freshness" {
 
   tags = {
     Name    = "DuckLake Catalog DR Freshness Alarm"
-    Purpose = "T2.18 FP-B CD.34 >25h freshness guard"
+    Purpose = "T2.18 FP-B CD.34 over-25h freshness guard"
   }
 }
 

@@ -324,6 +324,8 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "glue:GetPartitions",
           "glue:BatchCreatePartition",
           "glue:GetTags",
+          "glue:TagResource",
+          "glue:UntagResource",
         ]
         Resource = [
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
@@ -424,6 +426,65 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "dynamodb:ListTagsOfResource",
         ]
         Resource = [aws_dynamodb_table.counters.arn]
+      },
+      {
+        # T2.18 FP-B: provision the dedicated catalog-DR bucket (versioning, SSE, public-access-block,
+        # lifecycle, tagging). Scoped to the DR bucket ARN ONLY -- object IO is the DR Lambda role's
+        # domain, not the provisioning role's. Mirrors DataLakeBucketManage for the new bucket.
+        Sid    = "CatalogDrBucketManage"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketAcl",
+          "s3:GetBucketVersioning",
+          "s3:PutBucketVersioning",
+          "s3:GetEncryptionConfiguration",
+          "s3:PutEncryptionConfiguration",
+          "s3:GetBucketPublicAccessBlock",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPolicy",
+          "s3:PutBucketPolicy",
+          "s3:GetBucketTagging",
+          "s3:PutBucketTagging",
+          "s3:GetLifecycleConfiguration",
+          "s3:PutLifecycleConfiguration",
+          "s3:GetBucketOwnershipControls",
+          "s3:GetAccelerateConfiguration",
+          "s3:GetBucketRequestPayment",
+          "s3:GetBucketLogging",
+          "s3:GetReplicationConfiguration",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketCORS",
+          "s3:GetBucketWebsite",
+        ]
+        Resource = ["arn:aws:s3:::agent-platform-ducklake-catalog-dr"]
+      },
+      {
+        # T2.18 FP-B: manage the shared SNS alerts topic + its email subscription (Decision 39).
+        # Scoped to the alerts topic ARN and its subscription ARNs. The provisioning role creates
+        # and configures the topic; alarms publish to it at runtime (no publish grant needed here).
+        Sid    = "AlertsTopicManage"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:ListTagsForResource",
+          "sns:TagResource",
+          "sns:UntagResource",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:GetSubscriptionAttributes",
+          "sns:SetSubscriptionAttributes",
+          "sns:ListSubscriptionsByTopic",
+        ]
+        Resource = [
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts",
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts:*",
+        ]
       },
     ]
   })
