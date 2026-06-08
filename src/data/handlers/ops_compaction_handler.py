@@ -1,5 +1,9 @@
 """Ops Compaction Lambda handler.
 
+DEPRECATED -- live Iceberg ops write path; retired at the T2.19 cutover when the DuckLake
+writer replaces it (Decision 78 clause 7). Do NOT disable before T2.19. Decommission runbook
+is in docs/runbooks/ducklake-catalog-operations.md (Section 5 / T2.19-gated steps).
+
 Triggered by S3 ObjectCreated events on the staging/ prefix of the
 agent-logs bucket.  Parses the S3 key to extract the ops table name and
 trade_date partition, then calls OpsWriter.compact() to write the staged

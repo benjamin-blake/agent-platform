@@ -7,8 +7,9 @@ Creates these zip artifacts:
   1. data-pipeline.zip                      -- application code (manifest-driven)
   2. ops-compaction.zip                     -- minimal ops compaction handler
   3. data-pipeline-deps-layer.zip           -- dependencies layer (yfinance, pyyaml, etc.)
-  4. ducklake-{writer,reader,maintenance}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
+  4. ducklake-{writer,reader,maintenance,catalog-dr}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
   5. ducklake-{deps,extensions}-layer.zip   -- duckdb==1.5.3 + baked extensions (--ducklake-only)
+  6. ducklake-pgclient-layer.zip            -- pg_dump 16 + libpq.so (--ducklake-only, T2.18 FP-B)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
 whole-src/whole-config copytrees (Decision 79 / CD.24).
@@ -16,6 +17,7 @@ whole-src/whole-config copytrees (Decision 79 / CD.24).
 
 import argparse
 import gzip
+import os
 import shutil
 import subprocess
 import sys
@@ -80,11 +82,19 @@ _EXT_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0"}
 _DUCKLAKE_WRITER_FUNCTION = "agent-platform-ducklake-writer"
 _DUCKLAKE_READER_FUNCTION = "agent-platform-ducklake-reader"
 _DUCKLAKE_MAINTENANCE_FUNCTION = "agent-platform-ducklake-maintenance"
+_DUCKLAKE_CATALOG_DR_FUNCTION = "agent-platform-ducklake-catalog-dr"
 _DUCKLAKE_FUNCTION_ZIP_KEYS = {
     _DUCKLAKE_WRITER_FUNCTION: "lambda-packages/ducklake-writer.zip",
     _DUCKLAKE_READER_FUNCTION: "lambda-packages/ducklake-reader.zip",
     _DUCKLAKE_MAINTENANCE_FUNCTION: "lambda-packages/ducklake-maintenance.zip",
+    _DUCKLAKE_CATALOG_DR_FUNCTION: "lambda-packages/ducklake-catalog-dr.zip",
 }
+
+# S3 key prefix for vendored AL2023/x86_64 pg_dump 16 binary + libpq.so.
+# The binary is fetched at layer-build time from this S3 prefix (no pip wheel for pg_dump).
+# Seeded by the operator via: aws s3 cp pg_dump s3://<bucket>/ducklake-pgclient/pg_dump16 --profile agent_platform
+DUCKLAKE_PGCLIENT_S3_PREFIX = "ducklake-pgclient"
+PINNED_PG_MAJOR = "16"
 
 # Retained for backward compatibility with external callers and tests.
 _LAMBDA_SCRIPTS = [
@@ -405,6 +415,130 @@ def build_ducklake_extensions_layer(
     return zip_path
 
 
+def _try_s3_pgclient(bucket: str, filename: str, profile: str, region: str) -> bytes | None:
+    """Try to fetch a vendored pgclient binary from S3; return None if absent/unreadable."""
+    import tempfile as _tf  # noqa: PLC0415
+
+    key = f"{DUCKLAKE_PGCLIENT_S3_PREFIX}/{filename}"
+    with _tf.TemporaryDirectory() as td:
+        dest = Path(td) / filename
+        result = subprocess.run(
+            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, "--profile", profile],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode == 0 and dest.exists():
+            return dest.read_bytes()
+    return None
+
+
+def build_pgclient_layer(
+    temp_dir: Path, *, bucket: str | None = None, profile: str = "agent_platform", region: str = "eu-west-2"
+) -> Path:
+    """Create ducklake-pgclient-layer.zip staging pg_dump 16 + libpq.so under /opt/bin + /opt/lib.
+
+    The Lambda runtime expects the binary at /opt/bin/pg_dump with LD_LIBRARY_PATH=/opt/lib
+    so libpq.so resolves at invocation.
+
+    Binary source: AL2023/x86_64 pg_dump 16 + libpq.so vendored to S3
+    (s3://<data-lake-bucket>/ducklake-pgclient/{pg_dump16,libpq.so.5}) by the operator.
+    Fetched here at build time; fails closed if the S3 objects are absent (a version mismatch
+    at deploy time is better than one at runtime).
+
+    After staging, asserts `./opt/bin/pg_dump --version` output contains PG major version 16
+    to catch version drift before the layer is uploaded (fail-closed guard).
+    """
+    opt_bin = temp_dir / "pgclient" / "bin"
+    opt_lib = temp_dir / "pgclient" / "lib"
+    opt_bin.mkdir(parents=True)
+    opt_lib.mkdir(parents=True)
+
+    if bucket is None:
+        print("  pgclient layer: no bucket specified -- skipping S3 fetch (local dev mode)")
+    else:
+        # Single vendored bundle: bin/pg_dump + lib/<libpq + full transitive .so closure>
+        # (ldap/lber/sasl/krb5 family/com_err/keyutils/libevent/libselinux/pcre2). The common
+        # libs (libcrypto/libssl/libz/libzstd/liblz4) are provided by the AL2023 Lambda base and
+        # deliberately NOT bundled, to avoid overriding the runtime's crypto on the global lib path.
+        bundle_name = "pgclient-bundle.tar.gz"
+        print(f"  pgclient: fetching {bundle_name} from s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/...")
+        raw = _try_s3_pgclient(bucket, bundle_name, profile, region)
+        if raw is None:
+            print(
+                f"  ERROR: {bundle_name} not found in s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/. "
+                "Seed it first: a gzip tarball with bin/pg_dump + lib/<libpq.so.5 + its transitive "
+                "shared-library closure>, built from RHEL9/AL2023-ABI (glibc 2.34) RPMs. See the "
+                "catalog-DR runbook (Section 4) for the closure-build procedure.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        import io as _io  # noqa: PLC0415
+        import tarfile as _tarfile  # noqa: PLC0415
+
+        n_files = 0
+        with _tarfile.open(fileobj=_io.BytesIO(raw), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if not member.isfile() or not (member.name.startswith("bin/") or member.name.startswith("lib/")):
+                    continue
+                target = temp_dir / "pgclient" / member.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                target.write_bytes(extracted.read())
+                target.chmod(0o755)
+                n_files += 1
+
+        pg_dump_bin = opt_bin / "pg_dump"
+        if not pg_dump_bin.exists():
+            print(f"  ERROR: {bundle_name} did not contain bin/pg_dump", file=sys.stderr)
+            sys.exit(1)
+
+        # Fail-closed version assert: pg_dump --version must report PG major 16, with the bundled
+        # libs on the loader path (proves the closure links before the layer ships).
+        version_env = {**os.environ, "LD_LIBRARY_PATH": str(opt_lib)}
+        version_result = subprocess.run(
+            [str(pg_dump_bin), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=version_env,
+        )
+        if version_result.returncode != 0 or f"pg_dump (PostgreSQL) {PINNED_PG_MAJOR}" not in version_result.stdout:
+            actual = version_result.stdout.strip() or version_result.stderr.strip()
+            print(
+                f"ERROR: pg_dump version assertion failed. Expected PG{PINNED_PG_MAJOR}, got: {actual!r}. "
+                "Re-seed the S3 bundle with a PG16 build + complete lib closure.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"  OK pg_dump --version reports PG{PINNED_PG_MAJOR} ({n_files} bundled files)")
+
+    layer_root = temp_dir / "pgclient"
+    zip_path = OUTPUT_DIR / "ducklake-pgclient-layer.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in layer_root.rglob("*"):
+            if f.is_file() or f.is_symlink():
+                arcname = str(f.relative_to(layer_root))
+                if f.is_symlink():
+                    info = zipfile.ZipInfo(arcname)
+                    info.create_system = 3  # Unix
+                    info.external_attr = 0o120755 << 16  # symlink type
+                    zf.writestr(info, str(f.resolve().name))
+                else:
+                    info = zipfile.ZipInfo(arcname)
+                    if "bin/" in arcname:
+                        info.external_attr = 0o755 << 16
+                    else:
+                        info.external_attr = 0o644 << 16
+                    zf.writestr(info, f.read_bytes())
+    return zip_path
+
+
 def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
     """Upload package to S3."""
     s3_key = f"lambda-packages/{zip_path.name}"
@@ -585,27 +719,31 @@ def _resolve_ducklake_profile(profile: str) -> str:
 
 
 def _run_ducklake_build(args: argparse.Namespace) -> None:
-    """Build (+optionally upload/deploy) ONLY the T2.17 DuckLake artifacts (Decision 79 hygiene)."""
+    """Build (+optionally upload/deploy) ONLY the T2.17/T2.18 DuckLake artifacts (Decision 79 hygiene)."""
     args.profile = _resolve_ducklake_profile(args.profile)
     bucket = args.bucket or resolve_bucket(args.profile)
     with tempfile.TemporaryDirectory(prefix="ducklake-build-") as tmp:
         temp_dir = Path(tmp)
 
-        print("[1/4] Building ducklake-writer.zip + ducklake-reader.zip + ducklake-maintenance.zip (manifest-driven)...")
+        print("[1/4] Building ducklake function zips (writer + reader + maintenance + catalog-dr, manifest-driven)...")
         writer_zip = build_ducklake_function_package(temp_dir, "ducklake_writer", "ducklake-writer.zip")
         reader_zip = build_ducklake_function_package(temp_dir, "ducklake_reader", "ducklake-reader.zip")
         maintenance_zip = build_ducklake_function_package(temp_dir, "ducklake_maintenance", "ducklake-maintenance.zip")
+        catalog_dr_zip = build_ducklake_function_package(temp_dir, "ducklake_catalog_dr", "ducklake-catalog-dr.zip")
         print(f"  OK ducklake-writer.zip ({round(writer_zip.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-reader.zip ({round(reader_zip.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-maintenance.zip ({round(maintenance_zip.stat().st_size / 1024 / 1024, 2)} MB)")
+        print(f"  OK ducklake-catalog-dr.zip ({round(catalog_dr_zip.stat().st_size / 1024 / 1024, 2)} MB)")
 
-        print("[2/4] Building ducklake-deps + ducklake-extensions layers...")
+        print("[2/4] Building ducklake-deps + ducklake-extensions + ducklake-pgclient layers...")
         deps_layer = build_ducklake_deps_layer(temp_dir)
         ext_layer = build_ducklake_extensions_layer(temp_dir, bucket=bucket, profile=args.profile, region=args.region)
+        pgclient_layer = build_pgclient_layer(temp_dir, bucket=bucket, profile=args.profile, region=args.region)
         print(f"  OK ducklake-deps-layer.zip ({round(deps_layer.stat().st_size / 1024 / 1024, 2)} MB)")
         print(f"  OK ducklake-extensions-layer.zip ({round(ext_layer.stat().st_size / 1024 / 1024, 2)} MB)")
+        print(f"  OK ducklake-pgclient-layer.zip ({round(pgclient_layer.stat().st_size / 1024 / 1024, 2)} MB)")
 
-        artifacts = (writer_zip, reader_zip, maintenance_zip, deps_layer, ext_layer)
+        artifacts = (writer_zip, reader_zip, maintenance_zip, catalog_dr_zip, deps_layer, ext_layer, pgclient_layer)
         for artifact in artifacts:
             assert_within_size_limit(artifact)
 
@@ -618,7 +756,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
                 upload_to_s3(artifact, bucket, args.profile, args.region)
             print("  OK Uploaded to S3")
             if args.deploy:
-                print("[3b/4] Updating DuckLake Lambda function code (writer + reader + maintenance)...")
+                print("[3b/4] Updating DuckLake Lambda function code (writer + reader + maintenance + catalog-dr)...")
                 update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True)
                 print("  OK DuckLake Lambda functions updated")
         else:
@@ -640,8 +778,8 @@ def main() -> None:
     parser.add_argument(
         "--ducklake-only",
         action="store_true",
-        help="Build/upload/deploy ONLY the DuckLake artifacts (3 zips + 2 layers + 3 "
-        "functions: writer, reader, maintenance); leave data-pipeline/ops-compaction untouched (Decision 79).",
+        help="Build/upload/deploy ONLY the DuckLake artifacts (4 zips + 3 layers + 4 "
+        "functions: writer, reader, maintenance, catalog-dr); leave data-pipeline/ops-compaction untouched (Decision 79).",
     )
     parser.add_argument(
         "--list-bundle",

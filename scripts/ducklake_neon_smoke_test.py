@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# complexity-waiver: decision-43 -- smoke-test driver: 3 Lambda gates (writer, reader, maintenance)
-# plus live attach, churn, and restore-drill paths legitimately exceed 500 SLOC.
-"""DuckLake Neon catalog smoke test (T2.16b / CD.34, pending).
+# complexity-waiver: decision-43 -- smoke-test driver: 5 Lambda gates (writer, reader, maintenance,
+# catalog-dr, hot-merge) plus live attach, churn, and restore-drill paths legitimately exceed 500 SLOC.
+"""DuckLake Neon catalog smoke test (T2.16b / T2.18 FP-B / CD.34).
 
-Three live gates, run post-deploy from a network-permitted context (egress to the Neon endpoint AND,
+Live gates, run post-deploy from a network-permitted context (egress to the Neon endpoint AND,
 for a fresh extension install, to extensions.duckdb.org):
 
   --attach        ATTACH the Neon catalog over TLS (sslmode=require, SNI) on the pinned DuckDB and run
@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
+from src.common import catalog_dr as _catalog_dr
 from src.common import ducklake_runtime, ducklake_spike
 from src.common.ducklake_runtime import (
     CHURN_WRITERS,
@@ -53,6 +54,7 @@ META_SCHEMA = "ducklake_ops"
 WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 READER_URL_ENV = "DUCKLAKE_READER_URL"
 MAINTENANCE_URL_ENV = "DUCKLAKE_MAINTENANCE_URL"
+CATALOG_DR_URL_ENV = "DUCKLAKE_CATALOG_DR_URL"
 
 # CD.33 OCC budget: re-exported from ducklake_runtime (single source -- rec-2091). Decision 55:
 # these are stop signals, never knobs to loosen so the gate passes.
@@ -207,9 +209,8 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _dsn_uri(dsn: dict[str, str]) -> str:
-    """Assemble a libpq URI for pg_dump/psql from DSN parts (sslmode defaults to require)."""
-    sslmode = dsn.get("sslmode") or "require"
-    return f"postgresql://{dsn['username']}:{dsn['password']}@{dsn['host']}/{dsn['dbname']}?sslmode={sslmode}"
+    """Assemble a libpq URI for pg_dump/psql from DSN parts. Delegates to catalog_dr.dsn_uri (single impl)."""
+    return _catalog_dr.dsn_uri(dsn)
 
 
 def _consistent_pg_dump(dsn: dict[str, str], *, engine_tag: str, dump_path: str) -> str:
@@ -280,8 +281,13 @@ def restore_drill(
 
 
 def _function_url(role: str) -> str:
-    """Resolve the writer/reader/maintenance Function URL from env, then terraform output. Loud-fail if absent."""
-    _env_map = {"writer": WRITER_URL_ENV, "reader": READER_URL_ENV, "maintenance": MAINTENANCE_URL_ENV}
+    """Resolve the writer/reader/maintenance/catalog_dr Function URL from env, then terraform output. Loud-fail if absent."""
+    _env_map = {
+        "writer": WRITER_URL_ENV,
+        "reader": READER_URL_ENV,
+        "maintenance": MAINTENANCE_URL_ENV,
+        "catalog_dr": CATALOG_DR_URL_ENV,
+    }
     env_name = _env_map.get(role, f"DUCKLAKE_{role.upper()}_URL")
     url = os.environ.get(env_name)
     if url:
@@ -589,6 +595,101 @@ def lambda_maintenance_breaker(*, profile: str | None = None, region: str = "eu-
     print(f"MAINTENANCE_BREAKER OK status=500 breaker_tripped=true error_type={body.get('error_type', 'n/a')}")
 
 
+def lambda_catalog_dr(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 FP-B VP11: invoke the DR Lambda; assert dump object + engine-version tag + CatalogDumpSuccess metric.
+
+    Invokes the ducklake_catalog_dr Lambda via its Function URL (AWS_IAM). Asserts:
+    - Response ok=True (200)
+    - s3_key present and contains expected engine-version tags (pg16 + duckdb 1.5.3)
+    - bucket returned matches the configured DR bucket
+    - dump_bytes > 0 (a real dump was produced)
+
+    The CatalogDumpSuccess CloudWatch metric emission is asserted via the response body
+    (the Lambda only returns ok=True after a successful metric emit). CloudWatch alarm state
+    transition is timing-dependent and is NOT the load-bearing assertion here.
+    """
+    import boto3  # noqa: PLC0415
+
+    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+    dr_url = _function_url("catalog_dr")
+    resp = _sigv4_invoke(dr_url, {}, profile=profile, region=region)
+    body = _ok_json(resp)
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: Lambda returned ok=False: {body}")
+
+    s3_key = body.get("s3_key", "")
+    bucket = body.get("bucket", "")
+    dump_bytes = body.get("dump_bytes", 0)
+
+    if "pg16" not in s3_key and "pg-16" not in s3_key and _catalog_dr.PINNED_PG_VERSION not in s3_key:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: s3_key missing PG16 engine tag: {s3_key!r}")
+    if ducklake_runtime.PINNED_DUCKDB_VERSION not in s3_key:
+        raise SmokeTestFailure(
+            f"CATALOG_DR FAIL: s3_key missing duckdb {ducklake_runtime.PINNED_DUCKDB_VERSION} tag: {s3_key!r}"
+        )
+    if not bucket:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: no bucket in response: {body}")
+    if dump_bytes <= 0:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: dump_bytes={dump_bytes} (expected > 0)")
+
+    # Confirm the object actually landed in S3 (belt-and-suspenders; the response already says ok).
+    session = boto3.Session(profile_name=resolve_aws_profile(profile), region_name=region)
+    s3 = session.client("s3")
+    try:
+        obj_meta = s3.head_object(Bucket=bucket, Key=s3_key)
+        metadata = obj_meta.get("Metadata", {})
+        if metadata.get("pg_version") != _catalog_dr.PINNED_PG_VERSION:
+            raise SmokeTestFailure(
+                f"CATALOG_DR FAIL: S3 object metadata pg_version={metadata.get('pg_version')!r} "
+                f"(expected {_catalog_dr.PINNED_PG_VERSION!r})"
+            )
+        if metadata.get("duckdb_version") != ducklake_runtime.PINNED_DUCKDB_VERSION:
+            raise SmokeTestFailure(
+                f"CATALOG_DR FAIL: S3 object metadata duckdb_version={metadata.get('duckdb_version')!r} "
+                f"(expected {ducklake_runtime.PINNED_DUCKDB_VERSION!r})"
+            )
+    except s3.exceptions.ClientError as exc:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: S3 head_object failed: {exc}") from exc
+
+    print(
+        f"CATALOG_DR OK ok=true bucket={bucket} s3_key={s3_key} "
+        f"dump_bytes={dump_bytes} pg_version={_catalog_dr.PINNED_PG_VERSION} "
+        f"duckdb_version={ducklake_runtime.PINNED_DUCKDB_VERSION}"
+    )
+
+
+def lambda_maintenance_hot_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 FP-B VP12: invoke hot_merge; assert files merged, nothing deleted (merge-only gate).
+
+    Invokes action=hot_merge on the live maintenance Lambda. Asserts:
+    - Response ok=True (200)
+    - action == "hot_merge"
+    - files_after <= files_before (merge can only reduce or hold file count)
+    - No cleanup_old_files / delete_orphaned_files / expire_snapshots issued (merge-only invariant).
+
+    The merge-only invariant is proven by the response body -- if the handler issued any
+    destructive call, the Lambda would have returned ok=False or a 5xx (DuckLakeMaintenanceError).
+    We additionally assert the action field is "hot_merge" and not "gc".
+    """
+    maint_url = _function_url("maintenance")
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "hot_merge"}, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MAINTENANCE_HOT_MERGE FAIL: {body}")
+    if body.get("action") != "hot_merge":
+        raise SmokeTestFailure(f"MAINTENANCE_HOT_MERGE FAIL: unexpected action in response: {body}")
+    files_before = body.get("files_before", 0)
+    files_after = body.get("files_after", 0)
+    if files_after > files_before:
+        raise SmokeTestFailure(
+            f"MAINTENANCE_HOT_MERGE FAIL: files grew after hot_merge files_before={files_before} files_after={files_after}"
+        )
+    print(
+        f"MAINTENANCE_HOT_MERGE OK files_before={files_before} files_after={files_after} "
+        f"elapsed_ms={body.get('elapsed_ms', 'n/a')}"
+    )
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -602,6 +703,8 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_maintenance_merge": lambda_maintenance_merge,
     "lambda_maintenance_gc": lambda_maintenance_gc,
     "lambda_maintenance_breaker": lambda_maintenance_breaker,
+    "lambda_catalog_dr": lambda_catalog_dr,
+    "lambda_maintenance_hot_merge": lambda_maintenance_hot_merge,
 }
 
 
@@ -643,6 +746,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--lambda-maintenance-breaker",
         action="store_true",
         help="[post-deploy] T2.18 breaker probe: forced-threshold trip, assert 5xx + breaker_tripped=True (VP11)",
+    )
+    group.add_argument(
+        "--lambda-catalog-dr",
+        action="store_true",
+        help="[post-deploy] T2.18 FP-B DR gate: invoke DR Lambda, assert dump object + engine-version tag + metric (VP11)",
+    )
+    group.add_argument(
+        "--lambda-maintenance-hot-merge",
+        action="store_true",
+        help="[post-deploy] T2.18 FP-B hot_merge gate: invoke hot_merge, assert files merged, nothing deleted (VP12)",
     )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")

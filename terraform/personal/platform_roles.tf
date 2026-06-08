@@ -209,6 +209,12 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
           "lambda:GetFunctionCodeSigningConfig",
           "lambda:GetRuntimeManagementConfig",
           "lambda:GetPolicy",
+          # Resource-based-policy lifecycle: T2.18 ducklake_maintenance is the first module Lambda
+          # invoked by EventBridge, which requires an AddPermission grant for principal
+          # events.amazonaws.com. T2.17 writer/reader used Function URLs (AWS_IAM) only, so the
+          # resource-policy actions were never needed. GetPolicy (above) was already present.
+          "lambda:AddPermission",
+          "lambda:RemovePermission",
           "lambda:ListFunctions",
           "lambda:ListVersionsByFunction",
           "lambda:InvokeFunction",
@@ -224,7 +230,56 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
           "lambda:TagResource",
           "lambda:UntagResource",
           "lambda:ListTags",
+          # Reserved-concurrency lifecycle: T2.18 ducklake_maintenance is the first Lambda in this
+          # module to pin reserved_concurrent_executions (singleton, Decision 81 clause 6). The
+          # prior set (T2.17 writer/reader) set no concurrency, so these were never needed.
+          "lambda:PutFunctionConcurrency",
+          "lambda:DeleteFunctionConcurrency",
+          "lambda:GetFunctionConcurrency",
         ]
+        Resource = "*"
+      },
+      {
+        # EventBridge schedule-rule lifecycle: T2.18 ducklake_maintenance is the first module
+        # resource to use EventBridge (two scheduled cadences: daily merge + weekly GC). Scoped to
+        # the agent-platform rule namespace. PutRule with inline tags requires events:TagResource.
+        Sid    = "EventBridgeScheduleManagement"
+        Effect = "Allow"
+        Action = [
+          "events:PutRule",
+          "events:DeleteRule",
+          "events:DescribeRule",
+          "events:EnableRule",
+          "events:DisableRule",
+          "events:PutTargets",
+          "events:RemoveTargets",
+          "events:ListTargetsByRule",
+          "events:TagResource",
+          "events:UntagResource",
+          "events:ListTagsForResource",
+        ]
+        Resource = "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*"
+      },
+      {
+        # CloudWatch metric-alarm lifecycle: T2.18 ducklake_maintenance is the first module resource
+        # to create an alarm (the circuit-breaker alarm on the DuckLakeMaintenance namespace).
+        # PutMetricAlarm/DeleteAlarms support alarm-ARN scoping; DescribeAlarms is a list op that
+        # does not support resource scoping, so it sits on "*".
+        Sid    = "CloudWatchAlarmManagement"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource",
+          "cloudwatch:ListTagsForResource",
+        ]
+        Resource = "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:*"
+      },
+      {
+        Sid      = "CloudWatchAlarmDescribe"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:DescribeAlarms"]
         Resource = "*"
       },
       {
@@ -286,6 +341,25 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
         ]
         Resource = "*"
       },
+      {
+        # Service Quotas: raise the account Lambda concurrent-executions ceiling so
+        # ducklake_maintenance can reserve 1 (singleton, Decision 81 clause 6) without breaching
+        # AWS's 10-unreserved floor. The unverified-account default (10) leaves no room to reserve.
+        # Service Quotas actions do not support resource-level scoping, so they sit on "*"; read
+        # actions are needed to confirm the new value applied before re-running PutFunctionConcurrency.
+        Sid    = "ServiceQuotasManagement"
+        Effect = "Allow"
+        Action = [
+          "servicequotas:GetServiceQuota",
+          "servicequotas:GetAWSDefaultServiceQuota",
+          "servicequotas:ListServiceQuotas",
+          "servicequotas:RequestServiceQuotaIncrease",
+          "servicequotas:GetRequestedServiceQuotaChange",
+          "servicequotas:ListRequestedServiceQuotaChangeHistory",
+          "servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota",
+        ]
+        Resource = "*"
+      },
     ]
   })
 }
@@ -324,6 +398,8 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "glue:GetPartitions",
           "glue:BatchCreatePartition",
           "glue:GetTags",
+          "glue:TagResource",
+          "glue:UntagResource",
         ]
         Resource = [
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
@@ -424,6 +500,81 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "dynamodb:ListTagsOfResource",
         ]
         Resource = [aws_dynamodb_table.counters.arn]
+      },
+      {
+        # T2.18 FP-B: provision the dedicated catalog-DR bucket (versioning, SSE, public-access-block,
+        # lifecycle, tagging). Scoped to the DR bucket ARN ONLY -- object IO is the DR Lambda role's
+        # domain, not the provisioning role's. Mirrors DataLakeBucketManage for the new bucket.
+        Sid    = "CatalogDrBucketManage"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketAcl",
+          "s3:GetBucketVersioning",
+          "s3:PutBucketVersioning",
+          "s3:GetEncryptionConfiguration",
+          "s3:PutEncryptionConfiguration",
+          "s3:GetBucketPublicAccessBlock",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPolicy",
+          "s3:PutBucketPolicy",
+          "s3:GetBucketTagging",
+          "s3:PutBucketTagging",
+          "s3:GetLifecycleConfiguration",
+          "s3:PutLifecycleConfiguration",
+          "s3:GetBucketOwnershipControls",
+          "s3:GetAccelerateConfiguration",
+          "s3:GetBucketRequestPayment",
+          "s3:GetBucketLogging",
+          "s3:GetReplicationConfiguration",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketCORS",
+          "s3:GetBucketWebsite",
+        ]
+        Resource = ["arn:aws:s3:::agent-platform-ducklake-catalog-dr"]
+      },
+      {
+        # T2.18 FP-B: read DR dump objects (smoke-gate head_object verification + restore-drill
+        # readback). Object-level read on the DR bucket only; the DR Lambda's own role writes them.
+        Sid    = "CatalogDrObjectRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          "arn:aws:s3:::agent-platform-ducklake-catalog-dr",
+          "arn:aws:s3:::agent-platform-ducklake-catalog-dr/*",
+        ]
+      },
+      {
+        # T2.18 FP-B: manage the shared SNS alerts topic + its email subscription (Decision 39).
+        # Scoped to the alerts topic ARN and its subscription ARNs. The provisioning role creates
+        # and configures the topic; alarms publish to it at runtime (no publish grant needed here).
+        Sid    = "AlertsTopicManage"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:ListTagsForResource",
+          "sns:TagResource",
+          "sns:UntagResource",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:GetSubscriptionAttributes",
+          "sns:SetSubscriptionAttributes",
+          "sns:ListSubscriptionsByTopic",
+        ]
+        Resource = [
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts",
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts:*",
+        ]
       },
     ]
   })
