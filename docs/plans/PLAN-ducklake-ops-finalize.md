@@ -48,7 +48,7 @@ each step that corresponds to a cutover gate is annotated `(= cutover VPx)`.
 | File | Action | Purpose |
 |------|--------|---------|
 | src/common/ducklake_scd2_schema.py | Create | New sibling module holding the SCD2 schema-spec helpers + DDL/MERGE-SQL builders extracted from `ducklake_runtime.py` (~130 SLOC). Lambda-packaged (writer/reader/maintenance). Behaviour-preserving extraction. (rec-2103/rec-2106) |
-| src/common/ducklake_runtime.py | Modify | Extract the SCD2 schema-spec + DDL/MERGE-SQL builders into `ducklake_scd2_schema.py` and re-import them; lands the file under the Decision-43 500 SLOC limit (576/500 at ci_rca filing -- re-measure at implementation). No behaviour change. (rec-2103/rec-2106) |
+| src/common/ducklake_runtime.py | Modify | Extract the SCD2 schema-spec + DDL/MERGE-SQL builders into `ducklake_scd2_schema.py` and re-import them; lands the file under the Decision-43 500 SLOC limit (589 currently / 576 at ci_rca filing, both > 500). No behaviour change. (rec-2103/rec-2106) |
 | src/lambdas/ducklake_writer/manifest.yaml | Modify | Add `src/common/ducklake_scd2_schema.py` to `includes[]`. The manifest lists `src/common` files by NAME (not the package); without this the writer bundle ships without the new module and import-fails at runtime. |
 | src/lambdas/ducklake_reader/manifest.yaml | Modify | Same: add `src/common/ducklake_scd2_schema.py` to `includes[]`. |
 | src/lambdas/ducklake_maintenance/manifest.yaml | Modify | Same: add `src/common/ducklake_scd2_schema.py` to `includes[]`. |
@@ -67,9 +67,9 @@ each step that corresponds to a cutover gate is annotated `(= cutover VPx)`.
 | src/common/iceberg_reader.py | Modify | SIGN-OFF: flip `_DEFAULT_OPS_STORAGE_BACKEND` `"iceberg"` -> `"ducklake"` (line 39). |
 | scripts/data_quality_runner.py | Modify | SIGN-OFF: flip the inline default `"iceberg"` -> `"ducklake"` (line 81). |
 | src/lambdas/ducklake_maintenance/handler.py | Modify | POST-SIGN-OFF (= cutover VP17): remove the TEMPORARY `seed_ops_recommendations` action; redeploy maintenance; confirm the recs closed boundary. (closes rec-2099) |
-| AGENTS.md | Modify | Source-of-truth flip ATOMIC with sign-off: `ops_recommendations` -> DuckLake-on-Neon is now the DEFAULT (drop the transition-state "flagged" wording); decisions/other ops tables remain on Athena; only write surface = `file_rec`/`update_rec` via the portal. |
+| AGENTS.md | Modify | Source-of-truth statement ATOMIC with sign-off: ADD that `ops_recommendations` source of truth = DuckLake-on-Neon by DEFAULT. NOTE: AGENTS.md has NO DuckLake/ops-source wording today (the predecessor's transition-state edit did not land), so this edit is ADDITIVE, not a "drop the flagged wording" -- the implementer should not search for non-existent text. Decisions/other ops tables remain on Athena; only write surface = `file_rec`/`update_rec` via the portal. |
 | docs/PROJECT_CONTEXT.md | Modify | Storage-architecture / source-of-truth flip to recs-on-DuckLake-by-default. |
-| docs/runbooks/ducklake-catalog-operations.md | Modify | Rewrite Section 6 (rollback/sign-off) for the post-flip default; add the restore-drill DEFERRAL note + compensating controls (daily `pg_dump`-to-S3, >25h freshness alarm, Neon native PITR, retained Iceberg recs snapshot) pointing to the follow-up rec. |
+| docs/runbooks/ducklake-catalog-operations.md | Modify | Rewrite Section 6 (rollback/sign-off) for the post-flip default; add the restore-drill DEFERRAL note + compensating controls (daily `pg_dump`-to-S3, >25h freshness alarm, Neon native PITR, retained Iceberg recs snapshot) pointing to the follow-up rec. ALSO remove the stale `migrate_ops_iceberg_to_ducklake` CLI reference (line ~473, the old direct-Neon sequence) so deleting the script in PHASE 1 leaves no dangling doc reference. |
 | docs/ROADMAP-PLATFORM.yaml | Modify | T2.19 recs-slice -> recs-complete; decisions + `ops_session_log`/`ops_execution_plans`/`ops_priority_queue` tracked as follow-ups; ops_compaction retirement still deferred. Update `progress_note`. |
 | docs/SESSION_LOG.md | Modify | Session entry. |
 
@@ -89,7 +89,8 @@ each step that corresponds to a cutover gate is annotated `(= cutover VPx)`.
 |------|--------|
 | Modified resources | `github_ci` OIDC role(s) gain `lambda:InvokeFunctionUrl` on the reader (and writer if the audit shows it is needed) Function URL (item 1); confirm the PlatformDev grant. OPTIONAL: remove the redundant `AgentPlatformRuntime` inline policy. No new Lambdas. No IAM WIDENING beyond the `InvokeFunctionUrl` grant. |
 | Apply posture | HUMAN-GATED via `agent_platform_admin` (Decision 35 + 77). The `InvokeFunctionUrl` grant and the inline-policy removal touch IAM -> trip the fail-closed `terraform_apply_guard.py`; present plan to human before apply. |
-| Lambda deployment (Decision 79 / CD.16) | The PHASE 0 split modifies the Lambda-packaged `ducklake_runtime.py` + the writer/reader/maintenance manifests. Run `compute_affected_artifacts(changed_files)` at implementation: writer + reader + maintenance are the affected ACTIVE artifacts and ARE built + deployed + smoke-tested in PHASE 2 (steps 11/15). The deploy is sequenced to PHASE 2 because the refactor is behaviour-preserving + flag-gated to `iceberg` by default -- deploy-deferred-within-plan, NOT a CD.16 deploy-skip. `ducklake_catalog_dr` unchanged. No model IDs touched (deterministic SQL) -> inference-provider validation N/A. |
+| Lambda deployment (Decision 79 / CD.16) | `compute_affected_artifacts()` over the real scope returns SIX active artifacts. The 4 DuckLake functions -- `ducklake_writer`, `ducklake_reader`, `ducklake_maintenance`, AND `ducklake_catalog_dr` -- are all built + deployed by `build_lambda --ducklake-only --deploy` (step 11) + smoke-tested. `ducklake_catalog_dr` is NOT byte-equivalent: its manifest bundles `src/common/ducklake_runtime.py` (line 10), so the split changes its zip -- it is rebuilt + redeployed + its existing smoke run. The deploy is sequenced to PHASE 2 because the refactor is behaviour-preserving + flag-gated to `iceberg` -- deploy-deferred-within-plan, NOT a CD.16 deploy-skip. No model IDs touched (deterministic SQL) -> inference-provider validation N/A. |
+| Transitively-affected artifacts (Decision 79) | The remaining 2 of the 6 -- `data-pipeline` + `ops-compaction` -- bundle `src/common/ducklake_runtime.py` (plus the new `ducklake_scd2_schema.py` and the SIGN-OFF `iceberg_reader.py` flip), so their zips change. Verified: `ops_compaction_handler.py` does NOT import `iceberg_reader` / `make_reader` / `OPS_STORAGE_BACKEND`, and the new module is an additive pure-move extraction not imported by these handlers -> NO behavioural delta. They are NOT built by `--ducklake-only`; rebuild them for byte-currency (`build_lambda` for those slugs) + run their EXISTING smoke at implementation (no new behaviour to verify). Recorded here so the change is not silent against Decision 79 (mirrors the predecessor cutover plan's transitively-affected row). |
 | Egress | No Neon 5432 from CC-web; all Postgres-direct ops Lambda-mediated over 443. Reader/writer Function URLs + Athena reads over 443. |
 | Timing | PHASE 0/1 = `[pre-deploy]` (merge-first, restores green main); PHASE 2 IAM apply + writer/reader/maintenance deploy = `[pre-deploy]`/`[post-deploy]`; sign-off flip + seed removal = `[post-deploy]`. |
 
@@ -102,6 +103,7 @@ each step that corresponds to a cutover gate is annotated `(= cutover VPx)`.
 - [ ] PlatformDev `InvokeFunctionUrl` confirmed live; all reader/writer Function-URL consumers audited; the `github_ci` OIDC role can read recs over the reader URL for CI/DQ (item 1).
 - [ ] CUTOVER SIGNED OFF: `_DEFAULT_OPS_STORAGE_BACKEND` flipped `iceberg`->`ducklake` in all 3 sites (`ops_data_portal.py:71`, `iceberg_reader.py:39`, `data_quality_runner.py:81`); `--selftest-roundtrip` green; `AGENTS.md` + `docs/PROJECT_CONTEXT.md` + runbook updated atomically to recs-on-DuckLake-by-default.
 - [ ] `seed_ops_recommendations` REMOVED from the maintenance handler + redeployed; recs closed boundary confirmed; rec-2099 closed.
+- [ ] Per-Lambda V3 (Decision 79): the 4 DuckLake functions (writer/reader/maintenance/catalog_dr) rebuilt + deployed + smoked (catalog_dr is NOT byte-equivalent -- it bundles the split runtime); `data-pipeline` + `ops-compaction` rebuilt for byte-currency + existing smoke (no behavioural delta).
 - [ ] The VP11 restore-drill deferral is recorded as an EXPLICIT deviation (Decision 81 cl.7) with compensating controls AND a follow-up rec filed as a HARD GATE before the next ops table migrates.
 - [ ] Scope boundary unchanged from the cutover plan: ONLY `ops_recommendations`; decisions + `ops_session_log`/`ops_execution_plans`/`ops_priority_queue` DEFERRED + on Iceberg/Athena; ops_compaction stays live; telemetry out of scope (Decision 78 cl.2).
 - [ ] Rollback still real: `OPS_STORAGE_BACKEND=iceberg` restores the recs Iceberg path (intact) -- rehearsed before sign-off.
@@ -110,16 +112,16 @@ each step that corresponds to a cutover gate is annotated `(= cutover VPx)`.
 | # | Phase | Action | Command | Expected Outcome | Fix If |
 |---|-------|--------|---------|-------------------|--------|
 | 1 | [pre-deploy] | Unit-test the SCD2 schema split: new module + runtime; DDL/MERGE byte-identical to pre-split | `bin/venv-python -m pytest tests/test_ducklake_scd2_schema.py tests/test_ducklake_runtime.py -q` | All pass; extracted builders produce identical SQL; smoke back-compat intact | SQL drift -> fix the extraction (it must be pure-move) |
-| 2 | [pre-deploy] | Assert `ducklake_runtime.py` is under the SLOC limit (no waiver added) | `bin/venv-python -c "from scripts.validate import validate_sloc_limits; f=[]; validate_sloc_limits(f); print([x for x in f if 'ducklake_runtime' in x] or 'UNDER-LIMIT')"` | `UNDER-LIMIT`; no `# complexity-waiver` comment introduced | Still >500 -> extract more into the schema module |
+| 2 | [pre-deploy] | Assert `ducklake_runtime.py` is under the SLOC limit, replicating `validate_sloc_limits`' exact counting, with NO waiver added. (`validate_sloc_limits(failed)` only appends a generic summary to `failed` -- per-file detail goes to stdout -- so a `failed`-list check cannot detect a residual breach; count directly instead.) | `bin/venv-python -c "p='src/common/ducklake_runtime.py'; ls=open(p,encoding='utf-8').read().splitlines(); sloc=len([l for l in ls if l.strip() and not l.strip().startswith('#')]); w=any('complexity-waiver: decision-43' in l for l in ls[:10]); print('SLOC=%d waiver=%s' % (sloc,w), 'PASS' if sloc<=500 and not w else 'FAIL')"` | Prints `SLOC=<500 waiver=False PASS` (counting matches `validate_sloc_limits`) | `FAIL` -> extract more into the schema module; do NOT add a `# complexity-waiver` |
 | 3 | [pre-deploy] | Assert the SLOC gate now runs in `--pre` AND `get_changed_files()` drops deleted paths | `bin/venv-python -m pytest tests/test_validate.py -q` | Both new assertions pass (SLOC-in-pre; deleted-path filter) | Missing -> wire the `--pre` call / fix the filter |
 | 4 | [pre-deploy] | Validate manifests + bundles stage the new module into writer/reader/maintenance | `bin/venv-python -m scripts.lambda_manifest --validate && bin/venv-python -m scripts.lambda_manifest --check-bundles` | 3 functions validate; `src/common/ducklake_scd2_schema.py` stages into all 3 bundles | Not staging -> add to the manifest `includes[]` |
 | 5 | [pre-deploy] | Identify + remediate the offending `ops_recommendations` row, restore the anchor, re-run DQ | identify the row, then `update_rec` it; then `bin/venv-python -m scripts.data_quality_runner && bin/venv-python -c "import json;print(json.load(open('logs/debug/dq-latest.json'))['verdict'])"` | DQ verdict `PASS`; `automatable`/`risk`/`context` populated on the row; D64 anchor present on both checks | Still FAIL -> triage the exact row + check; do NOT loosen the check |
 | 6 | [pre-deploy] | Full presubmit green (the authoritative main gate, CI-identical) | `bin/venv-python -m scripts.validate` | PASS incl. SLOC (now `--pre`+presubmit) + DQ | Any failure -> fix. **MERGE CHECKPOINT A; close rec-2103/2104/2105/2106** |
-| 7 | [pre-deploy] | Confirm the migrate script has no live references, then delete it + its test; re-validate | `grep -rn "migrate_ops_iceberg_to_ducklake" scripts/ src/ tests/ docs/ .github/` then delete then `bin/venv-python -m scripts.validate --pre` | Only the two deleted files referenced it; `--pre` PASS after deletion (no ruff error on missing path) | A live import/CLI ref remains -> re-route or keep the script |
+| 7 | [pre-deploy] | Confirm the migrate script has no live CODE references, then delete it + its test; re-validate | `grep -rn "migrate_ops_iceberg_to_ducklake" scripts/ src/ tests/ docs/ .github/` then delete then `bin/venv-python -m scripts.validate --pre` | After deletion the only remaining references are in-scope docs handled THIS plan: the runbook CLI line (~473, removed in the runbook rewrite) + `docs/SESSION_LOG.md` historical narrative (past-tense record, left as-is). NO live code import/CLI reference remains; `--pre` PASS (no ruff error on the deleted path -- the `get_changed_files()` fix from step 3 is the prerequisite) | A live CODE import/CLI ref remains -> re-route or keep the script |
 | 8 | [pre-deploy] | (optional) Confirm the `AgentPlatformRuntime` inline policy is redundant before removal | `terraform -chdir=terraform/personal plan` (after the edit) + IAM review | Plan shows the inline policy duplicated by an attached policy; removal is a no-op to effective permissions | Not redundant -> keep it; drop this item |
 | 9 | [pre-deploy] | Confirm PlatformDev `InvokeFunctionUrl` works live + audit all reader/writer URL consumers | `aws lambda invoke` / a reader-URL read under the `agent_platform` role; enumerate callers (portal, preflight, CI, DQ) | Reader URL returns recs under PlatformDev; consumer list complete; the `github_ci` grant gap identified | Denied -> the grant (next step) is the fix |
 | 10 | [pre-deploy] | HUMAN-GATED terraform apply: `github_ci` `InvokeFunctionUrl` grant (+ optional inline-policy removal) | `terraform -chdir=terraform/personal apply` (admin, after plan review) | Grant added; NO unexpected destroys; guard passes | Unexpected destroy/IAM -> STOP (Decision 77 guard) |
-| 11 | [post-deploy] | Rebuild + deploy writer/reader/maintenance with the split runtime | `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` | 3 functions live with the refactored runtime; catalog-dr byte-equivalent | Deploy error -> check the function map |
+| 11 | [post-deploy] | Rebuild + deploy the 4 DuckLake functions with the split runtime; rebuild the 2 transitively-affected artifacts for byte-currency + run their existing smoke | `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` (writer/reader/maintenance/catalog_dr) then rebuild + smoke `data-pipeline` + `ops-compaction` | 4 DuckLake functions live with the refactored runtime (incl. `ducklake_catalog_dr` -- NOT byte-equivalent, it bundles the split runtime); data-pipeline + ops-compaction rebuilt, existing smoke green, no behavioural delta | Deploy error -> check the function map; behavioural delta in the transitive pair -> STOP (unexpected import, Decision 79) |
 | 12 | [post-deploy] | DQ over DuckLake green (= cutover VP14) | `OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.data_quality_runner && bin/venv-python -c "import json;print(json.load(open('logs/debug/dq-latest.json'))['verdict'])"` | `PASS`; recs clause-8 checks green; decisions/others unaffected | FAIL -> RCA (Decision 55); cutover blocked |
 | 13 | [post-deploy] | Rollback rehearsal (= cutover VP15): both backends serve recs reads | `OPS_STORAGE_BACKEND=iceberg bin/venv-python -m scripts.ops_data_portal --selftest-read && OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.ops_data_portal --selftest-read` | Both serve recs reads; Iceberg path + ops_compaction intact | Rollback broken -> fix BEFORE sign-off |
 | 14 | [post-deploy] | CUTOVER SIGN-OFF (= cutover VP16): assert outbox empty, flip the 3 defaults, round-trip | assert `logs/.ops-outbox` empty, then flip the 3 sites, then `bin/venv-python -m scripts.ops_data_portal --selftest-roundtrip` | A `file_rec`-shaped write lands in DuckLake + reads back; no Iceberg recs write | Outbox non-empty -> re-parity; roundtrip fails -> revert the flag, RCA |
@@ -142,8 +144,11 @@ rec; rationale + compensating controls in Risks & Deviations.
   transport; the `file_rec`/`update_rec` caller surface is unchanged; no import/bypass surface is added.
 - Closed boundary for recs (Decision 81 cl.7): post-flip, recs reads/writes transit reader/writer only;
   no Athena escape hatch; break-glass = audited PlatformAdmin on Neon+S3.
-- Per-Lambda V3 (Decision 79 / CD.16): writer+reader+maintenance are the affected active artifacts; build
-  + deploy + smoke each in PHASE 2. The PHASE 0 split's deploy is deploy-deferred-within-plan to PHASE 2
+- Per-Lambda V3 (Decision 79 / CD.16): `compute_affected_artifacts()` returns SIX active artifacts -- the 4
+  DuckLake functions (writer/reader/maintenance/catalog_dr, all built by `--ducklake-only`; catalog_dr is
+  NOT byte-equivalent -- it bundles the split runtime) plus the transitively-affected `data-pipeline` +
+  `ops-compaction` (bundle the changed `src/common` files; rebuild for byte-currency + existing smoke, no
+  behavioural delta). The PHASE 0 split's deploy is deploy-deferred-within-plan to PHASE 2
   (behaviour-preserving, flag-gated) -- not a deploy-skip.
 - Terraform apply human-gated (Decision 35 + 77); the `InvokeFunctionUrl` grant + inline-policy removal
   trip the fail-closed guard.
@@ -180,8 +185,8 @@ rec; rationale + compensating controls in Risks & Deviations.
   finalises the two remaining gap-classes: (A) main full-tier CI red for 5 runs since the sequence began
   (4 ci_rca recs); (B) the live cutover ~90% done but not signed off.
 - **Why the SLOC breach:** parameterizing the runtime for `ops_recommendations` (cutover plan) pushed
-  `ducklake_runtime.py` from smoke-only size to 576 SLOC > the D43 500 limit. The split restores the limit
-  without losing the parameterization.
+  `ducklake_runtime.py` to 589 SLOC (576 at ci_rca filing) > the D43 500 limit. The split restores the
+  limit without losing the parameterization.
 - **Why the gate missed it pre-merge:** `validate_sloc_limits` is presubmit-only (`validate.py:2234`); the
   cyclomatic-complexity twin is ALSO in `--pre` (`validate.py:2676`, rec-859 `earliest_viable_gate="pre"`).
   PR #106 passed `--pre`, failed the full tier post-merge. This plan adds SLOC to `--pre` to close the gap.
@@ -213,7 +218,7 @@ rec; rationale + compensating controls in Risks & Deviations.
 - [ ] `PLAN-ducklake-ops-cutover.md` read (predecessor; cutover VP numbering)
 - [ ] Scope files located + readable (runtime, the 3 manifests, validate.py, ops.yaml, the 3 flip sites, maintenance handler, oidc.tf, the 3 docs)
 - [ ] The exact offending `ops_recommendations` DQ row identified (id + which checks fail) BEFORE remediation
-- [ ] `compute_affected_artifacts(changed_files)` run -- confirm writer/reader/maintenance are the affected active artifacts
+- [ ] `compute_affected_artifacts(changed_files)` run -- confirm the SIX affected active artifacts (4 DuckLake functions incl. `ducklake_catalog_dr` + the transitively-affected `data-pipeline` + `ops-compaction`)
 - [ ] `aws lambda invoke` / reader-URL read confirmed under the `agent_platform` role over 443
 
 ## Ordered Execution Steps
@@ -234,8 +239,9 @@ rec; rationale + compensating controls in Risks & Deviations.
    the churn gate.
 8. **PHASE 2 -- IAM:** confirm PlatformDev `InvokeFunctionUrl` live + audit URL consumers; add the
    `github_ci` `InvokeFunctionUrl` grant to `oidc.tf`. HUMAN-GATED terraform apply (after plan review).
-9. **PHASE 2 -- deploy:** rebuild + deploy writer/reader/maintenance with the split runtime
-   (`build_lambda --ducklake-only --deploy`).
+9. **PHASE 2 -- deploy:** rebuild + deploy the 4 DuckLake functions (writer/reader/maintenance/catalog_dr)
+   with the split runtime (`build_lambda --ducklake-only --deploy`); rebuild the transitively-affected
+   `data-pipeline` + `ops-compaction` for byte-currency + run their existing smoke (no behavioural delta, Decision 79).
 10. **PHASE 2 -- sign-off gates:** run VP12 (DQ over DuckLake), VP13 (rollback rehearsal), VP14 (SIGN-OFF
     flip of the 3 defaults + `--selftest-roundtrip`), VP15 (remove seed + redeploy + closed-boundary confirm).
     Any V3 gate failing unrecoverably -> STOP + RCA (Decision 55).
