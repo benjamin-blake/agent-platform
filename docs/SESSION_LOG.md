@@ -9,6 +9,47 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-08] - implement: ducklake-ops-cutover (recs-first rescope -- pre-deploy code re-landed)
+
+**Mode:** Implementation (PLAN-ducklake-ops-cutover.md, recs-first rescope, V3 tier). Continuation after
+the plan was rewritten in response to the VP8 findings (rec-2099 catalog data-path pin + no Neon 5432
+egress from CC-web).
+
+**What shipped (committed 3adb255, branch claude/upbeat-heisenberg-TO0fB; flag default stays
+`OPS_STORAGE_BACKEND=iceberg` -- zero live-behaviour change until the human-gated cutover):**
+- Runtime: `meta_schema` param on `open_connection` + `SMOKE_META_SCHEMA="ducklake_smoke"` (rec-2099
+  root-cause: smoke no longer squats the production `ducklake_ops` catalog); `write_scd2`
+  `created_override` so the operational seed preserves the original created vs last_updated.
+- Maintenance handler: `catalog_reinit` / `seed_ops_recommendations` (TEMP, removed post-sign-off) /
+  `restore_drill` operational actions, invoked over 443 via `aws lambda invoke` (NOT agent surfaces);
+  connectionless dispatch; manifest gains `catalog_dr` + the `field_semantics.yaml` asset.
+- Portal/readers: recs-only DuckLake routing; ops_decisions + the deferred ops_* tables STAY on
+  Iceberg/Athena (`make_reader(table=...)` table-aware); `sync`/`_sync_table` recs-aware.
+- DQ: recs-only clause-8 + DuckLake dispatch (`_DUCKLAKE_OPS_TABLES`); decisions stay on Athena.
+- Smoke harness: `ducklake_smoke` meta-schema; `catalog_restore_drill` now invokes the maintenance
+  action (no local pg_dump -> Neon 5432); `--emit-recs-seed-payload` reads recs from Iceberg/Athena.
+- Terraform: maintenance S3 prod prefix + meta-schema/field-semantics env + pgclient layer; DailyOps
+  `InvokeFunctionUrl` on writer/reader so the runtime portal (PlatformDev) can reach the closed boundary.
+- Tests: 546 green; `validate --pre` green.
+
+**IMPORTANT continuity note:** an earlier in-session implementation of this same slice was LOST when the
+ephemeral container reset on a session resume (uncommitted working tree wiped). It was re-implemented
+from context and committed/pushed immediately (lesson: commit early on long V3 work).
+
+**Live state carried over from the first session (terraform state is in S3, survives the reset):** VP7
+terraform apply (writer/reader prod DATA_PATH + IAM widening) and the writer/reader code deploy (the
+merged #102 build) were applied to LIVE AWS in the first session. The catalog is still pinned to the
+smoke path (rec-2099), so writer/reader `attach_check` fails until `catalog_reinit` runs. The NEW code
+(3adb255) and the NEW terraform (maintenance + DailyOps) are committed but NOT yet deployed/applied.
+
+**Remaining (live cutover, human-gated apply):** present the VP7 terraform plan for the maintenance +
+DailyOps changes -> apply -> deploy writer/reader/maintenance code -> VP9 catalog_reinit -> VP10 seed +
+parity -> VP11-15 gates (restore-drill, read-your-write, churn, DQ, rollback) -> VP16 sign-off flip +
+atomic AGENTS.md/PROJECT_CONTEXT update -> VP17 remove the seed action. Runbook Section 6 still needs the
+recs-first Lambda-mediated rewrite.
+
+---
+
 ## [2026-06-08] - implement: ducklake-ops-cutover (T2.19 -- DuckLake ops persistence cutover, pre-deploy)
 
 **Mode:** Implementation (PLAN-ducklake-ops-cutover.md, V3 tier). Big-bang cutover + documented rollback.
