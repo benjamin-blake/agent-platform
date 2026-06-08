@@ -209,6 +209,12 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
           "lambda:GetFunctionCodeSigningConfig",
           "lambda:GetRuntimeManagementConfig",
           "lambda:GetPolicy",
+          # Resource-based-policy lifecycle: T2.18 ducklake_maintenance is the first module Lambda
+          # invoked by EventBridge, which requires an AddPermission grant for principal
+          # events.amazonaws.com. T2.17 writer/reader used Function URLs (AWS_IAM) only, so the
+          # resource-policy actions were never needed. GetPolicy (above) was already present.
+          "lambda:AddPermission",
+          "lambda:RemovePermission",
           "lambda:ListFunctions",
           "lambda:ListVersionsByFunction",
           "lambda:InvokeFunction",
@@ -224,7 +230,56 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
           "lambda:TagResource",
           "lambda:UntagResource",
           "lambda:ListTags",
+          # Reserved-concurrency lifecycle: T2.18 ducklake_maintenance is the first Lambda in this
+          # module to pin reserved_concurrent_executions (singleton, Decision 81 clause 6). The
+          # prior set (T2.17 writer/reader) set no concurrency, so these were never needed.
+          "lambda:PutFunctionConcurrency",
+          "lambda:DeleteFunctionConcurrency",
+          "lambda:GetFunctionConcurrency",
         ]
+        Resource = "*"
+      },
+      {
+        # EventBridge schedule-rule lifecycle: T2.18 ducklake_maintenance is the first module
+        # resource to use EventBridge (two scheduled cadences: daily merge + weekly GC). Scoped to
+        # the agent-platform rule namespace. PutRule with inline tags requires events:TagResource.
+        Sid    = "EventBridgeScheduleManagement"
+        Effect = "Allow"
+        Action = [
+          "events:PutRule",
+          "events:DeleteRule",
+          "events:DescribeRule",
+          "events:EnableRule",
+          "events:DisableRule",
+          "events:PutTargets",
+          "events:RemoveTargets",
+          "events:ListTargetsByRule",
+          "events:TagResource",
+          "events:UntagResource",
+          "events:ListTagsForResource",
+        ]
+        Resource = "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*"
+      },
+      {
+        # CloudWatch metric-alarm lifecycle: T2.18 ducklake_maintenance is the first module resource
+        # to create an alarm (the circuit-breaker alarm on the DuckLakeMaintenance namespace).
+        # PutMetricAlarm/DeleteAlarms support alarm-ARN scoping; DescribeAlarms is a list op that
+        # does not support resource scoping, so it sits on "*".
+        Sid    = "CloudWatchAlarmManagement"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource",
+          "cloudwatch:ListTagsForResource",
+        ]
+        Resource = "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:*"
+      },
+      {
+        Sid      = "CloudWatchAlarmDescribe"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:DescribeAlarms"]
         Resource = "*"
       },
       {
@@ -283,6 +338,25 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
           "secretsmanager:GetResourcePolicy",
           "secretsmanager:TagResource",
           "secretsmanager:UntagResource",
+        ]
+        Resource = "*"
+      },
+      {
+        # Service Quotas: raise the account Lambda concurrent-executions ceiling so
+        # ducklake_maintenance can reserve 1 (singleton, Decision 81 clause 6) without breaching
+        # AWS's 10-unreserved floor. The unverified-account default (10) leaves no room to reserve.
+        # Service Quotas actions do not support resource-level scoping, so they sit on "*"; read
+        # actions are needed to confirm the new value applied before re-running PutFunctionConcurrency.
+        Sid    = "ServiceQuotasManagement"
+        Effect = "Allow"
+        Action = [
+          "servicequotas:GetServiceQuota",
+          "servicequotas:GetAWSDefaultServiceQuota",
+          "servicequotas:ListServiceQuotas",
+          "servicequotas:RequestServiceQuotaIncrease",
+          "servicequotas:GetRequestedServiceQuotaChange",
+          "servicequotas:ListRequestedServiceQuotaChangeHistory",
+          "servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota",
         ]
         Resource = "*"
       },
