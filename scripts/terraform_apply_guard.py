@@ -2,9 +2,10 @@
 """Deterministic guard for the sandbox auto-apply pipeline (Decision 77).
 
 Parses `terraform show -json <planfile>` output and decides whether the plan is safe to
-auto-apply in the sandbox environment without a human in the loop. The guard is the compensating
-control for the absence of branch protection / required status checks (Decision 72 / CD.20): it,
-together with a subagent plan review, IS the apply gate. It MUST fail closed.
+auto-apply in the sandbox environment without a human in the loop. The guard is the fail-closed
+plan-CONTENT control (Decision 77 / CD.35): it, together with a subagent plan review, IS the
+apply gate. Branch protection is now active (main-protection ruleset, Decision 83 / CD.20) but
+deliberately non-wedging -- the guard + review remain the content gate. It MUST fail closed.
 
 Exit codes (consumed by .github/workflows/terraform-apply-sandbox.yml):
   0  plan is safe: only create / update / no-op / read on non-IAM resources, no trust diffs, and

@@ -12,8 +12,10 @@ plan-source merge gate), while preserving their underlying intent.
 The model is designed for an agent-first repository operating under three hard
 constraints:
 
-1. **Branch protection is permanently unavailable** (Decision 72, GitHub free plan).
-   The merge gate must be enforced by tooling and convention, not GitHub API.
+1. **Branch protection is active but deliberately non-wedging** (Decision 83, amending Decision 72).
+   The `main-protection` ruleset uses admin bypass-always, `strict = false`, and required checks
+   = `pr-validate` + `terraform-validate` only. The forward-fix / convention-plus-tooling design
+   is preserved.
 2. **Multi-worktree parallelism is a first-class workflow.** Mechanisms that move
    `main` underneath active worktrees (e.g., auto-revert) are excluded.
 3. **Agent throughput dominates the cost function.** Wall-clock latency on the
@@ -458,7 +460,7 @@ planning decision, not a code change to workflow logic.
 | Decision 67 (Lambda + STRATEGIC plans deferred) | Acknowledged. The non-automatable backlog will re-enter circulation when Decision 67 is reversed. |
 | Decision 68 (Self-Hosted Runner) | Compounds. Free CI minutes are what make hourly full-tier canary affordable. The runner is also the single point of failure for the L1-L8 stack (Section 9). |
 | Decision 71 (cc-scheduled-agents) | Compounds. The infrastructure pattern for scheduled cron on the self-hosted runner is reused for the hourly canary (L8). |
-| Decision 72 (RCA-as-Plan-Source for CI; and Branch Protection Unavailable - both numbered 72 in current DECISIONS.md) | Extended. The ci-rca rec gains "hard block" semantics in the planning queue (L5) and "auto-merge pause" semantics in the merge workflow (L6). The branch-protection-unavailable constraint is what makes convention-plus-tooling the only viable gate. |
+| Decision 72 (RCA-as-Plan-Source for CI; and Branch Protection -- now active per Decision 83; both numbered 72 in current DECISIONS.md) | Extended. The ci-rca rec gains "hard block" semantics in the planning queue (L5) and "auto-merge pause" semantics in the merge workflow (L6). Amended by Decision 83: branch protection is now active (non-wedging); convention-plus-tooling design preserved. |
 
 ### Sibling INTENT documents
 
