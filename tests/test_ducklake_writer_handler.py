@@ -542,3 +542,82 @@ def test_open_writer_connection(monkeypatch):
     out = h._open_writer_connection()
     assert out == "CON"
     assert captured["extension_directory"] == h.EXTENSION_DIRECTORY
+
+
+# ---------------------------------------------------------------------------
+# T2.19 production ops actions: write_ops / update_ops / create_ops_tables
+# ---------------------------------------------------------------------------
+
+
+def test_action_write_ops_dispatches_to_runtime(monkeypatch):
+    captured = {}
+
+    def _write(con, record, *, table, **kw):  # noqa: ARG001
+        captured["table"] = table
+        captured["record"] = record
+        return _result(ulid="01W", rec_id="rec-9")
+
+    monkeypatch.setattr(rt, "write_scd2", _write)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_write_ops({"table": "ops_recommendations", "record": {"id": "rec-9", "status": "open"}}, FakeCon())
+    assert out["ok"] is True
+    assert out["table"] == "ops_recommendations"
+    assert out["key"] == "rec-9"
+    assert captured["table"] == "ops_recommendations"
+
+
+def test_action_update_ops_sets_require_exists(monkeypatch):
+    captured = {}
+
+    def _write(con, record, *, table, require_exists=False, **kw):  # noqa: ARG001
+        captured["require_exists"] = require_exists
+        return _result(rec_id=record["id"])
+
+    monkeypatch.setattr(rt, "write_scd2", _write)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_update_ops({"table": "ops_recommendations", "record": {"id": "rec-1", "status": "closed"}}, FakeCon())
+    assert out["ok"] is True
+    assert captured["require_exists"] is True
+
+
+def test_action_create_ops_tables(monkeypatch):
+    calls = {}
+
+    def _create(con, *, table, force_recreate):  # noqa: ARG001
+        calls.update(table=table, force=force_recreate)
+
+    monkeypatch.setattr(rt, "create_scd2_tables", _create)
+    out = h.action_create_ops_tables({"table": "ops_decisions", "force_recreate_tables": True}, FakeCon())
+    assert out["ok"] is True
+    assert calls == {"table": "ops_decisions", "force": True}
+    assert out["tables"] == ["ops_decisions_history", "ops_decisions_current"]
+
+
+def test_require_ops_table_rejects_unknown():
+    with pytest.raises(h.WriterActionError, match="unknown or missing ops table"):
+        h._require_ops_table("not_a_table")
+
+
+def test_require_ops_table_rejects_non_string():
+    with pytest.raises(h.WriterActionError):
+        h._require_ops_table(None)
+
+
+def test_handler_write_ops_unknown_table_returns_400(monkeypatch):
+    monkeypatch.setattr(h, "_open_writer_connection", lambda: FakeCon())
+    resp = h.handler({"action": "write_ops", "table": "bogus", "record": {}})
+    assert resp["statusCode"] == 400
+    assert json.loads(resp["body"])["error_type"] == "action"
+
+
+def test_handler_update_ops_referential_returns_409(monkeypatch):
+    monkeypatch.setattr(h, "_open_writer_connection", lambda: FakeCon())
+
+    def _raise(*a, **k):
+        raise rt.ReferentialError("absent rec-x")
+
+    monkeypatch.setattr(rt, "write_scd2", _raise)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    resp = h.handler({"action": "update_ops", "table": "ops_recommendations", "record": {"id": "rec-x", "status": "closed"}})
+    assert resp["statusCode"] == 409
+    assert json.loads(resp["body"])["error_type"] == "referential"

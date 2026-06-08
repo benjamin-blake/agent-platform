@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -97,10 +98,19 @@ CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
 _FIELD_SEMANTICS_ENV = "DUCKLAKE_FIELD_SEMANTICS_PATH"
 _DEFAULT_FIELD_SEMANTICS_PATH = Path(__file__).resolve().parents[2] / "config" / "lambda" / "ducklake" / "field_semantics.yaml"
 
-# SQL-type -> Python type for the schema gate's input-field validation.
+# SQL-type -> Python type for the schema gate's input-field validation. Extended for the real ops_*
+# column types (T2.19): arrays (tags/dependencies/related_decisions -> list), integers
+# (decision_id/execution_steps/rank -> int), booleans (automatable -> bool). DuckDB array types are
+# spelled `<base>[]` (e.g. VARCHAR[], BIGINT[]); they map to a Python list at the gate.
 _PY_TYPE_FOR_SQL: dict[str, type] = {
     "VARCHAR": str,
     "TIMESTAMP WITH TIME ZONE": datetime,
+    "BIGINT": int,
+    "INTEGER": int,
+    "BOOLEAN": bool,
+    "VARCHAR[]": list,
+    "BIGINT[]": list,
+    "INTEGER[]": list,
 }
 
 
@@ -123,6 +133,14 @@ class SchemaGateError(DuckLakeRuntimeError):
 
 class OCCRetryExhaustedError(DuckLakeRuntimeError):
     """Raised when the bounded OCC-retry budget is exhausted (CD.33). Stop-and-RCA, never relax."""
+
+
+class ReferentialError(DuckLakeRuntimeError):
+    """Raised when an update targets a merge-key absent from the current projection (CD.33 cl.8 / D-5).
+
+    The in-transaction existence check replaces the prior permissive upsert-on-absent: an update of a
+    non-existent record loud-fails instead of silently creating a partial row.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +338,148 @@ def load_field_semantics(path: str | Path | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Table spec -- the single resolved shape that drives the gate, DDL, MERGE, and reads.
+# table=None selects the smoke pair (T2.17 back-compat); a name selects an ops_tables entry (T2.19).
+# ---------------------------------------------------------------------------
+
+# Derived SCD2-envelope columns minted by the runtime (never caller-supplied). Physical column order
+# is: ulid first, then the input columns (merge_key first), then created/last_updated last.
+_DERIVED_LEAD = "ulid"
+_DERIVED_TAIL = ("created_timestamp", "last_updated_timestamp")
+
+
+@dataclass(frozen=True)
+class ScdTableSpec:
+    """Resolved SCD2 table shape. Drives create/gate/write/read uniformly for smoke + ops_* tables."""
+
+    table: str | None  # None = smoke
+    history_table: str
+    current_table: str
+    merge_key: str
+    fields: dict[str, Any]  # column name -> {role, sql_type, nullable}; the schema-gate contract
+    ordered_columns: tuple[tuple[str, str], ...]  # (name, sql_type) in physical (DDL/INSERT) order
+    partition_history: str
+    partition_current: str
+
+
+def _order_columns(fields: dict[str, Any], merge_key: str) -> tuple[tuple[str, str], ...]:
+    """Return ((name, sql_type), ...) in physical order: ulid, merge_key, other inputs, created, updated.
+
+    A stable, deterministic order so the DDL, the MERGE source SELECT, the INSERT VALUES list, and the
+    read projection all agree without a separate ordering source.
+    """
+    inputs = [c for c, s in fields.items() if s.get("role") == "input"]
+    other_inputs = [c for c in inputs if c != merge_key]
+    ordered = [_DERIVED_LEAD, merge_key, *other_inputs, *_DERIVED_TAIL]
+    return tuple((c, fields[c]["sql_type"]) for c in ordered)
+
+
+def resolve_table_spec(table: str | None = None, semantics: dict[str, Any] | None = None) -> ScdTableSpec:
+    """Resolve the SCD2 spec for *table* (None = smoke). Loud-fail on an unknown ops table name."""
+    semantics = semantics if semantics is not None else load_field_semantics()
+    if table is None:
+        partitions = semantics.get("partition_transforms", {})
+        return ScdTableSpec(
+            table=None,
+            history_table=SMOKE_HISTORY_TABLE,
+            current_table=SMOKE_CURRENT_TABLE,
+            merge_key="rec_id",
+            fields=semantics["fields"],
+            ordered_columns=_order_columns(semantics["fields"], "rec_id"),
+            partition_history=partitions.get("history", "day(created_timestamp)"),
+            partition_current=partitions.get("current", "bucket(8, rec_id)"),
+        )
+    ops_tables = semantics.get("ops_tables", {})
+    spec = ops_tables.get(table)
+    if spec is None:
+        raise SchemaGateError(f"unknown ops table {table!r}: not in field_semantics ops_tables (have {sorted(ops_tables)})")
+    merge_key = spec["merge_key"]
+    fields = spec["columns"]
+    part = spec.get("partition", {})
+    return ScdTableSpec(
+        table=table,
+        history_table=spec["history_table"],
+        current_table=spec["current_table"],
+        merge_key=merge_key,
+        fields=fields,
+        ordered_columns=_order_columns(fields, merge_key),
+        partition_history=part.get("history", "day(created_timestamp)"),
+        partition_current=part.get("current", f"bucket(8, {merge_key})"),
+    )
+
+
+def ops_table_names(semantics: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Return the configured ops_* table names (live + dormant)."""
+    semantics = semantics if semantics is not None else load_field_semantics()
+    return tuple(semantics.get("ops_tables", {}).keys())
+
+
+def _column_ddl(spec: ScdTableSpec) -> str:
+    """Compose the CREATE-TABLE column list from the spec (NOT NULL on non-nullable columns)."""
+    parts: list[str] = []
+    for name, sql_type in spec.ordered_columns:
+        nullable = bool(spec.fields[name].get("nullable", True))
+        parts.append(f"{name} {sql_type}" + ("" if nullable else " NOT NULL"))
+    return ", ".join(parts)
+
+
+def _build_merge_history_sql(spec: ScdTableSpec) -> str:
+    cols = [c for c, _ in spec.ordered_columns]
+    select = ", ".join(f"? AS {c}" for c in cols)
+    values = ", ".join(f"s.{c}" for c in cols)
+    return (
+        f"MERGE INTO {CATALOG_ALIAS}.{spec.history_table} AS t "
+        f"USING (SELECT {select}) AS s "
+        "ON t.ulid = s.ulid "
+        f"WHEN NOT MATCHED THEN INSERT VALUES ({values})"
+    )
+
+
+def _build_merge_current_sql(spec: ScdTableSpec) -> str:
+    cols = [c for c, _ in spec.ordered_columns]
+    select = ", ".join(f"? AS {c}" for c in cols)
+    values = ", ".join(f"s.{c}" for c in cols)
+    # created_timestamp is carried (never re-stamped on update); the merge key is the ON predicate.
+    update_cols = [c for c in cols if c not in (spec.merge_key, "created_timestamp")]
+    set_clause = ", ".join(f"{c} = s.{c}" for c in update_cols)
+    return (
+        f"MERGE INTO {CATALOG_ALIAS}.{spec.current_table} AS t "
+        f"USING (SELECT {select}) AS s "
+        f"ON t.{spec.merge_key} = s.{spec.merge_key} "
+        f"WHEN MATCHED THEN UPDATE SET {set_clause} "
+        f"WHEN NOT MATCHED THEN INSERT VALUES ({values})"
+    )
+
+
+def _build_select_existing_created_sql(spec: ScdTableSpec) -> str:
+    return f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{spec.current_table} WHERE {spec.merge_key} = ?"
+
+
+def _write_params(spec: ScdTableSpec, record: dict[str, Any], identity: WriteIdentity, created_ts: datetime) -> list[Any]:
+    """Bind the ordered-column values for the MERGE source row (derived minted, inputs from record)."""
+    params: list[Any] = []
+    for name, _ in spec.ordered_columns:
+        if name == "ulid":
+            params.append(identity.ulid)
+        elif name == "created_timestamp":
+            params.append(created_ts)
+        elif name == "last_updated_timestamp":
+            params.append(identity.timestamp)
+        else:
+            params.append(record.get(name))
+    return params
+
+
+# ---------------------------------------------------------------------------
 # Schema gate -- loud-fail on unknown / derived / missing / mis-typed input fields
 # ---------------------------------------------------------------------------
 
 
-def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None) -> None:
+def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None, *, table: str | None = None) -> None:
     """Validate a caller-supplied write record against the contract. Loud-fail (Decision 55).
+
+    `table=None` validates against the smoke `fields` map (T2.17 back-compat); a table name validates
+    against that ops_tables entry's `columns` map (T2.19).
 
     Rejects (raises SchemaGateError):
       - any key not present in the contract (unknown field),
@@ -334,7 +488,7 @@ def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None)
       - any input field whose value is not the contract's declared SQL type.
     """
     semantics = semantics if semantics is not None else load_field_semantics()
-    fields: dict[str, Any] = semantics["fields"]
+    fields: dict[str, Any] = semantics["fields"] if table is None else resolve_table_spec(table, semantics).fields
 
     for key in record:
         spec = fields.get(key)
@@ -363,64 +517,41 @@ def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None)
 # Table DDL -- CREATE + partition transforms BEFORE first write (post-ALTER-only, M-5)
 # ---------------------------------------------------------------------------
 
-_SCD2_COLUMNS = (
-    "ulid VARCHAR NOT NULL, "
-    "rec_id VARCHAR NOT NULL, "
-    "payload VARCHAR, "
-    "created_timestamp TIMESTAMP WITH TIME ZONE NOT NULL, "
-    "last_updated_timestamp TIMESTAMP WITH TIME ZONE NOT NULL"
-)
 
+def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bool = False) -> None:
+    """Create the history + current tables for *table* and partition them BEFORE first write.
 
-def create_scd2_tables(con: Any, *, force_recreate: bool = False) -> None:
-    """Create the history + current smoke tables and apply partition transforms BEFORE first write.
+    `table=None` is the smoke pair (T2.17); a name selects an ops_tables entry (T2.19). The column
+    list, the merge-key bucket, and the day(created_timestamp) history partition all come from the
+    resolved spec, so the DDL never drifts from the gate.
 
     Partition transforms are post-ALTER-only (CD.33 M-5): they MUST be applied before any row lands.
-    `force_recreate=True` drops both tables first (idempotent re-run of the table-DDL smoke path,
-    satisfying the Lambda `force_{param}` convention). Re-ALTER on an already-partitioned table is
-    idempotent in DuckLake 1.5.3, so the non-force path converges too.
+    `force_recreate=True` drops both tables first -- the backfill's resurrection-loop guard: a
+    re-run DROPs + recreates rather than appending onto a half-populated catalog. Re-ALTER on an
+    already-partitioned table is idempotent in DuckLake 1.5.3, so the non-force path converges too.
     """
-    history = f"{CATALOG_ALIAS}.{SMOKE_HISTORY_TABLE}"
-    current = f"{CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
+    spec = resolve_table_spec(table)
+    history = f"{CATALOG_ALIAS}.{spec.history_table}"
+    current = f"{CATALOG_ALIAS}.{spec.current_table}"
+    columns = _column_ddl(spec)
 
     if force_recreate:
         con.execute(f"DROP TABLE IF EXISTS {history}")
         con.execute(f"DROP TABLE IF EXISTS {current}")
 
-    con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({_SCD2_COLUMNS})")
-    con.execute(f"CREATE TABLE IF NOT EXISTS {current} ({_SCD2_COLUMNS})")
+    con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({columns})")
+    con.execute(f"CREATE TABLE IF NOT EXISTS {current} ({columns})")
 
     # Partition transforms BEFORE first write: history by day(created_timestamp) for date-range
-    # pruning; current by bucket(8, rec_id) to bound the single-key lookup/MERGE scan footprint.
-    con.execute(f"ALTER TABLE {history} SET PARTITIONED BY (day(created_timestamp))")
-    con.execute(f"ALTER TABLE {current} SET PARTITIONED BY (bucket(8, rec_id))")
+    # pruning; current by bucket(N, merge_key) to bound the single-key lookup/MERGE scan footprint.
+    con.execute(f"ALTER TABLE {history} SET PARTITIONED BY ({spec.partition_history})")
+    con.execute(f"ALTER TABLE {current} SET PARTITIONED BY ({spec.partition_current})")
 
 
 # ---------------------------------------------------------------------------
 # The shared write primitive -- history MERGE-on-ULID + current write-through, bounded OCC retry
+# (the MERGE/SELECT SQL is generated per-table by _build_merge_*_sql from the resolved spec)
 # ---------------------------------------------------------------------------
-
-_MERGE_HISTORY = (
-    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_HISTORY_TABLE} AS t "
-    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
-    "? AS last_updated_timestamp) AS s "
-    "ON t.ulid = s.ulid "
-    "WHEN NOT MATCHED THEN INSERT VALUES "
-    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
-)
-
-_MERGE_CURRENT = (
-    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} AS t "
-    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
-    "? AS last_updated_timestamp) AS s "
-    "ON t.rec_id = s.rec_id "
-    "WHEN MATCHED THEN UPDATE SET ulid = s.ulid, payload = s.payload, "
-    "last_updated_timestamp = s.last_updated_timestamp "
-    "WHEN NOT MATCHED THEN INSERT VALUES "
-    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
-)
-
-_SELECT_EXISTING_CREATED = f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} WHERE rec_id = ?"
 
 
 def is_occ_collision(exc: Exception) -> bool:
@@ -439,18 +570,28 @@ def write_scd2(
     con: Any,
     record: dict[str, Any],
     *,
+    table: str | None = None,
     identity: WriteIdentity | None = None,
     semantics: dict[str, Any] | None = None,
+    require_exists: bool = False,
     max_attempts: int = OCC_MAX_ATTEMPTS,
     metric_sink: Optional[Callable[[str, float], None]] = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> WriteResult:
     """Write one SCD2 record: history MERGE-on-ULID append + current write-through, one transaction.
 
+    `table=None` writes the smoke pair (T2.17); a name selects an ops_tables entry (T2.19). The
+    merge key, column order, and MERGE SQL are resolved from the spec, so this single primitive
+    drives every governance table.
+
     Idempotency (CD.33 D-2): the ULID + timestamp are minted ONCE here, OUTSIDE the retry loop, and
     reused on every attempt. MERGE-on-ULID de-duplicates the history append, so a retried write
     never double-appends. `created_timestamp` is carried unchanged from the existing current row on
     update, and minted (= identity.timestamp) on first insert -- never re-stamped.
+
+    Referential gate (CD.33 cl.8 / D-5): with `require_exists=True` (the update path), the
+    in-transaction existing-row lookup must be non-empty -- an absent merge key raises ReferentialError
+    BEFORE any MERGE, replacing the prior permissive upsert-on-absent.
 
     Concurrency (CD.33): a serialization collision is retried with bounded backoff+jitter up to
     `max_attempts`; exhaustion raises OCCRetryExhaustedError (loud-fail, Decision 55). A non-OCC
@@ -459,11 +600,15 @@ def write_scd2(
     Emits OccRetryCount + CommitLatencyMs via `metric_sink` (EC9) when provided.
     """
     semantics = semantics if semantics is not None else load_field_semantics()
-    schema_gate(record, semantics)  # loud-fail before any catalog work
+    schema_gate(record, semantics, table=table)  # loud-fail before any catalog work
+
+    spec = resolve_table_spec(table, semantics)
+    merge_history_sql = _build_merge_history_sql(spec)
+    merge_current_sql = _build_merge_current_sql(spec)
+    select_existing_sql = _build_select_existing_created_sql(spec)
 
     identity = identity if identity is not None else mint_write_identity()
-    rec_id = record["rec_id"]
-    payload = record.get("payload")
+    key = record[spec.merge_key]
 
     occ_retries = 0
     start = time.perf_counter()
@@ -474,13 +619,21 @@ def write_scd2(
         attempt += 1
         try:
             con.execute("BEGIN TRANSACTION")
-            existing = con.execute(_SELECT_EXISTING_CREATED, [rec_id]).fetchall()
+            existing = con.execute(select_existing_sql, [key]).fetchall()
+            if require_exists and not existing:
+                raise ReferentialError(
+                    f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
+                    "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
+                )
             created_ts = existing[0][0] if existing else identity.timestamp
-            params = [identity.ulid, rec_id, payload, created_ts, identity.timestamp]
-            con.execute(_MERGE_HISTORY, params)
-            con.execute(_MERGE_CURRENT, params)
+            params = _write_params(spec, record, identity, created_ts)
+            con.execute(merge_history_sql, params)
+            con.execute(merge_current_sql, params)
             con.execute("COMMIT")
             break
+        except ReferentialError:
+            _safe_rollback(con)
+            raise  # referential failure is terminal, never retried
         except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
             _safe_rollback(con)
             if is_occ_collision(exc):
@@ -491,7 +644,7 @@ def write_scd2(
                 commit_ms = (time.perf_counter() - start) * 1000.0
                 _emit_write_metrics(metric_sink, occ_retries, commit_ms)
                 raise OCCRetryExhaustedError(
-                    f"OCC retry budget exhausted after {attempt} attempts for rec_id={rec_id!r} "
+                    f"OCC retry budget exhausted after {attempt} attempts for {spec.merge_key}={key!r} "
                     f"(ulid={identity.ulid}). Stop and RCA the contention (Decision 55) -- do NOT "
                     "relax the budget."
                 ) from exc
@@ -501,7 +654,7 @@ def write_scd2(
     _emit_write_metrics(metric_sink, occ_retries, commit_ms)
     return WriteResult(
         ulid=identity.ulid,
-        rec_id=rec_id,
+        rec_id=key,
         occ_retries=occ_retries,
         commit_ms=commit_ms,
         created_timestamp=created_ts,
@@ -530,21 +683,82 @@ def _emit_write_metrics(metric_sink: Optional[Callable[[str, float], None]], occ
 # ---------------------------------------------------------------------------
 
 
-def read_current(con: Any, *, rec_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
-    """Return rows from the current write-through projection (latest version per rec_id).
+def read_current(
+    con: Any, *, table: str | None = None, rec_id: str | None = None, key: str | None = None, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """Return rows from the current write-through projection (latest version per merge key).
 
-    `rec_id` filters to a single record (the bucket-partitioned single-key lookup). `limit` bounds
-    the row count. Returns a list of column-keyed dicts.
+    `table=None` reads the smoke current table (T2.17); a name selects an ops_tables entry (T2.19).
+    `key` (or the back-compat `rec_id` alias) filters to a single record (the bucket-partitioned
+    single-key lookup). `limit` bounds the row count. Returns a list of column-keyed dicts.
     """
-    sql = f"SELECT ulid, rec_id, payload, created_timestamp, last_updated_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE}"
+    spec = resolve_table_spec(table)
+    cols = ", ".join(c for c, _ in spec.ordered_columns)
+    sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table}"
+    filter_value = key if key is not None else rec_id
     params: list[Any] = []
-    if rec_id is not None:
-        sql += " WHERE rec_id = ?"
-        params.append(rec_id)
-    sql += " ORDER BY rec_id"
+    if filter_value is not None:
+        sql += f" WHERE {spec.merge_key} = ?"
+        params.append(filter_value)
+    sql += f" ORDER BY {spec.merge_key}"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"
     cursor = con.execute(sql, params) if params else con.execute(sql)
+    col_names = [desc[0] for desc in cursor.description]
+    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
+
+
+def read_history(
+    con: Any, *, table: str | None = None, key: str | None = None, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """Return append-history rows for *table* (optionally a single merge key), newest-first."""
+    spec = resolve_table_spec(table)
+    cols = ", ".join(c for c, _ in spec.ordered_columns)
+    sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.history_table}"
+    params: list[Any] = []
+    if key is not None:
+        sql += f" WHERE {spec.merge_key} = ?"
+        params.append(key)
+    sql += " ORDER BY last_updated_timestamp DESC, ulid DESC"
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    cursor = con.execute(sql, params) if params else con.execute(sql)
+    col_names = [desc[0] for desc in cursor.description]
+    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
+
+
+def assert_read_only_sql(sql: str) -> None:
+    """Loud-fail unless *sql* is a read-only statement (SELECT/WITH only).
+
+    The reader holds the full Neon catalog credential; S3-read-only IAM blocks Parquet writes but NOT
+    Postgres catalog DDL (DROP/ALTER TABLE on the DuckLake metadata). This verb guard is the
+    application-layer half of the closed read boundary (OQ.7): a non-SELECT statement never reaches
+    the catalog. Reject anything whose first keyword is not SELECT or WITH (CTE) -- this also blocks
+    a multi-statement payload (the leading verb of a `SELECT 1; DROP TABLE x` is SELECT, but DuckDB
+    rejects multi-statement in one execute; the guard plus single-statement execution close it).
+    """
+    if not re.match(r"^\s*(?:SELECT|WITH)\b", sql, re.IGNORECASE):
+        raise SchemaGateError(
+            "read-only boundary: only SELECT/WITH statements may execute on the reader path "
+            f"(got {sql.strip()[:60]!r}). Catalog DDL/DML is denied at the closed boundary (OQ.7)."
+        )
+    if ";" in sql.rstrip().rstrip(";"):
+        raise SchemaGateError("read-only boundary: multi-statement SQL is rejected on the reader path (OQ.7).")
+
+
+def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    """Run a read-only *sql* over the current projection of *table*. Use `{tbl}` for the table ref.
+
+    Mirrors the Reader.query semantics: the caller supplies a SELECT referencing `{tbl}`; `?` binds
+    params. The reader Lambda exposes this so the portal/sync read paths can push predicates down.
+    A read-only verb guard (assert_read_only_sql) rejects any non-SELECT/WITH statement BEFORE it
+    reaches the catalog -- catalog DDL is not blocked by the S3-read-only IAM, so the guard is the
+    application-layer half of the closed read boundary (OQ.7 / CD.33 clause 6).
+    """
+    assert_read_only_sql(sql)
+    spec = resolve_table_spec(table)
+    final_sql = sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}")
+    cursor = con.execute(final_sql, list(params)) if params else con.execute(final_sql)
     col_names = [desc[0] for desc in cursor.description]
     return [dict(zip(col_names, row)) for row in cursor.fetchall()]
 

@@ -18,16 +18,21 @@
 #   2. terraform -chdir=terraform/personal plan  -> present to human -> apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (updates the two functions' code from S3)
 #
-# SINGLE-PORTAL NOTE (Decision 78/81): these Function URLs are a T2.17 smoke-test ingress ONLY. No
-# ops_* governance table is reachable here -- the tables are the dedicated ducklake_smoke_* pair on a
-# smoke DATA_PATH. Production ops writes still transit scripts/ops_data_portal.py (T2.19 cutover).
+# SINGLE-PORTAL NOTE (Decision 78/81): at T2.19 these Function URLs become the CLOSED ops boundary --
+# the writer is the sole ops_* write authority, the reader the sole read authority. ops_data_portal
+# transits them (transport-swapped behind OPS_STORAGE_BACKEND); the caller surface is unchanged. This
+# apply widens both roles to the production ducklake/ data path + flips DUCKLAKE_DATA_PATH smoke->prod.
 
 locals {
   ducklake_smoke_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake-neon-smoke/"
   ducklake_smoke_data_prefix = "ducklake-neon-smoke"
-  ducklake_writer_function   = "agent-platform-ducklake-writer"
-  ducklake_reader_function   = "agent-platform-ducklake-reader"
-  ducklake_extension_dir     = "/opt/duckdb_extensions"
+  # T2.19 production ops data path. The generalized writer/reader operate on the ops_* SCD2 tables
+  # here at cutover; smoke access is RETAINED for the T2.17 gates + rollback (Decision 78 cl.7).
+  ducklake_prod_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake/"
+  ducklake_prod_data_prefix = "ducklake"
+  ducklake_writer_function  = "agent-platform-ducklake-writer"
+  ducklake_reader_function  = "agent-platform-ducklake-reader"
+  ducklake_extension_dir    = "/opt/duckdb_extensions"
 }
 
 # ---------------------------------------------------------------------------
@@ -95,7 +100,7 @@ data "aws_iam_policy_document" "lambda_assume" {
 
 resource "aws_iam_role" "ducklake_writer" {
   name               = "agent-platform-ducklake-writer"
-  description        = "Write-scoped DuckLake runtime: S3 RW on the smoke prefix, Neon DSN read, metrics"
+  description        = "Write-scoped DuckLake runtime: S3 RW on ducklake/ + smoke prefixes, Neon DSN read, metrics"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
@@ -119,19 +124,24 @@ resource "aws_iam_role_policy" "ducklake_writer" {
         Resource = [aws_secretsmanager_secret.ducklake_neon_catalog_dsn.arn]
       },
       {
-        Sid      = "S3SmokeDataReadWrite"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = ["${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*"]
+        # Writer is the SOLE write authority for ops_* (CD.33 clause 4): RW on the production
+        # ducklake/ data path AND the retained smoke prefix (T2.17 gates / rollback).
+        Sid    = "S3DataReadWrite"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = [
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_prod_data_prefix}/*",
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*",
+        ]
       },
       {
-        Sid      = "S3ListSmokePrefix"
+        Sid      = "S3ListDataPrefix"
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
         Resource = [aws_s3_bucket.data_lake.arn]
         Condition = {
           StringLike = {
-            "s3:prefix" = ["${local.ducklake_smoke_data_prefix}/*"]
+            "s3:prefix" = ["${local.ducklake_prod_data_prefix}/*", "${local.ducklake_smoke_data_prefix}/*"]
           }
         }
       },
@@ -158,7 +168,7 @@ resource "aws_iam_role_policy" "ducklake_writer" {
 
 resource "aws_iam_role" "ducklake_reader" {
   name               = "agent-platform-ducklake-reader"
-  description        = "Read-scoped DuckLake runtime: S3 GetObject on the smoke prefix only, Neon DSN read"
+  description        = "Read-scoped DuckLake runtime: S3 GetObject on ducklake/ + smoke prefixes only, Neon DSN read"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
@@ -184,19 +194,23 @@ resource "aws_iam_role_policy" "ducklake_reader" {
       {
         # GetObject ONLY -- no PutObject/DeleteObject. A DuckLake write (Parquet PutObject) from this
         # role is denied at S3, which is the closed-boundary proof (write_probe -> write_denied=true).
-        Sid      = "S3SmokeDataReadOnly"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = ["${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*"]
+        # Read-only on the production ducklake/ data path AND the retained smoke prefix.
+        Sid    = "S3DataReadOnly"
+        Effect = "Allow"
+        Action = ["s3:GetObject"]
+        Resource = [
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_prod_data_prefix}/*",
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*",
+        ]
       },
       {
-        Sid      = "S3ListSmokePrefix"
+        Sid      = "S3ListDataPrefix"
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
         Resource = [aws_s3_bucket.data_lake.arn]
         Condition = {
           StringLike = {
-            "s3:prefix" = ["${local.ducklake_smoke_data_prefix}/*"]
+            "s3:prefix" = ["${local.ducklake_prod_data_prefix}/*", "${local.ducklake_smoke_data_prefix}/*"]
           }
         }
       },
@@ -230,7 +244,7 @@ resource "aws_lambda_function" "ducklake_writer" {
 
   environment {
     variables = {
-      DUCKLAKE_DATA_PATH            = local.ducklake_smoke_data_path
+      DUCKLAKE_DATA_PATH            = local.ducklake_prod_data_path
       DUCKLAKE_EXTENSION_DIRECTORY  = local.ducklake_extension_dir
       DUCKLAKE_FIELD_SEMANTICS_PATH = "/var/task/config/lambda/ducklake/field_semantics.yaml"
     }
@@ -268,7 +282,7 @@ resource "aws_lambda_function" "ducklake_reader" {
 
   environment {
     variables = {
-      DUCKLAKE_DATA_PATH            = local.ducklake_smoke_data_path
+      DUCKLAKE_DATA_PATH            = local.ducklake_prod_data_path
       DUCKLAKE_EXTENSION_DIRECTORY  = local.ducklake_extension_dir
       DUCKLAKE_FIELD_SEMANTICS_PATH = "/var/task/config/lambda/ducklake/field_semantics.yaml"
     }

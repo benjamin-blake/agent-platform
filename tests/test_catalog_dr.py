@@ -279,3 +279,48 @@ def test_run_catalog_dump_no_s3_upload_on_failure(tmp_path):
         with pytest.raises(CatalogDrError):
             run_catalog_dump(_SAMPLE_DSN, bucket="test-dr-bucket", _now=_NOW)
     mock_s3.upload_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# T2.19: pg_restore helper (custom-format restore-drill)
+# ---------------------------------------------------------------------------
+
+
+def test_build_pg_restore_cmd_clean_default():
+    import src.common.catalog_dr as cdr
+
+    cmd = cdr.build_pg_restore_cmd("/tmp/c.dump", "postgresql://u:p@h/db?sslmode=require")
+    assert cmd[0] == cdr.LAMBDA_PG_RESTORE_PATH
+    assert "--clean" in cmd and "--if-exists" in cmd and "--no-owner" in cmd and "--exit-on-error" in cmd
+    assert cmd[-1] == "/tmp/c.dump"
+    assert "--dbname" in cmd
+
+
+def test_build_pg_restore_cmd_no_clean():
+    import src.common.catalog_dr as cdr
+
+    cmd = cdr.build_pg_restore_cmd("/tmp/c.dump", "uri", clean=False)
+    assert "--clean" not in cmd
+
+
+def test_run_pg_restore_success():
+    import src.common.catalog_dr as cdr
+
+    calls = {}
+
+    def _runner(cmd, **kw):
+        calls["cmd"] = cmd
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    cdr.run_pg_restore("/tmp/c.dump", {"host": "h", "dbname": "db", "username": "u", "password": "p"}, runner=_runner)
+    assert calls["cmd"][0] == cdr.LAMBDA_PG_RESTORE_PATH
+
+
+def test_run_pg_restore_nonzero_loud_fails():
+    import src.common.catalog_dr as cdr
+
+    def _runner(cmd, **kw):
+        return type("R", (), {"returncode": 1, "stderr": "restore blew up"})()
+
+    with pytest.raises(cdr.CatalogDrError, match="pg_restore exited 1"):
+        cdr.run_pg_restore("/tmp/c.dump", {"host": "h", "dbname": "db", "username": "u", "password": "p"}, runner=_runner)

@@ -590,3 +590,277 @@ def test_make_metric_sink_units():
     units = {d["MetricName"]: d["Unit"] for d in captured}
     assert units["CommitLatencyMs"] == "Milliseconds"
     assert units["OccRetryCount"] == "Count"
+
+
+# ---------------------------------------------------------------------------
+# T2.19: table-parameterized ops_* schemas (write/read/gate over the real tables)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_table_spec_smoke_is_backcompat():
+    """table=None resolves the smoke pair with the historical column order (T2.17 back-compat)."""
+    spec = rt.resolve_table_spec(None)
+    assert spec.history_table == rt.SMOKE_HISTORY_TABLE
+    assert spec.current_table == rt.SMOKE_CURRENT_TABLE
+    assert spec.merge_key == "rec_id"
+    assert [c for c, _ in spec.ordered_columns] == [
+        "ulid",
+        "rec_id",
+        "payload",
+        "created_timestamp",
+        "last_updated_timestamp",
+    ]
+
+
+def test_resolve_table_spec_ops_recommendations():
+    """ops_recommendations resolves merge_key=id, ulid-lead, timestamps-tail, id-bucket partition."""
+    spec = rt.resolve_table_spec("ops_recommendations")
+    assert spec.merge_key == "id"
+    cols = [c for c, _ in spec.ordered_columns]
+    assert cols[0] == "ulid"
+    assert cols[1] == "id"  # merge key first among inputs
+    assert cols[-2:] == ["created_timestamp", "last_updated_timestamp"]
+    assert "bucket(8, id)" == spec.partition_current
+    # array/int/bool columns are present with their real types
+    assert spec.fields["dependencies"]["sql_type"] == "VARCHAR[]"
+    assert spec.fields["automatable"]["sql_type"] == "BOOLEAN"
+    assert spec.fields["execution_steps"]["sql_type"] == "BIGINT"
+
+
+def test_resolve_table_spec_unknown_raises():
+    with pytest.raises(rt.SchemaGateError, match="unknown ops table"):
+        rt.resolve_table_spec("ops_not_a_table")
+
+
+def test_py_type_map_extended_for_ops_columns():
+    """The gate type map covers arrays/ints/booleans for the real ops columns (T2.19)."""
+    assert rt._PY_TYPE_FOR_SQL["BIGINT"] is int
+    assert rt._PY_TYPE_FOR_SQL["BOOLEAN"] is bool
+    assert rt._PY_TYPE_FOR_SQL["VARCHAR[]"] is list
+    assert rt._PY_TYPE_FOR_SQL["BIGINT[]"] is list
+
+
+def test_schema_gate_ops_accepts_valid_record():
+    """A valid ops_recommendations record (arrays, bool, int) passes the table-parameterized gate."""
+    record = {
+        "id": "rec-1",
+        "status": "open",
+        "title": "t",
+        "automatable": True,
+        "dependencies": ["rec-2", "rec-3"],
+        "execution_steps": 4,
+    }
+    rt.schema_gate(record, table="ops_recommendations")  # no raise
+
+
+def test_schema_gate_ops_rejects_unknown_field():
+    with pytest.raises(rt.SchemaGateError, match="unknown field"):
+        rt.schema_gate({"id": "rec-1", "status": "open", "bogus": "x"}, table="ops_recommendations")
+
+
+def test_schema_gate_ops_rejects_derived_ulid():
+    with pytest.raises(rt.SchemaGateError, match="derived"):
+        rt.schema_gate({"id": "rec-1", "status": "open", "ulid": "01XYZ"}, table="ops_recommendations")
+
+
+def test_schema_gate_ops_requires_merge_key_and_status():
+    with pytest.raises(rt.SchemaGateError, match="missing or null"):
+        rt.schema_gate({"status": "open"}, table="ops_recommendations")  # id missing
+
+
+def test_schema_gate_ops_rejects_mistyped_bool():
+    with pytest.raises(rt.SchemaGateError, match="expected bool"):
+        rt.schema_gate({"id": "rec-1", "status": "open", "automatable": "yes"}, table="ops_recommendations")
+
+
+def test_schema_gate_ops_rejects_mistyped_array():
+    with pytest.raises(rt.SchemaGateError, match="expected list"):
+        rt.schema_gate({"id": "rec-1", "status": "open", "tags": "not-a-list"}, table="ops_recommendations")
+
+
+def test_build_merge_sql_ops_recommendations_uses_id_key():
+    """The generated MERGE SQL targets the ops tables and keys current on id (not rec_id)."""
+    spec = rt.resolve_table_spec("ops_recommendations")
+    hist_sql = rt._build_merge_history_sql(spec)
+    curr_sql = rt._build_merge_current_sql(spec)
+    assert "ops_recommendations_history" in hist_sql
+    assert "ON t.ulid = s.ulid" in hist_sql
+    assert "ops_recommendations_current" in curr_sql
+    assert "ON t.id = s.id" in curr_sql
+    # created_timestamp is carried, never in the UPDATE SET; id (merge key) is not updated either.
+    assert "created_timestamp = s.created_timestamp" not in curr_sql
+    assert "id = s.id" not in curr_sql.split("WHEN MATCHED THEN UPDATE SET")[1].split("WHEN NOT MATCHED")[0]
+
+
+def test_write_scd2_ops_binds_columns_in_order(monkeypatch):
+    """write_scd2(table=...) binds ulid, then inputs (id first), then created/updated -- in column order."""
+    con = FakeCon(created_lookup=None)  # insert path (no existing row)
+    moment = datetime(2026, 6, 8, tzinfo=timezone.utc)
+    identity = rt.mint_write_identity(now=moment)
+    record = {"id": "rec-1", "status": "open", "title": "t", "automatable": False, "execution_steps": 2}
+    result = rt.write_scd2(con, record, table="ops_recommendations", identity=identity)
+    assert result.rec_id == "rec-1"
+    # The history MERGE params: positional, matching ordered_columns.
+    spec = rt.resolve_table_spec("ops_recommendations")
+    ordered = [c for c, _ in spec.ordered_columns]
+    hist_params = [p for sql, p in con.executed if "ops_recommendations_history" in sql and sql.startswith("MERGE INTO")]
+    assert len(hist_params) == 1
+    params = hist_params[0]
+    assert params[0] == identity.ulid
+    assert params[ordered.index("id")] == "rec-1"
+    assert params[ordered.index("status")] == "open"
+    assert params[ordered.index("created_timestamp")] == moment
+    assert params[ordered.index("last_updated_timestamp")] == moment
+
+
+def test_write_scd2_ops_require_exists_loud_fails_on_absent():
+    """update path (require_exists=True) raises ReferentialError when the merge key is absent."""
+    con = FakeCon(created_lookup=None)  # no existing current row
+    record = {"id": "rec-absent", "status": "closed"}
+    with pytest.raises(rt.ReferentialError, match="absent"):
+        rt.write_scd2(con, record, table="ops_recommendations", require_exists=True)
+    # The MERGE must NOT have run (rolled back before any write).
+    merged = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO")]
+    assert merged == []
+
+
+def test_write_scd2_ops_require_exists_proceeds_when_present():
+    """update path proceeds and carries the original created_timestamp when the row exists."""
+    original = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    con = FakeCon(created_lookup=[(original,)])  # existing current row
+    record = {"id": "rec-1", "status": "closed"}
+    result = rt.write_scd2(con, record, table="ops_recommendations", require_exists=True)
+    assert result.created_timestamp == original  # carried, not re-stamped
+    assert any(sql.startswith("MERGE INTO") for sql, _ in con.executed)
+
+
+def test_create_scd2_tables_ops_ddl_has_real_types(monkeypatch):
+    con = FakeCon()
+    rt.create_scd2_tables(con, table="ops_decisions", force_recreate=True)
+    ddl = [sql for sql, _ in con.executed if sql.startswith("CREATE TABLE")]
+    assert any("ops_decisions_history" in s for s in ddl)
+    assert any("related_decisions BIGINT[]" in s for s in ddl)
+    assert any("decision_id BIGINT" in s for s in ddl)
+    # partition ALTERs applied before first write
+    alters = [sql for sql, _ in con.executed if "SET PARTITIONED BY" in sql]
+    assert any("bucket(8, id)" in s for s in alters)
+
+
+def test_ops_table_names_lists_all_five():
+    names = rt.ops_table_names()
+    assert "ops_recommendations" in names
+    assert "ops_decisions" in names
+    assert "ops_priority_queue" in names
+    assert len(names) == 5
+
+
+def test_read_current_ops_table_projects_and_filters():
+    """read_current(table=...) selects the ops column set and filters on the merge key."""
+    rows = [("01U", "rec-1", "open")]
+
+    class _Cur:
+        description = [("ulid",), ("id",), ("status",)]
+
+        def __init__(self):
+            self.sql = ""
+            self.params = None
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+            self.params = params
+            return self
+
+        def fetchall(self):
+            return rows
+
+    con = _Cur()
+    out = rt.read_current(con, table="ops_recommendations", key="rec-1", limit=10)
+    assert "ops_recommendations_current" in con.sql
+    assert "WHERE id = ?" in con.sql and "LIMIT 10" in con.sql
+    assert con.params == ["rec-1"]
+    assert out == [{"ulid": "01U", "id": "rec-1", "status": "open"}]
+
+
+def test_read_history_orders_newest_first():
+    class _Cur:
+        description = [("ulid",)]
+
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+            return self
+
+        def fetchall(self):
+            return [("01B",), ("01A",)]
+
+    con = _Cur()
+    out = rt.read_history(con, table="ops_decisions", key="dec-1")
+    assert "ops_decisions_history" in con.sql
+    assert "ORDER BY last_updated_timestamp DESC" in con.sql
+    assert out == [{"ulid": "01B"}, {"ulid": "01A"}]
+
+
+def test_query_current_substitutes_tbl():
+    class _Cur:
+        description = [("violation",)]
+
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+            return self
+
+        def fetchall(self):
+            return [(0,)]
+
+    con = _Cur()
+    out = rt.query_current(con, table="ops_recommendations", sql="SELECT COUNT(*) violation FROM {tbl}")
+    assert "ops_catalog.ops_recommendations_current" in con.sql
+    assert out == [{"violation": 0}]
+
+
+# ---------------------------------------------------------------------------
+# Closed-boundary read-only verb guard (code-review Critical #1)
+# ---------------------------------------------------------------------------
+
+
+def test_assert_read_only_sql_allows_select_and_with():
+    rt.assert_read_only_sql("SELECT 1 FROM {tbl}")
+    rt.assert_read_only_sql("  with x as (select 1) select * from x")  # case-insensitive, leading ws
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "DROP TABLE ops_catalog.ops_recommendations_current",
+        "DELETE FROM {tbl}",
+        "ALTER TABLE {tbl} ADD COLUMN x INT",
+        "UPDATE {tbl} SET status='x'",
+        "INSERT INTO {tbl} VALUES (1)",
+    ],
+)
+def test_assert_read_only_sql_rejects_writes(bad):
+    with pytest.raises(rt.SchemaGateError, match="read-only boundary"):
+        rt.assert_read_only_sql(bad)
+
+
+def test_assert_read_only_sql_rejects_multistatement():
+    with pytest.raises(rt.SchemaGateError, match="multi-statement"):
+        rt.assert_read_only_sql("SELECT 1; DROP TABLE x")
+
+
+def test_query_current_enforces_read_only():
+    class _Cur:
+        description = [("v",)]
+
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchall(self):
+            return [(0,)]
+
+    with pytest.raises(rt.SchemaGateError, match="read-only boundary"):
+        rt.query_current(_Cur(), table="ops_recommendations", sql="DROP TABLE {tbl}")

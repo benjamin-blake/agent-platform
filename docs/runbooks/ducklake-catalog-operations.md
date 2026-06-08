@@ -438,3 +438,76 @@ decommission_steps:
 
 Do NOT skip the 24h monitoring window (step 2) -- a partial cutover could leave a write path open
 that drains to the old Iceberg store, causing ops data loss.
+
+## Section 6 -- T2.19 ops cutover, rollback, and restore-drill (Decision 81 / Decision 82)
+
+The ops persistence layer is selected by the `OPS_STORAGE_BACKEND` env flag, read by
+`scripts/ops_data_portal.py`, `src/common/iceberg_reader.make_reader`, and
+`scripts/data_quality_runner.py`:
+
+| Value | Transport | Status |
+|-------|-----------|--------|
+| `iceberg` (default) | `OpsWriter()` staging + Athena/Iceberg reader | rollback target; retained until sign-off |
+| `ducklake` | closed `ducklake_writer` / `ducklake_reader` Function-URL boundary | the cutover target |
+
+The Single-Portal caller surface (`file_rec`/`update_rec`/`file_decision`/`update_decision`/`sync`)
+is identical on both backends -- only the transport underneath swaps.
+
+### Cutover sequence (human-gated apply via `agent_platform_admin`)
+
+```bash
+# 1. Build the ducklake zips (writer, reader, maintenance, catalog-dr) and upload to S3.
+bin/venv-python -m scripts.build_lambda --ducklake-only
+
+# 2. Apply the IAM widening + DUCKLAKE_DATA_PATH smoke->prod flip. PRESENT THE PLAN TO A HUMAN FIRST.
+#    The IAM change trips the Decision-77 fail-closed guard -> manual agent_platform_admin path.
+terraform -chdir=terraform/personal plan      # review: no destroys (ops_compaction stays live)
+terraform -chdir=terraform/personal apply      # via agent_platform_admin, after confirmation
+
+# 3. Deploy the writer/reader code.
+bin/venv-python -m scripts.build_lambda --ducklake-only --deploy
+
+# 4. Drain the Iceberg outbox, then backfill + verify parity (excl. Decision-70 tombstones).
+OPS_STORAGE_BACKEND=iceberg bin/venv-python -m scripts.ops_data_portal --sync
+DUCKLAKE_DATA_PATH=s3://agent-platform-data-lake/ducklake/ \
+  bin/venv-python -m scripts.migrate_ops_iceberg_to_ducklake --execute --verify-parity   # parity=PASS
+
+# 5. Sign-off gates (any FAIL stops the cutover -- Decision 55, never relax a budget):
+bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill   # pg_restore read-your-write
+bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write     # write_ops->read; absent->409
+bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-churn-regate        # EC8 4-writer, 2000ms/0.20
+OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.data_quality_runner   # DQ PASS (clause-8 incl.)
+
+# 6. Rollback rehearsal (both backends serve reads; Iceberg + ops_compaction intact):
+OPS_STORAGE_BACKEND=iceberg  bin/venv-python -m scripts.ops_data_portal --selftest-read
+OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.ops_data_portal --selftest-read
+
+# 7. CUTOVER SIGN-OFF: flip the default to ducklake (the atomic doc + ROADMAP update lands with this),
+#    then prove the portal write+read path on DuckLake:
+OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.ops_data_portal --selftest-roundtrip
+```
+
+### Rollback (one step, real until ops_compaction is retired)
+
+Set `OPS_STORAGE_BACKEND=iceberg` (env, or revert the default). The portal immediately resumes the
+`OpsWriter()`/Athena path; the Iceberg tables + `ops_compaction` are intact (they are NOT touched
+until post-sign-off). No data migration is needed to roll back -- the Iceberg store was never retired.
+Re-run `scripts.ops_data_portal --sync` to refresh the local cache from Iceberg.
+
+### Restore drill (CD.33 O-2 as amended by CD.34)
+
+The daily FP-B DR dumps are `--format=custom` (`src/common/catalog_dr.run_catalog_dump`). The drill
+restores via `pg_restore` (NOT the plain-SQL `psql` path the T2.16b drill used), version-matched to
+the pinned engine, into a scratch catalog, and verifies read-your-write:
+
+```bash
+bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill
+# RESTORE helper: src/common/catalog_dr.build_pg_restore_cmd / run_pg_restore (--clean --exit-on-error).
+```
+
+### Closed boundary / break-glass (OQ.7, Decision 81 cl.7)
+
+Every ops read transits `ducklake_reader`; every write transits `ducklake_writer`. There is NO Athena
+escape hatch on the `ducklake` backend (`ops_data_portal` does not fall back to Athena when
+`OPS_STORAGE_BACKEND=ducklake`). The only break-glass is the audited PlatformAdmin principal reading
+the Neon catalog credential (Secrets Manager) + S3, plus the catalog-DR PITR export -- see Section 1.

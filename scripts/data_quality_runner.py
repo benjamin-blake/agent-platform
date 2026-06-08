@@ -27,6 +27,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -61,6 +62,20 @@ class Check:
     severity: str = "error"
     enforced: bool = True
     exclude_before: str | None = None
+    backend: str = "athena"  # "athena" (Iceberg views) | "ducklake" (closed reader); set per-backend dispatch
+
+
+# Ops governance tables. When OPS_STORAGE_BACKEND=ducklake these route to the DuckLake reader; every
+# other table (telemetry_*) stays on Athena this slice (Decision 78 cl.2).
+_OPS_TABLES: frozenset[str] = frozenset(
+    {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_session_log", "ops_execution_plans"}
+)
+_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
+
+
+def _ops_backend() -> str:
+    """Return the active ops storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
+    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or "iceberg").strip().lower()
 
 
 @dataclass
@@ -419,6 +434,131 @@ def _compile_column_test(
 # ---------------------------------------------------------------------------
 
 
+def _verdict_for(check: Check, violation_count: int, duration: float) -> CheckResult:
+    """Map a violation count to a verdict (shared by the Athena + DuckLake execution paths)."""
+    if violation_count == 0:
+        return CheckResult(check=check, verdict="PASS", violation_count=0, duration_seconds=duration)
+    # Tombstone resurrection is always HARD_GATE regardless of severity.
+    if check.test_type == "tombstone_resurrection":
+        return CheckResult(
+            check=check,
+            verdict="HARD_GATE",
+            violation_count=violation_count,
+            detail=f"resurrected tombstoned record ({violation_count} row(s))",
+            duration_seconds=duration,
+        )
+    if not check.enforced:
+        verdict = "UNENFORCED_FAIL" if check.severity == "error" else "WARN"
+    else:
+        verdict = "FAIL" if check.severity == "error" else "WARN"
+    return CheckResult(
+        check=check,
+        verdict=verdict,
+        violation_count=violation_count,
+        detail=f"{violation_count} violation(s)",
+        duration_seconds=duration,
+    )
+
+
+def to_ducklake_sql(sql: str, table: str, database: str) -> str:
+    """Translate an Athena/Trino check SQL to DuckDB dialect over the DuckLake `current` table.
+
+    - Rewrite the Athena table reference (`{database}.{table}_current` or `{database}.{table}`) to the
+      `{tbl}` placeholder the reader's query_ops substitutes with the DuckLake current TABLE.
+    - Translate Trino `regexp_like(x, p)` -> DuckDB `regexp_matches(x, p)`. `date_diff`, CURRENT_TIMESTAMP,
+      DATE('...'), COUNT(*), NOT IN, IS NULL are already DuckDB-compatible.
+    """
+    out = sql.replace(f"{database}.{table}_current", "{tbl}").replace(f"{database}.{table}", "{tbl}")
+    out = re.sub(r"\bregexp_like\(", "regexp_matches(", out)
+    return out
+
+
+def _uniqueness_sql(column: str) -> str:
+    """DuckDB COUNT-of-duplicates violation query for *column* over the `{tbl}` placeholder."""
+    dupes = f"SELECT {column}, COUNT(*) n FROM {{tbl}} GROUP BY {column} HAVING COUNT(*) > 1"
+    return f"SELECT COUNT(*) AS violation FROM ({dupes}) d"
+
+
+def build_clause8_checks(spec_yaml: dict, database: str, table_filter: str | None = None) -> list[Check]:
+    """Generate the CD.33 clause-8 DuckLake checks (ULID-history uniqueness, current merge-key uniqueness).
+
+    Driven by the ops.yaml `ducklake.clause8_checks` declaration + the field_semantics merge keys.
+    Referential integrity is enforced in-writer (L1); the relationships checks in ops.yaml are the L2
+    backstop, so no separate referential check is generated here. DuckLake backend only.
+    """
+    from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+    cfg = (spec_yaml.get("ducklake") or {}).get("clause8_checks") or {}
+    checks: list[Check] = []
+    for table in cfg.get("tables", []):
+        if table_filter and table != table_filter:
+            continue
+        spec = resolve_table_spec(table)
+        if cfg.get("ulid_history_unique"):
+            checks.append(
+                Check(
+                    table=table,
+                    column="ulid",
+                    test_type="ulid_history_unique",
+                    sql=_uniqueness_sql("ulid"),
+                    description=f"{spec.history_table}.ulid: history ULID unique (idempotency PK)",
+                    backend="ducklake",
+                )
+            )
+        if cfg.get("current_merge_key_unique"):
+            mk = spec.merge_key
+            checks.append(
+                Check(
+                    table=table,
+                    column=mk,
+                    test_type="current_merge_key_unique",
+                    sql=_uniqueness_sql(mk),
+                    description=f"{spec.current_table}.{mk}: current has one row per merge key",
+                    backend="ducklake",
+                )
+            )
+    return checks
+
+
+def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
+    """Execute a single ops-table check against DuckLake via the closed reader. DuckDB dialect.
+
+    `ulid_history_unique` runs over the history table (read_ops_history surface); the other checks run
+    over the current projection via query_ops. A cross-table relationships check cannot be expressed
+    through the single-`{tbl}` reader surface and is SKIPPED on this backend (priority_queue FK is
+    dormant + unenforced).
+    """
+    start = time.time()
+    if check.test_type == "relationships":
+        return CheckResult(
+            check=check,
+            verdict="SKIP",
+            detail="cross-table FK not run on ducklake backend (dormant/unenforced)",
+            duration_seconds=0.0,
+        )
+    table = check.table
+    is_history = check.test_type == "ulid_history_unique"
+    sql = check.sql if check.backend == "ducklake" else to_ducklake_sql(check.sql, table, "agent_platform")
+    try:
+        if is_history:
+            from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+            hist = resolve_table_spec(table).history_table
+            rows = reader.query(table, sql.replace("{tbl}", f"ops_catalog.{hist}"))
+        else:
+            rows = reader.query(table, sql)
+        if rows is None:
+            return CheckResult(
+                check=check, verdict="ERROR", detail="ducklake reader returned None", duration_seconds=time.time() - start
+            )
+        violation_count = int(next(iter(rows[0].values()))) if rows else 0
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            check=check, verdict="ERROR", detail=f"ducklake query failed: {exc}", duration_seconds=time.time() - start
+        )
+    return _verdict_for(check, violation_count, time.time() - start)
+
+
 def _execute_check(
     check: Check,
     athena_client: Any,
@@ -494,41 +634,7 @@ def _execute_check(
             duration_seconds=time.time() - start,
         )
 
-    duration = time.time() - start
-
-    if violation_count == 0:
-        return CheckResult(
-            check=check,
-            verdict="PASS",
-            violation_count=0,
-            duration_seconds=duration,
-        )
-
-    # Tombstone resurrection is always HARD_GATE regardless of severity
-    if check.test_type == "tombstone_resurrection":
-        return CheckResult(
-            check=check,
-            verdict="HARD_GATE",
-            violation_count=violation_count,
-            detail=f"resurrected tombstoned record ({violation_count} row(s))",
-            duration_seconds=duration,
-        )
-
-    # Non-zero violations: enforce-aware labelling.
-    # enforced=False + error severity -> UNENFORCED_FAIL (tracked but non-blocking).
-    # enforced=False + warn severity -> WARN (purely informational).
-    # enforced=True -> FAIL (error) or WARN (warn).
-    if not check.enforced:
-        verdict = "UNENFORCED_FAIL" if check.severity == "error" else "WARN"
-    else:
-        verdict = "FAIL" if check.severity == "error" else "WARN"
-    return CheckResult(
-        check=check,
-        verdict=verdict,
-        violation_count=violation_count,
-        detail=f"{violation_count} violation(s)",
-        duration_seconds=duration,
-    )
+    return _verdict_for(check, violation_count, time.time() - start)
 
 
 def run_checks(
@@ -549,28 +655,42 @@ def run_checks(
             duration_seconds=time.time() - run_start,
         )
 
-    try:
-        import boto3
-    except ImportError:
-        logger.error("boto3 not available")
-        return RunResult(
-            results=[CheckResult(check=c, verdict="SKIP", detail="boto3 unavailable") for c in checks],
-            verdict="SKIP",
-            duration_seconds=0.0,
-        )
+    # DuckLake checks route through the closed reader; Athena checks need the boto3 client. Build
+    # each lazily so a pure-DuckLake run does not require boto3 and vice versa.
+    needs_athena = any(c.backend != "ducklake" for c in checks)
+    needs_ducklake = any(c.backend == "ducklake" for c in checks)
 
-    from scripts.aws_profile import resolve_aws_profile
+    athena = None
+    if needs_athena:
+        try:
+            import boto3
+        except ImportError:
+            logger.error("boto3 not available")
+            return RunResult(
+                results=[CheckResult(check=c, verdict="SKIP", detail="boto3 unavailable") for c in checks],
+                verdict="SKIP",
+                duration_seconds=0.0,
+            )
+        from scripts.aws_profile import resolve_aws_profile
 
-    _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
-    session = boto3.Session(profile_name=_profile)
-    athena = session.client("athena", region_name="eu-west-2")
+        _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
+        athena = boto3.Session(profile_name=_profile).client("athena", region_name="eu-west-2")
+
+    reader = None
+    if needs_ducklake:
+        from src.common.iceberg_reader import DuckLakeReader  # noqa: PLC0415
+
+        reader = DuckLakeReader(profile=profile_name)
 
     results: list[CheckResult] = []
     for check in checks:
-        result = _execute_check(check, athena, workgroup, database)
+        if check.backend == "ducklake":
+            result = _execute_check_ducklake(check, reader)
+        else:
+            result = _execute_check(check, athena, workgroup, database)
         results.append(result)
         # Log as we go
-        symbol = {"PASS": ".", "FAIL": "F", "UNENFORCED_FAIL": "U", "WARN": "W", "ERROR": "E", "SKIP": "S"}
+        symbol = {"PASS": ".", "FAIL": "F", "UNENFORCED_FAIL": "U", "WARN": "W", "ERROR": "E", "SKIP": "S", "HARD_GATE": "G"}
         print(symbol.get(result.verdict, "?"), end="", flush=True)
 
     print()  # newline after progress dots
@@ -743,6 +863,21 @@ def main() -> int:
     # Add tombstone resurrection checks
     tombstones = load_tombstones()
     all_checks.extend(build_tombstone_checks(tombstones, table_filter=args.table, database=database))
+
+    # Dual-backend dispatch (T2.19 / Decision 81): when OPS_STORAGE_BACKEND=ducklake, route the
+    # ops-table checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
+    # CD.33 clause-8 checks. Telemetry checks stay on Athena. iceberg (default) leaves everything
+    # on the Athena views -- the rollback path, byte-identical to pre-cutover.
+    if _ops_backend() == "ducklake":
+        for c in all_checks:
+            # Tombstone checks are included: they target ops_* current and MUST transit DuckLake on
+            # this backend (no Athena escape hatch -- OQ.7). build_tombstone_checks emits the Athena
+            # view name, which to_ducklake_sql rewrites to the {tbl} placeholder.
+            if c.table in _OPS_TABLES:
+                c.sql = to_ducklake_sql(c.sql, c.table, database)
+                c.backend = "ducklake"
+        ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}
+        all_checks.extend(build_clause8_checks(ops_spec_yaml, database, table_filter=args.table))
 
     # Filter by check type (e.g. --checks tombstone_resurrection)
     if args.checks:

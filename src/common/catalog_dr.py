@@ -37,8 +37,9 @@ DR_CLOUDWATCH_NAMESPACE = "DuckLakeCatalogDR"
 PINNED_PG_VERSION = "16"
 DR_METRIC_NAME = "CatalogDumpSuccess"
 
-# Default pg_dump binary path inside the Lambda pgclient layer (/opt/bin/).
+# Default pg_dump/pg_restore binary paths inside the Lambda pgclient layer (/opt/bin/).
 LAMBDA_PG_DUMP_PATH = "/opt/bin/pg_dump"
+LAMBDA_PG_RESTORE_PATH = "/opt/bin/pg_restore"
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,50 @@ def build_pg_dump_cmd(
         out_path,
         dsn_uri_str,
     ]
+
+
+def build_pg_restore_cmd(
+    dump_path: str,
+    target_dsn_uri: str,
+    *,
+    pg_restore_path: str = LAMBDA_PG_RESTORE_PATH,
+    clean: bool = True,
+) -> list[str]:
+    """Return the pg_restore argv for restoring a --format=custom dump into *target_dsn_uri*.
+
+    The FP-B daily dumps are --format=custom (run_catalog_dump / build_pg_dump_cmd), so the T2.19
+    restore-drill restores via pg_restore -- NOT the plain-SQL psql path the T2.16b drill used.
+    Flags:
+      --dbname=<uri>   restore directly into the target database (drives the connection)
+      --no-owner       do not restore ownership (the scratch role differs from the dump's owner)
+      --clean --if-exists  drop existing objects first so the drill is idempotent on a reused scratch db
+      --exit-on-error  loud-fail on the first restore error (Decision 55 -- no partial restore)
+    """
+    cmd = [pg_restore_path, "--no-owner", "--exit-on-error", "--dbname", target_dsn_uri]
+    if clean:
+        cmd[1:1] = ["--clean", "--if-exists"]
+    cmd.append(dump_path)
+    return cmd
+
+
+def run_pg_restore(
+    dump_path: str,
+    target_dsn: dict[str, str],
+    *,
+    pg_restore_path: str = LAMBDA_PG_RESTORE_PATH,
+    runner: Any = None,
+) -> None:
+    """Restore *dump_path* (custom format) into *target_dsn* via pg_restore. Loud-fail on non-zero.
+
+    `runner` defaults to subprocess.run; injectable for tests. Raises CatalogDrError on a non-zero
+    exit so the restore-drill gate (ducklake_neon_smoke_test --catalog-restore-drill) stops the
+    cutover rather than recording a half-restored catalog as healthy.
+    """
+    run = runner if runner is not None else subprocess.run
+    cmd = build_pg_restore_cmd(dump_path, dsn_uri(target_dsn), pg_restore_path=pg_restore_path)
+    result = run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if result.returncode != 0:
+        raise CatalogDrError(f"pg_restore exited {result.returncode}: {result.stderr.strip()[:500]}")
 
 
 def build_dr_key(

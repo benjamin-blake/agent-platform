@@ -6,11 +6,15 @@ the Neon catalog credential), so a write attempt is denied at the IAM/S3 layer.
 
 Actions:
   attach_check         -- ATTACH proof + DuckDB version (mirror of the writer's, read-only).
-  read_current         -- return rows from the `current` write-through projection (EC1 / boundary).
+  read_current         -- return rows from the smoke `current` projection (EC1 / boundary).
   partition_prune_check-- a single-key `current` lookup that touches <=1 bucket-partition.
+  read_ops_current     -- production: current projection of an ops_* table (optional single-key filter).
+  read_ops_history     -- production: append-history rows of an ops_* table.
+  query_ops            -- production: a read-only SELECT over an ops_* current projection (pushdown).
 
-SINGLE-PORTAL DEFERRAL NOTE (Decision 78/81): this Function URL is a T2.17 smoke-test ingress ONLY;
-production reads transit the ops portal until the T2.19 cutover.
+PRODUCTION OPS PATH (T2.19 / Decision 81): the reader is the SOLE read authority for the ops_*
+governance tables -- the closed boundary. The read role is S3 GetObject only, so a write attempt is
+denied at IAM/S3. Every ops read transits this URL; there is no Athena escape hatch.
 """
 
 from __future__ import annotations
@@ -77,6 +81,44 @@ def action_write_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
         return {"ok": True, "write_denied": True, "detail": type(exc).__name__}
 
 
+def action_read_ops_current(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: return current-projection rows for an ops_* table (optional single-key filter)."""
+    table = event.get("table")
+    _require_ops_table(table)
+    key = event.get("key") if event.get("key") is not None else event.get("id")
+    rows = rt.read_current(con, table=table, key=key, limit=event.get("limit"))
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_read_ops_history(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: return append-history rows for an ops_* table (optional single-key filter)."""
+    table = event.get("table")
+    _require_ops_table(table)
+    rows = rt.read_history(con, table=table, key=event.get("key"), limit=event.get("limit"))
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_query_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: run a read-only SELECT over an ops_* current projection. Use `{tbl}` for the table.
+
+    The SQL is caller-supplied (internal read paths: predicate pushdown). Only the current projection
+    is reachable; the read role is S3-read-only so the boundary holds even for an arbitrary SELECT.
+    """
+    table = event.get("table")
+    _require_ops_table(table)
+    sql = event.get("sql")
+    if not isinstance(sql, str) or not sql.strip():
+        raise rt.DuckLakeRuntimeError("query_ops requires a non-empty 'sql' string referencing {tbl}")
+    rows = rt.query_current(con, table=table, sql=sql, params=event.get("params") or [])
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def _require_ops_table(table: Any) -> None:
+    """Loud-fail if *table* is not a configured ops_* table (closed-boundary table allow-list)."""
+    if not isinstance(table, str) or table not in rt.ops_table_names():
+        raise rt.DuckLakeRuntimeError(f"unknown or missing ops table {table!r}: expected one of {list(rt.ops_table_names())}")
+
+
 def _json_safe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Coerce non-JSON-native values (datetimes) to ISO strings for the response body."""
     out: list[dict[str, Any]] = []
@@ -90,6 +132,9 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "read_current": action_read_current,
     "partition_prune_check": action_partition_prune_check,
     "write_probe": action_write_probe,
+    "read_ops_current": action_read_ops_current,
+    "read_ops_history": action_read_ops_history,
+    "query_ops": action_query_ops,
 }
 
 
