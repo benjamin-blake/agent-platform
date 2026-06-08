@@ -690,6 +690,106 @@ def lambda_maintenance_hot_merge(*, profile: str | None = None, region: str = "e
     )
 
 
+def ops_read_your_write(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP11: write via the writer (write_ops) -> read via the reader (read_ops_current).
+
+    Proves the closed boundary end-to-end on the real ops schema: a write_ops lands and read_ops_current
+    returns it; an update_ops is reflected; an update_ops on an ABSENT key loud-fails 409 (referential,
+    CD.33 cl.8). Uses a `test-` probe id so the production counter is untouched.
+    """
+    writer_url = _function_url("writer")
+    reader_url = _function_url("reader")
+    table = "ops_recommendations"
+    probe_id = f"test-ryw-{uuid4().hex[:12]}"
+    base = {
+        "id": probe_id,
+        "status": "open",
+        "title": "ops read-your-write probe",
+        "source": "manual",
+        "effort": "XS",
+        "priority": "Low",
+        "risk": "low",
+    }
+    _ok_json(
+        _sigv4_invoke(writer_url, {"action": "write_ops", "table": table, "record": base}, profile=profile, region=region)
+    )
+    read1 = _ok_json(
+        _sigv4_invoke(
+            reader_url, {"action": "read_ops_current", "table": table, "key": probe_id}, profile=profile, region=region
+        )
+    )
+    if read1.get("row_count") != 1 or read1["rows"][0].get("status") != "open":
+        raise SmokeTestFailure(f"OPS_RYW FAIL: write_ops not read back: {read1}")
+
+    updated = {**base, "status": "closed"}
+    _ok_json(
+        _sigv4_invoke(writer_url, {"action": "update_ops", "table": table, "record": updated}, profile=profile, region=region)
+    )
+    read2 = _ok_json(
+        _sigv4_invoke(
+            reader_url, {"action": "read_ops_current", "table": table, "key": probe_id}, profile=profile, region=region
+        )
+    )
+    if read2["rows"][0].get("status") != "closed":
+        raise SmokeTestFailure(f"OPS_RYW FAIL: update_ops not reflected: {read2}")
+
+    absent = {**base, "id": f"test-absent-{uuid4().hex[:8]}", "status": "closed"}
+    resp = _sigv4_invoke(
+        writer_url, {"action": "update_ops", "table": table, "record": absent}, profile=profile, region=region
+    )
+    if resp.status_code != 409:
+        raise SmokeTestFailure(
+            f"OPS_RYW FAIL: update_ops on absent rec returned {resp.status_code} (expected 409 referential)"
+        )
+    print(f"OPS_RYW OK write+read+update reflected; absent-update referential=409 probe_id={probe_id}")
+
+
+def ops_churn_regate(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP12: re-run the Decision-82 EC8 churn/OCC gate at production scope (post-cutover catalog).
+
+    Delegates to the EC8 fan-out (CHURN_WRITERS=4, per-invocation wall p95<=2000ms, collision<=0.20 --
+    the single-source budgets in ducklake_runtime). Production scope = the post-cutover production data
+    path; the contention measured is catalog-commit-level (table-independent). Loud-fail on breach
+    (Decision 55 -- never relax the budget to commit_ms).
+    """
+    lambda_churn(profile=profile, region=region)
+    print("OPS_CHURN_REGATE OK (EC8 fan-out within CD.33 budget at production scope)")
+
+
+def catalog_restore_drill(
+    *,
+    profile: str | None = None,
+    region: str = "eu-west-2",
+    dsn: dict[str, str] | None = None,
+    scratch_dsn: dict[str, str] | None = None,
+    dump_path: str = "/tmp/ducklake_catalog_restore_drill.dump",
+) -> None:
+    """T2.19 VP10: custom-format pg_dump -> pg_restore into scratch -> read-your-write (CD.33 O-2/CD.34).
+
+    Diverges from --restore-drill (plain-SQL + psql): this restores the --format=custom FP-B daily-DR
+    dump via pg_restore, version-matched to the pinned engine. Loud-fail if the probe is lost.
+    """
+    dsn = dsn or fetch_dsn(profile=profile)
+    scratch = scratch_dsn or _derive_scratch_dsn(dsn)
+    probe = uuid4().hex
+    _write_probe(dsn, probe, profile=profile)
+    dump_cmd = _catalog_dr.build_pg_dump_cmd(_dsn_uri(dsn), dump_path, pg_dump_path="pg_dump")
+    dump_result = _run(dump_cmd)
+    if dump_result.returncode != 0:
+        raise SmokeTestFailure(
+            f"CATALOG_RESTORE_DRILL FAIL: pg_dump rc={dump_result.returncode}: {dump_result.stderr.strip()[:300]}"
+        )
+    try:
+        _catalog_dr.run_pg_restore(dump_path, scratch, pg_restore_path="pg_restore", runner=_run)
+    except _catalog_dr.CatalogDrError as exc:
+        raise SmokeTestFailure(f"CATALOG_RESTORE_DRILL FAIL: {exc}") from exc
+    if not _verify_probe(scratch, probe, profile=profile):
+        raise SmokeTestFailure(
+            "CATALOG_RESTORE_DRILL FAIL: read-your-write probe missing after pg_restore -- dump not consistent."
+        )
+    print(f"CATALOG_RESTORE_DRILL OK pg_restore read-your-write verified engine={_engine_tag()}")
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -717,6 +817,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     group.add_argument("--attach", action="store_true", help="ATTACH + SELECT 1 over TLS")
     group.add_argument("--churn-gate", action="store_true", help="connection-churn / OCC gate (loud-fail)")
     group.add_argument("--restore-drill", action="store_true", help="pg_dump -> scratch Neon -> read-your-write")
+    group.add_argument(
+        "--ops-read-your-write",
+        action="store_true",
+        dest="ops_read_your_write",
+        help="[post-deploy] T2.19 VP11: write_ops via writer -> read via reader; absent update loud-fails 409",
+    )
+    group.add_argument(
+        "--ops-churn-regate",
+        action="store_true",
+        dest="ops_churn_regate",
+        help="[post-deploy] T2.19 VP12: Decision-82 EC8 churn/OCC re-gate at production scope (loud-fail)",
+    )
+    group.add_argument(
+        "--catalog-restore-drill",
+        action="store_true",
+        dest="catalog_restore_drill",
+        help="[post-deploy] T2.19 VP10: custom-format pg_dump -> pg_restore scratch -> read-your-write",
+    )
     group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
     group.add_argument(
         "--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)"
@@ -771,6 +889,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.restore_drill:
             restore_drill(profile=args.profile)
             print("RESTORE_OK read-your-write verified")
+        elif args.ops_read_your_write:
+            ops_read_your_write(profile=args.profile, region=args.region)
+        elif args.ops_churn_regate:
+            ops_churn_regate(profile=args.profile, region=args.region)
+        elif args.catalog_restore_drill:
+            catalog_restore_drill(profile=args.profile, region=args.region)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)

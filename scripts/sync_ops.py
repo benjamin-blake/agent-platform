@@ -64,10 +64,10 @@ def _pull_via_reader(table: str) -> list[dict] | None:
     the existing _coerce_ops_*_row helpers (they tolerate already-typed values).
     """
     try:
-        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
+        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        reader = DuckDBIcebergReader()
-        return reader.current_state(table)
+        # Flag-selected reader: DuckLake (closed boundary) or DuckDB-on-Iceberg (rollback target).
+        return make_reader().current_state(table)
     except Exception as exc:  # noqa: BLE001
         logger.warning("sync_ops._pull_via_reader: reader failed for %s, will fall back to Athena: %s", table, exc)
         return None
@@ -91,7 +91,20 @@ def _coerce_athena_array(val: object, *, elem_type: type = str) -> list:
     with unquoted, comma-separated elements. ast.literal_eval is not suitable
     here because elements are not quoted Python string literals.
     Returns [] for null/empty values.
+
+    Backend-agnostic: the DuckLake reader returns native Python lists (JSON arrays), so an
+    already-list value is coerced element-wise and returned as-is rather than re-parsed from str().
     """
+    if isinstance(val, list):
+        out: list = []
+        for elem in val:
+            if elem is None:
+                continue
+            try:
+                out.append(elem_type(elem))
+            except (ValueError, TypeError):
+                pass
+        return out
     raw = str(val).strip() if val is not None else ""
     if not raw:
         return []

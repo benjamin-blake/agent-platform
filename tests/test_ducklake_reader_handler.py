@@ -157,3 +157,48 @@ def test_open_reader_connection(monkeypatch):
     out = h._open_reader_connection()
     assert out == "CON"
     assert captured["extension_directory"] == h.EXTENSION_DIRECTORY
+
+
+# ---------------------------------------------------------------------------
+# T2.19 production ops read actions: read_ops_current / read_ops_history / query_ops
+# ---------------------------------------------------------------------------
+
+
+def test_action_read_ops_current(monkeypatch):
+    rows = [{"id": "rec-1", "status": "open", "created_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)}]
+    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, limit: rows)
+    out = h.action_read_ops_current({"table": "ops_recommendations", "id": "rec-1"}, FakeCon())
+    assert out["ok"] is True
+    assert out["row_count"] == 1
+    # datetime is coerced to ISO string for the JSON body
+    assert isinstance(out["rows"][0]["created_timestamp"], str)
+
+
+def test_action_read_ops_history(monkeypatch):
+    monkeypatch.setattr(rt, "read_history", lambda con, *, table, key, limit: [{"ulid": "01A"}, {"ulid": "01B"}])
+    out = h.action_read_ops_history({"table": "ops_decisions", "limit": 5}, FakeCon())
+    assert out["row_count"] == 2
+
+
+def test_action_query_ops(monkeypatch):
+    monkeypatch.setattr(rt, "query_current", lambda con, *, table, sql, params: [{"violation": 0}])
+    out = h.action_query_ops({"table": "ops_recommendations", "sql": "SELECT 1 FROM {tbl}"}, FakeCon())
+    assert out["row_count"] == 1
+
+
+def test_action_query_ops_requires_sql():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="non-empty 'sql'"):
+        h.action_query_ops({"table": "ops_recommendations"}, FakeCon())
+
+
+def test_require_ops_table_rejects_unknown():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="unknown or missing ops table"):
+        h._require_ops_table("nope")
+
+
+def test_handler_read_ops_current_end_to_end(monkeypatch):
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: FakeCon())
+    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, limit: [{"id": "rec-1"}])
+    resp = h.handler({"action": "read_ops_current", "table": "ops_recommendations"})
+    assert resp["statusCode"] == 200
+    assert json.loads(resp["body"])["row_count"] == 1

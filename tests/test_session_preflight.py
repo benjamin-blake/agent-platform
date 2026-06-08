@@ -1580,7 +1580,7 @@ class TestReadPriorityQueueReader:
 
     def test_reader_path_returns_shaped_rows(self) -> None:
         """DuckDBIcebergReader success -> rows shaped and sorted without Athena call."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.return_value = list(self._PQ_ROWS)
 
             result = _preflight.read_priority_queue()
@@ -1594,7 +1594,7 @@ class TestReadPriorityQueueReader:
         athena_rows = [
             {"rec_id": "rec-99", "rank": "1", "rationale": "athena-row", "north_star_impact": "medium"},
         ]
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
 
             with patch("session_preflight._run_athena_query", return_value=athena_rows):
@@ -1605,7 +1605,7 @@ class TestReadPriorityQueueReader:
 
     def test_reader_empty_returns_empty_list(self) -> None:
         """Reader returns [] -> function returns [] without calling Athena."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.return_value = []
 
             with patch("session_preflight._run_athena_query") as mock_q:
@@ -1637,7 +1637,7 @@ class TestCountRecommendationsReader:
 
     def test_reader_path_returns_counts(self) -> None:
         """DuckDBIcebergReader success -> counts returned without Athena call."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.return_value = list(self._OPEN_ROWS)
 
             with patch("session_preflight._run_athena_query") as mock_q:
@@ -1660,7 +1660,7 @@ class TestCountRecommendationsReader:
                 "automatable": "true",
             }
         ]
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
 
             with patch("session_preflight._run_athena_query", return_value=athena_rows):
@@ -1672,7 +1672,7 @@ class TestCountRecommendationsReader:
 
     def test_both_paths_fail_returns_none(self) -> None:
         """Both reader and Athena fail -> returns None (graceful degradation, T2.5)."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
+        with patch("session_preflight._make_reader") as MockReader:
             MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
 
             with patch("session_preflight._run_athena_query", return_value=None):

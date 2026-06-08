@@ -874,3 +874,78 @@ def test_main_lambda_gate_loud_fail_returns_1(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "lambda_reader", _boom)
     assert smoke.main(["--lambda-reader"]) == 1
     assert "READER FAIL" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T2.19: production gates (ops read-your-write, churn re-gate, pg_restore drill)
+# ---------------------------------------------------------------------------
+
+
+def test_ops_read_your_write_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    state = {"status": "open"}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "write_ops":
+            return _Resp(200, {"ok": True})
+        if action == "update_ops":
+            if payload["record"]["id"].startswith("test-absent"):
+                return _Resp(409, {"error_type": "referential"})
+            state["status"] = payload["record"]["status"]
+            return _Resp(200, {"ok": True})
+        if action == "read_ops_current":
+            return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
+        return _Resp(200, {})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    smoke.ops_read_your_write()
+    assert "OPS_RYW OK" in capsys.readouterr().out
+
+
+def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    state = {"status": "open"}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "read_ops_current":
+            return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
+        if action == "update_ops" and not payload["record"]["id"].startswith("test-absent"):
+            state["status"] = "closed"
+            return _Resp(200, {"ok": True})
+        if action == "update_ops":
+            return _Resp(200, {"ok": True})  # absent update wrongly succeeds -> boundary broken
+        return _Resp(200, {"ok": True})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    with pytest.raises(smoke.SmokeTestFailure, match="expected 409"):
+        smoke.ops_read_your_write()
+
+
+def test_ops_churn_regate_delegates(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "lambda_churn", lambda profile=None, region="eu-west-2": None)
+    smoke.ops_churn_regate()
+    assert "OPS_CHURN_REGATE OK" in capsys.readouterr().out
+
+
+def test_catalog_restore_drill_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: dict(_DSN))
+    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(smoke, "_run", lambda cmd: type("R", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(smoke._catalog_dr, "run_pg_restore", lambda *a, **k: None)
+    monkeypatch.setattr(smoke, "_verify_probe", lambda dsn, probe, profile=None: True)
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    smoke.catalog_restore_drill()
+    assert "CATALOG_RESTORE_DRILL OK" in capsys.readouterr().out
+
+
+def test_catalog_restore_drill_probe_lost_fails(monkeypatch):
+    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: dict(_DSN))
+    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(smoke, "_run", lambda cmd: type("R", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(smoke._catalog_dr, "run_pg_restore", lambda *a, **k: None)
+    monkeypatch.setattr(smoke, "_verify_probe", lambda dsn, probe, profile=None: False)
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    with pytest.raises(smoke.SmokeTestFailure, match="probe missing"):
+        smoke.catalog_restore_drill()
