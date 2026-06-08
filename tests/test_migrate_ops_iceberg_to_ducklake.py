@@ -182,9 +182,7 @@ def test_run_migration_execute_and_verify(monkeypatch):
 def test_load_tombstone_ids_filters_by_table(tmp_path, monkeypatch):
     manifest = tmp_path / "dq_tombstones.yaml"
     manifest.write_text(
-        "tombstones:\n"
-        "  - {table: ops_recommendations, id: rec-9}\n"
-        "  - {table: ops_decisions, id: dec-3}\n",
+        "tombstones:\n  - {table: ops_recommendations, id: rec-9}\n  - {table: ops_decisions, id: dec-3}\n",
         encoding="utf-8",
     )
     ids = mig.load_tombstone_ids("ops_recommendations", path=manifest)
