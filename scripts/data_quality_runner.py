@@ -65,11 +65,14 @@ class Check:
     backend: str = "athena"  # "athena" (Iceberg views) | "ducklake" (closed reader); set per-backend dispatch
 
 
-# Ops governance tables. When OPS_STORAGE_BACKEND=ducklake these route to the DuckLake reader; every
-# other table (telemetry_*) stays on Athena this slice (Decision 78 cl.2).
+# Ops governance tables (the full set; telemetry_* stays on Athena per Decision 78 cl.2).
 _OPS_TABLES: frozenset[str] = frozenset(
     {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_session_log", "ops_execution_plans"}
 )
+# RECS-FIRST SLICE: only ops_recommendations is migrated to DuckLake. Every other ops table stays on
+# Athena/Iceberg regardless of OPS_STORAGE_BACKEND until its own migration, so only this set routes to
+# the DuckLake reader when the flag is set.
+_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset({"ops_recommendations"})
 _OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
 
 
@@ -864,16 +867,17 @@ def main() -> int:
     tombstones = load_tombstones()
     all_checks.extend(build_tombstone_checks(tombstones, table_filter=args.table, database=database))
 
-    # Dual-backend dispatch (T2.19 / Decision 81): when OPS_STORAGE_BACKEND=ducklake, route the
-    # ops-table checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
-    # CD.33 clause-8 checks. Telemetry checks stay on Athena. iceberg (default) leaves everything
-    # on the Athena views -- the rollback path, byte-identical to pre-cutover.
+    # Dual-backend dispatch (T2.19 / Decision 81): when OPS_STORAGE_BACKEND=ducklake, route ONLY the
+    # migrated recs checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
+    # CD.33 clause-8 checks for recs. ops_decisions + the deferred ops_* tables + telemetry stay on
+    # Athena (recs-first slice). iceberg (default) leaves everything on the Athena views -- the rollback
+    # path, byte-identical to pre-cutover.
     if _ops_backend() == "ducklake":
         for c in all_checks:
-            # Tombstone checks are included: they target ops_* current and MUST transit DuckLake on
-            # this backend (no Athena escape hatch -- OQ.7). build_tombstone_checks emits the Athena
-            # view name, which to_ducklake_sql rewrites to the {tbl} placeholder.
-            if c.table in _OPS_TABLES:
+            # Recs tombstone checks are included: they target ops_recommendations current and MUST
+            # transit DuckLake on this backend (no Athena escape hatch -- OQ.7). build_tombstone_checks
+            # emits the Athena view name, which to_ducklake_sql rewrites to the {tbl} placeholder.
+            if c.table in _DUCKLAKE_OPS_TABLES:
                 c.sql = to_ducklake_sql(c.sql, c.table, database)
                 c.backend = "ducklake"
         ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}

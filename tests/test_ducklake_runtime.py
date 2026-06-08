@@ -213,6 +213,17 @@ def test_open_connection_dev_mode_installs(monkeypatch):
     assert any(s == "SET threads=1" for s in sqls)
 
 
+def test_open_connection_meta_schema_param_relocates_smoke(monkeypatch):
+    """Smoke attaches its OWN meta-schema (rec-2099): passing meta_schema overrides the ducklake_ops default."""
+    con = FakeCon()
+    _patch_duckdb(monkeypatch, con)
+    rt.open_connection(dsn=_DSN, data_path="s3://x/y/", meta_schema=rt.SMOKE_META_SCHEMA)
+    sqls = [s for s, _ in con.executed]
+    assert rt.SMOKE_META_SCHEMA == "ducklake_smoke"
+    assert any("META_SCHEMA 'ducklake_smoke'" in s for s in sqls)
+    assert not any("META_SCHEMA 'ducklake_ops'" in s for s in sqls)
+
+
 def test_open_connection_baked_mode_failclosed(monkeypatch):
     con = FakeCon()
     _patch_duckdb(monkeypatch, con)
@@ -407,6 +418,24 @@ def test_created_timestamp_carried_on_update():
     # the history MERGE bound the carried created_timestamp (param index 3)
     hist_params = con.merge_history_params()[0]
     assert hist_params[3] == carried
+
+
+def test_write_scd2_created_override_on_insert():
+    """Seed path: created_override supplies the historical created on a FRESH insert; last_updated stays
+    identity.timestamp. The agent path leaves created_override=None -> created = identity.timestamp."""
+    con = FakeCon(created_lookup=[])  # fresh insert (no existing row)
+    wid = rt.mint_write_identity(now=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    original_created = datetime(2026, 5, 2, tzinfo=timezone.utc)
+    result = rt.write_scd2(
+        con,
+        {"rec_id": "rec-1", "payload": "v1"},
+        identity=wid,
+        semantics=_SEMANTICS,
+        created_override=original_created,
+    )
+    assert result.created_timestamp == original_created  # preserved, NOT re-stamped to identity.timestamp
+    assert result.last_updated_timestamp == wid.timestamp
+    assert con.merge_history_params()[0][3] == original_created
 
 
 def test_last_updated_minted_once():

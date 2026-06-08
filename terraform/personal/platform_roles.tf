@@ -124,6 +124,28 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${aws_glue_catalog_database.ops.name}/*",
         ]
       },
+      {
+        # T2.19 recs cutover: the ops portal runs as PlatformDev at RUNTIME and reaches the closed
+        # DuckLake boundary by SigV4-invoking the writer/reader AWS_IAM Function URLs (file_rec /
+        # update_rec -> writer; recs reads -> reader). Without InvokeFunctionUrl every post-cutover recs
+        # op fails AccessDenied. Scoped to the two function ARNs. NOTE: no lambda:FunctionUrlAuthType
+        # condition -- AWS does not reliably populate that context key for IDENTITY-policy evaluation of
+        # Function-URL invokes (it implicit-denies real requests even though the simulator allows them
+        # with the key supplied), so the condition broke live invokes. The ARN scoping is the control;
+        # both URLs are AWS_IAM. The maintenance operational actions stay break-glass on PlatformAdmin.
+        Sid    = "DuckLakeInvokeRuntime"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunctionUrl"]
+        # Function-URL invokes authorize against the QUALIFIED function ARN (e.g. ...:function:NAME:$LATEST),
+        # so the unqualified ARN alone implicit-denies (AdminOps works only because it uses "*"). Grant both
+        # the unqualified and the :* qualified forms, scoped to writer + reader.
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
+      },
     ]
   })
 }

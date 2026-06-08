@@ -9,6 +9,153 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-08] - CLOSING REPORT: ducklake-ops-cutover recs-first -- LIVE CUTOVER ~90% (handoff to planning)
+
+**Read this first.** This is the authoritative handoff. The recs-first DuckLake cutover was driven
+LIVE this session and is ~90% complete: the recs data is migrated + verified on DuckLake, the closed
+boundary works, and most sign-off gates pass. Two items block the final `OPS_STORAGE_BACKEND=ducklake`
+default flip. A new plan should finish from "Remaining work" below. Branch `claude/upbeat-heisenberg-TO0fB`
+@ `df98738` (pushed; NOT merged, NO PR opened). Plan: `docs/plans/PLAN-ducklake-ops-cutover.md` (recs-first).
+
+### DONE -- code (committed + pushed, df98738)
+All pre-deploy code from the recs-first plan: runtime `meta_schema` param + `SMOKE_META_SCHEMA` +
+`write_scd2 created_override`; maintenance `catalog_reinit`/`seed_ops_recommendations`/`restore_drill`
+actions (+ manifest catalog_dr include + field_semantics asset); portal recs-only routing (decisions
+stay Iceberg); `make_reader(table=...)` table-aware; recs-only DQ dispatch; smoke harness ->
+ducklake_smoke + `catalog_restore_drill` invokes the maintenance action + `--emit-recs-seed-payload`;
+terraform (maintenance prod IAM/env/pgclient layer + DailyOps InvokeFunctionUrl). 546 ducklake tests
+green; `validate --pre` green. (`migrate_ops_iceberg_to_ducklake.py` was intentionally KEPT -- deleting
+it broke validate's changed-files ruff step because get_changed_files() feeds deleted paths to ruff;
+it is now dead/superseded by the maintenance seed -- a planning item to remove it + fix that gate.)
+
+### DONE -- live AWS (terraform state in S3 + live infra; survives container resets)
+- VP7 terraform apply (writer/reader prod DATA_PATH + IAM were already live from an earlier session;
+  THIS session applied maintenance prod-S3 IAM + DUCKLAKE_META_SCHEMA=ducklake_smoke +
+  DUCKLAKE_FIELD_SEMANTICS_PATH env + pgclient:2 layer; + DailyOps DuckLakeInvokeRuntime grant).
+- VP8 deploy: writer/reader/maintenance running the df98738 code (verified: maintenance lists the 3 new
+  actions). NOTE deploy was MANUAL (`build_lambda --ducklake-only` builds the function zips then FAILS
+  at the pgclient LAYER build -> I uploaded the function zips to S3 + `aws lambda update-function-code`).
+- VP9 `catalog_reinit` OK: `ducklake_ops` re-initialized at `s3://agent-platform-data-lake/ducklake/`
+  (rec-2099 RESOLVED). Required a fix (DuckLake 1.5.3 does NOT auto-create the PG meta-schema on ATTACH;
+  `_drop_meta_schema(recreate=True)` now drops + recreates empty before ATTACH).
+- VP10 seed OK: **806 recs seeded, current_rows=806, parity=true**, ids + timestamps preserved, D70
+  exclude-list empty (no recs tombstones in dq_tombstones.yaml). Persisted (admin reader confirms 807
+  current = 806 + the VP12 test probe).
+- VP12 read-your-write OK (write->read->update reflected; absent-update -> 409 referential).
+- VP13 churn/OCC re-gate OK on WARM Neon: collision 0.0, p95 1210ms (<2000). NOTE: a COLD run fails the
+  2000ms budget purely on Neon scale-to-zero connect (~17s); the gate measures warm steady-state. Future
+  runs must warm Neon first (or the gate needs a documented warm-up pre-step).
+- writer + reader `attach_check` succeed at the prod path (closed boundary live).
+
+### ISSUES / GOTCHAS hit (for the planner)
+1. **Two container resets wiped UNCOMMITTED work.** The ephemeral container reset on session resume and
+   discarded the entire working tree both times. First reset lost a full implementation (re-done from
+   context). LESSON ENFORCED: commit+push after every coherent slice on long V3 work. All work is now
+   safely pushed.
+2. **No Neon 5432 egress from CC-web** (only 443). All Postgres-direct ops MUST be Lambda-mediated
+   (catalog_reinit/seed/restore_drill run INSIDE the maintenance Lambda). This is why the plan was
+   rescoped recs-first + Lambda-mediated. Confirmed again this session.
+3. **pgclient layer ships pg_dump but NOT pg_restore** -> `restore_drill` (VP11) FAILS with
+   `/opt/bin/pg_restore` FileNotFoundError. Adding pg_restore needs the RHEL9/AL2023 seed-bundle rebuild
+   (`pgclient-bundle.tar.gz` in s3 .../ducklake-pgclient/; runbook Section 4 closure-build). That bundle
+   is also why `build_lambda --ducklake-only` can't rebuild layers here at all.
+4. **PlatformDev (agent_platform) InvokeFunctionUrl was wrong twice.** Function-URL IAM auth evaluates
+   the QUALIFIED function ARN (`...:function:NAME:$LATEST`); an unqualified-only grant implicit-denies,
+   and a `lambda:FunctionUrlAuthType` condition also broke it (AWS doesn't reliably populate that context
+   key for identity-policy eval). Fixed: grant InvokeFunctionUrl on BOTH `<arn>` and `<arn>:*` (df98738),
+   no condition. IAM simulate now allows it. BUT live PlatformDev invokes were STILL 403 at end of session
+   (data-plane propagation lag and/or Neon cold-start timeouts on verification). MUST be confirmed live
+   before sign-off (admin works; PlatformDev is the runtime portal identity).
+5. terraform applies churn writer/reader/maintenance `source_code_hash` + the deps/extensions LAYERS
+   whenever `lambda-packages/*.zip` are present (build artifacts). REMOVE `lambda-packages/*.zip` before
+   any terraform plan/apply intended to be infra-only (the `try(filemd5(zip),null)` pattern -> null = no
+   churn). A stray `lambda-packages/` build left from the VP8 build caused a layer replacement during a
+   1-line IAM apply this session (harmless -- same layer content -- but avoid it).
+
+### REMAINING WORK (for the new plan -- VP11/14/15/16/17 + docs)
+1. **Confirm PlatformDev InvokeFunctionUrl works live** (the grant is correct; verify it propagated:
+   `OPS_STORAGE_BACKEND=ducklake AWS_PROFILE=agent_platform bin/venv-python -c "from src.common.iceberg_reader import make_reader; print(make_reader(table='ops_recommendations').query('ops_recommendations','SELECT 1 AS n FROM {tbl} LIMIT 1'))"`
+   -> expect a row, not None/403). The CI/DQ role and any other reader consumer likely need the SAME
+   InvokeFunctionUrl grant (only PlatformDev DailyOps was granted; the github_ci OIDC role in oidc.tf was
+   NOT -- post-cutover CI DQ would 403 on the reader). Audit all reader/writer URL consumers.
+2. **VP14 DQ over DuckLake**: re-run `OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.data_quality_runner`
+   once (1) is confirmed -- the recs checks returned "reader returned None" ONLY because of the 403; the
+   reader query path itself works (verified via admin). Expect PASS (clause-8 + recency + D64 anchor).
+3. **VP11 restore_drill**: rebuild the pgclient layer to include pg_restore (operator: RHEL9 seed bundle),
+   redeploy maintenance, then `bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill`.
+   USER DECISION PENDING: defer this DR-restore gate (proceed to sign-off; daily pg_dump unaffected) vs
+   hold sign-off until it passes. (User left the call to the new plan.)
+4. **VP15 rollback rehearsal**: `OPS_STORAGE_BACKEND=iceberg ... --selftest-read` and
+   `OPS_STORAGE_BACKEND=ducklake ... --selftest-read` (needs (1)).
+5. **VP16 SIGN-OFF**: flip `_DEFAULT_OPS_STORAGE_BACKEND` "iceberg"->"ducklake" in scripts/ops_data_portal.py
+   + src/common/iceberg_reader.py + scripts/data_quality_runner.py; `--selftest-roundtrip`; ATOMIC
+   AGENTS.md + docs/PROJECT_CONTEXT.md source-of-truth update (recs->DuckLake; decisions/others->Athena;
+   only-write-surface=portal; recs break-glass=Neon+S3). DO NOT flip until (1)+(4) green.
+6. **VP17 post-sign-off**: remove `seed_ops_recommendations` from the maintenance handler + redeploy;
+   confirm no recs bypass write path remains.
+7. **Docs still owed by the plan**: runbook `docs/runbooks/ducklake-catalog-operations.md` Section 6
+   rewrite (still describes the OLD direct-Neon `migrate_ops_iceberg_to_ducklake` sequence at line ~473;
+   replace with the Lambda-mediated reinit/seed/restore_drill + ducklake_smoke + rollback). AGENTS.md +
+   PROJECT_CONTEXT source-of-truth flip (land with VP16).
+8. **Cleanup**: remove the superseded `scripts/migrate_ops_iceberg_to_ducklake.py` + its test AND fix
+   `scripts/validate.get_changed_files()` to drop deleted paths before feeding ruff (else the deletion
+   reddens CI). Consider warming Neon in the churn gate. Remove `AgentPlatformRuntime` redundant inline
+   policy (pre-existing follow-up).
+
+### Environment / how to resume
+- Branch `claude/upbeat-heisenberg-TO0fB` @ df98738 (recreate locally from origin: `git reset --hard
+  origin/claude/upbeat-heisenberg-TO0fB`). terraform: `cd terraform/personal && terraform init
+  -backend-config=backend-sandbox.hcl`; reconstruct gitignored `terraform.personal.tfvars` from live infra
+  (account_id from STS=707578707169, owner_email from the maintenance Lambda Owner tag, external_ids from
+  the PlatformDev/PlatformAdmin role trust policies, alerts_email from the SNS subscription state).
+- Profiles: `agent_platform` (PlatformDev, runtime) / `agent_platform_admin` (PlatformAdmin, apply +
+  break-glass Lambda invoke). The maintenance operational actions were invoked with admin this session.
+- Production is SAFE: `OPS_STORAGE_BACKEND` default is still `iceberg`; the live ops portal is unaffected;
+  DuckLake recs are seeded + staged but not the active backend until VP16.
+
+---
+
+## [2026-06-08] - implement: ducklake-ops-cutover (recs-first rescope -- pre-deploy code re-landed)
+
+**Mode:** Implementation (PLAN-ducklake-ops-cutover.md, recs-first rescope, V3 tier). Continuation after
+the plan was rewritten in response to the VP8 findings (rec-2099 catalog data-path pin + no Neon 5432
+egress from CC-web).
+
+**What shipped (committed 3adb255, branch claude/upbeat-heisenberg-TO0fB; flag default stays
+`OPS_STORAGE_BACKEND=iceberg` -- zero live-behaviour change until the human-gated cutover):**
+- Runtime: `meta_schema` param on `open_connection` + `SMOKE_META_SCHEMA="ducklake_smoke"` (rec-2099
+  root-cause: smoke no longer squats the production `ducklake_ops` catalog); `write_scd2`
+  `created_override` so the operational seed preserves the original created vs last_updated.
+- Maintenance handler: `catalog_reinit` / `seed_ops_recommendations` (TEMP, removed post-sign-off) /
+  `restore_drill` operational actions, invoked over 443 via `aws lambda invoke` (NOT agent surfaces);
+  connectionless dispatch; manifest gains `catalog_dr` + the `field_semantics.yaml` asset.
+- Portal/readers: recs-only DuckLake routing; ops_decisions + the deferred ops_* tables STAY on
+  Iceberg/Athena (`make_reader(table=...)` table-aware); `sync`/`_sync_table` recs-aware.
+- DQ: recs-only clause-8 + DuckLake dispatch (`_DUCKLAKE_OPS_TABLES`); decisions stay on Athena.
+- Smoke harness: `ducklake_smoke` meta-schema; `catalog_restore_drill` now invokes the maintenance
+  action (no local pg_dump -> Neon 5432); `--emit-recs-seed-payload` reads recs from Iceberg/Athena.
+- Terraform: maintenance S3 prod prefix + meta-schema/field-semantics env + pgclient layer; DailyOps
+  `InvokeFunctionUrl` on writer/reader so the runtime portal (PlatformDev) can reach the closed boundary.
+- Tests: 546 green; `validate --pre` green.
+
+**IMPORTANT continuity note:** an earlier in-session implementation of this same slice was LOST when the
+ephemeral container reset on a session resume (uncommitted working tree wiped). It was re-implemented
+from context and committed/pushed immediately (lesson: commit early on long V3 work).
+
+**Live state carried over from the first session (terraform state is in S3, survives the reset):** VP7
+terraform apply (writer/reader prod DATA_PATH + IAM widening) and the writer/reader code deploy (the
+merged #102 build) were applied to LIVE AWS in the first session. The catalog is still pinned to the
+smoke path (rec-2099), so writer/reader `attach_check` fails until `catalog_reinit` runs. The NEW code
+(3adb255) and the NEW terraform (maintenance + DailyOps) are committed but NOT yet deployed/applied.
+
+**Remaining (live cutover, human-gated apply):** present the VP7 terraform plan for the maintenance +
+DailyOps changes -> apply -> deploy writer/reader/maintenance code -> VP9 catalog_reinit -> VP10 seed +
+parity -> VP11-15 gates (restore-drill, read-your-write, churn, DQ, rollback) -> VP16 sign-off flip +
+atomic AGENTS.md/PROJECT_CONTEXT update -> VP17 remove the seed action. Runbook Section 6 still needs the
+recs-first Lambda-mediated rewrite.
+
+---
+
 ## [2026-06-08] - implement: ducklake-ops-cutover (T2.19 -- DuckLake ops persistence cutover, pre-deploy)
 
 **Mode:** Implementation (PLAN-ducklake-ops-cutover.md, V3 tier). Big-bang cutover + documented rollback.

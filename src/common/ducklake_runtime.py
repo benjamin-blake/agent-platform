@@ -51,6 +51,13 @@ DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 CATALOG_ALIAS = "ops_catalog"
 META_SCHEMA = "ducklake_ops"
 
+# Smoke uses a DEDICATED meta-schema so it can never collide with the production catalog. rec-2099
+# root cause: T2.17 smoke initialized `ducklake_ops` at the smoke DATA_PATH, and DATA_PATH is pinned
+# per meta-schema, so a later production ATTACH at `ducklake/` fails. Each meta-schema is an
+# independent DuckLake catalog in the same Neon Postgres -- production attaches `ducklake_ops`, smoke
+# attaches `ducklake_smoke` -- so their DATA_PATH pins never conflict.
+SMOKE_META_SCHEMA = "ducklake_smoke"
+
 # Representative SCD2 smoke-table pair (real ops_* business schema is T2.19).
 SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-neon-smoke/"
 SMOKE_HISTORY_TABLE = "ducklake_smoke_history"
@@ -256,6 +263,7 @@ def open_connection(
     *,
     dsn: dict[str, str],
     data_path: str = SMOKE_DATA_PATH,
+    meta_schema: str = META_SCHEMA,
     extension_directory: str | None = None,
     profile: str | None = None,
     _creds: tuple[str, str, str | None, str] | None = None,
@@ -266,6 +274,10 @@ def open_connection(
       - None  -> dev/smoke mode: network INSTALL + LOAD of each extension.
       - set   -> Lambda baked mode: LOAD from the directory with autoload/autoinstall DISABLED and
                  custom_extension_repository EMPTY (fail-closed: no network INSTALL at runtime).
+
+    meta_schema selects the DuckLake catalog: production attaches `ducklake_ops` (the default
+    META_SCHEMA), smoke attaches `SMOKE_META_SCHEMA` (`ducklake_smoke`). Each meta-schema is an
+    independent catalog in the same Neon Postgres, so their pinned DATA_PATHs never collide (rec-2099).
 
     The ATTACH validates DATA_PATH against the catalog's stored value and fails loud on mismatch
     (no silent rebind). DuckLake pins the data_path at catalog-init; OVERRIDE_DATA_PATH is only a
@@ -310,7 +322,7 @@ def open_connection(
 
     conninfo = libpq_conninfo(dsn)
     con.execute(
-        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{META_SCHEMA}')"
+        f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{meta_schema}')"
     )
     return con
 
@@ -574,6 +586,7 @@ def write_scd2(
     identity: WriteIdentity | None = None,
     semantics: dict[str, Any] | None = None,
     require_exists: bool = False,
+    created_override: datetime | None = None,
     max_attempts: int = OCC_MAX_ATTEMPTS,
     metric_sink: Optional[Callable[[str, float], None]] = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -592,6 +605,12 @@ def write_scd2(
     Referential gate (CD.33 cl.8 / D-5): with `require_exists=True` (the update path), the
     in-transaction existing-row lookup must be non-empty -- an absent merge key raises ReferentialError
     BEFORE any MERGE, replacing the prior permissive upsert-on-absent.
+
+    `created_override` (operational seed path ONLY -- the maintenance `seed_ops_recommendations`
+    bootstrap): when set AND the row is a fresh insert, it supplies the historical `created_timestamp`
+    instead of `identity.timestamp`, so a one-time migration preserves each rec's ORIGINAL created time
+    (Decision-64 anchor) while `identity.timestamp` carries the original last_updated. It has NO effect
+    on the agent write path (always None there).
 
     Concurrency (CD.33): a serialization collision is retried with bounded backoff+jitter up to
     `max_attempts`; exhaustion raises OCCRetryExhaustedError (loud-fail, Decision 55). A non-OCC
@@ -625,7 +644,9 @@ def write_scd2(
                     f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
                     "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
                 )
-            created_ts = existing[0][0] if existing else identity.timestamp
+            created_ts = (
+                existing[0][0] if existing else (created_override if created_override is not None else identity.timestamp)
+            )
             params = _write_params(spec, record, identity, created_ts)
             con.execute(merge_history_sql, params)
             con.execute(merge_current_sql, params)

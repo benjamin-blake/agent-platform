@@ -9,7 +9,8 @@
 #
 # Smoke tables: ducklake_smoke_history (append source-of-truth) +
 #               ducklake_smoke_current (Type-1 write-through projection).
-# META_SCHEMA: ducklake_ops
+# META_SCHEMA: ducklake_smoke  (relocated off the production `ducklake_ops` catalog -- rec-2099 fix;
+#              smoke can never again pin a DATA_PATH on the production meta-schema)
 # DATA_PATH:   s3://agent-platform-data-lake/ducklake-neon-smoke/
 #
 # Field roles:
@@ -156,8 +157,10 @@ connection_settings:
 #   - <merge_key>            input    natural key; MERGE key of the `current` projection
 #   - <business columns>     input    caller-supplied, schema-gated
 #
-# `status: live`    -> exercised by the cutover (ops_recommendations, ops_decisions
-#                      via file_rec/update_rec/file_decision/update_decision).
+# `status: live`     -> exercised by the cutover. THIS SLICE migrates ONLY ops_recommendations
+#                      (recs-first, via file_rec/update_rec). ops_decisions is schema-ready but
+#                      DEFERRED to its own migration (its source of truth is DECISIONS.md, so it
+#                      rebuilds rather than migrates) and STAYS on the Iceberg/Athena path.
 # `status: dormant` -> schema-ready, NOT live-exercised. The executor write paths
 #                      (ops_priority_queue, ops_execution_plans) are paused per CD.17
 #                      and route through the generalized writer when the executor
