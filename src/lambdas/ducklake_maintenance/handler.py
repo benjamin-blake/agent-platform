@@ -192,12 +192,16 @@ def _require_identifier(name: Any) -> str:
     return name
 
 
-def _drop_meta_schema(meta_schema: str) -> bool:
+def _drop_meta_schema(meta_schema: str, *, recreate: bool = False) -> bool:
     """Break-glass: DROP a DuckLake meta-schema in Neon Postgres (psycopg2). Returns True if it ran.
 
     The DuckLake DATA_PATH pin lives in this meta-schema's metadata tables, so dropping it is what
     makes a re-ATTACH at a new DATA_PATH possible. DESTRUCTIVE -- the caller has confirmed the state
     is disposable.
+
+    `recreate=True` re-creates the schema EMPTY after the drop. DuckLake (1.5.3) does not auto-create
+    the Postgres meta-schema on ATTACH -- it errors "Schema not found" -- so a reinit/init must leave an
+    empty schema for the next ATTACH to initialize its metadata tables into (at the new DATA_PATH).
     """
     import psycopg2  # noqa: PLC0415
 
@@ -207,6 +211,8 @@ def _drop_meta_schema(meta_schema: str) -> bool:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {meta_schema} CASCADE")
+            if recreate:
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {meta_schema}")
     finally:
         conn.close()
     return True
@@ -249,7 +255,8 @@ def action_catalog_reinit(event: dict[str, Any], _con: Any) -> dict[str, Any]:
         raise rt.DuckLakeRuntimeError("catalog_reinit requires a 'data_path' s3:// URI (the production DuckLake path)")
     meta_schema = _require_identifier(event.get("meta_schema", rt.META_SCHEMA))
 
-    dropped = _drop_meta_schema(meta_schema)
+    # Drop the squatting catalog AND leave an empty meta-schema for the ATTACH to initialize into.
+    dropped = _drop_meta_schema(meta_schema, recreate=True)
 
     con = rt.open_connection(
         dsn=rt.fetch_dsn(), data_path=data_path, meta_schema=meta_schema, extension_directory=EXTENSION_DIRECTORY
@@ -335,8 +342,9 @@ def action_restore_drill(event: dict[str, Any], _con: Any) -> dict[str, Any]:
             dsn=dsn, data_path=scratch_path, meta_schema=scratch_meta, extension_directory=EXTENSION_DIRECTORY
         )
 
-    # 1. Clean start + seed a known row into the scratch catalog (smoke pair, isolated meta-schema).
-    _drop_meta_schema(scratch_meta)
+    # 1. Clean start (drop + recreate empty so ATTACH can initialize) + seed a known row into the
+    # scratch catalog (smoke pair, isolated meta-schema).
+    _drop_meta_schema(scratch_meta, recreate=True)
     con = _attach()
     try:
         rt.create_scd2_tables(con, force_recreate=True)

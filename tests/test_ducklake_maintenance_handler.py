@@ -537,7 +537,7 @@ def test_catalog_reinit_drops_then_reattaches():
     ):
         result = h.action_catalog_reinit({"action": "catalog_reinit", "data_path": "s3://b/ducklake/"}, None)
     assert result["ok"] is True and result["reinitialized"] is True
-    drop_mock.assert_called_once_with("ducklake_ops")
+    drop_mock.assert_called_once_with("ducklake_ops", recreate=True)
     assert open_mock.call_args.kwargs["data_path"] == "s3://b/ducklake/"
     assert open_mock.call_args.kwargs["meta_schema"] == "ducklake_ops"
     con.close.assert_called_once()

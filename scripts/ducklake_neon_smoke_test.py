@@ -807,7 +807,7 @@ def emit_recs_seed_payload(*, profile: str | None = None) -> None:
     maintenance seed action. Timestamps are emitted as ISO strings (the seed parses them back).
     """
     from scripts.session_preflight import _run_athena_query  # noqa: PLC0415
-    from scripts.sync_ops import _coerce_ops_recommendations_row  # noqa: PLC0415
+    from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
     rows = _run_athena_query("SELECT * FROM agent_platform.ops_recommendations_current") or []
     tombstones = set(_recs_tombstone_ids())
@@ -817,7 +817,9 @@ def emit_recs_seed_payload(*, profile: str | None = None) -> None:
         rec.pop("row_num", None)
         if rec.get("id") in tombstones:
             continue
-        seeded.append(_coerce_ops_recommendations_row(rec))
+        coerced = _coerce_ops_rec_row(rec)  # returns None for a schema-rejected row
+        if coerced is not None:
+            seeded.append(coerced)
     payload = {
         "action": "seed_ops_recommendations",
         "data_path": PROD_DATA_PATH,
