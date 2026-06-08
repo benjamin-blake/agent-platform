@@ -820,3 +820,47 @@ def test_query_current_substitutes_tbl():
     out = rt.query_current(con, table="ops_recommendations", sql="SELECT COUNT(*) violation FROM {tbl}")
     assert "ops_catalog.ops_recommendations_current" in con.sql
     assert out == [{"violation": 0}]
+
+
+# ---------------------------------------------------------------------------
+# Closed-boundary read-only verb guard (code-review Critical #1)
+# ---------------------------------------------------------------------------
+
+
+def test_assert_read_only_sql_allows_select_and_with():
+    rt.assert_read_only_sql("SELECT 1 FROM {tbl}")
+    rt.assert_read_only_sql("  with x as (select 1) select * from x")  # case-insensitive, leading ws
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "DROP TABLE ops_catalog.ops_recommendations_current",
+        "DELETE FROM {tbl}",
+        "ALTER TABLE {tbl} ADD COLUMN x INT",
+        "UPDATE {tbl} SET status='x'",
+        "INSERT INTO {tbl} VALUES (1)",
+    ],
+)
+def test_assert_read_only_sql_rejects_writes(bad):
+    with pytest.raises(rt.SchemaGateError, match="read-only boundary"):
+        rt.assert_read_only_sql(bad)
+
+
+def test_assert_read_only_sql_rejects_multistatement():
+    with pytest.raises(rt.SchemaGateError, match="multi-statement"):
+        rt.assert_read_only_sql("SELECT 1; DROP TABLE x")
+
+
+def test_query_current_enforces_read_only():
+    class _Cur:
+        description = [("v",)]
+
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchall(self):
+            return [(0,)]
+
+    with pytest.raises(rt.SchemaGateError, match="read-only boundary"):
+        rt.query_current(_Cur(), table="ops_recommendations", sql="DROP TABLE {tbl}")

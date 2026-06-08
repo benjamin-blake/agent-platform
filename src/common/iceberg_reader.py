@@ -53,6 +53,16 @@ _ORDER_BY_DEFAULT = "last_updated_timestamp"
 # Valid SQL identifier pattern -- used to guard column-name interpolation
 _COL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 
+# Single-key equality row_filter: `<col> = '<value>'` (the only shape the portal passes). The value
+# is extracted and bound as a parameter on the reader's key-filtered path -- never interpolated.
+_SINGLE_KEY_FILTER_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*'([^']*)'\s*$")
+
+
+def _parse_single_key_filter(row_filter: str) -> str | None:
+    """Return the quoted value of a `<col> = '<value>'` filter, or None if it is not that shape."""
+    m = _SINGLE_KEY_FILTER_RE.match(row_filter)
+    return m.group(1) if m else None
+
 
 class Reader(Protocol):
     """Minimal engine-agnostic read interface.
@@ -358,8 +368,17 @@ class DuckLakeReader:
         """
         if row_filter is None:
             body = self._invoke({"action": "read_ops_current", "table": table})
-        else:
-            body = self._invoke({"action": "query_ops", "table": table, "sql": f"SELECT * FROM {{tbl}} WHERE {row_filter}"})
+            return list(body.get("rows", []))
+        # Parameterize the single-key equality form (`<col> = '<value>'`) into the safe, key-filtered
+        # read_ops_current path rather than interpolating raw SQL (parity with the pyiceberg reader's
+        # parsed row_filter; closes the injection surface). The portal only ever passes `id = '<id>'`.
+        key = _parse_single_key_filter(row_filter)
+        if key is None:
+            raise ValueError(
+                f"DuckLakeReader.current_state: row_filter must be a single-key equality "
+                f"(\"<col> = '<value>'\"); got {row_filter!r}. Use query() for arbitrary read-only SQL."
+            )
+        body = self._invoke({"action": "read_ops_current", "table": table, "key": key})
         return list(body.get("rows", []))
 
     def latest_snapshot(self, table: str) -> int | None:

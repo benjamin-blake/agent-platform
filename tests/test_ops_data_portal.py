@@ -1555,3 +1555,24 @@ class TestSelftests:
         monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
         with pytest.raises(RuntimeError, match="read-back"):
             p.selftest_roundtrip()
+
+
+class TestClosedBoundaryNoAthenaFallback:
+    """On the ducklake backend a reader failure must NOT fall back to Athena (OQ.7, code-review #review)."""
+
+    def test_fetch_rec_ducklake_no_athena_fallback(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+
+        class _Reader:
+            def current_state(self, table, **kw):
+                raise RuntimeError("reader down")
+
+        monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
+        # boto3 must never be touched (no Athena escape hatch). Make it explode if constructed.
+        import boto3
+
+        monkeypatch.setattr(boto3, "Session", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Athena fallback used")))
+        with pytest.raises(RuntimeError, match="reader down"):
+            p._fetch_rec_from_athena("rec-1")

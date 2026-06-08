@@ -217,3 +217,15 @@ def test_main_parity_failure_returns_1(monkeypatch, capsys):
     rc = mig.main(["--execute", "--verify-parity"])
     assert rc == 1
     assert "PARITY FAIL" in capsys.readouterr().err
+
+
+def test_content_hash_normalizes_type_asymmetry():
+    """An Iceberg string-array vs a DuckLake native-list hash IDENTICALLY after normalization (High #4)."""
+    iceberg_side = [{"id": "rec-1", "status": "open", "title": "t", "tags": "[a, b]", "dependencies": "[rec-2]"}]
+    ducklake_side = [{"id": "rec-1", "status": "open", "title": "t", "tags": ["a", "b"], "dependencies": ["rec-2"]}]
+    assert mig._content_hash("ops_recommendations", iceberg_side) == mig._content_hash("ops_recommendations", ducklake_side)
+
+
+def test_default_tables_excludes_priority_queue():
+    """ops_priority_queue is excluded from the live backfill set (snapshot semantics, Medium #1)."""
+    assert mig.DEFAULT_TABLES == ("ops_recommendations", "ops_decisions")

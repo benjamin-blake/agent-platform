@@ -870,7 +870,10 @@ def main() -> int:
     # on the Athena views -- the rollback path, byte-identical to pre-cutover.
     if _ops_backend() == "ducklake":
         for c in all_checks:
-            if c.table in _OPS_TABLES and c.test_type != "tombstone_resurrection":
+            # Tombstone checks are included: they target ops_* current and MUST transit DuckLake on
+            # this backend (no Athena escape hatch -- OQ.7). build_tombstone_checks emits the Athena
+            # view name, which to_ducklake_sql rewrites to the {tbl} placeholder.
+            if c.table in _OPS_TABLES:
                 c.sql = to_ducklake_sql(c.sql, c.table, database)
                 c.backend = "ducklake"
         ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}

@@ -579,15 +579,17 @@ def test_ducklake_reader_current_state_no_filter(monkeypatch):
     assert _json.loads(captured["body"])["action"] == "read_ops_current"
 
 
-def test_ducklake_reader_current_state_row_filter_uses_query_ops(monkeypatch):
+def test_ducklake_reader_query_uses_query_ops(monkeypatch):
+    """The explicit query() path still routes arbitrary read-only SQL through query_ops."""
     captured: dict = {}
-    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": []}), captured)
-    ir.DuckLakeReader().current_state("ops_recommendations", row_filter="id = 'rec-1'")
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"v": 0}]}), captured)
+    ir.DuckLakeReader().query("ops_recommendations", "SELECT COUNT(*) v FROM {tbl}", params=("x",))
     import json as _json
 
     body = _json.loads(captured["body"])
     assert body["action"] == "query_ops"
-    assert "WHERE id = 'rec-1'" in body["sql"]
+    assert body["sql"] == "SELECT COUNT(*) v FROM {tbl}"
+    assert body["params"] == ["x"]
 
 
 def test_ducklake_reader_query_returns_none_on_error(monkeypatch):
@@ -609,3 +611,32 @@ def test_ducklake_reader_url_loud_fail_when_unset(monkeypatch):
     monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(RuntimeError, match="DUCKLAKE_READER_URL not set"):
         ir.DuckLakeReader()._reader_url()
+
+
+def test_ducklake_reader_current_state_parameterizes_single_key(monkeypatch):
+    """row_filter `id = 'rec-1'` routes to the parameterized read_ops_current key path (High #3)."""
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-1"}]}), captured)
+    ir.DuckLakeReader().current_state("ops_recommendations", row_filter="id = 'rec-1'")
+    import json as _json
+
+    body = _json.loads(captured["body"])
+    assert body["action"] == "read_ops_current"  # NOT query_ops -- parameterized, no raw SQL
+    assert body["key"] == "rec-1"
+
+
+def test_ducklake_reader_current_state_rejects_complex_filter(monkeypatch):
+    """A non-single-key row_filter is rejected rather than raw-interpolated (injection guard)."""
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": []}), captured)
+    with pytest.raises(ValueError, match="single-key equality"):
+        ir.DuckLakeReader().current_state("ops_recommendations", row_filter="1=1 OR id IS NOT NULL")
+
+
+def test_parse_single_key_filter():
+    import src.common.iceberg_reader as ir
+
+    assert ir._parse_single_key_filter("id = 'rec-1'") == "rec-1"
+    assert ir._parse_single_key_filter("  status='open'  ") == "open"
+    assert ir._parse_single_key_filter("1=1 OR 2=2") is None
+    assert ir._parse_single_key_filter("id IN ('a','b')") is None

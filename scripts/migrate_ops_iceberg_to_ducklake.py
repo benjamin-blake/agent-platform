@@ -41,11 +41,15 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TOMBSTONES_PATH = _REPO_ROOT / "config" / "agent" / "data_quality" / "dq_tombstones.yaml"
 
-# The ops_* tables backfilled at cutover. ops_recommendations + ops_decisions are the live cutover
-# tables; ops_priority_queue is provisioned (curator-written) but the executor is paused (CD.17).
+# The ops_* tables backfilled at cutover: ops_recommendations + ops_decisions ONLY -- the two LIVE
+# cutover tables (file_rec/update_rec/file_decision/update_decision write paths).
+# ops_priority_queue is EXCLUDED: its current-state is the Decision-70 latest-queue_run correlated set,
+# NOT a per-merge-key MERGE, so a per-row backfill + read_current parity comparison would legitimately
+# differ in row count and spuriously FAIL the cutover. It is dormant (executor paused, CD.17) with no
+# live consumer; its backfill is deferred to executor-resume, when its snapshot semantics are handled.
 # ops_session_log / ops_execution_plans are NOT provisioned in the personal account (sync_ops
-# 2026-05-28 note) and are omitted from the backfill -- they have no source rows.
-DEFAULT_TABLES = ("ops_recommendations", "ops_decisions", "ops_priority_queue")
+# 2026-05-28 note) -- no source rows.
+DEFAULT_TABLES = ("ops_recommendations", "ops_decisions")
 
 _PROD_DATA_PATH_ENV = "DUCKLAKE_DATA_PATH"
 
@@ -76,8 +80,32 @@ def read_iceberg_current(table: str, reader: Any = None) -> list[dict]:
     return [dict(r) for r in (rows or [])]
 
 
+# Per-table coercion applied to BOTH sides before the parity hash, so the Iceberg side (raw
+# DuckDBIcebergReader / Athena VarChar) and the DuckLake side (native list/int/bool) are normalized
+# to identical Python types -- otherwise a `tags` value that is a string on one side and a list on
+# the other hashes differently and triggers a spurious parity FAIL (Decision 55 / High #review).
+def _normalize_rows(table: str, rows: list[dict]) -> list[dict]:
+    """Apply the same sync_ops per-table coercion to *rows* so both backends compare type-for-type."""
+    from scripts import sync_ops as _so  # noqa: PLC0415
+
+    coercer = {
+        "ops_recommendations": _so._coerce_ops_rec_row,
+        "ops_decisions": _so._coerce_ops_decisions_row,
+        "ops_priority_queue": _so._coerce_ops_priority_queue_row,
+        "ops_session_log": _so._coerce_ops_session_log_row,
+    }.get(table)
+    if coercer is None:
+        return [dict(r) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        coerced = coercer(dict(r))
+        if coerced is not None:  # _coerce_ops_rec_row returns None on an invalid id prefix
+            out.append(coerced)
+    return out
+
+
 def _project_record(table: str, row: dict) -> dict:
-    """Project an Iceberg row onto the DuckLake INPUT columns (drop derived + unknown keys)."""
+    """Project a row onto the DuckLake INPUT columns (drop derived + unknown keys)."""
     from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
 
     spec = resolve_table_spec(table)
@@ -86,15 +114,17 @@ def _project_record(table: str, row: dict) -> dict:
 
 
 def _content_hash(table: str, rows: list[dict]) -> str:
-    """Stable content hash of the input-column projection of *rows*, sorted by merge key.
+    """Stable content hash of the normalized input-column projection of *rows*, sorted by merge key.
 
-    Derived SCD2 envelope fields (ulid/created/last_updated) are excluded -- they are minted fresh by
-    the runtime, so they differ by construction and must not enter the parity comparison.
+    Both backends' rows are run through the same `_normalize_rows` coercion FIRST so type asymmetry
+    (Athena VarChar vs DuckLake native) does not produce a spurious mismatch. Derived SCD2 envelope
+    fields (ulid/created/last_updated) are excluded -- minted fresh by the runtime, different by
+    construction, must not enter the parity comparison.
     """
     from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
 
     spec = resolve_table_spec(table)
-    projected = [_project_record(table, r) for r in rows]
+    projected = [_project_record(table, r) for r in _normalize_rows(table, rows)]
     projected.sort(key=lambda r: str(r.get(spec.merge_key, "")))
     canonical = json.dumps(projected, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -516,14 +517,6 @@ def schema_gate(record: dict[str, Any], semantics: dict[str, Any] | None = None,
 # Table DDL -- CREATE + partition transforms BEFORE first write (post-ALTER-only, M-5)
 # ---------------------------------------------------------------------------
 
-_SCD2_COLUMNS = (
-    "ulid VARCHAR NOT NULL, "
-    "rec_id VARCHAR NOT NULL, "
-    "payload VARCHAR, "
-    "created_timestamp TIMESTAMP WITH TIME ZONE NOT NULL, "
-    "last_updated_timestamp TIMESTAMP WITH TIME ZONE NOT NULL"
-)
-
 
 def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bool = False) -> None:
     """Create the history + current tables for *table* and partition them BEFORE first write.
@@ -557,29 +550,8 @@ def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bo
 
 # ---------------------------------------------------------------------------
 # The shared write primitive -- history MERGE-on-ULID + current write-through, bounded OCC retry
+# (the MERGE/SELECT SQL is generated per-table by _build_merge_*_sql from the resolved spec)
 # ---------------------------------------------------------------------------
-
-_MERGE_HISTORY = (
-    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_HISTORY_TABLE} AS t "
-    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
-    "? AS last_updated_timestamp) AS s "
-    "ON t.ulid = s.ulid "
-    "WHEN NOT MATCHED THEN INSERT VALUES "
-    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
-)
-
-_MERGE_CURRENT = (
-    f"MERGE INTO {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} AS t "
-    "USING (SELECT ? AS ulid, ? AS rec_id, ? AS payload, ? AS created_timestamp, "
-    "? AS last_updated_timestamp) AS s "
-    "ON t.rec_id = s.rec_id "
-    "WHEN MATCHED THEN UPDATE SET ulid = s.ulid, payload = s.payload, "
-    "last_updated_timestamp = s.last_updated_timestamp "
-    "WHEN NOT MATCHED THEN INSERT VALUES "
-    "(s.ulid, s.rec_id, s.payload, s.created_timestamp, s.last_updated_timestamp)"
-)
-
-_SELECT_EXISTING_CREATED = f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{SMOKE_CURRENT_TABLE} WHERE rec_id = ?"
 
 
 def is_occ_collision(exc: Exception) -> bool:
@@ -755,12 +727,35 @@ def read_history(
     return [dict(zip(col_names, row)) for row in cursor.fetchall()]
 
 
+def assert_read_only_sql(sql: str) -> None:
+    """Loud-fail unless *sql* is a read-only statement (SELECT/WITH only).
+
+    The reader holds the full Neon catalog credential; S3-read-only IAM blocks Parquet writes but NOT
+    Postgres catalog DDL (DROP/ALTER TABLE on the DuckLake metadata). This verb guard is the
+    application-layer half of the closed read boundary (OQ.7): a non-SELECT statement never reaches
+    the catalog. Reject anything whose first keyword is not SELECT or WITH (CTE) -- this also blocks
+    a multi-statement payload (the leading verb of a `SELECT 1; DROP TABLE x` is SELECT, but DuckDB
+    rejects multi-statement in one execute; the guard plus single-statement execution close it).
+    """
+    if not re.match(r"^\s*(?:SELECT|WITH)\b", sql, re.IGNORECASE):
+        raise SchemaGateError(
+            "read-only boundary: only SELECT/WITH statements may execute on the reader path "
+            f"(got {sql.strip()[:60]!r}). Catalog DDL/DML is denied at the closed boundary (OQ.7)."
+        )
+    if ";" in sql.rstrip().rstrip(";"):
+        raise SchemaGateError("read-only boundary: multi-statement SQL is rejected on the reader path (OQ.7).")
+
+
 def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     """Run a read-only *sql* over the current projection of *table*. Use `{tbl}` for the table ref.
 
     Mirrors the Reader.query semantics: the caller supplies a SELECT referencing `{tbl}`; `?` binds
     params. The reader Lambda exposes this so the portal/sync read paths can push predicates down.
+    A read-only verb guard (assert_read_only_sql) rejects any non-SELECT/WITH statement BEFORE it
+    reaches the catalog -- catalog DDL is not blocked by the S3-read-only IAM, so the guard is the
+    application-layer half of the closed read boundary (OQ.7 / CD.33 clause 6).
     """
+    assert_read_only_sql(sql)
     spec = resolve_table_spec(table)
     final_sql = sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}")
     cursor = con.execute(final_sql, list(params)) if params else con.execute(final_sql)

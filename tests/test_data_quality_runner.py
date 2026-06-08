@@ -846,3 +846,15 @@ def test_run_checks_routes_ducklake(monkeypatch):
     check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
     result = dq.run_checks([check], "wg", "db", dry_run=False)
     assert result.verdict == "PASS"
+
+
+def test_tombstone_check_rewrites_to_ducklake_no_athena():
+    """A tombstone check on an ops table rewrites to {tbl} (DuckLake), not the Athena view (High #2)."""
+    import scripts.data_quality_runner as dq
+
+    checks = dq.build_tombstone_checks([{"table": "ops_recommendations", "id": "rec-9"}], database="agent_platform")
+    assert checks and checks[0].test_type == "tombstone_resurrection"
+    rewritten = dq.to_ducklake_sql(checks[0].sql, "ops_recommendations", "agent_platform")
+    assert "{tbl}" in rewritten
+    assert "agent_platform.ops_recommendations" not in rewritten  # no Athena escape hatch
+    assert checks[0].table in dq._OPS_TABLES  # so main() flips it to backend=ducklake
