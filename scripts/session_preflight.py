@@ -650,8 +650,10 @@ def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[di
         return _read_priority_queue_cache(max_items)
 
     # -- DuckDB reader path (Decision 70: correlated subquery applied internally) --
+    # ops_priority_queue is DEFERRED from the DuckLake cutover -- pass the table so make_reader returns
+    # the Iceberg reader regardless of OPS_STORAGE_BACKEND (only recs are on DuckLake this slice).
     try:
-        reader = _make_reader()
+        reader = _make_reader(table="ops_priority_queue")
         reader_rows = reader.current_state("ops_priority_queue")
         if reader_rows is not None:
             shaped = _shape_priority_queue_rows(reader_rows, max_items)

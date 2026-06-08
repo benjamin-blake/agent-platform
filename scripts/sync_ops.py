@@ -66,8 +66,9 @@ def _pull_via_reader(table: str) -> list[dict] | None:
     try:
         from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        # Flag-selected reader: DuckLake (closed boundary) or DuckDB-on-Iceberg (rollback target).
-        return make_reader().current_state(table)
+        # Table-aware flag-selected reader: recs -> DuckLake (closed boundary) when flagged; decisions
+        # and the deferred ops_* tables -> DuckDB-on-Iceberg regardless of the flag (recs-first slice).
+        return make_reader(table=table).current_state(table)
     except Exception as exc:  # noqa: BLE001
         logger.warning("sync_ops._pull_via_reader: reader failed for %s, will fall back to Athena: %s", table, exc)
         return None

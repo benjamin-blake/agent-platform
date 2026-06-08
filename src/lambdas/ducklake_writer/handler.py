@@ -22,6 +22,7 @@ from typing import Any, Callable
 from src.common import ducklake_runtime as rt
 
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
+META_SCHEMA = os.environ.get("DUCKLAKE_META_SCHEMA", rt.META_SCHEMA)
 EXTENSION_DIRECTORY = os.environ.get("DUCKLAKE_EXTENSION_DIRECTORY", rt.LAMBDA_EXTENSION_DIRECTORY)
 
 
@@ -32,7 +33,7 @@ class WriterActionError(rt.DuckLakeRuntimeError):
 def _open_writer_connection() -> Any:
     """Open a write-scoped baked-extension connection to the Neon catalog (loud-fail on version)."""
     dsn = rt.fetch_dsn()
-    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY)
+    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +249,9 @@ def action_churn_single(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     dsn = rt.fetch_dsn()
     creds = _frozen_creds()
     if event.get("setup"):
-        con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+        con = rt.open_connection(
+            dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+        )
         try:
             rt.create_scd2_tables(con, force_recreate=True)
         finally:
@@ -277,7 +280,9 @@ def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
     dsn = rt.fetch_dsn()
     creds = _frozen_creds()
     # Pre-create the tables once so concurrent writers only write (avoids a CREATE race).
-    pre = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+    pre = rt.open_connection(
+        dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+    )
     try:
         rt.create_scd2_tables(pre, force_recreate=bool(event.get("force_recreate_tables", True)))
     finally:
@@ -340,7 +345,9 @@ def _churn_one_writer(writer_id: int, dsn: dict[str, Any], creds: Any) -> dict[s
     total_occ_retries = 0
 
     connect_start = time.perf_counter()
-    con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+    con = rt.open_connection(
+        dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+    )
     connect_ms = (time.perf_counter() - connect_start) * 1000.0
 
     try:
@@ -381,7 +388,9 @@ def _churn_one_single_write(writer_id: int, dsn: dict[str, Any], creds: Any) -> 
     total_occ_retries = 0
 
     connect_start = time.perf_counter()
-    con = rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY, _creds=creds)
+    con = rt.open_connection(
+        dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+    )
     connect_ms = (time.perf_counter() - connect_start) * 1000.0
 
     try:

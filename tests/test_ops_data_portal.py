@@ -263,6 +263,64 @@ class TestStorageBackendTransport:
         assert mock_write.call_args.kwargs["action"] == "update_ops"
         mock_opswriter.return_value.write.assert_not_called()
 
+    def test_file_decision_stays_iceberg_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
+        """Recs-first slice: decisions are DEFERRED -- file_decision uses OpsWriter (Iceberg) even when
+        OPS_STORAGE_BACKEND=ducklake (NOT the DuckLake writer)."""
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value=57),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+        ):
+            from scripts.ops_data_portal import file_decision
+
+            file_decision({"title": "D", "status": "open", "rationale": "x"})
+
+        mock_opswriter.return_value.write.assert_called_once()
+        mock_dl.assert_not_called()
+
+    def test_update_decision_stays_iceberg_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
+        """update_decision stays on OpsWriter (Iceberg) even on the ducklake backend (decisions deferred)."""
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        existing = {
+            "id": "dec-042",
+            "title": "D",
+            "status": "open",
+            "created_timestamp": "2026-05-01T00:00:00+00:00",
+            "last_updated_timestamp": "2026-05-01T00:00:00+00:00",
+        }
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        with (
+            patch("scripts.ops_data_portal._fetch_decision_from_athena", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import update_decision
+
+            assert update_decision("dec-042", {"status": "closed"}) is True
+
+        mock_opswriter.return_value.write.assert_called_once()
+        mock_dl.assert_not_called()
+
+    def test_portal_exposes_no_import_bypass_write_surface(self) -> None:
+        """The ONLY ops write surface is file_rec/update_rec (+ file_decision/update_decision for the
+        deferred Iceberg path). No import/bootstrap/bypass writer is exposed on the portal (Decision 81;
+        the one-time recs move is the operational maintenance seed, not a portal/agent surface)."""
+        import scripts.ops_data_portal as portal
+
+        forbidden = [
+            n
+            for n in dir(portal)
+            if any(k in n.lower() for k in ("import_rec", "bootstrap", "bypass", "seed_rec", "raw_write", "import_ops"))
+        ]
+        assert forbidden == []
+
 
 class TestFileDecision:
     """Tests for file_decision()."""

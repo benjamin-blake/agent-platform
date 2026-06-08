@@ -790,8 +790,11 @@ def test_build_clause8_checks_table_filter():
     import scripts.data_quality_runner as dq
 
     spec = yaml.safe_load(open("config/agent/data_quality/ops.yaml", encoding="utf-8"))
-    checks = dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_decisions")
-    assert {c.table for c in checks} == {"ops_decisions"}
+    # Recs-first slice: only ops_recommendations is clause-8-checked (decisions deferred to Iceberg).
+    checks = dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_recommendations")
+    assert {c.table for c in checks} == {"ops_recommendations"}
+    # A deferred table filter yields no clause-8 checks (it is not on DuckLake this slice).
+    assert dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_decisions") == []
 
 
 def test_verdict_for_pass_fail_unenforced_hardgate():

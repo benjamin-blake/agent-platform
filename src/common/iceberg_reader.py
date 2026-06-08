@@ -407,13 +407,17 @@ def ops_storage_backend() -> str:
     return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
 
 
-def make_reader(profile: str | None = None) -> Reader:
-    """Return the flag-selected operational Reader.
+def make_reader(profile: str | None = None, table: str | None = None) -> Reader:
+    """Return the flag-selected operational Reader for *table*.
 
-    OPS_STORAGE_BACKEND=ducklake -> DuckLakeReader (closed boundary); else DuckDBIcebergReader
-    (the rollback target, retained until cutover sign-off). Both satisfy the Reader protocol, so
-    call sites (ops_data_portal, sync_ops, session_preflight) need not branch.
+    RECS-FIRST SLICE: `ops_recommendations` is the ONLY table on DuckLake. So
+    OPS_STORAGE_BACKEND=ducklake -> DuckLakeReader (closed boundary) ONLY for recs (or a None table,
+    which the recs-default call sites pass); every other named table -- ops_decisions and the deferred
+    ops_* tables -- reads from DuckDBIcebergReader regardless of the flag (they stay on Iceberg until
+    their own migration). Else (rollback / iceberg backend) DuckDBIcebergReader. Both satisfy the
+    Reader protocol, so call sites need not branch beyond passing the table they intend to read.
     """
-    if ops_storage_backend() == "ducklake":
+    recs_path = table in (None, "ops_recommendations")
+    if recs_path and ops_storage_backend() == "ducklake":
         return DuckLakeReader(profile=profile)
     return DuckDBIcebergReader(profile=profile)

@@ -157,7 +157,8 @@ def test_open_attached_real_attach_composition(monkeypatch):
     attach_sql = [s for s in con.executed if s.startswith("ATTACH")]
     assert len(attach_sql) == 1
     assert "ducklake:postgres:" in attach_sql[0]
-    assert "META_SCHEMA 'ducklake_ops'" in attach_sql[0]
+    # Smoke attaches its OWN meta-schema (rec-2099) -- never the production ducklake_ops catalog.
+    assert "META_SCHEMA 'ducklake_smoke'" in attach_sql[0]
     assert any("INSTALL postgres" in s for s in con.executed)
 
 
@@ -930,22 +931,20 @@ def test_ops_churn_regate_delegates(monkeypatch, capsys):
 
 
 def test_catalog_restore_drill_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: dict(_DSN))
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_run", lambda cmd: type("R", (), {"returncode": 0, "stderr": ""})())
-    monkeypatch.setattr(smoke._catalog_dr, "run_pg_restore", lambda *a, **k: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda dsn, probe, profile=None: True)
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    # T2.19: catalog_restore_drill now INVOKES the maintenance restore_drill action over 443 (the
+    # pg_dump/pg_restore runs inside AWS -- no Neon 5432 from CC-web). Mock the URL + the invoke.
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        smoke,
+        "_sigv4_invoke",
+        lambda url, p, **kw: _Resp(200, {"ok": True, "restored": True, "probe_id": "drill-probe", "pg_version": "16"}),
+    )
     smoke.catalog_restore_drill()
     assert "CATALOG_RESTORE_DRILL OK" in capsys.readouterr().out
 
 
 def test_catalog_restore_drill_probe_lost_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: dict(_DSN))
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_run", lambda cmd: type("R", (), {"returncode": 0, "stderr": ""})())
-    monkeypatch.setattr(smoke._catalog_dr, "run_pg_restore", lambda *a, **k: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda dsn, probe, profile=None: False)
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
-    with pytest.raises(smoke.SmokeTestFailure, match="probe missing"):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "restored": False}))
+    with pytest.raises(smoke.SmokeTestFailure, match="did not restore"):
         smoke.catalog_restore_drill()

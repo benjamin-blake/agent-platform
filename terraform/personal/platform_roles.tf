@@ -124,6 +124,22 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${aws_glue_catalog_database.ops.name}/*",
         ]
       },
+      {
+        # T2.19 recs cutover: the ops portal runs as PlatformDev at RUNTIME and reaches the closed
+        # DuckLake boundary by SigV4-invoking the writer/reader AWS_IAM Function URLs (file_rec /
+        # update_rec -> writer; recs reads -> reader). Without InvokeFunctionUrl every post-cutover recs
+        # op fails AccessDenied. Scoped to the two Function URLs. The maintenance operational actions
+        # (catalog_reinit / seed / restore_drill) stay break-glass on PlatformAdmin -- NOT granted here.
+        Sid      = "DuckLakeInvokeRuntime"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunctionUrl"]
+        Resource = [aws_lambda_function.ducklake_writer.arn, aws_lambda_function.ducklake_reader.arn]
+        Condition = {
+          StringEquals = {
+            "lambda:FunctionUrlAuthType" = "AWS_IAM"
+          }
+        }
+      },
     ]
   })
 }

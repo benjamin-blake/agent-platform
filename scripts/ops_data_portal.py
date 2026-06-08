@@ -560,7 +560,9 @@ def _sync_table(table: str) -> None:
     """
     from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
 
-    if _ops_backend() == "ducklake":
+    # Only ops_recommendations follows the DuckLake backend this slice; decisions + other tables are
+    # DEFERRED and always rebuild from Iceberg/Athena (compact + refresh + pull).
+    if table == "ops_recommendations" and _ops_backend() == "ducklake":
         _pull_single_table(table)
         return
 
@@ -666,10 +668,10 @@ def file_decision(
 
         Decision.model_validate(merged)
 
-        if _ops_backend() == "ducklake":
-            _ducklake_write("ops_decisions", merged, action="write_ops", profile=profile)
-        else:
-            OpsWriter().write("ops_decisions", merged)
+        # Decisions are DEFERRED from the recs-first DuckLake cutover (their source of truth is
+        # DECISIONS.md, so they rebuild rather than migrate). They STAY on the Iceberg/OpsWriter path
+        # regardless of OPS_STORAGE_BACKEND until their own migration.
+        OpsWriter().write("ops_decisions", merged)
         _append_to_local_jsonl(DECISIONS_JSONL, merged)
         logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
         if not _skip_sync:
@@ -704,18 +706,9 @@ def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None)
     if not re.fullmatch(r"dec-\d+", decision_id):
         raise ValueError(f"_fetch_decision_from_athena: invalid decision_id: {decision_id!r}")
 
-    # -- DuckLake closed-boundary path (no Athena fallback -- OQ.7) --
-    if _ops_backend() == "ducklake":
-        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
-
-        rows = make_reader().current_state("ops_decisions", row_filter=f"id = '{decision_id}'")
-        if not rows:
-            return None
-        rec = dict(rows[0])
-        rec.pop("row_num", None)
-        return _sanitize_athena_record(_coerce_ops_decisions_row(rec))
-
-    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena fallback retained until cutover) --
+    # Decisions are DEFERRED from the DuckLake cutover -- they read from Iceberg/Athena regardless of
+    # OPS_STORAGE_BACKEND (no DuckLake closed-boundary path for decisions this slice).
+    # -- DuckDB-on-Iceberg reader path (Athena fallback retained) --
     try:
         from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
 
@@ -816,10 +809,9 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
 
     Decision.model_validate(merged)
 
-    if _ops_backend() == "ducklake":
-        _ducklake_write("ops_decisions", merged, action="update_ops", profile=profile)
-    else:
-        OpsWriter().write("ops_decisions", merged)
+    # Decisions are DEFERRED from the DuckLake cutover -- they STAY on Iceberg/OpsWriter regardless of
+    # OPS_STORAGE_BACKEND until their own migration.
+    OpsWriter().write("ops_decisions", merged)
     _append_to_local_jsonl(DECISIONS_JSONL, merged)
     logger.info("[PORTAL] Updated %s: %s", decision_id, list(updates.keys()))
     _sync_table("ops_decisions")
@@ -985,28 +977,28 @@ def sync(tables: Optional[list] = None) -> dict:
     Raises:
         RuntimeError: If the backend infrastructure is unreachable.
     """
-    from scripts.sync_ops import _pull_single_table
-
-    ops_tables = tables or ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
-
-    # DuckLake: cache-pull only. The atomic catalog commit eliminates the Iceberg
-    # outbox-drain/compact/view-refresh category (Decision 81 cl.4); `current` is already live.
-    if _ops_backend() == "ducklake":
-        pulled = {table: _pull_single_table(table) for table in ops_tables}
-        return {"compacted": {}, "pulled": pulled, "views_refreshed": []}
-
-    # Iceberg (rollback target): drain the outbox, compact, refresh views, pull.
+    from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
     from scripts.sync_ops import drain as _drain_outbox  # noqa: PLC0415
 
+    ops_tables = tables or ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
+    backend = _ops_backend()
+
+    # Drain the Iceberg outbox first: it buffers offline decisions writes (always Iceberg) and any
+    # pre-cutover recs (the VP10 "drain to Iceberg before backfill" step). Idempotent when empty.
     _drain_outbox()
 
     compacted: dict[str, int] = {}
-    pulled = {}
+    pulled: dict[str, int] = {}
     views_refreshed: list[str] = []
 
     for table in ops_tables:
-        count = OpsWriter().compact(table)
-        compacted[table] = count
+        # ops_recommendations on DuckLake: the atomic catalog commit eliminates compact/view-refresh
+        # (Decision 81 cl.4) -- `current` is already live, so a cache-pull from the reader suffices.
+        if table == "ops_recommendations" and backend == "ducklake":
+            pulled[table] = _pull_single_table(table)
+            continue
+        # Deferred tables (decisions/queue) + recs-on-Iceberg rollback: compact + refresh + pull.
+        compacted[table] = OpsWriter().compact(table)
         OpsWriter()._refresh_view(table)
         views_refreshed.append(table)
         pulled[table] = _pull_single_table(table)

@@ -47,7 +47,9 @@ DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 # re-introduces drift and can bind the shared catalog to the wrong path on direct pre-checks.
 SMOKE_DATA_PATH = ducklake_runtime.SMOKE_DATA_PATH
 CATALOG_ALIAS = "ops_catalog"
-META_SCHEMA = "ducklake_ops"
+# Smoke runs in its OWN meta-schema (ducklake_smoke), isolated from the production ducklake_ops catalog
+# so it can never pin a DATA_PATH on production again (rec-2099 root-cause fix).
+META_SCHEMA = ducklake_runtime.SMOKE_META_SCHEMA
 
 # Function-URL endpoints for the in-Lambda invoke gates (post-deploy). Resolved from env first, then
 # terraform output. The URLs are AWS_IAM-protected (SigV4 required; unsigned -> 403).
@@ -81,10 +83,11 @@ def _open_attached(
 
     One ATTACH implementation (ducklake_runtime.open_connection) backs both the dev/smoke path (here,
     dev-mode network INSTALL: extension_directory=None) and the Lambda path (baked layer). The churn
-    gate shares a single credential resolution across workers via _creds.
+    gate shares a single credential resolution across workers via _creds. Smoke uses the isolated
+    ducklake_smoke meta-schema (rec-2099).
     """
     return ducklake_runtime.open_connection(
-        dsn=dsn, data_path=data_path, extension_directory=None, profile=profile, _creds=_creds
+        dsn=dsn, data_path=data_path, meta_schema=META_SCHEMA, extension_directory=None, profile=profile, _creds=_creds
     )
 
 
@@ -756,38 +759,72 @@ def ops_churn_regate(*, profile: str | None = None, region: str = "eu-west-2") -
     print("OPS_CHURN_REGATE OK (EC8 fan-out within CD.33 budget at production scope)")
 
 
-def catalog_restore_drill(
-    *,
-    profile: str | None = None,
-    region: str = "eu-west-2",
-    dsn: dict[str, str] | None = None,
-    scratch_dsn: dict[str, str] | None = None,
-    dump_path: str = "/tmp/ducklake_catalog_restore_drill.dump",
-) -> None:
-    """T2.19 VP10: custom-format pg_dump -> pg_restore into scratch -> read-your-write (CD.33 O-2/CD.34).
+def catalog_restore_drill(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP11: invoke the maintenance `restore_drill` action (pg_dump -> pg_restore + read-your-write).
 
-    Diverges from --restore-drill (plain-SQL + psql): this restores the --format=custom FP-B daily-DR
-    dump via pg_restore, version-matched to the pinned engine. Loud-fail if the probe is lost.
+    Lambda-mediated over 443 (there is NO Neon 5432 egress from CC-web): the maintenance Lambda runs the
+    custom-format pg_dump -> pg_restore into a scratch meta-schema and verifies read-your-write INSIDE
+    AWS, version-matched to the pinned engine. Loud-fail on a non-ok response (Decision 55).
     """
-    dsn = dsn or fetch_dsn(profile=profile)
-    scratch = scratch_dsn or _derive_scratch_dsn(dsn)
-    probe = uuid4().hex
-    _write_probe(dsn, probe, profile=profile)
-    dump_cmd = _catalog_dr.build_pg_dump_cmd(_dsn_uri(dsn), dump_path, pg_dump_path="pg_dump")
-    dump_result = _run(dump_cmd)
-    if dump_result.returncode != 0:
-        raise SmokeTestFailure(
-            f"CATALOG_RESTORE_DRILL FAIL: pg_dump rc={dump_result.returncode}: {dump_result.stderr.strip()[:300]}"
-        )
+    maint_url = _function_url("maintenance")
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "restore_drill"}, profile=profile, region=region))
+    if not body.get("restored"):
+        raise SmokeTestFailure(f"CATALOG_RESTORE_DRILL FAIL: maintenance restore_drill did not restore: {body}")
+    print(
+        f"CATALOG_RESTORE_DRILL OK maintenance restore_drill read-your-write verified "
+        f"probe={body.get('probe_id')} pg={body.get('pg_version')}"
+    )
+
+
+PROD_DATA_PATH = os.environ.get("DUCKLAKE_PROD_DATA_PATH", "s3://agent-platform-data-lake/ducklake/")
+_TOMBSTONES_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config",
+    "agent",
+    "data_quality",
+    "dq_tombstones.yaml",
+)
+
+
+def _recs_tombstone_ids() -> list[str]:
+    """Decision-70 physically-deleted ops_recommendations ids (from dq_tombstones.yaml)."""
+    import yaml  # noqa: PLC0415
+
     try:
-        _catalog_dr.run_pg_restore(dump_path, scratch, pg_restore_path="pg_restore", runner=_run)
-    except _catalog_dr.CatalogDrError as exc:
-        raise SmokeTestFailure(f"CATALOG_RESTORE_DRILL FAIL: {exc}") from exc
-    if not _verify_probe(scratch, probe, profile=profile):
-        raise SmokeTestFailure(
-            "CATALOG_RESTORE_DRILL FAIL: read-your-write probe missing after pg_restore -- dump not consistent."
-        )
-    print(f"CATALOG_RESTORE_DRILL OK pg_restore read-your-write verified engine={_engine_tag()}")
+        with open(_TOMBSTONES_PATH, encoding="utf-8") as fh:
+            spec = yaml.safe_load(fh) or {}
+    except OSError:
+        return []
+    return [e["id"] for e in spec.get("tombstones", []) if e.get("table") == "ops_recommendations" and e.get("id")]
+
+
+def emit_recs_seed_payload(*, profile: str | None = None) -> None:
+    """T2.19 VP10 helper: emit the seed_ops_recommendations payload JSON to stdout (NOT a gate).
+
+    Reads ops_recommendations CURRENT-STATE from Iceberg over Athena (443 -- works from CC-web), coerces
+    Athena VarChar to proper Python types (arrays/bools/ints) so the in-Lambda schema gate accepts them,
+    excludes Decision-70 physically-deleted rows, and prints a payload for `aws lambda invoke` to feed the
+    maintenance seed action. Timestamps are emitted as ISO strings (the seed parses them back).
+    """
+    from scripts.session_preflight import _run_athena_query  # noqa: PLC0415
+    from scripts.sync_ops import _coerce_ops_recommendations_row  # noqa: PLC0415
+
+    rows = _run_athena_query("SELECT * FROM agent_platform.ops_recommendations_current") or []
+    tombstones = set(_recs_tombstone_ids())
+    seeded: list[dict] = []
+    for raw in rows:
+        rec = dict(raw)
+        rec.pop("row_num", None)
+        if rec.get("id") in tombstones:
+            continue
+        seeded.append(_coerce_ops_recommendations_row(rec))
+    payload = {
+        "action": "seed_ops_recommendations",
+        "data_path": PROD_DATA_PATH,
+        "exclude_ids": sorted(tombstones),
+        "rows": seeded,
+    }
+    print(json.dumps(payload, default=str))
 
 
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
@@ -833,7 +870,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--catalog-restore-drill",
         action="store_true",
         dest="catalog_restore_drill",
-        help="[post-deploy] T2.19 VP10: custom-format pg_dump -> pg_restore scratch -> read-your-write",
+        help="[post-deploy] T2.19 VP11: invoke maintenance restore_drill (pg_dump->pg_restore + read-your-write)",
+    )
+    group.add_argument(
+        "--emit-recs-seed-payload",
+        action="store_true",
+        dest="emit_recs_seed_payload",
+        help="[post-deploy] T2.19 VP10 helper: emit the seed_ops_recommendations payload JSON to stdout (NOT a gate)",
     )
     group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
     group.add_argument(
@@ -895,6 +938,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             ops_churn_regate(profile=args.profile, region=args.region)
         elif args.catalog_restore_drill:
             catalog_restore_drill(profile=args.profile, region=args.region)
+        elif args.emit_recs_seed_payload:
+            emit_recs_seed_payload(profile=args.profile)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)

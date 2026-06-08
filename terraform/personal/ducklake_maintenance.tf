@@ -64,7 +64,7 @@ resource "aws_cloudwatch_log_group" "ducklake_maintenance" {
 
 resource "aws_iam_role" "ducklake_maintenance" {
   name               = "agent-platform-ducklake-maintenance"
-  description        = "Maintenance singleton: S3 RW+Delete on the smoke prefix, Neon DSN read, maintenance metrics"
+  description        = "Maintenance singleton: S3 RW+Delete on the smoke + production prefixes, Neon DSN read, maintenance metrics"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
@@ -88,24 +88,26 @@ resource "aws_iam_role_policy" "ducklake_maintenance" {
         Resource = [aws_secretsmanager_secret.ducklake_neon_catalog_dsn.arn]
       },
       {
-        # T2.19 NOTE: delete_orphaned_files is catalog-wide, not table-scoped. When GC_TABLE_SCOPE
-        # expands to ops_* at T2.19, this resource ARN must expand to cover all DuckLake data prefixes
-        # (not just the smoke prefix) or delete_orphaned_files will fail with AccessDenied at S3.
-        Sid    = "S3SmokeDataReadWriteDelete"
+        # T2.19: the operational actions write to the PRODUCTION prefix -- seed_ops_recommendations and
+        # catalog_reinit at ducklake/, and restore_drill at ducklake/_restore_drill/ (a sub-prefix). The
+        # scheduled merge/gc still touch the smoke prefix. delete_orphaned_files is catalog-wide, so both
+        # data prefixes are covered here.
+        Sid    = "S3DataReadWriteDelete"
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = [
-          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*"
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_prod_data_prefix}/*",
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*",
         ]
       },
       {
-        Sid      = "S3ListSmokePrefix"
+        Sid      = "S3ListDataPrefix"
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
         Resource = [aws_s3_bucket.data_lake.arn]
         Condition = {
           StringLike = {
-            "s3:prefix" = ["${local.ducklake_smoke_data_prefix}/*"]
+            "s3:prefix" = ["${local.ducklake_prod_data_prefix}/*", "${local.ducklake_smoke_data_prefix}/*"]
           }
         }
       },
@@ -150,12 +152,20 @@ resource "aws_lambda_function" "ducklake_maintenance" {
   layers = [
     aws_lambda_layer_version.ducklake_deps.arn,
     aws_lambda_layer_version.ducklake_extensions.arn,
+    # T2.19: restore_drill runs pg_dump/pg_restore (/opt/bin) from the pgclient layer.
+    aws_lambda_layer_version.ducklake_pgclient.arn,
   ]
 
   environment {
     variables = {
+      # Scheduled merge/gc operate on the SMOKE catalog (relocated to its own ducklake_smoke
+      # meta-schema -- rec-2099). The operational actions target production via explicit event params.
       DUCKLAKE_DATA_PATH           = local.ducklake_smoke_data_path
+      DUCKLAKE_META_SCHEMA         = "ducklake_smoke"
       DUCKLAKE_EXTENSION_DIRECTORY = local.ducklake_extension_dir
+      # The seed/catalog actions schema_gate + write_scd2, which load the field-semantics contract
+      # bundled into the zip (manifest assets[]).
+      DUCKLAKE_FIELD_SEMANTICS_PATH = "/var/task/config/lambda/ducklake/field_semantics.yaml"
       # FP-B env-tunable GC circuit-breaker thresholds (CD.34 co-tuning mechanism).
       # FP-A defaults retained as the shipped values; change ONLY via a Decision superseding CD.33.
       # Tuning to pass a gate is a Decision-55 violation.

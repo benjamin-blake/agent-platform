@@ -27,13 +27,14 @@ from typing import Any, Callable
 from src.common import ducklake_runtime as rt
 
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
+META_SCHEMA = os.environ.get("DUCKLAKE_META_SCHEMA", rt.META_SCHEMA)
 EXTENSION_DIRECTORY = os.environ.get("DUCKLAKE_EXTENSION_DIRECTORY", rt.LAMBDA_EXTENSION_DIRECTORY)
 
 
 def _open_reader_connection() -> Any:
     """Open a read-scoped baked-extension connection to the Neon catalog."""
     dsn = rt.fetch_dsn()
-    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY)
+    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
 
 
 def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:

@@ -513,3 +513,99 @@ def test_env_gc_breaker_bytes_passed_to_run_gc(monkeypatch):
     # Restore
     monkeypatch.delenv("GC_BREAKER_BYTES", raising=False)
     importlib.reload(h)
+
+
+# ---------------------------------------------------------------------------
+# T2.19 operational actions: catalog_reinit / seed / restore_drill + connectionless dispatch
+# ---------------------------------------------------------------------------
+
+_FULL_DSN = {"username": "u", "password": "p", "host": "hostx", "dbname": "neondb", "sslmode": "require"}
+
+
+def test_handler_lists_new_operational_actions():
+    body = _response_body(h.handler({"action": "bad"}))
+    for action in ("catalog_reinit", "seed_ops_recommendations", "restore_drill"):
+        assert action in body["actions"]
+
+
+def test_catalog_reinit_drops_then_reattaches():
+    con = MagicMock()
+    with (
+        patch.object(h, "_drop_meta_schema", return_value=True) as drop_mock,
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h.rt, "open_connection", return_value=con) as open_mock,
+    ):
+        result = h.action_catalog_reinit({"action": "catalog_reinit", "data_path": "s3://b/ducklake/"}, None)
+    assert result["ok"] is True and result["reinitialized"] is True
+    drop_mock.assert_called_once_with("ducklake_ops")
+    assert open_mock.call_args.kwargs["data_path"] == "s3://b/ducklake/"
+    assert open_mock.call_args.kwargs["meta_schema"] == "ducklake_ops"
+    con.close.assert_called_once()
+
+
+def test_catalog_reinit_requires_s3_data_path():
+    with pytest.raises(DuckLakeRuntimeError, match="data_path"):
+        h.action_catalog_reinit({"action": "catalog_reinit"}, None)
+
+
+def test_catalog_reinit_rejects_bad_meta_schema():
+    with pytest.raises(DuckLakeRuntimeError, match="invalid SQL identifier"):
+        h.action_catalog_reinit({"data_path": "s3://b/ducklake/", "meta_schema": "bad-name;DROP"}, None)
+
+
+def _restore_drill_patches(read_rows):
+    return (
+        patch.object(h, "_drop_meta_schema", return_value=True),
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h.rt, "open_connection", return_value=MagicMock()),
+        patch.object(h.rt, "create_scd2_tables"),
+        patch.object(h.rt, "write_scd2"),
+        patch.object(h.rt, "read_current", return_value=read_rows),
+        patch.object(h, "subprocess_run", return_value=type("R", (), {"returncode": 0, "stderr": ""})()),
+        patch.object(h.catalog_dr, "run_pg_restore"),
+    )
+
+
+def test_restore_drill_ok():
+    p = _restore_drill_patches([{"rec_id": "drill-probe", "payload": "restore-drill"}])
+    with p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]:
+        result = h.action_restore_drill({"action": "restore_drill"}, None)
+    assert result["ok"] is True and result["restored"] is True
+
+
+def test_restore_drill_probe_lost_loud_fails():
+    p = _restore_drill_patches([])  # read-your-write finds nothing after restore
+    with p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]:
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="read-your-write FAILED"):
+            h.action_restore_drill({"action": "restore_drill"}, None)
+
+
+def test_restore_drill_pg_dump_failure_loud_fails():
+    with (
+        patch.object(h, "_drop_meta_schema", return_value=True),
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h.rt, "open_connection", return_value=MagicMock()),
+        patch.object(h.rt, "create_scd2_tables"),
+        patch.object(h.rt, "write_scd2"),
+        patch.object(h, "subprocess_run", return_value=type("R", (), {"returncode": 1, "stderr": "boom"})()),
+    ):
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="pg_dump exited 1"):
+            h.action_restore_drill({"action": "restore_drill"}, None)
+
+
+def test_handler_connectionless_action_skips_open_connection():
+    with (
+        patch.object(h, "_open_connection") as open_mock,
+        patch.dict(h._ACTIONS, {"catalog_reinit": MagicMock(return_value={"ok": True})}),
+    ):
+        r = h.handler({"action": "catalog_reinit", "data_path": "s3://b/ducklake/"})
+    assert r["statusCode"] == 200
+    open_mock.assert_not_called()
+
+
+def test_handler_catalog_dr_error_maps_to_500():
+    raiser = MagicMock(side_effect=h.catalog_dr.CatalogDrError("restore boom"))
+    with patch.dict(h._ACTIONS, {"restore_drill": raiser}):
+        r = h.handler({"action": "restore_drill"})
+    assert r["statusCode"] == 500
+    assert _response_body(r)["error_type"] == "catalog_dr"

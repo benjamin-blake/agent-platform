@@ -569,6 +569,19 @@ def test_make_reader_selects_by_flag(monkeypatch):
     assert isinstance(ir.make_reader(), ir.DuckDBIcebergReader)
 
 
+def test_make_reader_table_aware_recs_only(monkeypatch):
+    """Recs-first slice: on the ducklake backend ONLY ops_recommendations (or a None table) routes to
+    DuckLake; every deferred table reads from Iceberg regardless of the flag."""
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+    assert isinstance(ir.make_reader(table="ops_recommendations"), ir.DuckLakeReader)
+    assert isinstance(ir.make_reader(), ir.DuckLakeReader)  # None -> recs-default call sites
+    # Deferred tables stay on Iceberg even when the flag is ducklake.
+    assert isinstance(ir.make_reader(table="ops_decisions"), ir.DuckDBIcebergReader)
+    assert isinstance(ir.make_reader(table="ops_priority_queue"), ir.DuckDBIcebergReader)
+
+
 def test_ducklake_reader_current_state_no_filter(monkeypatch):
     captured: dict = {}
     ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-1"}]}), captured)

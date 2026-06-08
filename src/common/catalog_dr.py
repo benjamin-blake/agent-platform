@@ -75,22 +75,22 @@ def build_pg_dump_cmd(
     out_path: str,
     *,
     pg_dump_path: str = LAMBDA_PG_DUMP_PATH,
+    schema: str | None = None,
 ) -> list[str]:
     """Return the pg_dump argv list for a custom-format consistent dump.
 
     Flags:
       --format=custom          compressed, supports selective/parallel restore (pg_restore)
       --serializable-deferrable  single-txn consistent snapshot, non-blocking
+      --schema=<s>             (optional) dump ONLY this schema -- used by the restore drill to dump a
+                               scratch meta-schema in isolation, so the drill never touches production
       --file=<out>             write to local path (not stdout)
     """
-    return [
-        pg_dump_path,
-        "--format=custom",
-        "--serializable-deferrable",
-        "--file",
-        out_path,
-        dsn_uri_str,
-    ]
+    cmd = [pg_dump_path, "--format=custom", "--serializable-deferrable"]
+    if schema is not None:
+        cmd.append(f"--schema={schema}")
+    cmd += ["--file", out_path, dsn_uri_str]
+    return cmd
 
 
 def build_pg_restore_cmd(
