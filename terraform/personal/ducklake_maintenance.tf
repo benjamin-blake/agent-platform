@@ -30,6 +30,19 @@ locals {
   ducklake_maintenance_function = "agent-platform-ducklake-maintenance"
 }
 
+# Singleton concurrency cap (Decision 81 clause 6) = 1: AWS physically refuses a second concurrent
+# invocation, so the singleton is enforced by the platform, not just by schedule geometry. This was
+# briefly -1 (unreserved) at initial deploy because the account Lambda "Concurrent executions" quota
+# (L-B99A9384) sat at the unverified-account floor of 10 and PutFunctionConcurrency cannot drop the
+# unreserved pool below 10. AWS support case 178085808000233 raised L-B99A9384 to 1000 (2026-06-08),
+# so the reservation is now applied. Kept as a variable so the cap can be lifted again for a quota or
+# load test without editing the resource body.
+variable "ducklake_maintenance_reserved_concurrency" {
+  description = "Reserved concurrency for the maintenance singleton (Decision 81 cl.6). 1 = singleton; -1 = unreserved (only for a quota/load test)."
+  type        = number
+  default     = 1
+}
+
 # ---------------------------------------------------------------------------
 # CloudWatch log group (pre-created so the execution-role grant can be scoped to its ARN).
 # ---------------------------------------------------------------------------
@@ -126,10 +139,9 @@ resource "aws_lambda_function" "ducklake_maintenance" {
   timeout       = 300
   memory_size   = 1024
 
-  # NOTE: reserved_concurrent_executions=1 (singleton, Decision 81 clause 6). This is intentional
-  # and correct for the maintenance pipeline. It differs from the writer (no reserved_concurrency,
-  # Decision 81 clause 3 OCC model). See file-level comment for the full rationale.
-  reserved_concurrent_executions = 1
+  # Singleton cap (Decision 81 clause 6) = 1 via the variable default. Differs from the writer's OCC
+  # model (no reserved concurrency, clause 3). See the variable definition above for the quota history.
+  reserved_concurrent_executions = var.ducklake_maintenance_reserved_concurrency
 
   s3_bucket        = aws_s3_bucket.data_lake.id
   s3_key           = "lambda-packages/ducklake-maintenance.zip"
