@@ -62,6 +62,91 @@ _OPS_YAML_PATH = _REPO_ROOT / "config" / "agent" / "data_quality" / "ops.yaml"
 _capabilities_cache: Optional[dict] = None
 _write_time_validators_cache: dict[str, list] = {}
 
+# --- Storage-backend transport flag (T2.19 / Decision 81) -----------------------------------------
+# The Single-Portal caller surface (file_rec/update_rec/file_decision/update_decision/sync) is
+# unchanged; ONLY the transport underneath swaps. `iceberg` = OpsWriter()/Athena (legacy, rollback
+# target until cutover sign-off); `ducklake` = the closed writer/reader Function-URL boundary.
+# Default is `iceberg`; the cutover (VP15) flips the default to `ducklake`.
+_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
+_DEFAULT_OPS_STORAGE_BACKEND = "iceberg"
+_DUCKLAKE_WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
+_AWS_LAMBDA_SERVICE = "lambda"
+
+# Portal table -> DuckLake ops_* table (the writer/reader select schema by this name).
+_PORTAL_TABLE_NAMES = ("ops_recommendations", "ops_decisions")
+
+
+def _ops_backend() -> str:
+    """Return the active storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
+    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
+
+
+def _resolve_writer_url() -> str:
+    """Resolve the ducklake_writer Function URL: env first, then terraform output. Loud-fail if absent."""
+    url = os.environ.get(_DUCKLAKE_WRITER_URL_ENV)
+    if url:
+        return url.rstrip("/")
+    try:
+        proc = subprocess.run(
+            ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_writer_function_url"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip().rstrip("/")
+    except FileNotFoundError:
+        pass
+    raise RuntimeError(
+        f"{_DUCKLAKE_WRITER_URL_ENV} not set and terraform output 'ducklake_writer_function_url' unavailable -- "
+        "cannot reach the DuckLake writer (OPS_STORAGE_BACKEND=ducklake)."
+    )
+
+
+def _project_ops_record(table: str, record: dict) -> dict:
+    """Project a validated record onto the table's INPUT columns for the writer schema gate.
+
+    Drops derived fields (ulid/created_timestamp/last_updated_timestamp -- the runtime mints them)
+    and any non-schema keys (e.g. the Decision-56-deprecated `date`). Keeps the merge key + business
+    inputs. Mirrors the writer's schema gate so the request is accepted on the first try.
+    """
+    from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+    spec = resolve_table_spec(table)
+    inputs = {name for name, fspec in spec.fields.items() if fspec.get("role") == "input"}
+    return {k: v for k, v in record.items() if k in inputs}
+
+
+def _ducklake_write(table: str, record: dict, *, action: str, profile: Optional[str] = None) -> dict:
+    """Invoke the ducklake_writer Function URL (SigV4) for a production ops write. Loud-fail on error.
+
+    action is 'write_ops' (file) or 'update_ops' (update; the writer enforces the in-tx referential
+    existence check). Maps the writer's loud-fail status codes back to portal exceptions.
+    """
+    import boto3  # noqa: PLC0415
+    import requests  # noqa: PLC0415
+    from botocore.auth import SigV4Auth  # noqa: PLC0415
+    from botocore.awsrequest import AWSRequest  # noqa: PLC0415
+
+    url = _resolve_writer_url()
+    payload = {"action": action, "table": table, "record": _project_ops_record(table, record)}
+    body = json.dumps(payload)
+    headers = {"Content-Type": "application/json"}
+    session = boto3.Session(profile_name=resolve_aws_profile(profile, default=_SSO_PROFILE))
+    creds = session.get_credentials().get_frozen_credentials()
+    aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+    SigV4Auth(creds, _AWS_LAMBDA_SERVICE, _AWS_REGION).add_auth(aws_req)
+    resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+    if resp.status_code == 200:
+        return resp.json()
+    detail = resp.text[:400]
+    if resp.status_code == 409:
+        raise RuntimeError(f"ducklake_writer referential failure ({action} {table}): {detail}")
+    if resp.status_code == 422:
+        raise ValueError(f"ducklake_writer schema-gate rejection ({action} {table}): {detail}")
+    raise RuntimeError(f"ducklake_writer {action} {table} failed (HTTP {resp.status_code}): {detail}")
+
 
 def _compute_risk_score(file_path: str, effort: str) -> float:
     """Return raw R = (C * S) / M for the given file and effort label.
@@ -352,7 +437,10 @@ def file_rec(
 
     Recommendation.model_validate(merged)  # raises ValidationError on schema failure
 
-    OpsWriter().write("ops_recommendations", merged)
+    if _ops_backend() == "ducklake":
+        _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
+    else:
+        OpsWriter().write("ops_recommendations", merged)
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Filed %s: %s", rec_id, merged.get("title", ""))
     if not _skip_sync:
@@ -377,7 +465,17 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
 
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
-    # -- DuckDB reader path --
+    # -- DuckLake closed-boundary path (no Athena fallback -- OQ.7) --
+    if _ops_backend() == "ducklake":
+        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+        rows = make_reader().current_state("ops_recommendations", row_filter=f"id = '{rec_id}'")
+        if not rows:
+            return None
+        coerced = _coerce_ops_rec_row(dict(rows[0]))
+        return _sanitize_athena_record(coerced) if coerced is not None else None
+
+    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena fallback retained until cutover) --
     try:
         from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
 
@@ -454,11 +552,17 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
 
 
 def _sync_table(table: str) -> None:
-    """Compact Iceberg, refresh view, and pull local cache for one ops table.
+    """Refresh the local read-cache for one ops table from the active backend.
 
-    Raises RuntimeError if compact() hits an infrastructure failure.
+    DuckLake: the atomic catalog commit means there is no compaction/view-refresh step (Decision 81
+    cl.4) -- the write already landed in `current`, so a cache-pull from the DuckLake reader suffices.
+    Iceberg (rollback): compact + refresh the view + pull (legacy). Raises on infrastructure failure.
     """
     from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
+
+    if _ops_backend() == "ducklake":
+        _pull_single_table(table)
+        return
 
     OpsWriter().compact(table)
     OpsWriter()._refresh_view(table)
@@ -498,13 +602,23 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
     if "status" in updates and updates["status"] not in _VALID_STATUSES:
         raise ValueError(f"Invalid status '{updates['status']}'. Must be one of: {', '.join(sorted(_VALID_STATUSES))}")
 
-    existing = _fetch_rec_from_athena(rec_id, profile=profile) or {}
+    # Referential existence (CD.33 cl.8 / D-5): an absent rec loud-fails. This replaces the prior
+    # permissive `existing or {}` upsert-on-absent, which silently created a partial record.
+    existing = _fetch_rec_from_athena(rec_id, profile=profile)
+    if existing is None:
+        raise RuntimeError(
+            f"update_rec: {rec_id} does not exist in the current projection -- an absent rec cannot be "
+            "updated (referential, CD.33 cl.8 / D-5). File it first via file_rec."
+        )
     merged = {**existing, **updates}
     merged["id"] = rec_id  # always preserve the ID
 
     Recommendation.model_validate(merged)  # raises on failure
 
-    OpsWriter().write("ops_recommendations", merged)
+    if _ops_backend() == "ducklake":
+        _ducklake_write("ops_recommendations", merged, action="update_ops", profile=profile)
+    else:
+        OpsWriter().write("ops_recommendations", merged)
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Updated %s: %s", rec_id, list(updates.keys()))
     _sync_table("ops_recommendations")
@@ -552,7 +666,10 @@ def file_decision(
 
         Decision.model_validate(merged)
 
-        OpsWriter().write("ops_decisions", merged)
+        if _ops_backend() == "ducklake":
+            _ducklake_write("ops_decisions", merged, action="write_ops", profile=profile)
+        else:
+            OpsWriter().write("ops_decisions", merged)
         _append_to_local_jsonl(DECISIONS_JSONL, merged)
         logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
         if not _skip_sync:
@@ -587,7 +704,18 @@ def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None)
     if not re.fullmatch(r"dec-\d+", decision_id):
         raise ValueError(f"_fetch_decision_from_athena: invalid decision_id: {decision_id!r}")
 
-    # -- DuckDB reader path --
+    # -- DuckLake closed-boundary path (no Athena fallback -- OQ.7) --
+    if _ops_backend() == "ducklake":
+        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+        rows = make_reader().current_state("ops_decisions", row_filter=f"id = '{decision_id}'")
+        if not rows:
+            return None
+        rec = dict(rows[0])
+        rec.pop("row_num", None)
+        return _sanitize_athena_record(_coerce_ops_decisions_row(rec))
+
+    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena fallback retained until cutover) --
     try:
         from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
 
@@ -677,13 +805,21 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
         RuntimeError: If Athena is unreachable.
         ValidationError: If the merged record fails schema validation.
     """
-    existing = _fetch_decision_from_athena(decision_id, profile=profile) or {}
+    existing = _fetch_decision_from_athena(decision_id, profile=profile)
+    if existing is None:
+        raise RuntimeError(
+            f"update_decision: {decision_id} does not exist in the current projection -- an absent decision "
+            "cannot be updated (referential, CD.33 cl.8 / D-5). File it first via file_decision."
+        )
     merged = {**existing, **updates}
     merged["id"] = decision_id
 
     Decision.model_validate(merged)
 
-    OpsWriter().write("ops_decisions", merged)
+    if _ops_backend() == "ducklake":
+        _ducklake_write("ops_decisions", merged, action="update_ops", profile=profile)
+    else:
+        OpsWriter().write("ops_decisions", merged)
     _append_to_local_jsonl(DECISIONS_JSONL, merged)
     logger.info("[PORTAL] Updated %s: %s", decision_id, list(updates.keys()))
     _sync_table("ops_decisions")
@@ -847,17 +983,25 @@ def sync(tables: Optional[list] = None) -> dict:
         {"compacted": {table: rows}, "pulled": {table: rows}, "views_refreshed": [...]}
 
     Raises:
-        RuntimeError: If Athena/S3 infrastructure is unreachable.
+        RuntimeError: If the backend infrastructure is unreachable.
     """
     from scripts.sync_ops import _pull_single_table
-    from scripts.sync_ops import drain as _drain_outbox  # noqa: PLC0415
 
     ops_tables = tables or ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
+
+    # DuckLake: cache-pull only. The atomic catalog commit eliminates the Iceberg
+    # outbox-drain/compact/view-refresh category (Decision 81 cl.4); `current` is already live.
+    if _ops_backend() == "ducklake":
+        pulled = {table: _pull_single_table(table) for table in ops_tables}
+        return {"compacted": {}, "pulled": pulled, "views_refreshed": []}
+
+    # Iceberg (rollback target): drain the outbox, compact, refresh views, pull.
+    from scripts.sync_ops import drain as _drain_outbox  # noqa: PLC0415
 
     _drain_outbox()
 
     compacted: dict[str, int] = {}
-    pulled: dict[str, int] = {}
+    pulled = {}
     views_refreshed: list[str] = []
 
     for table in ops_tables:
@@ -868,6 +1012,63 @@ def sync(tables: Optional[list] = None) -> dict:
         pulled[table] = _pull_single_table(table)
 
     return {"compacted": compacted, "pulled": pulled, "views_refreshed": views_refreshed}
+
+
+def selftest_read(table: str = "ops_recommendations", profile: Optional[str] = None) -> dict:
+    """Read a sample row from *table* via the ACTIVE backend's reader (VP14 rollback rehearsal).
+
+    Proves the flag-selected read path serves rows on whichever backend OPS_STORAGE_BACKEND names.
+    Returns {"backend": ..., "table": ..., "row_count": ..., "sample_id": ...}.
+    """
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+    backend = _ops_backend()
+    rows = make_reader(profile=profile).current_state(table) or []
+    sample_id = (rows[0].get("id") if rows else None) if rows else None
+    return {"backend": backend, "table": table, "row_count": len(rows), "sample_id": sample_id}
+
+
+def selftest_roundtrip(profile: Optional[str] = None) -> dict:
+    """Write a file_rec-shaped throwaway rec via the active backend, then read it back (VP15 sign-off).
+
+    Uses a `test-roundtrip-<uuid>` id (valid `test-` prefix; not a DynamoDB-allocated rec-NNN, so the
+    live counter is untouched) so the proof does not consume a production ID. On DuckLake the write
+    transits the writer Function URL and the read transits the reader -- the closed-boundary proof.
+    """
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+    backend = _ops_backend()
+    probe_id = f"test-roundtrip-{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": probe_id,
+        "title": "ducklake cutover selftest-roundtrip",
+        "source": "manual",
+        "status": "open",
+        "effort": "XS",
+        "priority": "Low",
+        "risk": "low",
+        "file": "scripts/ops_data_portal.py",
+        "context": (
+            "Selftest roundtrip probe written by --selftest-roundtrip to prove the active backend's "
+            "write+read path end-to-end at cutover sign-off (VP15). Safe to ignore/purge."
+        ),
+        "acceptance": "grep -q selftest-roundtrip logs/.recommendations-log.jsonl",
+        "created_timestamp": now_iso,
+        "last_updated_timestamp": now_iso,
+    }
+    Recommendation.model_validate(record)
+
+    if backend == "ducklake":
+        _ducklake_write("ops_recommendations", record, action="write_ops", profile=profile)
+    else:
+        OpsWriter().write("ops_recommendations", record)
+
+    rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter=f"id = '{probe_id}'") or []
+    read_back = bool(rows) and rows[0].get("id") == probe_id
+    if not read_back:
+        raise RuntimeError(f"selftest_roundtrip FAIL ({backend}): wrote {probe_id} but read-back returned {len(rows)} rows")
+    return {"backend": backend, "probe_id": probe_id, "read_back": True}
 
 
 def enqueue_findings(path: Path, profile: Optional[str] = None) -> dict:
@@ -1186,6 +1387,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Print field semantics and registered source values as YAML, then exit",
     )
+    action.add_argument(
+        "--sync",
+        action="store_true",
+        help="Drain + refresh the local read-cache from the active backend (OPS_STORAGE_BACKEND)",
+    )
+    action.add_argument(
+        "--selftest-read",
+        action="store_true",
+        help="Read a sample row via the active backend's reader (rollback rehearsal, VP14)",
+    )
+    action.add_argument(
+        "--selftest-roundtrip",
+        action="store_true",
+        help="Write+read a throwaway test- rec via the active backend (cutover sign-off, VP15)",
+    )
 
     # file-rec fields
     rec = parser.add_argument_group("--file-rec fields")
@@ -1323,6 +1539,25 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         guidance = get_rec_write_guidance()
         print(yaml.dump(guidance, default_flow_style=False, sort_keys=True, allow_unicode=True))
+        return 0
+
+    if args.sync:
+        result = sync()
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.selftest_read:
+        result = selftest_read(profile=args.profile)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.selftest_roundtrip:
+        try:
+            result = selftest_roundtrip(profile=args.profile)
+        except (RuntimeError, ValueError, ValidationError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
         return 0
 
     return 0

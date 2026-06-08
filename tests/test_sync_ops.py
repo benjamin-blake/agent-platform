@@ -1191,3 +1191,14 @@ class TestPipelineConsolidation:
             cwd=str(Path(__file__).parent.parent),
         )
         assert result.returncode != 0
+
+
+def test_coerce_athena_array_handles_native_list():
+    """DuckLake reader returns native lists; the coercion returns them element-typed (not re-parsed)."""
+    from scripts.sync_ops import _coerce_athena_array
+
+    assert _coerce_athena_array(["rec-1", "rec-2"]) == ["rec-1", "rec-2"]
+    assert _coerce_athena_array([1, 2, 3], elem_type=int) == [1, 2, 3]
+    assert _coerce_athena_array([None, "x"]) == ["x"]
+    # Athena string form still parses
+    assert _coerce_athena_array("[a, b]") == ["a", "b"]

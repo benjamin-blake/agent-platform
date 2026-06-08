@@ -27,7 +27,8 @@ from scripts import product_roadmap as product_roadmap_module
 from scripts.aws_profile import resolve_aws_profile
 from scripts.s3_log_store import get_backend, read_jsonl
 from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull
-from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader
+from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader  # noqa: F401  (kept for back-compat refs)
+from src.common.iceberg_reader import make_reader as _make_reader
 
 ROOT = Path(__file__).resolve().parent.parent
 PREFLIGHT_REPORT = ROOT / "logs" / ".preflight-report.json"
@@ -444,7 +445,7 @@ def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
     """
     # -- DuckDB reader path --
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         rows = reader.current_state(
             "ops_recommendations",
             row_filter="status = 'open'",
@@ -650,7 +651,7 @@ def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[di
 
     # -- DuckDB reader path (Decision 70: correlated subquery applied internally) --
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         reader_rows = reader.current_state("ops_priority_queue")
         if reader_rows is not None:
             shaped = _shape_priority_queue_rows(reader_rows, max_items)
@@ -701,7 +702,7 @@ def _fetch_ci_rca_recs() -> list[dict]:
         "ORDER BY created_timestamp DESC LIMIT 5"
     )
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         rows = reader.query("ops_recommendations", sql, params=("ci_rca", "open", "in_progress"))
         if rows is not None:
             return rows
@@ -730,7 +731,7 @@ def _check_non_automatable_softcap(non_auto_count: int) -> bool:
 def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
     """Return ci_rca recs created after *ts*. Returns [] on any failure."""
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         rows = reader.query(
             "ops_recommendations",
             "SELECT id FROM {tbl} WHERE source = ? AND created_timestamp > ?",
@@ -820,7 +821,7 @@ def _check_forward_fix_recursion() -> dict | None:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         rows = reader.query(
             "ops_recommendations",
             "SELECT file, COUNT(*) AS cnt FROM {tbl} "
@@ -864,7 +865,7 @@ def _check_budget_bypass_alert() -> dict | None:
     Returns None when count < 3 or the warehouse is unreachable.
     """
     try:
-        reader = _DuckDBIcebergReader()
+        reader = _make_reader()
         rows = reader.query(
             "ops_recommendations",
             "SELECT id, context, created_timestamp FROM {tbl} WHERE source = ? "

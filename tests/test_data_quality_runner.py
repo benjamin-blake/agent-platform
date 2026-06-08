@@ -748,3 +748,101 @@ def test_print_results_json_includes_unenforced_fail(capsys):
     assert "unenforced_fail" in data
     assert data["unenforced_fail"] == 1
     assert data["failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# T2.19: dual-backend dispatch (DuckLake path)
+# ---------------------------------------------------------------------------
+
+
+def test_ops_backend_default(monkeypatch):
+    import scripts.data_quality_runner as dq
+
+    monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert dq._ops_backend() == "iceberg"
+
+
+def test_to_ducklake_sql_rewrites_table_and_regexp():
+    import scripts.data_quality_runner as dq
+
+    sql = "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE id IS NULL"
+    out = dq.to_ducklake_sql(sql, "ops_recommendations", "agent_platform")
+    assert "{tbl}" in out and "agent_platform.ops_recommendations" not in out
+    out2 = dq.to_ducklake_sql("SELECT 1 WHERE regexp_like(id, '^x')", "ops_decisions", "agent_platform")
+    assert "regexp_matches(" in out2 and "regexp_like(" not in out2
+
+
+def test_build_clause8_checks_generates_uniqueness():
+    import yaml
+
+    import scripts.data_quality_runner as dq
+
+    spec = yaml.safe_load(open("config/agent/data_quality/ops.yaml", encoding="utf-8"))
+    checks = dq.build_clause8_checks(spec, "agent_platform")
+    types_ = {c.test_type for c in checks}
+    assert "ulid_history_unique" in types_ and "current_merge_key_unique" in types_
+    assert all(c.backend == "ducklake" for c in checks)
+
+
+def test_build_clause8_checks_table_filter():
+    import yaml
+
+    import scripts.data_quality_runner as dq
+
+    spec = yaml.safe_load(open("config/agent/data_quality/ops.yaml", encoding="utf-8"))
+    checks = dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_decisions")
+    assert {c.table for c in checks} == {"ops_decisions"}
+
+
+def test_verdict_for_pass_fail_unenforced_hardgate():
+    import scripts.data_quality_runner as dq
+
+    c_pass = dq.Check("t", "x", "not_null", "sql", "d")
+    assert dq._verdict_for(c_pass, 0, 0.1).verdict == "PASS"
+    assert dq._verdict_for(c_pass, 3, 0.1).verdict == "FAIL"
+    c_unenf = dq.Check("t", "x", "not_null", "sql", "d", enforced=False)
+    assert dq._verdict_for(c_unenf, 1, 0.1).verdict == "UNENFORCED_FAIL"
+    c_tomb = dq.Check("t", "id", "tombstone_resurrection", "sql", "d")
+    assert dq._verdict_for(c_tomb, 1, 0.1).verdict == "HARD_GATE"
+
+
+def test_execute_check_ducklake_success():
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def query(self, table, sql, **kw):
+            return [{"violation": 0}]
+
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT COUNT(*) v FROM {tbl}", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, _Reader()).verdict == "PASS"
+
+
+def test_execute_check_ducklake_relationships_skipped():
+    import scripts.data_quality_runner as dq
+
+    check = dq.Check("ops_priority_queue", "rec_id", "relationships", "sql", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, object()).verdict == "SKIP"
+
+
+def test_execute_check_ducklake_reader_none_is_error():
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def query(self, *a, **k):
+            return None
+
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+
+def test_run_checks_routes_ducklake(monkeypatch):
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def query(self, table, sql, **kw):
+            return [{"violation": 0}]
+
+    monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+    result = dq.run_checks([check], "wg", "db", dry_run=False)
+    assert result.verdict == "PASS"

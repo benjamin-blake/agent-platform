@@ -9,6 +9,57 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-08] - implement: ducklake-ops-cutover (T2.19 -- DuckLake ops persistence cutover, pre-deploy)
+
+**Mode:** Implementation (PLAN-ducklake-ops-cutover.md, V3 tier). Big-bang cutover + documented rollback.
+**Goal:** Cut the live ops persistence layer from Iceberg/Athena to the closed DuckLake-on-Neon
+writer/reader boundary (T2.19), Single-Portal caller surface unchanged. Closes the T2.18 tail.
+
+**What shipped this session (pre-deploy, all flag-gated `OPS_STORAGE_BACKEND`, default `iceberg` --
+zero live-behaviour change until the human-gated cutover):**
+- `config/lambda/ducklake/field_semantics.yaml`: per-table `ops_tables` SCD2 schemas (recs/decisions
+  authoritative from the Pydantic models + ops.yaml; priority_queue/session_log/execution_plans
+  schema-ready/dormant). Smoke `fields` retained for T2.17 back-compat.
+- `src/common/ducklake_runtime.py`: table-parameterized `resolve_table_spec`/`create_scd2_tables`/
+  `write_scd2`/`read_current` + new `read_history`/`query_current`; MERGE/DDL generated from the
+  spec; `_PY_TYPE_FOR_SQL` extended (arrays/ints/booleans); `ReferentialError` + `require_exists`
+  in-tx referential gate (CD.33 cl.8). Smoke path byte-identical (49 T2.17 tests still green).
+- `src/lambdas/ducklake_writer/handler.py`: `write_ops`/`update_ops`/`create_ops_tables` (sole write
+  authority); referential -> 409. `ducklake_reader/handler.py`: `read_ops_current`/`read_ops_history`/
+  `query_ops` (sole read authority, closed boundary).
+- `scripts/ops_data_portal.py`: transport swap behind the flag (writer Function URL, SigV4);
+  caller surface + DynamoDB ID alloc preserved; `update_rec`/`update_decision` referential loud-fail
+  (permissive upsert-on-absent REMOVED); `sync` re-pointed to a DuckLake cache-pull (Iceberg
+  outbox-drain/compact retires on ducklake); `--sync`/`--selftest-read`/`--selftest-roundtrip` CLI.
+- `src/common/iceberg_reader.py`: `DuckLakeReader` (Reader protocol over the reader URL) + `make_reader`
+  factory; `DuckDBIcebergReader` retained as rollback target. `sync_ops`/`session_preflight` route via
+  the factory; `_coerce_athena_array` is now backend-agnostic (native lists).
+- `scripts/migrate_ops_iceberg_to_ducklake.py` (new): one-time backfill, parity verify (row count +
+  content hash, excl. Decision-70 tombstones), idempotent by DROP+recreate (resurrection-loop guard).
+- `config/agent/data_quality/ops.yaml` + `scripts/data_quality_runner.py`: dual-backend dispatch
+  (ops checks -> DuckLake DuckDB dialect when flag=ducklake; Athena retained for iceberg/telemetry);
+  clause-8 checks (ULID-history + current merge-key uniqueness); Decision-64 anchor preserved.
+- `src/common/catalog_dr.py`: `build_pg_restore_cmd`/`run_pg_restore` (custom-format restore drill).
+- `scripts/ducklake_neon_smoke_test.py`: `--ops-read-your-write`, `--ops-churn-regate`,
+  `--catalog-restore-drill` gates.
+- `terraform/personal/ducklake_lambdas.tf`: writer/reader IAM widened to the production `ducklake/`
+  prefix (writer RW, reader RO; smoke retained) + `DUCKLAKE_DATA_PATH` flipped smoke->prod. HUMAN-GATED.
+- Tests: runtime ops-schema tests; portal transport+referential+selftest; migration parity/D70/idempotency;
+  DuckLakeReader; pg_restore; DQ dual-backend; writer/reader ops actions; smoke gates. 600+ pass; ruff clean.
+- `docs/runbooks/ducklake-catalog-operations.md`: Section 6 (cutover/rollback/restore-drill/closed-boundary).
+
+**VP status:** VP1-4 PASS (runtime/portal/migration unit tests + manifest validate). VP5 (full validate)
+run this session. VP6 (build) + VP7 (HUMAN-GATED IAM apply via agent_platform_admin) + VP8-16
+(post-deploy: backfill+parity, restore drill, read-your-write, churn re-gate, DQ, rollback rehearsal,
+cutover sign-off, ops_compaction retirement) are the live cutover sequence, driven interactively with
+operator confirmation.
+
+**DEFERRED to cutover sign-off (VP15+), NOT in this commit (would assert a false state pre-cutover):**
+the `OPS_STORAGE_BACKEND` default flip to `ducklake`; the atomic `AGENTS.md`/`docs/PROJECT_CONTEXT.md`
+source-of-truth flip; ROADMAP T2.18/T2.19 completion; `ops_compaction` retirement (Decision 78 cl.7).
+
+---
+
 ## [2026-06-07] - implement: ducklake-maintenance-fpb (T2.18 FP-B -- catalog DR, SNS alerts, co-tuning)
 
 **Mode:** Implementation (PLAN-ducklake-maintenance-fpb.md, V3 tier). FP-B slice.

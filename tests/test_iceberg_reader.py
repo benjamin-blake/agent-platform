@@ -496,3 +496,116 @@ class TestWarehouseParity:
         duckdb_rec_ids = {str(r.get("rec_id", "")) for r in duckdb_rows}
         athena_rec_ids = {str(r.get("rec_id", "")) for r in athena_rows}
         assert duckdb_rec_ids == athena_rec_ids, "rec_id sets differ"
+
+
+# ---------------------------------------------------------------------------
+# T2.19: DuckLakeReader + make_reader factory + ops_storage_backend flag
+# ---------------------------------------------------------------------------
+
+
+class _FakeResp:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def _patch_dl_invoke(monkeypatch, resp: _FakeResp, captured: dict):
+    """Patch the DuckLakeReader SigV4 plumbing (boto3 + requests + profile) for a canned response."""
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.setenv("DUCKLAKE_READER_URL", "https://reader.example/")
+
+    class _Creds:
+        access_key = "AK"
+        secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
+        token = None
+
+        def get_frozen_credentials(self):
+            return self
+
+    class _Session:
+        def __init__(self, profile_name=None):
+            pass
+
+        def get_credentials(self):
+            return _Creds()
+
+    import boto3
+    import requests
+    from botocore.auth import SigV4Auth
+
+    monkeypatch.setattr(boto3, "Session", _Session)
+    monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
+    monkeypatch.setattr("scripts.aws_profile.resolve_aws_profile", lambda *a, **k: None)
+
+    def _post(url, data=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["body"] = data
+        return resp
+
+    monkeypatch.setattr(requests, "post", _post)
+    return ir
+
+
+def test_ops_storage_backend_default_and_flag(monkeypatch):
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert ir.ops_storage_backend() == "iceberg"
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "DuckLake")
+    assert ir.ops_storage_backend() == "ducklake"
+
+
+def test_make_reader_selects_by_flag(monkeypatch):
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+    assert isinstance(ir.make_reader(), ir.DuckLakeReader)
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+    assert isinstance(ir.make_reader(), ir.DuckDBIcebergReader)
+
+
+def test_ducklake_reader_current_state_no_filter(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-1"}]}), captured)
+    rows = ir.DuckLakeReader().current_state("ops_recommendations")
+    assert rows == [{"id": "rec-1"}]
+    import json as _json
+
+    assert _json.loads(captured["body"])["action"] == "read_ops_current"
+
+
+def test_ducklake_reader_current_state_row_filter_uses_query_ops(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": []}), captured)
+    ir.DuckLakeReader().current_state("ops_recommendations", row_filter="id = 'rec-1'")
+    import json as _json
+
+    body = _json.loads(captured["body"])
+    assert body["action"] == "query_ops"
+    assert "WHERE id = 'rec-1'" in body["sql"]
+
+
+def test_ducklake_reader_query_returns_none_on_error(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(status_code=500, text="boom"), captured)
+    assert ir.DuckLakeReader().query("ops_recommendations", "SELECT 1 FROM {tbl}") is None
+
+
+def test_ducklake_reader_latest_snapshot_is_none():
+    import src.common.iceberg_reader as ir
+
+    assert ir.DuckLakeReader().latest_snapshot("ops_recommendations") is None
+
+
+def test_ducklake_reader_url_loud_fail_when_unset(monkeypatch):
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    with pytest.raises(RuntimeError, match="DUCKLAKE_READER_URL not set"):
+        ir.DuckLakeReader()._reader_url()

@@ -5,11 +5,11 @@ of smoke actions that prove the CD.33 runtime primitives in the live Lambda exec
 ATTACH on the baked extension layer, idempotent MERGE-on-ULID append, the `current` write-through
 projection, the schema gate, bounded OCC retry, partition pruning, and inlining-disabled writes.
 
-SINGLE-PORTAL DEFERRAL NOTE (Decision 78/81): this Function URL is a T2.17 smoke-test ingress ONLY.
-No ops_* governance table is writable via this path -- the tables here are the dedicated
-ducklake_smoke_* pair on a smoke DATA_PATH. Production ops writes still transit
-scripts/ops_data_portal.py; the production portal transport swap is deferred to T2.19. Do NOT wire
-any ops_* table behind this URL.
+PRODUCTION OPS PATH (T2.19 / Decision 81): the writer is the SOLE write authority for the ops_*
+governance tables (CD.33 clause 4). `write_ops` (INSERT history + MERGE current, schema-gated,
+bounded OCC) and `update_ops` (in-transaction referential existence check before MERGE -- loud-fail
+if the rec is absent, CD.33 clause 8 / D-5) are the production actions; the smoke actions remain for
+the T2.17 gates. Every ops write transits this URL; no out-of-band write path exists.
 """
 
 from __future__ import annotations
@@ -78,6 +78,68 @@ def action_write(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "occ_retries": result.occ_retries,
         "commit_ms": round(result.commit_ms, 2),
     }
+
+
+def action_write_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: write one SCD2 record to an ops_* table (schema-gated, OCC-retried, idempotent).
+
+    The table is selected from the field_semantics ops_tables contract. The tables are created once by
+    the backfill (force-recreate); a production write assumes they exist and MERGEs into them. A
+    schema-gate rejection -> 422, OCC exhaustion -> 503 (handled by the dispatcher).
+    """
+    table = event.get("table")
+    record = event.get("record") or {}
+    _require_ops_table(table)
+    result = rt.write_scd2(con, record, table=table, metric_sink=rt.make_metric_sink())
+    return {
+        "ok": True,
+        "table": table,
+        "ulid": result.ulid,
+        "key": result.rec_id,
+        "occ_retries": result.occ_retries,
+        "commit_ms": round(result.commit_ms, 2),
+    }
+
+
+def action_update_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: update an existing ops_* record. Loud-fail (referential) if the merge key is absent.
+
+    The portal sends the FULL merged record (existing <- updates). The writer enforces the CD.33
+    clause-8 / D-5 referential invariant in-transaction (require_exists=True): an update of an absent
+    merge key raises ReferentialError -> 409, never a silent create.
+    """
+    table = event.get("table")
+    record = event.get("record") or {}
+    _require_ops_table(table)
+    result = rt.write_scd2(con, record, table=table, require_exists=True, metric_sink=rt.make_metric_sink())
+    return {
+        "ok": True,
+        "table": table,
+        "ulid": result.ulid,
+        "key": result.rec_id,
+        "occ_retries": result.occ_retries,
+        "commit_ms": round(result.commit_ms, 2),
+    }
+
+
+def action_create_ops_tables(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: create (optionally re-create) an ops_* table pair with partition transforms.
+
+    Used by the backfill's resurrection-loop guard (force_recreate drops + recreates so a failed
+    mid-sequence run never appends onto a half-populated catalog).
+    """
+    table = event.get("table")
+    _require_ops_table(table)
+    force = bool(event.get("force_recreate_tables", False))
+    rt.create_scd2_tables(con, table=table, force_recreate=force)
+    spec = rt.resolve_table_spec(table)
+    return {"ok": True, "table": table, "tables": [spec.history_table, spec.current_table], "force_recreate": force}
+
+
+def _require_ops_table(table: Any) -> None:
+    """Loud-fail if *table* is not a configured ops_* table (closed-boundary table allow-list)."""
+    if not isinstance(table, str) or table not in rt.ops_table_names():
+        raise WriterActionError(f"unknown or missing ops table {table!r}: expected one of {list(rt.ops_table_names())}")
 
 
 def action_idempotency_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -435,6 +497,9 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "attach_check": action_attach_check,
     "create_tables": action_create_tables,
     "write": action_write,
+    "write_ops": action_write_ops,
+    "update_ops": action_update_ops,
+    "create_ops_tables": action_create_ops_tables,
     "idempotency_probe": action_idempotency_probe,
     "partition_probe": action_partition_probe,
     "inlining_probe": action_inlining_probe,
@@ -484,6 +549,10 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             con.close()
     except rt.SchemaGateError as exc:
         return _response(422, {"ok": False, "error_type": "schema_gate", "error": str(exc)})
+    except rt.ReferentialError as exc:
+        return _response(409, {"ok": False, "error_type": "referential", "error": str(exc)})
+    except WriterActionError as exc:
+        return _response(400, {"ok": False, "error_type": "action", "error": str(exc)})
     except rt.OCCRetryExhaustedError as exc:
         return _response(503, {"ok": False, "error_type": "occ_exhausted", "error": str(exc)})
     except rt.VersionMismatchError as exc:

@@ -20,7 +20,9 @@ to ambient credentials.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 from typing import Any, Protocol
 
@@ -29,6 +31,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DATABASE = "agent_platform"
 _DEFAULT_REGION = "eu-west-2"
 _DEFAULT_CATALOG_NAME = "agent_platform"
+
+# Storage-backend selector (T2.19 / Decision 81). `make_reader()` returns the DuckLake reader when
+# OPS_STORAGE_BACKEND=ducklake, else the legacy DuckDB-on-Iceberg reader (rollback target). Both
+# satisfy the Reader protocol so call sites (portal, sync_ops, preflight) are unchanged.
+_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
+_DEFAULT_OPS_STORAGE_BACKEND = "iceberg"
+_DUCKLAKE_READER_URL_ENV = "DUCKLAKE_READER_URL"
 
 # pk used for ROW_NUMBER() dedup (Decision 56)
 _TABLE_PARTITION_KEYS: dict[str, str] = {
@@ -268,3 +277,124 @@ class DuckDBIcebergReader:
         except Exception as exc:  # noqa: BLE001
             logger.warning("DuckDBIcebergReader.query: %s: %s", table, exc)
             return None
+
+
+class DuckLakeReader:
+    """DuckLake closed-boundary read layer (T2.19 / Decision 81): reads transit ducklake_reader.
+
+    Satisfies the Reader protocol over the AWS_IAM Function URL (SigV4-signed). `current_state`
+    returns the `current` write-through projection (the SCD2 latest-per-merge-key is materialised in
+    DuckLake itself, so there is no client-side ROW_NUMBER dedup). There is no Athena escape hatch:
+    a reader failure raises (the portal's closed-boundary callers surface it; sync_ops/preflight
+    catch to degrade gracefully, same as the Iceberg reader).
+    """
+
+    def __init__(self, profile: str | None = None, region: str = _DEFAULT_REGION) -> None:
+        self._profile = profile
+        self._region = region
+
+    def _reader_url(self) -> str:
+        """Resolve the ducklake_reader Function URL: env first, then terraform output. Loud-fail if absent."""
+        url = os.environ.get(_DUCKLAKE_READER_URL_ENV)
+        if url:
+            return url.rstrip("/")
+        import subprocess  # noqa: PLC0415
+
+        try:
+            proc = subprocess.run(
+                ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_reader_function_url"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip().rstrip("/")
+        except FileNotFoundError:
+            pass
+        raise RuntimeError(
+            f"{_DUCKLAKE_READER_URL_ENV} not set and terraform output 'ducklake_reader_function_url' unavailable -- "
+            "cannot reach the DuckLake reader (OPS_STORAGE_BACKEND=ducklake)."
+        )
+
+    def _invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """SigV4-POST *payload* to the reader Function URL; return the parsed JSON body. Loud-fail on non-200."""
+        import boto3  # noqa: PLC0415
+        import requests  # noqa: PLC0415
+        from botocore.auth import SigV4Auth  # noqa: PLC0415
+        from botocore.awsrequest import AWSRequest  # noqa: PLC0415
+
+        from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+        url = self._reader_url()
+        body = json.dumps(payload)
+        headers = {"Content-Type": "application/json"}
+        session = boto3.Session(profile_name=resolve_aws_profile(self._profile, default="agent_platform"))
+        creds = session.get_credentials().get_frozen_credentials()
+        aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+        SigV4Auth(creds, "lambda", self._region).add_auth(aws_req)
+        resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"ducklake_reader {payload.get('action')!r} failed (HTTP {resp.status_code}): {resp.text[:300]}"
+            )
+        return resp.json()
+
+    def current_state(
+        self,
+        table: str,
+        *,
+        partition_by: str = "id",
+        order_by: str = _ORDER_BY_DEFAULT,
+        row_filter: str | None = None,
+        selected_fields: tuple[str, ...] | None = None,
+        snapshot_id: int | None = None,
+    ) -> list[dict]:
+        """Return current-projection rows for *table*. `row_filter` pushes a WHERE down to the reader.
+
+        partition_by/order_by/selected_fields/snapshot_id are part of the Reader protocol but are
+        no-ops here: DuckLake materialises the current projection, so no client-side dedup or
+        snapshot pinning is applied.
+        """
+        if row_filter is None:
+            body = self._invoke({"action": "read_ops_current", "table": table})
+        else:
+            body = self._invoke({"action": "query_ops", "table": table, "sql": f"SELECT * FROM {{tbl}} WHERE {row_filter}"})
+        return list(body.get("rows", []))
+
+    def latest_snapshot(self, table: str) -> int | None:
+        """DuckLake current is a live projection (no Iceberg snapshot id). Returns None by contract."""
+        return None
+
+    def query(
+        self,
+        table: str,
+        sql: str,
+        *,
+        params: tuple[Any, ...] = (),
+        snapshot_id: int | None = None,
+    ) -> list[dict] | None:
+        """Execute *sql* (using `{tbl}`) over the current projection via the reader. None on error."""
+        try:
+            body = self._invoke({"action": "query_ops", "table": table, "sql": sql, "params": list(params)})
+            return list(body.get("rows", []))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DuckLakeReader.query: %s: %s", table, exc)
+            return None
+
+
+def ops_storage_backend() -> str:
+    """Return the active ops storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
+    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
+
+
+def make_reader(profile: str | None = None) -> Reader:
+    """Return the flag-selected operational Reader.
+
+    OPS_STORAGE_BACKEND=ducklake -> DuckLakeReader (closed boundary); else DuckDBIcebergReader
+    (the rollback target, retained until cutover sign-off). Both satisfy the Reader protocol, so
+    call sites (ops_data_portal, sync_ops, session_preflight) need not branch.
+    """
+    if ops_storage_backend() == "ducklake":
+        return DuckLakeReader(profile=profile)
+    return DuckDBIcebergReader(profile=profile)

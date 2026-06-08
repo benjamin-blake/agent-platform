@@ -172,10 +172,14 @@ class TestUpdateRec:
         with pytest.raises(ValueError, match="Invalid status"):
             update_rec("rec-042", {"status": "done"})
 
-    def test_update_rec_no_local_record(self, tmp_path: Path) -> None:
-        """update_rec() proceeds with updates-only when rec not found in Athena."""
+    def test_update_rec_absent_rec_loud_fails(self, tmp_path: Path) -> None:
+        """update_rec() loud-fails on an absent rec (referential, CD.33 cl.8 / D-5).
+
+        The prior permissive upsert-on-absent (`existing or {}`) is GONE: an update of a record
+        that does not exist in the current projection raises RuntimeError and never silently
+        creates a partial row.
+        """
         recs_file = tmp_path / ".recommendations-log.jsonl"
-        # Provide all required fields in updates so Pydantic validation passes
         updates = {**_VALID_FIELDS, "id": "rec-042", "status": "closed"}
 
         with (
@@ -186,10 +190,78 @@ class TestUpdateRec:
         ):
             from scripts.ops_data_portal import update_rec
 
-            result = update_rec("rec-042", updates)
+            with pytest.raises(RuntimeError, match="does not exist"):
+                update_rec("rec-042", updates)
 
-        assert result is True
+        # No write was staged -- the absent rec was rejected before any write path.
+        mock_opswriter.return_value.write.assert_not_called()
+
+
+class TestStorageBackendTransport:
+    """The OPS_STORAGE_BACKEND flag swaps transport only; the caller surface is unchanged."""
+
+    def test_file_rec_ducklake_invokes_writer_not_opswriter(self, tmp_path: Path, monkeypatch) -> None:
+        """backend=ducklake routes file_rec through the writer Function URL, not OpsWriter (Iceberg)."""
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        fields = {**_VALID_FIELDS}
+
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value="rec-900"),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            rec_id = file_rec(fields)
+
+        assert rec_id == "rec-900"
+        mock_write.assert_called_once()
+        assert mock_write.call_args[0][0] == "ops_recommendations"
+        assert mock_write.call_args.kwargs["action"] == "write_ops"
+        mock_opswriter.return_value.write.assert_not_called()
+
+    def test_file_rec_iceberg_uses_opswriter(self, tmp_path: Path, monkeypatch) -> None:
+        """backend=iceberg (default/rollback) still stages via OpsWriter -- the rollback path intact."""
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        fields = {**_VALID_FIELDS}
+
+        with (
+            patch("scripts.ops_data_portal._next_id", return_value="rec-901"),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_write,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            file_rec(fields)
+
         mock_opswriter.return_value.write.assert_called_once()
+        mock_write.assert_not_called()
+
+    def test_update_rec_ducklake_invokes_writer_update_ops(self, tmp_path: Path, monkeypatch) -> None:
+        """backend=ducklake routes update_rec through update_ops (the in-tx referential write)."""
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        existing = {**_VALID_FIELDS, "id": "rec-042"}
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import update_rec
+
+            assert update_rec("rec-042", {"status": "closed"}) is True
+
+        assert mock_write.call_args.kwargs["action"] == "update_ops"
+        mock_opswriter.return_value.write.assert_not_called()
 
 
 class TestFileDecision:
@@ -1277,3 +1349,209 @@ class TestFetchRecFromAthena:
 
         with pytest.raises(ValueError, match="invalid rec_id"):
             _fetch_rec_from_athena("'; DROP TABLE ops_recommendations; --")
+
+
+class TestDuckLakeTransportHelpers:
+    """Coverage for the DuckLake transport helpers (T2.19): URL resolve, projection, SigV4 write."""
+
+    def test_ops_backend_default_and_flag(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+        assert p._ops_backend() == "iceberg"
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "DUCKLAKE")
+        assert p._ops_backend() == "ducklake"
+
+    def test_resolve_writer_url_env(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("DUCKLAKE_WRITER_URL", "https://writer.example/")
+        assert p._resolve_writer_url() == "https://writer.example"
+
+    def test_resolve_writer_url_loud_fail(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.delenv("DUCKLAKE_WRITER_URL", raising=False)
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        with pytest.raises(RuntimeError, match="DUCKLAKE_WRITER_URL not set"):
+            p._resolve_writer_url()
+
+    def test_project_ops_record_drops_derived_and_unknown(self) -> None:
+        import scripts.ops_data_portal as p
+
+        rec = {
+            "id": "rec-1",
+            "status": "open",
+            "title": "t",
+            "ulid": "01X",  # derived -> dropped
+            "created_timestamp": "2026-01-01",  # derived -> dropped
+            "last_updated_timestamp": "2026-01-01",  # derived -> dropped
+            "date": "2026-01-01",  # unknown -> dropped
+        }
+        projected = p._project_ops_record("ops_recommendations", rec)
+        assert "ulid" not in projected and "created_timestamp" not in projected and "date" not in projected
+        assert projected["id"] == "rec-1" and projected["status"] == "open" and projected["title"] == "t"
+
+    def test_ducklake_write_sigv4_success(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("DUCKLAKE_WRITER_URL", "https://writer.example/")
+        captured: dict = {}
+
+        class _Creds:
+            access_key = "AK"
+            secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
+            token = None
+
+            def get_frozen_credentials(self):
+                return self
+
+        class _Session:
+            def __init__(self, profile_name=None):
+                pass
+
+            def get_credentials(self):
+                return _Creds()
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "key": "rec-1"}
+
+        import boto3
+        import requests
+        from botocore.auth import SigV4Auth
+
+        monkeypatch.setattr(boto3, "Session", _Session)
+        monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
+
+        def _post(url, data=None, headers=None, timeout=None):
+            captured["body"] = json.loads(data)
+            return _Resp()
+
+        monkeypatch.setattr(requests, "post", _post)
+        out = p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
+        assert out["ok"] is True
+        assert captured["body"]["action"] == "write_ops"
+        assert captured["body"]["table"] == "ops_recommendations"
+
+    def test_ducklake_write_referential_409_maps_to_runtimeerror(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda: "https://w.example")
+
+        class _Resp:
+            status_code = 409
+            text = "absent"
+
+        self._patch_sig(monkeypatch, _Resp())
+        with pytest.raises(RuntimeError, match="referential"):
+            p._ducklake_write("ops_recommendations", {"id": "rec-x", "status": "closed"}, action="update_ops")
+
+    def test_ducklake_write_schema_422_maps_to_valueerror(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda: "https://w.example")
+
+        class _Resp:
+            status_code = 422
+            text = "bad field"
+
+        self._patch_sig(monkeypatch, _Resp())
+        with pytest.raises(ValueError, match="schema-gate"):
+            p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
+
+    @staticmethod
+    def _patch_sig(monkeypatch, resp) -> None:
+        class _Creds:
+            access_key = "AK"
+            secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
+            token = None
+
+            def get_frozen_credentials(self):
+                return self
+
+        class _Session:
+            def __init__(self, profile_name=None):
+                pass
+
+            def get_credentials(self):
+                return _Creds()
+
+        import boto3
+        import requests
+        from botocore.auth import SigV4Auth
+
+        monkeypatch.setattr(boto3, "Session", _Session)
+        monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
+        monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+
+
+class TestSyncBackendAware:
+    """sync()/_sync_table cache-pull behaviour per backend (T2.19)."""
+
+    def test_sync_table_ducklake_pull_only(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        calls: list[str] = []
+        monkeypatch.setattr("scripts.sync_ops._pull_single_table", lambda t: calls.append(t) or 0)
+        with patch("scripts.ops_data_portal.OpsWriter") as mock_ow:
+            p._sync_table("ops_recommendations")
+        mock_ow.return_value.compact.assert_not_called()
+        assert calls == ["ops_recommendations"]
+
+    def test_sync_ducklake_no_outbox_drain(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        monkeypatch.setattr("scripts.sync_ops._pull_single_table", lambda t: 3)
+        result = p.sync(["ops_recommendations"])
+        assert result == {"compacted": {}, "pulled": {"ops_recommendations": 3}, "views_refreshed": []}
+
+
+class TestSelftests:
+    """--selftest-read / --selftest-roundtrip portal probes (VP14/15)."""
+
+    def test_selftest_read(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+
+        class _Reader:
+            def current_state(self, table, **kw):
+                return [{"id": "rec-1"}]
+
+        monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
+        out = p.selftest_read()
+        assert out["backend"] == "iceberg" and out["row_count"] == 1 and out["sample_id"] == "rec-1"
+
+    def test_selftest_roundtrip_ducklake(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        written: dict = {}
+        monkeypatch.setattr(p, "_ducklake_write", lambda t, r, *, action, profile=None: written.update(id=r["id"]))
+
+        class _Reader:
+            def current_state(self, table, *, row_filter=None, **kw):
+                return [{"id": written["id"]}]
+
+        monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
+        out = p.selftest_roundtrip()
+        assert out["read_back"] is True and out["backend"] == "ducklake"
+
+    def test_selftest_roundtrip_loud_fails_when_not_read_back(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+        monkeypatch.setattr("scripts.ops_data_portal.OpsWriter", lambda: type("W", (), {"write": lambda *a, **k: None})())
+
+        class _Reader:
+            def current_state(self, table, *, row_filter=None, **kw):
+                return []
+
+        monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
+        with pytest.raises(RuntimeError, match="read-back"):
+            p.selftest_roundtrip()
