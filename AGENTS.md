@@ -52,7 +52,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
   Active artifacts (`status: active` in `src/lambdas/<slug>/manifest.yaml`) must include per-Lambda
   build + deploy + smoke-test steps (V3 tier). Stub artifacts (`status: stub`) need no deploy step.
   `config/agent/` is NOT Lambda-packaged. Decision 67's STRATEGIC-plan clause is RETAINED (see above).
-- **T2.12 security gate (CD.20) -- controls-as-code shipped, apply pending:** GHAS secret scanning + push protection, branch-protection ruleset, CodeQL, Dependabot, and Actions permissions are authored in `terraform/github/` + `.github/`. Human-gated local apply required to activate -- see `terraform/github/README.md`.
+- **T2.12 security gate (CD.20) -- apply landed; branch protection + Dependabot live (Decision 83):** `terraform/github/` human-gated local apply landed 2026-06-08. Confirmed live via GitHub API: `main-protection` ruleset (active, admin bypass actor, non-wedging: strict=false, required = pr-validate + terraform-validate, terraform-converged advisory) and Dependabot (5 active branches). GHAS secret-scanning, push protection, CodeQL, and Actions permissions: apply landed per `repo.tf` / committed `.github/`; live-probe verification outstanding (web PAT lacks `security_events`); one-time UI confirmation recommended.
 
 ## Memory policy — CLAUDE.md is canonical persistence
 Do **not** write to the auto-memory system (`~/.claude/projects/.../memory/`) in this project. The user's persistence model is git-tracked CLAUDE.md files (root + per-directory) plus structured logs (`docs/SESSION_LOG.md`, `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`).

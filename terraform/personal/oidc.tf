@@ -236,8 +236,9 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 #
 # This is the role the .github/workflows/terraform-apply-sandbox.yml workflow assumes to run
 # `terraform apply` against terraform/personal on push to main. Its blast radius is the highest of
-# any CI role, so two compensating controls bound it (Decision 72 / CD.20 -- branch protection and
-# required status checks are NOT available):
+# any CI role, so two compensating controls bound it (branch protection is now active via the
+# main-protection ruleset, Decision 83 / CD.20, but deliberately non-wedging -- the controls
+# below remain the authoritative apply gate):
 #   1. Trust is scoped to refs/heads/main ONLY -- NOT agent/*, NOT pull/*. A PR or agent branch
 #      cannot assume this role; only a merge to main can.
 #   2. scripts/terraform_apply_guard.py runs (fail-closed) before apply and blocks any destroy,
