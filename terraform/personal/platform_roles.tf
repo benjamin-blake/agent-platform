@@ -136,7 +136,15 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
         Sid      = "DuckLakeInvokeRuntime"
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunctionUrl"]
-        Resource = [aws_lambda_function.ducklake_writer.arn, aws_lambda_function.ducklake_reader.arn]
+        # Function-URL invokes authorize against the QUALIFIED function ARN (e.g. ...:function:NAME:$LATEST),
+        # so the unqualified ARN alone implicit-denies (AdminOps works only because it uses "*"). Grant both
+        # the unqualified and the :* qualified forms, scoped to writer + reader.
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
       },
     ]
   })
