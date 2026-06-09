@@ -3,6 +3,10 @@
 All network/duckdb mocked -- no live catalog. The live proof is the [post-deploy] verification-plan
 steps; these tests prove the derivation rules, the schema gate, the OCC loud-fail, the version
 assert, and the partition DDL composition.
+
+Split invariant (PLAN-ducklake-ops-finalize): the pure schema layer now lives in
+ducklake_scd2_schema; ducklake_runtime re-exports its symbols. Tests confirm that the re-exported
+symbols produce byte-identical SQL to the schema module's own builders.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src.common import ducklake_runtime as rt
+from src.common import ducklake_scd2_schema as schema
 
 pytestmark = pytest.mark.unit
 
@@ -893,3 +898,43 @@ def test_query_current_enforces_read_only():
 
     with pytest.raises(rt.SchemaGateError, match="read-only boundary"):
         rt.query_current(_Cur(), table="ops_recommendations", sql="DROP TABLE {tbl}")
+
+
+# ---------------------------------------------------------------------------
+# Split invariant: runtime re-exports produce byte-identical SQL to schema module (VP1)
+# ---------------------------------------------------------------------------
+
+
+def test_split_smoke_merge_history_sql_byte_identical():
+    """After the schema split, runtime re-export produces byte-identical SQL to schema module."""
+    spec = schema.resolve_table_spec(None, _SEMANTICS)
+    assert rt._build_merge_history_sql(spec) == schema._build_merge_history_sql(spec)
+
+
+def test_split_smoke_merge_current_sql_byte_identical():
+    spec = schema.resolve_table_spec(None, _SEMANTICS)
+    assert rt._build_merge_current_sql(spec) == schema._build_merge_current_sql(spec)
+
+
+def test_split_ops_recommendations_merge_history_sql_byte_identical():
+    """ops_recommendations merge history SQL identical across the split."""
+    spec = rt.resolve_table_spec("ops_recommendations")
+    assert rt._build_merge_history_sql(spec) == schema._build_merge_history_sql(spec)
+
+
+def test_split_ops_recommendations_merge_current_sql_byte_identical():
+    spec = rt.resolve_table_spec("ops_recommendations")
+    assert rt._build_merge_current_sql(spec) == schema._build_merge_current_sql(spec)
+
+
+def test_split_schema_gate_is_re_exported():
+    """schema_gate on rt is the same function object from the schema module."""
+    assert rt.schema_gate is schema.schema_gate
+
+
+def test_split_no_import_cycle():
+    """Importing both modules in the same process must not raise (no circular import)."""
+    import importlib
+
+    importlib.import_module("src.common.ducklake_scd2_schema")
+    importlib.import_module("src.common.ducklake_runtime")
