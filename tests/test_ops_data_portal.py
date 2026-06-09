@@ -26,6 +26,19 @@ _VALID_FIELDS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _default_iceberg_backend(monkeypatch):
+    """Pin the legacy write/read tests to the iceberg (rollback) path.
+
+    T2.19 flipped the DEFAULT ops backend iceberg -> ducklake (signed off 2026-06-09). The tests in
+    this module that assert the OpsWriter()/DuckDBIcebergReader (iceberg) path predate the flip; pin
+    them to iceberg so they exercise the (still-live) rollback path explicitly. Tests that need the
+    ducklake transport override via `monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")`; the
+    default-value test (`test_ops_backend_default_and_flag`) `delenv`s first to see the true default.
+    """
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+
+
 class TestFileRec:
     """Tests for file_rec()."""
 
@@ -391,6 +404,36 @@ class TestDrainPending:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["id"] == "rec-601"
+
+    def test_drain_pending_routes_to_writer_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
+        """On the ducklake backend, drain_pending() routes the drained rec through the writer (closed boundary).
+
+        T2.19 sign-off: the offline-outbox drain must honour the active backend, not unconditionally
+        stage to Iceberg -- otherwise an offline-queued rec resurfaces in Iceberg post-cutover.
+        """
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir(parents=True)
+        pending_fields = {**_VALID_FIELDS}
+        pending_fields.pop("id", None)
+        (pending_dir / "abc123.json").write_text(json.dumps(pending_fields), encoding="utf-8")
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+
+        with (
+            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch("scripts.ops_data_portal._next_id", return_value="rec-601"),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import drain_pending
+
+            result = drain_pending()
+
+        assert result["drained"] == 1
+        mock_dl_write.assert_called_once()
+        assert mock_dl_write.call_args[0][0] == "ops_recommendations"
+        mock_opswriter.return_value.write.assert_not_called()
 
     def test_drain_pending_dynamo_still_down(self, tmp_path: Path) -> None:
         """drain_pending() leaves files untouched when DynamoDB is still unreachable."""
@@ -1415,7 +1458,10 @@ class TestDuckLakeTransportHelpers:
     def test_ops_backend_default_and_flag(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
+        # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
         monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+        assert p._ops_backend() == "ducklake"
+        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ICEBERG")
         assert p._ops_backend() == "iceberg"
         monkeypatch.setenv("OPS_STORAGE_BACKEND", "DUCKLAKE")
         assert p._ops_backend() == "ducklake"
@@ -1431,8 +1477,19 @@ class TestDuckLakeTransportHelpers:
 
         monkeypatch.delenv("DUCKLAKE_WRITER_URL", raising=False)
         monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        # The AWS-API fallback also fails (no resolvable URL) -> the loud-fail must still fire.
+        monkeypatch.setattr(p, "_resolve_function_url_via_api", lambda *a, **k: None)
         with pytest.raises(RuntimeError, match="DUCKLAKE_WRITER_URL not set"):
             p._resolve_writer_url()
+
+    def test_resolve_writer_url_api_fallback(self, monkeypatch) -> None:
+        """When env + terraform are unavailable, the writer URL resolves via GetFunctionUrlConfig (CI case)."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.delenv("DUCKLAKE_WRITER_URL", raising=False)
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        monkeypatch.setattr(p, "_resolve_function_url_via_api", lambda name, profile=None: "https://api.example/")
+        assert p._resolve_writer_url() == "https://api.example"
 
     def test_project_ops_record_drops_derived_and_unknown(self) -> None:
         import scripts.ops_data_portal as p
@@ -1497,7 +1554,7 @@ class TestDuckLakeTransportHelpers:
     def test_ducklake_write_referential_409_maps_to_runtimeerror(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda: "https://w.example")
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
 
         class _Resp:
             status_code = 409
@@ -1510,7 +1567,7 @@ class TestDuckLakeTransportHelpers:
     def test_ducklake_write_schema_422_maps_to_valueerror(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda: "https://w.example")
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
 
         class _Resp:
             status_code = 422

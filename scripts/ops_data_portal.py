@@ -65,11 +65,12 @@ _write_time_validators_cache: dict[str, list] = {}
 # --- Storage-backend transport flag (T2.19 / Decision 81) -----------------------------------------
 # The Single-Portal caller surface (file_rec/update_rec/file_decision/update_decision/sync) is
 # unchanged; ONLY the transport underneath swaps. `iceberg` = OpsWriter()/Athena (legacy, rollback
-# target until cutover sign-off); `ducklake` = the closed writer/reader Function-URL boundary.
-# Default is `iceberg`; the cutover (VP15) flips the default to `ducklake`.
+# target); `ducklake` = the closed writer/reader Function-URL boundary.
+# Default is `ducklake` (T2.19 cutover signed off 2026-06-09); set OPS_STORAGE_BACKEND=iceberg to roll back.
 _OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
-_DEFAULT_OPS_STORAGE_BACKEND = "iceberg"
+_DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
 _DUCKLAKE_WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
+_DUCKLAKE_WRITER_FUNCTION_NAME = "agent-platform-ducklake-writer"
 _AWS_LAMBDA_SERVICE = "lambda"
 
 # Portal table -> DuckLake ops_* table (the writer/reader select schema by this name).
@@ -81,8 +82,29 @@ def _ops_backend() -> str:
     return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
 
 
-def _resolve_writer_url() -> str:
-    """Resolve the ducklake_writer Function URL: env first, then terraform output. Loud-fail if absent."""
+def _resolve_function_url_via_api(function_name: str, profile: Optional[str] = None) -> Optional[str]:
+    """Resolve a Lambda Function URL via lambda:GetFunctionUrlConfig. None on any failure.
+
+    Last-resort fallback for environments with neither the DUCKLAKE_*_URL env nor a terraform-init'd
+    checkout -- principally the CI runner (T2.19 cutover), where the github_ci OIDC role carries the
+    GetFunctionUrlConfig grant.
+    """
+    try:
+        import boto3  # noqa: PLC0415
+
+        client = boto3.Session(profile_name=profile).client("lambda", region_name="eu-west-2")
+        return client.get_function_url_config(FunctionName=function_name).get("FunctionUrl")
+    except Exception as exc:  # noqa: BLE001 -- best-effort fallback; caller raises if this returns None
+        logger.warning("[PORTAL] GetFunctionUrlConfig fallback failed for %s: %s", function_name, exc)
+        return None
+
+
+def _resolve_writer_url(profile: Optional[str] = None) -> str:
+    """Resolve the ducklake_writer Function URL: env, then terraform output, then the AWS API.
+
+    The AWS-API fallback (lambda:GetFunctionUrlConfig) covers the CI runner case (no env, no
+    terraform-init'd checkout); the github_ci OIDC role carries the grant. Loud-fail if all fail.
+    """
     url = os.environ.get(_DUCKLAKE_WRITER_URL_ENV)
     if url:
         return url.rstrip("/")
@@ -98,9 +120,12 @@ def _resolve_writer_url() -> str:
             return proc.stdout.strip().rstrip("/")
     except FileNotFoundError:
         pass
+    api_url = _resolve_function_url_via_api(_DUCKLAKE_WRITER_FUNCTION_NAME, profile=profile)
+    if api_url:
+        return api_url.rstrip("/")
     raise RuntimeError(
-        f"{_DUCKLAKE_WRITER_URL_ENV} not set and terraform output 'ducklake_writer_function_url' unavailable -- "
-        "cannot reach the DuckLake writer (OPS_STORAGE_BACKEND=ducklake)."
+        f"{_DUCKLAKE_WRITER_URL_ENV} not set, terraform output 'ducklake_writer_function_url' unavailable, and "
+        "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake writer (OPS_STORAGE_BACKEND=ducklake)."
     )
 
 
@@ -129,7 +154,7 @@ def _ducklake_write(table: str, record: dict, *, action: str, profile: Optional[
     from botocore.auth import SigV4Auth  # noqa: PLC0415
     from botocore.awsrequest import AWSRequest  # noqa: PLC0415
 
-    url = _resolve_writer_url()
+    url = _resolve_writer_url(profile=profile)
     payload = {"action": action, "table": table, "record": _project_ops_record(table, record)}
     body = json.dumps(payload)
     headers = {"Content-Type": "application/json"}
@@ -949,7 +974,10 @@ def drain_pending(profile: str | None = None) -> dict:
                 for _col, _validator in _load_write_time_validators("ops_recommendations"):
                     _validator(merged.get(_col), _col)
             Recommendation.model_validate(merged)
-            OpsWriter().write("ops_recommendations", merged)
+            if _ops_backend() == "ducklake":
+                _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
+            else:
+                OpsWriter().write("ops_recommendations", merged)
             _append_to_local_jsonl(RECS_JSONL, merged)
             pending_file.unlink(missing_ok=True)
             drained += 1

@@ -77,8 +77,8 @@ _OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
 
 
 def _ops_backend() -> str:
-    """Return the active ops storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
-    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or "iceberg").strip().lower()
+    """Return the active ops storage backend ('iceberg' | 'ducklake'); default ducklake (T2.19 cutover)."""
+    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or "ducklake").strip().lower()
 
 
 @dataclass

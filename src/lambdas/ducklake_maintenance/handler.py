@@ -8,10 +8,12 @@ Also supports action=breaker_probe (forced-threshold test for VP step 11).
 
 T2.19 recs cutover adds OPERATIONAL admin actions invoked over 443 via `aws lambda invoke` (NOT
 public Function URLs, NOT agent surfaces): catalog_reinit (rec-2099 fix -- drop the squatting
-meta-schema + re-init at the production DATA_PATH), seed_ops_recommendations (TEMPORARY one-time recs
-bootstrap, removed post-sign-off), and restore_drill (pg_dump->pg_restore + read-your-write DR gate).
-These target the PRODUCTION catalog (ducklake_ops) via explicit event params; the SCHEDULED merge/gc
-cadence stays on the smoke catalog (ducklake_smoke, relocated off ducklake_ops -- rec-2099 root-cause).
+meta-schema + re-init at the production DATA_PATH) and restore_drill (pg_dump->pg_restore +
+read-your-write DR gate). These target the PRODUCTION catalog (ducklake_ops) via explicit event
+params; the SCHEDULED merge/gc cadence stays on the smoke catalog (ducklake_smoke, relocated off
+ducklake_ops -- rec-2099 root-cause). (The TEMPORARY seed_ops_recommendations bootstrap action was
+removed at the 2026-06-09 recs sign-off -- the closed boundary now admits recs writes only via the
+portal `file_rec`/`update_rec` -> writer path, Decision 81 cl.7.)
 
 No LLM / agent invocation anywhere in this path (CD.33 clause 5 / Decision 81 clause 6).
 Singleton enforced by reserved_concurrent_executions=1 (Decision 81 clause 6; see Terraform).
@@ -26,7 +28,6 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from src.common import catalog_dr
@@ -180,8 +181,9 @@ def action_breaker_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
 # Operational actions (T2.19 recs cutover) -- invoked over 443 via `aws lambda invoke`, NOT public
 # Function URLs and NOT agent surfaces. They target the PRODUCTION catalog (ducklake_ops) via explicit
 # event params and manage their own connections (the scheduled merge/gc stay on the smoke catalog).
-# `seed_ops_recommendations` is TEMPORARY and removed post-sign-off; catalog_reinit + restore_drill
-# are retained as operational DR ops.
+# catalog_reinit + restore_drill are retained as operational DR ops. The TEMPORARY
+# seed_ops_recommendations bootstrap was removed at the 2026-06-09 recs sign-off (closed boundary --
+# recs writes now transit only the portal -> writer path, Decision 81 cl.7).
 # ---------------------------------------------------------------------------
 
 
@@ -218,30 +220,6 @@ def _drop_meta_schema(meta_schema: str, *, recreate: bool = False) -> bool:
     return True
 
 
-def _parse_ts(value: Any) -> datetime | None:
-    """Parse an ISO timestamp string (or pass through a datetime); None on empty. Assumes UTC if naive."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def _seed_identity_and_record(spec: Any, row: dict[str, Any]) -> tuple[Any, datetime | None, dict[str, Any]]:
-    """Build (identity, created_override, input_record) for one current-state seed row.
-
-    Preserves the original timestamps: identity.timestamp = last_updated (a fresh ULID embeds it),
-    created_override = created. Strips the derived envelope columns (ulid/created/last_updated) so the
-    schema gate sees only caller-input fields.
-    """
-    created = _parse_ts(row.get("created_timestamp"))
-    last_updated = _parse_ts(row.get("last_updated_timestamp")) or created
-    identity = rt.mint_write_identity(now=last_updated) if last_updated is not None else rt.mint_write_identity()
-    record = {k: v for k, v in row.items() if k not in ("ulid", "created_timestamp", "last_updated_timestamp")}
-    return identity, created, record
-
-
 def action_catalog_reinit(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     """OPERATIONAL break-glass: drop the squatting meta-schema + re-initialize it at DATA_PATH (rec-2099).
 
@@ -272,51 +250,6 @@ def action_catalog_reinit(event: dict[str, Any], _con: Any) -> dict[str, Any]:
         "dropped_existing": dropped,
         "reinitialized": True,
     }
-
-
-def action_seed_ops_recommendations(event: dict[str, Any], _con: Any) -> dict[str, Any]:
-    """OPERATIONAL one-time bootstrap (TEMP -- removed post-sign-off): seed ops_recommendations.
-
-    Accepts the recs CURRENT-STATE rows (read from Iceberg over Athena by the caller, Decision-70 rows
-    already excluded; `exclude_ids` is defence-in-depth) and writes each via the SCD2 primitive with
-    PRESERVED id + original created/last_updated timestamps (current-state only; SCD2 version history
-    is dropped, accepted). Idempotent by DROP+recreate (resurrection-loop guard). Reuses
-    schema_gate + write_scd2 -- there is NO bypass/import write path. Self-reports parity and
-    loud-fails (Decision 55) on a count mismatch.
-    """
-    table = "ops_recommendations"
-    rows = event.get("rows")
-    if not isinstance(rows, list):
-        raise rt.DuckLakeRuntimeError("seed_ops_recommendations requires a 'rows' list of recs current-state records")
-    data_path = event.get("data_path", DATA_PATH)
-    meta_schema = _require_identifier(event.get("meta_schema", rt.META_SCHEMA))
-    exclude_ids = set(event.get("exclude_ids") or [])
-
-    con = rt.open_connection(
-        dsn=rt.fetch_dsn(), data_path=data_path, meta_schema=meta_schema, extension_directory=EXTENSION_DIRECTORY
-    )
-    seeded = 0
-    skipped = 0
-    try:
-        rt.create_scd2_tables(con, table=table, force_recreate=True)  # DROP+recreate: idempotent re-run
-        spec = rt.resolve_table_spec(table)
-        for row in rows:
-            if row.get(spec.merge_key) in exclude_ids:
-                skipped += 1
-                continue
-            identity, created_override, record = _seed_identity_and_record(spec, row)
-            rt.write_scd2(con, record, table=table, identity=identity, created_override=created_override)
-            seeded += 1
-        current_rows = int(con.execute(f"SELECT count(*) FROM {rt.CATALOG_ALIAS}.{spec.current_table}").fetchone()[0])
-    finally:
-        con.close()
-
-    parity = current_rows == seeded
-    if not parity:
-        raise rt.DuckLakeRuntimeError(
-            f"seed parity FAILED: seeded={seeded} but {table} current_rows={current_rows} -- STOP (Decision 55)"
-        )
-    return {"ok": True, "table": table, "seeded": seeded, "skipped_d70": skipped, "current_rows": current_rows, "parity": True}
 
 
 def action_restore_drill(event: dict[str, Any], _con: Any) -> dict[str, Any]:
@@ -402,13 +335,12 @@ _ACTIONS: dict[str, Any] = {
     "hot_merge": action_hot_merge,
     "breaker_probe": action_breaker_probe,
     "catalog_reinit": action_catalog_reinit,
-    "seed_ops_recommendations": action_seed_ops_recommendations,
     "restore_drill": action_restore_drill,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "seed_ops_recommendations", "restore_drill"}
+_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:

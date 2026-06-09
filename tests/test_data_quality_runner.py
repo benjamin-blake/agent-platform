@@ -758,7 +758,10 @@ def test_print_results_json_includes_unenforced_fail(capsys):
 def test_ops_backend_default(monkeypatch):
     import scripts.data_quality_runner as dq
 
+    # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
     monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert dq._ops_backend() == "ducklake"
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
     assert dq._ops_backend() == "iceberg"
 
 

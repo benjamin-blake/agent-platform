@@ -33,10 +33,11 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 
 ### Recommendation & Decision Logging
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
+- **Storage backend (T2.19 cutover, signed off 2026-06-09):** `ops_recommendations` source of truth = **DuckLake-on-Neon by DEFAULT** (`OPS_STORAGE_BACKEND=ducklake`, the flag default in `ops_data_portal.py` / `iceberg_reader.make_reader` / `data_quality_runner.py`). Recs reads/writes transit the closed `ducklake_reader`/`ducklake_writer` Function-URL boundary -- no Athena escape hatch (Decision 81 cl.7). All OTHER ops tables (`ops_decisions`, `ops_session_log`, `ops_execution_plans`, `ops_priority_queue`) remain on **Athena/Iceberg** (DEFERRED). Rollback: `OPS_STORAGE_BACKEND=iceberg` resumes the intact Iceberg recs path (`ops_compaction` stays live).
 - **ID Authority:** Recommendation and decision IDs are allocated atomically via DynamoDB. The local JSONL files are read-only caches, not the source of truth.
-- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads from Athena (requires the agent_platform static-key chain); raises `RuntimeError` if unreachable.
+- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads recs from the DuckLake reader (and other ops tables from Athena), via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
 - **Offline/Pending Outbox:** If AWS credentials (profile `agent_platform`) are missing or services are unreachable, the portal automatically queues records to `logs/.ops-outbox/`. Call `ops_data_portal.sync()` once connectivity is restored to drain and compact.
-- **SCD Type 2:** The authoritative store (Athena/Iceberg) uses append-only semantics. Deduplication to the latest record happens at query time via the `ops_recommendations_current` and `ops_decisions_current` views.
+- **SCD Type 2:** Both backends use append-only SCD2 semantics. On Iceberg, deduplication to the latest record happens at query time via the `ops_recommendations_current` / `ops_decisions_current` views; on DuckLake the reader returns current-state directly (DuckLake-side dedup).
 
 ### Data Quality Enforcement
 
