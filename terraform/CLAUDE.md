@@ -18,6 +18,38 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 - Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
 - The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
+## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
+**This project runs ONLY on Claude Code on the web. There is no operator local machine.** The agent
+itself runs `terraform plan`/`apply` for `terraform/personal/` inside the CC-web container.
+
+`terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
+`terraform/**/terraform.personal.tfvars`), so it is NOT in the fresh clone and there is no standalone
+`s3://.../terraform.personal.tfvars` object to fetch -- do not go looking for that file. The four
+no-default vars (`account_id`, `owner_email`, `platform_dev_external_id`, `platform_admin_external_id`)
+are recoverable from the **remote Terraform state in S3**, which IS the source of truth:
+- State: `s3://agent-platform-data-lake/tfstate/personal/sandbox/terraform.tfstate` (region `eu-west-2`),
+  wired via `terraform -chdir=terraform/personal init -backend-config=backend-sandbox.hcl`.
+- The values live as resource attributes in that state: `account_id` in every resource ARN;
+  the two ExternalIds in the IAM roles' `assume_role_policy` trust documents (`sts:ExternalId` condition);
+  `owner_email` in resource tags / the SNS subscription endpoint. `account_id` is also obtainable from
+  `aws sts get-caller-identity`.
+- After `init`, recover them with `terraform state show` / a parse of the state JSON, then pass via `-var`
+  (or a regenerated, still-gitignored tfvars) for `plan`.
+- **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
+  trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
+
+**Apply posture (current):** the planned CD auto-apply path is the FUTURE state but has issues right now,
+so for now the CC-web agent works the loop **iteratively: run `terraform plan` -> PRESENT it -> the human
+accepts the presented plan (this acceptance IS the human gate, Decision 77/35) -> agent runs `terraform
+apply`.** The deterministic `scripts/terraform_apply_guard.py` (fail-closed on any destroy/IAM/trust change)
+still runs as the safety net. Do not apply without presenting the plan and getting acceptance first.
+
+**Apply posture (future, not yet reliable):** sandbox CD auto-apply
+(`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
+behind the guard + subagent plan review). It sources the same vars as `TF_VAR_*` env from GitHub repo
+variables/secrets (`AWS_ACCOUNT_ID`, `OWNER_EMAIL`, `TF_VAR_PLATFORM_DEV_EXTERNAL_ID`,
+`TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID`). Use this once it is reliable; until then, use the interactive loop above.
+
 ## Out-of-band IAM grants (drift -- not managed by this module)
 
 The `PlatformDev` and `PlatformAdmin` roles pre-exist the module and are now BOTH codified (see the
