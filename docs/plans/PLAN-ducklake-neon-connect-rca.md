@@ -25,7 +25,7 @@ no new agent write surface and does not flip any default backend.
 ## Scope
 | File | Action | Purpose |
 |------|--------|---------|
-| src/common/ducklake_runtime.py | Modify | Add a bounded `connect_timeout` (default 10s, overridable via the `DUCKLAKE_CONNECT_TIMEOUT_S` env) to the libpq conninfo emitted by `libpq_conninfo` (line 210-217), so a connect that does not complete FAILS FAST with a precise libpq error instead of hanging to the 120s OS/Lambda wall. This is the single highest-leverage change: it converts the opaque 502-timeout into a diagnosable, logged error. Keep it a one-liner addition -- the file is 479/500 SLOC (Decision 43), so the phased probe goes in a NEW sibling module (next row), NOT here. Lambda-packaged (bundled in 4 DuckLake artifacts). |
+| src/common/ducklake_runtime.py | Modify | Add a bounded `connect_timeout` (default 10s, overridable via the `DUCKLAKE_CONNECT_TIMEOUT_S` env) to the libpq conninfo emitted by `libpq_conninfo` (line 210-217), so a connect that does not complete FAILS FAST with a precise libpq error instead of hanging to the 120s OS/Lambda wall. This is the single highest-leverage change: it converts the opaque 502-timeout into a diagnosable, logged error. Keep it a one-liner addition -- the file is 426/500 SLOC (Decision 43), so the phased probe goes in a NEW sibling module (next row), NOT here. Lambda-packaged (bundled in 4 DuckLake artifacts). |
 | src/common/ducklake_connect_probe.py | Create | NEW diagnostic-only module holding `probe_connection(dsn, *, data_path, meta_schema, extension_directory, timeout_s)` -- a phased, each-phase-bounded connection diagnostic that NEVER hangs and returns a structured result: `{phase_reached, failed_phase, dns_ms, tcp_ms, auth_ms, attach_ms, ok, error}`. Phases, each with its own short timeout: (1) DNS -- `socket.getaddrinfo(host, 5432)`; (2) TCP -- raw `socket.create_connection((host, 5432), timeout=timeout_s)`; (3) AUTH -- `psycopg2.connect(..., connect_timeout=timeout_s, sslmode=require)` then close (proves credentials + Postgres reachability independent of DuckDB); (4) ATTACH -- delegate to `ducklake_runtime.open_connection(...)` + `SELECT 1`. Each phase is timed; the first to fail short-circuits and is reported as `failed_phase`. Pure-ish (only stdlib socket + psycopg2 + the runtime ATTACH); isolates the diagnostic concern and keeps `ducklake_runtime.py` under the SLOC budget (Decision 43). Lambda-packaged -- MUST be added to the 4 DuckLake manifests' `includes[]` (next rows). |
 | src/lambdas/ducklake_writer/handler.py | Modify | Add a `connect_probe` action and register it in the EXISTING `_CONNECTIONLESS_ACTIONS` set (handler.py:522) -- the writer ALREADY special-cases connectionless actions ahead of `_open_writer_connection()` (handler.py:550-551), so REUSE that mechanism; do NOT invent a new branch. The probe MUST NOT depend on the pre-opened `con` (the normal open is what hangs today). It fetches the DSN, calls `ducklake_connect_probe.probe_connection(...)` with the writer's DATA_PATH/META_SCHEMA/EXTENSION_DIRECTORY, and returns the structured phased result (200 even on a diagnosed failure -- the body carries `ok=False`+`failed_phase`; a probe that itself errors is a 5xx). Logs each phase to CloudWatch. Thin delegate to the new module (SLOC budget). |
 | src/lambdas/ducklake_reader/handler.py | Modify | Add the SAME `connect_probe` action, pre-connection. NOTE: unlike the writer, the reader handler has NO connectionless-dispatch path today -- `handler()` (reader handler.py:165-168) UNCONDITIONALLY opens the connection before dispatch. This is NOT a reorder: the implementer must ADD a pre-connection special-case branch (mirror the writer's `_CONNECTIONLESS_ACTIONS` mechanism) so the probe runs even when the normal open would hang. The reader is the load-bearing path for post-cutover recs reads, so its probe is the primary signal. |
@@ -46,7 +46,7 @@ no new agent write surface and does not flip any default backend.
 
 ## Bundled Recommendations
 - **rec-2107 + rec-2108** (ci_rca, `ducklake_runtime.py` SLOC=589 > 500): STALE -- resolved by the PHASE 0+1
-  split (commit `f2e5cd9`; `ducklake_runtime.py` now 479 SLOC). Close as resolved at VP1, each `update_rec`
+  split (commit `f2e5cd9`; `ducklake_runtime.py` now 426 SLOC). Close as resolved at VP1, each `update_rec`
   citing commit `3e5152e`/`f2e5cd9` + the live SLOC fact.
 - **rec-2109 + rec-2110** (ci_rca, `ops_recommendations` DQ FAIL: NULL automatable/risk + sub-80 context):
   STALE -- the offending row was remediated and the D64 anchor restored in PHASE 0+1; 0 rows currently
@@ -93,7 +93,7 @@ no new agent write surface and does not flip any default backend.
 - **RCA-first, loud-fail (Decision 55).** The probe makes the failure LEGIBLE; the fix addresses the named
   root cause. A failing phase with no matching branch STOPS the work -- never relax `connect_timeout`, never
   add a retry-until-it-passes loop, never widen a threshold to mask the hang.
-- **Decision 43 SLOC budget.** `ducklake_runtime.py` is 479/500; the `connect_timeout` change is a one-liner
+- **Decision 43 SLOC budget.** `ducklake_runtime.py` is 426/500; the `connect_timeout` change is a one-liner
   and the phased probe lives in `src/common/ducklake_connect_probe.py`. Do NOT add a `# complexity-waiver`;
   if runtime approaches 500, move logic OUT to the sibling module.
 - **Closed boundary preserved (Decision 81 / CD.33).** No new ops write surface; the probe is a diagnostic
@@ -117,7 +117,7 @@ no new agent write surface and does not flip any default backend.
 
 ## Context
 - **Why this plan exists:** `PLAN-ducklake-ops-finalize.md` landed PHASE 0+1 (CI-green: SCD2 split ->
-  `ducklake_runtime.py` 479 SLOC, `--pre` SLOC gate, D64 DQ anchor) and the PlatformDev
+  `ducklake_runtime.py` 426 SLOC, `--pre` SLOC gate, D64 DQ anchor) and the PlatformDev
   `lambda:InvokeFunction` IAM fix (commits `f2e5cd9`, `3e5152e`; PRs #108/#109). main full-tier CI is GREEN.
   But the finalize PHASE 2/3 sign-off tail (DQ-over-DuckLake, rollback rehearsal, the 3-site default flip,
   seed removal) ALL require a live reader/writer round-trip to Neon -- and that round-trip currently hangs
@@ -135,7 +135,7 @@ no new agent write surface and does not flip any default backend.
   (reader `handler.py:167`, writer analogous), so a `connect_probe` that uses the pre-opened `con` would
   itself hang. The probe MUST be special-cased ahead of `_open_*_connection()` -- VP3 enforces this.
 - **The 4 ci_rca recs are stale:** filed against the earlier RED runs (`d1b4214`, `e2047ef`) before the
-  split + anchor fix merged. rec-2107/2108 (SLOC=589) are moot (now 479); rec-2109/2110 (DQ FAIL) are moot
+  split + anchor fix merged. rec-2107/2108 (SLOC=589) are moot (now 426); rec-2109/2110 (DQ FAIL) are moot
   (0 violating rows, CI green). They are open bookkeeping; VP1 closes them with evidence. The preflight
   HARD BLOCK is satisfied on same-file (`ducklake_runtime.py`) + same-category (SLOC / DQ).
 - **Decision-scout verdict: FLAGS_FOUND** (2 NOTE flags, both folded, no pivot):
