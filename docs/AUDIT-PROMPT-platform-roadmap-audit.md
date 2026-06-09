@@ -159,6 +159,27 @@ owned by the named wave/subagent (Section 7).
   not auto-failures).
 
 ### D2 - dependency-graph and gating semantics (Wave 1.5, auditor)
+- Missing-edge detection (incomplete dependencies - a stated priority of
+  this audit). Generate candidate edges three ways, then triage each:
+  (a) files_in_scope overlap - two items naming the same path with no
+  dependency path between them; (b) artifact references - an item whose
+  intent/exit_criteria mention a table, contract, script, or capability
+  that another item produces, with no `depends_on` path between them;
+  (c) shared-contract co-reference - items altering the same
+  `docs/contracts/` entry (cross-feed from D11). A missing edge is a
+  finding when the un-edged ordering could let a consumer start before its
+  producer completes; mere co-location without an ordering risk is a note.
+- Incorrect-edge detection: `depends_on` entries that are inverted
+  (producer depends on consumer) or semantically wrong (the edge resolves,
+  but the target does not produce what the dependent actually needs).
+  Sample-check eligible and in_progress items first - wrong edges there
+  misdirect the very next planning session.
+- Decommission pairing: items whose name/intent implies a cutover,
+  migration, backend swap, or retirement MUST have a paired decommission
+  item (or an explicit in-item exit criterion retiring the old path).
+  A cutover item with no decommission counterpart anywhere in the file is
+  a finding regardless of its status - it is the structural precondition
+  for split-brain (see D11).
 - Deadlock analysis: for every CD with `gates`, can its gated items reach
   `complete` under the documented semantics ("CD must be ratified before
   gated tier_items can be marked complete") given current CD states and the
@@ -275,6 +296,53 @@ For `not_started` and `reserved` items (the forward book of work):
 - `document.status` / `document.version` / `filed_via` consistent with the
   document's actual lifecycle stage.
 
+### D11 - contract closure and migration completeness (Wave 1, subagent F)
+
+The highest-weight dimension for this audit's purpose. A cutover is CLOSED
+only when: the new surface is live, the old surface is dead (deleted, or
+fails closed, or alarms on access), permissions match the new topology, and
+the contract, the roadmap, and the code all agree. "New path works" is not
+closure; closure is defined by the ABSENCE of the old path.
+
+Method - per contract in `docs/contracts/` that names concrete resources,
+and per roadmap item (any status) whose name/intent implies a cutover,
+migration, backend swap, or retirement:
+1. Extract the contract's named resources: tables, views, Lambda function
+   names/URLs, buckets, IAM roles/actions, env vars, profiles - for BOTH
+   the new and the old topology.
+2. Sweep `src/`, `scripts/`, `terraform/`, `.github/`, `config/`,
+   `.claude/` for every reference to every extracted identifier. Follow
+   config-driven routing by reading the config values, not by guessing.
+   Note identifiers that are computed at runtime as `unknown_routing` -
+   never silently skip them.
+3. Classify every referencing surface:
+   `compliant_new` / `legacy_live` (still routes to the old backend) /
+   `fallback_to_legacy` (degrades to the old path on error - these hide
+   for months and then serve stale state) / `dead_but_provisioned` (zero
+   code refs but terraform still provisions it or grants access to it) /
+   `unknown_routing`.
+4. Diff the classification against (a) the contract's declared end state
+   and (b) any roadmap item claiming the cutover complete. `legacy_live`
+   or `fallback_to_legacy` write surfaces under a complete cutover item
+   are CRITICAL (split-brain: writes invisible to readers). Read-side
+   stale fallbacks under a complete item are high.
+5. Permission closure: diff terraform IAM grants against the contract's
+   surfaces. Over-grants to retired backends, missing grants for new
+   surfaces, and agent-facing surfaces with NO documented permission
+   template are findings (the last one medium).
+6. Enforcement closure: locate any validate.py / CI guard protecting the
+   contract and check it encodes the CURRENT topology. A guard that still
+   permits the old path is a finding even if no code uses that path today
+   - the guard exists precisely for the day something does.
+
+Output discipline: subagent F emits the FULL surface inventory (every
+referencing path with its classification, not only violations) in
+`wave-1-outputs/F.yaml` under a stable per-contract schema
+(`{contract, resource, surface_path, direction: read|write, classification,
+evidence}`). The user intends to promote this inventory into per-contract
+surface registries later, so inventory completeness matters as much as the
+findings themselves.
+
 ---
 
 ## 6. Roadmap content rubric (completeness benchmark)
@@ -297,6 +365,7 @@ the element matters for THIS repo's operating model.
 | R8 | Economics: cost projection, effort calibration | `cost_projection`, `effort` |
 | R9 | Measurability and freshness: per-item exit criteria, roadmap-level review/refresh mechanism, status trustworthiness | `exit_criteria`, preflight staleness note |
 | R10 | Consumer integration: named consumers, agent-facing reading instructions, state computable without human interpretation | header, `agent_instructions`, preflight |
+| R11 | Impact closure: items that alter shared contracts/surfaces declare which ones; cutovers pair with first-class decommission items; old-path retirement is roadmap work, not an afterthought | per-item scope fields, paired tier_items, `docs/contracts/` cross-refs |
 
 Deliberately ABSENT in this repo's style (do NOT report as gaps): calendar
 dates/quarters (sequencing-over-dates by design), owner/assignee fields
@@ -320,6 +389,7 @@ run all (prog) checks from D1/D6; create `docs/audit-reports/` and
 | C | COVERAGE-GAP-SCANNER | D8 | repo surfaces list, roadmap id+name inventory, `docs/plans/`, `docs/handoffs/` | `wave-1-outputs/C.yaml` |
 | D | CONTENT-QUALITY-REVIEWER | D7 | roadmap not_started/reserved slice | `wave-1-outputs/D.yaml` |
 | E | CROSS-ROADMAP-COHERENCE | D5 | both roadmap files, edge inventory | `wave-1-outputs/E.yaml` |
+| F | CONTRACT-CLOSURE-SWEEPER | D11 | `docs/contracts/`, `src/`, `scripts/`, `terraform/`, `.github/`, `config/`, roadmap cutover items | `wave-1-outputs/F.yaml` |
 
 Subagent briefing rules:
 - Each brief is self-contained: goal, ABSOLUTE file paths, the relevant
@@ -331,9 +401,11 @@ Subagent briefing rules:
   PROPOSALS; the auditor assigns final values at synthesis.
 - Subagent A may be split (A1: tiers T-1/T0, A2: T1+) if its brief exceeds
   a comfortable single-agent scope - decide from the measured item count.
-- Use `general-purpose` subagents for A, B, E (synthesis-heavy) and
+- Use `general-purpose` subagents for A, B, E, F (synthesis-heavy) and
   `Explore` for C and D if available; pass `model: "opus"` unless the user
-  has said otherwise.
+  has said otherwise. F gets the largest brief - it must contain the full
+  D11 method text and the explicit instruction that the inventory is
+  exhaustive, not violations-only.
 - Trust but verify: when a subagent returns, spot-check at least one
   non-trivial claim per subagent against the source before accepting it
   into synthesis. Record each spot-check in the report.
@@ -344,8 +416,11 @@ model in one head - do not delegate.
 
 **Wave 2 (auditor, after Wave 1 returns):** synthesis. Dedupe (one root
 cause = one finding listing all `affected_ids`, not N copies); assign final
-severity/confidence; run D9 and D10 judgment passes; score the Section 6
-rubric; author the report; self-validate it (Section 10); commit and push.
+severity/confidence; reconcile A against F - an item marked `complete` whose
+contract has any `legacy_live` / `fallback_to_legacy` surface cannot keep a
+`confirmed` D3 verdict, and the combined finding escalates to critical; run
+D9 and D10 judgment passes; score the Section 6 rubric; author the report;
+self-validate it (Section 9); commit and push.
 
 ---
 
@@ -368,7 +443,8 @@ summary:
     failure modes found (if any), and whether preflight/planning consumers
     can currently rely on the document.
   findings_by_severity: {critical: 0, high: 0, medium: 0, low: 0}
-  findings_by_dimension: {D1: 0, D2: 0, D3: 0, D4: 0, D5: 0, D6: 0, D7: 0, D8: 0, D9: 0, D10: 0}
+  findings_by_dimension: {D1: 0, D2: 0, D3: 0, D4: 0, D5: 0, D6: 0, D7: 0, D8: 0, D9: 0, D10: 0, D11: 0}
+  contract_closure: {closed: 0, open: 0, waived_prose_only: 0}   # per docs/contracts/ entry, from subagent F
   status_truth_verdicts: {confirmed: 0, partially_confirmed: 0, unsubstantiated: 0, contradicted: 0}
   rubric_coverage:
     - id: R1
@@ -415,7 +491,8 @@ Severity taxonomy:
 - **critical**: the roadmap asserts false state that would misdirect
   autonomous work (false `complete` on a dependency of eligible work;
   structural deadlock no bootstrap exemption covers; a consumer
-  crashes/errors on the current file).
+  crashes/errors on the current file; a `complete` cutover whose old
+  WRITE path is still live - split-brain).
 - **high**: dangling or wrong reference the validator does not catch; CD
   state contradicting the ratified decision record; materially wrong
   eligibility computation; product-critical platform item practically
@@ -441,17 +518,20 @@ discarded at synthesis, not downgraded.
 2. Every Column-B audit-surface row covered by a dimension check or
    explicitly waived with a reason.
 3. Every `complete` / `in_progress` / foundation entry has a D3 verdict.
-4. Report YAML parses (`bin/venv-python -c "import yaml;
+4. Every `docs/contracts/` entry has a D11 closure verdict (closed / open
+   / waived-as-prose-only), and subagent F's inventory enumerates every
+   referencing surface, not only the violating ones.
+5. Report YAML parses (`bin/venv-python -c "import yaml;
    yaml.safe_load(open('docs/audit-reports/PLATFORM-ROADMAP-AUDIT-....yaml'))"`)
    and structurally matches Section 8 (keys, enums, sort order).
-5. At least one spot-check per Wave 1 subagent recorded.
-6. `git status` shows ONLY new files under `docs/audit-reports/`.
-7. No recs filed, no plans authored, no PR opened.
-8. Report committed and pushed on the session branch
+6. At least one spot-check per Wave 1 subagent recorded.
+7. `git status` shows ONLY new files under `docs/audit-reports/`.
+8. No recs filed, no plans authored, no PR opened.
+9. Report committed and pushed on the session branch
    (`git push -u origin <branch>` with the AGENTS.md retry protocol).
-9. Final chat reply: headline verdict, counts by severity, top 5 findings
-   in plain sentences, and the open questions - nothing that exists only
-   in the report and matters to the user may be omitted from the reply.
+10. Final chat reply: headline verdict, counts by severity, top 5 findings
+    in plain sentences, and the open questions - nothing that exists only
+    in the report and matters to the user may be omitted from the reply.
 
 ## 10. Ask-user gates (use AskUserQuestion; otherwise do not block)
 
