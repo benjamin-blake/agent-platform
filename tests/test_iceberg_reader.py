@@ -554,7 +554,10 @@ def _patch_dl_invoke(monkeypatch, resp: _FakeResp, captured: dict):
 def test_ops_storage_backend_default_and_flag(monkeypatch):
     import src.common.iceberg_reader as ir
 
+    # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
     monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert ir.ops_storage_backend() == "ducklake"
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "Iceberg")
     assert ir.ops_storage_backend() == "iceberg"
     monkeypatch.setenv("OPS_STORAGE_BACKEND", "DuckLake")
     assert ir.ops_storage_backend() == "ducklake"
@@ -622,8 +625,22 @@ def test_ducklake_reader_url_loud_fail_when_unset(monkeypatch):
 
     monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
     monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    # The AWS-API fallback also fails (no resolvable URL) -> the loud-fail must still fire.
+    monkeypatch.setattr(ir, "_resolve_function_url_via_api", lambda *a, **k: None)
     with pytest.raises(RuntimeError, match="DUCKLAKE_READER_URL not set"):
         ir.DuckLakeReader()._reader_url()
+
+
+def test_ducklake_reader_url_api_fallback(monkeypatch):
+    """When env + terraform are unavailable, the reader URL resolves via GetFunctionUrlConfig (CI case)."""
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        ir, "_resolve_function_url_via_api", lambda name, profile=None, region="eu-west-2": "https://api.example/"
+    )
+    assert ir.DuckLakeReader()._reader_url() == "https://api.example"
 
 
 def test_ducklake_reader_current_state_parameterizes_single_key(monkeypatch):

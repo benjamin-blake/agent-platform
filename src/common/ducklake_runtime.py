@@ -377,11 +377,12 @@ def write_scd2(
     in-transaction existing-row lookup must be non-empty -- an absent merge key raises ReferentialError
     BEFORE any MERGE, replacing the prior permissive upsert-on-absent.
 
-    `created_override` (operational seed path ONLY -- the maintenance `seed_ops_recommendations`
-    bootstrap): when set AND the row is a fresh insert, it supplies the historical `created_timestamp`
-    instead of `identity.timestamp`, so a one-time migration preserves each rec's ORIGINAL created time
-    (Decision-64 anchor) while `identity.timestamp` carries the original last_updated. It has NO effect
-    on the agent write path (always None there).
+    `created_override` (operational backfill/re-seed path ONLY): when set AND the row is a fresh
+    insert, it supplies the historical `created_timestamp` instead of `identity.timestamp`, so a
+    migration/re-seed preserves each rec's ORIGINAL created time (Decision-64 anchor) while
+    `identity.timestamp` carries the original last_updated. It has NO effect on the agent write path
+    (always None there). The maintenance `seed_ops_recommendations` action that used this was removed
+    at the 2026-06-09 recs sign-off; the parameter is retained for any future break-glass re-seed.
 
     Concurrency (CD.33): a serialization collision is retried with bounded backoff+jitter up to
     `max_attempts`; exhaustion raises OCCRetryExhaustedError (loud-fail, Decision 55). A non-OCC

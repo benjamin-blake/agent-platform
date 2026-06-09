@@ -93,16 +93,22 @@ All recommendation and decision writes go through `python -m scripts.ops_data_po
 Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity via the `agent_platform` (PlatformDev) assume-role profile. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model.
 
 ## Warehouse-as-source-of-truth invariant
-This is an append-only lakehouse. Athena (over Iceberg) is the single source of truth for all operational data. Local files have exactly two valid roles:
+This is an append-only lakehouse. The warehouse is the single source of truth for all operational data; local files are never upstream of it.
 
-1. **Outbox** (`logs/.ops-outbox/`) — write-ahead buffer for offline writes. Drained once into S3 staging, then deleted. Never replayable. Each entry is a *new write that has not yet propagated*, never a *replay of an existing warehouse row*.
-2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM Athena via `sync_ops pull`. Downstream of the warehouse, never upstream.
+**Source-of-truth by table (T2.19 cutover, signed off 2026-06-09):**
+- **`ops_recommendations` = DuckLake-on-Neon by DEFAULT.** Recs reads/writes transit the closed `ducklake_reader`/`ducklake_writer` Function-URL boundary (Decision 81 cl.7); there is NO Athena escape hatch on the `ducklake` backend. Set `OPS_STORAGE_BACKEND=iceberg` to roll back to the (intact, retained) Iceberg path.
+- **All OTHER ops tables (`ops_decisions`, `ops_session_log`, `ops_execution_plans`, `ops_priority_queue`) = Athena (over Iceberg).** These remain DEFERRED on the Iceberg/Athena path; `ops_compaction` stays live for them.
 
-**Hard rule: a read cache is never a write source.** Reading any file in `logs/` and calling `OpsWriter.write()` (or otherwise putting data into S3 staging) is the CRUD anti-pattern in lakehouse clothing. Iceberg DELETE only removes a snapshot; if the same row is restaged from a stale local file on any clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe (because `_prepare_record` refreshes `last_updated_timestamp = now`). The result is an infinite resurrection loop where deletes never stick.
+The write surface is unchanged on both backends: `file_rec`/`update_rec` via the portal; only the transport underneath swaps. Local files have exactly two valid roles:
+
+1. **Outbox** (`logs/.ops-outbox/`) — write-ahead buffer for offline writes. Drained once into S3 staging (Iceberg) or the writer (DuckLake), then deleted. Never replayable. Each entry is a *new write that has not yet propagated*, never a *replay of an existing warehouse row*.
+2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM the warehouse via `sync_ops pull` (recs from the DuckLake reader; decisions from Athena). Downstream of the warehouse, never upstream.
+
+**Hard rule: a read cache is never a write source.** Reading any file in `logs/` and calling `OpsWriter.write()` (or otherwise putting data into S3 staging) is the CRUD anti-pattern in lakehouse clothing. The Iceberg-DELETE-resurrection caveat below is scoped to the still-Iceberg tables: Iceberg DELETE only removes a snapshot; if the same row is restaged from a stale local file on any clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe (because `_prepare_record` refreshes `last_updated_timestamp = now`). The result is an infinite resurrection loop where deletes never stick. (`ops_recommendations` on DuckLake is not Iceberg-snapshot-based, but the same "never re-stage from a read cache" rule applies -- recs writes go only through the writer.)
 
 The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and (b) ETL from a non-warehouse source of truth (e.g., `DECISIONS.md` -> `ops_decisions`). Anything else that ends in `OpsWriter.write()` must be reviewed for replay-from-cache violations.
 
-If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls from Athena and overwrites local). Never fix drift by re-staging from the local file.
+If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls from the warehouse -- recs from the DuckLake reader, decisions from Athena -- and overwrites local). Never fix drift by re-staging from the local file.
 
 ## Merge protocol
 - **Authoritative pre-merge gate**: remote CI (`validate.py` on GitHub-hosted runners with OIDC, CD.21) is the authoritative gate. A branch is not merge-ready until CI passes.

@@ -36,8 +36,9 @@ _DEFAULT_CATALOG_NAME = "agent_platform"
 # OPS_STORAGE_BACKEND=ducklake, else the legacy DuckDB-on-Iceberg reader (rollback target). Both
 # satisfy the Reader protocol so call sites (portal, sync_ops, preflight) are unchanged.
 _OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
-_DEFAULT_OPS_STORAGE_BACKEND = "iceberg"
+_DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
 _DUCKLAKE_READER_URL_ENV = "DUCKLAKE_READER_URL"
+_DUCKLAKE_READER_FUNCTION_NAME = "agent-platform-ducklake-reader"
 
 # pk used for ROW_NUMBER() dedup (Decision 56)
 _TABLE_PARTITION_KEYS: dict[str, str] = {
@@ -62,6 +63,24 @@ def _parse_single_key_filter(row_filter: str) -> str | None:
     """Return the quoted value of a `<col> = '<value>'` filter, or None if it is not that shape."""
     m = _SINGLE_KEY_FILTER_RE.match(row_filter)
     return m.group(1) if m else None
+
+
+def _resolve_function_url_via_api(function_name: str, *, profile: str | None, region: str) -> str | None:
+    """Resolve a Lambda Function URL via lambda:GetFunctionUrlConfig. None on any failure.
+
+    Last-resort fallback for environments with neither the DUCKLAKE_*_URL env nor a terraform-init'd
+    checkout -- principally the CI runner (T2.19 cutover), where the github_ci OIDC role carries the
+    GetFunctionUrlConfig grant. Best-effort: any error (missing grant, throttle, boto3 absent) returns
+    None so the caller can raise a single actionable error.
+    """
+    try:
+        import boto3  # noqa: PLC0415
+
+        client = boto3.Session(profile_name=profile).client("lambda", region_name=region)
+        return client.get_function_url_config(FunctionName=function_name).get("FunctionUrl")
+    except Exception as exc:  # noqa: BLE001 -- best-effort fallback; caller raises if this returns None
+        logger.warning("iceberg_reader: GetFunctionUrlConfig fallback failed for %s: %s", function_name, exc)
+        return None
 
 
 class Reader(Protocol):
@@ -304,7 +323,12 @@ class DuckLakeReader:
         self._region = region
 
     def _reader_url(self) -> str:
-        """Resolve the ducklake_reader Function URL: env first, then terraform output. Loud-fail if absent."""
+        """Resolve the ducklake_reader Function URL: env, then terraform output, then the AWS API.
+
+        The AWS-API fallback (lambda:GetFunctionUrlConfig) covers the CI runner case (T2.19 cutover):
+        there is no DUCKLAKE_READER_URL env and no terraform-init'd checkout, but the github_ci OIDC
+        role carries the GetFunctionUrlConfig grant. Loud-fail only if all three resolutions fail.
+        """
         url = os.environ.get(_DUCKLAKE_READER_URL_ENV)
         if url:
             return url.rstrip("/")
@@ -322,9 +346,12 @@ class DuckLakeReader:
                 return proc.stdout.strip().rstrip("/")
         except FileNotFoundError:
             pass
+        api_url = _resolve_function_url_via_api(_DUCKLAKE_READER_FUNCTION_NAME, profile=self._profile, region=self._region)
+        if api_url:
+            return api_url.rstrip("/")
         raise RuntimeError(
-            f"{_DUCKLAKE_READER_URL_ENV} not set and terraform output 'ducklake_reader_function_url' unavailable -- "
-            "cannot reach the DuckLake reader (OPS_STORAGE_BACKEND=ducklake)."
+            f"{_DUCKLAKE_READER_URL_ENV} not set, terraform output 'ducklake_reader_function_url' unavailable, and "
+            "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake reader (OPS_STORAGE_BACKEND=ducklake)."
         )
 
     def _invoke(self, payload: dict[str, Any]) -> dict[str, Any]:

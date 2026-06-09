@@ -9,6 +9,23 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-09] - ducklake-ops-finalize: T2.19 recs cutover SIGNED OFF (PHASE 2/3 tail)
+
+Completed the recs-first DuckLake cutover (PLAN-ducklake-ops-finalize, resuming from VP9 after #108/#109/#111).
+
+**Sign-off path (all VP gates PASS):**
+- VP9a connectivity readiness: `connect_probe` reader+writer `phase_reached=attach ok=True`; cold-resume ATTACH ~9-11s (within 18s budget).
+- VP9/10 IAM: confirmed PlatformDev `lambda:InvokeFunction` live (#109); added `lambda:InvokeFunction` + `lambda:GetFunctionUrlConfig` to the `github_ci` branch+pr OIDC roles (human-gated apply, 2 in-place policy updates). The GetFunctionUrlConfig grant + a boto3 URL-resolution fallback in `iceberg_reader`/`ops_data_portal` let the post-flip CI DQ resolve+reach the reader URL (no env / no terraform in CI).
+- VP11 deploy: 4 DuckLake functions (writer/reader/maintenance/catalog_dr) + data-pipeline/ops-compaction rebuilt/deployed; per-function smoke (writer attach, reader closed-path, catalog-dr DR dump, maintenance catalog_reinit). NOTE: maintenance merge/gc gate is blocked post-cutover (writer->prod / maintenance->smoke catalogs no longer shared) and restore_drill is the documented pg_restore deferral -- both filed as rec-2115.
+- VP12 DQ-over-DuckLake: initially FAIL on 2 rows (stale rec-001 + a leaked `test-ryw` smoke probe); RCA showed DuckLake was a stale seed. Re-seeded from current Iceberg current-state (parity 812/812) -> DQ PASS (37 checks). The 7 "context_short" rows were a red herring (created<2026-05-01, correctly excluded by the D64 anchor).
+- VP13 rollback: DuckLake read 812 + Iceberg read 812 via Athena. The `iceberg` `--selftest-read` direct-pyarrow path is ACCESS_DENIED under PlatformDev from CC-web (pre-existing; Athena is the working rollback read) -- filed as rec-2115.
+- VP14 sign-off: outbox empty -> flipped `_DEFAULT_OPS_STORAGE_BACKEND` iceberg->ducklake in all 3 sites (`ops_data_portal.py`, `iceberg_reader.py`, `data_quality_runner.py`) -> `--selftest-roundtrip` GREEN. The roundtrip leaves a `test-roundtrip-*` probe (automatable unset -> fails DQ); purged via a second re-seed (bumped maintenance timeout 300->900s for the 812-row seed, restored after). Docs (AGENTS.md / PROJECT_CONTEXT / runbook Section 6) flipped atomically.
+- VP15 closed boundary: removed `seed_ops_recommendations` (+ helpers + tests) from the maintenance handler, redeployed (live Lambda now returns "unknown action"); made `drain_pending` backend-aware; confirmed every `OpsWriter().write("ops_recommendations")` is behind the `iceberg` rollback branch.
+
+**Test impact of the flip:** the default flip broke ~29 tests assuming the iceberg default -> added a module-autouse `iceberg`-pinning fixture in test_ops_data_portal.py + updated the 3 `*_default*` backend tests + added drain/URL-fallback coverage. All green.
+
+**Bookkeeping:** rec-2113 (restore-drill HARD GATE), rec-2114 (selftest probe leak), rec-2115 (post-cutover smoke/rollback-read hardening) filed via the live DuckLake write path; rec-2099 + rec-2111 closed. T2.19 -> recs-complete (stays `in_progress`: decisions/other ops tables + restore-drill deferred). DuckLake recs = 815 rows, DQ-clean.
+
 ## [2026-06-09] - ducklake-neon-connect-rca: connectivity unblocked, lambda_attach GREEN
 
 **Root cause identified and fixed.** The previous 120s Lambda hangs were caused by `libpq_conninfo`

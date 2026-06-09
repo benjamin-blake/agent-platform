@@ -524,8 +524,10 @@ _FULL_DSN = {"username": "u", "password": "p", "host": "hostx", "dbname": "neond
 
 def test_handler_lists_new_operational_actions():
     body = _response_body(h.handler({"action": "bad"}))
-    for action in ("catalog_reinit", "seed_ops_recommendations", "restore_drill"):
+    for action in ("catalog_reinit", "restore_drill"):
         assert action in body["actions"]
+    # seed_ops_recommendations was removed at the 2026-06-09 recs sign-off (closed boundary).
+    assert "seed_ops_recommendations" not in body["actions"]
 
 
 def test_catalog_reinit_drops_then_reattaches():

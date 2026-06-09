@@ -132,6 +132,24 @@ resource "aws_iam_role_policy" "github_ci_branch" {
           "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${aws_glue_catalog_database.ops.name}",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${aws_glue_catalog_database.ops.name}/*"
         ]
+      },
+      {
+        # T2.19 recs cutover (rec-2111): CI/DQ reads recs over the DuckLake reader Function URL and
+        # may write recs via the writer. lambda:InvokeFunction is the action the Function-URL IAM
+        # authorizer actually checks (InvokeFunctionUrl alone is INSUFFICIENT -- live-verified).
+        # InvokeFunctionUrl retained alongside for AWS-doc alignment; not sufficient on its own.
+        # lambda:GetFunctionUrlConfig lets the runner RESOLVE the reader/writer URL via the AWS API
+        # when neither DUCKLAKE_*_URL env nor a terraform-init'd checkout is present (the CI case) --
+        # iceberg_reader / ops_data_portal fall back to get_function_url_config (post-cutover DQ).
+        Sid    = "DuckLakeInvokeCI"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
       }
     ]
   })
@@ -226,6 +244,23 @@ resource "aws_iam_role_policy" "github_ci_pr" {
           "glue:GetPartitions"
         ]
         Resource = "*"
+      },
+      {
+        # T2.19 recs cutover (rec-2111): PR CI reads recs over the DuckLake reader Function URL.
+        # lambda:InvokeFunction is the action the Function-URL IAM authorizer actually checks.
+        # InvokeFunctionUrl retained for AWS-doc alignment; not sufficient alone. PR CI is
+        # read-only (no rec writes) but scoped to writer ARNs for consistency / future-compat.
+        # lambda:GetFunctionUrlConfig lets the runner resolve the URL via the AWS API (no env / no
+        # terraform-init'd checkout) -- mirrors the branch role's DuckLakeInvokeCI grant.
+        Sid    = "DuckLakeInvokeCI"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
       }
     ]
   })

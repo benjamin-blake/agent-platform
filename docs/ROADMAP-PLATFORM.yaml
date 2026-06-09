@@ -3584,6 +3584,22 @@ tier_items:
         CC-web). DEFERRED to follow-up migrations (still on Iceberg/Athena, ops_compaction stays live):
         ops_decisions (rebuilds from DECISIONS.md), ops_session_log, ops_execution_plans,
         ops_priority_queue. T2.18 ops_compaction-retirement tail also defers.
+      - 2026-06-09: RECS SLICE COMPLETE (PLAN-ducklake-ops-finalize). CI-green slice landed earlier
+        (#108/#109: SCD2 pure/impure split -> ducklake_runtime.py 432 SLOC < 500 no waiver,
+        validate_sloc_limits in --pre, D64 anchor restored, 4 ci_rca recs closed). This session signed off
+        the live cutover: connect_probe reader+writer GREEN (cold-resume ATTACH within budget); 4 DuckLake
+        functions (writer/reader/maintenance/catalog_dr) + data-pipeline/ops-compaction rebuilt/deployed;
+        github_ci OIDC granted lambda:InvokeFunction + GetFunctionUrlConfig (human-gated apply) so CI/DQ
+        resolve+reach the reader URL post-flip; _DEFAULT_OPS_STORAGE_BACKEND flipped iceberg->ducklake in
+        all 3 sites; DQ-over-DuckLake PASS after a from-Iceberg re-seed restored parity (stale rec-001 +
+        a leaked test-ryw smoke probe purged); --selftest-roundtrip GREEN; seed_ops_recommendations action
+        REMOVED from the maintenance handler + redeployed (closed boundary: recs writes transit only the
+        portal->writer path); drain_pending made backend-aware. AGENTS.md/PROJECT_CONTEXT/runbook updated
+        atomically. STILL DEFERRED: ops_decisions/session_log/execution_plans/priority_queue on
+        Iceberg/Athena; ops_compaction live; the pg_restore catalog-DR restore drill (pgclient layer lacks
+        pg_restore) -- filed as rec-2113 HARD GATE before the next ops table migrates (Decision 81 cl.7,
+        compensating controls live). Follow-ups: rec-2114 (selftest probe leak), rec-2115 (post-cutover
+        smoke/rollback-read hardening).
 
   - id: T2.20
     tier: T2
