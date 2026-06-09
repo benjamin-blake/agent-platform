@@ -1,0 +1,213 @@
+# CONTENT-QUALITY-REVIEWER D -- Wave-1 D7 per-item content-quality audit (REPORT-ONLY)
+# Target: docs/ROADMAP-PLATFORM.yaml ; Repo: /home/user/agent-platform ; HEAD ; 2026-06-09
+# Scope: 60 not_started items + 1 reserved (T1.8). Priority: eligible + one-dep-away first.
+# Method dimension: intent-states-why; exit_criteria adjudicable; files_in_scope plausible;
+#   effort calibration; naming/id consistency.
+# Verdict vocabulary: stale_path | retired_infra_reference | architecture_contradiction |
+#   vague_exit_criteria | effort_miscalibration | naming_inconsistency | redundant_overlap | content_ok
+
+claims:
+
+  # ===================== ARCHITECTURE CONTRADICTION (Docker vs CD.24 manifest SSOT) =====================
+  - id: D-001
+    affected_ids: [T0.7a, T0.7b, T0.7c, T1.1]
+    verdict_or_classification: architecture_contradiction
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2220-2221 (T0.7a Dockerfile+requirements.txt)"
+      - "docs/ROADMAP-PLATFORM.yaml:2243-2244 (T0.7b)"
+      - "docs/ROADMAP-PLATFORM.yaml:2269-2270 (T0.7c)"
+      - "docs/ROADMAP-PLATFORM.yaml:2588-2589 (T1.1)"
+      - "docs/PROJECT_CONTEXT.md:15 ('No Docker in this environment -- Lambdas use zip packaging via S3')"
+      - "docs/ROADMAP-PLATFORM.yaml:667-711 (CD.24 ratified, filed_via dec-1086, manifest SSOT)"
+      - "docs/ROADMAP-PLATFORM.yaml:1731 (T-1.8 status complete 2026-06-03: 'eight manifests shipped; copytrees retired')"
+      - "src/lambdas/*/manifest.yaml exists for all 12 lambdas; zero Dockerfiles found (find src/lambdas -name Dockerfile -> empty)"
+    proposed_severity: high
+    proposed_confidence: high
+    note: "These forward Lambda items prescribe Dockerfile + requirements.txt as the packaging artefact, contradicting ratified+shipped CD.24 (per-Lambda manifest.yaml is the packaging SSOT; T-1.8 complete). They also OMIT manifest.yaml from files_in_scope. The files_in_scope predate CD.24/T-1.8 and were never reconciled. T0.7a/b/c are bootstrap-critical (gate the whole Lambda surface) and T1.1 is the next Lambda wave -- a fresh agent following files_in_scope would author the wrong packaging."
+
+  - id: D-002
+    affected_ids: [T1.14, T3.5]
+    verdict_or_classification: architecture_contradiction
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2928-2929 (T1.14 lists BOTH src/lambdas/reconciliation/Dockerfile AND manifest.yaml)"
+      - "docs/ROADMAP-PLATFORM.yaml:3864-3865 (T3.5 lists BOTH src/lambdas/tca_aggregation/Dockerfile AND manifest.yaml)"
+      - "docs/ROADMAP-PLATFORM.yaml:3461-3464 (T2.17, the correct pattern: manifest.yaml only, '# new -- CD.24 per-Lambda manifest')"
+      - "docs/ROADMAP-PLATFORM.yaml:3998 (T4.1 correct: 'per-Lambda manifest (per CD.24)', no Dockerfile)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Internally inconsistent: these newer items DO list the CD.24 manifest.yaml but ALSO retain a vestigial Dockerfile entry. Less severe than D-001 (manifest is present) but the Dockerfile line is dead per CD.24/'No Docker'. Drop the Dockerfile entries to match T2.17/T4.1."
+
+  # ===================== STALE files_in_scope PATHS =====================
+  - id: D-003
+    affected_ids: [T1.5, T1.6]
+    verdict_or_classification: stale_path
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2662 (T1.5 lists config/data_quality/decisions/ops_decisions.yaml)"
+      - "docs/ROADMAP-PLATFORM.yaml:2698,2703 (T1.6 lists config/data_quality/)"
+      - "ls config/data_quality/ -> No such file or directory"
+      - "DQ config now at config/agent/data_quality/ (ls confirms decisions/ops_decisions.yaml, ops.yaml, source_registry.yaml, telemetry.yaml)"
+      - "Contrast: T2.15 uses the CORRECT path config/agent/data_quality/ops.yaml (docs/ROADMAP-PLATFORM.yaml:3334)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "DQ config relocated from config/data_quality/ to config/agent/data_quality/. T1.5 and T1.6 still cite the old prefix. T1.6 effort L strategic -- its whole point is to retire config/data_quality/, so the stale path is load-bearing. (Note: T0.12 intent+exit also cite config/data_quality/*.yaml at lines 2361/2373 but T0.12 is complete, out of scope.)"
+
+  - id: D-004
+    affected_ids: [T-1.14]
+    verdict_or_classification: stale_path
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1937,1941 (T-1.14 files_in_scope + exit criterion list config/copilot_model_routing.yaml)"
+      - "config/copilot_model_routing.yaml does NOT exist (rg + ls); git log --all -- config/copilot_model_routing.yaml returns nothing"
+      - "Actual file: config/agent/copilot/model_routing.yaml (ls confirms)"
+      - "config/README.md:335 still documents 'copilot_model_routing.yaml' (README also stale)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "The routing config moved to config/agent/copilot/model_routing.yaml. T-1.14 intent already flags reconciling against the existing routing config, so the work is real, but the path string is wrong (and the exit criterion 'either projects from inference-provider.yaml OR is deleted' references a non-existent path). One-dep-away (dep T-1.12 in_progress)."
+
+  - id: D-005
+    affected_ids: [T2.9]
+    verdict_or_classification: stale_path
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3108 (T2.9 files_in_scope: terraform/secrets.tf, NO '# new' marker)"
+      - "terraform/secrets.tf does NOT exist; no rg hit for 'secrets.tf'"
+      - "Secrets Manager resources actually live in terraform/scheduled_agents.tf, terraform/outputs.tf, terraform/personal/*.tf (rg aws_secretsmanager_secret)"
+      - "Contrast: T0.4 introduces terraform/inference_credentials.tf marked '# new' (3157); T2.14 references terraform/secrets_manager_brokers.tf (3291)"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "T2.9 (eligible, dep T2.1 complete) lists terraform/secrets.tf with no '# new' marker, implying an existing file -- but it does not exist at that path. Either it should be marked new or pointed at the real secrets location. T2.14 depends on T2.9 so the ambiguity propagates. Lower severity: terraform layout is flexible and the item is a policy/automation item."
+
+  # ===================== RETIRED-INFRASTRUCTURE REFERENCES (EC2 / self-hosted runner) =====================
+  - id: D-006
+    affected_ids: [T3.2]
+    verdict_or_classification: retired_infra_reference
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3811 (T3.2 exit criterion: 'Scheduled hourly via the EC2 runner cron')"
+      - "docs/PROJECT_CONTEXT.md:177 (CI runner = GitHub-hosted + OIDC per CD.21; ec2_runner.tf 'retained as a retired-runner artefact')"
+      - "docs/ROADMAP-PLATFORM.yaml:3152-3155 (T2.10 complete: EC2 runner retired, CI on ubuntu-latest+OIDC, cite Decision 73 + CD.21)"
+      - "Contrast: T3.7 correctly schedules on 'GitHub Actions schedule, NOT a Lambda' (3916)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "The EC2 self-hosted runner was retired (CD.21/Decision 73, realized by T2.10 complete). T3.2's exit criterion pins scheduling to a non-existent substrate. A fresh agent cannot satisfy 'scheduled via the EC2 runner cron' -- the criterion is now unadjudicable AND prescribes dead infra. T3.2 is the causal-chain verifier feeding T3.3/T3.4."
+
+  - id: D-007
+    affected_ids: [T4.3]
+    verdict_or_classification: retired_infra_reference
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:4093-4095 (T4.3 intent offers 'GitHub Actions scheduled workflows on the self-hosted runner (Decision 68)' as an alternative substrate)"
+      - "docs/ROADMAP-PLATFORM.yaml:4107 (exit criterion offers 'self-hosted runner cron' as a substrate choice)"
+      - "docs/PROJECT_CONTEXT.md:177 + T2.10 (3152-3155): self-hosted/EC2 runner retired per CD.21/Decision 73"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "T4.3 keeps the self-hosted-runner-cron (Decision 68) as a live substrate OPTION; that substrate was retired by CD.21/Decision 73. Lower severity than T3.2 because T4.3 offers TWO substrates and the Step-Functions-scheduled-execution option is valid -- but the retired option should be struck. files_in_scope terraform/scheduled_agents.tf EXISTS (path OK)."
+
+  # ===================== VAGUE / UNADJUDICABLE EXIT CRITERIA =====================
+  - id: D-008
+    affected_ids: [T3.3]
+    verdict_or_classification: vague_exit_criteria
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3826 (T3.3 exit criterion: 'False-positive rate below threshold (track via rec-curator)')"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Threshold is undefined -- no number, no formula, no pointer to where the threshold lives. A fresh agent cannot mark this true/false. Two deps from eligible (T3.2 -> T3.3). Fix: name the threshold or the contract field that defines it."
+
+  - id: D-009
+    affected_ids: [T3.4, T4.4]
+    verdict_or_classification: vague_exit_criteria
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3837 (T3.4 files_in_scope: 'varies -- touches executor, scheduled agents, ops portal Lambdas, planning skill')"
+      - "docs/ROADMAP-PLATFORM.yaml:3840 (T3.4 exit: 'Autonomy maturity gates A0-A3 documented and live' -- documented-where unspecified)"
+      - "docs/ROADMAP-PLATFORM.yaml:4122 (T4.4 files_in_scope: 'varies')"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Both are XL/strategic:true placeholders far in the future (deps chain through T3.3/T4.2). 'varies' files_in_scope and 'documented' (where?) are soft, but acceptable as deliberately-deferred strategic stubs that decompose later. Noting per the dimension; not prioritised. NOT flagged on eligible items."
+
+  # ===================== REDUNDANT / OVERLAPPING SCOPE =====================
+  - id: D-010
+    affected_ids: [T1.1]
+    verdict_or_classification: retired_infra_reference
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2579-2582,2594 (T1.1 intent+exit: read via 'Athena _current view against the OLD account (company-aws-profile) during the T1 bridging window')"
+      - "docs/ROADMAP-PLATFORM.yaml:2976-2979 (T2.2 complete 2026-05-29: ops_recommendations + ops_decisions imported to personal account; recommendation_sync confirms 722 recs + 38 decisions in personal-account)"
+      - "docs/ROADMAP-PLATFORM.yaml:2997-3000 (T2.3 complete: company-aws-profile reference sweep; live code paths clean)"
+      - "docs/ROADMAP-PLATFORM.yaml:3576-3598 (T2.19 in_progress: ops_recommendations cut over to DuckLake; reads transit ducklake_reader, no Athena escape hatch for recs)"
+    proposed_severity: high
+    proposed_confidence: medium
+    note: "T1.1's written read approach (Athena _current view against the OLD account, then DuckDB-on-Iceberg-snapshot post-T2.5) is obsolete: the old-account migration completed (T2.2/T2.3) and ops_recommendations now reads from DuckLake via ducklake_reader (T2.19). update_rec reads a rec before applying a diff; per the closed-boundary recs path that read should transit ducklake_reader, not an OLD-account Athena view. This is the next Lambda wave's instruction and would mis-direct the implementer. Confidence medium: T1.1 deps (T0.7a/T0.7c/T0.8) are still not_started so it is not imminently eligible, and ops_decisions/session_log remain on Iceberg/Athena -- but the recs read path it describes is wrong at HEAD."
+
+  - id: D-011
+    affected_ids: [T1.4]
+    verdict_or_classification: redundant_overlap
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2632 (T1.4 intent: 'Compact, optimize, vacuum operations on Iceberg tables. EventBridge-scheduled. Replaces the compact/optimize half of legacy ops_data_portal'; exit 'Hourly compaction')"
+      - "docs/ROADMAP-PLATFORM.yaml:3486-3534 (T2.18 in_progress: 'DuckLake maintenance pipeline replacing ops_compaction'; owns ops_compaction retirement, Decision 78 clause 7)"
+      - "docs/ROADMAP-PLATFORM.yaml:3584-3586,3598-3599 (T2.19 progress: ops tables migrating off Iceberg to DuckLake; ops_compaction stays live only for the still-Iceberg tables)"
+      - "terraform/maintenance_schedule.tf (T1.4 files_in_scope) does NOT exist; src/lambdas/maintenance/ has handler.py + manifest.yaml (no Dockerfile)"
+    proposed_severity: medium
+    proposed_confidence: medium
+    note: "T1.4 builds an Iceberg compact/optimize/vacuum maintenance Lambda; T2.18 builds the DuckLake maintenance pipeline that REPLACES ops_compaction. As operational tables migrate to DuckLake (T2.19), T1.4's Iceberg-maintenance scope shrinks to whatever tables remain on Iceberg, overlapping T2.18's mandate and the live ops_compaction Lambda. T1.4 does not reference DuckLake or T2.18 and is not reconciled with the cutover. No item other than T2.18/T2.19 owns ops_compaction retirement. Recommend T1.4 be re-scoped or folded; at minimum cross-reference T2.18."
+
+  # ===================== EFFORT CALIBRATION (L/XL vs strategic flag under freeze) =====================
+  - id: D-012
+    affected_ids: [T2.22, T2.23, T1.13, T2.19, T3.1]
+    verdict_or_classification: effort_miscalibration
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:51-53 (agent_instructions: 'L and XL items are tagged strategic: true and require their own STRATEGIC plan tree')"
+      - "AGENTS.md:38,43,47,54 (STRATEGIC plans suspended repo-wide; decomposed into atomic IMPLEMENTATION plans; restores at CD.17/T4.2)"
+      - "T2.22 effort L strategic:false (3679-3680); T2.23 effort L strategic:false (3703-3704) -- intents say 'Standalone IMPLEMENTATION plan. V3.' but carry NO explicit freeze-override note"
+      - "T1.13 effort L strategic:false (2899-2900) -- DEFENSIBLE: note 'Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze' (2903-2907); also in_progress"
+      - "T3.1 effort L strategic:false (3798-3799) -- DEFENSIBLE: explicit 'Freeze override (AGENTS.md): ... authored as IMPLEMENTATION (STRATEGIC suspended)' (3779-3781)"
+      - "T2.19 effort L strategic:false (3572-3574) -- in_progress, no explicit strategic-rationale note"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "The line-51-53 convention ('L/XL => strategic: true') is systematically superseded by the AGENTS.md repo-wide STRATEGIC suspension, so strategic:false on L items is DEFENSIBLE -- BUT application is uneven. T3.1 and T1.13 explicitly cite the freeze override; T2.22/T2.23/T2.19 do not. This is a documentation-consistency gap, not a hard error. Recommend the L-but-strategic-false items carry the same one-line freeze-override note T3.1 uses. (Inverse check: every strategic:true item found is L or XL -- no XS/S mislabeled strategic.)"
+
+  # ===================== NAMING / ID CONSISTENCY =====================
+  - id: D-013
+    affected_ids: [T-1.8, T1.8]
+    verdict_or_classification: naming_inconsistency
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1695 (T-1.8 = 'Per-Lambda packaging manifests', complete)"
+      - "docs/ROADMAP-PLATFORM.yaml:2725 (T1.8 = RESERVED, renamed-from 'Retire Athena _current views' -> T2.7)"
+      - "References to 'T-1.8' at 707,716,1658,1737,3998 all mean the hyphen item (manifest mechanism) -- correct"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "T-1.8 (tier T-1) and T1.8 (tier T1) are two DISTINCT items differing only by a hyphen -- one complete (manifest mechanism), one reserved. The tier-shortcut regex ^T-?\\d+$ and preflight disambiguate by parse, so no tooling hazard, but the pair is a human-legibility trap (easy to read 'T-1.8' as 'T1.8' in prose). No fix required; flagging as a latent readability risk. Reserved-T1.8 self-description ('gate CD.15 now reads [T0.7c, T1.2, T2.5, T2.7]', 2731) MATCHES CD.15.gates at line 501 -- consistent."
+
+  - id: D-014
+    affected_ids: [T2.16b]
+    verdict_or_classification: naming_inconsistency
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3347 (T2.16) + 3392 (T2.16b) -- base id has no 'a' suffix; follow-on is 'b'"
+      - "docs/ROADMAP-PLATFORM.yaml:3156 (T2.11a) + 3181 (T2.11b) -- both members of the pair carry suffixes"
+      - "Decimal-child ids T0.12.5/.6/.7 (2381/2436/2471) coexist with flat T-1.x -- two child-id schemes"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Mild id-convention drift: the a/b suffix pair is realized as (T2.16, T2.16b) -- base without 'a' -- whereas (T2.11a, T2.11b) suffixes both. And child decomposition uses two schemes (decimal T0.12.5 vs suffix T2.16b). Regex-safe; preflight handles both. Cosmetic; both items are complete so no forward-work impact. Noted for convention hygiene only."
+
+  # ===================== CLEAN ELIGIBLE / NEAR-ELIGIBLE ITEMS (summary, no per-item rows) =====================
+  - id: D-015
+    affected_ids: [T-1.9, T0.4, T0.6, T1.11, T2.4, T2.8, T2.20, T2.7, T2.21, T2.24, T2.15, T0.12.5, T0.12.7, T2.14, T1.2, T1.3, T1.7, T1.9, T1.10, T0.8, T2.5, T2.6, T2.25]
+    verdict_or_classification: content_ok
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1739 (T-1.9), 2134 (T0.4), 2189 (T0.6), 2785 (T1.11), 3001 (T2.4), 3074 (T2.8), 3604 (T2.20)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Eligible/near-eligible items whose intent states WHY and whose exit_criteria are adjudicable against the repo without asking the user. Spot-confirmed: T2.4 files_in_scope terraform/iceberg_tables.tf EXISTS (1634 lines) -- the hypothesised stale path is FALSE; criteria are grep/DDL-checkable. T-1.9/T1.11/T2.7/T2.8/T2.20/T2.21/T2.24/T2.15/T0.12.5/T0.12.7 have concrete, falsifiable criteria. T0.4/T0.6 carry user_action / human-gate criteria but those are explicitly marked. These are the clean forward book; no defects worth a row."
+
+  - id: D-016
+    affected_ids: [T-1.13, T-1.15, T-1.16, T-1.17, T-1.18, T-1.19]
+    verdict_or_classification: content_ok
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1897 (T-1.13) .. 2069 (T-1.19); each: contract YAML exists at contract_version:1 status:ratified + consumer wired + .md deleted + Step-10 critique converges"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "The md-to-yaml contract-conversion wave (dep T-1.12 in_progress). intent states WHY (agent-first contract ritual); exit_criteria are adjudicable (file exists at version/status; CI green; .md deleted). 'Step 10 multi-perspective critique converges' is a process gate (adjudicable only post-hoc) but is acceptable as an explicit ritual checkpoint, consistent across the wave. EXCEPTION: T-1.14 (same wave) is filed separately as D-004 for its stale config/copilot_model_routing.yaml path."
+
+  - id: D-017
+    affected_ids: [T1.8]
+    verdict_or_classification: content_ok
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2725-2743 (reserved item; status: reserved; empty depends_on/files_in_scope/exit_criteria; rename_history present)"
+      - "docs/ROADMAP-PLATFORM.yaml:501 (CD.15.gates == [T0.7c, T1.2, T2.5, T2.7] matches the reserved item's self-description at 2731)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Reserved T1.8 is internally consistent and correctly self-describes the CD.15 gate move (T1.8 -> T2.7). Status 'reserved' (not 'not_started') correctly excludes it from next_eligible/strategic_pending. No defect. (Cross-ref D-013 for the T-1.8/T1.8 legibility note.)"

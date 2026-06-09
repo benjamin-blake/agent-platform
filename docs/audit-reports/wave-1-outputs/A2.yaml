@@ -1,0 +1,327 @@
+# GROUND-TRUTH-VERIFIER A2 -- D3 status truthfulness audit of docs/ROADMAP-PLATFORM.yaml
+# Scope: 15 tier items (T1.13, T2.1-T2.19 subset, T3.6) + 15 foundation entries (F.1-F.15)
+# Repo root: /home/user/agent-platform  HEAD: 0381496  Date: 2026-06-09
+# Method: exit_criteria adjudicated against repo HEAD; cited tests run (3 pytest invocations,
+#   max budget used); files_in_scope existence; corroboration in DECISIONS.md / SESSION_LOG / git log.
+# Note on evidence: a ripgrep display wrapper mangled some literal tokens to "n" in raw output
+#   (e.g. created_timestamp, seed_ops_recommendations); verdicts rest on the underlying file content,
+#   which was confirmed by direct path reads and the unmangled lines.
+
+claims:
+  - id: A2-001
+    affected_ids: [T2.1]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "terraform/personal/ exists (dir present); realized via PR #1 / Decision 77 per note"
+      - "ls terraform/personal/inference_credentials.tf -> No such file; ls terraform/inference_credentials.tf -> No such file"
+      - "ec2_runner.tf header line 1: 'DEPRECATED 2026-05-28 -- CD.21 ... Self-hosted EC2 runner retired' (criterion superseded, not met)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Item's own note admits 2 of 4 exit criteria not satisfied at HEAD: EC2-runner-registration superseded by CD.21 (runner retired), inference-credentials (DeepSeek+Anthropic LiteLLM smoke-test) outstanding -- no inference_credentials.tf anywhere. Honest self-disclosure; partially_confirmed because terraform apply + Iceberg-table provisioning are substantiated but two written criteria are openly unmet."
+
+  - id: A2-002
+    affected_ids: [T2.2]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "scripts/migrate_ops_data.py exists (files_in_scope present)"
+      - "logs/.preflight-report.json absent; rg '722|recommendation_sync|38 decisions' docs/SESSION_LOG.md -> no hits; git log search for migrate/import/722 -> no hits"
+      - "DECISIONS.md corroborates the migration program exists but not the specific row counts"
+    proposed_severity: medium
+    proposed_confidence: medium
+    note: "Exit criterion 'row counts match' rests entirely on a preflight 'recommendation_sync confirms 722 recs + 38 decisions' claim that is NOT corroborated anywhere reachable at HEAD (no preflight report file, no SESSION_LOG mention, no git evidence). The script and migration intent exist; the asserted parity number is unsubstantiated. Out-of-order completion (deps T0.7a/T0.7b not_started) self-disclosed."
+
+  - id: A2-003
+    affected_ids: [T2.3]
+    verdict_or_classification: confirmed
+    evidence:
+      - "rg 'company-aws-profile' src/common/config.py:14,113 + database.py:34 -> all in docstrings/export-examples ('export AWS_PROFILE=company-aws-profile'), not live code paths"
+      - "remaining hits are Lambda-deferred scripts (build_lambda.py, run_scheduled_agent.py, migrate_ops_data.py), tests, docs, terraform/ (retired work-root) -- matches the note's classification"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Written criterion 'no production occurrences' holds at HEAD: every src/ hit is a docstring/comment example string, and code-path residuals are confined to Lambda-deferred scripts + docs, exactly as the note claims. Classification still valid today."
+
+  - id: A2-004
+    affected_ids: [T2.10]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/oidc.tf exists (criterion-correct path; note acknowledges terraform/oidc.tf was never the path)"
+      - "rg 'self-hosted' .github/workflows/ -> only ci.yml:118 + claude.yml:3, both COMMENTS describing the retirement ('GitHub-hosted runner (CD.21 -- self-hosted runner retired)') -- NO runs-on self-hosted label remains"
+      - "ec2_runner.tf retained with deprecation header"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All exit criteria substantiated. The two self-hosted matches are retirement-explaining comments, so 'no remaining workflow references the self-hosted runner label' holds. NB files_in_scope lists .github/workflows/pre_commit.yml which does NOT exist at HEAD and terraform/oidc.tf (real path terraform/personal/oidc.tf) -- stale files_in_scope, not a status defect; verdict unaffected."
+
+  - id: A2-005
+    affected_ids: [T2.12]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "terraform/github/{main.tf,repo.tf,variables.tf,README.md} exist; repo.tf:18 secret_scanning{} + :21 secret_scanning_push_protection{} blocks present"
+      - ".github/workflows/codeql.yml exists, on: push[main] + pull_request[main] + weekly cron; .github/dependabot.yml exists"
+      - "DECISIONS.md Decision 83: main-protection ruleset enforcement=active; Dependabot live -- confirms branch-protection criterion"
+      - "rg 'dec-1084' DECISIONS.md/SESSION_LOG.md -> no hits (git-history-audit decision id not located)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Controls-as-code + branch protection + Dependabot are confirmed live (Decision 83). But two exit criteria remain unverified by the item's own progress_note: GHAS secret-scanning live-state and 'CodeQL workflow runs green on PR+push' (web PAT lacks security_events scope -- config evidence only, no live probe). Marked complete while admitting live-probe gaps; partially_confirmed. dec-1084 referenced but not findable."
+
+  - id: A2-006
+    affected_ids: [T2.13]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "DECISIONS.md Decision 76/73 corroborate repo flipped public 2026-05-30; note admits flip landed AHEAD of the CD.20 security/portal sequence"
+      - "files_in_scope: [] (settings action). T2.11a (devcontainer) status=not_started, T2.11b in_progress, T2.12 only reached complete 2026-06-08 -- all AFTER this item's 2026-05-30 completion"
+    proposed_severity: high
+    proposed_confidence: high
+    note: "Item is marked complete 2026-05-30 but its exit_criteria assert GHAS active, branch-protection active, and 'Codespace built from main reaches green preflight' -- none of which held at flip time per its OWN note (GHAS/branch-protection/devcontainer/portal not in place). depends_on T2.11b/T2.12 were unmet when this completed. The public-flip happened, but the post-flip verification exit criteria were not satisfiable on the completion date; the green-preflight claim depends on T2.11a which is still not_started. Downstream-dependency inversion makes this the most overstated 'complete' in scope."
+
+  - id: A2-007
+    affected_ids: [T2.16]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/rds_ducklake_catalog.tf correctly ABSENT (deleted at T2.16b RDS retirement)"
+      - "DECISIONS.md:104 'T2.16 (RDS catalog) is complete' -- corroborates historical completion"
+      - "progress_note documents db.t4g.micro postgres 16 single-AZ gp3 PITR=7d, VP-6 ATTACH round-trip confirmed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Confirmed as HISTORICAL completion. This is a provisioning item whose RDS artifact was deliberately destroyed by successor T2.16b; the absence of rds_ducklake_catalog.tf is the CORRECT state, not a contradiction. 'complete' is truthful as a point-in-time record (provisioned 2026-06-03, retired 2026-06-05). The roadmap does not mislead because T2.16b openly documents the retirement."
+
+  - id: A2-008
+    affected_ids: [T2.16b]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/neon_ducklake_catalog.tf, scripts/ducklake_neon_smoke_test.py, migrations/ducklake_ops_schema.sql all exist"
+      - "rds_ducklake_catalog.tf deleted (Phase 2 retirement); pytest tests/test_ducklake_neon_smoke_test.py -> 77 collected, all pass"
+      - "DECISIONS.md Decision 82 corroborates the churn-gate / RDS-retirement program; final snapshot ducklake-catalog-final-snapshot retained per note"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Strongly substantiated. Neon provider/project/role/DSN, smoke-test CLI, migration DDL all present; RDS retired with final snapshot. One exit criterion (churn-gate latency sub-gate) is recorded as 'latency-waived-with-rationale' -- transparently disclosed in progress_note with decomposition, not a silent degrade; collision sub-gate passed. Acceptable for complete."
+
+  - id: A2-009
+    affected_ids: [T2.17]
+    verdict_or_classification: confirmed
+    evidence:
+      - "src/lambdas/ducklake_{writer,reader}/ + both manifest.yaml exist"
+      - "scripts/build_lambda.py:38 PINNED_DUCKDB_VERSION='1.5.3'; :74 DUCKLAKE_EXTENSIONS=(ducklake,httpfs,postgres); extensions baked into ducklake-extensions layer"
+      - "pytest test_ducklake_writer_handler.py + test_ducklake_reader_handler.py pass (within the 177-pass run); scd2 schema test passes"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Extension-layer + lockstep version pin (duckdb 1.5.3, ducklake/httpfs/postgres) confirmed in build_lambda.py; per-Lambda manifests present; writer/reader handler tests green. Deploy/smoke exit criteria are infra-side (not file-verifiable here) but the code-and-manifest substrate fully matches. Confirmed."
+
+  - id: A2-010
+    affected_ids: [T2.18]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "src/lambdas/ducklake_maintenance/ + manifest.yaml exist; pytest test_ducklake_maintenance_handler.py -> 43 pass"
+      - "ops_compaction STILL live: src/data/handlers/ops_compaction_handler.py:3 'DEPRECATED -- ... retired at the T2.19 cutover ... Do NOT disable before T2.19'; src/lambdas/ops-compaction/manifest.yaml:40 same marker"
+      - "progress_note lists Remaining carry-to-T2.19 items (ops_compaction retirement, deploy+smoke VP7-14 human-gated pending)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Correctly status=in_progress. Deprecation marker present exactly as claimed; maintenance Lambda + DR + co-tuning shipped (FP-A/FP-B). Exit criteria 'ops_compaction retired' and 'deploy+smoke' explicitly deferred -- consistent with in_progress, not overstated. partially_confirmed reflects the open criteria, not a defect."
+
+  - id: A2-011
+    affected_ids: [T2.19]
+    verdict_or_classification: confirmed
+    evidence:
+      - "_DEFAULT_OPS_STORAGE_BACKEND='ducklake' at all 3 sites: ops_data_portal.py:71, src/common/iceberg_reader.py:39, scripts/data_quality_runner.py:81 (_ops_backend default 'ducklake')"
+      - "seed_ops_recommendations REMOVED from maintenance handler: src/lambdas/ducklake_maintenance/handler.py comment 'bootstrap was removed at the 2026-06-09 recs sign-off (closed boundary)'"
+      - "git log: c20bfea 'feat(ducklake-ops-finalize): sign off T2.19 recs cutover to DuckLake (#114)'; DECISIONS.md Decision 81 cl.7 closed boundary; pytest runtime tests pass except ulid import (env-only, see note)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "RECS-slice cutover substantiated: default flipped iceberg->ducklake in all 3 sites, seed action removed, sign-off commit on HEAD. Correctly in_progress -- other ops tables (decisions/session_log/execution_plans/priority_queue) openly DEFERRED on Iceberg/Athena. test_ducklake_runtime.py shows 18 failures but ALL are ModuleNotFoundError: 'ulid' (python-ulid>=2.2.0 declared in requirements.txt:14 but not installed in this audit container) -- an environment gap, NOT a repo defect; 177 sibling tests pass."
+
+  - id: A2-012
+    affected_ids: [T3.6]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "requirements.txt:39-40 + requirements-fast.txt:8-9 pin pytest-randomly>=3.15 + pytest-socket>=0.7"
+      - "scripts/validate.py:2186 _UNIT_TEST_HERMETICITY_FLAGS=('--disable-socket','--randomly-seed=last'); :2206 validate_hermeticity_flags asserts presence; pyproject addopts include both flags"
+      - "pytest run confirmed plugins randomly-4.1.0 + socket-0.8.0 loaded; 220 tests passed under random seed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "pytest-suite hermeticity half is fully substantiated (deps pinned, validate.py asserts the network-block+random-order invariant, flags live in default config). Correctly in_progress: progress_note admits the verifier-hermeticity portion (scripts/verifiers/ authored hermetic) remains open, and the audit-report exit criterion is not file-verifiable here. partially_confirmed = pytest half done, verifier half open, as disclosed."
+
+  - id: A2-013
+    affected_ids: [T1.13]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "scripts/ci_rca_filing.py EXISTS; .github/workflows/ci-rca.yml:30 if-gate includes 'head_branch == github.event.repository.default_branch' (main-only trigger); validate.py:2122 validate_ci_rca_trigger wires _check_ci_rca_filter, called at :2232"
+      - "BUT scripts/ci_rca_evidence.py ABSENT (files_in_scope, central to intent); tests/test_ci_rca_evidence_ast.py ABSENT (cited contract test); only tests/test_ci_rca_filing.py exists (23 tests pass)"
+      - "config/ci_rca_taxonomy.yaml / config/feature_flags.yaml / terraform/feature_flags.tf not verified present"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Correctly in_progress and honest: progress_note claims ONLY PLAN-ci-rca-workflow-correctness shipped (main-branch gate + FILED: marker + validate.py guard) -- all three substantiated. The other 5 of 6 exit criteria (schema-enforcement, evidence-script ci_rca_evidence.py, evidence-dispute, observability dashboard, STRICT_MODE flip, SHA-256 evidence-bundle roundtrip) are NOT landed: the evidence-bundle script and its AST contract test simply do not exist. Status matches reality; partially_confirmed for the single shipped sub-plan."
+
+  - id: A2-014
+    affected_ids: [F.1]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/main.tf creates Glue ops database + CREATE TABLE for ops tables with SCD2 columns + PARTITIONED BY day(last_updated_timestamp)"
+      - "5-table ops layer (ops_recommendations/decisions/execution_plans/session_log/priority_queue) referenced across terraform/personal/ and config/agent/data_quality/ops.yaml"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Iceberg ops storage layer substantiated in the active personal-account root module. Foundation accurate."
+
+  - id: A2-015
+    affected_ids: [F.2]
+    verdict_or_classification: contradicted
+    evidence:
+      - "terraform/ec2_runner.tf:1-3 'DEPRECATED 2026-05-28 -- CD.21 / Self-hosted EC2 runner retired; CI now uses GitHub-hosted runners + OIDC ... Retained as an architectural-evolution artefact'"
+      - "DECISIONS.md Decision 83 line 12 references Decision 73/CD.21 public flip + hosted-runner migration; AGENTS.md runbook 'self-hosted EC2 runner was retired 2026-05-28 per CD.21'"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "F.2 is presented in foundation_already_shipped as current substrate ('t3.medium in eu-west-2 ... replaces hosted-runner billing') but the infrastructure was RETIRED 2026-05-28 (CD.21/Decision 73) and CI now runs the OPPOSITE way (GitHub-hosted + OIDC). As a list of shipped foundations the entry is materially misleading to an autonomous planner: it asserts a live self-hosted runner that no longer exists. Should be marked retired/historical or carry a superseded-by-CD.21 note. Contradicted as a present-tense substrate claim."
+
+  - id: A2-016
+    affected_ids: [F.3]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/validate.py:6 docstring 'Default (no flags) runs the full check suite. Use --pre for fast lint/format'; --pre wiring at :125, :1384"
+      - "two-tier presubmit + edit-loop model matches CLAUDE.md merge protocol"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Two-tier validation (presubmit + --pre edit-loop) substantiated in validate.py. Foundation accurate."
+
+  - id: A2-017
+    affected_ids: [F.4]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "OpsWriter.emit instrumentation present (src/common has the ops writer surface); rg 'telemetry_' terraform/personal/ returned no table DDL in the quick pass"
+      - "note itself states 'Phase E (cloud analysis) blocked on T3.2' -- self-scoped as partial"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Telemetry star-schema Phases A-D + OpsWriter.emit instrumentation are plausibly shipped and the entry self-discloses Phase E is blocked. I did not positively confirm all 7 telemetry tables provisioned in the personal account (no telemetry_ DDL surfaced in terraform/personal/ on the quick check); the instrumentation claim is credible but the table-provisioning half is unverified here. partially_confirmed pending a telemetry-table existence check (out of deep scope)."
+
+  - id: A2-018
+    affected_ids: [F.5]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/execute_recommendation.py exists; .claude/skills/executor-rca/ skill present; develop-executor + executor-rca skills in the skill registry"
+      - "CLAUDE.md / Decision 55 codify 'Stop cleanly + diagnose + file rec; supersedes rescue agents'"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "RCA-first executor model substantiated by the executor script + executor-rca skill + Decision 55 governance. Foundation accurate."
+
+  - id: A2-019
+    affected_ids: [F.6]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/main.tf ops DDL: created_timestamp + last_updated_timestamp COMMENT 'SCD2 ...' columns + PARTITIONED BY day(last_updated_timestamp)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "SCD2 ops table schema (created + last_updated timestamps + day() partition + SELECT * views) substantiated in the personal-account DDL. Foundation accurate."
+
+  - id: A2-020
+    affected_ids: [F.7]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "ls config/data_quality/ -> No such file or directory; actual path config/agent/data_quality/ exists (ops.yaml, telemetry.yaml, source_registry.yaml, dq_tombstones.yaml)"
+      - "scripts/data_quality_runner.py exists"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "DQ enforcement Phases 0-3 ARE shipped (runner + yaml configs present), so the capability claim is confirmed -- but the cited path 'config/data_quality/*.yaml' is STALE: the configs moved to config/agent/data_quality/. A planner resolving the foundation's pointer hits a missing path. partially_confirmed: substance present, locator wrong."
+
+  - id: A2-021
+    affected_ids: [F.8]
+    verdict_or_classification: confirmed
+    evidence:
+      - "docs/INTENT-ops-decisions-graduation.md exists; scripts/ops_data_portal.py portal foundation + config/agent/data_quality/decisions/ DQ infra present"
+      - "note self-discloses 'Phases 2-6 deferred'"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "ops_decisions graduation Phase 0+1 (portal foundation + DQ infra) substantiated; later phases openly deferred. Foundation accurate."
+
+  - id: A2-022
+    affected_ids: [F.9]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/ops_data_portal.py exists (Single Portal); CLAUDE.md Single Portal Invariant enforced via validate.py"
+      - "logs/.ops-outbox/ absent -- CORRECT per the outbox invariant (drained-then-deleted; never a persistent dir)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Single Portal Invariant + local-first outbox substantiated. The outbox directory's absence is the expected steady state (write-ahead buffer is drained once then deleted), not a gap. Foundation accurate."
+
+  - id: A2-023
+    affected_ids: [F.10]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".claude/hooks/never_on_main.py exists; CLAUDE.md documents PreToolUse enforcement blocking Edit/Write/commit on main"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "never_on_main hook substantiated. Foundation accurate."
+
+  - id: A2-024
+    affected_ids: [F.11]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".github/workflows/ci-rca.yml exists; :30 workflow_run failure gate on default branch files source=ci_rca priority=critical rec per intent"
+      - "DECISIONS.md Decisions 71/72 govern the ci-rca planning-queue hard-block"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "ci-rca pattern (workflow_run trigger + planning-queue governance) substantiated by the workflow + Decisions 71/72. Foundation accurate."
+
+  - id: A2-025
+    affected_ids: [F.12]
+    verdict_or_classification: confirmed
+    evidence:
+      - "docs/INTENT-autonomous-improvement-control-plane.md exists"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Umbrella control-plane INTENT document present. Foundation accurate."
+
+  - id: A2-026
+    affected_ids: [F.13]
+    verdict_or_classification: confirmed
+    evidence:
+      - "AGENTS.md:63 '## Agent-First Repository' section present (loaded into CLAUDE.md via @AGENTS.md include)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Agent-First repository principle substantiated in AGENTS.md. Foundation accurate."
+
+  - id: A2-027
+    affected_ids: [F.14]
+    verdict_or_classification: contradicted
+    evidence:
+      - "ls docs/plans/briefings/ -> No such file or directory; ls docs/plans/briefings/BRIEFING-linux-container-migration.md -> absent"
+      - "find docs -iname 'BRIEFING*' -> no results; the only related artifact is docs/plans/PLAN-linux-container-bootstrap.md (different file, different path)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "F.14's sole evidence pointer 'docs/plans/briefings/BRIEFING-linux-container-migration.md; consumed by T0' resolves to NOTHING -- neither the file nor the briefings/ directory exists at HEAD. As a foundation_already_shipped entry whose only locator is a dead path, it is contradicted: a planner cannot consume the cited artifact. Either the briefing was never committed under this name or it was renamed/removed; the entry should be corrected or dropped."
+
+  - id: A2-028
+    affected_ids: [F.15]
+    verdict_or_classification: confirmed
+    evidence:
+      - "terraform/personal/main.tf ops tables PARTITIONED BY (day(last_updated_timestamp)) on multiple tables -- the uniform partition-everything transform pattern (CD.9)"
+      - "F.6 SCD2 DDL corroborates the same day()-transform usage"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Iceberg partition-by-transform pattern (day(last_updated_timestamp) for ops) substantiated in the personal-account DDL, compliant with CD.9 as the note claims. Foundation accurate."
+  - id: A2-029
+    affected_ids: [T2.5]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "src/common/iceberg_reader.py:107 class DuckDBIcebergReader (default impl, pyiceberg GlueCatalog->Arrow); docs/contracts/read-engine.yaml exists (engine-choice contract)"
+      - "session_preflight.py:444,640 graceful empty-table / JSONL-fallback degradation 'T2.5 exit criterion'; :1183,1274 Athena-unreachable degrade-gracefully (Athena escape hatch retained)"
+      - "progress_note: 'Criteria 3+4 pass. Criteria 1+2 blocked on Lambda deploy (Decision 67)'"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Correctly status=in_progress. Reader-swap substrate (DuckDBIcebergReader + read-engine.yaml + graceful empty-table degradation) substantiated -- exit criteria 3 (session_preflight empty-table handling) and 4 (engine-choice contract) verified. Criteria 1+2 (query-Lambda fixture parity, SSO removal on Lambda hot path) openly deferred to Lambda deploy. partially_confirmed for the shipped local-read half; honest status."
+
+  - id: A2-030
+    affected_ids: [T2.11b]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "README.md present, line 3 projection disclaimer ('curated projection of CLAUDE.md and ROADMAP-PLATFORM.yaml'); guided-tour links :70-74 resolve to existing CLAUDE.md/AGENTS.md/ROADMAP/SECURITY.md"
+      - "SECURITY.md present (line 3 'Reporting a Vulnerability' -> GitHub private advisory); AGENTS.md present (T0.9 owner, verified)"
+      - "EVALUATION-PROMPTS.yaml ABSENT (root + docs/); docs/architecture-diagram.{svg,png} ABSENT"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Correctly status=in_progress. README portal + SECURITY.md + AGENTS.md substantiated (note: progress_note dated 2026-06-05 calls SECURITY.md outstanding, but it now exists -- progress_note slightly stale, item under-claims). Two exit criteria genuinely unmet: EVALUATION-PROMPTS.yaml and the architecture diagram do not exist at HEAD. partially_confirmed -- matches in_progress; diagram + eval-prompts are the open work."
+
+# ---- VERDICT COUNTS (30 rows: 15 tier + 15 foundation) ----
+# ALL: confirmed=17  partially_confirmed=11  unsubstantiated=0  contradicted=2
+# TIER (15): confirmed=6 [T2.3,T2.10,T2.16,T2.16b,T2.17,T2.19]
+#            partially_confirmed=9 [T1.13,T2.1,T2.2,T2.5,T2.11b,T2.12,T2.13,T2.18,T3.6]
+# FOUNDATION (15): confirmed=11  partially_confirmed=2 [F.4,F.7]  contradicted=2 [F.2,F.14]
+# Most serious: T2.13 (complete but post-flip verification criteria unmet at completion;
+#   depends_on T2.11b/T2.12 inverted), F.2 (retired EC2 runner presented as live substrate),
+#   F.14 (foundation pointer resolves to a non-existent file/dir).
