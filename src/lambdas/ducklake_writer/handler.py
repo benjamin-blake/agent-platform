@@ -49,8 +49,6 @@ def action_connect_probe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     Logs each phase result to CloudWatch via print (Lambda stdout -> CloudWatch Logs).
     A 5xx is reserved for a probe that itself errors unexpectedly (caught by the outer handler).
     """
-    import os  # noqa: PLC0415
-
     dsn = rt.fetch_dsn()
     timeout_s = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
     result = probe.probe_connection(

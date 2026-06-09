@@ -7,6 +7,8 @@ underlying socket/psycopg2 calls.
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -189,6 +191,94 @@ def test_timeout_passed_to_psycopg2():
         probe.probe_connection(_DSN, **{**_PROBE_KWARGS, "timeout_s": 5})
     assert captured.get("connect_timeout") == 5
     assert captured.get("sslmode") == "require"
+
+
+# ---------------------------------------------------------------------------
+# DNS phase is bounded (H1): a blackhole resolver does NOT hang the probe
+# ---------------------------------------------------------------------------
+
+
+def test_dns_phase_is_bounded_on_blackhole(monkeypatch):
+    """A getaddrinfo that never returns is bounded by timeout_s -> classified as dns failure.
+
+    The bounded helper runs getaddrinfo in a worker thread with future.result(timeout=...). We
+    patch the helper's underlying getaddrinfo to block; the future times out and the phase fails.
+    """
+    import threading
+
+    blocking = threading.Event()
+
+    def _never_returns(host, port):
+        blocking.wait(timeout=30)  # would hang well past timeout_s if unbounded
+        return []
+
+    with patch("src.common.ducklake_connect_probe.socket.getaddrinfo", side_effect=_never_returns):
+        result = probe.probe_connection(_DSN, **{**_PROBE_KWARGS, "timeout_s": 1})
+    blocking.set()
+    assert result["failed_phase"] == "dns"
+    assert result["ok"] is False
+    assert "DNS" in result["error"]
+
+
+def test_bounded_getaddrinfo_raises_timeout_on_block(monkeypatch):
+    """_bounded_getaddrinfo raises concurrent.futures.TimeoutError when the call exceeds timeout_s."""
+    import threading
+
+    blocking = threading.Event()
+
+    def _never_returns(host, port):
+        blocking.wait(timeout=30)
+        return []
+
+    with patch("src.common.ducklake_connect_probe.socket.getaddrinfo", side_effect=_never_returns):
+        with pytest.raises(concurrent.futures.TimeoutError):
+            probe._bounded_getaddrinfo("h", 5432, 1)
+    blocking.set()
+
+
+# ---------------------------------------------------------------------------
+# ATTACH phase forwards timeout_s via DUCKLAKE_CONNECT_TIMEOUT_S (H2 / M3)
+# ---------------------------------------------------------------------------
+
+
+def test_attach_forwards_timeout_s_and_restores_env(monkeypatch):
+    """The ATTACH phase sets DUCKLAKE_CONNECT_TIMEOUT_S=timeout_s for open_connection, then restores it."""
+    monkeypatch.setenv("DUCKLAKE_CONNECT_TIMEOUT_S", "99")
+    captured = {}
+    mock_sock = MagicMock()
+    mock_pg_conn = MagicMock()
+    mock_duck_con = MagicMock()
+
+    def _capture_open(**kwargs):
+        captured["env_at_call"] = os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S")
+        return mock_duck_con
+
+    with (
+        patch("src.common.ducklake_connect_probe.socket.getaddrinfo", return_value=[("AF_INET", None, None, None, None)]),
+        patch("src.common.ducklake_connect_probe.socket.create_connection", return_value=mock_sock),
+        patch("psycopg2.connect", return_value=mock_pg_conn),
+        patch("src.common.ducklake_runtime.open_connection", side_effect=_capture_open),
+    ):
+        result = probe.probe_connection(_DSN, **{**_PROBE_KWARGS, "timeout_s": 4})
+    assert result["ok"] is True
+    assert captured["env_at_call"] == "4", "ATTACH must forward timeout_s via the env var"
+    assert os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S") == "99", "prior env value must be restored"
+
+
+def test_attach_restores_absent_env(monkeypatch):
+    """When DUCKLAKE_CONNECT_TIMEOUT_S was unset, the ATTACH phase removes it again after the call."""
+    monkeypatch.delenv("DUCKLAKE_CONNECT_TIMEOUT_S", raising=False)
+    mock_sock = MagicMock()
+    mock_pg_conn = MagicMock()
+    mock_duck_con = MagicMock()
+    with (
+        patch("src.common.ducklake_connect_probe.socket.getaddrinfo", return_value=[("AF_INET", None, None, None, None)]),
+        patch("src.common.ducklake_connect_probe.socket.create_connection", return_value=mock_sock),
+        patch("psycopg2.connect", return_value=mock_pg_conn),
+        patch("src.common.ducklake_runtime.open_connection", return_value=mock_duck_con),
+    ):
+        probe.probe_connection(_DSN, **{**_PROBE_KWARGS, "timeout_s": 4})
+    assert "DUCKLAKE_CONNECT_TIMEOUT_S" not in os.environ
 
 
 # ---------------------------------------------------------------------------

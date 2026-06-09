@@ -44,8 +44,6 @@ def action_connect_probe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     Returns the structured probe result even on a diagnosed failure (ok=False + failed_phase).
     Logs each phase result to CloudWatch via print (Lambda stdout -> CloudWatch Logs).
     """
-    import os  # noqa: PLC0415
-
     dsn = rt.fetch_dsn()
     timeout_s = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
     result = probe.probe_connection(

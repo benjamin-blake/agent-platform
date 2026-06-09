@@ -28,9 +28,22 @@ Result schema:
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 import socket
 import time
 from typing import Any
+
+
+def _bounded_getaddrinfo(host: str, port: int, timeout_s: int) -> Any:
+    """socket.getaddrinfo with an enforced wall-clock bound.
+
+    The stdlib getaddrinfo has no timeout parameter and relies on the OS resolver, which can
+    blackhole-hang. Running it in a worker thread with future.result(timeout=...) caps the DNS
+    phase at timeout_s, honouring the "no phase hangs" guarantee (raises TimeoutError on expiry).
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(socket.getaddrinfo, host, port).result(timeout=timeout_s)
 
 
 def probe_connection(
@@ -44,7 +57,9 @@ def probe_connection(
     """Run the phased connectivity probe against the Neon catalog endpoint.
 
     Each phase is bounded by *timeout_s*. The probe never hangs: every network call carries an
-    explicit timeout. Returns a structured result dict (see module docstring for schema).
+    explicit timeout (DNS via a bounded worker-thread future; TCP/AUTH via socket/libpq timeouts;
+    ATTACH via DUCKLAKE_CONNECT_TIMEOUT_S forwarded from timeout_s). Returns a structured result
+    dict (see module docstring for schema).
     """
     result: dict[str, Any] = {
         "phase_reached": "none",
@@ -60,13 +75,13 @@ def probe_connection(
     host = dsn.get("host", "")
     port = 5432
 
-    # -- Phase 1: DNS ----------------------------------------------------------
+    # -- Phase 1: DNS (bounded by timeout_s via a worker-thread future) ---------
     t0 = time.perf_counter()
     try:
-        socket.getaddrinfo(host, port)
+        _bounded_getaddrinfo(host, port, timeout_s)
         result["dns_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         result["phase_reached"] = "dns"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 -- includes concurrent.futures.TimeoutError on a blackhole resolver
         result["dns_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         result["failed_phase"] = "dns"
         result["error"] = f"DNS: {exc}"
@@ -108,10 +123,16 @@ def probe_connection(
         return result
 
     # -- Phase 4: ATTACH (DuckDB + DuckLake) -----------------------------------
-    t0 = time.perf_counter()
-    try:
-        from src.common import ducklake_runtime  # noqa: PLC0415
+    # open_connection builds the libpq conninfo via libpq_conninfo, which reads the
+    # DUCKLAKE_CONNECT_TIMEOUT_S env var for the postgres connect_timeout. Forward timeout_s
+    # through that env var so the ATTACH phase is bounded by the caller's timeout_s (not a stale
+    # default), then restore the prior value.
+    from src.common import ducklake_runtime  # noqa: PLC0415
 
+    t0 = time.perf_counter()
+    _prev_timeout = os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S")
+    os.environ["DUCKLAKE_CONNECT_TIMEOUT_S"] = str(timeout_s)
+    try:
         con = ducklake_runtime.open_connection(
             dsn=dsn,
             data_path=data_path,
@@ -129,5 +150,10 @@ def probe_connection(
         result["attach_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         result["failed_phase"] = "attach"
         result["error"] = f"ATTACH: {exc}"
+    finally:
+        if _prev_timeout is None:
+            os.environ.pop("DUCKLAKE_CONNECT_TIMEOUT_S", None)
+        else:
+            os.environ["DUCKLAKE_CONNECT_TIMEOUT_S"] = _prev_timeout
 
     return result

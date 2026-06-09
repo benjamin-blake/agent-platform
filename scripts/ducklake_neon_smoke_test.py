@@ -832,9 +832,9 @@ def emit_recs_seed_payload(*, profile: str | None = None) -> None:
 def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """T2.19 RCA: SigV4-invoke the reader AND writer connect_probe actions; print the phased results.
 
-    This is a diagnostic driver, NOT a pass/fail gate -- it reports the failing phase even on
-    success (ok=False). Both the reader and writer are probed so the failing phase is captured
-    from the load-bearing read path (reader) AND the write path (writer).
+    This is a diagnostic driver, NOT a pass/fail gate -- it reports the failing phase even on a
+    diagnosed failure (ok=False). Both the reader and writer are probed so the failing phase is
+    captured from the load-bearing read path (reader) AND the write path (writer).
     """
     reader_resp = _sigv4_invoke(_function_url("reader"), {"action": "connect_probe"}, profile=profile, region=region)
     writer_resp = _sigv4_invoke(_function_url("writer"), {"action": "connect_probe"}, profile=profile, region=region)
