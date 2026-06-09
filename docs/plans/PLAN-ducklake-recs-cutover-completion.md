@@ -139,6 +139,7 @@ Platform T2.19 (DuckLake recs cutover) completion + T2.7 (recs `ops_recommendati
    - `scripts/ops_data_portal.py`: make `_fetch_rec_from_athena` reader-only on the ducklake backend (loud-fail if unreachable; no Athena query).
    - `scripts/sync_ops.py`: remove the recs Athena fallback (`_pull_single_table_athena` recs path, `_TABLE_TO_VIEW["ops_recommendations"]`, recs S3-staging guard).
    - `src/data/handlers/scheduled_agent_handler.py`: repoint :302 to `make_reader().current_state(...)`.
+   - NOTE: VP 16 greps whole-line over `*.py`, so also clear the NON-executable `ops_recommendations_current` references (docstrings/comments/headers, e.g. `ops_data_portal.py:611`, `scheduled_agent_handler.py:287/294/301/339`, `session_preflight.py:521/527`), not only the executable queries.
 3. **Slice 3 -- reader-as-tool discovery (SSM).**
    - `src/common/iceberg_reader.py`: insert SSM resolution into `_reader_url()` (and writer): env -> SSM (path from manifest `runtime_config[]`) -> terraform-output -> `GetFunctionUrlConfig`; consolidate the single `_resolve_function_url_via_api` here and have `ops_data_portal.py` import it (rec-2116).
    - `src/lambdas/ducklake_reader/manifest.yaml` + `ducklake_writer/manifest.yaml`: declare `runtime_config[]` SSM paths.
