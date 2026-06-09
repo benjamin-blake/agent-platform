@@ -18,6 +18,31 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 - Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
 - The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
+## terraform.personal.tfvars -- local-only secret file; NOT in S3, NOT committed
+`terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
+`terraform/**/terraform.personal.tfvars`) and exists **only on the operator's local machine**. It is
+NEVER committed and is NOT stored in S3, Secrets Manager, or any remote location -- there is no
+`s3://...` path to fetch it from. Do not search the data lake for it. It holds secret values
+(`account_id`, `owner_email`, `platform_dev_external_id`, `platform_admin_external_id`, plus
+`alerts_email`, `neon_*`) -- all declared no-default in `variables.tf`. Never paste these values into
+chat, a PR, or any committed file (the ExternalIds are AssumeRole trust secrets).
+
+A Claude Code on the web agent does NOT have this file and is NOT expected to run a real
+`terraform plan`/`apply` against the personal account. The two legitimate apply paths supply the
+variables WITHOUT the tfvars file:
+- **Human local apply (human-gated, Decision 77/35):** the operator runs `terraform -chdir=terraform/personal
+  plan/apply -var-file=terraform.personal.tfvars` on their own machine. An agent's job ends at preparing the
+  `.tf` edit and presenting it; the human runs the apply.
+- **Sandbox CD auto-apply** (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching
+  `terraform/personal/**` auto-applies behind `terraform_apply_guard.py` + subagent plan review, Decision 77):
+  the workflow injects the values as `TF_VAR_*` env vars from GitHub repo variables/secrets -- NOT a tfvars file:
+  | tfvar | GitHub source | kind |
+  |-------|---------------|------|
+  | `TF_VAR_account_id` | `AWS_ACCOUNT_ID` | repo variable |
+  | `TF_VAR_owner_email` | `OWNER_EMAIL` | repo variable |
+  | `TF_VAR_platform_dev_external_id` | `TF_VAR_PLATFORM_DEV_EXTERNAL_ID` | repo secret |
+  | `TF_VAR_platform_admin_external_id` | `TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID` | repo secret |
+
 ## Out-of-band IAM grants (drift -- not managed by this module)
 
 The `PlatformDev` and `PlatformAdmin` roles pre-exist the module and are now BOTH codified (see the
