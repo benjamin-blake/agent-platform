@@ -107,14 +107,14 @@ def invoke_step(name: str, cmd: list[str], failed: list[str], cwd: Path | None =
 
 
 def get_changed_files() -> list[str]:
-    """Get files changed vs origin/main, falling back to HEAD."""
+    """Get files changed vs origin/main, falling back to HEAD. Excludes deleted paths."""
     result = run(["git", "diff", "--name-only", "origin/main"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
     if result.returncode == 0:
         files = result.stdout.strip().splitlines()
     else:
         result = run(["git", "diff", "--name-only", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         files = result.stdout.strip().splitlines()
-    return [f for f in files if f]
+    return [f for f in files if f and (ROOT / f).exists()]
 
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
@@ -2674,6 +2674,9 @@ def main() -> None:
         validate_product_roadmap(failed)
         # CC-gate in --pre: O(lines) AST check, per rec-859 RCA earliest_viable_gate="pre" (docs/INTENT-ci-rca-methodology.md)
         validate_cc_limits(failed)
+        # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach
+        # missed pre-merge in PR #106 because it ran in full-tier only (rec-2106 RCA).
+        validate_sloc_limits(failed)
 
         elapsed = time.monotonic() - _t0
 

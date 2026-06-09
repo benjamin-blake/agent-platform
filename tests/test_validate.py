@@ -2948,3 +2948,130 @@ class TestValidateLambdaDeployGating:
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
         assert "Lambda deploy gating" in failed
+
+
+class TestSlocLimitsInPreMode:
+    """Assert validate_sloc_limits runs in the --pre tier (rec-2106 RCA fix)."""
+
+    def test_sloc_limits_called_in_pre_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_sloc_limits must be invoked during --pre alongside validate_cc_limits."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        sloc_called = []
+
+        def capture_sloc(failed: list[str]) -> None:
+            sloc_called.append(True)
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        assert sloc_called, "validate_sloc_limits was NOT called in --pre mode"
+
+    def test_sloc_limits_called_after_cc_limits_in_pre(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_sloc_limits is called in the same --pre block as validate_cc_limits."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        call_order: list[str] = []
+
+        def capture_cc(failed: list[str]) -> None:
+            call_order.append("cc")
+
+        def capture_sloc(failed: list[str]) -> None:
+            call_order.append("sloc")
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_cc_limits", side_effect=capture_cc),
+            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit),
+        ):
+            _validate.main()
+
+        assert "cc" in call_order, "validate_cc_limits not called in --pre mode"
+        assert "sloc" in call_order, "validate_sloc_limits not called in --pre mode"
+        cc_idx = call_order.index("cc")
+        sloc_idx = call_order.index("sloc")
+        assert cc_idx < sloc_idx, "validate_sloc_limits must be called after validate_cc_limits"
+
+
+class TestGetChangedFilesDeletedPaths:
+    """Assert get_changed_files() drops deleted (non-existent) paths before returning."""
+
+    def test_drops_deleted_file(self, tmp_path: Path) -> None:
+        """A file listed by git diff but absent on disk is excluded from the result."""
+        existing = tmp_path / "scripts" / "exists.py"
+        existing.parent.mkdir()
+        existing.write_text("x = 1\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "scripts/exists.py\nscripts/deleted_gone.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert "scripts/exists.py" in files
+        assert "scripts/deleted_gone.py" not in files
+
+    def test_all_deleted_returns_empty(self, tmp_path: Path) -> None:
+        """When all listed files are deleted, the result is an empty list."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "scripts/migrate_ops_iceberg_to_ducklake.py\ntests/test_migrate_ops_iceberg_to_ducklake.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert files == []
+
+    def test_existing_files_all_returned(self, tmp_path: Path) -> None:
+        """When all listed files exist on disk, none are filtered out."""
+        for name in ("a.py", "b.py"):
+            f = tmp_path / name
+            f.write_text("x = 1\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "a.py\nb.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert sorted(files) == ["a.py", "b.py"]
