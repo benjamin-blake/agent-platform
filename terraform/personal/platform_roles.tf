@@ -127,18 +127,24 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
       {
         # T2.19 recs cutover: the ops portal runs as PlatformDev at RUNTIME and reaches the closed
         # DuckLake boundary by SigV4-invoking the writer/reader AWS_IAM Function URLs (file_rec /
-        # update_rec -> writer; recs reads -> reader). Without InvokeFunctionUrl every post-cutover recs
-        # op fails AccessDenied. Scoped to the two function ARNs. NOTE: no lambda:FunctionUrlAuthType
-        # condition -- AWS does not reliably populate that context key for IDENTITY-policy evaluation of
-        # Function-URL invokes (it implicit-denies real requests even though the simulator allows them
-        # with the key supplied), so the condition broke live invokes. The ARN scoping is the control;
-        # both URLs are AWS_IAM. The maintenance operational actions stay break-glass on PlatformAdmin.
+        # update_rec -> writer; recs reads -> reader). Without this grant every post-cutover recs op
+        # fails 403 AccessDenied at the Function-URL auth layer. Scoped to the two function ARNs.
+        #
+        # ACTION: lambda:InvokeFunction is the action the Function-URL IAM authorizer actually checks.
+        # Verified live 2026-06-09: InvokeFunction alone, scoped to these ARNs, authorizes the URL invoke
+        # (stable past propagation), while lambda:InvokeFunctionUrl alone is INSUFFICIENT -- reproducible
+        # 403 over 3 min, even at Resource:"*" and even with a resource-based aws_lambda_permission added.
+        # PlatformAdmin works only because its AdminOps lambda statement (below) includes InvokeFunction.
+        # The IAM policy simulator reports InvokeFunctionUrl as "allowed" but the live URL denies it -- do
+        # not trust the simulator for Function-URL authorization. InvokeFunctionUrl is retained alongside
+        # InvokeFunction for AWS-doc alignment / forward-compat (harmless, not sufficient on its own; this
+        # matches the two-action grant in lambda_tooling_iam.tf). Maintenance ops stay break-glass on PlatformAdmin.
         Sid    = "DuckLakeInvokeRuntime"
         Effect = "Allow"
-        Action = ["lambda:InvokeFunctionUrl"]
-        # Function-URL invokes authorize against the QUALIFIED function ARN (e.g. ...:function:NAME:$LATEST),
-        # so the unqualified ARN alone implicit-denies (AdminOps works only because it uses "*"). Grant both
-        # the unqualified and the :* qualified forms, scoped to writer + reader.
+        Action = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl"]
+        # Scoped to writer + reader, both the unqualified ARN and the :* qualified form (the URLs are on
+        # $LATEST/unqualified; the :* form covers any future qualifier/alias). Verified live with this
+        # exact 4-ARN scoping.
         Resource = [
           aws_lambda_function.ducklake_writer.arn,
           "${aws_lambda_function.ducklake_writer.arn}:*",
