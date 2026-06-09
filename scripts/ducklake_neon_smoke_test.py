@@ -829,6 +829,33 @@ def emit_recs_seed_payload(*, profile: str | None = None) -> None:
     print(json.dumps(payload, default=str))
 
 
+def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 RCA: SigV4-invoke the reader AND writer connect_probe actions; print the phased results.
+
+    This is a diagnostic driver, NOT a pass/fail gate -- it reports the failing phase even on
+    success (ok=False). Both the reader and writer are probed so the failing phase is captured
+    from the load-bearing read path (reader) AND the write path (writer).
+    """
+    reader_resp = _sigv4_invoke(_function_url("reader"), {"action": "connect_probe"}, profile=profile, region=region)
+    writer_resp = _sigv4_invoke(_function_url("writer"), {"action": "connect_probe"}, profile=profile, region=region)
+    reader_body = _ok_json(reader_resp)
+    writer_body = _ok_json(writer_resp)
+    print(
+        f"CONNECT_PROBE reader=phase_reached:{reader_body.get('phase_reached')} "
+        f"failed_phase:{reader_body.get('failed_phase')} ok:{reader_body.get('ok')} "
+        f"dns_ms:{reader_body.get('dns_ms')} tcp_ms:{reader_body.get('tcp_ms')} "
+        f"auth_ms:{reader_body.get('auth_ms')} attach_ms:{reader_body.get('attach_ms')} "
+        f"error:{reader_body.get('error')!r}"
+    )
+    print(
+        f"CONNECT_PROBE writer=phase_reached:{writer_body.get('phase_reached')} "
+        f"failed_phase:{writer_body.get('failed_phase')} ok:{writer_body.get('ok')} "
+        f"dns_ms:{writer_body.get('dns_ms')} tcp_ms:{writer_body.get('tcp_ms')} "
+        f"auth_ms:{writer_body.get('auth_ms')} attach_ms:{writer_body.get('attach_ms')} "
+        f"error:{writer_body.get('error')!r}"
+    )
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -844,6 +871,7 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_maintenance_breaker": lambda_maintenance_breaker,
     "lambda_catalog_dr": lambda_catalog_dr,
     "lambda_maintenance_hot_merge": lambda_maintenance_hot_merge,
+    "connect_probe": connect_probe,
 }
 
 
@@ -920,6 +948,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="[post-deploy] T2.18 FP-B hot_merge gate: invoke hot_merge, assert files merged, nothing deleted (VP12)",
     )
+    group.add_argument(
+        "--connect-probe",
+        action="store_true",
+        dest="connect_probe",
+        help="[post-deploy] T2.19 RCA: SigV4-invoke reader+writer connect_probe; print per-phase timings",
+    )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
     args = parser.parse_args(argv)
@@ -942,6 +976,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             catalog_restore_drill(profile=args.profile, region=args.region)
         elif args.emit_recs_seed_payload:
             emit_recs_seed_payload(profile=args.profile)
+        elif args.connect_probe:
+            connect_probe(profile=args.profile, region=args.region)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)

@@ -24,6 +24,7 @@ import os
 import time
 from typing import Any, Callable
 
+from src.common import ducklake_connect_probe as probe
 from src.common import ducklake_runtime as rt
 
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
@@ -35,6 +36,33 @@ def _open_reader_connection() -> Any:
     """Open a read-scoped baked-extension connection to the Neon catalog."""
     dsn = rt.fetch_dsn()
     return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
+
+
+def action_connect_probe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Phased connectivity diagnostic (T2.19 RCA). Runs before any connection open.
+
+    Returns the structured probe result even on a diagnosed failure (ok=False + failed_phase).
+    Logs each phase result to CloudWatch via print (Lambda stdout -> CloudWatch Logs).
+    """
+    import os  # noqa: PLC0415
+
+    dsn = rt.fetch_dsn()
+    timeout_s = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
+    result = probe.probe_connection(
+        dsn,
+        data_path=DATA_PATH,
+        meta_schema=META_SCHEMA,
+        extension_directory=EXTENSION_DIRECTORY,
+        timeout_s=timeout_s,
+    )
+    print(
+        f"CONNECT_PROBE reader phase_reached={result['phase_reached']} "
+        f"failed_phase={result['failed_phase']} ok={result['ok']} "
+        f"dns_ms={result['dns_ms']} tcp_ms={result['tcp_ms']} "
+        f"auth_ms={result['auth_ms']} attach_ms={result['attach_ms']} "
+        f"error={result['error']!r}"
+    )
+    return result
 
 
 def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -136,7 +164,11 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "read_ops_current": action_read_ops_current,
     "read_ops_history": action_read_ops_history,
     "query_ops": action_query_ops,
+    "connect_probe": action_connect_probe,
 }
+
+# Actions that run BEFORE the normal connection open (e.g. to diagnose a hanging connect).
+_CONNECTIONLESS_ACTIONS = {"connect_probe"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -163,6 +195,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(400, {"ok": False, "error": f"unknown action {action!r}", "actions": sorted(_ACTIONS)})
 
     try:
+        if action in _CONNECTIONLESS_ACTIONS:
+            return _response(200, fn(payload, None))
         t0 = time.perf_counter()
         con = _open_reader_connection()
         payload["_connect_ms"] = (time.perf_counter() - t0) * 1000.0

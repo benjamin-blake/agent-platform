@@ -202,3 +202,76 @@ def test_handler_read_ops_current_end_to_end(monkeypatch):
     resp = h.handler({"action": "read_ops_current", "table": "ops_recommendations"})
     assert resp["statusCode"] == 200
     assert json.loads(resp["body"])["row_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# connect_probe: runs WITHOUT a pre-opened connection
+# ---------------------------------------------------------------------------
+
+
+def test_handler_connect_probe_runs_without_connection(monkeypatch):
+    """connect_probe action returns the structured probe result even when _open_reader_connection would hang.
+
+    Proves the probe is dispatched via _CONNECTIONLESS_ACTIONS ahead of _open_reader_connection.
+    """
+    hang_called = {"called": False}
+
+    def _hanging_open():
+        hang_called["called"] = True
+        raise RuntimeError("hang: should not be called for connect_probe")
+
+    monkeypatch.setattr(h, "_open_reader_connection", _hanging_open)
+    fake_result = {
+        "phase_reached": "dns",
+        "failed_phase": "tcp",
+        "dns_ms": 4.0,
+        "tcp_ms": 10001.0,
+        "auth_ms": None,
+        "attach_ms": None,
+        "ok": False,
+        "error": "TCP: timed out",
+    }
+    import src.common.ducklake_connect_probe as p
+
+    monkeypatch.setattr(p, "probe_connection", lambda dsn, **kw: fake_result)
+    _fake_dsn = {"host": "h", "dbname": "d", "username": "u", "password": "p"}  # pragma: allowlist secret
+    monkeypatch.setattr(rt, "fetch_dsn", lambda: _fake_dsn)
+
+    r = h.handler({"action": "connect_probe"})
+    assert r["statusCode"] == 200
+    body = json.loads(r["body"])
+    assert body["failed_phase"] == "tcp"
+    assert body["ok"] is False
+    assert hang_called["called"] is False, "_open_reader_connection must NOT be called for connect_probe"
+
+
+def test_handler_connect_probe_success(monkeypatch):
+    """connect_probe returns ok=True and phase_reached=attach on a successful probe."""
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: (_ for _ in ()).throw(RuntimeError("should not be called")))
+    success_result = {
+        "phase_reached": "attach",
+        "failed_phase": None,
+        "dns_ms": 1.5,
+        "tcp_ms": 4.0,
+        "auth_ms": 45.0,
+        "attach_ms": 900.0,
+        "ok": True,
+        "error": None,
+    }
+    import src.common.ducklake_connect_probe as p
+
+    monkeypatch.setattr(p, "probe_connection", lambda dsn, **kw: success_result)
+    _fake_dsn = {"host": "h", "dbname": "d", "username": "u", "password": "p"}  # pragma: allowlist secret
+    monkeypatch.setattr(rt, "fetch_dsn", lambda: _fake_dsn)
+
+    r = h.handler({"action": "connect_probe"})
+    assert r["statusCode"] == 200
+    body = json.loads(r["body"])
+    assert body["ok"] is True
+    assert body["phase_reached"] == "attach"
+    assert body["failed_phase"] is None
+
+
+def test_connect_probe_in_connectionless_actions():
+    """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_reader_connection."""
+    assert "connect_probe" in h._CONNECTIONLESS_ACTIONS

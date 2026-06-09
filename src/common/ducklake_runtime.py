@@ -212,9 +212,16 @@ def libpq_conninfo(dsn: dict[str, str]) -> str:
 
     sslmode defaults to require so TLS is always enforced even if the secret omits it (the
     Terraform-written secret always sets it; this is defence in depth).
+    connect_timeout is bounded (default 10s, overridable via DUCKLAKE_CONNECT_TIMEOUT_S) so a
+    stale/unreachable endpoint fails fast with a precise libpq error instead of hanging to the
+    120s Lambda wall.
     """
+    import os  # noqa: PLC0415
+
     sslmode = dsn.get("sslmode") or "require"
-    return f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} password={dsn['password']} sslmode={sslmode}"
+    timeout = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
+    base = f"dbname={dsn['dbname']} host={dsn['host']} user={dsn['username']} password={dsn['password']}"
+    return f"{base} sslmode={sslmode} connect_timeout={timeout}"
 
 
 # ---------------------------------------------------------------------------

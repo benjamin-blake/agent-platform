@@ -194,6 +194,18 @@ def test_libpq_conninfo_explicit_and_default_sslmode():
     assert "host=ep-test-123.eu-west-2.aws.neon.tech" in out
 
 
+def test_libpq_conninfo_default_connect_timeout(monkeypatch):
+    monkeypatch.delenv("DUCKLAKE_CONNECT_TIMEOUT_S", raising=False)
+    out = rt.libpq_conninfo(_DSN)
+    assert "connect_timeout=10" in out
+
+
+def test_libpq_conninfo_honours_connect_timeout_env(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_CONNECT_TIMEOUT_S", "30")
+    out = rt.libpq_conninfo(_DSN)
+    assert "connect_timeout=30" in out
+
+
 # ---------------------------------------------------------------------------
 # open_connection (dev INSTALL vs baked LOAD)
 # ---------------------------------------------------------------------------
