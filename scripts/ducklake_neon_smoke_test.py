@@ -776,57 +776,11 @@ def catalog_restore_drill(*, profile: str | None = None, region: str = "eu-west-
     )
 
 
-PROD_DATA_PATH = os.environ.get("DUCKLAKE_PROD_DATA_PATH", "s3://agent-platform-data-lake/ducklake/")
-_TOMBSTONES_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config",
-    "agent",
-    "data_quality",
-    "dq_tombstones.yaml",
-)
-
-
-def _recs_tombstone_ids() -> list[str]:
-    """Decision-70 physically-deleted ops_recommendations ids (from dq_tombstones.yaml)."""
-    import yaml  # noqa: PLC0415
-
-    try:
-        with open(_TOMBSTONES_PATH, encoding="utf-8") as fh:
-            spec = yaml.safe_load(fh) or {}
-    except OSError:
-        return []
-    return [e["id"] for e in spec.get("tombstones", []) if e.get("table") == "ops_recommendations" and e.get("id")]
-
-
-def emit_recs_seed_payload(*, profile: str | None = None) -> None:
-    """T2.19 VP10 helper: emit the seed_ops_recommendations payload JSON to stdout (NOT a gate).
-
-    Reads ops_recommendations CURRENT-STATE from Iceberg over Athena (443 -- works from CC-web), coerces
-    Athena VarChar to proper Python types (arrays/bools/ints) so the in-Lambda schema gate accepts them,
-    excludes Decision-70 physically-deleted rows, and prints a payload for `aws lambda invoke` to feed the
-    maintenance seed action. Timestamps are emitted as ISO strings (the seed parses them back).
-    """
-    from scripts.session_preflight import _run_athena_query  # noqa: PLC0415
-    from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
-
-    rows = _run_athena_query("SELECT * FROM agent_platform.ops_recommendations_current") or []
-    tombstones = set(_recs_tombstone_ids())
-    seeded: list[dict] = []
-    for raw in rows:
-        rec = dict(raw)
-        rec.pop("row_num", None)
-        if rec.get("id") in tombstones:
-            continue
-        coerced = _coerce_ops_rec_row(rec)  # returns None for a schema-rejected row
-        if coerced is not None:
-            seeded.append(coerced)
-    payload = {
-        "action": "seed_ops_recommendations",
-        "data_path": PROD_DATA_PATH,
-        "exclude_ids": sorted(tombstones),
-        "rows": seeded,
-    }
-    print(json.dumps(payload, default=str))
+# NOTE: the seed_ops_recommendations payload emitter (emit_recs_seed_payload) and its
+# --emit-recs-seed-payload flag were REMOVED at the 2026-06-09 recs sign-off alongside the maintenance
+# seed action (closed boundary, Decision 81 cl.7). Re-seeding is now a break-glass operation: git-revert
+# the removal commit (restores BOTH the maintenance action and this emitter), redeploy, re-seed, then
+# re-remove. See docs/runbooks/ducklake-catalog-operations.md Section 6.
 
 
 def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> None:
@@ -902,12 +856,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         dest="catalog_restore_drill",
         help="[post-deploy] T2.19 VP11: invoke maintenance restore_drill (pg_dump->pg_restore + read-your-write)",
     )
-    group.add_argument(
-        "--emit-recs-seed-payload",
-        action="store_true",
-        dest="emit_recs_seed_payload",
-        help="[post-deploy] T2.19 VP10 helper: emit the seed_ops_recommendations payload JSON to stdout (NOT a gate)",
-    )
     group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
     group.add_argument(
         "--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)"
@@ -974,8 +922,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             ops_churn_regate(profile=args.profile, region=args.region)
         elif args.catalog_restore_drill:
             catalog_restore_drill(profile=args.profile, region=args.region)
-        elif args.emit_recs_seed_payload:
-            emit_recs_seed_payload(profile=args.profile)
         elif args.connect_probe:
             connect_probe(profile=args.profile, region=args.region)
         else:

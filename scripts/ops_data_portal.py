@@ -78,7 +78,7 @@ _PORTAL_TABLE_NAMES = ("ops_recommendations", "ops_decisions")
 
 
 def _ops_backend() -> str:
-    """Return the active storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
+    """Return the active storage backend ('iceberg' | 'ducklake'); default ducklake (T2.19 cutover)."""
     return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
 
 

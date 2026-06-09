@@ -456,7 +456,13 @@ Scope: ONLY `ops_recommendations` is on DuckLake. `ops_decisions`, `ops_session_
 The Single-Portal caller surface (`file_rec`/`update_rec`/`file_decision`/`update_decision`/`sync`)
 is identical on both backends -- only the transport underneath swaps.
 
-### Cutover sequence (human-gated apply via `agent_platform_admin`)
+### Cutover sequence -- HISTORICAL RECORD (performed 2026-06-09; seed tooling REMOVED at sign-off)
+
+This is the sequence that performed the recs cutover. The one-time migration tooling -- the maintenance
+`seed_ops_recommendations` action AND its `--emit-recs-seed-payload` payload emitter -- was REMOVED at
+step 8 (closed boundary, Decision 81 cl.7), so steps 4 and 7 below are NOT directly re-runnable today.
+**Re-seeding is now a break-glass operation: git-revert the sign-off removal commit (restores BOTH the
+action and the emitter), redeploy maintenance, re-seed, then re-remove.** See "Break-glass re-seed" below.
 
 ```bash
 # 1. Build the ducklake zips (writer, reader, maintenance, catalog-dr) and upload to S3.
@@ -470,11 +476,11 @@ terraform -chdir=terraform/personal apply      # via agent_platform_admin, after
 # 3. Deploy the writer/reader code.
 bin/venv-python -m scripts.build_lambda --ducklake-only --deploy
 
-# 4. Drain the Iceberg outbox, then seed DuckLake from Iceberg current-state + verify parity
-#    (excl. Decision-70 tombstones). The seed is the maintenance `seed_ops_recommendations` action:
+# 4. [seed tooling removed at step 8 -- break-glass only now] Drain the Iceberg outbox, then seed
+#    DuckLake from Iceberg current-state + verify parity (excl. Decision-70 tombstones). The migration
+#    seed was the maintenance `seed_ops_recommendations` action, fed by `--emit-recs-seed-payload`:
 OPS_STORAGE_BACKEND=iceberg bin/venv-python -m scripts.ops_data_portal --sync
-bin/venv-python -m scripts.ducklake_neon_smoke_test --emit-recs-seed-payload > /tmp/seed.json
-#   then SigV4-invoke the maintenance seed action with /tmp/seed.json (parity=PASS asserted in-Lambda).
+#   (historically) emit the payload + SigV4-invoke the maintenance seed action (parity=PASS in-Lambda).
 #   NOTE: ~812 sequential SCD2 writes can approach the 300s Lambda timeout; if it times out, raise the
 #   maintenance timeout temporarily (900s) and invoke synchronously (--cli-read-timeout 900, AWS_MAX_ATTEMPTS=1),
 #   then restore. Re-seeding is idempotent (DROP+recreate); it also purges any leaked `test-*` selftest probe.
@@ -496,8 +502,29 @@ OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.ops_data_portal --selfte
 # 7. CUTOVER SIGN-OFF: flip the default to ducklake (the atomic doc + ROADMAP update lands with this),
 #    then prove the portal write+read path on DuckLake:
 OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.ops_data_portal --selftest-roundtrip
-# The roundtrip leaves a throwaway `test-roundtrip-*` probe (automatable unset -> would fail DQ). Purge
-# it by re-running the step-4 seed (DROP+recreate from Iceberg) so the post-merge DuckLake DQ stays green.
+# The roundtrip leaves a throwaway `test-roundtrip-*` probe (automatable unset -> would fail DQ). At
+# sign-off it was purged by re-running the step-4 seed. POST-REMOVAL there is no seed action, so if you
+# run --selftest-roundtrip again you must purge the probe via the break-glass re-seed below, or avoid
+# running it against the live backend (prefer OPS_STORAGE_BACKEND=iceberg for a throwaway proof).
+
+# 8. POST-SIGN-OFF: remove the seed_ops_recommendations action (+ the --emit-recs-seed-payload emitter)
+#    and redeploy maintenance -- the closed boundary now admits recs writes only via portal -> writer.
+bin/venv-python -m scripts.build_lambda --ducklake-only --deploy
+```
+
+### Break-glass re-seed (post-removal)
+
+The seed action and its emitter are no longer deployed. To re-seed DuckLake recs from Iceberg
+current-state (e.g. catalog corruption with the Iceberg snapshot still intact):
+
+1. `git revert` (or cherry-pick the pre-removal blob of) the sign-off commit that removed
+   `action_seed_ops_recommendations` from `src/lambdas/ducklake_maintenance/handler.py` and
+   `emit_recs_seed_payload` from `scripts/ducklake_neon_smoke_test.py`.
+2. `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` to redeploy maintenance with the
+   restored action.
+3. Emit the payload + SigV4-invoke the maintenance `seed_ops_recommendations` action (idempotent
+   DROP+recreate; ~812 writes may need the 900s-timeout workaround above).
+4. Re-remove the action + emitter and redeploy to restore the closed boundary.
 ```
 
 ### Rollback (one step, real)
