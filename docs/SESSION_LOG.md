@@ -9,6 +9,37 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-09] - ducklake-neon-connect-rca: connectivity unblocked, lambda_attach GREEN
+
+**Root cause identified and fixed.** The previous 120s Lambda hangs were caused by `libpq_conninfo`
+having NO `connect_timeout`, so any DNS/TCP/AUTH/ATTACH failure silently blocked to the OS/Lambda
+wall -- making all failure modes look identical. Fix: bounded `connect_timeout=10s`
+(`DUCKLAKE_CONNECT_TIMEOUT_S`-overridable) added to `libpq_conninfo` in `ducklake_runtime.py`.
+
+**Probe result (post-deploy):**
+- `CONNECT_PROBE reader=phase_reached:attach failed_phase:None ok:True dns_ms:6.3 tcp_ms:1.76 auth_ms:726.83 attach_ms:10172.24`
+- `CONNECT_PROBE writer=phase_reached:attach failed_phase:None ok:True dns_ms:2.57 tcp_ms:4.87 auth_ms:145.33 attach_ms:15552.73`
+- `LAMBDA_ATTACH OK version=1.5.3 source=layer connect_ms=596.51 commit_ms=0.8`
+- `READER OK rows=4 write_denied=true`
+
+The 10-15s attach_ms is DuckLake scale-to-zero cold-resume (within 18s budget). No Neon endpoint or
+credential fix was needed - the root cause was purely the absent connect_timeout making cold-resume
+indistinguishable from a blackhole.
+
+**What shipped:** `src/common/ducklake_connect_probe.py` (phased DNS->TCP->AUTH->ATTACH diagnostic);
+`connect_probe` action added to writer + reader handlers (pre-connection, via `_CONNECTIONLESS_ACTIONS`);
+manifests updated (includes for writer/reader, excludes for data-pipeline/ops-compaction);
+`--connect-probe` flag added to smoke test driver; 167 tests all pass; full validate green.
+
+**4 stale ci_rca recs closed:** rec-2107/2108 (SLOC=589, moot since f2e5cd9: now 426) and
+rec-2109/2110 (DQ FAIL, moot since 3e5152e: 0 violations). ci_rca_recs=0 post-close.
+
+**Follow-up rec filed:** rec-2111 (High) - resume `PLAN-ducklake-ops-finalize.md` PHASE 2/3. Key
+correction: oidc.tf grant must be `lambda:InvokeFunction` not `lambda:InvokeFunctionUrl`. Branch:
+`claude/ducklake-neon-connect-rca-17a47n`.
+
+---
+
 ## [2026-06-08] - CLOSING REPORT: ducklake-ops-cutover recs-first -- LIVE CUTOVER ~90% (handoff to planning)
 
 **Read this first.** This is the authoritative handoff. The recs-first DuckLake cutover was driven

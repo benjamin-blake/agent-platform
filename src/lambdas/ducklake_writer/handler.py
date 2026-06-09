@@ -19,6 +19,7 @@ import os
 import time
 from typing import Any, Callable
 
+from src.common import ducklake_connect_probe as probe
 from src.common import ducklake_runtime as rt
 
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
@@ -39,6 +40,32 @@ def _open_writer_connection() -> Any:
 # ---------------------------------------------------------------------------
 # Actions -- each returns a JSON-serialisable dict (the handler wraps status + body)
 # ---------------------------------------------------------------------------
+
+
+def action_connect_probe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Phased connectivity diagnostic (T2.19 RCA). Runs before any connection open.
+
+    Returns the structured probe result even on a diagnosed failure (ok=False + failed_phase).
+    Logs each phase result to CloudWatch via print (Lambda stdout -> CloudWatch Logs).
+    A 5xx is reserved for a probe that itself errors unexpectedly (caught by the outer handler).
+    """
+    dsn = rt.fetch_dsn()
+    timeout_s = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
+    result = probe.probe_connection(
+        dsn,
+        data_path=DATA_PATH,
+        meta_schema=META_SCHEMA,
+        extension_directory=EXTENSION_DIRECTORY,
+        timeout_s=timeout_s,
+    )
+    print(
+        f"CONNECT_PROBE writer phase_reached={result['phase_reached']} "
+        f"failed_phase={result['failed_phase']} ok={result['ok']} "
+        f"dns_ms={result['dns_ms']} tcp_ms={result['tcp_ms']} "
+        f"auth_ms={result['auth_ms']} attach_ms={result['attach_ms']} "
+        f"error={result['error']!r}"
+    )
+    return result
 
 
 def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -516,10 +543,12 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "loudfail_probe": action_loudfail_probe,
     "churn": action_churn,
     "churn_single": action_churn_single,
+    "connect_probe": action_connect_probe,
 }
 
-# Actions that manage their own connections (churn opens many; attach measures connect time itself).
-_CONNECTIONLESS_ACTIONS = {"churn", "churn_single"}
+# Actions that manage their own connections (churn opens many; attach measures connect time itself;
+# connect_probe runs BEFORE the connection open to diagnose a hanging connect).
+_CONNECTIONLESS_ACTIONS = {"churn", "churn_single", "connect_probe"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
