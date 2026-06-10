@@ -420,6 +420,17 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
         ]
         Resource = "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"
       },
+      {
+        # ssm:DescribeParameters is the list/metadata API the AWS provider issues during the
+        # aws_ssm_parameter create read-back and on every plan-time refresh. Like other AWS list
+        # operations (see LambdaLogGroupDescribe / CloudWatchAlarmDescribe above) it does NOT support
+        # resource-level scoping, so it must sit on "*". Without it, PutParameter succeeds but the
+        # provider's read-back fails with AccessDenied on ssm:DescribeParameters.
+        Sid      = "SSMDescribeParameters"
+        Effect   = "Allow"
+        Action   = "ssm:DescribeParameters"
+        Resource = "*"
+      },
     ]
   })
 }
