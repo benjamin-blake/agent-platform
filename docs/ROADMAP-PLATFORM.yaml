@@ -1515,8 +1515,10 @@ candidate_decisions:
       does NOT edit DECISIONS.md while pending.
       Load-bearing design choices (from the converged review):
       (1) Convergence anchored SERVER-SIDE: the apply job writes a durable S3 convergence record
-          (apply-identity-only write-IAM; always-run, red-on-failure) and refuses to apply against a red record
-          -- the sole hard block, unbypassable. terraform-converged is an ADVISORY PR status only (NOT a
+          (pipeline-writer-identity-only write-IAM; always-run, red-on-failure) and refuses to apply against a
+          red record -- the sole hard block, unbypassable by merge-path actors (workflow self-edit is the
+          Wave-4 / authority-budget residual, points 6-9; red clears only via the T2.20 dispatch-ack path).
+          terraform-converged is an ADVISORY PR status only (NOT a
           required check -- required would wedge the autonomous fix-merge once a record is red, or be
           admin-bypassed anyway given main-protection strict=false + bypass_mode=always).
       (2) Speculative plan on PRs under a NET-NEW least-priv github_ci_plan role (tfstate read-only, fork-gated
@@ -1531,6 +1533,34 @@ candidate_decisions:
       (5) Apply failures wire into ci-rca; drift detection (scheduled plan, alarm-only per Decision 55) files
           its rec directly via the ops portal. Post-apply agent re-engagement baseline = next planning session
           (the record is authoritative); a same-turn post-merge wake is best-effort only.
+      [Amended 2026-06-10 -- authority-budget clarification; extends the converged review, overturns nothing:]
+      (6) The Wave 3 Environment gate is an AUTHORIZATION boundary, not a quality gate, and its steady-state
+          contract is EXCEPTION-PATH: human review is reserved for changes that expand the pipeline's own
+          authority (IAM/trust) or destroy state -- never routine control flow. End-state after T2.23 + T2.25:
+          an explicit AUTHORITY BUDGET -- an IAM permissions boundary on github_ci_apply, boundary-propagation
+          condition keys (any role/policy the pipeline creates or attaches must carry the same boundary), and
+          a deterministic in-budget/out-of-budget diff classification in the guard -- auto-passes in-budget
+          IAM changes; ONLY out-of-budget, trust-policy, and destroy changes route to the gate. Target gate
+          frequency: near-zero. A firing gate is design signal ("the agent wants authority it does not have"),
+          not ceremony.
+      (7) The budget, boundary, and guard policy definitions live in the terraform/bootstrap/ root (Wave 4),
+          outside the pipeline's writable surface. Without that separation ANY automated handling of the
+          fail-closed set is self-approval -- which is also why the wave sequencing is load-bearing: gate
+          exists (T2.22) -> privilege separation (T2.23) -> budget narrowing (T2.25).
+      (8) Automated environment escalation (the future-state platform promotion train) is REJECTED as a
+          substitute for the authority gate: escalation verifies BEHAVIOR ("does it work") and
+          authority-expanding diffs pass behavioral verification by definition; destroys rehearsed on sandbox
+          data prove nothing about higher-environment data; and the train's machinery is itself
+          pipeline-authored code. Escalation remains the correct pattern for the BEHAVIORAL axis when SIT/PROD
+          are stood up (the environment-taxonomy section 4 trigger), consuming T2.20 convergence records +
+          T2.24 drift signals as platform-promotion evidence. Behavioral risk -> automate fully; authority
+          risk -> budget + out-of-band amendment. Orthogonal controls, both kept, each on its own axis.
+      (9) Autonomy is earned and revocable PER CHANGE-CLASS (ratchet model): the budget may widen for a class
+          on measured track record (e.g. 30 days of green applies, zero red-convergence incidents) and MUST
+          narrow back to gated on incident. Ratchet decisions are themselves out-of-band budget amendments via
+          the bootstrap tier (the Decision 67 freeze -> Decision 79 per-artifact unfreeze pattern, made
+          data-driven). A subagent review may advise at the gate; it is never the lock -- the lock is
+          deterministic policy plus the human signature on budget amendments.
     gates: [T2.20, T2.21, T2.22, T2.23, T2.24, T2.25]
     state: pending
     filed_via: pending_log_decision_lambda
@@ -1541,7 +1571,8 @@ candidate_decisions:
       - "CI/CD pipeline files are build-tooling, not executor machinery (Decision 44 boundary untouched; Decision 79 precedent). Drift + apply failures alarm and file recs; nothing auto-remediates (Decision 55)."
       - "Each of T2.20-T2.25 is a standalone IMPLEMENTATION plan (Decision 67 STRATEGIC suspension); none authored STRATEGIC."
       - "Does NOT edit DECISIONS.md while pending; ratified via the log-decision path (a numbered Decision when Wave 1 / T2.20 ships), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81."
-    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; apply-identity-only write-IAM) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (OIDC sub pinned to refs/heads/main); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
+      - "The Environment reviewer gate is an authorization boundary, not a routine quality gate: post-T2.25 only out-of-budget / trust-policy / destroy changes route to it (in-budget IAM auto-passes under the bootstrap-defined permissions boundary + guard budget). Environment escalation through the future-state platform promotion train is NOT a substitute (it verifies behavior, not authority); subagent review at the gate is advisory, never the lock. (Amended 2026-06-10; detail points 6-9.)"
+    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (OIDC sub pinned to refs/heads/main); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -3974,25 +4005,52 @@ tier_items:
     name: "Terraform CI/CD: convergence substrate + apply-RCA + best-effort post-merge wake (CD.35 Wave 1)"
     intent: |
       Make terraform apply outcomes sticky and observed. The apply job writes a durable S3 convergence record
-      (apply-identity-only write-IAM; always-run, red-on-failure) and reads it as a server-side precondition
-      that refuses to apply against a red record -- the sole hard block. terraform-converged is an ADVISORY PR
-      status only (pass-on-absent; NOT added to main-protection required_status_checks). Wire
+      (pipeline-writer-identity-only write-IAM; always-run, red-on-failure) and reads it as a server-side
+      precondition that refuses to apply against a red record -- the sole hard block. terraform-converged is an
+      ADVISORY PR status only (pass-on-absent; NOT added to main-protection required_status_checks). Wire
       terraform-apply-sandbox into ci-rca.yml so apply failures file source=ci_rca recs. Attempt a best-effort
       post-merge wake (resolve the PR from the merge commit SHA -- workflow_run.pull_requests[] is empty for
       push; agent holds its subscription through apply) with next-planning-session re-check as the poll-free
       baseline. Standalone IMPLEMENTATION plan (Decision 67). V3.
+      [Amended 2026-06-10 -- pre-plan design review; settles four under-specified points:]
+      (a) UNLATCH PROTOCOL = dispatch-ack: a red record blocks ALL push-triggered applies, and a refusal does
+          NOT overwrite the record. Clearing requires an explicit workflow_dispatch acknowledge-and-retry run
+          whose input names the red record's commit (or rec id); only a successful apply from that path writes
+          green. The dispatch actor + input are the audit trail. Agent autonomy is preserved (the agent may
+          dispatch via the MCP actions trigger after the rec review, per Decision 55/72 failure-must-be-seen
+          discipline). Auto-allow-descendants is REJECTED: on linear-history main every commit is a
+          descendant, so the latch would never latch.
+      (b) SERIALIZATION: the apply workflow declares a concurrency group (cancel-in-progress: false) so
+          applies serialize -- closes the read-precondition -> apply -> write-record race (two rapid merges
+          both read green; the second applies onto an unconverged state) and keeps state-lock-timeout noise
+          out of ci-rca.
+      (c) RECORD PLACEMENT + WRITE IDENTITY: the record lives in its OWN S3 prefix (e.g.
+          convergence/personal/sandbox.json), NOT under tfstate/ as INTENT 5.5 originally sketched -- the
+          advisory PR status must read it at PR time and "github_ci_pr cannot read tfstate" (re-asserted by
+          T2.21 exit criteria) stays cleanly auditable; the PR role gets read on the record prefix only.
+          Write-IAM is pipeline-writer-identity-only via a shared record-writer policy (apply identity at
+          Wave 1; the T2.24 drift identity joins at Wave 5 -- "apply identity alone" would contradict Wave
+          5's red-flip). Never PR roles, never laptops. plan_sha is null until Wave 2 introduces saved plans.
+      (d) RCA DEDUPE + HONEST FRAMING: refusals-while-red carry a distinguishable failure marker and ci-rca
+          dedupes them against the open red-record rec (coordinate with T1.13's structured taxonomy) -- one
+          underlying failure, one rec. The forced-failure verification rec is closed via update_rec annotated
+          as synthetic. The record is unbypassable by merge-path actors but NOT against workflow self-edit;
+          that residual is the Wave-4 / authority-budget class (CD.35 points 6-9) and contract language must
+          not overclaim.
     depends_on: [T2.12]
     files_in_scope:
       - .github/workflows/terraform-apply-sandbox.yml    # convergence record (if: always(), red-on-failure) + precondition read + SHA->PR wake
       - .github/workflows/ci-rca.yml    # add terraform-apply-sandbox to the workflows: trigger
-      - terraform/personal/oidc.tf    # apply-identity-only write-IAM for the convergence record
+      - terraform/personal/oidc.tf    # record-writer write-IAM (shared policy; apply identity at Wave 1) -- record in its own prefix, NOT tfstate/; PR role reads record prefix only
       - .claude/skills/implement/SKILL.md    # hold-subscription-through-apply convention for terraform PRs
-      - terraform/CLAUDE.md    # document the server-side convergence anchor + advisory status
+      - terraform/CLAUDE.md    # document the server-side convergence anchor + advisory status + dispatch-ack unlatch
     exit_criteria:
-      - "A forced apply failure writes status=red via the always-run step; the NEXT apply is refused server-side against the red record"
-      - "The same forced failure files a source=ci_rca critical rec (terraform-apply-sandbox wired into ci-rca.yml)"
+      - "A forced apply failure writes status=red via the always-run step; the NEXT push-triggered apply is refused server-side against the red record AND the refusal does not overwrite the record"
+      - "The same forced failure files a source=ci_rca critical rec (terraform-apply-sandbox wired into ci-rca.yml); subsequent refusals-while-red file NO duplicate recs (distinguishable refusal marker + dedupe against the open rec); the synthetic verification rec is closed via update_rec annotated as synthetic"
       - "The advisory terraform-converged status shows red on a non-converged main and is NOT in main-protection required_status_checks"
-      - "A passing apply writes the first convergence record from absent (pass-on-absent); write-IAM proven restricted to the apply identity"
+      - "A red record clears ONLY via the workflow_dispatch acknowledge-and-retry path (input names the red commit or rec id); the recovery from the forced failure demonstrates it -- a successful acknowledge-path apply writes green"
+      - "Applies serialize via a workflow concurrency group (cancel-in-progress: false); rapid sequential merges produce sequential applies with no precondition race"
+      - "A passing apply writes the first convergence record from absent (pass-on-absent); write-IAM proven restricted to the pipeline writer identity (apply identity at Wave 1); the record lives in its own prefix outside tfstate/ with the PR role granted read on the record prefix only"
       - "Post-merge wake proven live (PR resolved via merge SHA wakes a held subscription) OR the next-planning-session re-check baseline confirmed; no sleep/loop poll (Decision 76)"
     related_candidate_decisions: [CD.35]
     effort: M
@@ -4032,6 +4090,11 @@ tier_items:
       claim in the OIDC sub is NOT an authorization boundary (a known GitHub footgun); the Environment, not the
       token, gates. Retire the manual/laptop branch-first apply. No job-level environment: precedent exists, so
       prototype one first. Standalone IMPLEMENTATION plan. V3.
+      [Amended 2026-06-10 per CD.35 detail points 6-9]: the gate's contract is authorization-boundary,
+      exception-path. During Waves 3-4 (authority budget not yet defined) it interim-handles the WHOLE
+      fail-closed set; after T2.25's budget narrowing it fires ONLY for out-of-budget / trust-policy / destroy
+      changes (in-budget IAM auto-passes). Steady-state target frequency: near-zero, trending down. A reviewer
+      approval here is the human signing an authority-budget exception, not routine change review.
     depends_on: [T2.20]
     files_in_scope:
       - terraform/personal/oidc.tf    # tf-gated-apply Environment; privileged role trust pinned to refs/heads/main
@@ -4057,6 +4120,11 @@ tier_items:
       permissions. Absorbs rec-2079 (consolidate IAMRoleReconcile + IAMPlatformRolesRead). The bootstrap state
       bucket/lock + apply identity are provisioned once by a documented one-time admin action. Standalone
       IMPLEMENTATION plan. V3.
+      [Amended 2026-06-10 per CD.35 detail points 6-9]: the bootstrap root additionally defines the AUTHORITY
+      BUDGET: the IAM permissions boundary attached to github_ci_apply, boundary-propagation condition keys
+      (any role/policy the pipeline creates or attaches must carry the same boundary), and the guard's
+      in-budget policy table. Living in this root makes the budget pipeline-unwritable by construction;
+      amending the budget IS the human-gated act.
     depends_on: [T2.22]
     files_in_scope:
       - terraform/bootstrap/    # new root + own state for the CI/CD role's own IAM
@@ -4067,6 +4135,8 @@ tier_items:
       - "A change to github_ci_apply's own policy applies via the bootstrap tier with NO red push run on the main pipeline (self-grant cycle broken)"
       - "rec-2079 absorbed: IAMRoleReconcile + IAMPlatformRolesRead consolidated"
       - "The bootstrap root's state/lock + apply identity are provisioned by a documented one-time admin action, not managed by the pipeline"
+      - "github_ci_apply carries a bootstrap-defined permissions boundary; pipeline iam:CreateRole / iam:PutRolePolicy / iam:AttachRolePolicy are condition-keyed to require that boundary (verified: an unbounded role-create attempt is denied)"
+      - "The authority-budget definitions (permissions boundary + guard policy table) are writable only via the bootstrap tier; a main-pipeline PR touching them cannot self-apply"
     related_candidate_decisions: [CD.35]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
@@ -4080,6 +4150,9 @@ tier_items:
       On drift: flip the convergence record red and file a rec DIRECTLY via the ops portal (drift is a
       state-vs-code delta, not a CI-log failure that fits ci-rca's log-RCA model). Alarm only -- never
       auto-apply (Decision 55). Standalone IMPLEMENTATION plan. V3.
+      [Amended 2026-06-10 per T2.20 amendment (c)]: the drift identity writes the record via the shared
+      record-writer policy (joining the apply identity); the record lives in its own S3 prefix, not under
+      tfstate/. A drift-flipped red record clears via the same dispatch-ack path as an apply failure.
     depends_on: [T2.20]
     files_in_scope:
       - .github/workflows/terraform-drift.yml    # new -- scheduled plan with explicit exit-code handling
@@ -4103,6 +4176,12 @@ tier_items:
       human-gated-action example. Narrow the Decision-77 guard to plan-content policy now that native controls
       own authorization (INTENT 5.9). Ratify CD.35 as a numbered Decision via the log-decision path. Standalone
       IMPLEMENTATION plan. V3 (guard change) + governance.
+      [Amended 2026-06-10 per CD.35 detail points 6-9]: the narrowing is BUDGET-BASED, not merely
+      content-based -- the guard classifies IAM diffs against the bootstrap-defined authority budget (T2.23):
+      in-budget changes auto-pass the sandbox auto-apply; out-of-budget / trust-policy / destroy changes route
+      to the T2.22 Environment gate. The ratification Decision states the ratchet criteria: per-change-class
+      widening on measured track record, mandatory narrowing on incident, budget amendments only via the
+      bootstrap tier. (Effort raised S -> M for the budget-classification work.)
     depends_on: [T2.20, T2.21, T2.22, T2.23]
     files_in_scope:
       - docs/contracts/environment-taxonomy.md    # SoT for the apply-model convention
@@ -4113,9 +4192,11 @@ tier_items:
     exit_criteria:
       - "The apply-model statement lives in ONE source of truth (environment-taxonomy.md); the others reference it; prompt_compliance.py passes"
       - "The guard is narrowed to plan-content policy; native controls (required checks + Environment) own authorization (INTENT 5.9 division verified)"
+      - "The guard classifies IAM diffs against the bootstrap-defined budget: an in-budget IAM change auto-applies; an out-of-budget change routes to the tf-gated-apply Environment (both demonstrated)"
+      - "Ratchet criteria (widen-on-track-record per change-class, narrow-on-incident, budget amendments via bootstrap tier only) are stated in the ratification Decision text"
       - "CD.35 ratified as a numbered Decision via the log-decision path (DECISIONS.md not edited until ratification)"
     related_candidate_decisions: [CD.35]
-    effort: S
+    effort: M    # raised from S 2026-06-10: budget-classification work added per CD.35 points 6-9
     strategic: false
     status: not_started
 
