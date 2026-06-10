@@ -400,6 +400,26 @@ resource "aws_iam_role_policy" "platform_admin_ops" {
         ]
         Resource = "*"
       },
+      {
+        # SSM Parameter Store lifecycle for the DuckLake endpoint-discovery parameters
+        # (/agent-platform/ducklake/{reader,writer}_url, T2.19 / Decision 81 cl.7). PlatformDev reads
+        # them at runtime (DuckLakeEndpointDiscovery, below); AdminOps must create + tag + manage them
+        # at apply time. PutParameter with inline tags requires ssm:AddTagsToResource; the read actions
+        # back the AWS provider's plan-time GetParameter + ListTagsForResource refresh. Scoped to the
+        # agent-platform parameter namespace -- all listed actions support parameter-ARN scoping.
+        Sid    = "SSMParameterProvisioning"
+        Effect = "Allow"
+        Action = [
+          "ssm:PutParameter",
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:DeleteParameter",
+          "ssm:AddTagsToResource",
+          "ssm:RemoveTagsFromResource",
+          "ssm:ListTagsForResource",
+        ]
+        Resource = "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"
+      },
     ]
   })
 }
