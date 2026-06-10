@@ -356,6 +356,54 @@ def test_run_checks_profile_hard_default(monkeypatch):
     mock_session.assert_called_once_with(profile_name="agent_platform")
 
 
+def test_apply_backend_routing_ducklake_rewrites_recs(monkeypatch):
+    """ducklake backend: recs checks -> reader (backend=ducklake, {tbl} SQL); non-recs untouched."""
+    import scripts.data_quality_runner as dq
+
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+    recs = Check(
+        "ops_recommendations",
+        "file",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE file IS NULL",
+        "recs file not null",
+        "error",
+    )
+    other = Check(
+        "ops_decisions",
+        "status",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_decisions_current WHERE status IS NULL",
+        "dec status",
+        "error",
+    )
+    dq.apply_backend_routing([recs, other], "agent_platform")
+    assert recs.backend == "ducklake"
+    assert "{tbl}" in recs.sql
+    assert "ops_recommendations_current" not in recs.sql
+    # ops_decisions is NOT migrated -- stays on Athena, SQL unchanged.
+    assert other.backend == "athena"
+    assert "ops_decisions_current" in other.sql
+
+
+def test_apply_backend_routing_iceberg_noop(monkeypatch):
+    """iceberg backend (rollback): no rewrite, no clause-8 append -- byte-identical to pre-cutover."""
+    import scripts.data_quality_runner as dq
+
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+    recs = Check(
+        "ops_recommendations",
+        "file",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE file IS NULL",
+        "recs file not null",
+        "error",
+    )
+    out = dq.apply_backend_routing([recs], "agent_platform")
+    assert recs.backend == "athena"
+    assert out == [recs]
+
+
 def test_print_results_json(capsys):
     c = Check("t", "c", "type", "sql", "desc")
     results = [CheckResult(c, "PASS")]

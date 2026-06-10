@@ -640,6 +640,28 @@ def _execute_check(
     return _verdict_for(check, violation_count, time.time() - start)
 
 
+def apply_backend_routing(all_checks: list[Check], database: str, *, table_filter: str | None = None) -> list[Check]:
+    """Route the migrated recs checks to the active ops storage backend (T2.19 / Decision 81).
+
+    When OPS_STORAGE_BACKEND=ducklake (default post-cutover), rewrite every check on a migrated
+    recs table to the DuckLake closed reader (DuckDB dialect over the `current` TABLE) and append
+    the CD.33 clause-8 checks. iceberg (rollback) leaves all checks on the Athena views.
+
+    Shared by main() AND DataQualityVerifier so the verifier harness routes recs through the
+    reader -- NOT the dropped ops_recommendations_current Athena view (which would TABLE_NOT_FOUND).
+    Mutates and returns *all_checks*.
+    """
+    if _ops_backend() != "ducklake":
+        return all_checks
+    for c in all_checks:
+        if c.table in _DUCKLAKE_OPS_TABLES:
+            c.sql = to_ducklake_sql(c.sql, c.table, database)
+            c.backend = "ducklake"
+    ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}
+    all_checks.extend(build_clause8_checks(ops_spec_yaml, database, table_filter=table_filter))
+    return all_checks
+
+
 def run_checks(
     checks: list[Check],
     workgroup: str,
@@ -871,17 +893,8 @@ def main() -> int:
     # migrated recs checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
     # CD.33 clause-8 checks for recs. ops_decisions + the deferred ops_* tables + telemetry stay on
     # Athena (recs-first slice). iceberg (default) leaves everything on the Athena views -- the rollback
-    # path, byte-identical to pre-cutover.
-    if _ops_backend() == "ducklake":
-        for c in all_checks:
-            # Recs tombstone checks are included: they target ops_recommendations current and MUST
-            # transit DuckLake on this backend (no Athena escape hatch -- OQ.7). build_tombstone_checks
-            # emits the Athena view name, which to_ducklake_sql rewrites to the {tbl} placeholder.
-            if c.table in _DUCKLAKE_OPS_TABLES:
-                c.sql = to_ducklake_sql(c.sql, c.table, database)
-                c.backend = "ducklake"
-        ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}
-        all_checks.extend(build_clause8_checks(ops_spec_yaml, database, table_filter=args.table))
+    # path, byte-identical to pre-cutover. Shared with DataQualityVerifier via apply_backend_routing.
+    all_checks = apply_backend_routing(all_checks, database, table_filter=args.table)
 
     # Filter by check type (e.g. --checks tombstone_resurrection)
     if args.checks:
