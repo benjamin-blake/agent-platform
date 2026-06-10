@@ -42,8 +42,9 @@ _TABLE_TO_LOCAL: dict[str, str] = {
 }
 
 # Maps Iceberg table name -> Athena view/table to query
+# ops_recommendations is EXCLUDED: recs transit the DuckLake closed boundary (Decision 81 cl.7).
+# No Athena fallback for recs -- the reader is the only allowed read path.
 _TABLE_TO_VIEW: dict[str, str] = {
-    "ops_recommendations": "ops_recommendations_current",
     "ops_decisions": "ops_decisions_current",
     "ops_priority_queue": "ops_priority_queue_current",
 }
@@ -57,20 +58,19 @@ _REQUIRED_REC_FIELDS = ["title", "source", "effort", "priority"]
 
 
 def _pull_via_reader(table: str) -> list[dict] | None:
-    """Return current-state rows for *table* via DuckDBIcebergReader.
+    """Return current-state rows for *table* via the configured reader.
 
-    Returns None on any exception so the caller can fall back to Athena.
-    Rows are returned as plain Python dicts with all coercions deferred to
-    the existing _coerce_ops_*_row helpers (they tolerate already-typed values).
+    For ops_recommendations (DuckLake closed boundary): returns None on any
+    exception -- no Athena fallback (Decision 81 cl.7).
+    For other ops_* tables: returns None on any exception so the caller can
+    fall back to Athena (Iceberg reader; escape-hatch retained until their migration).
     """
     try:
         from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        # Table-aware flag-selected reader: recs -> DuckLake (closed boundary) when flagged; decisions
-        # and the deferred ops_* tables -> DuckDB-on-Iceberg regardless of the flag (recs-first slice).
         return make_reader(table=table).current_state(table)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("sync_ops._pull_via_reader: reader failed for %s, will fall back to Athena: %s", table, exc)
+        logger.warning("sync_ops._pull_via_reader: reader failed for %s: %s", table, exc)
         return None
 
 
@@ -265,6 +265,13 @@ def drain() -> dict[str, int]:
             if not table_dir.is_dir():
                 continue
             table = table_dir.name
+            if table == "ops_recommendations":
+                logger.warning(
+                    "sync_ops.drain: skipping ops_recommendations outbox dir -- recs transit the "
+                    "DuckLake closed boundary (Decision 81 cl.7 / T2.19). A recs entry here is an "
+                    "anomaly; drain it via ops_data_portal.file_rec / update_rec instead."
+                )
+                continue
             drained = 0
             for outbox_file in list(table_dir.glob("*.jsonl")):
                 try:
@@ -288,7 +295,8 @@ def drain() -> dict[str, int]:
 def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
     """Pull a single ops table and overwrite the local JSONL file.
 
-    Tries DuckDBIcebergReader first; falls back to Athena on failure (CD.8/CD.15).
+    ops_recommendations: DuckLake reader only -- no Athena fallback (Decision 81 cl.7 / T2.19).
+    Other tables: DuckDBIcebergReader first; Athena fallback on failure (CD.8/CD.15 escape hatch).
     Returns number of rows pulled, or 0 on failure.
     """
     local_rel = _TABLE_TO_LOCAL.get(table)
@@ -301,7 +309,14 @@ def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
         rows = _coerce_rows_list(table, reader_rows)
         return _write_rows_to_local(table, rows, local_rel)
 
-    # Athena fallback (CD.8/CD.15 escape hatch)
+    if table == "ops_recommendations":
+        logger.warning(
+            "sync_ops._pull_single_table: DuckLake reader unreachable for ops_recommendations -- "
+            "no Athena fallback (Decision 81 cl.7). Local cache not updated."
+        )
+        return 0
+
+    # Athena fallback for non-recs tables (CD.8/CD.15 escape hatch)
     logger.info("sync_ops._pull_single_table: using Athena fallback for %s", table)
     return _pull_single_table_athena(table, profile, local_rel)
 
@@ -440,42 +455,21 @@ def _pull_single_table_athena(table: str, profile: str, local_rel: str) -> int:
 
 
 def _rebuild_local_cache(profile: str = _SSO_PROFILE) -> dict[str, int]:
-    """Read Iceberg current-state and overwrite local JSONL files with fresh data.
+    """Read current-state and overwrite local JSONL files with fresh data.
 
-    DESTRUCTIVE: overwrites local JSONL files with Iceberg state. If any S3 staging
-    files for ops_recommendations exist today (unstaged writes), raises RuntimeError
-    to prevent silent data loss. Call sync() first to compact pending writes.
-
-    Read path: DuckDBIcebergReader first, Athena fallback (CD.8/CD.15).
+    DESTRUCTIVE: overwrites local JSONL files with warehouse state.
+    ops_recommendations: DuckLake reader (no Athena fallback, Decision 81 cl.7).
+    Other tables: DuckDBIcebergReader first, Athena fallback (CD.8/CD.15).
 
     Returns:
         Dict mapping table name to number of rows pulled.
     """
     counts: dict[str, int] = {}
 
-    # Guard: refuse to overwrite if there are unstaged S3 writes for ops_recommendations
-    try:
-        import datetime as _dt  # noqa: PLC0415
-
-        from scripts.ops_writer import STAGING_PREFIX, OpsWriter  # noqa: PLC0415
-
-        _writer = OpsWriter()
-        _bucket = _writer._bucket()
-        if _bucket:
-            _client = _writer._get_client()
-            if _client:
-                _today = _dt.date.today().isoformat()
-                _prefix = f"{STAGING_PREFIX}/ops_recommendations/dt={_today}/"
-                _paginator = _client.get_paginator("list_objects_v2")
-                for _page in _paginator.paginate(Bucket=_bucket, Prefix=_prefix):
-                    if _page.get("Contents"):
-                        raise RuntimeError(
-                            "_rebuild_local_cache: unstaged writes detected for ops_recommendations -- call sync() first"
-                        )
-    except RuntimeError:
-        raise
-    except Exception:  # noqa: BLE001
-        pass  # staging guard failure is non-fatal
+    # ops_recommendations is excluded from _TABLE_TO_VIEW (DuckLake closed boundary).
+    # Pull it via the DuckLake reader path in _pull_single_table.
+    recs_pulled = _pull_single_table("ops_recommendations", profile=profile)
+    counts["ops_recommendations"] = recs_pulled
 
     for table in _TABLE_TO_VIEW:
         local_rel = _TABLE_TO_LOCAL.get(table)

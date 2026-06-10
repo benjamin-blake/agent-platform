@@ -282,7 +282,10 @@ def test_main_no_matching_filters():
     with patch("scripts.data_quality_runner._DQ_DIR") as mock_dq_dir:
         mock_dq_dir.glob.return_value = [Path("test.yaml")]
         with patch("scripts.data_quality_runner.load_checks", return_value=([], {"database": "db"})):
-            with patch("sys.argv", ["runner.py", "--table", "non_existent"]):
+            with (
+                patch("sys.argv", ["runner.py", "--table", "non_existent"]),
+                patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+            ):
                 assert main() == 0
 
 
@@ -378,7 +381,8 @@ def test_main_full(mock_run, mock_load, mock_dq_dir):
     mock_dq_dir.glob.return_value = [Path("test.yaml")]
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     mock_run.return_value = RunResult(verdict="PASS")
-    with patch("sys.argv", ["runner.py"]):
+    # Force iceberg backend: ducklake path reads _DQ_DIR/"ops.yaml" via MagicMock which hangs yaml.safe_load.
+    with patch("sys.argv", ["runner.py"]), patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}):
         assert main() == 0
 
 
@@ -399,7 +403,10 @@ def test_main_severity_error(mock_load, mock_dq_dir, _mock_tombstones):
         Check("t", "c", "type", "sql", "desc", "warn"),
     ]
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
-    with patch("sys.argv", ["runner.py", "--severity", "error", "--dry-run"]):
+    with (
+        patch("sys.argv", ["runner.py", "--severity", "error", "--dry-run"]),
+        patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+    ):
         with patch("builtins.print") as mock_print:
             main()
             # Only error check printed (2 lines: desc and sql)
@@ -415,7 +422,10 @@ def test_main_severity_warn(mock_load, mock_dq_dir):
         Check("t", "c", "type", "sql", "desc", "warn"),
     ]
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
-    with patch("sys.argv", ["runner.py", "--severity", "warn", "--dry-run"]):
+    with (
+        patch("sys.argv", ["runner.py", "--severity", "warn", "--dry-run"]),
+        patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+    ):
         with patch("builtins.print") as mock_print:
             main()
             assert mock_print.call_count == 2
@@ -428,7 +438,7 @@ def test_main_json(mock_load, mock_dq_dir):
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     with patch("scripts.data_quality_runner.run_checks") as mock_run:
         mock_run.return_value = RunResult(verdict="PASS")
-        with patch("sys.argv", ["runner.py", "--json"]):
+        with patch("sys.argv", ["runner.py", "--json"]), patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}):
             with patch("builtins.print") as mock_print:
                 main()
                 # Check that print was called with JSON (one of the calls should be the JSON string)

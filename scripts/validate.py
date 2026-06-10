@@ -812,16 +812,39 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']ops_'),
     ]
 
+    # Table-specific block: ops_recommendations must NEVER route to OpsWriter/Iceberg after T2.19.
+    # This catches any site (including whitelisted files) that re-introduces the split-brain.
+    # Self-excluded: validate.py itself contains the pattern strings and would otherwise self-flag.
+    _RECS_BLOCK_PATTERNS = [
+        re.compile(r'OpsWriter\(\)\.write\(\s*["\']ops_recommendations'),
+        re.compile(r'OpsWriter\(\)\.compact\(\s*["\']ops_recommendations'),
+        re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']ops_recommendations'),
+        re.compile(r'\b(?:writer|ops|_writer)\.compact\(\s*["\']ops_recommendations'),
+    ]
+
     errors: list[str] = []
     for search_dir in [scripts_dir, src_dir]:
         if not search_dir.exists():
             continue
         for py_file in sorted(search_dir.glob("**/*.py")):
-            if py_file in _WHITELIST:
-                continue
             try:
                 content = py_file.read_text(encoding="utf-8")
             except OSError:
+                continue
+
+            # Table-specific ops_recommendations block (applies to ALL files, including whitelist).
+            if py_file != scripts_dir / "validate.py":
+                for recs_pat in _RECS_BLOCK_PATTERNS:
+                    if recs_pat.search(content):
+                        rel = py_file.relative_to(ROOT)
+                        errors.append(
+                            f"{rel}: writes/compacts ops_recommendations via OpsWriter -- "
+                            "recs transit the DuckLake closed boundary (Decision 81 cl.7 / T2.19). "
+                            "Use ops_data_portal.file_rec / update_rec."
+                        )
+                        break
+
+            if py_file in _WHITELIST:
                 continue
             for pattern in _PATTERNS:
                 if pattern.search(content):

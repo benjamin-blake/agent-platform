@@ -22,9 +22,9 @@ class TestDrain:
 
     def test_drain_reads_outbox_calls_opswriter_deletes_file(self, tmp_path):
         """drain() reads files, calls OpsWriter.write(), and deletes the files."""
-        outbox_dir = tmp_path / "ops_recommendations"
+        outbox_dir = tmp_path / "ops_decisions"
         outbox_dir.mkdir(parents=True)
-        entry = {"id": "rec-001", "status": "open"}
+        entry = {"id": "dec-001", "status": "open"}
         (outbox_dir / "test-entry.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
         mock_writer_instance = MagicMock()
@@ -42,13 +42,13 @@ class TestDrain:
 
         # Verify file was deleted
         assert not (outbox_dir / "test-entry.jsonl").exists()
-        assert result.get("ops_recommendations", 0) >= 0  # drained at least 0
+        assert result.get("ops_decisions", 0) >= 1  # drained at least 1
 
     def test_drain_factory(self, tmp_path):
         """drain() with real outbox directory successfully drains entries."""
-        outbox_dir = tmp_path / "ops_recommendations"
+        outbox_dir = tmp_path / "ops_decisions"
         outbox_dir.mkdir(parents=True)
-        entry = {"id": "rec-drain-001", "status": "open"}
+        entry = {"id": "dec-drain-001", "status": "open"}
         outfile = outbox_dir / "entry.jsonl"
         outfile.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -72,8 +72,8 @@ class TestDrain:
 
             result = sync_ops.drain()
 
-        assert result.get("ops_recommendations") == 1
-        mock_writer_instance.write.assert_called_once_with("ops_recommendations", entry)
+        assert result.get("ops_decisions") == 1
+        mock_writer_instance.write.assert_called_once_with("ops_decisions", entry)
         assert not outfile.exists()
 
     def test_drain_write_failure_keeps_file(self, tmp_path):
@@ -114,7 +114,12 @@ class TestDrain:
 
 class TestPull:
     def test_pull_sso_expired_returns_empty(self):
-        """When reader fails and SSO is expired, _rebuild_local_cache() returns {}."""
+        """When DuckLake reader unreachable and SSO expired, returns {ops_recommendations: 0}.
+
+        H1 fix (code review): _rebuild_local_cache() always attempts recs pull via DuckLake
+        and includes the key even on failure (value=0). Non-recs tables are skipped when
+        check_sso returns False (no Athena fallback available).
+        """
         _bypass = MagicMock()
         _bypass._bucket.return_value = ""
         with (
@@ -128,7 +133,7 @@ class TestPull:
             from scripts.sync_ops import _rebuild_local_cache
 
             result = _rebuild_local_cache()
-        assert result == {}
+        assert result == {"ops_recommendations": 0}
 
     def test_pull_queries_athena_writes_local_files(self, tmp_path):
         """Athena fallback: _rebuild_local_cache() writes rows when reader fails."""
@@ -797,13 +802,16 @@ class TestTelemetryMappings:
             assert table not in _TABLE_TO_VIEW
 
     def test_migrated_ops_tables_present(self):
-        """The three migrated ops tables remain mapped to their _current views."""
+        """ops_decisions and ops_priority_queue remain in _TABLE_TO_VIEW.
+
+        ops_recommendations excluded (DuckLake, Decision 81 cl.7).
+        """
         from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
 
-        migrated = {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
-        assert set(_TABLE_TO_VIEW) == migrated
-        assert set(_TABLE_TO_LOCAL) == migrated
-        assert _TABLE_TO_VIEW["ops_recommendations"] == "ops_recommendations_current"
+        # ops_recommendations uses DuckLake reader only -- excluded from Athena view map
+        assert set(_TABLE_TO_VIEW) == {"ops_decisions", "ops_priority_queue"}
+        # _TABLE_TO_LOCAL still covers all three (local cache updated from DuckLake for recs, Athena for others)
+        assert set(_TABLE_TO_LOCAL) == {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
         assert _TABLE_TO_VIEW["ops_decisions"] == "ops_decisions_current"
         assert _TABLE_TO_VIEW["ops_priority_queue"] == "ops_priority_queue_current"
 
@@ -1136,32 +1144,6 @@ class TestPipelineConsolidation:
             assert result is not None, f"expected non-None for id={valid_id!r}"
             assert result["id"] == valid_id
 
-    def test_rebuild_local_cache_guard_blocks_on_staging_files(self, tmp_path):
-        """_rebuild_local_cache raises RuntimeError when S3 staging files exist for today."""
-        from unittest.mock import MagicMock, patch
-
-        import pytest
-
-        mock_writer = MagicMock()
-        mock_writer._bucket.return_value = "my-bucket"
-        mock_client = MagicMock()
-        mock_writer._get_client.return_value = mock_client
-        mock_client.get_paginator.return_value.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-05-09/f.jsonl"}]}
-        ]
-
-        with (
-            patch("scripts.sync_ops.OpsWriter", return_value=mock_writer, create=True),
-            patch.dict(
-                "sys.modules",
-                {"scripts.ops_writer": MagicMock(OpsWriter=lambda: mock_writer, STAGING_PREFIX="staging")},
-            ),
-        ):
-            from scripts import sync_ops
-
-            with pytest.raises(RuntimeError, match="unstaged writes detected"):
-                sync_ops._rebuild_local_cache()
-
     def test_drain_cli_removed(self):
         """Running `python -m scripts.sync_ops drain` exits non-zero (subcommand removed)."""
         import subprocess
@@ -1202,3 +1184,49 @@ def test_coerce_athena_array_handles_native_list():
     assert _coerce_athena_array([None, "x"]) == ["x"]
     # Athena string form still parses
     assert _coerce_athena_array("[a, b]") == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# T2.19 DuckLake cutover -- drain() skips recs outbox
+# ---------------------------------------------------------------------------
+
+
+class TestDrainSkipsRecsOutbox:
+    """T2.19: drain() must skip the ops_recommendations outbox dir (Decision 81 cl.7)."""
+
+    def test_drain_skips_recs_outbox_dir(self, tmp_path):
+        """drain() skips ops_recommendations outbox files -- recs transit DuckLake boundary."""
+        recs_outbox = tmp_path / "ops_recommendations"
+        recs_outbox.mkdir(parents=True)
+        entry = {"id": "rec-001", "status": "open"}
+        outbox_file = recs_outbox / "entry.jsonl"
+        outbox_file.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        write_calls: list[tuple] = []
+
+        class _FakeOpsWriter:
+            def __init__(self):
+                pass
+
+            def write(self, table, e):
+                write_calls.append((table, e))
+
+        with (
+            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch.dict(
+                "sys.modules",
+                {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
+            ),
+        ):
+            from scripts import sync_ops
+
+            result = sync_ops.drain()
+
+        # ops_recommendations outbox entries must NOT be written via OpsWriter
+        assert not any(t == "ops_recommendations" for t, _ in write_calls), (
+            "drain() must not route ops_recommendations through OpsWriter (Decision 81 cl.7)"
+        )
+        # Outbox file for recs is NOT deleted (was never processed)
+        assert outbox_file.exists(), "recs outbox file should not be deleted (was skipped)"
+        # drain() reports 0 for ops_recommendations
+        assert result.get("ops_recommendations", 0) == 0

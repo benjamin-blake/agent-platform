@@ -1,10 +1,33 @@
 ---
 # Engine-choice contract for the ops-store read layer.
-# Authoritative reference for CD.8 (engine-agnostic) and CD.15 (Athena escape-hatch).
+# Authoritative reference for CD.8 (engine-agnostic), CD.15 (Athena escape-hatch),
+# and T2.19 / Decision 81 (DuckLake closed boundary for recs).
 # Consumed by: agents, planning sessions, T0.7c query Lambda implementors.
 
-version: 1
-decisions_cited: [CD.8, CD.15, CD.16, Decision-56, Decision-69, Decision-70]
+version: 2
+last_updated: "2026-06-09"
+decisions_cited: [CD.8, CD.15, CD.16, Decision-56, Decision-69, Decision-70, Decision-78, Decision-81]
+
+# T2.19 (2026-06-09): ops_recommendations is now on the DuckLake closed boundary.
+# - Reads: make_reader() -> DuckLakeReader -> ducklake_reader Function URL (Decision 81 cl.7).
+# - Writes: ops_data_portal.file_rec / update_rec -> ducklake_writer Function URL.
+# - NO Athena escape hatch for recs on the ducklake backend.
+# - ops_recommendations_current Athena view DROPPED (T2.7 scoped partial; siblings deferred).
+
+t2_19_recs_cutover:
+  status: complete
+  completed_at: "2026-06-09"
+  recs_read_engine: DuckLakeReader (src/common/iceberg_reader.py)
+  recs_write_engine: ducklake_writer Function URL via ops_data_portal
+  athena_fallback_for_recs: FORBIDDEN (Decision 81 cl.7)
+  ops_recommendations_current_view: DROPPED
+
+t2_7_view_retirement:
+  status: in_progress
+  progress_note: "2026-06-09: ops_recommendations_current dropped (T2.19 scoped partial)"
+  remaining:
+    - ops_decisions_current (deferred until ops_decisions migrates to DuckLake)
+    - ops_priority_queue_current (deferred until ops_priority_queue migrates)
 
 default_engine:
   name: DuckDB
@@ -12,9 +35,11 @@ default_engine:
   class: DuckDBIcebergReader
   rationale: >
     In-process, zero-cost, Arrow-native. Removes Athena from the operational read
-    hot-path (722-row ops store; scales to billions-of-rows market-data path via
-    same interface). Reference implementation for the product's future T0.7c query
-    Lambda.
+    hot-path (ops store; scales to billions-of-rows market-data path via same
+    interface). Reference implementation for the product's future T0.7c query Lambda.
+  note: >
+    ops_recommendations uses DuckLakeReader (not DuckDBIcebergReader) since T2.19.
+    Non-recs ops tables remain on DuckDBIcebergReader.
 
 catalog_resolution:
   type: pyiceberg GlueCatalog
@@ -82,11 +107,12 @@ predicate_pushdown:
 single_portal_invariant:
   decision: Decision-69
   rule: >
-    ops_data_portal fetch-before-update reads (_fetch_rec_from_athena,
-    _fetch_decision_from_athena) read the warehouse via DuckDBIcebergReader with
-    predicate pushdown. On reader failure they fall back to Athena. If BOTH are
-    unreachable, RuntimeError is raised -- the local JSONL cache is never read as
-    a fallback for these write-gating reads.
+    ops_data_portal fetch-before-update reads (_fetch_rec_from_athena --
+    function name retained for back-compat) read the warehouse via the configured
+    reader: DuckLakeReader for recs (ducklake backend), DuckDBIcebergReader for
+    decisions (iceberg backend). On reader failure RuntimeError is raised --
+    no local JSONL fallback (Decision 69); no Athena fallback for recs
+    (Decision 81 cl.7).
 
 athena_escape_hatch:
   policy: CD.8 / CD.15
@@ -94,13 +120,16 @@ athena_escape_hatch:
     DuckDBIcebergReader raises any exception (credential failure, network error,
     pyiceberg incompatibility). The fallback path runs the original Athena query
     via boto3 and returns the same coerced row list.
-  scope: read paths only (sync_ops, ops_data_portal, session_preflight)
+  scope: >
+    Non-recs ops tables only (sync_ops, ops_data_portal for decisions,
+    session_preflight for priority_queue/decisions). REMOVED for recs (Decision 81 cl.7).
   retirement: >
-    Athena _current views are retired in T2.7, after all read paths have been
-    validated on DuckDB for >= one production cycle.
+    ops_decisions_current and ops_priority_queue_current Athena views retire in T2.7,
+    after those tables migrate to DuckLake. ops_recommendations_current ALREADY DROPPED.
   note: >
-    No _current view deletion in this plan. View retirement depends on T2.5
-    (this plan) and the write-path swap (fast-follow plan).
+    ops_recommendations reads have NO Athena escape hatch as of T2.19. Any reader
+    failure for recs surfaces as recs_read_status=reader_unreachable in the preflight
+    report (Decision 55: loud degraded signal, never a false zero).
 
 interim_direct_engine_exposure:
   note: >
@@ -128,13 +157,12 @@ fast_follow_plans:
   - slug: write-path-swap
     scope: >
       Route view refresh (CREATE OR REPLACE VIEW), to_iceberg compaction, and
-      DELETE DML off Athena/awswrangler onto DuckDB/pyiceberg.
+      DELETE DML off Athena/awswrangler onto DuckDB/pyiceberg (non-recs tables).
   - slug: current-view-retirement
     roadmap: T2.7
     scope: >
-      Drop ops_recommendations_current, ops_decisions_current,
-      ops_priority_queue_current Athena views once all reads are DuckDB-backed
-      for >= one production cycle.
+      Drop ops_decisions_current, ops_priority_queue_current Athena views once
+      those tables migrate to DuckLake. ops_recommendations_current ALREADY DROPPED.
   - slug: query-lambda-wiring
     roadmap: T0.7c
     scope: >

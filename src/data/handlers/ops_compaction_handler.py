@@ -70,6 +70,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ANN
             logger.warning("ops_compaction_handler: could not parse date from %r", date_segment)
             return {"statusCode": 200, "rows_compacted": 0}
 
+    if table_name == "ops_recommendations":
+        logger.warning(
+            "ops_compaction_handler: ops_recommendations is excluded from Iceberg compaction -- "
+            "recs transit the DuckLake closed boundary (Decision 81 cl.7 / T2.19). No-op."
+        )
+        return {"statusCode": 200, "rows_compacted": 0, "table": table_name, "note": "recs_excluded_ducklake"}
+
     if table_name not in TABLE_NAMES:
         logger.warning(
             "ops_compaction_handler: unknown table %r -- skipping (valid: %s)",

@@ -434,16 +434,13 @@ def _run_athena_query(sql: str) -> list[dict] | None:
     return results
 
 
-def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
-    """Return open recommendation counts from the warehouse.
+def _count_recommendations_reader() -> tuple[int, int, int, list[dict]] | str:
+    """Return open recommendation counts from the DuckLake reader.
 
-    Tries DuckDBIcebergReader first (with predicate + projection pushdown),
-    falls back to the Athena CLI on reader failure.
-
-    Returns ``None`` if both paths fail, allowing the caller to fall back to
-    the local JSONL file (graceful degradation, T2.5 exit criterion).
+    Returns the tally tuple on success, or the string "reader_unreachable" on any
+    reader failure (Decision 55 / Decision 81 cl.7: loud degraded signal, never a
+    false zero; no Athena fallback on the ducklake backend).
     """
-    # -- DuckDB reader path --
     try:
         reader = _make_reader()
         rows = reader.current_state(
@@ -456,14 +453,9 @@ def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
     except Exception as exc:  # noqa: BLE001
         import logging as _log  # noqa: PLC0415
 
-        _log.getLogger(__name__).warning("session_preflight._count_recommendations_athena: reader failed: %s", exc)
+        _log.getLogger(__name__).warning("session_preflight._count_recommendations_reader: reader unreachable: %s", exc)
 
-    # -- Athena fallback --
-    sql = "SELECT id, title, context, created_timestamp, automatable FROM ops_recommendations_current WHERE status = 'open'"
-    rows_raw = _run_athena_query(sql)
-    if rows_raw is None:
-        return None
-    return _tally_rec_counts(rows_raw, source="athena")
+    return "reader_unreachable"
 
 
 def _tally_rec_counts(
@@ -518,15 +510,24 @@ def _tally_rec_counts(
 def count_recommendations() -> tuple[int, int, int, list[dict]]:
     """Count open, aging (>30 days), and non-automatable recommendations.
 
-    Tries the ops_recommendations_current Athena view first when credentials are
-    available.  Falls back to the local JSONL file if the query fails.
+    Reads exclusively from the DuckLake reader (Decision 81 cl.7 / T2.19 cutover).
+    On reader failure, emits a LOUD recs_read_status=reader_unreachable signal and
+    returns a sentinel (0,0,0,[]) -- never a false zero silently (Decision 55).
+    The degraded status is surfaced in the preflight report for human attention.
     """
-    # Try Athena view first (authoritative source per Decision 50)
-    athena_result = _count_recommendations_athena()
-    if athena_result is not None:
-        print("  (recommendations sourced from Athena ops_recommendations_current view)")
-        return athena_result
+    result = _count_recommendations_reader()
+    if result != "reader_unreachable":
+        print("  (recommendations sourced from DuckLake reader)")
+        return result  # type: ignore[return-value]
 
+    print(
+        "[WARN] session_preflight: recs reader unreachable -- recs counts are DEGRADED "
+        "(recs_read_status=reader_unreachable). Run `aws sts get-caller-identity --profile "
+        "agent_platform` to verify credentials. The ops loop is impaired until the reader "
+        "is reachable.",
+        file=sys.stderr,
+    )
+    # Return sentinel -- callers must check recs_read_status in the report
     open_count = 0
     aging_count = 0
     non_auto_count = 0
@@ -696,33 +697,33 @@ def print_priority_queue(items: list[dict]) -> None:
 
 
 def _fetch_ci_rca_recs() -> list[dict]:
-    """Return up to 5 open CI-RCA recs from the warehouse. Returns [] on any failure."""
+    """Return up to 5 open CI-RCA recs from the DuckLake reader.
+
+    Returns [] with a loud warning on reader failure (Decision 55 / Decision 81 cl.7:
+    no Athena fallback; loud degraded signal).
+    """
     sql = (
         "SELECT id, title, priority, created_timestamp "
         "FROM {tbl} "
         "WHERE source = ? AND status IN (?, ?) "
         "ORDER BY created_timestamp DESC LIMIT 5"
     )
+    _reader_exc: Exception | None = None
     try:
         reader = _make_reader()
         rows = reader.query("ops_recommendations", sql, params=("ci_rca", "open", "in_progress"))
         if rows is not None:
             return rows
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Athena fallback
-    athena_sql = (
-        "SELECT id, title, priority, created_timestamp "
-        "FROM ops_recommendations_current "
-        "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
-        "ORDER BY created_timestamp DESC LIMIT 5"
-    )
-    rows_raw = _run_athena_query(athena_sql)
-    if rows_raw is None:
-        print("[WARNING] preflight: ci_rca query failed -- CI RCA Recs section may be incomplete", file=sys.stderr)
         return []
-    return rows_raw
+    except Exception as exc:  # noqa: BLE001
+        _reader_exc = exc
+
+    print(
+        f"[WARN] preflight: ci_rca recs reader unreachable ({_reader_exc}) -- CI RCA Recs "
+        "section degraded (recs_read_status=reader_unreachable). No Athena fallback (Decision 81 cl.7).",
+        file=sys.stderr,
+    )
+    return []
 
 
 def _check_non_automatable_softcap(non_auto_count: int) -> bool:
@@ -731,7 +732,10 @@ def _check_non_automatable_softcap(non_auto_count: int) -> bool:
 
 
 def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
-    """Return ci_rca recs created after *ts*. Returns [] on any failure."""
+    """Return ci_rca recs created after *ts* from the DuckLake reader.
+
+    Returns [] on any failure (Decision 81 cl.7: no Athena fallback).
+    """
     try:
         reader = _make_reader()
         rows = reader.query(
@@ -743,13 +747,7 @@ def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
             return rows
     except Exception:  # noqa: BLE001
         pass
-
-    # Athena fallback
-    sql = f"SELECT id FROM ops_recommendations_current WHERE source = 'ci_rca' AND created_timestamp > '{ts}'"
-    rows_raw = _run_athena_query(sql)
-    if rows_raw is None:
-        return []
-    return rows_raw
+    return []
 
 
 def _check_ci_rca_liveness(creds_status: str) -> dict | None:
@@ -843,22 +841,7 @@ def _check_forward_fix_recursion() -> dict | None:
     except Exception:  # noqa: BLE001
         pass
 
-    # Athena fallback
-    athena_sql = (
-        "SELECT file, COUNT(*) AS cnt "
-        "FROM ops_recommendations_current "
-        f"WHERE source = 'ci_rca' AND created_timestamp > '{cutoff}' "
-        "GROUP BY file HAVING COUNT(*) >= 3"
-    )
-    rows_raw = _run_athena_query(athena_sql)
-    if not rows_raw:
-        return None
-    first = rows_raw[0]
-    try:
-        count = int(first.get("cnt", 3))
-    except (ValueError, TypeError):
-        count = 3
-    return {"file": first.get("file", ""), "count": count, "threshold": 3}
+    return None
 
 
 def _check_budget_bypass_alert() -> dict | None:
@@ -882,27 +865,7 @@ def _check_budget_bypass_alert() -> dict | None:
     except Exception:  # noqa: BLE001
         pass
 
-    # Athena fallback
-    try:
-        athena_sql = (
-            "SELECT id, context, created_timestamp "
-            "FROM ops_recommendations_current "
-            "WHERE source = 'budget_bypass' "
-            "AND created_timestamp > (current_timestamp - INTERVAL '7' DAY) "
-            "ORDER BY created_timestamp DESC "
-            "LIMIT 10"
-        )
-        rows_raw = _run_athena_query(athena_sql)
-        if rows_raw is None:
-            return None
-        if len(rows_raw) < 3:
-            return None
-        return {"count": len(rows_raw), "entries": rows_raw}
-    except Exception:  # noqa: BLE001
-        import logging as _logging  # noqa: PLC0415
-
-        _logging.getLogger(__name__).warning("_check_budget_bypass_alert: query failed; degrading to None")
-        return None
+    return None
 
 
 def print_ci_rca_recs(recs: list[dict]) -> None:
@@ -1081,24 +1044,19 @@ def read_context_files() -> dict:
             except ValueError:
                 continue
 
-    # recommendations_count: try Athena view first, fall back to local JSONL
+    # recommendations_count: reader-only (Decision 81 cl.7 / T2.19); no Athena fallback
     recommendations_count = 0
-    athena_rows = _run_athena_query("SELECT COUNT(*) AS cnt FROM ops_recommendations_current WHERE status = 'open'")
-    if athena_rows is not None and athena_rows:
-        try:
-            recommendations_count = int(athena_rows[0].get("cnt", "0"))
-        except (ValueError, IndexError):
-            recommendations_count = 0
-    elif RECOMMENDATIONS_FILE.exists():
-        for line in RECOMMENDATIONS_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip() or line.startswith("#"):
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("status", "").lower() == "open":
-                    recommendations_count += 1
-            except json.JSONDecodeError:
-                pass
+    try:
+        reader = _make_reader()
+        rec_rows = reader.current_state(
+            "ops_recommendations",
+            row_filter="status = 'open'",
+            selected_fields=("id",),
+        )
+        if rec_rows is not None:
+            recommendations_count = len(rec_rows)
+    except Exception:  # noqa: BLE001
+        pass
 
     return {
         "roadmap_phase": roadmap_phase,
@@ -1449,7 +1407,14 @@ def main() -> int:
             pass  # sync is best-effort
 
     last_session = parse_last_session()
-    open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = count_recommendations()
+    _rec_result = _count_recommendations_reader()
+    recs_read_status: str
+    if _rec_result == "reader_unreachable":
+        recs_read_status = "reader_unreachable"
+        open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = 0, 0, 0, []
+    else:
+        recs_read_status = "ok"
+        open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = _rec_result  # type: ignore[misc]
     ci_rca_recs = _fetch_ci_rca_recs()
     if ci_rca_recs:
         print_ci_rca_recs(ci_rca_recs)
@@ -1483,6 +1448,7 @@ def main() -> int:
         "non_automatable_recommendations": non_automatable_count,
         "priority_queue": priority_queue,
         "priority_queue_source": "athena" if creds_status == "ok" else "cache",
+        "recs_read_status": recs_read_status,
         "ci_rca_recs": ci_rca_recs,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
@@ -1538,13 +1504,15 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
     mf = report.get("main_freshness", {}) or {}
     behind = mf.get("commits_behind", "?")
     ahead = mf.get("commits_ahead", "?")
+    recs_status = report.get("recs_read_status", "ok")
+    recs_status_suffix = "" if recs_status == "ok" else f" [DEGRADED: recs_read_status={recs_status}]"
     return (
         f"Preflight OK -> {report_path}\n"
         f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
         f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
         f"  open_recs={report.get('open_recommendations')} "
         f"non_automatable={report.get('non_automatable_recommendations')} "
-        f"ci_rca={len(report.get('ci_rca_recs') or [])}\n"
+        f"ci_rca={len(report.get('ci_rca_recs') or [])}{recs_status_suffix}\n"
         f"  Read the report file for full constraint detail."
     )
 

@@ -72,6 +72,8 @@ _DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
 _DUCKLAKE_WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 _DUCKLAKE_WRITER_FUNCTION_NAME = "agent-platform-ducklake-writer"
 _AWS_LAMBDA_SERVICE = "lambda"
+# SSM path declared in src/lambdas/ducklake_writer/manifest.yaml runtime_config[] (Decision 79 SSOT).
+_DUCKLAKE_WRITER_SSM_PATH = "/agent-platform/ducklake/writer_url"
 
 # Portal table -> DuckLake ops_* table (the writer/reader select schema by this name).
 _PORTAL_TABLE_NAMES = ("ops_recommendations", "ops_decisions")
@@ -82,32 +84,30 @@ def _ops_backend() -> str:
     return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
 
 
-def _resolve_function_url_via_api(function_name: str, profile: Optional[str] = None) -> Optional[str]:
-    """Resolve a Lambda Function URL via lambda:GetFunctionUrlConfig. None on any failure.
-
-    Last-resort fallback for environments with neither the DUCKLAKE_*_URL env nor a terraform-init'd
-    checkout -- principally the CI runner (T2.19 cutover), where the github_ci OIDC role carries the
-    GetFunctionUrlConfig grant.
-    """
-    try:
-        import boto3  # noqa: PLC0415
-
-        client = boto3.Session(profile_name=profile).client("lambda", region_name="eu-west-2")
-        return client.get_function_url_config(FunctionName=function_name).get("FunctionUrl")
-    except Exception as exc:  # noqa: BLE001 -- best-effort fallback; caller raises if this returns None
-        logger.warning("[PORTAL] GetFunctionUrlConfig fallback failed for %s: %s", function_name, exc)
-        return None
-
-
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
-    """Resolve the ducklake_writer Function URL: env, then terraform output, then the AWS API.
+    """Resolve the ducklake_writer Function URL.
 
-    The AWS-API fallback (lambda:GetFunctionUrlConfig) covers the CI runner case (no env, no
-    terraform-init'd checkout); the github_ci OIDC role carries the grant. Loud-fail if all fail.
+    Resolution order (Decision 79 SSOT):
+      1. env DUCKLAKE_WRITER_URL -- CI / explicit override
+      2. SSM /agent-platform/ducklake/writer_url -- CC-web (no terraform binary)
+      3. terraform output ducklake_writer_function_url -- local dev with initialized checkout
+      4. lambda:GetFunctionUrlConfig -- last resort (CI runner, github_ci OIDC role)
+
+    Loud-fail if all four are unavailable.
     """
+    from src.common.iceberg_reader import (  # noqa: PLC0415
+        _resolve_function_url_via_api as _api_resolver,
+    )
+    from src.common.iceberg_reader import (
+        _resolve_function_url_via_ssm as _ssm_resolver,
+    )
+
     url = os.environ.get(_DUCKLAKE_WRITER_URL_ENV)
     if url:
         return url.rstrip("/")
+    ssm_url = _ssm_resolver(_DUCKLAKE_WRITER_SSM_PATH, profile=profile, region=_AWS_REGION)
+    if ssm_url:
+        return ssm_url
     try:
         proc = subprocess.run(
             ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_writer_function_url"],
@@ -120,12 +120,14 @@ def _resolve_writer_url(profile: Optional[str] = None) -> str:
             return proc.stdout.strip().rstrip("/")
     except FileNotFoundError:
         pass
-    api_url = _resolve_function_url_via_api(_DUCKLAKE_WRITER_FUNCTION_NAME, profile=profile)
+    api_url = _api_resolver(_DUCKLAKE_WRITER_FUNCTION_NAME, profile=profile, region=_AWS_REGION)
     if api_url:
         return api_url.rstrip("/")
     raise RuntimeError(
-        f"{_DUCKLAKE_WRITER_URL_ENV} not set, terraform output 'ducklake_writer_function_url' unavailable, and "
-        "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake writer (OPS_STORAGE_BACKEND=ducklake)."
+        f"{_DUCKLAKE_WRITER_URL_ENV} not set, SSM {_DUCKLAKE_WRITER_SSM_PATH!r} unavailable, "
+        "terraform output 'ducklake_writer_function_url' unavailable, and "
+        "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake writer "
+        "(OPS_STORAGE_BACKEND=ducklake)."
     )
 
 
@@ -462,10 +464,8 @@ def file_rec(
 
     Recommendation.model_validate(merged)  # raises ValidationError on schema failure
 
-    if _ops_backend() == "ducklake":
-        _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
-    else:
-        OpsWriter().write("ops_recommendations", merged)
+    # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
+    _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Filed %s: %s", rec_id, merged.get("title", ""))
     if not _skip_sync:
@@ -473,20 +473,20 @@ def file_rec(
     return str(rec_id)
 
 
-def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Fetch a single ops_recommendations record by id from the warehouse.
+def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
+    """Fetch a single ops_recommendations record by id from the warehouse reader.
 
-    Reads the current-state snapshot via DuckDBIcebergReader with predicate
-    pushdown (row_filter="id = '<rec_id>'"), falling back to Athena on reader
-    failure.
+    ducklake backend (default): reads via DuckLakeReader Function URL (closed boundary,
+    Decision 81 cl.7 -- no Athena fallback). iceberg backend (rollback): reads via
+    DuckDBIcebergReader with predicate pushdown (row_filter="id = '<rec_id>'").
 
-    Decision 69: raises RuntimeError if the warehouse is unreachable. Never
-    falls back to the local JSONL cache.
+    Decision 69: raises RuntimeError if the reader is unreachable. Never falls back
+    to the local JSONL cache.
 
     Returns the record dict (coerced and sanitised) or None if not found.
     """
     if not re.fullmatch(r"rec-\d+", rec_id):
-        raise ValueError(f"_fetch_rec_from_athena: invalid rec_id: {rec_id!r}")
+        raise ValueError(f"_fetch_rec_from_reader: invalid rec_id: {rec_id!r}")
 
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
@@ -500,7 +500,7 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
         coerced = _coerce_ops_rec_row(dict(rows[0]))
         return _sanitize_athena_record(coerced) if coerced is not None else None
 
-    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena fallback retained until cutover) --
+    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena view dropped at T2.7 -- reader-only) --
     try:
         from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
 
@@ -515,65 +515,11 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
                 return None
             return _sanitize_athena_record(coerced)
         return None
-    except Exception as reader_exc:  # noqa: BLE001
-        logger.warning(
-            "ops_data_portal._fetch_rec_from_athena: reader failed for %s, using Athena fallback: %s",
-            rec_id,
-            reader_exc,
-        )
-
-    # -- Athena fallback (Decision 69: must raise on unreachable; never return cache) --
-    import time  # noqa: PLC0415
-
-    import boto3 as _boto3  # noqa: PLC0415
-
-    effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
-    try:
-        session = _boto3.Session(profile_name=effective_profile)
-        athena = session.client("athena", region_name=_AWS_REGION)
-        eid = athena.start_query_execution(
-            QueryString=f"SELECT * FROM {_ATHENA_DATABASE}.ops_recommendations_current WHERE id = '{rec_id}' LIMIT 1",
-            WorkGroup=_ATHENA_WORKGROUP,
-        )["QueryExecutionId"]
-    except Exception as exc:
-        raise RuntimeError(f"ops_data_portal._fetch_rec_from_athena: warehouse unreachable: {exc}") from exc
-
-    deadline = time.time() + 60
-    state = "RUNNING"
-    status: dict = {}
-    while time.time() < deadline:
-        resp = athena.get_query_execution(QueryExecutionId=eid)
-        status = resp["QueryExecution"]["Status"]
-        state = status["State"]
-        if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-            break
-        time.sleep(2)
-    else:
-        raise RuntimeError(f"ops_data_portal._fetch_rec_from_athena: query timed out for {rec_id}")
-
-    if state != "SUCCEEDED":
+    except Exception as reader_exc:
         raise RuntimeError(
-            f"ops_data_portal._fetch_rec_from_athena: query {state} for {rec_id}: {status.get('StateChangeReason', 'unknown')}"
-        )
-
-    paginator = athena.get_paginator("get_query_results")
-    header: list[str] = []
-    for page in paginator.paginate(QueryExecutionId=eid):
-        for i, row in enumerate(page.get("ResultSet", {}).get("Rows", [])):
-            data = [col.get("VarCharValue", "") for col in row.get("Data", [])]
-            if i == 0 and not header:
-                header = data
-                continue
-            if not header:
-                continue
-            rec = dict(zip(header, data))
-            rec.pop("row_num", None)
-            rec.pop("_rn", None)
-            coerced = _coerce_ops_rec_row(rec)
-            if coerced is None:
-                return None
-            return _sanitize_athena_record(coerced)
-    return None
+            f"ops_data_portal._fetch_rec_from_reader: Iceberg reader failed for {rec_id} "
+            f"(Athena fallback removed -- view dropped at T2.7): {reader_exc}"
+        ) from reader_exc
 
 
 def _sync_table(table: str) -> None:
@@ -606,12 +552,12 @@ def _sanitize_athena_record(record: dict) -> dict:
 
 
 def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> bool:
-    """Merge update fields into an existing recommendation and stage via OpsWriter.
+    """Merge update fields into an existing recommendation and write via the DuckLake closed boundary.
 
-    Reads the current record from Athena ops_recommendations_current (requires SSO
-    connectivity). Raises RuntimeError if Athena is unreachable. Merges updates,
-    validates the merged record, stages to OpsWriter (S3), writes through to local
-    JSONL, then triggers _sync_table to compact and refresh the view.
+    Reads the current record via DuckLake reader (ducklake backend) or DuckDBIcebergReader
+    (iceberg rollback). Raises RuntimeError if the warehouse is unreachable. Merges updates,
+    validates the merged record, routes the write to _ducklake_write, writes through to local
+    JSONL, then triggers _sync_table to refresh the read cache.
 
     Args:
         rec_id: Recommendation ID to update (e.g. 'rec-042').
@@ -631,7 +577,7 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
 
     # Referential existence (CD.33 cl.8 / D-5): an absent rec loud-fails. This replaces the prior
     # permissive `existing or {}` upsert-on-absent, which silently created a partial record.
-    existing = _fetch_rec_from_athena(rec_id, profile=profile)
+    existing = _fetch_rec_from_reader(rec_id, profile=profile)
     if existing is None:
         raise RuntimeError(
             f"update_rec: {rec_id} does not exist in the current projection -- an absent rec cannot be "
@@ -642,10 +588,8 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
 
     Recommendation.model_validate(merged)  # raises on failure
 
-    if _ops_backend() == "ducklake":
-        _ducklake_write("ops_recommendations", merged, action="update_ops", profile=profile)
-    else:
-        OpsWriter().write("ops_recommendations", merged)
+    # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
+    _ducklake_write("ops_recommendations", merged, action="update_ops", profile=profile)
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Updated %s: %s", rec_id, list(updates.keys()))
     _sync_table("ops_recommendations")
@@ -974,10 +918,8 @@ def drain_pending(profile: str | None = None) -> dict:
                 for _col, _validator in _load_write_time_validators("ops_recommendations"):
                     _validator(merged.get(_col), _col)
             Recommendation.model_validate(merged)
-            if _ops_backend() == "ducklake":
-                _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
-            else:
-                OpsWriter().write("ops_recommendations", merged)
+            # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
+            _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
             _append_to_local_jsonl(RECS_JSONL, merged)
             pending_file.unlink(missing_ok=True)
             drained += 1
@@ -1079,10 +1021,8 @@ def selftest_roundtrip(profile: Optional[str] = None) -> dict:
     }
     Recommendation.model_validate(record)
 
-    if backend == "ducklake":
-        _ducklake_write("ops_recommendations", record, action="write_ops", profile=profile)
-    else:
-        OpsWriter().write("ops_recommendations", record)
+    # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
+    _ducklake_write("ops_recommendations", record, action="write_ops", profile=profile)
 
     rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter=f"id = '{probe_id}'") or []
     read_back = bool(rows) and rows[0].get("id") == probe_id
@@ -1302,6 +1242,18 @@ def purge_postmortems_for(failed_rec_id: str, dry_run: bool = False, profile: Op
     Returns:
         {"pending_files": N, "jsonl_entries": M, "iceberg_delete_attempted": bool}
     """
+    # Guard: purge operates on Iceberg/Athena DML DELETE. After T2.19, ops_recommendations lives
+    # on DuckLake (Decision 81 cl.7) and this Athena DELETE path is invalid. Fail loud BEFORE any
+    # JSONL rewrite or update_rec side effects (Decision 55: never a silent false-zero).
+    _backend = os.environ.get(_OPS_STORAGE_BACKEND_ENV, _DEFAULT_OPS_STORAGE_BACKEND)
+    if _backend != "iceberg":
+        raise NotImplementedError(
+            f"purge_postmortems_for: Iceberg/Athena DML DELETE is not supported on the "
+            f"{_backend!r} backend (OPS_STORAGE_BACKEND={_backend!r}). "
+            "Set OPS_STORAGE_BACKEND=iceberg to use the (still-live) Iceberg rollback path, "
+            "or use the DuckLake admin interface to delete postmortem rows."
+        )
+
     # Discover pending files
     pending_matches: list[Path] = []
     if _PENDING_OUTBOX.exists():

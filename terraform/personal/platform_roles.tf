@@ -152,6 +152,18 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           "${aws_lambda_function.ducklake_reader.arn}:*",
         ]
       },
+      {
+        # DuckLake endpoint-discovery: SSM GetParameter on the /agent-platform/ducklake/* path so
+        # the runtime client can resolve the Function URLs without an env var or terraform binary.
+        # Decision 81 (endpoint-discovery only -- not a data-plane expansion; write/read transit the
+        # InvokeFunction grant above). MANUAL admin-apply required (IAM change, Decision 77 guard).
+        Sid    = "DuckLakeEndpointDiscovery"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/ducklake/*",
+        ]
+      },
     ]
   })
 }

@@ -2,13 +2,23 @@
 
 ## Overview
 
-Operational structured logs (recommendations, execution plans, session telemetry, decisions,
-priority queue) are stored as append-only Iceberg tables in Athena. Current state is exposed
-via ROW_NUMBER() views. This replaces the fragile dual-source JSONL+S3 pattern (Decision 45)
-with a unified, SQL-queryable audit trail (Decision 50).
+Operational structured logs are stored across two backends (T2.19 cutover, Decision 81):
 
-**Authoritative store:** `agent-platform-agent-logs` S3 bucket, `iceberg/` prefix.
-**Database:** `trading_formulas_db` (Glue catalog, Athena engine v3).
+**ops_recommendations** -- DuckLake closed boundary (T2.19 / Decision 81 cl.7).
+- Authoritative store: Neon serverless-Postgres DuckLake catalog (`/ducklake/` S3 prefix).
+- Write path ONLY: `ops_data_portal.file_rec` / `update_rec` -> ducklake_writer Function URL.
+- Read path ONLY: `make_reader()` -> ducklake_reader Function URL.
+- No OpsWriter/Iceberg staging, no Athena `ops_recommendations_current` view (DROPPED at T2.19).
+- No Athena fallback on the ducklake backend (Decision 81 cl.7 hard constraint).
+
+**All other ops_* tables** (execution_plans, session_log, decisions, priority_queue) --
+Iceberg/Athena (unchanged).
+- Authoritative store: `agent-platform-data-lake` S3 bucket, `iceberg/` prefix.
+- Write path: `OpsWriter.write()` -> S3 staging -> `OpsWriter.compact()` -> Iceberg via awswrangler.
+- Read path: `DuckDBIcebergReader` first; Athena fallback (CD.8/CD.15 escape hatch retained until those tables migrate).
+- Current state via `ops_*_current` ROW_NUMBER() views (decisions + priority_queue views retained).
+
+**Database (non-recs Iceberg tables):** `agent_platform` (Glue catalog, Athena engine v3, personal account).
 **Workgroup:** `agent-platform-production` (engine v3 required for Iceberg operations).
 
 ---
@@ -23,10 +33,12 @@ All tables follow these conventions:
 - `write.metadata.previous-versions-max = 10`
 - INSERT-only semantics (no MERGE, no DELETE except test cleanup)
 
-### ops_recommendations
+### ops_recommendations (DuckLake backend -- Decision 81 cl.7)
 
-Mirrors `logs/.recommendations-log.jsonl`. One row per recommendation state snapshot.
-Current state exposed via `ops_recommendations_current` view.
+Recommendation state snapshots. Authoritative store: Neon DuckLake catalog via the closed
+ducklake_writer / ducklake_reader Lambda boundary. Local `logs/.recommendations-log.jsonl`
+is a read-only cache rebuilt from the warehouse via `sync_ops pull`.
+No `ops_recommendations_current` Athena view -- DROPPED at T2.19 (Decision 81 cl.7 / T2.7 scoped partial).
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -132,33 +144,23 @@ All entries from a single curator run share the same `queue_run_id`.
 
 ---
 
-## View Definitions
+## View Definitions (Athena -- non-recs Iceberg tables only)
 
-Views expose the current state of each append-only table using ROW_NUMBER() deduplication.
-All views are in database `trading_formulas_db`.
+Views expose the current state of each append-only Iceberg table using ROW_NUMBER() deduplication.
+All views are in database `agent_platform` (personal account).
 
-### ops_recommendations_current
-
-```sql
-CREATE OR REPLACE VIEW trading_formulas_db.ops_recommendations_current AS
-SELECT * EXCEPT (row_num)
-FROM (
-  SELECT *,
-    ROW_NUMBER() OVER (PARTITION BY id ORDER BY ingested_at DESC) AS row_num
-  FROM trading_formulas_db.ops_recommendations
-)
-WHERE row_num = 1
-```
+`ops_recommendations_current` -- DROPPED at T2.19 (Decision 81 cl.7). No replacement view;
+recs current state is served exclusively by the ducklake_reader Function URL.
 
 ### ops_decisions_current
 
 ```sql
-CREATE OR REPLACE VIEW trading_formulas_db.ops_decisions_current AS
+CREATE OR REPLACE VIEW agent_platform.ops_decisions_current AS
 SELECT * EXCEPT (row_num)
 FROM (
   SELECT *,
     ROW_NUMBER() OVER (PARTITION BY decision_id ORDER BY ingested_at DESC) AS row_num
-  FROM trading_formulas_db.ops_decisions
+  FROM agent_platform.ops_decisions
 )
 WHERE row_num = 1
 ```
@@ -168,12 +170,12 @@ WHERE row_num = 1
 Returns only entries from the most recent curator run.
 
 ```sql
-CREATE OR REPLACE VIEW trading_formulas_db.ops_priority_queue_current AS
+CREATE OR REPLACE VIEW agent_platform.ops_priority_queue_current AS
 SELECT *
-FROM trading_formulas_db.ops_priority_queue
+FROM agent_platform.ops_priority_queue
 WHERE queue_run_id = (
   SELECT queue_run_id
-  FROM trading_formulas_db.ops_priority_queue
+  FROM agent_platform.ops_priority_queue
   ORDER BY ingested_at DESC
   LIMIT 1
 )

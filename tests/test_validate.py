@@ -1224,8 +1224,27 @@ class TestValidateWarehouseWriteSources:
         assert len(failed) > 0
         assert any("bad_alias.py" in e for e in failed)
 
-    def test_allows_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
-        """ops_data_portal.py is whitelisted as the canonical write path."""
+    def test_allows_whitelisted_portal_for_non_recs(self, tmp_path: Path, capsys) -> None:
+        """ops_data_portal.py is whitelisted for ops_decisions writes (non-recs ops_* tables)."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        portal_file = scripts_dir / "ops_data_portal.py"
+        portal_file.write_text(
+            'OpsWriter().write("ops_decisions", merged)\n',
+            encoding="utf-8",
+        )
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_warehouse_write_sources(failed)
+        assert failed == []
+
+    def test_recs_opswriter_blocked_even_for_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
+        """T2.19: _RECS_BLOCK_PATTERNS apply to ALL files including the whitelist.
+
+        Decision 81 cl.7: even whitelisted callers (ops_data_portal.py) must not route
+        ops_recommendations through OpsWriter after T2.19. The guard must fire regardless of
+        whitelist status.
+        """
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         portal_file = scripts_dir / "ops_data_portal.py"
@@ -1236,7 +1255,8 @@ class TestValidateWarehouseWriteSources:
         with patch("validate.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
-        assert failed == []
+        assert len(failed) > 0, "recs block must fire even for whitelisted portal"
+        assert any("ops_recommendations" in e for e in failed)
 
     def test_clean_script_with_no_warehouse_writes_passes(self, tmp_path: Path, capsys) -> None:
         """Scripts that only call portal functions (file_rec) pass cleanly."""

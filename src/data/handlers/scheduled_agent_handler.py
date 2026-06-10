@@ -284,36 +284,32 @@ def _query_athena_to_json(query: str) -> list[dict]:
 def _preload_rec_curator_context(prompt_text: str) -> str:
     """Inject recommendation and retro data into the rec-curator prompt.
 
-    Reads open recommendations from the ``ops_recommendations_current``
-    Athena view (Decision 50 -- Iceberg is the authoritative store).
-    Falls back to S3 JSONL if the Athena query fails.
+    Reads open recommendations via the DuckLake closed boundary (Decision 81 cl.7 /
+    T2.19 cutover): make_reader().current_state("ops_recommendations", ...).
+    On reader failure, degrades gracefully to an empty list with a loud warning.
 
     Retro entries are still read from S3 (no Iceberg table for retro data).
 
     Files/views injected:
-      - ops_recommendations_current view  (Athena, open recs only)
+      - DuckLake reader (open recs via closed boundary)
       - logs/.retro-lite-log.jsonl        (S3 or local via s3_log_store)
       - docs/ROADMAP-PRODUCT.md           (product phases -- Lambda filesystem at /var/task or repo root)
       - docs/ROADMAP-PLATFORM.yaml        (platform tier items -- Lambda filesystem at /var/task or repo root)
     """
-    from scripts.s3_log_store import read_jsonl
+    from scripts.s3_log_store import read_jsonl  # noqa: PLC0415
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    # Primary path: query Athena ops_recommendations_current view.
-    open_recs = _query_athena_to_json("SELECT * FROM trading_formulas_db.ops_recommendations_current WHERE status = 'open'")
-    if open_recs:
-        logger.info(
-            "rec-curator context: %d open recs from Athena view",
-            len(open_recs),
-        )
-    else:
-        # Fallback: read from S3 JSONL (pre-backfill or Athena unavailable).
-        logger.warning("Athena view returned 0 open recs; falling back to S3 JSONL")
-        recs = read_jsonl(".recommendations-log.jsonl")
-        open_recs = [r for r in recs if isinstance(r, dict) and r.get("status") == "open"]
-        logger.info(
-            "rec-curator context: %d open recs from S3 fallback (of %d total)",
-            len(open_recs),
-            len(recs),
+    open_recs: list = []
+    try:
+        rows = make_reader().current_state("ops_recommendations", row_filter="status = 'open'")
+        if rows is not None:
+            open_recs = rows
+        logger.info("rec-curator context: %d open recs from DuckLake reader", len(open_recs))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "rec-curator context: DuckLake reader unreachable (%s); degrading to empty recs list "
+            "(Decision 81 cl.7 -- no Athena fallback)",
+            exc,
         )
 
     retro = read_jsonl(".retro-lite-log.jsonl")
@@ -336,7 +332,7 @@ def _preload_rec_curator_context(prompt_text: str) -> str:
         "## Data Pre-loaded by Lambda Handler\n\n"
         "The following data has been loaded for you. "
         "Do NOT issue any bash commands to read files -- use this data directly.\n\n"
-        "### Open Recommendations (from ops_recommendations_current Athena view)\n"
+        "### Open Recommendations (from DuckLake reader via closed boundary)\n"
         "```\n"
         f"{recs_text}\n"
         "```\n\n"

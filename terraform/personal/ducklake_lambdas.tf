@@ -337,3 +337,35 @@ output "ducklake_reader_function_name" {
   description = "ducklake_reader Lambda function name (build_lambda --ducklake-only --deploy target)."
   value       = aws_lambda_function.ducklake_reader.function_name
 }
+
+# ---------------------------------------------------------------------------
+# SSM endpoint-discovery parameters (Decision 79 SSOT / Decision 81 cl.7 closed boundary).
+# Published by push-to-main auto-apply (non-IAM, non-destroy: guard passes).
+# Runtime clients resolve the Function URL via ssm:GetParameter on the PlatformDev role
+# (see platform_roles.tf DuckLakeEndpointDiscovery statement). No write-path data
+# transits SSM -- these parameters hold only the public Function URL strings.
+# ---------------------------------------------------------------------------
+
+resource "aws_ssm_parameter" "ducklake_reader_url" {
+  name        = "/agent-platform/ducklake/reader_url"
+  type        = "String"
+  value       = aws_lambda_function_url.ducklake_reader.function_url
+  description = "DuckLake reader Function URL for endpoint discovery (Decision 79 / Decision 81 cl.7)"
+
+  tags = {
+    Name    = "ducklake-reader-url"
+    Purpose = "T2.19 DuckLake endpoint discovery"
+  }
+}
+
+resource "aws_ssm_parameter" "ducklake_writer_url" {
+  name        = "/agent-platform/ducklake/writer_url"
+  type        = "String"
+  value       = aws_lambda_function_url.ducklake_writer.function_url
+  description = "DuckLake writer Function URL for endpoint discovery (Decision 79 / Decision 81 cl.7)"
+
+  tags = {
+    Name    = "ducklake-writer-url"
+    Purpose = "T2.19 DuckLake endpoint discovery"
+  }
+}
