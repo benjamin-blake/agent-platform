@@ -160,7 +160,7 @@ class TestUpdateRec:
         recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
@@ -196,7 +196,7 @@ class TestUpdateRec:
         updates = {**_VALID_FIELDS, "id": "rec-042", "status": "closed"}
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=None),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=None),
             patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
@@ -264,7 +264,7 @@ class TestStorageBackendTransport:
         recs_file = tmp_path / ".recommendations-log.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
             patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
             patch("scripts.ops_data_portal._sync_table"),
@@ -746,7 +746,7 @@ class TestPostmortemDedupe:
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
             patch("scripts.ops_data_portal._next_id") as mock_next_id,
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(existing_postmortem)),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing_postmortem)),
             patch("scripts.ops_data_portal._sync_table"),
         ):
             from scripts.ops_data_portal import drain_pending
@@ -817,7 +817,7 @@ class TestPostmortemDedupe:
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
             patch("scripts.ops_data_portal._delete_postmortems_from_iceberg", return_value=-1) as mock_iceberg,
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(rec_100)),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(rec_100)),
             patch("scripts.ops_data_portal._sync_table"),
         ):
             from scripts.ops_data_portal import purge_postmortems_for
@@ -889,7 +889,7 @@ class TestCLI:
         recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
@@ -1179,12 +1179,12 @@ class TestPipelineConsolidation:
     """Tests for the ops pipeline consolidation changes (Decision 69)."""
 
     def test_update_rec_reads_from_athena_not_jsonl(self, tmp_path: Path) -> None:
-        """update_rec() calls _fetch_rec_from_athena (Athena) not a local JSONL read."""
+        """update_rec() calls _fetch_rec_from_reader (warehouse reader) not a local JSONL read."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
         existing = dict(_VALID_FIELDS, id="rec-042", status="open")
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=existing) as mock_fetch,
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=existing) as mock_fetch,
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
@@ -1201,7 +1201,7 @@ class TestPipelineConsolidation:
         existing = dict(_VALID_FIELDS, id="rec-042", status="open")
 
         with (
-            patch("scripts.ops_data_portal._fetch_rec_from_athena", return_value=existing),
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=existing),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
@@ -1261,12 +1261,12 @@ class TestPipelineConsolidation:
         assert "ops_recommendations" in result["views_refreshed"]
 
     def test_update_rec_raises_on_athena_unreachable(self, tmp_path: Path) -> None:
-        """update_rec() propagates RuntimeError when _fetch_rec_from_athena raises."""
+        """update_rec() propagates RuntimeError when _fetch_rec_from_reader raises."""
         import pytest
 
         with (
             patch(
-                "scripts.ops_data_portal._fetch_rec_from_athena",
+                "scripts.ops_data_portal._fetch_rec_from_reader",
                 side_effect=RuntimeError("Athena unreachable"),
             ),
         ):
@@ -1385,7 +1385,7 @@ class TestMigrationParams:
 
 
 class TestFetchRecFromAthena:
-    """Tests for _fetch_rec_from_athena reader path (Decision 69 / CD.8)."""
+    """Tests for _fetch_rec_from_reader reader path (Decision 69 / CD.8)."""
 
     _REC_ROW = {
         "id": "rec-042",
@@ -1408,9 +1408,9 @@ class TestFetchRecFromAthena:
         with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
             MockReader.return_value.current_state.return_value = [dict(self._REC_ROW)]
 
-            from scripts.ops_data_portal import _fetch_rec_from_athena
+            from scripts.ops_data_portal import _fetch_rec_from_reader
 
-            result = _fetch_rec_from_athena("rec-042")
+            result = _fetch_rec_from_reader("rec-042")
 
         assert result is not None
         assert result["id"] == "rec-042"
@@ -1430,10 +1430,10 @@ class TestFetchRecFromAthena:
                 "Session",
                 lambda *a, **k: (_ for _ in ()).throw(AssertionError("Athena fallback used")),
             ):
-                from scripts.ops_data_portal import _fetch_rec_from_athena
+                from scripts.ops_data_portal import _fetch_rec_from_reader
 
                 with pytest.raises(RuntimeError, match="Iceberg reader failed"):
-                    _fetch_rec_from_athena("rec-042")
+                    _fetch_rec_from_reader("rec-042")
 
     def test_reader_returns_none_when_row_not_found(self) -> None:
         """Reader returns empty list -> function returns None without calling Athena."""
@@ -1441,9 +1441,9 @@ class TestFetchRecFromAthena:
             MockReader.return_value.current_state.return_value = []
 
             with patch("scripts.ops_data_portal.resolve_aws_profile") as mock_profile:
-                from scripts.ops_data_portal import _fetch_rec_from_athena
+                from scripts.ops_data_portal import _fetch_rec_from_reader
 
-                result = _fetch_rec_from_athena("rec-999")
+                result = _fetch_rec_from_reader("rec-999")
 
             mock_profile.assert_not_called()
 
@@ -1451,10 +1451,10 @@ class TestFetchRecFromAthena:
 
     def test_invalid_rec_id_raises_value_error(self) -> None:
         """Malformed rec_id raises ValueError before any reader or Athena call (security guard)."""
-        from scripts.ops_data_portal import _fetch_rec_from_athena
+        from scripts.ops_data_portal import _fetch_rec_from_reader
 
         with pytest.raises(ValueError, match="invalid rec_id"):
-            _fetch_rec_from_athena("'; DROP TABLE ops_recommendations; --")
+            _fetch_rec_from_reader("'; DROP TABLE ops_recommendations; --")
 
 
 class TestDuckLakeTransportHelpers:
@@ -1740,4 +1740,4 @@ class TestClosedBoundaryNoAthenaFallback:
 
         monkeypatch.setattr(boto3, "Session", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Athena fallback used")))
         with pytest.raises(RuntimeError, match="reader down"):
-            p._fetch_rec_from_athena("rec-1")
+            p._fetch_rec_from_reader("rec-1")

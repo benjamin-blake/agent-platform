@@ -473,20 +473,20 @@ def file_rec(
     return str(rec_id)
 
 
-def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Fetch a single ops_recommendations record by id from the warehouse.
+def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
+    """Fetch a single ops_recommendations record by id from the warehouse reader.
 
-    Reads the current-state snapshot via DuckDBIcebergReader with predicate
-    pushdown (row_filter="id = '<rec_id>'"), falling back to Athena on reader
-    failure.
+    ducklake backend (default): reads via DuckLakeReader Function URL (closed boundary,
+    Decision 81 cl.7 -- no Athena fallback). iceberg backend (rollback): reads via
+    DuckDBIcebergReader with predicate pushdown (row_filter="id = '<rec_id>'").
 
-    Decision 69: raises RuntimeError if the warehouse is unreachable. Never
-    falls back to the local JSONL cache.
+    Decision 69: raises RuntimeError if the reader is unreachable. Never falls back
+    to the local JSONL cache.
 
     Returns the record dict (coerced and sanitised) or None if not found.
     """
     if not re.fullmatch(r"rec-\d+", rec_id):
-        raise ValueError(f"_fetch_rec_from_athena: invalid rec_id: {rec_id!r}")
+        raise ValueError(f"_fetch_rec_from_reader: invalid rec_id: {rec_id!r}")
 
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
 
@@ -517,7 +517,7 @@ def _fetch_rec_from_athena(rec_id: str, profile: Optional[str] = None) -> Option
         return None
     except Exception as reader_exc:
         raise RuntimeError(
-            f"ops_data_portal._fetch_rec_from_athena: Iceberg reader failed for {rec_id} "
+            f"ops_data_portal._fetch_rec_from_reader: Iceberg reader failed for {rec_id} "
             f"(Athena fallback removed -- view dropped at T2.7): {reader_exc}"
         ) from reader_exc
 
@@ -577,7 +577,7 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
 
     # Referential existence (CD.33 cl.8 / D-5): an absent rec loud-fails. This replaces the prior
     # permissive `existing or {}` upsert-on-absent, which silently created a partial record.
-    existing = _fetch_rec_from_athena(rec_id, profile=profile)
+    existing = _fetch_rec_from_reader(rec_id, profile=profile)
     if existing is None:
         raise RuntimeError(
             f"update_rec: {rec_id} does not exist in the current projection -- an absent rec cannot be "

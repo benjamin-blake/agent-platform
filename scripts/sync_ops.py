@@ -466,6 +466,11 @@ def _rebuild_local_cache(profile: str = _SSO_PROFILE) -> dict[str, int]:
     """
     counts: dict[str, int] = {}
 
+    # ops_recommendations is excluded from _TABLE_TO_VIEW (DuckLake closed boundary).
+    # Pull it via the DuckLake reader path in _pull_single_table.
+    recs_pulled = _pull_single_table("ops_recommendations", profile=profile)
+    counts["ops_recommendations"] = recs_pulled
+
     for table in _TABLE_TO_VIEW:
         local_rel = _TABLE_TO_LOCAL.get(table)
         if not local_rel:

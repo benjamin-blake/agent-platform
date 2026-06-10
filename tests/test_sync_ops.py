@@ -114,7 +114,12 @@ class TestDrain:
 
 class TestPull:
     def test_pull_sso_expired_returns_empty(self):
-        """When reader fails and SSO is expired, _rebuild_local_cache() returns {}."""
+        """When DuckLake reader unreachable and SSO expired, returns {ops_recommendations: 0}.
+
+        H1 fix (code review): _rebuild_local_cache() always attempts recs pull via DuckLake
+        and includes the key even on failure (value=0). Non-recs tables are skipped when
+        check_sso returns False (no Athena fallback available).
+        """
         _bypass = MagicMock()
         _bypass._bucket.return_value = ""
         with (
@@ -128,7 +133,7 @@ class TestPull:
             from scripts.sync_ops import _rebuild_local_cache
 
             result = _rebuild_local_cache()
-        assert result == {}
+        assert result == {"ops_recommendations": 0}
 
     def test_pull_queries_athena_writes_local_files(self, tmp_path):
         """Athena fallback: _rebuild_local_cache() writes rows when reader fails."""
