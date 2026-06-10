@@ -94,6 +94,50 @@ Decompose the human's input into structured components:
 
 If the request is vague or missing key information, ask between 2 and 5 questions -- ranked by impact, no padding questions. Wait for answers before continuing.
 
+## Tier Item Freshness Gate (Workflow Step 3, fires once intent resolves to tier_items)
+
+The roadmap can lag the repo: items go stale when decisions ratify, surfaces move, or
+sibling work absorbs their scope (2026-06-09 roadmap audit, findings F-008/F-013/F-016/F-017).
+Before scoping ANY tier_item -- whether picked from `next_eligible` or named by the human --
+re-verify it against the repo. Eligibility computation alone is NOT sufficient grounds to
+plan an item. Run four checks, cheapest first:
+
+1. **Silent-completion check.** Re-adjudicate the item's `exit_criteria[]` against the repo
+   (executable criteria via subprocess; prose criteria with the implement skill's conservative
+   bias). If ALL criteria already hold, do NOT plan the item -- propose a status closeout
+   instead: stage `status: complete` + `completed_at` + a note citing the evidence, present it
+   to the human, and on confirmation land it as a small roadmap-bookkeeping commit. Precedent:
+   T-1.9 sat `not_started` after its deliverable (docs/INTENT-session-log-architecture.md) had
+   already landed, and a downstream item (T2.15) was citing the deliverable as existing.
+2. **Stale-reference check.** Verify every `files_in_scope` path exists or is marked `# new`;
+   scan the item's intent/exit_criteria for surfaces or substrates that ratified decisions have
+   retired (e.g. the EC2 runner per CD.21/Decision 73, Bedrock per CD.28, SSO per CD.26, direct
+   Iceberg/Athena access for tables cut over to the DuckLake closed boundary per CD.31/CD.33/
+   Decision 81). A stale reference does not block planning -- but the plan MUST include
+   re-grounding the item's text as an explicit Scope row, and the implementation follows the
+   CURRENT architecture, never the stale instruction.
+3. **Supersession / redundancy check.** Search the roadmap for sibling tier_items or ratified-CD
+   amendment notes that have absorbed or superseded the item's scope (`rg` the item's key
+   artefacts across `tier_items[]` and `candidate_decisions[]`). Fully absorbed -> propose
+   closing the item out (`status: reserved` with a supersession note, preserving the id)
+   instead of planning duplicate work. Partial overlap -> the plan names the boundary
+   explicitly and cross-references the sibling.
+4. **Gating-decision and gate-rule check.** Read the item's `related_candidate_decisions` and
+   any `decision_required_before`; check each referenced CD's `state` in the roadmap. If a
+   gating CD is pending, surface it: starting is allowed (bootstrap allowance) but COMPLETION
+   is gated, and ratification currently transits the ops portal (see the roadmap
+   agent_instructions "ratification vehicle" note). Also grep `cross_tier_gates[]` for rules
+   naming the item or its tier and adjudicate them by hand (e.g. a grace_period_elapsed window
+   that has not elapsed makes an eligible-by-deps item not actually startable -- T5.2/G.10 is
+   the canonical case). This manual check stands in for the blocked-on-CD and gate-evaluation
+   preflight surfacing until T-1.20 lands.
+
+Output discipline: every closeout or re-grounding this gate proposes is staged as a roadmap
+edit in the plan's Scope table (or its own micro-commit on human confirmation) -- never
+applied silently, never dropped silently. If the gate finds nothing, say so in one line and
+continue. Closeouts replace dead work; they do not become an excuse to skip the human
+confirmation gate (Step 6b).
+
 ## Suggest Aligned Recommendations
 Search `logs/.recommendations-log.jsonl` for open recommendations that align with the current task (ensure cache is fresh via `bin/venv-python -m scripts.sync_ops pull` during preflight):
 1. Extract keywords from the task description (file paths, module names, concepts)
@@ -220,7 +264,7 @@ V1 / V2 / V3
 docs/plans/PLAN-{slug}.md
 
 ## Phase
-[phase number and name from ROADMAP.md]
+[product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id from docs/ROADMAP-PLATFORM.yaml]
 
 ## Scope
 | File | Action | Purpose |
@@ -287,13 +331,13 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
 - `prompt:` self-contained, mentions:
   - The absolute path to `docs/plans/PLAN-{slug}.md`
   - Instruction to invoke the `plan-critique` skill via the `Skill` tool against that path
-  - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.md`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
+  - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
   - For IMPLEMENTATION plans: instruction to also read every file in the plan's Scope table
   - Requirement to return the skill's structured output verbatim, including the final `Recommendation: PROCEED / REVISE` line
   - Forbid file edits
 
 **Example prompt body:**
-> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.md`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.md`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
+> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.md`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
 
 Read the critique output returned by the subagent.
 If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan. Each Agent call is a fresh window, so the re-launch genuinely re-evaluates.

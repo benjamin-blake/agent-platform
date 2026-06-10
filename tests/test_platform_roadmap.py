@@ -530,6 +530,15 @@ class TestCD25SchemaAmendments:
             "T2.3",
             "T2.10",
             "T2.13",
+            # Scope (c) realized-ahead-of-ratification additions (2026-06-09 roadmap audit
+            # integration, finding F-002): items completed under pending gating CDs that
+            # ratify post-hoc via the ops portal vehicle. Exemption ends when the gating
+            # CD ratifies (CD.5/CD.8+CD.15/CD.20/CD.34 respectively).
+            "T0.10",
+            "T2.5",
+            "T2.12",
+            "T2.16b",
+            "T2.17",
         }
         actual = {item.id for item in doc.tier_items if item.bootstrap_completion_exempt}
         assert actual == expected, f"missing={expected - actual} extra={actual - expected}"
