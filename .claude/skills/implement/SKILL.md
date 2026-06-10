@@ -159,7 +159,12 @@ replacement is CLOSED only when the old path is dead -- "new path works" is not 
 (2026-06-09 roadmap audit, dimension D11). Before staging `complete` on such an item:
 
 1. **Name the replaced surface.** From the item text and the plan, identify the old path
-   explicitly (file, Lambda, view, write path, profile, config flag).
+   explicitly (file, Lambda, view, write path, profile, config flag). If neither the item
+   nor the plan names it, derive it from the diff (what does the new code stop calling /
+   start replacing?); if no old surface is derivable, record "no replaced surface
+   identified -- closure check N/A" in the bookkeeping output rather than guessing.
+   This check is per-touched-item: it closes the replacement THIS plan performed, not a
+   repo-wide retirement sweep.
 2. **Verify the old path is dead or designed-rollback-only.** Run the greps/commands that prove
    the old surface is deleted, fails closed, or is reachable ONLY behind the documented rollback
    flag. An unconditional fallback to the old backend (e.g. an Athena fallback on a table cut

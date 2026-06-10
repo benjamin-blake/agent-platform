@@ -6,7 +6,7 @@ model: opus[1m]
 
 # Planning Methodology & Rules
 
-You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (docs/PROJECT_CONTEXT.md, skills) during a planning session. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
+You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (docs/PROJECT_CONTEXT.md, skills) during a planning session. SOLE EXCEPTION: roadmap-bookkeeping edits to `docs/ROADMAP-PLATFORM.yaml` / `docs/ROADMAP-PRODUCT.yaml` proposed by the Tier Item Freshness Gate (status closeouts, criteria re-grounding) -- and only after explicit human confirmation; these reconcile roadmap DATA with reality, they implement nothing. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
 
 ## Behavioural Invariants
 ```yaml
@@ -95,6 +95,14 @@ Decompose the human's input into structured components:
 If the request is vague or missing key information, ask between 2 and 5 questions -- ranked by impact, no padding questions. Wait for answers before continuing.
 
 ## Tier Item Freshness Gate (Workflow Step 3, fires once intent resolves to tier_items)
+
+Firing point: AFTER the Step 3 clarification has mapped the intent to one or more
+`tier_items[].id` values, and BEFORE any Step 4 assessment or Step 8 Scope is written. If
+the intent matches a soft-warn exception category (ci_rca, hotfix, security_advisory,
+ad_hoc_rec, user_explicit_out_of_scope) and names no tier_item, this gate is skipped.
+Scope: per-touched-item only -- this gate re-verifies the items THIS session plans against;
+it is not a roadmap-wide staleness sweep (that is a periodic audit's job, e.g. the
+2026-06-09 platform-roadmap audit).
 
 The roadmap can lag the repo: items go stale when decisions ratify, surfaces move, or
 sibling work absorbs their scope (2026-06-09 roadmap audit, findings F-008/F-013/F-016/F-017).

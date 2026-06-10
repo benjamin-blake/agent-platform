@@ -104,9 +104,10 @@ document:
             CD may ratify AFTER the gated work lands, with ratification via the
             ops portal. Members carry the flag with a note citing this scope;
             at reconciliation time: {T0.2, T0.3, T0.5, T0.10, T2.1, T2.2, T2.3,
-            T2.10, T2.12, T2.13, T2.16b, T2.17}. Each exemption ends when its
-            gating CD ratifies (CD.2/CD.5/CD.6/CD.20/CD.21/CD.26/CD.34
-            respectively). New completions under a pending gating CD MUST add
+            T2.5, T2.10, T2.12, T2.13, T2.16b, T2.17}. Each exemption ends when
+            its gating CD ratifies (CD.2/CD.5/CD.6/CD.8+CD.15/CD.20/CD.21/
+            CD.26/CD.34 respectively; per-item notes name the binding CD).
+            New completions under a pending gating CD MUST add
             the flag + a scope-(c) note in the same edit (implement skill
             bookkeeping enforces this; T-1.22).
     - Ratification vehicle (single source of truth; supersedes earlier "T0.7b
@@ -165,8 +166,10 @@ document:
         True iff the dotted field_path resolved against the tier_item equals expected.
         Used for runtime aggregates like item.latest_run.verdict == "PASS" that depend on
         external state (verifier outputs) not encoded in tier_items themselves. The
-        validator does not statically check field_path resolution — that is a runtime
-        concern handled by T-1.4's preflight computation.
+        validator does not statically check field_path resolution — runtime evaluation is
+        owned by T-1.20 (gate evaluation; item_field_eq stays runtime-deferred there until
+        a verifier-output source exists). T-1.4's shipped preflight computes eligibility
+        only. (Ownership re-pointed 2026-06-09; previously cited T-1.4.)
 
 north_star:
   principles:
@@ -436,7 +439,7 @@ candidate_decisions:
       that boundary (extend its verb set or call through it; OQ.15 resolves the shape at T0.6 plan time)
       and NEVER write Iceberg/Athena directly for cut-over tables. ops_data_portal.py-as-internal-
       implementation survives for the still-Iceberg tables until T2.26.
-    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]
+    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]    # T1.4 is reserved (superseded by T2.18/T2.26) -- a gate on a reserved item is inert
     state: pending
     supersedes_intents: [ops-pipeline-consolidation]
   - id: CD.11
@@ -484,7 +487,7 @@ candidate_decisions:
       This is correctly-scoped change verification. The previous blanket "all Lambda steps DEFERRED" placeholder
       was a workaround for executor-telemetry trust leaking into Lambda-deploy decisions; it is not intrinsic
       to good Lambda hygiene.
-    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]
+    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]    # T1.4 is reserved (superseded by T2.18/T2.26) -- inert here; CD.16 is ratified regardless
     state: ratified
     filed_via: ops_decisions:dec-1086
     enforcement_mechanism: |
@@ -2213,10 +2216,12 @@ tier_items:
       - .claude/skills/planning/SKILL.md
       - .claude/skills/plan-critique/SKILL.md    # required-context reroute to ROADMAP-PRODUCT.yaml
       - .claude/commands/plan.md                 # required-context reroute to ROADMAP-PRODUCT.yaml
+      - .claude/agents/scheduled/rec-curator.md  # same drift class, swept on zero-context review (2026-06-09)
+      - .claude/skills/code-review/SKILL.md      # same drift class, swept on zero-context review (2026-06-09)
     exit_criteria:
-      - "Planning skill contains a Tier Item Freshness Gate section firing after intent resolves to tier_items, with the four checks (silent-completion, stale-reference, supersession, gating-decision) and the staged-closeout output discipline"
+      - "Planning skill contains a Tier Item Freshness Gate section firing after intent resolves to tier_items, with the four checks (silent-completion, stale-reference, supersession, gating-decision + cross-tier-gate) and the staged-closeout output discipline; firing point and per-touched-item scope stated explicitly; the skill's top-line no-modification rule carries the roadmap-bookkeeping exception"
       - "Gate prescribes closeout proposals (status flip / reserved-with-note) over planning dead work, with human confirmation preserved"
-      - "plan-critique skill required-context and plan.md prompt text reference docs/ROADMAP-PRODUCT.yaml (not the superseded .md)"
+      - "plan-critique skill required-context, plan.md prompt text, rec-curator agent, and code-review skill reference docs/ROADMAP-PRODUCT.yaml (not the superseded .md); rg 'ROADMAP-PRODUCT\\.md' .claude/ returns zero consumer references (the legacy deep-frozen .agents/ and .github/prompts/ mirrors are exempt)"
       - "Planning skill PLAN template Phase line references docs/ROADMAP-PRODUCT.yaml / platform tier ids (not bare ROADMAP.md)"
     related_candidate_decisions: [CD.13, CD.17]
     effort: S
