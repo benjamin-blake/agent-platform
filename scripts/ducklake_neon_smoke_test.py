@@ -712,6 +712,16 @@ def ops_read_your_write(*, profile: str | None = None, region: str = "eu-west-2"
         "effort": "XS",
         "priority": "Low",
         "risk": "low",
+        # DQ-required NOT-NULL columns: populated so the probe row is data-quality-clean while it
+        # persists (the writer has no delete verb -- postmortem-DELETE deferred). Without these the
+        # probe trips the ops_recommendations not_null DQ checks and reds the verifier harness.
+        "automatable": False,
+        "file": "scripts/ducklake_neon_smoke_test.py",
+        "context": (
+            "Read-your-write smoke probe written by ducklake_neon_smoke_test --ops-read-your-write "
+            "to prove the closed DuckLake writer/reader boundary end-to-end on the real ops schema."
+        ),
+        "acceptance": "grep -q ops_read_your_write scripts/ducklake_neon_smoke_test.py",
     }
     _ok_json(
         _sigv4_invoke(writer_url, {"action": "write_ops", "table": table, "record": base}, profile=profile, region=region)

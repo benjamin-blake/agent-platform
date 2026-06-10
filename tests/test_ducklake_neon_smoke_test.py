@@ -885,10 +885,12 @@ def test_main_lambda_gate_loud_fail_returns_1(monkeypatch, capsys):
 def test_ops_read_your_write_ok(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
     state = {"status": "open"}
+    written = {}
 
     def fake_invoke(url, payload, **kw):
         action = payload["action"]
         if action == "write_ops":
+            written.update(payload["record"])
             return _Resp(200, {"ok": True})
         if action == "update_ops":
             if payload["record"]["id"].startswith("test-absent"):
@@ -902,6 +904,10 @@ def test_ops_read_your_write_ok(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
     smoke.ops_read_your_write()
     assert "OPS_RYW OK" in capsys.readouterr().out
+    # The probe row persists (writer has no delete verb); it must carry the DQ NOT-NULL columns
+    # so it does not red the ops_recommendations data-quality checks while it lingers.
+    for col in ("automatable", "file", "context", "acceptance"):
+        assert written.get(col) is not None, f"probe missing DQ-required column {col!r}"
 
 
 def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
