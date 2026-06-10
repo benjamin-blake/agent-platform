@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,14 @@ _DUCKLAKE_READER_FUNCTION_NAME = "agent-platform-ducklake-reader"
 # Resolution order: env -> SSM -> terraform output -> GetFunctionUrlConfig.
 _DUCKLAKE_READER_SSM_PATH = "/agent-platform/ducklake/reader_url"
 _DUCKLAKE_WRITER_SSM_PATH = "/agent-platform/ducklake/writer_url"
+
+# Transient reader-invoke resilience: the Neon free-tier catalog scales to zero, so the first
+# read after idle can return a 5xx while the compute resumes (cold-resume). Reader ops are
+# idempotent, so retry transient 5xx with backoff before loud-failing. (HTTP 502 is the observed
+# cold-resume signature; 503/504 covered for completeness.)
+_READER_MAX_ATTEMPTS = 3
+_READER_TRANSIENT_STATUS = frozenset({502, 503, 504})
+_READER_RETRY_BACKOFF_S = (2.0, 4.0)
 
 # pk used for ROW_NUMBER() dedup (Decision 56)
 _TABLE_PARTITION_KEYS: dict[str, str] = {
@@ -398,17 +407,32 @@ class DuckLakeReader:
 
         url = self._reader_url()
         body = json.dumps(payload)
-        headers = {"Content-Type": "application/json"}
         session = boto3.Session(profile_name=resolve_aws_profile(self._profile, default="agent_platform"))
         creds = session.get_credentials().get_frozen_credentials()
-        aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
-        SigV4Auth(creds, "lambda", self._region).add_auth(aws_req)
-        resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"ducklake_reader {payload.get('action')!r} failed (HTTP {resp.status_code}): {resp.text[:300]}"
-            )
-        return resp.json()
+
+        last_status: int | None = None
+        last_text = ""
+        for attempt in range(_READER_MAX_ATTEMPTS):
+            # Re-sign per attempt: SigV4 carries a timestamp, so a fresh request avoids skew on retry.
+            aws_req = AWSRequest(method="POST", url=url, data=body, headers={"Content-Type": "application/json"})
+            SigV4Auth(creds, "lambda", self._region).add_auth(aws_req)
+            resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+            if resp.status_code == 200:
+                return resp.json()
+            last_status, last_text = resp.status_code, resp.text[:300]
+            if resp.status_code in _READER_TRANSIENT_STATUS and attempt < _READER_MAX_ATTEMPTS - 1:
+                # Cold-resume: give Neon time to wake, then re-invoke (reads are idempotent).
+                logger.warning(
+                    "ducklake_reader %r HTTP %d (attempt %d/%d) -- retrying after cold-resume backoff",
+                    payload.get("action"),
+                    resp.status_code,
+                    attempt + 1,
+                    _READER_MAX_ATTEMPTS,
+                )
+                time.sleep(_READER_RETRY_BACKOFF_S[attempt])
+                continue
+            break
+        raise RuntimeError(f"ducklake_reader {payload.get('action')!r} failed (HTTP {last_status}): {last_text}")
 
     def current_state(
         self,

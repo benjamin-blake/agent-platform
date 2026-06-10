@@ -34,6 +34,7 @@ class DataQualityVerifier(Verifier):
             import boto3
 
             from scripts.data_quality_runner import (
+                apply_backend_routing,
                 build_tombstone_checks,
                 load_checks,
                 load_tombstones,
@@ -75,6 +76,10 @@ class DataQualityVerifier(Verifier):
             all_checks.extend(checks)
 
         all_checks.extend(build_tombstone_checks(load_tombstones(), database=database))
+
+        # Route migrated recs checks to the DuckLake reader (Decision 81 cl.7). Without this the recs
+        # checks query the dropped ops_recommendations_current Athena view and error TABLE_NOT_FOUND.
+        all_checks = apply_backend_routing(all_checks, database)
 
         result = run_checks(all_checks, workgroup, database, profile_name=profile)
 

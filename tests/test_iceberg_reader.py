@@ -551,6 +551,76 @@ def _patch_dl_invoke(monkeypatch, resp: _FakeResp, captured: dict):
     return ir
 
 
+def _patch_dl_invoke_seq(monkeypatch, responses: list, captured: dict):
+    """Like _patch_dl_invoke but returns *responses* in sequence and stubs time.sleep (retry tests)."""
+    import src.common.iceberg_reader as ir
+
+    monkeypatch.setenv("DUCKLAKE_READER_URL", "https://reader.example/")
+
+    class _Creds:
+        access_key = "AK"
+        secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
+        token = None
+
+        def get_frozen_credentials(self):
+            return self
+
+    class _Session:
+        def __init__(self, profile_name=None):
+            pass
+
+        def get_credentials(self):
+            return _Creds()
+
+    import boto3
+    import requests
+    from botocore.auth import SigV4Auth
+
+    monkeypatch.setattr(boto3, "Session", _Session)
+    monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
+    monkeypatch.setattr("scripts.aws_profile.resolve_aws_profile", lambda *a, **k: None)
+    captured["sleeps"] = []
+    monkeypatch.setattr(ir.time, "sleep", lambda s: captured["sleeps"].append(s))
+    seq = list(responses)
+
+    def _post(url, data=None, headers=None, timeout=None):
+        captured["calls"] = captured.get("calls", 0) + 1
+        return seq.pop(0)
+
+    monkeypatch.setattr(requests, "post", _post)
+    return ir
+
+
+def test_ducklake_reader_retries_transient_502_then_succeeds(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke_seq(
+        monkeypatch,
+        [_FakeResp(status_code=502, text="Internal Server Error"), _FakeResp(payload={"rows": [{"v": 1}]})],
+        captured,
+    )
+    rows = ir.DuckLakeReader().query("ops_recommendations", "SELECT COUNT(*) v FROM {tbl}")
+    assert rows == [{"v": 1}]
+    assert captured["calls"] == 2  # retried once after the cold-resume 502
+    assert len(captured["sleeps"]) == 1
+
+
+def test_ducklake_reader_persistent_502_raises_after_max_attempts(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke_seq(monkeypatch, [_FakeResp(status_code=502, text="boom")] * 3, captured)
+    # query() swallows the loud-fail and returns None; the underlying _invoke exhausted retries.
+    assert ir.DuckLakeReader().query("ops_recommendations", "SELECT 1 FROM {tbl}") is None
+    assert captured["calls"] == 3  # _READER_MAX_ATTEMPTS
+    assert len(captured["sleeps"]) == 2  # backoff between the 3 attempts
+
+
+def test_ducklake_reader_non_transient_500_not_retried(monkeypatch):
+    captured: dict = {}
+    ir = _patch_dl_invoke_seq(monkeypatch, [_FakeResp(status_code=500, text="boom")], captured)
+    assert ir.DuckLakeReader().query("ops_recommendations", "SELECT 1 FROM {tbl}") is None
+    assert captured["calls"] == 1  # 500 is not transient -> no retry
+    assert captured["sleeps"] == []
+
+
 def test_ops_storage_backend_default_and_flag(monkeypatch):
     import src.common.iceberg_reader as ir
 
