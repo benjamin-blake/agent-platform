@@ -16,7 +16,6 @@ import datetime
 import json
 import logging
 import os
-import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -72,8 +71,9 @@ except ImportError:  # pragma: no cover
     _TELEMETRY_SCHEMAS_AVAILABLE = False
 
 # Recognised table names (ops data store) -- see docs/contracts/ops-data-store.md
+# ops_recommendations is EXCLUDED: recs transit the DuckLake closed boundary (Decision 81 cl.7 /
+# T2.19 cutover). OpsWriter can no longer stage or compact recs to Iceberg.
 _OPS_TABLE_NAMES: list[str] = [
-    "ops_recommendations",
     "ops_execution_plans",
     "ops_session_log",
     "ops_decisions",
@@ -94,10 +94,6 @@ _BUCKET_ENV_VAR = "S3_LOG_BUCKET"
 # object columns when the target type is an array<> variant -- these overrides
 # supply the schema explicitly so compaction succeeds even for all-null batches.
 _OPS_TABLE_DTYPES: dict[str, dict[str, str]] = {
-    "ops_recommendations": {
-        "dependencies": "array<string>",
-        "tags": "array<string>",
-    },
     "ops_execution_plans": {},
     "ops_session_log": {
         "recs_attempted": "array<string>",
@@ -125,7 +121,7 @@ class OpsWriter:
 
     Usage:
         writer = OpsWriter()
-        writer.write("ops_recommendations", {"id": "rec-001", ...})
+        writer.write("ops_decisions", {"id": "dec-042", ...})
 
         # At session close (session_postflight.py):
         counts = writer.compact_all()
@@ -232,9 +228,17 @@ class OpsWriter:
         Never raises -- logs warnings on failure.
 
         Args:
-            table: One of TABLE_NAMES (e.g., "ops_recommendations").
+            table: One of TABLE_NAMES (excludes ops_recommendations -- DuckLake boundary).
             entry: Dict to serialise. Must be JSON-serialisable.
         """
+        if table == "ops_recommendations":
+            logger.warning(
+                "ops_writer.write: ops_recommendations writes are rejected -- recs transit the "
+                "DuckLake closed boundary (Decision 81 cl.7 / T2.19). Use ops_data_portal.file_rec "
+                "/ update_rec. Entry dropped."
+            )
+            return
+
         if table not in TABLE_NAMES:
             logger.warning("ops_writer.write: unknown table %r -- skipping (valid: %s)", table, TABLE_NAMES)
             return
@@ -246,20 +250,6 @@ class OpsWriter:
         if not _BOTO3_AVAILABLE:
             logger.warning("ops_writer.write: boto3 unavailable -- staging skipped for %s", table)
             return
-
-        if table == "ops_recommendations":
-            # Backstop guard: last-resort check that fires only when an S3 write is imminent.
-            # The portal (ops_data_portal.file_rec/update_rec) is the primary gate; this catches
-            # any bypasses that reach OpsWriter directly with hollow data.
-            _REQUIRED_REC_FIELDS = ["title", "source", "effort", "priority", "file", "context", "acceptance"]
-            for _req in _REQUIRED_REC_FIELDS:
-                _val = entry.get(_req)
-                if not _val or not str(_val).strip():
-                    raise ValueError(f"ops_writer: ops_recommendations requires non-empty '{_req}' field")
-            rec_id = str(entry.get("id") or "")
-            if not re.match(r"^rec-\d+$", rec_id):
-                logger.error("ops_writer: refusing to stage ops_recommendations record with invalid id %r", rec_id)
-                return
 
         staged = self._prepare_record(table, entry)
         dt = datetime.date.today().isoformat()
@@ -299,12 +289,19 @@ class OpsWriter:
         """Read staging files for *table* and compact them into the Iceberg table.
 
         Args:
-            table: One of TABLE_NAMES.
+            table: One of TABLE_NAMES (excludes ops_recommendations -- DuckLake boundary).
             trade_date: ISO date string (YYYY-MM-DD). Defaults to today.
 
         Returns:
             Number of rows compacted. 0 if awswrangler unavailable or no staging files.
         """
+        if table == "ops_recommendations":
+            logger.warning(
+                "ops_writer.compact: ops_recommendations compaction rejected -- recs transit the "
+                "DuckLake closed boundary (Decision 81 cl.7 / T2.19). No-op."
+            )
+            return 0
+
         if table not in TABLE_NAMES:
             logger.warning("ops_writer.compact: unknown table %r -- skipping", table)
             return 0
@@ -563,18 +560,9 @@ class OpsWriter:
         if not _BOTO3_AVAILABLE:
             return
 
-        # Map tables to their current-state view SQL (from terraform/iceberg_tables.tf)
+        # Map tables to their current-state view SQL (from terraform/iceberg_tables.tf).
+        # ops_recommendations is EXCLUDED: the view is dropped at T2.19 (Decision 81 cl.7).
         view_sqls = {
-            "ops_recommendations": f"""
-                CREATE OR REPLACE VIEW {DATABASE}.ops_recommendations_current AS
-                SELECT *
-                FROM (
-                  SELECT *,
-                    ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-                  FROM {DATABASE}.ops_recommendations
-                )
-                WHERE row_num = 1
-            """,
             "ops_decisions": f"""
                 CREATE OR REPLACE VIEW {DATABASE}.ops_decisions_current AS
                 SELECT *

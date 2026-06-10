@@ -33,8 +33,8 @@ class TestOpsCompactionHandlerS3Event:
     """Tests for S3 event key parsing path."""
 
     def test_parses_key_and_calls_compact(self) -> None:
-        """Well-formed S3 key: table and trade_date extracted, compact() called."""
-        key = "staging/ops_recommendations/dt=2026-04-21/batch-abc.jsonl"
+        """Well-formed S3 key for a non-recs table: table and trade_date extracted, compact() called."""
+        key = "staging/ops_decisions/dt=2026-04-21/batch-abc.jsonl"
         mock_writer = MagicMock()
         mock_writer.compact.return_value = 5
 
@@ -48,10 +48,10 @@ class TestOpsCompactionHandlerS3Event:
             handler = _get_handler()
             result = handler(_make_s3_event(key), None)
 
-        mock_writer.compact.assert_called_once_with("ops_recommendations", "2026-04-21")
+        mock_writer.compact.assert_called_once_with("ops_decisions", "2026-04-21")
         assert result["statusCode"] == 200
         assert result["rows_compacted"] == 5
-        assert result["table"] == "ops_recommendations"
+        assert result["table"] == "ops_decisions"
         assert result["trade_date"] == "2026-04-21"
 
     def test_unknown_table_returns_zero_without_compact(self) -> None:
@@ -156,3 +156,35 @@ class TestOpsCompactionHandlerForceEvent:
             )
 
         assert result["rows_compacted"] == 42
+
+
+class TestRecsExcludedFromCompaction:
+    """ops_recommendations must be excluded from Iceberg compaction (T2.19 / Decision 81 cl.7)."""
+
+    def test_recs_force_event_returns_early_with_note(self) -> None:
+        """force_table=ops_recommendations -> early return, rows_compacted=0, note=recs_excluded_ducklake."""
+        mock_writer = MagicMock()
+
+        with patch("scripts.ops_writer.OpsWriter", return_value=mock_writer):
+            handler = _get_handler()
+            result = handler(
+                {"force_table": "ops_recommendations", "force_date": "2026-04-21"},
+                None,
+            )
+
+        assert result["rows_compacted"] == 0
+        assert result.get("note") == "recs_excluded_ducklake"
+        mock_writer.compact.assert_not_called()
+
+    def test_recs_s3_event_returns_early_with_note(self) -> None:
+        """S3 event targeting ops_recommendations prefix -> early return, no compact call."""
+        mock_writer = MagicMock()
+        event = _make_s3_event("staging/ops_recommendations/dt=2026-04-21/batch.jsonl")
+
+        with patch("scripts.ops_writer.OpsWriter", return_value=mock_writer):
+            handler = _get_handler()
+            result = handler(event, None)
+
+        assert result["rows_compacted"] == 0
+        assert result.get("note") == "recs_excluded_ducklake"
+        mock_writer.compact.assert_not_called()

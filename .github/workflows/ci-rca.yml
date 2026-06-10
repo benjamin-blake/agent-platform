@@ -124,9 +124,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.dedup.outputs.run_id }}"
-          gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
-            || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
-            || true
+          # Retry loop: the workflow_run log-availability race means logs may not
+          # be ready immediately after the triggering run completes (rec-2117 / rec-2118).
+          LOG_FETCHED=false
+          for ATTEMPT in 1 2 3; do
+            gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
+              || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
+              || true
+            if test -s /tmp/ci-rca-failed.log; then
+              LOG_FETCHED=true
+              break
+            fi
+            echo "Attempt ${ATTEMPT}: log empty or unavailable; waiting before retry..." >&2
+            sleep $((ATTEMPT * 10))
+          done
+          if [ "$LOG_FETCHED" != "true" ]; then
+            echo "::error::ci-rca: log file is empty after ${ATTEMPT} attempts for run ${RUN_ID}. " \
+              "The log may not be available yet or the run produced no output. Failing loudly so " \
+              "the agent is not invoked on a 0-byte log (rec-2117 / rec-2118)."
+            exit 1
+          fi
 
       - name: Run ci-rca agent
         id: rca_agent

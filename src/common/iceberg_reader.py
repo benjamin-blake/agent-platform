@@ -40,6 +40,11 @@ _DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
 _DUCKLAKE_READER_URL_ENV = "DUCKLAKE_READER_URL"
 _DUCKLAKE_READER_FUNCTION_NAME = "agent-platform-ducklake-reader"
 
+# SSM parameter paths declared in Lambda manifests' runtime_config[] (Decision 79 SSOT).
+# Resolution order: env -> SSM -> terraform output -> GetFunctionUrlConfig.
+_DUCKLAKE_READER_SSM_PATH = "/agent-platform/ducklake/reader_url"
+_DUCKLAKE_WRITER_SSM_PATH = "/agent-platform/ducklake/writer_url"
+
 # pk used for ROW_NUMBER() dedup (Decision 56)
 _TABLE_PARTITION_KEYS: dict[str, str] = {
     "ops_recommendations": "id",
@@ -63,6 +68,25 @@ def _parse_single_key_filter(row_filter: str) -> str | None:
     """Return the quoted value of a `<col> = '<value>'` filter, or None if it is not that shape."""
     m = _SINGLE_KEY_FILTER_RE.match(row_filter)
     return m.group(1) if m else None
+
+
+def _resolve_function_url_via_ssm(ssm_path: str, *, profile: str | None, region: str) -> str | None:
+    """Resolve a Function URL from an SSM parameter. None on any failure.
+
+    Covers CC-web and CI environments where DUCKLAKE_*_URL is unset and there is no
+    terraform binary: SSM is lighter than GetFunctionUrlConfig and requires no Lambda
+    describe permission. The PlatformDev role carries ssm:GetParameter on the
+    /agent-platform/ducklake/* path (Decision 81 endpoint-discovery grant).
+    """
+    try:
+        import boto3  # noqa: PLC0415
+
+        client = boto3.Session(profile_name=profile).client("ssm", region_name=region)
+        resp = client.get_parameter(Name=ssm_path, WithDecryption=False)
+        return resp["Parameter"]["Value"].rstrip("/") or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("iceberg_reader: SSM resolution failed for %s: %s", ssm_path, exc)
+        return None
 
 
 def _resolve_function_url_via_api(function_name: str, *, profile: str | None, region: str) -> str | None:
@@ -323,15 +347,22 @@ class DuckLakeReader:
         self._region = region
 
     def _reader_url(self) -> str:
-        """Resolve the ducklake_reader Function URL: env, then terraform output, then the AWS API.
+        """Resolve the ducklake_reader Function URL.
 
-        The AWS-API fallback (lambda:GetFunctionUrlConfig) covers the CI runner case (T2.19 cutover):
-        there is no DUCKLAKE_READER_URL env and no terraform-init'd checkout, but the github_ci OIDC
-        role carries the GetFunctionUrlConfig grant. Loud-fail only if all three resolutions fail.
+        Resolution order (Decision 79 SSOT):
+          1. env DUCKLAKE_READER_URL -- CI / explicit override
+          2. SSM /agent-platform/ducklake/reader_url -- CC-web (no terraform binary)
+          3. terraform output ducklake_reader_function_url -- local dev with initialized checkout
+          4. lambda:GetFunctionUrlConfig -- last resort (CI runner, github_ci OIDC role)
+
+        Loud-fail if all four are unavailable.
         """
         url = os.environ.get(_DUCKLAKE_READER_URL_ENV)
         if url:
             return url.rstrip("/")
+        ssm_url = _resolve_function_url_via_ssm(_DUCKLAKE_READER_SSM_PATH, profile=self._profile, region=self._region)
+        if ssm_url:
+            return ssm_url
         import subprocess  # noqa: PLC0415
 
         try:
@@ -350,8 +381,10 @@ class DuckLakeReader:
         if api_url:
             return api_url.rstrip("/")
         raise RuntimeError(
-            f"{_DUCKLAKE_READER_URL_ENV} not set, terraform output 'ducklake_reader_function_url' unavailable, and "
-            "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake reader (OPS_STORAGE_BACKEND=ducklake)."
+            f"{_DUCKLAKE_READER_URL_ENV} not set, SSM {_DUCKLAKE_READER_SSM_PATH!r} unavailable, "
+            "terraform output 'ducklake_reader_function_url' unavailable, and "
+            "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake reader "
+            "(OPS_STORAGE_BACKEND=ducklake)."
         )
 
     def _invoke(self, payload: dict[str, Any]) -> dict[str, Any]:

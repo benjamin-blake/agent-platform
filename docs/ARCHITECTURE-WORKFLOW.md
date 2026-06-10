@@ -372,7 +372,13 @@ Human/Agent → ops_data_portal.py → DynamoDB (ID Authority)
 
 ### SCD Type 2 Semantics
 
-The authoritative store (Athena/Iceberg) uses append-only semantics. Deduplication to the latest record happens at query time via the `ops_recommendations_current` and `ops_decisions_current` Athena views.
+Append-only semantics apply to all ops tables. Deduplication to the latest record:
+- `ops_recommendations` -- DuckLake materialises the current projection in the
+  `ducklake_reader` Function URL (T2.19 / Decision 81 cl.7). No Athena
+  `ops_recommendations_current` view -- DROPPED at T2.19.
+- `ops_decisions` and other Iceberg tables -- deduplication at query time via the
+  `ops_decisions_current` / `ops_priority_queue_current` Athena views (retained
+  until those tables migrate to DuckLake).
 
 ### Operational Tables
 

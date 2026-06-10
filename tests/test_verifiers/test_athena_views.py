@@ -39,7 +39,7 @@ async def test_athena_views_pass():
             verifier = AthenaViewsVerifier()
             result = await verifier.verify()
             assert result.status == VerifierStatus.PASS
-            assert "Found 42 recs" in result.message
+            assert "Found 42 decisions" in result.message
 
 
 @pytest.mark.asyncio

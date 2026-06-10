@@ -670,3 +670,75 @@ def test_parse_single_key_filter():
     assert ir._parse_single_key_filter("  status='open'  ") == "open"
     assert ir._parse_single_key_filter("1=1 OR 2=2") is None
     assert ir._parse_single_key_filter("id IN ('a','b')") is None
+
+
+class TestDuckLakeReaderSSMResolution:
+    """SSM step in _reader_url() resolution chain (Decision 79 / T2.19 Slice 1)."""
+
+    def test_ssm_url_used_when_env_unset_and_terraform_absent(self, monkeypatch) -> None:
+        """env absent + terraform absent + SSM present -> URL resolved via SSM (CC-web path)."""
+        import src.common.iceberg_reader as ir
+
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        monkeypatch.setattr(
+            ir,
+            "_resolve_function_url_via_ssm",
+            lambda path, profile, region: "https://ssm-resolved.lambda-url.eu-west-2.on.aws",
+        )
+        monkeypatch.setattr(ir, "_resolve_function_url_via_api", lambda *a, **k: None)
+
+        url = ir.DuckLakeReader()._reader_url()
+        assert url == "https://ssm-resolved.lambda-url.eu-west-2.on.aws"
+
+    def test_ssm_called_with_correct_path(self, monkeypatch) -> None:
+        """_resolve_function_url_via_ssm is called with _DUCKLAKE_READER_SSM_PATH."""
+        import src.common.iceberg_reader as ir
+
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+
+        captured: dict = {}
+
+        def fake_ssm(path, *, profile, region):
+            captured["path"] = path
+            return "https://ssm.example/"
+
+        monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", fake_ssm)
+        monkeypatch.setattr(ir, "_resolve_function_url_via_api", lambda *a, **k: None)
+
+        ir.DuckLakeReader()._reader_url()
+        assert captured["path"] == ir._DUCKLAKE_READER_SSM_PATH
+
+    def test_ssm_skipped_when_env_set(self, monkeypatch) -> None:
+        """When DUCKLAKE_READER_URL is set, SSM is never called (env takes priority)."""
+        import src.common.iceberg_reader as ir
+
+        monkeypatch.setenv("DUCKLAKE_READER_URL", "https://env-direct.example/")
+
+        ssm_called: list[bool] = []
+
+        def fake_ssm(*a, **k):
+            ssm_called.append(True)
+            return None
+
+        monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", fake_ssm)
+
+        url = ir.DuckLakeReader()._reader_url()
+        assert url == "https://env-direct.example"
+        assert not ssm_called
+
+    def test_ssm_failure_falls_through_to_terraform(self, monkeypatch) -> None:
+        """SSM returns None -> resolution continues to terraform step."""
+        import src.common.iceberg_reader as ir
+
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None)
+
+        fake_proc = MagicMock()
+        fake_proc.returncode = 0
+        fake_proc.stdout = "https://terraform.example/"
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: fake_proc)
+
+        url = ir.DuckLakeReader()._reader_url()
+        assert url == "https://terraform.example"
