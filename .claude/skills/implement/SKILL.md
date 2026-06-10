@@ -152,6 +152,48 @@ For each identified tier_item, load its `exit_criteria[]` from `docs/ROADMAP-PLA
 - **Strict subset pass (>=1 but not all)** -> stage `status: in_progress` + `progress_note: "<one-line description of what shipped this session>"`. If the item already has a `progress_note`, append a dated bullet (e.g., `"- 2026-05-20: shipped criteria 1, 3"`) rather than overwriting.
 - **Zero criteria pass** -> no YAML change.
 
+### Replacement closure check (cutover / supersession items)
+Runs during the same bookkeeping walk for any checked tier_item whose name or intent implies a
+replacement: cutover, migration, backend swap, retirement, supersession, "replaces X". A
+replacement is CLOSED only when the old path is dead -- "new path works" is not closure
+(2026-06-09 roadmap audit, dimension D11). Before staging `complete` on such an item:
+
+1. **Name the replaced surface.** From the item text and the plan, identify the old path
+   explicitly (file, Lambda, view, write path, profile, config flag). If neither the item
+   nor the plan names it, derive it from the diff (what does the new code stop calling /
+   start replacing?); if no old surface is derivable, record "no replaced surface
+   identified -- closure check N/A" in the bookkeeping output rather than guessing.
+   This check is per-touched-item: it closes the replacement THIS plan performed, not a
+   repo-wide retirement sweep.
+2. **Verify the old path is dead or designed-rollback-only.** Run the greps/commands that prove
+   the old surface is deleted, fails closed, or is reachable ONLY behind the documented rollback
+   flag. An unconditional fallback to the old backend (e.g. an Athena fallback on a table cut
+   over to the DuckLake closed boundary) is a FAIL: do not count the cutover criterion as
+   passing; surface the fallback as a finding and add its closure to the plan or stage a
+   criterion for it on the open item.
+3. **Verify a named owner for any surviving old path.** Partial cutovers are legitimate ONLY
+   while a tier_item (or an explicit exit criterion elsewhere) owns the survivor's retirement.
+   If none exists, stage one in the same YAML edit (a new criterion on the open item, or
+   surface to the human that a successor item is needed). Deferred work with no carrier is
+   invisible to eligibility computation and rots (audit finding F-018).
+4. **Close out superseded predecessors.** If the completed work absorbs an older tier_item's
+   scope, reconcile that older item in the same staged edit: `status: reserved` with a
+   supersession note (preserving the id, per the T1.8 precedent), or re-home its still-live
+   criteria onto the owning item. Never leave two items claiming the same future work.
+
+### Exit-criteria truth maintenance (realized-differently rule)
+When the session satisfied an item's INTENT via a different mechanism than its written exit
+criteria describe (different filename, different substrate, a criterion superseded by a
+ratified decision), do NOT flip the item complete over criteria that no longer adjudicate
+true -- and do NOT leave the criteria stale with the truth buried in a note. In the same
+staged YAML edit, rewrite the affected criteria to the realized mechanism (preserve the
+original wording inside the item's note when the history matters) so the item re-adjudicates
+true against the repo today. A `complete` item whose criteria cannot be re-run is an audit
+finding (2026-06-09 audit, F-006/F-014), not a convenience. This rule applies the same way
+when the bookkeeping walk runs against items completed in EARLIER sessions: discovering a
+criteria-vs-reality mismatch on an already-complete item stages a criteria rewrite, never a
+silent pass.
+
 ### Parallel-with-code-review state machine
 1. Dispatch the code-review subagent (Step 5 above).
 2. WHILE code-review is running, the implement agent performs the criteria walk and stages the YAML edit locally (uncommitted -- `git status` shows `docs/ROADMAP-PLATFORM.yaml` as modified).
@@ -203,7 +245,7 @@ The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks +
 
 The slow full tier runs post-merge on `main` (Decision 73); on failure the ci-rca agent files a `priority=critical`, `source=ci_rca` rec that hard-blocks the next planning session. You do not babysit main CI.
 
-Robustness note: a genuinely lost webhook leaves the PR open (safe). The bulletproof upgrade is GitHub-native auto-merge (server-side merge on green, container fully out of the loop); unblocked now the repo is public but needs branch protection + required status checks (CD.20, deferred). See Decision 76.
+Robustness note: a genuinely lost webhook leaves the PR open (safe). The bulletproof upgrade is GitHub-native auto-merge (server-side merge on green, container fully out of the loop); branch protection + required status checks are now LIVE (Decision 83 / T2.12, applied 2026-06-08), so auto-merge is unblocked -- adopt via a small follow-up plan if desired. See Decision 76.
 
 ### Pre-Push Rebase (applies to both flows)
 After the local commit, before pushing, refresh and rebase so the PR opens against current main:

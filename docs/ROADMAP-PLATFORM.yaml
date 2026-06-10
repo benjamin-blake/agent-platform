@@ -6,9 +6,10 @@
 # .claude/commands/plan.md (orientation surface),
 # scripts/validate.py (RoadmapDocument Pydantic schema check).
 #
-# This file is the source of truth for platform sequencing. docs/ROADMAP-PRODUCT.md
-# is the source of truth for trading-system product sequencing. They are siblings,
-# not parent/child.
+# This file is the source of truth for platform sequencing. docs/ROADMAP-PRODUCT.yaml
+# is the source of truth for trading-system product sequencing (it supersedes
+# docs/ROADMAP-PRODUCT.md, retained only as a recovery artefact -- see KG.1).
+# They are siblings, not parent/child.
 
 document:
   id: ROADMAP-PLATFORM
@@ -16,7 +17,7 @@ document:
   status: draft
   filed_via: pending_log_decision_lambda    # union type: "pending_log_decision_lambda" (pre-ratification) or "ops_decisions:dec-NNN" (post-ratification). T-1.5 schema enforces.
   description: |
-    The platform underneath docs/ROADMAP-PRODUCT.md. Names the automation, governance,
+    The platform underneath docs/ROADMAP-PRODUCT.yaml. Names the automation, governance,
     and control-plane infrastructure underneath the trading system. Sequenced as
     tiers T-1..T5 with named cross-tier gates. Replaces and inlines the content of
     the retired docs/INTENT-compute-and-account-topology.md (per CD.14).
@@ -39,9 +40,15 @@ document:
       Value is a gate-rule expression using gate_helpers grammar. Distinct from
       .gates in that .gates governs COMPLETION while .decision_required_before
       governs START (or another named state transition). T-1.5 schema enforces
-      both fields; preflight surfaces "blocked-on-CD" when a tier_item is
-      eligible-by-deps but a referenced CD is pending.
-    - Cross-tier gates in cross_tier_gates[] are MUST hold, not advisory.
+      both fields STRUCTURALLY (helper grammar + arity; prose entries are
+      no-ops). Blocked-on-CD surfacing at preflight is NOT yet implemented --
+      T-1.20 lands it; until then planning sessions check
+      decision_required_before/gates manually per the planning skill's Tier
+      Item Freshness Gate (T-1.21).
+    - Cross-tier gates in cross_tier_gates[] are MUST hold, not advisory --
+      but note no runtime consumer evaluates gate rules yet (the validator
+      checks grammar only; evaluation lands with T-1.20). Until then gates
+      bind by convention and are checked manually at plan time.
       Gate rule strings are evaluated against a mini-grammar of:
         - item lookups: T0.1.status, T0.1.uptime_days, T0.1.latest_run.verdict
         - boolean / comparison operators
@@ -50,14 +57,24 @@ document:
       Unknown helpers MUST be rejected by the T-1.5 RoadmapDocument schema check.
     - Effort markers (XS/S/M/L/XL) indicate decomposition need, not wall-clock.
       L and XL items are tagged strategic: true and require their own STRATEGIC
-      plan tree before implementation.
+      plan tree before implementation -- SUSPENDED while the CD.17 STRATEGIC
+      freeze holds (AGENTS.md Temporary Operational Constraints): during the
+      freeze every plan is IMPLEMENTATION type, strategic: true marks
+      decomposition need only, and L items deliberately authored as trees of
+      atomic IMPLEMENTATION plans carry strategic: false with a freeze-override
+      note (T1.13 / T2.19 / T2.22 / T2.23 / T3.1 pattern).
+    - Id grammar: tier prefix (T-1, T0..T5) + dotted item number. Letter
+      suffixes (T2.11a/T2.11b, T2.16b) mark sibling/follow-on items; decimal
+      children (T0.12.5/.6/.7) mark decomposed sub-items. Beware the hyphen:
+      T-1.8 (tier T-1, manifest mechanism, complete) and T1.8 (tier T1,
+      reserved tombstone) are DISTINCT ids differing only by the hyphen.
     - Bootstrap clause (START eligibility): T-1 tier_items AND T0 tier_items
       with depends_on:[] are eligible to START even when document.status ==
       "draft" and document.filed_via == "pending_log_decision_lambda" and
-      candidate_decisions are all state == "pending". This covers T-1.0, T-1.4,
-      T-1.5 in T-1 and T0.1, T0.2, T0.3, T0.4, T0.9, T0.10, T0.12 in T0 (the
-      items with no upstream dependency that produce the substrate everything
-      else needs).
+      candidate_decisions are all state == "pending". The covered set is
+      COMPUTED from the graph (items in tiers T-1/T0 whose depends_on is
+      empty), not enumerated here -- a prior inline enumeration drifted as
+      depends_on edges changed (2026-06-09 audit F-002) and was removed.
     - Bootstrap clause (COMPLETION exemption): the ratification-prerequisite
       set MAY reach status == "complete" with their gating CDs still state ==
       "pending". The exempt set is now enumerated per-item via the
@@ -72,18 +89,37 @@ document:
             related_candidate_decisions reference CD.1/CD.13 -- also circular.
             Exemption ends at CD.1 ratification (i.e. the moment T-1.1 completes).
         (b) CD.25-scoped subset (T-1.12 expansion): {T-1.11..T-1.19, T0.12.5,
-            T0.12.6, T0.12.7}. CD.25 cannot ratify until T0.7b (log-decision Lambda)
-            is deployed, which is governed by CD.16 ratification + per-Lambda gating.
-            Without this exemption, the new ratification items deadlock. Exemption
+            T0.12.6, T0.12.7}. Historical rationale: this scope was authored when
+            CD.25 was believed unable to ratify until T0.7b deployed; the
+            ratification-vehicle note below supersedes that premise (the portal
+            ratifies CDs today), but the exemption is RETAINED so contract-wave
+            items can complete ahead of CD.25's portal ratification. Exemption
             ends at CD.25 ratification. Round-3 M2: atomic decomposition children
             of a parent inherit the parent's bootstrap_completion_exempt value
             automatically; the bookkeeping rule reads decomposition_hints at
             plan-filing time (.claude/skills/implement/SKILL.md amendment lands in
             a T-1.12 follow-on plan).
-    - During the bootstrap window, candidate_decisions with state == "pending"
-      MUST be treated as binding by any agent reading the roadmap; the pending
-      window may span several weeks because the log-decision Lambda (T0.7b) is
-      the first ratification vehicle.
+        (c) Realized-ahead-of-ratification set (2026-06-09 audit reconciliation,
+            F-002): items completed under the operating convention that a gating
+            CD may ratify AFTER the gated work lands, with ratification via the
+            ops portal. Members carry the flag with a note citing this scope;
+            at reconciliation time: {T0.2, T0.3, T0.5, T0.10, T2.1, T2.2, T2.3,
+            T2.5, T2.10, T2.12, T2.13, T2.16b, T2.17}. Each exemption ends when
+            its gating CD ratifies (CD.2/CD.5/CD.6/CD.8+CD.15/CD.20/CD.21/
+            CD.26/CD.34 respectively; per-item notes name the binding CD).
+            New completions under a pending gating CD MUST add
+            the flag + a scope-(c) note in the same edit (implement skill
+            bookkeeping enforces this; T-1.22).
+    - Ratification vehicle (single source of truth; supersedes earlier "T0.7b
+      is the first ratification vehicle" phrasing -- 2026-06-09 audit F-001):
+      until T0.7b (log-decision Lambda) is deployed, candidate decisions are
+      ratified via the ops portal (scripts.ops_data_portal file_decision ->
+      ops_decisions:dec-NNN), exactly as CD.16/CD.24 (Decision 79, dec-1086),
+      CD.31 (Decision 78, dec-1085) and CD.33 (Decision 81, dec-1089) were.
+      T0.7b assumes the vehicle role once deployed; the portal path retires
+      with T1.5's import-site sweep. During the pending window,
+      candidate_decisions with state == "pending" MUST still be treated as
+      binding by any agent reading the roadmap.
     - This document is self-contained. No outbound substantive references to
       retired INTENT-compute-and-account-topology.md are valid. Mentions in
       retirement metadata (CD.14, T5.5, KG.4) are not references.
@@ -130,8 +166,10 @@ document:
         True iff the dotted field_path resolved against the tier_item equals expected.
         Used for runtime aggregates like item.latest_run.verdict == "PASS" that depend on
         external state (verifier outputs) not encoded in tier_items themselves. The
-        validator does not statically check field_path resolution — that is a runtime
-        concern handled by T-1.4's preflight computation.
+        validator does not statically check field_path resolution — runtime evaluation is
+        owned by T-1.20 (gate evaluation; item_field_eq stays runtime-deferred there until
+        a verifier-output source exists). T-1.4's shipped preflight computes eligibility
+        only. (Ownership re-pointed 2026-06-09; previously cited T-1.4.)
 
 north_star:
   principles:
@@ -218,7 +256,7 @@ rebuild_vs_refactor:
     - Read engine layer (DuckDB default; Athena _current views retired in new account per CD.15)
   refactor:
     - Python codebase (scripts/, src/, tests/) — surgical changes per open recs and tier items, no rewrite
-    - Iceberg table schemas (preserve, partition-everywhere on rebuild per CD.9)
+    - Iceberg table schemas (preserve, partition-everywhere on rebuild per CD.9; scope narrowed by CD.31 -- ops/telemetry tables migrate to DuckLake, recs already cut over per T2.19, so "preserve" now applies to market-data/product Iceberg tables + the not-yet-migrated ops tables)
     - Decision history (graduate to ops_decisions table; identities preserved)
   retired_options:
     - id: R.1
@@ -234,9 +272,14 @@ foundation_already_shipped:
     related_decisions: [50, 56]
     notes: ops_recommendations, ops_decisions, ops_execution_plans, ops_session_log, ops_priority_queue
   - id: F.2
-    name: Self-hosted EC2 CI runner
-    related_decisions: [68]
-    notes: t3.medium in eu-west-2, IAM instance role, replaces hosted-runner billing
+    name: Self-hosted EC2 CI runner (RETIRED 2026-05-28)
+    related_decisions: [68, 73]
+    notes: |
+      HISTORICAL foundation, no longer live substrate (annotated 2026-06-09, audit F-024): the
+      t3.medium eu-west-2 runner with IAM instance role served as CI substrate under Decision 68,
+      then was RETIRED per CD.21/Decision 73 (T2.10) -- CI now runs GitHub-hosted ubuntu-latest +
+      OIDC. terraform/ec2_runner.tf retained with a deprecation header as an architectural-evolution
+      artefact. Listed here because it WAS shipped foundation; do not plan against it as current.
   - id: F.3
     name: Two-tier validation (presubmit + edit-loop)
     related_decisions: [60, 73]
@@ -256,7 +299,7 @@ foundation_already_shipped:
   - id: F.7
     name: DQ enforcement Phases 0-3
     related_intents: [dq-enforcement]
-    notes: config/data_quality/*.yaml + data_quality_runner.py; presubmit auto-invoke when stale
+    notes: config/agent/data_quality/*.yaml + data_quality_runner.py; presubmit auto-invoke when stale (locator corrected 2026-06-09, audit F-025 -- the DQ config relocated under config/agent/)
   - id: F.8
     name: ops_decisions graduation Phase 0+1
     related_intents: [ops-decisions-graduation]
@@ -280,15 +323,23 @@ foundation_already_shipped:
     name: Agent-First repository principle
     notes: CLAUDE.md "Agent-First Repository" section; this roadmap is its first exemplar
   - id: F.14
-    name: Linux-container migration briefing
-    notes: docs/plans/briefings/BRIEFING-linux-container-migration.md; consumed by T0
+    name: Linux-container migration briefing (pointer dead at HEAD)
+    notes: |
+      The cited artefact docs/plans/briefings/BRIEFING-linux-container-migration.md does NOT exist
+      at HEAD (neither does the briefings/ directory; provenance unrecoverable from the squashed
+      clone -- annotated 2026-06-09, audit F-024). The briefing's substance was consumed by the T0
+      bootstrap wave (largely complete); the surviving related artefact is
+      docs/plans/PLAN-linux-container-bootstrap.md. Retained as historical record of the input;
+      do not attempt to read the dead path.
   - id: F.15
     name: Iceberg table partition-by-transform pattern (ops + telemetry)
     related_decisions: [56]
     notes: Complete relative to CD.9 — ops/telemetry use day(last_updated_timestamp); market_data uses day(trade_date); both compliant with the uniform partition-everything rule. T2.4 applies the same rule to any remaining unpartitioned tables in the personal-account redeploy.
 
 candidate_decisions:
-  # Pre-ratification. Each will be filed via log-decision Lambda (T0.7b) once that lands.
+  # Pre-ratification. Ratification vehicle: the ops portal (file_decision ->
+  # ops_decisions:dec-NNN) until T0.7b lands, then the log-decision Lambda --
+  # see the agent_instructions "Ratification vehicle" note (audit F-001).
   # Ratified decisions move to ops_decisions and their candidate id is retained here as
   # an alias for traceability.
   - id: CD.1
@@ -296,7 +347,7 @@ candidate_decisions:
     detail: ROADMAP-PLATFORM.yaml is the source of truth for platform sequencing. Supersedes the platform sections of ROADMAP-PRODUCT.md.
     gates: [T-1]
     state: pending
-    filed_via: log-decision-lambda  # circular; resolved by T0.7b landing first then T-1.1 filing this (round-2 architect HIGH-3 typo fix: was 'files_via')
+    filed_via: pending_log_decision_lambda  # normalized to the canonical pending literal (audit F-030; was the off-union 'log-decision-lambda'); ratifiable via the ops portal per the agent_instructions vehicle note
   - id: CD.2
     title: Dev surface = Claude Code on the web; Windows VM exits
     detail: |
@@ -381,7 +432,14 @@ candidate_decisions:
       PlatformDev and PlatformAdmin are now aws_iam_role resources (terraform/lambda_tooling_iam.tf), not
       aws_ssoadmin_permission_set. The two-principal allow-list semantic is preserved verbatim. Lambda handlers
       check the assumed-role ARN against the IAM role ARN for admin-only branches.
-    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]
+      [Amendment 2026-06-09 -- audit integration (F-008)]: the six-Lambda enumeration is illustrative,
+      not canonical (CD.33 ratified the writer/reader/maintenance path split + closed boundary; the verb
+      surface in front of it is deliberately extensible). For ops_recommendations, the write/read TRANSPORT
+      is the closed ducklake_writer/ducklake_reader boundary (Decision 81 cl.7) -- the verb Lambdas front
+      that boundary (extend its verb set or call through it; OQ.15 resolves the shape at T0.6 plan time)
+      and NEVER write Iceberg/Athena directly for cut-over tables. ops_data_portal.py-as-internal-
+      implementation survives for the still-Iceberg tables until T2.26.
+    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4]    # T1.4 is reserved (superseded by T2.18/T2.26) -- a gate on a reserved item is inert
     state: pending
     supersedes_intents: [ops-pipeline-consolidation]
   - id: CD.11
@@ -429,7 +487,7 @@ candidate_decisions:
       This is correctly-scoped change verification. The previous blanket "all Lambda steps DEFERRED" placeholder
       was a workaround for executor-telemetry trust leaking into Lambda-deploy decisions; it is not intrinsic
       to good Lambda hygiene.
-    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]
+    gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]    # T1.4 is reserved (superseded by T2.18/T2.26) -- inert here; CD.16 is ratified regardless
     state: ratified
     filed_via: ops_decisions:dec-1086
     enforcement_mechanism: |
@@ -458,7 +516,7 @@ candidate_decisions:
       - Stateful invariants (status DAG transitions, FK across tables, intra-table parent/child uniqueness) live in handler code, NOT in Annotated metadata. They run pre-commit against the read path (T2.5+ via DuckDB-on-Iceberg-snapshot, T1.x bridging via Athena _current views in the old account only) and return typed 4xx on failure.
       - Distributional / drift checks live in the DQ runner (T1.6 alarm-not-gate), NOT in Annotated metadata. Annotated marker vocabulary is for shapes the runner can express as a row-level boolean; drift is a distribution-level signal.
       - Schema evolution policy. Field removal is destructive — the DDL generator does NOT emit `ALTER TABLE ... DROP COLUMN` for fields merely absent from the Pydantic model. Removal requires an explicit `Annotated[T, DqDeleted(since='YYYY-MM-DD')]` marker on a deprecated field for at least one release cycle; the generator emits a no-op for `DqDeleted` and the runner short-circuits checks on those fields. Then a separate explicit drop step in a follow-on plan removes the field from Pydantic and emits the DDL drop.
-      - Schema-drift detector. Until T1.6 retires `config/data_quality/*.yaml`, both YAML and Pydantic-Annotated coexist (T0.12 onwards). A CI check (added in T0.12) confirms the two sources express the same checks for any overlapping field; divergence fails CI.
+      - Schema-drift detector. Until T1.6 retires `config/agent/data_quality/*.yaml` (path corrected 2026-06-09, audit F-015), both YAML and Pydantic-Annotated coexist (T0.12 onwards). A CI check (added in T0.12) confirms the two sources express the same checks for any overlapping field; divergence fails CI.
   - id: CD.13
     title: ROADMAP-PLATFORM.yaml is the agent-first documentation exemplar
     detail: Pure YAML, no narrative prose, structured tier_items + cross_tier_gates + candidate_decisions. Future repo documentation follows this shape. Markdown-with-prose is the legacy pattern being retired.
@@ -592,7 +650,7 @@ candidate_decisions:
       session_preflight.py no longer requires Athena SSO, enabling Codespace verification), T2.10 (security gate --
       self-hosted runner removed before public exposure), T2.11a (devcontainer substrate), T2.11b (portal artefacts),
       and T2.12 (security pre-flight settings applied).
-      [Realized 2026-05-30 (partial): public flip completed (T2.13 done) per Decision 76. T2.11a (.devcontainer), T2.11b (portal artefacts: SECURITY.md + EVALUATION-PROMPTS.yaml), and T2.12 (GHAS + branch protection) remain outstanding -- the curated public surface is not yet complete.]
+      [Realized 2026-05-30 (partial): public flip completed (T2.13 done) per Decision 76. T2.12 (GHAS + branch protection) completed 2026-06-08 (Decision 83). T2.11a (.devcontainer) and T2.11b (portal artefacts: SECURITY.md shipped; EVALUATION-PROMPTS.yaml + architecture diagram outstanding) remain open -- the curated public surface is not yet complete.]
     gates: [T2.11a, T2.11b, T2.12, T2.13]
     state: pending
   - id: CD.21
@@ -748,10 +806,14 @@ candidate_decisions:
       CD.25) but T-1.11 produces CD.25; without an allowance, CD.25 cannot ratify until T-1.11
       completes, which itself depends on CD.25 ratifying. Same circular pattern as
       CD.1 / T-1.1 / T0.7b. Under bootstrap_allowance: true, T-1.11 completion is permitted
-      with CD.25 state == "pending"; ratification happens once T0.7b (log-decision Lambda) is
-      available. The exemption set is enumerated per-item via the bootstrap_completion_exempt
-      flag (T-1.11..T-1.19, T0.12.5/.6/.7). Exemption ends at CD.25 ratification for the
-      CD.25-scoped subset; the legacy CD.1-scoped subset still terminates at CD.1 ratification.
+      with CD.25 state == "pending". Ratification: via the ops portal (the proven interim
+      vehicle per the agent_instructions ratification-vehicle note) -- the original
+      "ratification happens once T0.7b is available" premise created a structural deadlock
+      (T0.7a/b/c depend on T1.12; T1.12 completion is CD.25-gated and NOT exempt; the vehicle
+      was T0.7b itself -- 2026-06-09 audit F-001, dissolved by the portal path). The exemption
+      set is enumerated per-item via the bootstrap_completion_exempt flag (T-1.11..T-1.19,
+      T0.12.5/.6/.7). Exemption ends at CD.25 ratification for the CD.25-scoped subset; the
+      legacy CD.1-scoped subset still terminates at CD.1 ratification.
 
       Enforcement (round-2 C5 + round-3 H2/H3/M3): T-1.12 lands (a) scripts/platform_roadmap.py
       schema extension for bootstrap_completion_exempt, decomposition_hints, decision_required_before
@@ -882,7 +944,7 @@ candidate_decisions:
       - Step Functions retry policies are deterministic-only. LLM-judgment failure escalates via the rec/RCA path (Decision 55), never via automatic LLM-call retry-on-bad-output.
       - Lambda Durable Functions maturity monitoring -- the service is ~5 months in GA at the time of CD.27 ratification. If API semantics regress within the first 12 months, fall back to self-checkpointed Lambda with state in DynamoDB (intentional re-evaluation trigger; recorded as an INTENT Open Question for re-eval at each T4.2 atomic-plan filing). Track via T4.2 exit criterion "checkpoint-replay verified" and the Health Signal "Lambda Durable Function checkpoint-replay rate" (INTENT line surfaces alarm threshold).
       - T4.2 "stable for 14 days" operational definition (required for the CD.17 reversal trigger). Across the 14-day grace window: per-persona checkpoint-replay rate < 5%; per-rec success rate >= rolling 7-day baseline; zero unrecovered failures (Decision 55 stop-clean-and-RCA path counts as recovered if a rec was filed); cost-per-rec rolling avg within 1.5x rolling 7-day baseline. Trigger fires only when ALL personas' executions satisfy these per-signal thresholds for the full 14-day window. This is the explicit semantic definition replacing the pre-CD.27 "Fargate handler runs the loop end-to-end without recovery agent" implicit definition.
-      - T4.x atomic-plan template: each T4.x atomic plan must declare Plan Type IMPLEMENTATION (STRATEGIC remains suspended per AGENTS.md Temporary Operational Constraints) and must include the CD.16 + Decision 67 deferred-deployment markers in its execution steps. T4.2 in particular splits per-persona; not all personas need to land in the same window.
+      - T4.x atomic-plan template: each T4.x atomic plan must declare Plan Type IMPLEMENTATION (STRATEGIC remains suspended per AGENTS.md Temporary Operational Constraints) and must include CD.16 per-Lambda build/deploy/smoke-test steps for the Lambdas it touches (Decision 79 lifted the blanket Decision-67 deploy freeze; only the dispatcher smoke-test deferral survives until T4.3 -- audit F-009). T4.2 in particular splits per-persona; not all personas need to land in the same window.
 
   - id: CD.28
     title: LLM inference = DeepSeek-direct via LiteLLM (Tier 1); Anthropic-direct (Tier 2); Bedrock retired from architecture
@@ -969,8 +1031,11 @@ candidate_decisions:
       Follow-on plan inventory (surfaced by the multi-perspective deliverable critique 2026-05-27):
         Each entry names a code-or-doc surface that CD.28 retires architecturally but does NOT sweep
         in the REPORT-ONLY plan that filed it; the follow-on is the right home for cleanup work. Each
-        follow-on plan must be filed via /plan; Lambda-packaged subsets inherit CD.16 per-Lambda gating
-        + Decision 67 deferred-deployment markers until dispatcher Lambda re-enables.
+        follow-on plan must be filed via /plan; Lambda-packaged subsets follow CD.16 per-Lambda gating
+        (build + deploy + smoke-test per touched Lambda; Decision 79 lifted the blanket Decision-67
+        deploy freeze -- only the dispatcher SMOKE-TEST deferral survives until T4.3; audit F-009).
+        [2026-06-09 audit integration: the two high-priority sweeps below are now carried by tier item
+        T1.15 so they are schedulable work, not prose-only inventory (audit F-021).]
 
         - PLAN-retire-copilot-sdk (priority medium)
           Scope: delete scripts/copilot_sdk_client.py; sweep references (CLAUDE.md,
@@ -994,10 +1059,11 @@ candidate_decisions:
           the bedrock_via_chain entry); update Bedrock-referencing test files in lockstep with
           the production sweep -- tests/test_llm_client.py, tests/test_verify_platform_account.py,
           tests/test_build_lambda.py, tests/test_scheduled_agent_handler.py.
-          Gating: touches Lambda-packaged code (scheduled_agent_handler.py, llm_client.py) -- inherits
-          CD.16 per-Lambda gating + Decision 67 deferred-deployment markers until dispatcher Lambda
-          re-enables. Other files (bedrock_client.py deletion, terraform IAM, verifier) are non-Lambda
-          and can land freely.
+          Gating: touches Lambda-packaged code (scheduled_agent_handler.py, llm_client.py) -- CD.16
+          per-Lambda gating applies (build + deploy + smoke-test per touched Lambda; deploy is no
+          longer frozen per Decision 79; the dispatcher's smoke-test stays deferred until T4.3).
+          Other files (bedrock_client.py deletion, terraform IAM, verifier) are non-Lambda
+          and can land freely. [Carried by tier item T1.15 per the 2026-06-09 audit.]
           Rationale: CD.28 retires Bedrock from the architecture but dispatch-active code paths remain.
           Leaving live code paths to a retired substrate is a confused-architecture anti-pattern that
           violates the agent-first repository principle (machine-parseable canonical state should match
@@ -1022,7 +1088,8 @@ candidate_decisions:
           or after PLAN-retire-bedrock-code-paths). Decision 49's Copilot SDK commitment for scheduled
           agents is retired by this plan; file as the formal supersession.
           Gating: touches Lambda-packaged code (scheduled_agent_handler.py) and schedule.yaml --
-          inherits CD.16 per-Lambda gating + Decision 67 deferred-deployment markers.
+          CD.16 per-Lambda gating applies (deploy no longer frozen per Decision 79; dispatcher
+          smoke-test deferred until T4.3).
           Rationale: CD.28 commits the architecture to LiteLLM-only; scheduled-agent provider state
           must reconcile or the architecture is internally contradictory.
 
@@ -1232,7 +1299,10 @@ candidate_decisions:
         - FP-B = T2.19: DuckLake ops write/read migration (replace OpsWriter JSONL-staging with DuckLake
           writer preserving Decision 69; swap DuckDBIcebergReader -> DuckLake reader; adopt SCD2 via
           current_state + optionally ducklake_table_changes CDC; resolve OQ.7 + OQ.10). V3 IMPLEMENTATION
-          plan, gated on CD.31 ratification + T2.16/T2.17/T2.18; Lambda-deploy DEFERRED per Decision 67.
+          plan, gated on CD.31 ratification + T2.16/T2.17/T2.18. (The original "Lambda-deploy DEFERRED
+          per Decision 67" rider is retired: Decision 79 lifted the blanket freeze; per-Lambda CD.16
+          gating applies and the recs slice deployed live -- audit F-009. The deferred-table half is
+          carried by T2.26.)
         - FP-C: market_data / product D.lake DuckLake assessment + catalog multi-tenancy decision (OQ.14).
           Gated on a billions-of-rows scale-proof; deferred after ops catalog validates the approach.
     gates: [T2.16, T2.17, T2.18, T2.19]
@@ -1241,7 +1311,7 @@ candidate_decisions:
     supersedes_decisions: [50, 56, 51, 69]
     discipline_points:
       - "NS.1 generalisation (\"S3 + Iceberg\" -> \"S3 + open table format\") was deferred to OQ.13 and is now ENACTED at CD.31 ratification (Decision 78, 2026-06-02): NS.1 detail now reads \"S3 + open table format\", not the original \"S3 + Iceberg\". (Pre-ratification this discipline point recorded the deferral; it is retained as enacted-state history.)"
-      - "FP-B (T2.19) carries Decision 67 / CD.16 deferred-deploy markers: Lambda-deploy DEFERRED until per-Lambda gating (CD.16) resolves. This plan is IMPLEMENTATION and deploys nothing."
+      - "[Superseded 2026-06-09 -- audit F-009] FP-B (T2.19) originally carried Decision 67 / CD.16 deferred-deploy markers ('deploys nothing'). CD.16 ratified (dec-1086) and Decision 79 lifted the blanket Decision-67 deploy freeze, so T2.19 deploys per the CD.16 per-Lambda flow -- its exit criteria require ducklake_writer/reader build + deploy + smoke-test, and the recs slice deployed live 2026-06-08/09."
       - "Product D.lake.* and market_data Iceberg tables REMAIN Iceberg (KG.1 platform/product boundary; independently Class-A-gated per CD.25). Market-data DuckLake assessment is deferred to FP-C."
       - "The RDS catalog is a metadata store (Glue-analog), NOT a query engine. NS.1 governs engine-swappability, not a metastore ban. NS.3 actively supports a small managed cloud state-store."
       - "VPC egress (to reach RDS) is orthogonal to Function-URL + AWS_IAM ingress (CD.10 / NS.5). The extension layer must be pre-baked into a Lambda layer to work around blocked egress to extensions.duckdb.org (T2.17)."
@@ -1377,7 +1447,7 @@ candidate_decisions:
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
       - "Capability claims VERIFIED against official DuckLake docs (ducklake.select) pre-ratification: multi-table single-snapshot ACID txn (CONFIRMED), MERGE INTO (CONFIRMED), no engine PK/FK so ULID is a logical key enforced by MERGE+DQ (CONFIRMED), OCC + app-retry (CONFIRMED), inlining row-limit=0 + flush (CONFIRMED), expire/cleanup/delete_orphaned + merge_adjacent_files names+semantics (CONFIRMED), ALTER SET PARTITIONED BY post-ALTER-only + day()/bucket(N,col) + pruning (CONFIRMED). GC deletion safety is a SOFT time-based deferral, not a hard lock -- older_than grace MUST exceed max reader/writer duration; cleanup_all=>true forbidden with pinned readers. Pin a DuckLake version; smoke-test upstream issues #233/#376 (concurrency) and #921 (inlining) at T2.17."
-      - "[Amendment -- CD.34 (pending)]: CD.34 proposes migrating the catalog backend to Neon serverless Postgres. CD.33 was ratified by Decision 81 (dec-1089) WITH the RDS backend, so its body above is UNCHANGED while CD.34 is pending; the following enact only when CD.34 ratifies (Decision 82): clause (3) 'RDS catalog txn' -> 'catalog txn (Neon Postgres)'; clause (5) telemetry-inlining carve-out removed (inlining disabled for ALL tables incl. telemetry; high-write-rate tables get a higher-frequency merge, T2.18 co-tunes the GC breaker); enforcement_mechanism O-2 DR -> daily pg_dump-to-S3 (30d retention, >25h freshness alarm), O-5 pooling -> Neon built-in pooler / direct endpoint (no RDS Proxy). Tracked meanwhile in the T2.16b-T2.19 exit criteria. The runtime architecture (split/OCC/projection/SCD2 keys/GC+merge cadences) is unaffected. See docs/REPORT-ducklake-catalog-neon-migration.md."
+      - "[Amendment -- CD.34 (pending)]: CD.34 proposes migrating the catalog backend to Neon serverless Postgres. CD.33 was ratified by Decision 81 (dec-1089) WITH the RDS backend, so its body above is UNCHANGED while CD.34 is pending; the following enact only when CD.34 ratifies (Decision 82): clause (3) 'RDS catalog txn' -> 'catalog txn (Neon Postgres)'; clause (5) telemetry-inlining carve-out removed (inlining disabled for ALL tables incl. telemetry; high-write-rate tables get a higher-frequency merge, T2.18 co-tunes the GC breaker); enforcement_mechanism O-2 DR -> daily pg_dump-to-S3 (30d retention, >25h freshness alarm), O-5 pooling -> Neon built-in pooler / direct endpoint (no RDS Proxy). Tracked meanwhile in the T2.16b-T2.19 exit criteria. The runtime architecture (split/OCC/projection/SCD2 keys/GC+merge cadences) is unaffected. See docs/REPORT-ducklake-catalog-neon-migration.md. (Ratification vehicle note, 2026-06-09 audit F-033: the parenthetical 'Decision 82' reservations for CD.34 collided with the actual Decision 82 -- the EC8 churn-gate frame correction; CD.34 ratifies via a FUTURE numbered Decision, number not pre-reserved.)"
     enforcement_mechanism: "ducklake_writer schema gate + closed reader/writer boundary; ULID logical key + MERGE-on-ULID insert-if-not-matched append idempotency (no engine PK); current write-through projection enforces current-version uniqueness; guarded destructive-GC circuit breaker (expire 30d/7d, grace >=7d, breaker >20%/>10GB, weekly, no cleanup_all); PlatformAdmin break-glass (catalog+S3 read) + daily catalog PITR-to-S3; partition-prune smoke test in T2.17/T2.19 exit criteria; per-Lambda CD.24 manifests."
 
   - id: CD.34
@@ -1393,9 +1463,10 @@ candidate_decisions:
       after the CD.21 EC2-runner retirement; Neon free tier is $0 (realized saving ~$12-15/mo). Sequenced
       BEFORE T2.17 so the Lambda runtime is built against Neon (no VPC attach for catalog reachability; Neon's
       built-in pooler) rather than RDS-in-a-VPC. Nothing consumes the catalog yet (live ops are Iceberg/Athena
-      until T2.19), so present blast radius is zero. Ratified later via the log-decision path (provisionally
-      Decision 82, sequenced after Decision 81 which ratified CD.33 as dec-1089); this CD does NOT edit
-      DECISIONS.md while pending.
+      until T2.19), so present blast radius is zero. Ratified later via the log-decision path (a FUTURE
+      numbered Decision -- the number is not pre-reserved; the prior 'provisionally Decision 82' reservation
+      collided with the actual Decision 82, the EC8 churn-gate frame correction -- audit F-033); this CD
+      does NOT edit DECISIONS.md while pending.
       Consequential mechanics (folded into the gated tier items + CD.33):
       (1) Inlining DISABLED for ALL tables including telemetry (ducklake_default_data_inlining_row_limit=0),
           overriding the telemetry-inlining carve-out in CD.33 clause (5) and OQ.11 -- on Neon's ~6h free-tier
@@ -1411,19 +1482,19 @@ candidate_decisions:
           Manager) + S3, not an RDS/IAM grant.
       Authored by docs/REPORT-ducklake-catalog-neon-migration.md (architect + ops-risk zero-context review,
       converged PROCEED over three rounds).
-    gates: [T2.16b, T2.17, T2.18, T2.19]
+    gates: [T2.16b, T2.17, T2.18, T2.19, T2.26]    # T2.26 added 2026-06-09 (audit F-018): the deferred-table migrations inherit CD.34's inlining/DR/pooling mechanics
     state: pending
     filed_via: pending_log_decision_lambda
     supersedes_decisions: []
     discipline_points:
       - "Narrowly amends the CD.31 catalog-backend paragraph / Decision 78 item (RDS PostgreSQL -> Neon serverless Postgres); preserves DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the metadata-store framing, and the closed boundary. CD.31/Decision 78 are paragraph-structured, not clause-numbered. Stays inside the NS.3 'small managed cloud state-store' framing that justified the catalog originally."
-      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (provisionally Decision 82, after Decision 81 ratified CD.33 as dec-1089), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81. Because CD.33 is now RATIFIED, CD.34's CD.33-level changes are staged as an additive [Amendment -- CD.34] annotation on CD.33 (the CD.31 pattern), NOT a rewrite of CD.33's ratified body; they enact when CD.34 ratifies."
+      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (a future numbered Decision -- NOT 'Decision 82', which now names the EC8 churn-gate frame correction; audit F-033), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81. Because CD.33 is now RATIFIED, CD.34's CD.33-level changes are staged as an additive [Amendment -- CD.34] annotation on CD.33 (the CD.31 pattern), NOT a rewrite of CD.33's ratified body; they enact when CD.34 ratifies."
       - "Inlining DISABLED for ALL tables including telemetry (inlined_rows=0), overriding the telemetry carve-out in CD.33 clause (5) + OQ.11 -- a durability decision on Neon's ~6h free-tier PITR, NOT an architecture change. High-write-rate tables get a higher-frequency merge; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate."
       - "Supersedes OQ.8's RDS-Proxy/IAM-auth-preferred resolution: RDS Proxy (never provisioned; deferrable per OQ.8) -> Neon built-in pooler (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget); credential = Secrets Manager DSN (IAM DB auth is N/A against a non-AWS endpoint). Realized saving ~$12-15/mo; the +$10-12 RDS-Proxy figure was conditional, not bankable."
       - "Catalog is the lakehouse SPOF; on Neon free tier (~6h PITR) DR = a daily pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, >25h freshness alarm) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR -- rec-2063 WONTFIX while the catalog is provably unused), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
       - "Provisioned via the Terraform Neon provider in terraform/personal/, auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (policy-as-code parity for the new provider; NOT carved out). The guard blocks any neon_* update/replace/delete (the mutation surface -- allow-list widening, credential rotation, project deletion) and allows a neon_* create on the strength of compensating controls -- enforced TLS (sslmode=require) + a scoped non-owner neon_role + the DSN in Secrets Manager -- NOT an IP allow-list (Neon IP-Allow is Scale-plan-only, unavailable on the free tier, and egress here is dynamic; REPORT R3). Keeps declarative state/audit for the lakehouse's single most critical stateful dependency rather than console-only. The out-of-band ducklake_ops schema DDL is captured as a versioned in-repo migration for reproducibility."
       - "The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED; only the catalog backend + its consequential recovery/pooling mechanics change."
-    enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via Decision 82."
+    enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via a future numbered Decision (log-decision path; number not pre-reserved -- audit F-033)."
 
   - id: CD.35
     title: Agent-native Terraform CI/CD -- speculative plan, server-side convergence, gated-CD-apply via GitHub Environments, privilege-tiered bootstrap
@@ -1527,7 +1598,7 @@ tier_items:
       - docs/INTENT-autonomous-improvement-control-plane.md
       - docs/INTENT-ci-cd-architecture.md
     exit_criteria:
-      - "grep -rn 'docs/ROADMAP\\.md' --exclude-dir=.git --exclude-dir=docs/plans/briefings --exclude=SESSION_LOG_ARCHIVE.md --exclude-dir=docs/plans returns zero hits (historical PLAN-*.md files retain original references — they are committed history)"
+      - "grep -rn 'docs/ROADMAP\\.md' --exclude-dir=.git --exclude-dir=docs/plans/briefings --exclude=SESSION_LOG_ARCHIVE.md --exclude-dir=docs/plans --exclude-dir=logs --exclude=ROADMAP-PLATFORM.yaml returns zero hits (historical PLAN-*.md files and append-only logs retain original references -- committed history; this item's own name/intent self-references excluded. 2026-06-09 audit F-032: criterion amended to exclude logs/ + self-references which the original pattern caught; note docs/PROJECT_CONTEXT.md:17 carries a bare 'ROADMAP.md' narrative reference the pattern never covered -- swept opportunistically, not a reopen)"
       - "scripts/session_preflight.py preflight report shows roadmap_phase resolvable (not 'unknown')"
       - "Plan-critique skill loads its context files without 'file not found' warnings"
       - "scheduled_agent_handler.py Lambda packaging copies the renamed file successfully; deployed Lambda finds context at runtime"
@@ -1603,7 +1674,7 @@ tier_items:
     files_in_scope:
       - scripts/session_preflight.py
     exit_criteria:
-      - "logs/.preflight-report.json contains platform_roadmap key with next_eligible[], in_progress[], blocked[], strategic_pending[], active_tier"
+      - "logs/.preflight-report.json contains platform_roadmap key with next_eligible[] + strategic_pending[] (the deliberately slim projection per session_preflight._slim_roadmap_state; in_progress/blocked/active_tier are computed by compute_state_dict and recoverable on demand -- criterion amended 2026-06-09, audit F-010, to match the shipped slimming; full-state surfacing + blocked-on-CD lands in T-1.20)"
       - "Stale-cache detection: if YAML mtime newer than ops_decisions latest decision, surface 'roadmap edits awaiting ratification' note"
       - "Tier-name shortcuts in depends_on resolved per agent_instructions semantics"
     related_candidate_decisions: [CD.13]
@@ -1756,7 +1827,17 @@ tier_items:
     related_candidate_decisions: []
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-09"
+    note: |
+      Status reconciled by the 2026-06-09 roadmap audit (F-013, silent completion): all three
+      exit criteria are satisfied by the committed docs/INTENT-session-log-architecture.md
+      (Sections 3-5 audit both surfaces; Section 12 proposes CD.NN.a/b; Section 13 names the
+      follow-on plans + the agent-platform-log-turn Lambda) plus docs/plans/PLAN-session-log-audit.md.
+      The deliverable landed before this date (exact landing date unavailable in the squashed
+      clone); completed_at records the reconciliation. Downstream T2.15 already cites the INTENT.
+      The proposed CDs (CD.NN.a/b) remain UNRATIFIED -- ratification is follow-on work via the
+      portal vehicle, not part of this REPORT-ONLY item.
   - id: T-1.10
     tier: T-1
     name: In-implement tier_item bookkeeping rule
@@ -1854,10 +1935,10 @@ tier_items:
       split_by: subsystem
       atomic_plans:
         - "PLAN-cd25-platform-gap-sequencing -- roadmap edits + scripts/platform_roadmap.py schema amendment (subset a + b + GAP-t-1-12 absorption)"
-        - "PLAN-contracts-schema-and-loader -- scripts/contracts.py Pydantic schema + $ref resolver + tests (subset c)"
-        - "PLAN-contracts-ci-drift-gate -- scripts/validate.py CI drift gate covering CD.25 enforcement clause (subset d)"
-        - "PLAN-contracts-preflight-hook -- scripts/session_preflight.py v0-provisional re-ratification trigger hook (subset e)"
-        - "PLAN-implement-skill-decomposition-hints -- .claude/skills/implement/SKILL.md amendment for decomposition_hints inheritance (subset f)"
+        - "PLAN-contracts-schema-and-loader -- scripts/contracts.py Pydantic schema + $ref resolver + tests (subset d)"
+        - "PLAN-contracts-ci-drift-gate -- scripts/validate.py CI drift gate covering CD.25 enforcement clause (subset e)"
+        - "PLAN-contracts-preflight-hook -- scripts/session_preflight.py v0-provisional re-ratification trigger hook (subset f)"
+        - "PLAN-implement-skill-decomposition-hints -- .claude/skills/implement/SKILL.md amendment for decomposition_hints inheritance (subset g)"
       rationale: |
         Sub-plan (a)+(b) lands schemas + roadmap data; subsets (c)/(d)/(e)/(f) land
         the loaders/gates that consume them. Split is required because the combined
@@ -1911,6 +1992,7 @@ tier_items:
     exit_criteria:
       - "instruction-architecture.yaml exists at contract_version: 1, status: ratified"
       - "prompt_compliance.py reads the YAML; old .md deleted; CI green"
+      - "Layer table reflects the LIVE consumer set (Claude Code reading CLAUDE.md/AGENTS.md + docs/PROJECT_CONTEXT.md per Decision 76) -- the .md's Layer 1/2 still name GEMINI.md / copilot-instructions.md (2026-06-09 audit F-038); the conversion must not carry that drift forward"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25]
     effort: S
@@ -1925,20 +2007,24 @@ tier_items:
       REPORT-ONLY + small IMPLEMENTATION. Convert docs/contracts/inference-provider.md
       (244 lines) to inference-provider.yaml. Provider routing rules, model IDs,
       fallback semantics, escalation rules become structured. model_registry.py
-      reads the YAML; config/copilot_model_routing.yaml either projects from it or
-      is replaced. Effort M per INTENT round-3 H4: the substance is large and
-      requires reconciling against the existing copilot_model_routing.yaml +
-      model_registry.py code paths.
-    depends_on: [T-1.12]
+      reads the YAML; config/agent/copilot/model_routing.yaml (path corrected
+      2026-06-09, audit F-015 -- was config/copilot_model_routing.yaml) either
+      projects from it or is replaced. Effort M per INTENT round-3 H4: the
+      substance is large and requires reconciling against the existing
+      model_routing.yaml + model_registry.py code paths. Depends on T1.15 so the
+      conversion consumes CD.28-ALIGNED contract content (Tier 1 DeepSeek-direct
+      via LiteLLM), not the pre-pivot Bedrock tier model (per CD.28's
+      "Coordinate with T-1.14" note).
+    depends_on: [T-1.12, T1.15]    # T1.15 added 2026-06-09 (audit F-021): refresh inference-provider.md to the CD.28 tier model BEFORE converting it to YAML
     files_in_scope:
       - docs/contracts/inference-provider.yaml
       - docs/contracts/inference-provider.md
       - scripts/model_registry.py
-      - config/copilot_model_routing.yaml
+      - config/agent/copilot/model_routing.yaml
     exit_criteria:
       - "inference-provider.yaml exists at contract_version: 1, status: ratified"
       - "model_registry.py reads the YAML; CI green; .md deleted"
-      - "copilot_model_routing.yaml either projects from inference-provider.yaml OR is deleted in favour of it; relationship documented in the new YAML's projects_to"
+      - "config/agent/copilot/model_routing.yaml either projects from inference-provider.yaml OR is deleted in favour of it; relationship documented in the new YAML's projects_to"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25]
     effort: M
@@ -2068,6 +2154,114 @@ tier_items:
     bootstrap_completion_exempt: true
     status: not_started
 
+  - id: T-1.20
+    tier: T-1
+    name: Preflight roadmap-state contract reconciliation (blocked-on-CD + gate evaluation + full-state surfacing)
+    intent: |
+      Close the documented-vs-implemented gap the 2026-06-09 audit found (F-010): the
+      agent_instructions promised blocked-on-CD surfacing and binding cross-tier gates,
+      but PlatformRoadmapState never reads candidate_decisions, no consumer evaluates
+      cross_tier_gates[].rule (the validator checks grammar only -- G.8's
+      latest_run.verdict aggregation was never built), and session_preflight's slim
+      projection drops in_progress/blocked/active_tier plus the user_action_required
+      flag. Implement: (a) blocked-on-CD computation in compute_state_dict (an item
+      eligible-by-deps whose related/gating CD or decision_required_before references
+      a pending CD is surfaced with the blocking CD id); (b) gate-rule evaluation for
+      the static helpers (tier_complete, all_in_tier_with_status, grace_period_elapsed;
+      item_field_eq remains runtime-deferred until a verifier-output source exists --
+      document that explicitly); (c) restore in_progress/blocked/active_tier to the
+      preflight report OR ratify the slim projection by amending the agent_instructions
+      consumer contract (decide at plan time; either way text and code must agree);
+      (d) surface user_action_required on eligible items. Until this lands, the
+      planning skill's Tier Item Freshness Gate (T-1.21) performs the manual
+      equivalent.
+    depends_on: []
+    files_in_scope:
+      - scripts/platform_roadmap.py
+      - scripts/session_preflight.py
+      - docs/ROADMAP-PLATFORM.yaml    # agent_instructions consumer-contract text kept in lockstep
+      - tests/test_platform_roadmap.py
+    exit_criteria:
+      - "compute_state_dict output includes blocked_on_cd[] (item id + blocking CD ids) for items eligible-by-deps with pending gating CDs"
+      - "Cross-tier gate rules with static helpers evaluate at preflight; gate verdicts surfaced in the report; item_field_eq documented as runtime-deferred"
+      - "Preflight report keys and the agent_instructions consumer-contract text agree (no promised-but-unimplemented key in either direction)"
+      - "next_eligible entries carry user_action_required when the item sets it"
+      - "Unit tests cover blocked-on-CD computation and gate evaluation"
+    related_candidate_decisions: [CD.13]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T-1.21
+    tier: T-1
+    name: Planning-skill Tier Item Freshness Gate (dead-end closeout at plan time)
+    intent: |
+      The 2026-06-09 audit found the forward book drifts faster than statuses: items
+      sat not_started after their deliverables landed (T-1.9, F-013), prescribed
+      retired substrates (T3.2/T4.3, F-016), contradicted ratified packaging/topology
+      decisions (T0.7x/T1.1, F-008), or overlapped sibling scope (T1.4, F-017) --
+      and computed eligibility alone surfaced none of it. Add a gate to
+      .claude/skills/planning/SKILL.md that fires once intent resolves to tier_items:
+      (1) silent-completion check (re-adjudicate exit_criteria; propose closeout
+      instead of planning done work); (2) stale-reference check (files_in_scope
+      existence; retired-substrate scan against ratified decisions; plan must
+      re-ground stale text, never implement it); (3) supersession/redundancy check
+      (propose reserved-with-note closeout when a sibling absorbed the scope);
+      (4) gating-decision check (manual blocked-on-CD stand-in until T-1.20).
+      Companion sweep: the planning/plan-critique skills and plan.md command read
+      the superseded docs/ROADMAP-PRODUCT.md as required context -- rerouted to
+      docs/ROADMAP-PRODUCT.yaml (same drift class, F-029).
+    depends_on: [T-1.2]
+    files_in_scope:
+      - .claude/skills/planning/SKILL.md
+      - .claude/skills/plan-critique/SKILL.md    # required-context reroute to ROADMAP-PRODUCT.yaml
+      - .claude/commands/plan.md                 # required-context reroute to ROADMAP-PRODUCT.yaml
+      - .claude/agents/scheduled/rec-curator.md  # same drift class, swept on zero-context review (2026-06-09)
+      - .claude/skills/code-review/SKILL.md      # same drift class, swept on zero-context review (2026-06-09)
+    exit_criteria:
+      - "Planning skill contains a Tier Item Freshness Gate section firing after intent resolves to tier_items, with the four checks (silent-completion, stale-reference, supersession, gating-decision + cross-tier-gate) and the staged-closeout output discipline; firing point and per-touched-item scope stated explicitly; the skill's top-line no-modification rule carries the roadmap-bookkeeping exception"
+      - "Gate prescribes closeout proposals (status flip / reserved-with-note) over planning dead work, with human confirmation preserved"
+      - "plan-critique skill required-context, plan.md prompt text, rec-curator agent, and code-review skill reference docs/ROADMAP-PRODUCT.yaml (not the superseded .md); rg 'ROADMAP-PRODUCT\\.md' .claude/ returns zero consumer references (the legacy deep-frozen .agents/ and .github/prompts/ mirrors are exempt)"
+      - "Planning skill PLAN template Phase line references docs/ROADMAP-PRODUCT.yaml / platform tier ids (not bare ROADMAP.md)"
+    related_candidate_decisions: [CD.13, CD.17]
+    effort: S
+    strategic: false
+    status: complete
+    completed_at: "2026-06-09"
+    note: "Realized in the 2026-06-09 audit-integration session (same commit as the roadmap reconciliation); zero-context coherence reviews ran per the integration protocol."
+
+  - id: T-1.22
+    tier: T-1
+    name: Implement-skill replacement-closure check + exit-criteria truth maintenance
+    intent: |
+      The audit's highest-weight dimension (D11) showed replacements were being counted
+      done while the old path lived on: the recs cutover left an unconditional Athena
+      fallback in sync_ops (F-003), partial cutovers deferred work with no owning item
+      (F-018), and five complete items carried criteria that no longer adjudicate true
+      because the intent was realized via a different mechanism (F-006/F-014). Extend
+      the implement skill's tier_item bookkeeping (T-1.10) with: (1) a Replacement
+      closure check for any cutover/migration/retirement-shaped item -- name the
+      replaced surface, prove the old path dead or designed-rollback-only, require a
+      named owner for any survivor, and close out superseded predecessor items in the
+      same staged edit; (2) an exit-criteria truth-maintenance rule -- when intent is
+      realized differently than written, rewrite the criteria to the realized mechanism
+      in the same staged edit instead of flipping complete over stale criteria or
+      burying the truth in a note. Companion fix: the commit-flow robustness note
+      claimed branch protection was deferred; it is live (Decision 83).
+    depends_on: [T-1.10]
+    files_in_scope:
+      - .claude/skills/implement/SKILL.md
+    exit_criteria:
+      - "Implement skill bookkeeping section contains a Replacement closure check (name old surface; prove dead/designed-rollback-only; named owner for survivors; predecessor closeout) gating complete on cutover-shaped items"
+      - "Implement skill contains the exit-criteria truth-maintenance rule (rewrite criteria to the realized mechanism in the same staged edit; applies to earlier sessions' items too)"
+      - "Commit-flow robustness note reflects live branch protection (Decision 83), not the deferred-CD.20 premise"
+    related_candidate_decisions: [CD.13]
+    effort: S
+    strategic: false
+    status: complete
+    completed_at: "2026-06-09"
+    note: "Realized in the 2026-06-09 audit-integration session (same commit as the roadmap reconciliation); zero-context coherence reviews ran per the integration protocol."
+
   # ----- T0: Bootstrap (surface + account + minimum tooling) -----
   - id: T0.1
     tier: T0
@@ -2096,40 +2290,54 @@ tier_items:
     intent: One-time per-env install of Python 3.12, terraform, aws CLI v2, gh CLI, system build deps. Persistent pip wheel cache. Static config injection.
     depends_on: []
     files_in_scope:
-      - env/setup.sh    # new
-      - env/persistent-volumes.yaml    # new
+      - bin/setup-cloud-env.sh    # realized mechanism (originally proposed: env/setup.sh + env/persistent-volumes.yaml, never created)
     exit_criteria:
-      - "Fresh CC-on-web container starts with Python 3.12 + terraform + aws v2 + gh installed and on PATH"
-      - "pip install -r requirements.txt completes in <60s from warm wheel cache"
-      - "S3_LOG_BUCKET, AWS_PROFILE pre-set; ~/.aws/config block injected"
+      - "bin/setup-cloud-env.sh exists and provisions a fresh CC-on-web container (Python via bin/venv-python resolution, AWS static-key config, S3_LOG_BUCKET/AWS_PROFILE env) -- criteria rewritten 2026-06-09 (audit F-014) to the realized mechanism"
+      - "Session-start hooks complete green in a fresh container (the operational proof; this audit session's own SessionStart output is an instance)"
     related_candidate_decisions: [CD.2]
     effort: S
     strategic: false
     status: complete
     completed_at: "2026-05-30"
     bootstrap_completion_exempt: true
-    note: "Realized via bin/setup-cloud-env.sh static-key env setup (PRs #4/#6, 2026-05-29/30; cite Decision 76). CC-web dev surface confirmed operational."
+    note: |
+      Realized via bin/setup-cloud-env.sh static-key env setup (PRs #4/#6, 2026-05-29/30; cite
+      Decision 76). CC-web dev surface confirmed operational. Original (unrealized) criteria for
+      the record: env/setup.sh + env/persistent-volumes.yaml with terraform/aws/gh on PATH and a
+      <60s warm-cache pip install -- superseded by the harness-managed container + setup script
+      (gh CLI is unavailable on web by design, Decision 76). bootstrap_completion_exempt under
+      scope (c): gating CD.2 ratifies post-hoc via the portal vehicle.
   - id: T0.3
     tier: T0
     name: Provision personal AWS account with Pattern B agent-auth (two-role IAM + chained AssumeRole)
     intent: Create the personal AWS account and bootstrap Pattern B agent-auth -- static-key + chained AssumeRole -- with two IAM roles (PlatformDev for daily ops, PlatformAdmin for admin/import-mode). Supersedes Identity Center prep per CD.26.
     depends_on: []
     files_in_scope:
-      - scripts/verify_platform_account.py    # verifier updated for Pattern B checks
+      - terraform/personal/platform_roles.tf    # realized substrate (the originally-cited scripts/verify_platform_account.py verifier is ABSENT at HEAD -- see note)
+      - .claude/hooks/session_start_aws.sh      # daily operational proof of the assume-role chain
     exit_criteria:
-      - "Personal AWS account exists with verifiable account-id REDACTED-PERSONAL-ACCOUNT; verifier check account_id passes"
-      - "IAM user agent-service-account exists with sole inline policy AssumeRoleOnly (sts:AssumeRole on PlatformDev + PlatformAdmin ARNs only, no managed policies); verifier checks agent_service_account_user and agent_service_account_policy pass"
-      - "IAM roles PlatformDev (MaxSessionDuration=3600) and PlatformAdmin (MaxSessionDuration=3600; effective session capped via duration_seconds in ~/.aws/config) exist with ExternalId-conditioned trust policies; PlatformDev DailyOps policy includes bedrock:InvokeModel [vestigial post-CD.28 -- Bedrock is no longer in the LLM substrate per CD.28; retained to avoid re-Terraform churn; safe because no Bedrock access is granted at the account level after CD.28], lambda:InvokeFunctionUrl, dynamodb:*Item, s3:GetObject/PutObject, athena:StartQueryExecution/GetQueryResults; PlatformAdmin AdminOps policy includes iam:* + admin Lambda management; all verifier role/trust/policy checks pass"
-      - "Chained AssumeRole works: aws sts get-caller-identity --profile agent_platform returns PlatformDev assumed-role ARN; --profile agent_platform_admin returns PlatformAdmin ARN; verifier checks assume_role_chain_dev, assume_role_chain_admin, bedrock_via_chain [vestigial post-CD.28 -- retained as historical IAM-permission verification; not required to pass under the new tier model since CD.28 retired Bedrock; will be removed by the follow-on PLAN-retire-bedrock-code-paths sweep listed in CD.28 discipline_points], admin_action_via_chain all pass"
-      - "Account-id recorded as ops_decisions entry once log-decision Lambda exists (T0.7b); staged in docs/platform/agent-platform-bootstrap-record.yaml pending T0.7b"
+      - "Personal AWS account exists; terraform/personal/platform_roles.tf provisions IAM user agent-service-account (sole inline policy AssumeRoleOnly: sts:AssumeRole on PlatformDev + PlatformAdmin ARNs only) and roles PlatformDev/PlatformAdmin with ExternalId-conditioned trust policies (criteria rewritten 2026-06-09, audit F-006, from verifier-check form to terraform-substrate form -- see note)"
+      - "Chained AssumeRole works: aws sts get-caller-identity --profile agent_platform returns the PlatformDev assumed-role ARN (proven at every session start by .claude/hooks/session_start_aws.sh); --profile agent_platform_admin returns PlatformAdmin"
+      - "Account-id recorded as ops_decisions entry once log-decision Lambda exists (T0.7b); staged in docs/platform/agent-platform-bootstrap-record.yaml pending T0.7b [still-open tail; user_action_required]"
     related_candidate_decisions: [CD.6, CD.10, CD.26]
     effort: S
     strategic: false
     status: complete
     completed_at: "2026-05-29"
     bootstrap_completion_exempt: true
-    note: "Realized via terraform/personal/platform_roles.tf Pattern B IAM roles (PR #4; cite CD.26). Exit criterion 5 (ops_decisions entry via log-decision Lambda) deferred to T0.7b per Decision 67 Lambda-deploy freeze; human-action exit criterion still outstanding."
-    progress_note: "2026-05-24: agent/t03-pattern-b-agent-auth -- exit criteria 1-4 satisfied (account_id, agent-service-account+AssumeRoleOnly, PlatformDev/PlatformAdmin roles with ExternalId trust, chained AssumeRole working); verifier reports t03_status:complete with 14/14 checks pass; agent-platform retired; exit criterion 5 (ops_decisions entry) deferred to T0.7b per Decision 67 Lambda-deploy freeze"
+    note: |
+      Realized via terraform/personal/platform_roles.tf Pattern B IAM roles (PR #4; cite CD.26).
+      2026-06-09 audit reconciliation (F-006): the original criteria asserted ~14 checks of
+      scripts/verify_platform_account.py, which is ABSENT at HEAD (deletion provenance not
+      recoverable from the squashed clone) -- those criteria were unreproducible, so they were
+      rewritten to the terraform-substrate + session-start-chain form above; the historical
+      "verifier 14/14 pass" attestation is preserved in progress_note. The vestigial Bedrock
+      grants the old criteria documented (bedrock:InvokeModel, bedrock_via_chain) are swept by
+      T1.15 (CD.28 retirement sweeps) -- T1.15 also updates the stale verifier reference in
+      CD.28's plan inventory. Exit criterion 3 (ops_decisions entry) remains open pending T0.7b;
+      human-action criterion still outstanding. bootstrap_completion_exempt under scope (c):
+      gating CD.26 ratifies post-hoc via the portal vehicle.
+    progress_note: "2026-05-24: agent/t03-pattern-b-agent-auth -- account_id, agent-service-account+AssumeRoleOnly, PlatformDev/PlatformAdmin roles with ExternalId trust, chained AssumeRole all verified; the then-extant verifier reported t03_status:complete with 14/14 checks pass; ops_decisions entry deferred to T0.7b"
     user_action_required: true
   - id: T0.4
     tier: T0
@@ -2171,36 +2379,55 @@ tier_items:
     intent: On container session start, run device-code SSO login if no fresh token cache, then preflight. URL + 8-char code surfaced to user via chat.
     depends_on: [T0.1, T0.2, T0.3]
     files_in_scope:
-      - .claude/hooks/session_start.py    # new
+      - .claude/hooks/session_start_aws.sh    # realized mechanism (originally proposed: session_start.py device-code SSO; SSO abandoned per CD.26)
       - .claude/settings.json
       - CLAUDE.md    # "Memory policy", "Branching", hook-related sections updated to reference the new hook surface
     exit_criteria:
-      - "Fresh container session prompts device-code SSO flow surfaced as chat message"
-      - "After user authorises, boto3 calls succeed with agent_platform profile"
-      - "Cached SSO token reused across sessions within TTL"
-      - "CLAUDE.md hook section enumerates session_start.py alongside never_on_main.py and scheduled_agent_log_only.py"
-    related_candidate_decisions: [CD.2]
+      - ".claude/hooks/session_start_aws.sh verifies the static-key assume-role chain at every session start and reports the assumed PlatformDev ARN (criteria rewritten 2026-06-09, audit F-014, from the abandoned device-code-SSO form to the realized CD.26 static-key form -- originals preserved in note)"
+      - "boto3/aws CLI calls succeed with the agent_platform profile in a fresh container (chain auto-refreshes; no interactive login exists in the static-key model)"
+      - "AGENTS.md hook/credential guidance enumerates session_start_aws.sh alongside never_on_main.py"
+    related_candidate_decisions: [CD.2, CD.26]
     effort: S
     strategic: false
     status: complete
     completed_at: "2026-05-29"
     bootstrap_completion_exempt: true
-    note: "Intent met via .claude/hooks/session_start_aws.sh static-key chain verification (PR #4; cite CD.26). Original device-code SSO mechanism not built; SSO abandoned for personal account per CD.26. Static-key chain verification at session start satisfies the auth-bootstrap intent."
+    note: |
+      Intent met via .claude/hooks/session_start_aws.sh static-key chain verification (PR #4;
+      cite CD.26). Original (unrealized) criteria for the record: device-code SSO flow surfaced
+      in chat, cached SSO token reuse, and a session_start.py hook -- all superseded when SSO was
+      abandoned for the personal account (CD.26). Newer session-start hooks
+      (session_start_ensure_github_mcp.sh, session_start_precommit.sh, wired in
+      .claude/settings.json) extend this surface and are covered here for roadmap-representation
+      purposes (audit F-037). bootstrap_completion_exempt under scope (c): gating CD.2 ratifies
+      post-hoc via the portal vehicle.
   - id: T0.6
     tier: T0
     name: Lambda-tooling-platform Terraform skeleton in personal account
-    intent: Per-Lambda module pattern. Function URLs with auth_type=AWS_IAM. IAM role for PlatformDev permission set to invoke. CloudWatch log groups with retention.
+    intent: |
+      Per-Lambda module pattern. Function URLs with auth_type=AWS_IAM. IAM role for PlatformDev
+      to invoke. CloudWatch log groups with retention.
+      [Re-grounded 2026-06-09 per the roadmap audit (F-008): authored pre-CD.33/T2.17. The
+      personal account ALREADY runs Function-URL+AWS_IAM Lambdas -- ducklake_writer/reader/
+      maintenance/catalog_dr via terraform/personal/ducklake_lambdas.tf etc. -- so this item
+      EXTENDS that established pattern in terraform/personal/, it does not invent one in the
+      retired work-root (the old terraform/lambda_tooling_iam.tf in the work root is NOT the
+      target; T1.15 sweeps its stale bedrock grants). The agent-facing verb surface it
+      provisions is log-rec, log-decision, query, update-rec, list-tools; the maintenance slot
+      is ALREADY SERVED by ducklake_maintenance (T2.18) -- do not provision a duplicate. Verb
+      Lambdas front the closed ducklake_writer/reader boundary for cut-over tables (CD.33 /
+      Decision 81 cl.7; shape resolved at plan time per OQ.15).]
     depends_on: [T0.3]
     files_in_scope:
-      - terraform/lambda_tooling_platform.tf    # new
-      - terraform/lambda_tooling_iam.tf    # new; IAM role names PlatformDev/PlatformAdmin created in T0.3 Pattern B plan (CD.26) are consumed here
-      - terraform/lambda_tooling_outputs.tf    # new
+      - terraform/personal/lambda_tooling_platform.tf    # new -- extends the ducklake_lambdas.tf Function-URL+AWS_IAM pattern
+      - terraform/personal/lambda_tooling_iam.tf    # new; consumes PlatformDev/PlatformAdmin from T0.3 Pattern B (CD.26). NOT the retired work-root file of the same name
+      - terraform/personal/lambda_tooling_outputs.tf    # new
     exit_criteria:
-      - "terraform apply succeeds against personal account with module shape for log-rec, log-decision, query, update-rec, list-tools, maintenance (Lambdas can be stubs in T0.6 — full handlers in T0.7+ and T1)"
-      - "Each Lambda has a Function URL with AWS_IAM auth"
-      - "PlatformDev IAM role policy (DailyOps) allows lambda:InvokeFunctionUrl on the six Lambdas"
-      - "PlatformAdmin IAM role policy (AdminOps) additionally allows admin-scoped paths (import_mode=true on log-rec/log-decision per CD.10). Lambda handlers check the assumed-role ARN against the PlatformAdmin role ARN (arn:aws:iam::REDACTED-PERSONAL-ACCOUNT:role/PlatformAdmin) for admin-only branches"
-    related_candidate_decisions: [CD.10]
+      - "terraform apply succeeds against the personal account with module shape for log-rec, log-decision, query, update-rec, list-tools (Lambdas can be stubs in T0.6 -- full handlers in T0.7+ and T1; maintenance is served by ducklake_maintenance per T2.18, no duplicate)"
+      - "Each Lambda has a Function URL with AWS_IAM auth (same closed-boundary posture as ducklake_lambdas.tf)"
+      - "PlatformDev IAM role policy (DailyOps) allows lambda:InvokeFunctionUrl on the verb Lambdas"
+      - "PlatformAdmin IAM role policy (AdminOps) additionally allows admin-scoped paths (import_mode=true on log-rec/log-decision per CD.10). Lambda handlers check the assumed-role ARN against the PlatformAdmin role ARN for admin-only branches"
+    related_candidate_decisions: [CD.10, CD.33]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
@@ -2209,16 +2436,19 @@ tier_items:
     tier: T0
     name: log-rec Lambda (handler)
     intent: |
-      Pydantic RecPayload validation; pre-commit invariant checks against _current (read via internal
-      DuckDB-on-Iceberg or temporary Athena); idempotent Iceberg append; typed 4xx on failure. Per
-      round-2 architect MED-7, the payload contract MUST include an optional import_mode field; when
-      true the caller-supplied id and timestamps are preserved (used by T2.2 import). Default normal
-      operation rejects import_mode payloads without an admin-scoped principal.
+      Pydantic RecPayload validation; pre-commit invariant checks against current state read via
+      ducklake_reader; the write transits the closed ducklake_writer boundary (Decision 81 cl.7 --
+      ops_recommendations lives on DuckLake since the T2.19 recs cutover; the verb Lambda extends
+      the writer's verb set or calls through it per OQ.15, NEVER a direct Iceberg/Athena write);
+      typed 4xx on failure. [Re-grounded 2026-06-09, audit F-008: the original text prescribed
+      "idempotent Iceberg append" + Athena _current reads, authored pre-CD.31/CD.33/T2.19.]
+      Per round-2 architect MED-7, the payload contract MUST include an optional import_mode field;
+      when true the caller-supplied id and timestamps are preserved (used by T2.2 import). Default
+      normal operation rejects import_mode payloads without an admin-scoped principal.
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
       - src/lambdas/log_rec/handler.py    # new
-      - src/lambdas/log_rec/Dockerfile    # new
-      - src/lambdas/log_rec/requirements.txt    # new
+      - src/lambdas/log_rec/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008 -- no Docker in this architecture)
     exit_criteria:
       - "POST {function-url} with valid RecPayload → 200 + {rec_id}"
       - "Invalid payload → 400 with typed error code (per discipline point in CD.12)"
@@ -2235,13 +2465,17 @@ tier_items:
     name: log-decision Lambda (handler)
     intent: |
       Append-only DecisionPayload write. Same shape as log-rec, including the optional import_mode
-      field for T2.2 use. Unblocks T-1.1 (filing the candidate decisions that gate downstream work).
-      Decision id format dec-NNN allocated atomically in normal mode; preserved verbatim in import_mode.
+      field for T2.2 use. Becomes the ratification vehicle once deployed (until then the ops portal
+      ratifies CDs -- see agent_instructions; T-1.1 files the backlog through whichever vehicle is
+      live). Decision id format dec-NNN allocated atomically in normal mode; preserved verbatim in
+      import_mode. [Transport note, 2026-06-09 audit F-008: ops_decisions remains on Iceberg/Athena
+      until its T2.26 DuckLake migration -- if T2.26 lands first, the write transport is the closed
+      ducklake_writer boundary; coordinate ordering at plan time. Do not build a second write path
+      to a backend mid-retirement.]
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
       - src/lambdas/log_decision/handler.py    # new
-      - src/lambdas/log_decision/Dockerfile    # new
-      - src/lambdas/log_decision/requirements.txt    # new
+      - src/lambdas/log_decision/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
     exit_criteria:
       - "POST {function-url} with valid DecisionPayload → 200 + {decision_id}"
       - "Decision id format dec-NNN allocated atomically in normal mode"
@@ -2255,7 +2489,12 @@ tier_items:
   - id: T0.7c
     tier: T0
     name: query Lambda (minimum verb set)
-    intent: Typed-verb read surface. Minimum verbs for self-hosting bootstrap. SCD2 dedup inside the Lambda. No SQL exposed to agents.
+    intent: |
+      Typed-verb read surface. Minimum verbs for self-hosting bootstrap. No SQL exposed to agents.
+      [Re-grounded 2026-06-09, audit F-008: per-table read transport -- rec verbs read current
+      state via ducklake_reader (DuckLake-side dedup; closed boundary, no Athena path for recs);
+      decision/queue verbs read DuckDB-on-Iceberg until the T2.26 migrations land. "SCD2 dedup
+      inside the Lambda" applies only to the still-Iceberg tables.]
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     minimum_verbs:
       - get_rec_by_id
@@ -2266,8 +2505,7 @@ tier_items:
     files_in_scope:
       - src/lambdas/query/handler.py    # new
       - src/lambdas/query/verbs.py    # new — verb registry
-      - src/lambdas/query/Dockerfile    # new
-      - src/lambdas/query/requirements.txt    # new
+      - src/lambdas/query/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
     exit_criteria:
       - "Each minimum verb returns typed Pydantic response model"
       - "No verb accepts raw SQL or column names"
@@ -2331,8 +2569,10 @@ tier_items:
     related_candidate_decisions: [CD.5]
     effort: XS
     strategic: false
+    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-05-19"
+    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.5 pending; CD.5 ratifies post-hoc via the portal vehicle."
   - id: T0.11
     tier: T0
     name: session_preflight.py Linux-generalisation
@@ -2358,7 +2598,8 @@ tier_items:
       DqRowCount, plus the schema-evolution marker DqDeleted). Migrate RecPayload + DecisionPayload to single-source
       Pydantic models with Annotated metadata. ops.yaml fields kept as a backup until T1.6 retires the YAML.
       During the coexistence window (T0.12 onwards until T1.6 lands) a CI drift detector compares Annotated
-      metadata against config/data_quality/*.yaml; divergence on any overlapping field fails CI.
+      metadata against config/agent/data_quality/*.yaml (path corrected 2026-06-09, audit F-025; the DQ config
+      relocated under config/agent/); divergence on any overlapping field fails CI.
     depends_on: []
     files_in_scope:
       - src/schemas/__init__.py    # new
@@ -2370,7 +2611,7 @@ tier_items:
       - "Schema classes use Annotated[T, DqXxx()] for fields with DQ semantics"
       - "Annotation vocabulary documented in src/schemas/annotations.py docstrings (~6-8 markers + DqDeleted)"
       - "Round-trip test: a RecPayload validates exactly the same fields that DQ runner currently checks"
-      - "Drift-detector CI check: Pydantic-Annotated vocabulary and config/data_quality/*.yaml express the same checks for overlapping fields. Migration markers tolerate intentional transitional divergence: a field marked with @migrating(target='YYYY-MM-DD') in the Pydantic source is allow-listed for the duration; the check only fails when divergence persists beyond the marker date OR when an unmarked field diverges"
+      - "Drift-detector CI check: Pydantic-Annotated vocabulary and config/agent/data_quality/*.yaml express the same checks for overlapping fields. Migration markers tolerate intentional transitional divergence: a field marked with @migrating(target='YYYY-MM-DD') in the Pydantic source is allow-listed for the duration; the check only fails when divergence persists beyond the marker date OR when an unmarked field diverges"
       - "DqDeleted marker documented: marks fields pending physical drop; generator emits no DDL change; runner short-circuits checks"
     related_candidate_decisions: [CD.12]
     effort: M
@@ -2564,7 +2805,9 @@ tier_items:
       - 2026-05-27: Phase 2 complete (t014-phase2-scripts-sweep) -- scripts/ Linux-first venv
         resolution in formatters.py, step_runner.py, session_preflight.py; agent_telemetry_writer.py
         docstring updated; CD.3 annotations on llm_utils.py, copilot_wrapper.py; test coverage added.
-      Phase 3 remaining (.agents/, src/data/handlers/CLAUDE.md, setup.py) -- deferred to follow-on plan.
+      Phase 3 remaining (.agents/, src/data/handlers/CLAUDE.md, setup.py) -- deferred to the named
+      follow-on plan PLAN-t014-phase3-residual-sweep (named 2026-06-09, audit F-036, so the parked
+      remainder has a discoverable carrier).
       Exit criterion #2 ("grep python.exe returns zero hits except in comments documenting historical
       Windows policy") needs reinterpretation at closure: 5 files now contain annotated CD.2/CD.3 path
       literals as Windows fallbacks (executor/formatters.py, executor/step_runner.py, session_preflight.py,
@@ -2576,23 +2819,28 @@ tier_items:
     tier: T1
     name: update-rec Lambda (handler with pre-commit stateful invariants)
     intent: |
-      Read current rec via Athena _current view against the OLD account (company-aws-profile) during the T1
-      bridging window — the personal account does not deploy _current views per CD.15. After T2.5 (DuckDB swap),
-      reads switch to DuckDB-on-Iceberg-snapshot in the personal account. Apply diff. Validate status transitions,
-      FK to parent_id, status DAG. Append new SCD2 version on success. Typed 4xx on invariant failure.
-      Function URL concurrency must be reservedConcurrency=1 OR equivalent DynamoDB-conditional-update strategy
-      so RMW serialises correctly (Function URLs parallelise by default).
+      Read current rec via ducklake_reader (ops_recommendations lives on DuckLake behind the closed
+      boundary since the T2.19 recs cutover -- Decision 81 cl.7; NO Athena path for recs). Apply diff.
+      Validate status transitions, FK to parent_id, status DAG. Append the new SCD2 version via the
+      closed ducklake_writer path (the writer's update_ops verb already implements exactly this
+      read-validate-append shape -- extend or front it per OQ.15, never duplicate it). Typed 4xx on
+      invariant failure. Concurrency: bounded application-level OCC retry in the writer per CD.33
+      clause 2 -- the writer's ULID-keyed idempotent append handles concurrent updates.
+      [Re-grounded 2026-06-09, audit F-008/D-010: the original text prescribed reading the Athena
+      _current view in the OLD company account during a "T1 bridging window" (account migrated and
+      swept, T2.2/T2.3) with a later DuckDB-on-Iceberg swap, and required reservedConcurrency=1 or
+      DynamoDB locking (superseded by CD.33's OCC-retry resolution of OQ.10). Originals preserved
+      here for the record.]
     depends_on: [T0.7a, T0.7c, T0.8, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
       - src/lambdas/update_rec/handler.py
-      - src/lambdas/update_rec/Dockerfile
-      - src/lambdas/update_rec/requirements.txt
+      - src/lambdas/update_rec/manifest.yaml    # CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
     exit_criteria:
       - "Update with invalid status transition → 422 typed error"
-      - "Concurrent updates serialised correctly: terraform sets reservedConcurrency=1 OR handler uses DynamoDB optimistic-locking conditional update"
+      - "Concurrent updates safe via the CD.33 writer-side OCC retry + ULID-keyed idempotent append (no reservedConcurrency=1, no DynamoDB locking -- superseded per OQ.10 resolution)"
       - "Audit trail: each update appends a new SCD2 row; old version visible via query Lambda with version param"
-      - "Read path during T1 reads OLD account _current view; T2.5 cutover replaces with personal-account DuckDB-on-Iceberg-snapshot"
-    related_candidate_decisions: [CD.10, CD.12]
+      - "Recs read path transits ducklake_reader (closed boundary); no Athena/_current access for ops_recommendations"
+    related_candidate_decisions: [CD.10, CD.12, CD.33]
     effort: M
     strategic: false
     status: not_started
@@ -2615,12 +2863,12 @@ tier_items:
   - id: T1.3
     tier: T1
     name: list-tools + describe Lambda
-    intent: Discovery surface. list-tools returns the names of all six Lambdas; describe-tool returns the Pydantic schema for a given Lambda's request and response models.
+    intent: Discovery surface. list-tools returns the names of all agent-facing tool Lambdas (the verb surface is deliberately extensible per CD.33 -- "six" was the illustrative CD.10 enumeration); describe-tool returns the Pydantic schema for a given Lambda's request and response models.
     depends_on: [T0.7a, T0.7b, T0.7c, T1.1, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
       - src/lambdas/list_tools/handler.py
     exit_criteria:
-      - "agent_sdk.list_tools() returns six tool descriptors"
+      - "agent_sdk.list_tools() returns one descriptor per deployed agent-facing tool Lambda (count derived from the deployed set, not hard-coded)"
       - "agent_sdk.describe('log_rec') returns JSON schema (Pydantic model_json_schema output)"
     related_candidate_decisions: [CD.10]
     effort: S
@@ -2628,20 +2876,29 @@ tier_items:
     status: not_started
   - id: T1.4
     tier: T1
-    name: maintenance Lambda (scheduled, not agent-facing)
-    intent: Compact, optimize, vacuum operations on Iceberg tables. EventBridge-scheduled. Not exposed via Function URL — invoked only by scheduler. Replaces the compact/optimize half of legacy ops_data_portal.
-    depends_on: [T0.6, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
-    files_in_scope:
-      - src/lambdas/maintenance/handler.py
-      - terraform/maintenance_schedule.tf
-    exit_criteria:
-      - "Hourly compaction runs without error"
-      - "Daily optimize-bin-pack + vacuum runs"
-      - "Metrics emitted to CloudWatch (files compacted, snapshots vacuumed)"
+    name: RESERVED — superseded by T2.18 (DuckLake maintenance) + ops_compaction-until-T2.26
+    intent: |
+      Slot retained as RESERVED (2026-06-09 audit F-017). The original item ("Compact, optimize,
+      vacuum operations on Iceberg tables, EventBridge-scheduled; replaces the compact/optimize
+      half of legacy ops_data_portal") was superseded by the DuckLake program: ducklake_maintenance
+      (T2.18) owns maintenance for DuckLake tables; the live ops_compaction Lambda serves the
+      still-Iceberg ops tables until T2.26 migrates them and retires it. Nothing remains for an
+      ops-Iceberg maintenance Lambda to own (market-data Iceberg tables are product-side per KG.1).
+      Its files_in_scope (terraform/maintenance_schedule.tf) never existed. Do not reuse this id;
+      if a residual Iceberg-maintenance need emerges post-T2.26, allocate a new T2.x item. The
+      CD.10/CD.16 gates listing T1.4 are unaffected (gates on a reserved item are inert; CD.16 is
+      ratified).
+    depends_on: []
+    files_in_scope: []
+    exit_criteria: []
     related_candidate_decisions: [CD.10]
-    effort: M
+    effort: XS
     strategic: false
-    status: not_started
+    status: reserved
+    rename_history:
+      from: T1.4 (maintenance Lambda — Iceberg compact/optimize/vacuum)
+      to: superseded by T2.18 (ducklake_maintenance) + ops_compaction lifecycle (retires at T2.26)
+      reason: 2026-06-09 audit F-017 — redundant overlap; DuckLake cutover moved the maintenance surface; T1.9's dependency on this id dropped in the same edit.
   - id: T1.5
     tier: T1
     name: ops_decisions graduation Phases 2-6 + ops_data_portal import-site sweep (STRATEGIC)
@@ -2659,7 +2916,7 @@ tier_items:
     files_in_scope:
       - scripts/ops_data_portal.py
       - docs/DECISIONS.md    # eventually deleted in 3b (per T5.4)
-      - config/data_quality/decisions/ops_decisions.yaml
+      - config/agent/data_quality/decisions/ops_decisions.yaml    # path corrected 2026-06-09 (audit F-015; DQ config relocated under config/agent/)
       # Verified production importers (7) — grep `from scripts.ops_data_portal import` confirmed
       - scripts/classify_risk.py
       - scripts/execute_recommendation.py
@@ -2691,16 +2948,16 @@ tier_items:
   - id: T1.6
     tier: T1
     name: DQ runner reshape — alarm-not-gate; reads Annotated metadata
-    intent: Reads Pydantic Annotated metadata via introspection (no YAML). Runs on schedule, files recs on drift. Stops being presubmit gate (already not strictly a gate per Decision 73; this formalises). Retires config/data_quality/*.yaml.
+    intent: Reads Pydantic Annotated metadata via introspection (no YAML). Runs on schedule, files recs on drift. Stops being presubmit gate (already not strictly a gate per Decision 73; this formalises). Retires config/agent/data_quality/*.yaml (path corrected 2026-06-09, audit F-015 -- the DQ config relocated under config/agent/; this item's retirement target moved with it).
     depends_on: [T0.12, T1.5]
     files_in_scope:
       - scripts/data_quality_runner.py
-      - config/data_quality/    # eventually deleted
+      - config/agent/data_quality/    # eventually deleted (path corrected per audit F-015)
     exit_criteria:
       - "Runner reads RecPayload/DecisionPayload/etc Annotated metadata; YAML no longer loaded"
       - "Drift findings filed via log-rec Lambda with source='dq_drift'"
       - "validate.py presubmit no longer auto-invokes runner (it is purely scheduled now)"
-      - "Old config/data_quality/ directory retired and grep returns no remaining references"
+      - "Old config/agent/data_quality/ directory retired and grep returns no remaining references"
     related_intents: [dq-enforcement]
     related_candidate_decisions: [CD.12]
     effort: L
@@ -2745,17 +3002,21 @@ tier_items:
     tier: T1
     name: Lambda surface SLOs + CloudWatch alarms wired to log-rec
     intent: |
-      CD.10 introduces a new failure surface (six Function-URL-fronted Lambdas). Define SLOs (p50/p99 latency,
-      error rate, throttle rate) per Lambda; deploy CloudWatch alarms; alarm-fire triggers a rec via log-rec
-      with source='lambda_slo_breach'. Without this, a Lambda 500 means agent recs vanish silently.
-    depends_on: [T0.7a, T0.7b, T0.7c, T1.1, T1.3, T1.4]
+      CD.10 introduces a new failure surface (Function-URL-fronted agent-facing Lambdas; the
+      ducklake_writer/reader/maintenance set from T2.17/T2.18 is already live and joins this SLO
+      surface). Define SLOs (p50/p99 latency, error rate, throttle rate) per Lambda; deploy
+      CloudWatch alarms; alarm-fire triggers a rec via log-rec with source='lambda_slo_breach'.
+      Without this, a Lambda 500 means agent recs vanish silently. [Deps amended 2026-06-09,
+      audit F-017: T1.4 dropped (reserved -- maintenance observability is owned by T2.18's own
+      alarm criteria).]
+    depends_on: [T0.7a, T0.7b, T0.7c, T1.1, T1.3]
     files_in_scope:
-      - terraform/lambda_observability.tf    # new
+      - terraform/personal/lambda_observability.tf    # new (active module is terraform/personal/)
       - src/lambdas/_shared/metrics.py    # new — emit custom metrics
     exit_criteria:
-      - "Each agent-facing Lambda has p50/p99 latency + error-rate + throttle-rate alarms"
+      - "Each agent-facing Lambda (verb surface + ducklake_writer/reader) has p50/p99 latency + error-rate + throttle-rate alarms"
       - "Alarm-fire posts a rec via log-rec Lambda with source='lambda_slo_breach', priority='high'"
-      - "Dashboard exists (CloudWatch dashboard JSON committed) showing all six Lambdas' SLOs"
+      - "Dashboard exists (CloudWatch dashboard JSON committed) covering the agent-facing Lambda set"
     related_candidate_decisions: [CD.10]
     effort: M
     strategic: false
@@ -2819,18 +3080,21 @@ tier_items:
     tier: T1
     name: Ratify Class B Lambda verb contracts (gated on CD.16 ratification)
     intent: |
-      REPORT-ONLY parent placeholder, DEFERRED until CD.16 ratifies. Class B
-      ratifications under the Lambda-deploy freeze produce contracts that never
-      transition out of provisional_v0 (no traffic = no signal); defer until
-      CD.16 ratifies (significantly earlier than CD.17 reversal in the
-      dependency graph). Decomposes into per-Lambda atomic REPORT-ONLY plans
+      REPORT-ONLY parent placeholder. [Deferral EXPIRED 2026-06-03: CD.16 ratified
+      via Decision 79 (dec-1086), so the original "DEFERRED until CD.16 ratifies"
+      condition is satisfied -- audit F-009/B-009; the item is now gated only by its
+      depends_on. Historical rationale: Class B ratifications under the old blanket
+      Lambda-deploy freeze would have produced contracts that never transition out
+      of provisional_v0 (no traffic = no signal).] Decomposes into per-Lambda atomic REPORT-ONLY plans
       authoring lambda-log-rec.yaml, lambda-log-decision.yaml, lambda-query.yaml,
-      lambda-update-rec.yaml, lambda-list-tools.yaml, lambda-maintenance.yaml at
-      status: provisional_v0 with staggered re-ratification triggers per INTENT
-      Part 6B. Absorbs GAP-class-b-product-lambdas from ROADMAP-PRODUCT.yaml.
+      lambda-update-rec.yaml, lambda-list-tools.yaml, lambda-maintenance.yaml
+      (the maintenance contract now describes ducklake_maintenance per T2.18 --
+      T1.4 is reserved) at status: provisional_v0 with staggered re-ratification
+      triggers per INTENT Part 6B. Absorbs GAP-class-b-product-lambdas from
+      ROADMAP-PRODUCT.yaml.
     depends_on: [T-1.12, T0.12.5, T0.12.7]
     decision_required_before:
-      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force)"
+      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
     files_in_scope: []
     decomposition_hints:
       split_by: per_lambda
@@ -2897,7 +3161,7 @@ tier_items:
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
     related_candidate_decisions: []
     effort: L
-    strategic: false
+    strategic: false    # freeze override (AGENTS.md / CD.17): decomposed into six atomic IMPLEMENTATION plans -- see note
     status: in_progress
     progress_note: "2026-06-01: shipped PLAN-ci-rca-workflow-correctness (main-branch trigger gate, FILED: marker parser, ci-rca-filter guard wired into validate.py presubmit tier)"
     note: |
@@ -2916,18 +3180,19 @@ tier_items:
       contract (ops_reconciliations.yaml) under the CD.25 ritual and the
       Class B Lambda verb contract under T1.12. Gated on CD.16 ratification
       because deploy is in-scope. Absorbs GAP-reconciliation-lambda from
-      ROADMAP-PRODUCT.yaml; PRODUCT layer items E.env.8 + L3.exec.4/5/6 depend
-      on this.
+      ROADMAP-PRODUCT.yaml; the PRODUCT consumer is E.env.8 (consumer list
+      corrected 2026-06-09, audit F-023/E-002: L3.exec.4/5 actually depend on
+      sibling T2.14, and L3.exec.6 on neither -- the prior claim conflated the
+      two absorbers' consumers).
     depends_on: [T0.6, T0.12.5]
     decision_required_before:
-      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force)"
+      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
     files_in_scope:
       - docs/contracts/ops_reconciliations.yaml
       - docs/contracts/lambda-reconciliation.yaml
       - src/lambdas/reconciliation/handler.py
-      - src/lambdas/reconciliation/Dockerfile
-      - src/lambdas/reconciliation/manifest.yaml
-      - terraform/lambda_reconciliation.tf
+      - src/lambdas/reconciliation/manifest.yaml    # CD.24 per-Lambda manifest (zip packaging; vestigial Dockerfile entry removed 2026-06-09 per audit F-008/D-002)
+      - terraform/personal/lambda_reconciliation.tf    # active module is terraform/personal/
     exit_criteria:
       - "ops_reconciliations.yaml + lambda-reconciliation.yaml both ratified at contract_version: 1"
       - "Lambda handler validates broker state vs platform state; emits typed records via portal"
@@ -2937,6 +3202,54 @@ tier_items:
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
+    status: not_started
+
+  - id: T1.15
+    tier: T1
+    name: CD.28 retirement sweeps — Bedrock/Copilot code paths + inference-provider contract refresh
+    intent: |
+      Promote the two high-priority CD.28 follow-on sweeps from prose-only plan inventory to
+      schedulable work (2026-06-09 audit F-021: every legacy surface PLAN-retire-bedrock-code-paths
+      names still exists, the canonical inference-provider.md contract still declares Bedrock
+      dispatch active, and the contract's stated provider default disagrees with the code default).
+      Scope = CD.28's PLAN-retire-bedrock-code-paths + PLAN-update-inference-provider-contract
+      (and the PLAN-retire-copilot-sdk subset where reachable): delete scripts/bedrock_client.py;
+      remove _bedrock_call/_get_bedrock_credentials/_PRICING bedrock entries from scripts/llm_client.py;
+      remove _invoke_bedrock dispatch from src/data/handlers/scheduled_agent_handler.py; sweep
+      residual Bedrock references in scripts/model_registry.py, copilot_wrapper.py,
+      copilot_multipliers_refresher.py; remove bedrock:Invoke* from the retired-work-root
+      terraform/lambda_tooling_iam.tf and docs/runbooks/policies/platform-dev-daily-ops.json
+      (the live personal-account PlatformDev policy is already bedrock-free -- permission-closed);
+      update Bedrock-referencing tests in lockstep; refresh docs/contracts/inference-provider.md to
+      the CD.28 tier model (Tier 1 DeepSeek-direct via LiteLLM, Tier 2 Anthropic-direct, Tier 3
+      OpenRouter deferred; Bedrock + copilot-sdk retired; fix the stated-vs-code default mismatch).
+      The original CD.28 scope line "drop verifier check bedrock_via_chain from
+      scripts/verify_platform_account.py" is MOOT -- that verifier is absent at HEAD (audit F-006);
+      this item instead confirms no live surface still cites it. T-1.14 (contract .md -> .yaml
+      conversion) depends on this item so the conversion consumes CD.28-aligned content.
+    depends_on: []
+    files_in_scope:
+      - scripts/bedrock_client.py    # deleted
+      - scripts/llm_client.py
+      - src/data/handlers/scheduled_agent_handler.py    # Lambda-packaged: CD.16 per-Lambda build+deploy+smoke-test applies (Decision 79); dispatcher smoke-test deferred until T4.3
+      - scripts/model_registry.py
+      - scripts/copilot_wrapper.py
+      - scripts/copilot_multipliers_refresher.py
+      - terraform/lambda_tooling_iam.tf    # retired work-root: bedrock:Invoke* grant removed (dead_but_provisioned closure)
+      - docs/runbooks/policies/platform-dev-daily-ops.json
+      - docs/contracts/inference-provider.md
+      - tests/test_llm_client.py
+      - tests/test_build_lambda.py
+      - tests/test_scheduled_agent_handler.py
+    exit_criteria:
+      - "scripts/bedrock_client.py deleted; rg -l 'bedrock_client|_bedrock_call|_invoke_bedrock' scripts/ src/ returns zero production hits"
+      - "Affected Lambda artifacts rebuilt + deployed + smoke-tested per CD.16/Decision 79 (dispatcher smoke-test deferred until T4.3 per CD.16's surviving clause)"
+      - "bedrock:Invoke* absent from terraform/ (work root included) and docs/runbooks/policies/"
+      - "docs/contracts/inference-provider.md describes the CD.28 tier model; provider defaults in contract and code agree; Bedrock/copilot-sdk marked retired"
+      - "Bedrock-referencing tests updated in lockstep; pytest green"
+    related_candidate_decisions: [CD.28, CD.16]
+    effort: M
+    strategic: false
     status: not_started
 
   # ----- T2: Full state migration to personal account -----
@@ -2950,15 +3263,15 @@ tier_items:
     exit_criteria:
       - "terraform apply in personal account succeeds with no drift"
       - "All Iceberg tables created with partition transforms per CD.9"
-      - "EC2 self-hosted runner registered against personal GitHub repo connection"
-      - "Inference credentials (DeepSeek + Anthropic API keys per CD.28 / T0.4) verified end-to-end with LiteLLM smoke-test call against each tier"
+      - "[Superseded by CD.21/Decision 73 -- criterion retired 2026-06-09, audit F-014] EC2 self-hosted runner registration: the runner was retired before this could apply; CI runs GitHub-hosted + OIDC (T2.10)"
+      - "[Re-homed to T0.4 -- criterion moved 2026-06-09, audit F-014] Inference credentials (DeepSeek + Anthropic API keys) end-to-end LiteLLM smoke-test: owned by T0.4, which remains not_started; this item's terraform substrate does not include them"
     related_candidate_decisions: [CD.6, CD.9, CD.28]
     effort: L
     strategic: true
     status: complete
     completed_at: "2026-05-28"
     bootstrap_completion_exempt: true
-    note: "Realized via Phase B personal-account Terraform re-deploy (PR #1; cite Decision 77). Out-of-order complete: deps T0.4 (inference creds) and T0.6 (Lambda Terraform skeleton) not_started. Exit criterion 'EC2 runner registration' superseded by CD.21 (runner retired per Decision 73). Exit criterion 'inference creds' (T0.4) outstanding."
+    note: "Realized via Phase B personal-account Terraform re-deploy (PR #1; cite Decision 77). Out-of-order complete: deps T0.4 (inference creds) and T0.6 (Lambda Terraform skeleton) not_started at completion. Criteria 3-4 annotated superseded/re-homed per the audit truth-maintenance rule so the item re-adjudicates true. bootstrap_completion_exempt under scope (c): gating CD.6/CD.17 ratify post-hoc via the portal vehicle."
   - id: T2.2
     tier: T2
     name: Ops + decisions table export+import (rebuild data)
@@ -2967,16 +3280,16 @@ tier_items:
     files_in_scope:
       - scripts/migrate_ops_data.py    # new
     exit_criteria:
-      - "Row counts match between source and destination for ops_recommendations and ops_decisions"
-      - "Spot-checks of recent recs and decisions queryable in personal account via query Lambda"
+      - "Row counts match between source and destination for ops_recommendations and ops_decisions (attested at migration time by preflight recommendation_sync: 722 recs + 38 decisions; the attestation is point-in-time and not re-runnable post-T2.19 recs cutover -- audit F-014 corroboration note)"
+      - "Spot-checks of recent recs and decisions queryable in the personal account (realized via the direct migration path + Athena reads; the 'via query Lambda' phrasing predated the Lambda wave deferral -- criterion amended 2026-06-09, audit F-014)"
       - "logs/.ops-outbox/ drained against company-aws-profile before cutover (per CLAUDE.md outbox invariant)"
-    related_candidate_decisions: [CD.6]
+    related_candidate_decisions: [CD.6, CD.19]
     effort: M
     strategic: false
     status: complete
     completed_at: "2026-05-29"
     bootstrap_completion_exempt: true
-    note: "Realized: preflight recommendation_sync confirms 722 recs + 38 decisions in personal-account Athena. Out-of-order complete: deps T0.7a/T0.7b not_started (data imported via direct migration path before Lambda tooling landed). CD.19 timestamp preservation policy applied: original ids and timestamps preserved."
+    note: "Realized: preflight recommendation_sync confirmed 722 recs + 38 decisions in personal-account Athena at migration time (2026-05-29; the audit could not re-corroborate the figure from a fresh container -- treat as point-in-time attestation). Out-of-order complete: deps T0.7a/T0.7b not_started (data imported via direct migration path before Lambda tooling landed). CD.19 timestamp preservation policy applied: original ids and timestamps preserved. bootstrap_completion_exempt under scope (c)."
   - id: T2.3
     tier: T2
     name: company-aws-profile profile-reference sweep
@@ -3002,10 +3315,10 @@ tier_items:
     tier: T2
     name: Partition-everything sweep
     intent: Apply CD.9 uniform rule. Every Iceberg table in personal account is partitioned (day(last_updated_timestamp) for ops/telemetry; day(trade_date) for market data; per-table choice for new tables). New tables inherit a partitioned template.
-    depends_on: [T2.1]
+    depends_on: [T2.1, T0.13]    # T0.13 added 2026-06-09 (audit F-012): exit criterion 2 extends scripts/schema_to_iceberg.py, which T0.13 CREATES -- without the edge this item computed eligible while its producer was unbuilt
     files_in_scope:
       - terraform/iceberg_tables.tf
-      - scripts/schema_to_iceberg.py    # add partition-by clause emission
+      - scripts/schema_to_iceberg.py    # add partition-by clause emission (created by T0.13)
     exit_criteria:
       - "Every iceberg_tables.tf table has a PARTITIONED BY clause"
       - "scripts/schema_to_iceberg.py emits partition clause from a class-level annotation on Pydantic schema (e.g. @partition_by('day(last_updated_timestamp)'))"
@@ -3020,21 +3333,33 @@ tier_items:
   - id: T2.5
     tier: T2
     name: DuckDB swap on read paths
-    intent: Replace pyathena-based reads in query Lambda's internal implementation with DuckDB queries against the same Iceberg tables. Athena retained as escape hatch only for ad-hoc large scans.
+    intent: |
+      Replace pyathena-based reads on the LOCAL read paths (sync_ops, ops_data_portal,
+      session_preflight) with DuckDB-on-Iceberg via DuckDBIcebergReader. Athena retained as
+      escape hatch only for ad-hoc large scans on still-Iceberg tables (per the T2.19 recs
+      cutover, ops_recommendations reads transit ducklake_reader with NO Athena path).
+      [Rescoped 2026-06-09, audit F-012: the original criteria 1-2 (query-Lambda verb parity;
+      update_rec Lambda hot path) require T0.7c/T1.1/T1.2 artifacts that have no dependency
+      path from this item -- they were authored under the tier-order assumption that T0/T1
+      precede T2, which out-of-order execution invalidated. Those criteria are RE-HOMED to
+      T2.7 (which depends on the query Lambda); this item's shipped local-read scope is
+      complete as of 2026-05-31.]
     depends_on: [T2.1]
     files_in_scope:
-      - src/lambdas/query/handler.py
-      - src/lambdas/query/iceberg_reader.py    # new
+      - src/common/iceberg_reader.py    # realized location (originally proposed src/lambdas/query/iceberg_reader.py; the reader is shared, not Lambda-internal)
+      - docs/contracts/read-engine.yaml
     exit_criteria:
-      - "All query-Lambda verbs return same results before/after the swap on a fixture suite"
-      - "SSO friction removed on hot path: update_rec Lambda's read step no longer needs Athena availability"
+      - "Local read paths (sync_ops, ops_data_portal, session_preflight) route through DuckDBIcebergReader with Athena escape-hatch for still-Iceberg tables"
       - "session_preflight.py handles empty ops tables gracefully (exits 0, surfaces a warning) -- required for T2.13's Codespace preflight verification to pass without T2.2 (data import) as a hard gate"
-      - "Engine-choice contract documented in src/schemas/ comments or a small docs/contracts/ entry"
+      - "Engine-choice contract documented (docs/contracts/read-engine.yaml; refresh owned by T2.27 post-recs-cutover)"
     related_candidate_decisions: [CD.8, CD.15]
     effort: M
     strategic: false
-    status: in_progress
-    progress_note: "- 2026-05-31: shipped DuckDBIcebergReader (src/common/iceberg_reader.py), routed sync_ops/ops_data_portal/session_preflight reads through reader with Athena escape-hatch; docs/contracts/read-engine.yaml written; graceful empty-table degradation verified. Criteria 3+4 pass. Criteria 1+2 blocked on Lambda deploy (Decision 67)."
+    status: complete
+    completed_at: "2026-05-31"
+    bootstrap_completion_exempt: true
+    progress_note: "- 2026-05-31: shipped DuckDBIcebergReader (src/common/iceberg_reader.py), routed sync_ops/ops_data_portal/session_preflight reads through reader with Athena escape-hatch; docs/contracts/read-engine.yaml written; graceful empty-table degradation verified."
+    note: "Status flipped in_progress -> complete 2026-06-09 (audit F-012 reconciliation): the two unmet criteria were query-Lambda-era work mis-homed on this item (no dependency path to their producers); re-homed to T2.7. The shipped local-read scope satisfied all remaining criteria on 2026-05-31. bootstrap_completion_exempt under scope (c): gating CD.8/CD.15 pending."
   - id: T2.6
     tier: T2
     name: Local PySR runner on compute node
@@ -3058,15 +3383,23 @@ tier_items:
     intent: |
       Per CD.15. Moved from T1 to T2 (architect HIGH-1) because it depends on T2.5 which lives in T2.
       The personal account is deployed without _current views. The query Lambda reads Iceberg snapshots
-      directly via DuckDB inside the Lambda. Athena retained as escape hatch only for ad-hoc large scans
-      where DuckDB single-node memory binds.
-    depends_on: [T2.5]
+      directly via DuckDB inside the Lambda (still-Iceberg tables) and ducklake_reader (cut-over tables).
+      Athena retained as escape hatch only for ad-hoc large scans where DuckDB single-node memory binds
+      -- on still-Iceberg tables only; recs have NO Athena path (Decision 81 cl.7).
+      [Absorbed 2026-06-09 from T2.5 (audit F-012): the query-Lambda verb-parity and update_rec
+      hot-path criteria below were mis-homed on T2.5, which has no dependency path to their
+      producers; this item gains the T0.7c/T1.1/T1.2 edges that make them schedulable. Note the
+      _current views for the four deferred ops tables retire naturally with their T2.26 migrations;
+      this item owns whatever _current surface survives T2.26.]
+    depends_on: [T2.5, T0.7c, T1.1, T1.2]    # T0.7c/T1.1/T1.2 added 2026-06-09 (audit F-012): the absorbed criteria exercise the query/update-rec Lambdas
     files_in_scope:
       - terraform/iceberg_tables.tf    # personal-account variant omits _current view definitions
       - src/lambdas/query/handler.py    # in-Lambda SCD2 dedup confirmed in place
     exit_criteria:
       - "No _current views in personal AWS account"
       - "All read paths go through query Lambda; Athena/DuckDB usage is implementation detail"
+      - "All query-Lambda verbs return same results before/after the DuckDB swap on a fixture suite (re-homed from T2.5)"
+      - "update_rec Lambda's read step no longer needs Athena availability (re-homed from T2.5; recs already read via ducklake_reader per T2.19)"
     related_candidate_decisions: [CD.8, CD.15]
     effort: S
     strategic: false
@@ -3105,7 +3438,7 @@ tier_items:
       per CD.28, so the entire credential surface is now API-key-shaped.
     depends_on: [T2.1]
     files_in_scope:
-      - terraform/secrets.tf
+      - terraform/personal/secrets_rotation.tf    # new -- rotation policy module in the ACTIVE root (marker added 2026-06-09, audit F-015: the prior unmarked terraform/secrets.tf implied an existing file; none exists -- live secrets are spread across terraform/personal/*.tf)
       - docs/contracts/secrets-rotation.md    # new
       - .github/workflows/secrets-rotation-reminder.yml    # new — cron filing a rec when rotation due
     exit_criteria:
@@ -3240,11 +3573,13 @@ tier_items:
       - "Human-gated terraform apply: GHAS enabled (secret scanning + push protection), main ruleset active with admin bypass actor, CodeQL + Dependabot activated -- verified post-apply"
       - "CodeQL workflow runs green on PR + push to main"
       - "Dependabot baseline scan complete; any critical findings filed as recs via ops_data_portal"
-    related_candidate_decisions: [CD.20, dec-1084]
+    related_candidate_decisions: [CD.20]    # dec-1084 (git-history-audit decision) moved to the note 2026-06-09 (audit F-031: this field resolves against CD ids; dec-1084 is an ops_decisions id not locatable in DECISIONS.md -- confirm against the warehouse)
     effort: S
     strategic: false
+    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-06-08"
+    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.20 pending; CD.20 ratifies post-hoc via the portal vehicle. The git-history-audit decision is cited in-criteria as dec-1084; that id could not be located in DECISIONS.md from this clone (audit F-031) -- verify against the warehouse and correct if it is a typo. GHAS secret-scanning + CodeQL-green remain live-probe-unverified per progress_note (config evidence only)."
     progress_note: |
       Apply landed 2026-06-08 (terraform/github/ human-gated local apply per CD.20 / Decision 83). Controls live: branch protection (main protected=true, GitHub API), Dependabot (5 dependabot/* branches active), Actions permissions. GHAS secret-scanning + CodeQL live-probe outstanding (web PAT lacks security_events scope); repo.tf GHAS block (secret_scanning enabled) and committed codeql.yml are configuration evidence; one-time UI confirmation recommended.
       - 2026-06-01: controls-as-code shipped (terraform/github module, CodeQL workflow, Dependabot config, SECURITY.md); git history audit accepted (no must-rotate secrets, dec-1084); account-id literal parameterized at HEAD; validate.py covers terraform/github.
@@ -3262,11 +3597,8 @@ tier_items:
     files_in_scope: []    # no file changes -- this is a GitHub settings action plus verification
     exit_criteria:
       - "Repository visibility = Public on GitHub"
-      - "Codespace built from main reaches green preflight (scripts/session_preflight.py runs without error)"
-      - "GHAS settings verified post-flip: secret scanning + push protection + Dependabot + CodeQL all active"
       - "First post-flip PR runs OIDC-authenticated CI green on ubuntu-latest"
-      - "Branch-protection ruleset verified active post-flip"
-      - "gh repo view --json visibility returns 'public'"
+      - "[Re-homed 2026-06-09, audit F-007: post-flip security/portal verification belongs to the items that own those surfaces] GHAS + branch protection verification -> T2.12 (landed 2026-06-08, Decision 83; GHAS live-probe still open there); green-Codespace preflight -> T2.11a (not_started; was never satisfiable at flip time since the devcontainer does not exist)"
       - "Post-flip operational checklist captured in CLAUDE.md operational runbooks"
     related_candidate_decisions: [CD.20]
     effort: XS
@@ -3274,7 +3606,17 @@ tier_items:
     status: complete
     completed_at: "2026-05-30"
     bootstrap_completion_exempt: true
-    note: "Realized: repo flipped public 2026-05-30 per Decision 76. Landed ahead of CD.20 planned security/portal sequence; T2.11a/b + T2.12 outstanding (GHAS, branch protection, devcontainer, portal artefacts not in place at flip time)."
+    note: |
+      Realized: repo flipped public 2026-05-30 per Decision 76, AHEAD of the CD.20 planned
+      security/portal sequence -- the audit (F-007) rated this the most overstated complete
+      because the original criteria asserted GHAS/branch-protection/Codespace checks that did
+      not hold on the completion date (deps T2.5/T2.11b also unmet then; T2.5 since reconciled
+      complete, T2.12 landed 2026-06-08). Criteria rewritten 2026-06-09 to scope this item to
+      the flip event it actually performed; the verification work lives with its owners
+      (T2.12 done; T2.11a open). Originals for the record: GHAS settings verified post-flip;
+      branch-protection ruleset verified post-flip; Codespace green preflight; gh repo view
+      visibility==public (gh CLI unavailable on web -- verified via API instead).
+      bootstrap_completion_exempt under scope (c): gating CD.20 ratifies post-hoc.
 
   - id: T2.14
     tier: T2
@@ -3329,7 +3671,7 @@ tier_items:
          against telemetry_agent_turns (owned by the T3.2 causal-chain verifier item) and
          restoration of its covers globs in validate.py --coverage. Gated on CD.17
          telemetry trust (T3.2/T3.3).
-    depends_on: [T2.13]
+    depends_on: [T2.13, T3.2]    # T3.2 added 2026-06-09 (audit F-022): two of three criteria require telemetry_agent_turns / the rewritten causal-chain verifier (T3.2-era); without the edge this item computed eligible while none of its criteria were satisfiable -- the remaining ops_execution_plans criterion stays CD.17/T4.2-gated as annotated below
     files_in_scope:
       - config/agent/data_quality/ops.yaml
       - scripts/verifiers/__init__.py
@@ -3432,14 +3774,16 @@ tier_items:
     related_candidate_decisions: [CD.34]
     effort: M
     strategic: false
+    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-06-05"
+    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.34 pending; CD.34 ratifies post-hoc via the portal vehicle (a future numbered Decision)."
     progress_note: |
       2026-06-05: Phase 0+1 shipped -- kislerdm/neon provider + project (aws-eu-west-2) + scoped ducklake_ops role/database + Secrets Manager DSN (terraform/personal/neon_ducklake_catalog.tf, lockfile pinned), Neon-aware apply guard (blocks neon_* update/replace/delete, allows create on compensating controls), ducklake_ops migration DDL, smoke-test CLI (--attach/--churn-gate/--restore-drill, 100% mocked cov), CD.34/T2.16b posture revised to auto-apply-included. Phase 0 oidc.tf CI-apply-role secretsmanager grant added. Schema-DDL-captured exit-criterion met.
       2026-06-05: Phase 2 shipped (this commit) -- VP-1 (`--attach`) PASS once `CREATE SCHEMA IF NOT EXISTS ducklake_ops` was applied to the live Neon DB (post-provision step from migrations/ducklake_ops_schema.sql). VP-2 (`--churn-gate`) recorded as latency-waived-with-rationale (authorized 2026-06-05): collision sub-gate PASS (collision_rate=0.000 vs 0.20 CD.33 budget; the architectural OCC sub-gate's real subject); latency sub-gate NOT MET in any available test env (local Windows residential RTT: p95=4774ms post pre-warm + shared-creds fix; CC-web Linux: TCP/5432 egress-blocked, SYN dropped under "Full" policy). Decomposition: ~1100ms connection open + ~3500ms in 5 sequential DuckLake commits (each commit = S3 parquet write + Neon metadata write x residential RTT). Production path (Lambda -> Neon, same eu-west-2, sub-ms RTT) strips residential RTT; projected p95 lands under 2000ms; real ops writes are single-commit. CD.33 budget constants UNCHANGED in source (NOT a relaxation); real numbers + decomposition recorded (NOT a Decision-55 silent degrade). See docs/SESSION_LOG.md and the VP-2 disposition row in docs/plans/PLAN-ducklake-rds-retirement.md.
       2026-06-05: RDS retired (aws_db_instance.ducklake_catalog destroyed in 6m56s, final snapshot `ducklake-catalog-final-snapshot` retained as `available` 20GB postgres 16.13). Stack cleanup: aws_db_subnet_group, aws_security_group + ingress/egress rules, aws_db_parameter_group, 5 outputs and the 3 ducklake_catalog_* vars all removed. The aws_security_group destroy initially AccessDenied on ec2:DescribeNetworkInterfaces (AWS provider 5.x pre-delete ENI check; iterative-discovery gap not pre-granted -- documented in the plan's Follow-on item 2); resolved by adding the action to PlatformDuckLakeCatalogProvisioning via PlatformAdmin's iam:* and re-applying.
       2026-06-05: IAM pruned. The 5 transitional github_ci_apply Sids (RDSDuckLakeCatalogRead, RDSDuckLakeCatalogParameterGroupModify, EC2NetworkingDescribeForRDS, KMSDescribeForRDS, SecretsManagerRDSMasterSecretRead) removed; IAMPlatformRolesRead + both Neon Sids retained. aws_iam_role_policy.platform_admin_ducklake_catalog (`PlatformDuckLakeCatalogProvisioning`) destroyed; `aws iam get-role-policy` -> NoSuchEntity. Branch `terraform plan` is now clean (no changes), so the post-merge sandbox push run is a no-op.
-      Recs dispositioned: rec-2062/2064/2065/2066/2068/2069/2078/2080 closed; rec-2063 WONTFIX; rec-2067 closed + new Neon-egress rec filed; rec-2079 left open as the post-Phase-2 cleanup follow-on. CD.34 ratification deferred (plan keeps it pending; ratification to Decision 82 happens in the separate retrospective/governance plan).
+      Recs dispositioned: rec-2062/2064/2065/2066/2068/2069/2078/2080 closed; rec-2063 WONTFIX; rec-2067 closed + new Neon-egress rec filed; rec-2079 left open as the post-Phase-2 cleanup follow-on. CD.34 ratification deferred (plan keeps it pending; ratification happens via a future numbered Decision in the separate retrospective/governance plan -- 'Decision 82' is no longer reserved for it, audit F-033).
 
   - id: T2.17
     tier: T2
@@ -3480,8 +3824,10 @@ tier_items:
     related_candidate_decisions: [CD.31, CD.10, CD.33, CD.34]
     effort: M
     strategic: false
+    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-06-07"
+    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.34 pending; CD.34 ratifies post-hoc via the portal vehicle. (Gating CD.31/CD.33 were already ratified at completion.)"
 
   - id: T2.18
     tier: T2
@@ -3530,11 +3876,13 @@ tier_items:
             env-configurable on the maintenance Lambda. Numeric tuning + real high-write tables carry to T2.19.
         (4) ops_compaction deprecation marker + manifest notes + T2.19-gated decommission runbook
             (Section 5 of ducklake-catalog-operations.md). No behavioural change.
-      Remaining (carry to T2.19):
-        - ops_compaction retirement (live Iceberg write path until T2.19 cutover, Decision 78 clause 7)
-        - Final co-tuning numeric thresholds (real high-write-rate tables not yet in DuckLake)
-        - T2.19 restore-drill gate update (pg_restore for --format=custom; existing drill uses psql/plain-SQL)
-        - Deploy + post-deploy smoke gates (VP7-14; human-gated terraform apply pending)
+      Remaining (re-pointed 2026-06-09, audit F-018 -- the deferred-table work now has a named
+      carrier, T2.26):
+        - ops_compaction retirement -> T2.26 (live Iceberg write path until the deferred-table
+          migrations land there; Decision 78 clause 7)
+        - Final co-tuning numeric thresholds -> T2.26 (real high-write-rate tables enter DuckLake there)
+        - pg_restore-for---format=custom restore-drill gate update -> T2.26 start-gate (rec-2113)
+        - Deploy + post-deploy smoke gates (VP7-14; human-gated terraform apply pending) -- stays here
 
   - id: T2.19
     tier: T2
@@ -3547,7 +3895,15 @@ tier_items:
       ducklake_table_changes CDC and time-travel for richer audit. Resolve OQ.7 (Athena escape hatch path
       after DuckLake adoption) and OQ.10 (OCC writer-concurrency enforcement strategy). This is FP-B: a
       full V3 IMPLEMENTATION plan (V3 because it deploys and invokes the live DuckLake write path).
-      Lambda-deploy DEFERRED per Decision 67 / CD.16 until per-Lambda gating resolves.
+      [Rescoped 2026-06-09, audit F-018: this item's scope is the ops_recommendations slice
+      (rescoped recs-first 2026-06-08 and signed off 2026-06-09); the four DEFERRED tables
+      (ops_decisions, ops_session_log, ops_execution_plans, ops_priority_queue) + ops_compaction
+      retirement are owned by the successor item T2.26 -- exit criteria below are scoped
+      accordingly. The original "Lambda-deploy DEFERRED per Decision 67" line is retired:
+      CD.16 ratified and Decision 79 lifted the blanket freeze (audit F-009) -- the recs-slice
+      Lambdas are already deployed live. REMAINING for this item: the two closed-boundary
+      hardening criteria below (audit F-003/F-004) -- the recs read-side cache path still
+      falls back to Athena unconditionally, contradicting the signed-off closed boundary.]
     depends_on: [T2.16, T2.17, T2.18]
     files_in_scope:
       - scripts/ops_data_portal.py    # swap staging mechanism; preserve portal surface
@@ -3555,22 +3911,24 @@ tier_items:
       - src/lambdas/ducklake_writer/    # implement write path
       - src/lambdas/ducklake_reader/    # implement read path
     exit_criteria:
-      - "All ops writes go through DuckLake writer via ops_data_portal; Decision 69 Single-Portal invariant preserved"
-      - "DuckDBIcebergReader replaced by DuckLake reader for operational read paths"
+      - "All ops_recommendations writes go through the DuckLake writer via ops_data_portal; Decision 69 Single-Portal invariant preserved (full-cutover criterion 'ALL ops writes' re-homed to T2.26 per the 2026-06-08 recs-first rescope -- audit F-018)"
+      - "DuckDBIcebergReader replaced by DuckLake reader for the recs operational read paths (deferred tables keep DuckDBIcebergReader until T2.26)"
       - "SCD2 schema reproduced in DuckLake (current_state field); CDC / time-travel optional extension documented"
       - "OQ.7 resolved: Athena escape hatch strategy after DuckLake adoption documented + tested"
       - "OQ.10 resolved: writer-concurrency = bounded application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer + ducklake_maintenance singleton; reserved-concurrency=1 and SQS FIFO rejected as over-serialising (CD.33 clause 2)"
-      - "Decision 69 Single-Portal invariant verified: no write path bypasses ops_data_portal"
+      - "Decision 69 Single-Portal invariant verified: no recs write path bypasses ops_data_portal"
       - "ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)"
-      - "Closed boundary verified: every ops read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass reads the Neon catalog credential (Secrets Manager) + S3 (CD.33 clause 6 / OQ.7 / H2 / O-1; CD.34)"
-      - "Catalog DR restore drilled: a catalog rebuilt from the daily S3 pg_dump (version-matched to the pinned engine) passes read-your-write before cutover sign-off; re-drills the T2.16b proof against production-shaped data (CD.33 O-2 as amended by CD.34)"
+      - "Closed boundary verified for recs: every ops_recommendations read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass reads the Neon catalog credential (Secrets Manager) + S3 (CD.33 clause 6 / OQ.7 / H2 / O-1; CD.34)"
+      - "[OPEN -- added 2026-06-09, audit F-003] sync_ops recs cache-pull/rebuild is backend-gated: on the ducklake backend a DuckLakeReader failure loud-fails (or skips with a warning) instead of silently falling back to the stale Athena ops_recommendations_current view; the Athena fallback is reachable ONLY under OPS_STORAGE_BACKEND=iceberg (designed rollback). Evidence at audit time: scripts/sync_ops.py _pull_single_table and _rebuild_local_cache fell back unconditionally"
+      - "[OPEN -- added 2026-06-09, audit F-004] validate.py carries a recs-topology guard: asserts the 3 OPS_STORAGE_BACKEND default sites are 'ducklake', the recs reader path has no Athena branch, and any recs Athena reference is iceberg-gated -- so a regression re-opening the recs Athena path fails CI"
       - "Connection-churn / OCC-commit-latency headroom re-validated against production-shaped concurrency at cutover (re-drills the T2.16b churn gate, which proved it on an empty catalog under synthetic burst; CD.34)"
       - "current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4 / C-1)"
       - "SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
+      - "[Re-homed to T2.26 start gate -- audit F-018] Catalog DR restore drill with pg_restore against production-shaped data (rec-2113 HARD GATE before the next ops table migrates; the pgclient layer lacked pg_restore at recs sign-off)"
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
-    strategic: false
+    strategic: false    # freeze override (AGENTS.md / CD.17): executed as a sequence of atomic IMPLEMENTATION plans (recs-first rescope)
     status: in_progress
     progress_note: |
       - 2026-06-08: RECS-FIRST slice (PLAN-ducklake-ops-cutover, recs-first rescope). ops_recommendations
@@ -3677,7 +4035,7 @@ tier_items:
       - "The privileged apply role is assumable only from the gated job context; OIDC trust pinned to refs/heads/main"
     related_candidate_decisions: [CD.35]
     effort: L
-    strategic: false
+    strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
     status: not_started
   - id: T2.23
     tier: T2
@@ -3701,7 +4059,7 @@ tier_items:
       - "The bootstrap root's state/lock + apply identity are provisioned by a documented one-time admin action, not managed by the pipeline"
     related_candidate_decisions: [CD.35]
     effort: L
-    strategic: false
+    strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
     status: not_started
   - id: T2.24
     tier: T2
@@ -3748,6 +4106,90 @@ tier_items:
       - "CD.35 ratified as a numbered Decision via the log-decision path (DECISIONS.md not edited until ratification)"
     related_candidate_decisions: [CD.35]
     effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.26
+    tier: T2
+    name: Deferred ops-table DuckLake migrations + ops_compaction retirement
+    intent: |
+      Carrier for the T2.19 recs-first rescope's deferred half (created 2026-06-09, audit F-018:
+      the deferral previously lived only in progress notes, invisible to eligibility computation).
+      Migrate the four still-Iceberg ops tables -- ops_decisions, ops_session_log,
+      ops_execution_plans, ops_priority_queue -- to the closed DuckLake writer/reader boundary,
+      table by table, preserving the Decision 69 Single-Portal invariant; then retire
+      ops_compaction (its deprecation marker + T2.19-gated decommission runbook already exist,
+      docs/runbooks/ducklake-catalog-operations.md Section 5) and the per-table Athena _current
+      views (coordinating with T2.7, which owns whatever _current surface survives). Sequencing
+      notes per table: ops_decisions rebuilds from DECISIONS.md (coordinate with T1.5/T5.4);
+      ops_session_log is slated for retirement per T-1.9's INTENT (proposed CD.NN.a) -- migrate
+      OR retire per that decision, do not migrate blindly; ops_priority_queue coordinates with
+      the log-storage.md producer flow. Decommission sweep includes the orphaned
+      scripts/sync_athena_to_pgvector.py (audit F-037: zero roadmap representation, no live
+      caller, reads the retiring Athena path) and reconciling where the live ops_compaction
+      deployment is terraform-managed (currently the retired work-root terraform/scheduled_agents.tf
+      -- audit F-038). START GATE (hard, from T2.19): rec-2113 catalog-DR restore drill with
+      pg_restore passes against production-shaped data BEFORE the first table migrates
+      (Decision 81 cl.7 compensating control).
+    depends_on: [T2.19]
+    decomposition_hints:
+      split_by: per_table
+      atomic_plans:
+        - "Restore-drill gate (rec-2113): pgclient layer gains pg_restore; drill passes (precursor)"
+        - "Migrate ops_decisions (coordinate T1.5/T5.4 DECISIONS.md lifecycle)"
+        - "Migrate or retire ops_session_log (per T-1.9 INTENT / proposed CD.NN.a)"
+        - "Migrate ops_execution_plans"
+        - "Migrate ops_priority_queue (log-storage.md producer flow)"
+        - "Retire ops_compaction + per-table _current views + Athena-path orphan cleanup (sync_athena_to_pgvector.py)"
+      rationale: |
+        Per-table atomic IMPLEMENTATION plans under the CD.17 freeze (same pattern as the
+        recs-first slice); each table has distinct producers/consumers and its own cutover
+        verification. The destructive tail (compaction retirement, view deletion) lands last.
+    files_in_scope:
+      - scripts/ops_data_portal.py
+      - src/common/iceberg_reader.py
+      - src/lambdas/ducklake_writer/
+      - src/lambdas/ducklake_reader/
+      - src/lambdas/ops-compaction/    # retired in the final atomic plan
+      - scripts/sync_athena_to_pgvector.py    # deleted (orphan, audit F-037)
+      - config/agent/data_quality/ops.yaml
+    exit_criteria:
+      - "START GATE: rec-2113 pg_restore drill passes against production-shaped data before the first table migrates"
+      - "All four deferred ops tables write via ducklake_writer and read via ducklake_reader through the portal; OPS_STORAGE_BACKEND per-table routing (or full flip) documented"
+      - "ops_compaction retired (function + schedule removed; manifest status flipped; runbook Section 5 executed); no Iceberg ops write path survives outside the designed rollback"
+      - "Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)"
+      - "scripts/sync_athena_to_pgvector.py deleted; rg returns no references"
+      - "DQ checks for migrated tables run against the DuckLake backend and pass"
+      - "Replacement closure verified per the implement skill's Replacement closure check: old paths dead or designed-rollback-only, no unconditional fallbacks"
+    related_candidate_decisions: [CD.31, CD.33, CD.34]
+    effort: L
+    strategic: false    # freeze override (AGENTS.md / CD.17): decomposed per_table into atomic IMPLEMENTATION plans
+    status: not_started
+
+  - id: T2.27
+    tier: T2
+    name: Read-path contract reconciliation post recs cutover (read-engine.yaml + ops-data-store.md)
+    intent: |
+      Close the contract drift the 2026-06-09 audit found (F-005): docs/contracts/read-engine.yaml
+      (the T2.5 engine-choice contract) still declares an Athena escape hatch for ops_recommendations
+      reads and contains zero DuckLake awareness, contradicting the shipped T2.19 closed boundary
+      (AGENTS.md: NO Athena escape hatch on the ducklake backend); docs/contracts/ops-data-store.md
+      still places recs on Iceberg/Athena with OpsWriter staging. Amend read-engine.yaml to the
+      per-backend topology (recs = DuckLake closed boundary via ducklake_reader; deferred tables =
+      DuckDB-on-Iceberg + Athena escape hatch until T2.26) and banner ops-data-store.md's recs rows
+      as superseded-by-DuckLake (the .md's full retirement remains T0.12.5's job -- this is a
+      truth-patch, not the retirement). Contracts are agent-facing canonical surfaces; leaving them
+      on the pre-cutover topology is the exact drift CD.13/CD.25 exist to prevent.
+    depends_on: []
+    files_in_scope:
+      - docs/contracts/read-engine.yaml
+      - docs/contracts/ops-data-store.md
+    exit_criteria:
+      - "read-engine.yaml describes the per-backend read topology: recs via ducklake_reader (closed boundary, no Athena), deferred tables via DuckDB-on-Iceberg with iceberg-gated Athena escape hatch; rg ducklake docs/contracts/read-engine.yaml returns hits"
+      - "ops-data-store.md recs sections carry a superseded-by-DuckLake banner pointing at CD.31/CD.33/Decision 81 and T2.19; deferred-table sections unchanged"
+      - "Neither contract claims an unconditional Athena path for ops_recommendations"
+    related_candidate_decisions: [CD.31, CD.33, CD.25]
+    effort: XS
     strategic: false
     status: not_started
 
@@ -3808,7 +4250,7 @@ tier_items:
     exit_criteria:
       - "Verifier emits a synthetic telemetry record at one end and asserts arrival at the other within SLA"
       - "Failure modes (lost in outbox, lost in S3, lost in Iceberg compaction, lost in view) all surfaced with distinct exit codes"
-      - "Scheduled hourly via the EC2 runner cron"
+      - "Scheduled hourly via a GitHub Actions schedule or EventBridge (criterion re-substrated 2026-06-09, audit F-016: the original 'EC2 runner cron' pinned to the runner retired by CD.21/Decision 73; pick the mechanism at plan time per the Decision 62 / CD.29 inspectability preference)"
     related_intents: [verification-system, telemetry-system]
     effort: M
     strategic: false
@@ -3823,7 +4265,7 @@ tier_items:
       - .github/workflows/scheduled-telemetry-analysis.yml
     exit_criteria:
       - "Agent runs daily and files anomaly recs via log-rec"
-      - "False-positive rate below threshold (track via rec-curator)"
+      - "False-positive rate below a threshold DEFINED at decomposition time (the strategic decomposition must name the number/formula and where it lives -- e.g. a governed config field; flagged unadjudicable as written, 2026-06-09 audit F-035); tracked via rec-curator"
     related_intents: [telemetry-system, autonomous-improvement-control-plane]
     effort: L
     strategic: true
@@ -3854,16 +4296,23 @@ tier_items:
       contract under T1.12's wave. Gated on CD.16 ratification (deploy
       in-scope). Absorbs GAP-tca-aggregation from ROADMAP-PRODUCT.yaml;
       PRODUCT layer items L2.pc.10, L3.exec.11, MVP.4 depend on this.
-    depends_on: [T0.7a, T0.12.5, T3.4]
+      [Deps amended 2026-06-09, audit F-011/E-001: the prior T3.4 edge put a
+      product-MVP-critical aggregation Lambda behind the full XL control-plane
+      loop closure -- a tier-policy edge, not a producer edge (T3.4 produces
+      nothing this item consumes; TCA consumes per-fill records + the contract
+      ritual). With MVP.4/L2.pc.10/L3.exec.11 depending on this item, the chain
+      depth was the product's practical blocker. If loop-closure integration
+      later needs TCA signals, that is a T3.4-side consumption, not a
+      prerequisite here.]
+    depends_on: [T0.7a, T0.12.5]    # T3.4 edge dropped 2026-06-09 (audit F-011) -- see intent
     decision_required_before:
-      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force)"
+      - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
     files_in_scope:
       - docs/contracts/cost_curves.yaml
       - docs/contracts/lambda-tca-aggregation.yaml
       - src/lambdas/tca_aggregation/handler.py
-      - src/lambdas/tca_aggregation/Dockerfile
-      - src/lambdas/tca_aggregation/manifest.yaml
-      - terraform/lambda_tca_aggregation.tf
+      - src/lambdas/tca_aggregation/manifest.yaml    # CD.24 per-Lambda manifest (zip packaging; vestigial Dockerfile entry removed 2026-06-09 per audit F-008/D-002)
+      - terraform/personal/lambda_tca_aggregation.tf    # active module is terraform/personal/
     exit_criteria:
       - "cost_curves.yaml + lambda-tca-aggregation.yaml both ratified at contract_version: 1"
       - "Lambda aggregates per-fill records into cost curves via Athena/DuckDB; emits typed records via portal"
@@ -4091,8 +4540,10 @@ tier_items:
       Per CD.27, the substrate is Step Functions scheduled executions (EventBridge-triggered) wrapping
       the same agent-persona Durable Functions from T4.2 -- each scheduled agent reuses the persona
       Durable Function pattern with a thin per-agent prompt wrapper. Alternative substrate (still under
-      consideration at T4.3 implementation time): GitHub Actions scheduled workflows on the self-hosted
-      runner (Decision 68). CD.27 keeps both options open; T4.3 atomic plans pick one.
+      consideration at T4.3 implementation time): GitHub Actions scheduled workflows on GITHUB-HOSTED
+      runners (option re-substrated 2026-06-09, audit F-016: the original named the Decision-68
+      self-hosted runner, retired by CD.21/Decision 73). CD.27 keeps both options open; T4.3 atomic
+      plans pick one.
 
       Either way, findings write via log-rec Lambda; telemetry emits via agent_sdk; LLM transport is
       LiteLLM per CD.28.
@@ -4104,7 +4555,7 @@ tier_items:
       - "All six scheduled agents run on schedule"
       - "Findings file recs via log-rec Lambda"
       - "Telemetry emitted for each invocation"
-      - "Substrate choice (Step Functions scheduled execution vs self-hosted runner cron) documented in T4.3 atomic plan with rationale"
+      - "Substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented in T4.3 atomic plan with rationale"
     related_candidate_decisions: [CD.27, CD.28]
     effort: M
     strategic: false
@@ -4150,11 +4601,17 @@ tier_items:
   - id: T5.2
     tier: T5
     name: company-aws-profile account teardown (30d grace)
-    intent: After T2.* complete and 30d grace observed, tear down old account resources to halt billing. Terraform destroy or AWS console.
-    depends_on: [T2]
+    intent: |
+      After the MIGRATION subset of T2 completes (T2.1 re-deploy, T2.2 data import, T2.3 reference
+      sweep) and 30d grace is observed, tear down old account resources to halt billing. Terraform
+      destroy or AWS console. [Deps re-pointed 2026-06-09, audit F-027: the prior depends_on [T2]
+      held the cost-bearing teardown hostage to the ENTIRE growing T2 tier -- the CD.35 CI/CD program
+      (T2.20-25), the DuckLake program (T2.16-19) and absorbers were appended after this item was
+      authored and are irrelevant to old-account teardown. G.10 rewritten to match.]
+    depends_on: [T2.1, T2.2, T2.3]
     files_in_scope: []
     exit_criteria:
-      - "30 days elapsed since T2.1 + T2.2 completion"
+      - "30 days elapsed since T2.1 + T2.2 completion (both completed 2026-05-28/29; grace elapses ~2026-06-28)"
       - "Old account S3 buckets / Iceberg tables / DynamoDB tables removed or marked for retention if needed"
       - "Cost-report confirms zero billing in old account post-teardown"
     related_candidate_decisions: [CD.6]
@@ -4234,20 +4691,26 @@ tier_items:
 
 cross_tier_gates:
   - id: G.1
-    name: T-1 must complete before T1+ ratifies anything new
-    rule: tier_complete("T-1")
-    rationale: Without T-1.4 (preflight computation) and T-1.5 (validate schema check), the roadmap is documentation only — no harness consumption. Ratifications via log-decision (T-1.1) reference roadmap items by id; the schema must enforce that those ids resolve.
-  - id: G.2
-    name: T0 must complete before web-container sessions can do meaningful platform work
-    rule: tier_complete("T0")
-    rationale: Hooks, statusline, preflight, and agent_sdk all break in Linux container without T0.1-T0.11. Sessions can run from the Windows VM until T0 completes.
+    name: Roadmap harness integration (schema + preflight) must precede ratifications
+    rule: T-1.4.status == "complete" and T-1.5.status == "complete"
+    rationale: |
+      Ratifications reference roadmap items by id; the schema must enforce that those ids resolve
+      (T-1.5) and preflight must compute state (T-1.4) or the roadmap is documentation only.
+      [Rewritten 2026-06-09, audit F-028: the original rule tier_complete("T-1") over-claimed --
+      ratifications (Decisions 78/79/81) proceeded with T-1 at 10/20 complete because the
+      RATIONALE only ever needed T-1.4 + T-1.5, both complete since 2026-05-19. The rewritten
+      rule states the real constraint and is satisfied.]
+  # G.2 deleted 2026-06-09 (audit F-028): its premise ("T0 must complete before web-container
+  # sessions can do meaningful platform work") was falsified by operating reality -- Decision 76
+  # made web sessions the primary surface with T0 at 8/19 complete, because the load-bearing
+  # subset (T0.1, T0.5, T0.9-T0.12) had landed. Same deletion rationale as G.3/G.4/G.5/G.7:
+  # a gate the practice contradicts invites drift.
   # G.3, G.4, G.5, G.7 deleted: redundant with the depends_on graph already enforced by T-1.5 schema check.
   # The architect critique flagged these as restatements; keeping them invited drift. Constraints now live in
   # the single source of truth (depends_on) per CD.13.
-  - id: G.6
-    name: T1.5 ops_decisions Phases 0-4 complete before T1.6 final cutover (DQ Phase 5)
-    rule: T1.5.status == "complete"
-    rationale: HARD cross-arc prerequisite documented in both INTENT-dq-enforcement and INTENT-ops-decisions-graduation. Phase 4 corrects data; Phase 5 enforces. Wrong order makes Phase 5 unconditionally blocking against uncorrected data. T1.5 exit criteria require Phase 4 complete; T1.6 depends_on T1.5 already encodes this.
+  # G.6 deleted 2026-06-09 (audit F-028): its own rationale conceded "T1.6 depends_on T1.5
+  # already encodes this" -- the exact redundancy for which G.3/G.4/G.5/G.7 were deleted.
+  # The Phase-4-before-Phase-5 ordering lives in T1.5's exit criteria + T1.6's depends_on.
   - id: G.8
     name: T3.2 causal-chain verifier latest run PASS before T3.3 cloud analysis agent
     rule: T3.2.status == "complete" and T3.2.latest_run.verdict == "PASS"
@@ -4262,9 +4725,15 @@ cross_tier_gates:
       2026-05-27]: gate name updated from "Fargate executor handler" to "agent-persona Durable Functions"
       per CD.27 substrate pivot; rule expression structure unchanged.
   - id: G.10
-    name: T2 state migration complete plus 30-day grace before T5.2 account teardown
-    rule: all_in_tier_with_status("T2", "complete") and grace_period_elapsed(T2.1, 30)
-    rationale: 30-day grace period after migration completes before tearing down the old account. Rollback option preserved. Uses grace_period_elapsed(item, days) per gate_helpers table.
+    name: T2 MIGRATION subset complete plus 30-day grace before T5.2 account teardown
+    rule: T2.1.status == "complete" and T2.2.status == "complete" and T2.3.status == "complete" and grace_period_elapsed(T2.1, 30)
+    rationale: |
+      30-day grace period after the migration completes before tearing down the old account.
+      Rollback option preserved. Uses grace_period_elapsed(item, days) per gate_helpers table.
+      [Rewritten 2026-06-09, audit F-027: the original all_in_tier_with_status("T2","complete")
+      gated the cost-bearing teardown on the ENTIRE growing T2 tier -- the CD.35 CI/CD program and
+      DuckLake items appended after authoring are irrelevant to old-account teardown. The rule now
+      names the actual migration prerequisites, matching T5.2's re-pointed depends_on.]
   # G.11, G.12, G.13 deleted: redundant with the depends_on graph encoded in T2.13 and T2.11a.
   # Security rationale (live-account-reference exposure before T2.3, OIDC before T2.10, devcontainer
   # functional before T2.11a) is preserved in those items' intent and inline depends_on comments.
@@ -4275,11 +4744,21 @@ open_questions:
   - id: OQ.1
     question: AGENTS.md mechanism — symlink vs duplicate-with-CI-parity-check
     resolution_tier: T0.9
-    notes: Symlinks are awkward on Windows clones; duplicate-with-CI is more verbose but portable. Resolved at T0.9 because T0.9 creates AGENTS.md and cannot complete without committing to a mechanism. T2.11b consumes the already-created artefact.
+    notes: |
+      RESOLVED (status reconciled 2026-06-09, audit F-020): the duplicate-with-CI-parity mechanism
+      shipped at T0.9 (complete 2026-05-19) -- AGENTS.md is canonical, CLAUDE.md is the
+      '@AGENTS.md' pointer, validate.py enforces parity. Retained for traceability.
+      Original notes: symlinks are awkward on Windows clones; duplicate-with-CI is more verbose
+      but portable. T2.11b consumes the already-created artefact.
   - id: OQ.2
     question: Pre-commit bundling scope — just branch gates, or also ruff / EOF / secrets-scan
     resolution_tier: T0.10
-    notes: Bundling is convenient but enlarges the migration's diff. Branch gates only is the minimum.
+    notes: |
+      RESOLVED (status reconciled 2026-06-09, audit F-020): T0.10 shipped 2026-05-19 with the
+      bundling decision made in .pre-commit-config.yaml -- branch gates (no-commit-to-branch)
+      plus detect-secrets + sensitive-identifier blocking; ruff not bundled (lives in --pre).
+      Retained for traceability. Original notes: bundling is convenient but enlarges the
+      migration's diff; branch gates only is the minimum.
   - id: OQ.3
     question: REDACTED-VPN-in-container — include in first iteration, or defer until concrete need
     resolution_tier: T2.6
@@ -4287,7 +4766,13 @@ open_questions:
   - id: OQ.4
     question: GitHub OIDC vs personal-account precedence for IAM role assumption
     resolution_tier: T0.3
-    notes: Per topology INTENT -- OIDC against company-aws-profile may be blocked by corporate IAM. Skipping straight to personal-account was proposed; OIDC against personal-account is deferred to T2.10 / CD.21 public-flip. Current substrate for personal-account is Pattern B (static-key + chained AssumeRole) for unattended agents and breakglass-user console-login for human ops. Identity Center is not used for the personal account per CD.26.
+    notes: |
+      RESOLVED (status reconciled 2026-06-09, audit F-020): both halves shipped -- Pattern B
+      (static-key + chained AssumeRole, CD.26) at T0.3 (complete 2026-05-29) for unattended
+      agents, and GitHub OIDC federation at T2.10 (complete 2026-05-28, CD.21) for CI.
+      Retained for traceability. Original notes: OIDC against company-aws-profile may be
+      blocked by corporate IAM; breakglass-user console-login for human ops; Identity Center
+      not used for the personal account per CD.26.
   - id: OQ.5
     question: Will iceberg_tables_generated.tf be committed or gitignored
     resolution_tier: T0.13
@@ -4322,6 +4807,9 @@ open_questions:
   - id: OQ.8
     question: RDS catalog backend -- sizing, RDS Proxy, and credential mechanism
     resolution_tier: T2.16
+    # RESOLVED-PENDING-RATIFICATION (reconciled 2026-06-09, audit F-020): work shipped (T2.16
+    # complete 2026-06-03; T2.16b Neon migration complete 2026-06-05); the re-resolution below is
+    # the operative answer and formalises when CD.34 ratifies. Retained open-in-form until then.
     notes: |
       Catalog backend confirmed as standard RDS PostgreSQL (Aurora DSQL dropped as unvalidated against
       DuckLake's PG12+/SQL-92/PK-based-OCC contract). Sizing: db.t4g.micro single-AZ gp3 is the proposed
@@ -4338,6 +4826,10 @@ open_questions:
   - id: OQ.9
     question: Catalog durability, DR strategy, and SPOF mitigation
     resolution_tier: T2.16
+    # RESOLVED-PENDING-RATIFICATION (reconciled 2026-06-09, audit F-020): the CD.34 re-resolution
+    # below is shipped (daily pg_dump DR + freshness alarm live per T2.18 FP-B; tested restore at
+    # T2.16b) and formalises when CD.34 ratifies. The pg_restore production-shaped drill is the
+    # T2.26 start gate (rec-2113).
     notes: |
       The catalog is the lakehouse single point of failure: snapshots are catalog rows; un-flushed inlined
       data (threshold 10 rows default) lives ONLY in the catalog -- not in S3 -- until flushed. RDS PITR
@@ -4374,6 +4866,9 @@ open_questions:
   - id: OQ.11
     question: Inlining flush policy -- threshold, flush timing, and catalog-as-durability acceptance
     resolution_tier: T2.18
+    # RESOLVED-PENDING-ENACTMENT (reconciled 2026-06-09, audit F-020): direction decided
+    # (inlined_rows=0 for ALL tables per the CD.34 re-resolution below); enactment completes with
+    # T2.18 (in_progress) and ratification with CD.34.
     notes: |
       DuckLake default inlining threshold is 10 rows. Un-flushed inlined data is durable only in the
       catalog (RDS), not in S3. Options: (a) flush-on-write (call flush_inlined_data after every write;
@@ -4434,6 +4929,21 @@ open_questions:
       instance" to "shared Neon project + separate databases" vs "separate Neon projects per env" (Neon
       branching fits per-env catalogs). The question stays open (FP-C); only the option wording updates.
 
+  - id: OQ.15
+    question: Agent verb surface shape -- extend the ducklake_writer/reader verb sets, or separate verb Lambdas fronting them?
+    resolution_tier: T0.6
+    notes: |
+      Opened 2026-06-09 (audit F-008 integration). CD.33 committed the writer/reader/maintenance
+      path split + closed boundary and explicitly left the verb surface extensible; CD.10's
+      six-Lambda enumeration was illustrative. For cut-over tables (recs today; the T2.26 set
+      later) the transport MUST be the closed boundary either way (Decision 81 cl.7). Options:
+      (a) extend ducklake_writer/ducklake_reader with the agent-facing verbs (log_rec, update_rec,
+      query verbs) -- fewer Lambdas, verb logic co-located with the schema gate; (b) thin verb
+      Lambdas that validate payloads and call through the writer/reader Function URLs -- cleaner
+      CD.10 two-principal separation and per-verb SLOs (T1.9), at the cost of a hop. Resolve at
+      T0.6 plan time; the choice shapes T0.7a/c and T1.1-T1.3. Either resolution preserves the
+      closed boundary and the CD.10 PlatformDev/PlatformAdmin allow-list semantics.
+
 known_gaps:
   # Items deliberately not in the roadmap that the user / future sessions should be aware of.
   - id: KG.1
@@ -4451,8 +4961,13 @@ known_gaps:
       Enacts OD-5 from docs/INTENT-multi-product-platform.md. See also CD.32 (multi-product platform
       topology candidate decision) and KG.14 (multi-product enforcement substrate unbuilt).
   - id: KG.2
-    gap: 258 open recommendations not directly mapped to tier items
-    notes: The recs are surgical implementation tasks. Most align loosely with one tier item (e.g. ~35 executor recs align with T4.2). Mapping is a future exercise; for now treat the recs as "implementation hints" not "tier items".
+    gap: A large open-recommendation backlog (order ~250 at the 2026-05-18 snapshot) is not directly mapped to tier items
+    notes: |
+      The recs are surgical implementation tasks. Most align loosely with one tier item (e.g.
+      ~35 executor recs aligned with T4.2 at snapshot time). Mapping is a future exercise; for
+      now treat the recs as "implementation hints" not "tier items". (Count softened 2026-06-09,
+      audit F-020: the prior hard-coded "258" was a frozen snapshot unverifiable from a fresh
+      container -- the live count comes from preflight open_recommendations, not this file.)
   - id: KG.3
     gap: Provider-agnostic executor INTENT not deeply consumed
     notes: docs/INTENT-provider-agnostic-executor.md was newly added to main and skimmed only briefly during planning. T4.2 should re-read it during its STRATEGIC decomposition.
@@ -4492,17 +5007,16 @@ known_gaps:
       T0.4 is rewritten (per the same pivot) for Anthropic-direct + DeepSeek API key provisioning. The
       original Bedrock-model-access-request critical path is moot.
   - id: KG.8
-    gap: Self-hosted runner SPOF during T2.1 re-deploy
+    gap: CLOSED -- Self-hosted runner SPOF during T2.1 re-deploy (superseded by CD.21)
     notes: |
-      Decision 68 made the EC2 runner the canonical CI substrate. T2.1 re-deploys it in the personal
-      account. If new runner has registration / IAM / inference-credential (per CD.28) issues, all CI
-      fails until repaired. No remote-runner fallback configured. Mitigation options for the T2.1 plan:
-      (a) overlap window — keep old account runner registered until new runner passes 7d stability,
-      (b) temporary fallback to GitHub-hosted runners (billed minutes; document acceptance), (c)
-      local-validate sufficient for forward-fix during outage. Decide at T2.1 implementation time.
-      [Amendment 2026-05-27]: replaced "Bedrock issues" with "inference-credential (per CD.28) issues"
-      -- Bedrock no longer in the architecture; the credential surface is now DeepSeek + Anthropic API
-      keys in Secrets Manager.
+      CLOSED 2026-06-09 (audit F-020): the gap is moot -- the self-hosted runner was RETIRED
+      2026-05-28 per CD.21/Decision 73 (realized by T2.10, complete); CI runs entirely on
+      GitHub-hosted ubuntu-latest with OIDC, which is the very fallback option (b) below.
+      T2.1 completed without re-deploying a runner. Retained for traceability.
+      Original gap: Decision 68 made the EC2 runner the canonical CI substrate; T2.1 was to
+      re-deploy it in the personal account; registration / IAM / inference-credential issues
+      would fail all CI with no remote-runner fallback. Mitigation options were (a) overlap
+      window, (b) temporary GitHub-hosted fallback, (c) local-validate forward-fix.
   - id: KG.9
     gap: CC-on-web deprecation contingency
     notes: |
@@ -4518,13 +5032,16 @@ known_gaps:
       to CD.19 with explicit decision_required_before T2.2 gate. Recommended path is option (c) —
       preserve created_timestamp, tag with source='import-bootstrap'. KG.10 retained for traceability.
   - id: KG.11
-    gap: YAML file-size split policy when ROADMAP-PLATFORM.yaml exceeds threshold
+    gap: YAML file-size split policy -- threshold BREACHED (file is ~4,900 lines as of the 2026-06-09 audit integration vs the 2500-line trigger)
     notes: |
-      Round-2 adversarial LOW-8: file is ~1500 lines / ~32K tokens after the revision. .claude/skills/planning
-      reads it per /plan invocation. With ~20% expected growth during implementation phases, the ambient
-      context cost increases. Recommended threshold: 2500 lines OR 50K tokens. When exceeded, split
-      into per-tier YAML files (ROADMAP-PLATFORM-T0.yaml etc.) with a manifest that the harness loads
-      together. No tier item owns this yet; file a rec when the threshold is breached.
+      Round-2 adversarial LOW-8 set the threshold: 2500 lines OR 50K tokens; when exceeded, split
+      into per-tier YAML files (ROADMAP-PLATFORM-T0.yaml etc.) with a manifest the harness loads
+      together. STATUS 2026-06-09 (audit F-019): the trigger is breached ~2x (the prior "~1500
+      lines" self-description was stale) and the prescribed rec was never filed. The split-vs-
+      raise-threshold decision is surfaced to the human in the audit's open questions; whichever
+      way it lands, file the rec or a tier item and update this gap -- the planning skill reads
+      this file per /plan invocation, so the ambient cost is being paid today. No tier item owns
+      this yet.
   - id: KG.12
     gap: PLAN-platform-roadmap.md verification plan refresh cadence
     notes: |

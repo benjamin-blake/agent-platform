@@ -1,0 +1,239 @@
+_meta:
+  sweeper: F
+  dimension: D11 - contract closure and migration completeness
+  repo_root: /home/user/agent-platform
+  head: 038149661fade75cb94e02cb005cf312f00f4c7a  # pragma: allowlist secret -- public commit hash, not a credential
+  date: "2026-06-09"
+  scope: REPORT-ONLY static repo sweep of docs/contracts/ + cutover-shaped ROADMAP-PLATFORM.yaml items
+  method_notes: >-
+    Per-contract surface inventory is EXHAUSTIVE (compliant + violating). Classifications:
+    compliant_new / legacy_live / fallback_to_legacy / dead_but_provisioned / unknown_routing.
+    Flag-gated legacy (OPS_STORAGE_BACKEND=iceberg) is classified compliant_new (designed rollback)
+    per the prompt. The 3 default-flip sites were verified: ops_data_portal.py:71,
+    iceberg_reader.py:39, data_quality_runner.py:81 all default to 'ducklake'. No 4th default-iceberg
+    site exists outside tests.
+
+# ============================================================================
+# INVENTORY -- every referencing surface with its classification
+# ============================================================================
+inventory:
+
+  # ---- T2.19 ops_recommendations DuckLake cutover: WRITE surfaces ----
+  - {contract: "T2.19-recs-cutover", resource: "OPS_STORAGE_BACKEND default", surface_path: "scripts/ops_data_portal.py:71", direction: write, classification: compliant_new, evidence: "_DEFAULT_OPS_STORAGE_BACKEND = \"ducklake\" (cutover signed off 2026-06-09)"}
+  - {contract: "T2.19-recs-cutover", resource: "OPS_STORAGE_BACKEND default", surface_path: "src/common/iceberg_reader.py:39", direction: read, classification: compliant_new, evidence: "_DEFAULT_OPS_STORAGE_BACKEND = \"ducklake\"; make_reader returns DuckLakeReader for recs"}
+  - {contract: "T2.19-recs-cutover", resource: "OPS_STORAGE_BACKEND default", surface_path: "scripts/data_quality_runner.py:81", direction: read, classification: compliant_new, evidence: "_ops_backend() default \"ducklake\"; recs DQ routes to to_ducklake_sql"}
+  - {contract: "T2.19-recs-cutover", resource: "ducklake_writer", surface_path: "scripts/ops_data_portal.py:465-468 (file_rec)", direction: write, classification: compliant_new, evidence: "if _ops_backend()=='ducklake': _ducklake_write('ops_recommendations', merged, action='write_ops'); else OpsWriter().write (rollback)"}
+  - {contract: "T2.19-recs-cutover", resource: "ducklake_writer", surface_path: "scripts/ops_data_portal.py:645-648 (update_rec)", direction: write, classification: compliant_new, evidence: "update_rec routes to _ducklake_write action='update_ops' on ducklake; OpsWriter on iceberg rollback"}
+  - {contract: "T2.19-recs-cutover", resource: "ducklake_writer", surface_path: "scripts/ops_data_portal.py:977-980 (drain_pending)", direction: write, classification: compliant_new, evidence: "drain_pending honours backend flag: _ducklake_write on ducklake else OpsWriter"}
+  - {contract: "T2.19-recs-cutover", resource: "ducklake_writer Function URL resolve", surface_path: "scripts/ops_data_portal.py:102-129 (_resolve_writer_url)", direction: write, classification: compliant_new, evidence: "env -> terraform output -> lambda:GetFunctionUrlConfig API; loud-fail if all 3 fail (CI runner case)"}
+  - {contract: "T2.19-recs-cutover", resource: "ducklake_writer schema gate", surface_path: "src/lambdas/ducklake_writer/handler.py:112-170", direction: write, classification: compliant_new, evidence: "write_ops INSERT history + MERGE current schema-gated; 422 schema reject / 409 referential / 503 OCC; loud-fail (CD.33 cl.4)"}
+  - {contract: "T2.19-recs-cutover", resource: "ops_decisions write", surface_path: "scripts/ops_data_portal.py:699 (file_decision)", direction: write, classification: legacy_live, evidence: "OpsWriter().write('ops_decisions') ALWAYS regardless of flag -- DEFERRED by design (source=DECISIONS.md). Legit per partial cutover."}
+  - {contract: "T2.19-recs-cutover", resource: "ops_decisions write", surface_path: "scripts/ops_data_portal.py:839 (update_decision)", direction: write, classification: legacy_live, evidence: "OpsWriter().write('ops_decisions') always -- DEFERRED (legit)"}
+
+  # ---- T2.19 READ surfaces ----
+  - {contract: "T2.19-recs-cutover", resource: "DuckLakeReader (recs read)", surface_path: "src/common/iceberg_reader.py:311-429", direction: read, classification: compliant_new, evidence: "DuckLakeReader.current_state via SigV4 reader Function URL; NO Athena escape hatch -- reader failure raises (closed boundary OQ.7)"}
+  - {contract: "T2.19-recs-cutover", resource: "recs write-gating read", surface_path: "scripts/ops_data_portal.py:494-501 (_fetch_rec_from_athena ducklake branch)", direction: read, classification: compliant_new, evidence: "ducklake branch: make_reader().current_state(row_filter); returns early; NO Athena fallback on this path"}
+  - {contract: "T2.19-recs-cutover", resource: "recs write-gating read (rollback)", surface_path: "scripts/ops_data_portal.py:503-576 (_fetch_rec_from_athena iceberg branch)", direction: read, classification: compliant_new, evidence: "Athena fallback reached ONLY on iceberg backend (rollback); ducklake path returns before this. Designed rollback."}
+  - {contract: "T2.19-recs-cutover", resource: "make_reader routing", surface_path: "src/common/iceberg_reader.py:437-450", direction: read, classification: compliant_new, evidence: "recs (or None table) + ducklake -> DuckLakeReader; every other table -> DuckDBIcebergReader regardless of flag (recs-first slice)"}
+  - {contract: "T2.19-recs-cutover", resource: "recs cache-pull (sync_ops)", surface_path: "scripts/sync_ops.py:59-74 (_pull_via_reader)", direction: read, classification: compliant_new, evidence: "make_reader(table='ops_recommendations').current_state -> DuckLake when flagged; returns None on reader exc"}
+  - {contract: "T2.19-recs-cutover", resource: "recs cache-pull Athena fallback", surface_path: "scripts/sync_ops.py:299-306 + 354-439 (_pull_single_table -> _pull_single_table_athena)", direction: read, classification: fallback_to_legacy, evidence: "When _pull_via_reader returns None (DuckLakeReader fail), _pull_single_table falls back to Athena ops_recommendations_current view for recs. Cache-rebuild path; reachable; contradicts AGENTS.md 'NO Athena escape hatch on ducklake'."}
+  - {contract: "T2.19-recs-cutover", resource: "_rebuild_local_cache recs Athena fallback", surface_path: "scripts/sync_ops.py:485-497", direction: read, classification: fallback_to_legacy, evidence: "Same Athena ops_recommendations_current fallback in full-rebuild loop iterating _TABLE_TO_VIEW (includes recs)"}
+  - {contract: "T2.19-recs-cutover", resource: "ops_decisions read", surface_path: "scripts/ops_data_portal.py:737-805 (_fetch_decision_from_athena)", direction: read, classification: legacy_live, evidence: "DuckDBIcebergReader + Athena fallback always (DEFERRED, no DuckLake path for decisions). Legit."}
+  - {contract: "T2.19-recs-cutover", resource: "ops_priority_queue read", surface_path: "scripts/session_preflight.py:652-680 (read_priority_queue)", direction: read, classification: legacy_live, evidence: "Iceberg reader + Athena ops_priority_queue_current fallback; DEFERRED (legit)"}
+  - {contract: "T2.19-recs-cutover", resource: "selftest_read/roundtrip", surface_path: "scripts/ops_data_portal.py:1037-1091", direction: read, classification: compliant_new, evidence: "make_reader()/active-backend read+write rollback rehearsal (VP14/15)"}
+  - {contract: "T2.19-recs-cutover", resource: "_sync_table recs", surface_path: "scripts/ops_data_portal.py:590-596", direction: write, classification: compliant_new, evidence: "recs+ducklake: _pull_single_table only (atomic catalog commit, no compact/view-refresh); deferred tables compact+refresh+pull"}
+
+  # ---- ops-data-store.md contract vs reality ----
+  - {contract: "ops-data-store.md", resource: "ops_recommendations Iceberg/Athena _current authority", surface_path: "docs/contracts/ops-data-store.md:26-29,140-151,217-237", direction: read, classification: legacy_live, evidence: "Contract declares ops_recommendations stored as Iceberg, current via ops_recommendations_current Athena view, OpsWriter.write staging flow. Reality: recs on DuckLake-on-Neon. CONTRACT DRIFT vs T2.19."}
+  - {contract: "ops-data-store.md", resource: "OpsWriter compaction flow", surface_path: "scripts/ops_writer.py + terraform/scheduled_agents.tf:316 (ops_compaction Lambda)", direction: write, classification: legacy_live, evidence: "ops_compaction Lambda provisioned in retired work-root terraform/scheduled_agents.tf; manifest status:active; LIVE for deferred tables (decisions/queue/session/plans). Legit per partial cutover."}
+  - {contract: "ops-data-store.md", resource: "ops_decisions/session/plans/queue Iceberg", surface_path: "docs/contracts/ops-data-store.md (table schemas)", direction: write, classification: legacy_live, evidence: "These 4 tables genuinely remain Iceberg/Athena (DEFERRED) -- contract accurate for them; only the recs rows are drifted."}
+
+  # ---- read-engine.yaml contract vs reality ----
+  - {contract: "read-engine.yaml", resource: "ops_recommendations Athena escape hatch", surface_path: "docs/contracts/read-engine.yaml:91-104 (athena_escape_hatch)", direction: read, classification: legacy_live, evidence: "Contract declares Athena escape hatch on recs read paths (sync_ops, ops_data_portal, session_preflight). Reality: ducklake recs path has NO Athena fallback (closed). ZERO ducklake mentions in contract. DRIFT vs T2.19/AGENTS.md."}
+  - {contract: "read-engine.yaml", resource: "single_portal_invariant fetch-before-update", surface_path: "docs/contracts/read-engine.yaml:82-90", direction: read, classification: legacy_live, evidence: "Declares _fetch_rec_from_athena reads via DuckDBIcebergReader, Athena fallback. Recs now read via DuckLakeReader (no fallback). Stale."}
+  - {contract: "read-engine.yaml", resource: "DuckDBIcebergReader default engine", surface_path: "src/common/iceberg_reader.py:107-308", direction: read, classification: compliant_new, evidence: "DuckDBIcebergReader still the default/rollback engine for decisions + deferred tables; contract accurate for those"}
+
+  # ---- inference-provider.md / CD.28 Bedrock retirement ----
+  - {contract: "inference-provider.md", resource: "bedrock active provider (contract)", surface_path: "docs/contracts/inference-provider.md:14-19,42,76-91,146-217", direction: write, classification: legacy_live, evidence: "v6.0 contract declares bedrock dispatch active (DeepSeek V3.2), copilot-sdk dormant, llm_call via Bedrock. Contradicts CD.28 (Bedrock retired architecturally). PLAN-update-inference-provider-contract NOT landed."}
+  - {contract: "inference-provider.md", resource: "scripts/bedrock_client.py", surface_path: "scripts/bedrock_client.py", direction: write, classification: dead_but_provisioned, evidence: "converse() exists, packaged in _LAMBDA_SCRIPTS + ops-compaction/data-pipeline manifests; dispatch-reachable only if a schedule.yaml agent sets provider:bedrock (NONE do). PLAN-retire-bedrock-code-paths not landed."}
+  - {contract: "inference-provider.md", resource: "_invoke_bedrock dispatch branch", surface_path: "src/data/handlers/scheduled_agent_handler.py:156-173,475-479", direction: write, classification: dead_but_provisioned, evidence: "Bedrock branch reachable IF provider=='bedrock'; all 6 schedule.yaml agents use copilot-sdk + EventBridge rule DISABLED (May 2026). Zero live invocations."}
+  - {contract: "inference-provider.md", resource: "provider default mismatch", surface_path: "src/data/handlers/scheduled_agent_handler.py:435", direction: write, classification: unknown_routing, evidence: "Code default provider = agent.get('provider','github-models'); contract line 197 + 46 say default 'bedrock'/'copilot-sdk'. Code and contract disagree on default. All entries set explicit copilot-sdk so default unused in practice."}
+  - {contract: "inference-provider.md", resource: "_bedrock_call in llm_client", surface_path: "scripts/llm_client.py", direction: write, classification: dead_but_provisioned, evidence: "CD.28 names _bedrock_call + _get_bedrock_credentials + _PRICING bedrock entries for removal; still present (PLAN-retire-bedrock-code-paths not landed)"}
+  - {contract: "inference-provider.md", resource: "bedrock:Invoke* IAM (work-root)", surface_path: "terraform/lambda_tooling_iam.tf:118-126 (platform_dev_daily_ops BedrockInvoke Sid)", direction: grant, classification: dead_but_provisioned, evidence: "File EXISTS (CD.28 citation valid). bedrock:InvokeModel/InvokeModelWithResponseStream/ListFoundationModels granted to PlatformDev. RETIRED work-root module (CD.21, no longer applied). Over-grant to retired backend; not live."}
+  - {contract: "inference-provider.md", resource: "bedrock grant (personal runtime)", surface_path: "terraform/personal/platform_roles.tf (platform_dev_runtime DailyOps)", direction: grant, classification: compliant_new, evidence: "Personal PlatformDev DailyOps has NO bedrock grant -- the stale bedrock:InvokeModel was dropped at import (terraform/CLAUDE.md). Permission-closed for the live account."}
+  - {contract: "inference-provider.md", resource: "gemini-cli executor provider", surface_path: "docs/contracts/inference-provider.md:15,41,52-74", direction: write, classification: legacy_live, evidence: "Contract names gemini-cli active for executor (Decision 53). CD.28 supersedes to DeepSeek-direct via LiteLLM (Tier 1). Contract pre-CD.28."}
+
+  # ---- copilot-cli.md / cli-json-output.md / delegate-cli.md ----
+  - {contract: "cli-json-output.md", resource: "parse_jsonl_output", surface_path: "scripts/copilot_wrapper.py", direction: write, classification: dead_but_provisioned, evidence: "Contract self-marked DEPRECATED (Decision 52). copilot_wrapper.py present; sole live importer is scripts/test_coverage_checker.py:146 (kill_process_tree util), NOT JSON parsing. Parser dormant."}
+  - {contract: "copilot-cli.md", resource: "copilot CLI -p/@file semantics", surface_path: "scripts/copilot_wrapper.py + .github/copilot-instructions.md", direction: write, classification: dead_but_provisioned, evidence: "Copilot CLI inference deprecated (Decision 52/53/CD.28). copilot_wrapper packaged in ops-compaction/data-pipeline manifests but no live inference call site."}
+  - {contract: "delegate-cli.md", resource: "delegate_runner.py /delegate", surface_path: "scripts/delegate_runner.py", direction: write, classification: unknown_routing, evidence: "Prose contract for /delegate; gh CLI unavailable on CC-web (Decision 76 -> MCP). No live entrypoint found invoking delegate_runner. Methodology contract, no concrete live resource."}
+
+  # ---- log-storage.md ----
+  - {contract: "log-storage.md", resource: "s3_log_store patterns", surface_path: "scripts/s3_log_store.py (read_jsonl/append_jsonl/overwrite_jsonl/get_backend)", direction: write, classification: compliant_new, evidence: "Contract Patterns 1/2 match script API names. Pattern 3 (log_writer.py) explicitly PLANNED/not-implemented (rec-386)."}
+  - {contract: "log-storage.md", resource: "priority-queue producer (Athena/Iceberg)", surface_path: "docs/contracts/log-storage.md:65-89 + src/data/handlers/findings_processor_handler.py", direction: write, classification: legacy_live, evidence: "Canonical producer writes ops_priority_queue Iceberg via sync_ops; queue DEFERRED from DuckLake. Accurate. Legacy producer (rec-curator.prompt.md) active-until-Phase-5 by design."}
+  - {contract: "log-storage.md", resource: "ops_priority_queue_current Athena view", surface_path: "scripts/session_preflight.py:670 + sync_ops.py:47", direction: read, classification: legacy_live, evidence: "_current view live for queue (DEFERRED). Legit. (T2.7 retirement not_started, expected.)"}
+
+  # ---- build-lambda.md ----
+  - {contract: "build-lambda.md", resource: "build_lambda.py --handler convention", surface_path: "scripts/build_lambda.py + terraform/data_pipeline.tf", direction: deploy, classification: compliant_new, evidence: "Handler convention src/data/handlers/{name}_handler.py; lambda_manifest --list-patterns resolves; no drift. Last verified 2026-04-08 (pre-DuckLake but tool semantics unchanged)."}
+
+  # ---- environment-taxonomy.md (enforcement) ----
+  - {contract: "environment-taxonomy.md", resource: "validate_environment_taxonomy guard", surface_path: "scripts/validate.py:2288-2336", direction: grant, classification: compliant_new, evidence: "Guard enforces RESERVED vocab (sandbox/SIT/PROD vs phase) on changed docs; encodes current single-account-sandbox topology (section 4). Wired into presubmit (line 2248)."}
+
+  # ---- T2.16b RDS->Neon catalog migration (permission closure) ----
+  - {contract: "T2.16b-rds-neon", resource: "rds_ducklake_catalog.tf", surface_path: "terraform/personal/ (absent)", direction: grant, classification: compliant_new, evidence: "File DELETED (Phase 2). Confirmed: only descriptive 'RDS' comments remain in neon_ducklake_catalog.tf:3,54,94. No aws_db_instance."}
+  - {contract: "T2.16b-rds-neon", resource: "PlatformDuckLakeCatalogProvisioning policy", surface_path: "terraform/personal/platform_roles.tf (absent)", direction: grant, classification: compliant_new, evidence: "Policy DESTROYED. grep RDS/PlatformDuckLakeCatalogProvisioning in terraform/personal/ returns only Neon comments. 5 transitional github_ci_apply Sids removed (claim verified by absence)."}
+  - {contract: "T2.16b-rds-neon", resource: "Neon DSN secret + provider", surface_path: "terraform/personal/neon_ducklake_catalog.tf + oidc.tf:506-531", direction: grant, classification: compliant_new, evidence: "Neon DSN in Secrets Manager (ducklake-neon-catalog-dsn-*); CI apply role scoped grant present; PlatformAdmin DuckLakeBreakGlass reads it (platform_roles.tf:619-652)"}
+
+  # ---- T2.17 DuckLake Lambda runtime + closed boundary (permission) ----
+  - {contract: "T2.17-ducklake-runtime", resource: "ducklake_writer/reader Function URL AWS_IAM", surface_path: "terraform/personal/ducklake_lambdas.tf:307-314", direction: grant, classification: compliant_new, evidence: "authorization_type = AWS_IAM on both Function URLs (closed boundary; SigV4-only)"}
+  - {contract: "T2.17-ducklake-runtime", resource: "github_ci DuckLakeInvokeCI grant", surface_path: "terraform/personal/oidc.tf:136-153 (branch) + 248-264 (pr)", direction: grant, classification: compliant_new, evidence: "lambda:InvokeFunction + InvokeFunctionUrl + GetFunctionUrlConfig on writer/reader ARNs (+:* qualifier). T2.19 note claim verified present + scoped."}
+  - {contract: "T2.17-ducklake-runtime", resource: "PlatformDev DuckLakeInvokeRuntime grant", surface_path: "terraform/personal/platform_roles.tf:127-154", direction: grant, classification: compliant_new, evidence: "Runtime ops portal SigV4-invokes writer/reader; InvokeFunction (the action the URL authorizer checks, live-verified) scoped to 4 ARNs"}
+
+  # ---- T2.18 maintenance vs ops_compaction ----
+  - {contract: "T2.18-maintenance", resource: "ducklake_maintenance Lambda", surface_path: "terraform/personal/ducklake_maintenance.tf + src/lambdas/ducklake_maintenance/manifest.yaml", direction: deploy, classification: compliant_new, evidence: "FP-A/B landed; daily merge + weekly guarded GC, singleton reserved_concurrency=1; status active"}
+  - {contract: "T2.18-maintenance", resource: "ops_compaction Lambda (deferred-table compaction)", surface_path: "src/lambdas/ops-compaction/manifest.yaml:36-42 + terraform/scheduled_agents.tf:316", direction: deploy, classification: legacy_live, evidence: "status:active + DEPRECATED marker; LIVE Iceberg write path for the 4 deferred ops tables until T2.19 full cutover (Decision 78 cl.7). Correct per partial cutover; decommission runbook is T2.19-gated."}
+
+  # ---- T2.10 self-hosted runner retirement ----
+  - {contract: "T2.10-runner-migration", resource: "self-hosted runner label", surface_path: ".github/workflows/ (none)", direction: deploy, classification: compliant_new, evidence: "No 'runs-on: self-hosted' in any workflow; only retirement comments in ci.yml:118 + claude.yml:3"}
+  - {contract: "T2.10-runner-migration", resource: "terraform/ec2_runner.tf", surface_path: "terraform/ec2_runner.tf", direction: deploy, classification: dead_but_provisioned, evidence: "Retained per CD.21 as architectural artefact (no longer applied). Deprecation header present. Work-root, not in terraform/personal."}
+
+  # ---- T2.3 company-aws-profile sweep ----
+  - {contract: "T2.3-profile-sweep", resource: "company-aws-profile (Lambda-deferred scripts)", surface_path: "scripts/run_scheduled_agent.py + build_lambda.py + migrate_ops_data.py", direction: grant, classification: dead_but_provisioned, evidence: "Residual refs in Lambda-deferred scripts; acceptable per T2.3 note (Lambda deploy frozen; live paths clean)"}
+  - {contract: "T2.3-profile-sweep", resource: "company-aws-profile (src/common docstrings)", surface_path: "src/common/config.py:14,113 + database.py:34", direction: grant, classification: dead_but_provisioned, evidence: "Docstring EXAMPLES only (export AWS_PROFILE=company-aws-profile), not live profile values"}
+  - {contract: "T2.3-profile-sweep", resource: "company-aws-profile (retired work-root tf)", surface_path: "terraform/main.tf + variables.tf + ec2_runner.tf + scheduled_agents.tf + terraform.tfvars.example", direction: grant, classification: dead_but_provisioned, evidence: "Retired work-root (CD.21); not applied. Personal module uses agent_platform."}
+  - {contract: "T2.3-profile-sweep", resource: "company-aws-profile (config.company.yaml)", surface_path: "config/config.company.yaml:1", direction: grant, classification: dead_but_provisioned, evidence: "Work-account config retained; not the active personal config"}
+
+  # ---- T0.5/CD.26 SSO -> static-key ----
+  - {contract: "T0.5-sso-statickey", resource: "SSO login path", surface_path: "scripts/session_preflight.py + .claude/hooks/ (none live)", direction: grant, classification: compliant_new, evidence: "No live 'aws sso login' in preflight/hooks; only config/README.md:271-272,297 doc references (historical). Static-key model active."}
+
+  # ---- T5.3 legacy .github/prompts + .github/agents ----
+  - {contract: "T5.3-legacy-prompts", resource: ".github/agents/schedule.yaml", surface_path: "scripts/run_scheduled_agent.py:3 + src/data/handlers/scheduled_agent_handler.py:146 + src/lambdas/data-pipeline/manifest.yaml:38", direction: read, classification: legacy_live, evidence: "schedule.yaml is the LIVE manifest the dispatcher reads (Lambda-packaged). Not legacy-by-T5.3 -- this is the canonical scheduled-agent config. Expected."}
+  - {contract: "T5.3-legacy-prompts", resource: ".github/prompts/scheduled/", surface_path: "src/data/handlers/findings_processor_handler.py:41 + data-pipeline manifest:39 + executor prompts", direction: read, classification: legacy_live, evidence: "scheduled/ prompt dir still read by findings_processor + bundled in data-pipeline Lambda. Live-by-design until T5.3 (not_started)."}
+  - {contract: "T5.3-legacy-prompts", resource: ".github/prompts/*.prompt.md (interactive)", surface_path: "scripts/prompt_compliance.py + list_customizations.py + validate.py:214", direction: read, classification: legacy_live, evidence: ".github/prompts/{implement,plan}.prompt.md are LEGACY interactive mirrors (canonical = .claude/). Linted by prompt_compliance; deep-frozen. Expected legacy_live."}
+
+# ============================================================================
+# CLAIMS -- per-contract closure verdicts + cross-cutting findings
+# ============================================================================
+claims:
+
+  # ---- Per-contract closure verdicts (all 10 docs/contracts/ entries) ----
+  - id: F-C01
+    affected_ids: [ops-data-store.md]
+    verdict_or_classification: contract_drift
+    evidence: ["docs/contracts/ops-data-store.md:26-29,217-237", "scripts/ops_data_portal.py:71 (default ducklake)"]
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "OPEN. Contract declares ops_recommendations on Iceberg/Athena _current view + OpsWriter staging; recs actually live on DuckLake-on-Neon. Slated for retirement by T0.12.5 (not_started). Accurate for the 4 DEFERRED tables; drifted for recs rows."
+
+  - id: F-C02
+    affected_ids: [read-engine.yaml]
+    verdict_or_classification: contract_drift
+    evidence: ["docs/contracts/read-engine.yaml:91-104 (athena_escape_hatch)", "grep ducklake read-engine.yaml = 0 hits", "AGENTS.md:99 (NO Athena escape hatch on ducklake)"]
+    proposed_severity: high
+    proposed_confidence: high
+    note: "OPEN. read-engine.yaml (T2.5 contract) predates T2.19: declares Athena escape hatch for recs reads + zero DuckLake awareness. AGENTS.md says the ducklake recs reader has NO Athena escape hatch (closed boundary). Contract describes a topology the code no longer implements for recs."
+
+  - id: F-C03
+    affected_ids: [inference-provider.md]
+    verdict_or_classification: contract_drift
+    evidence: ["docs/contracts/inference-provider.md:3 (v6.0), 14-19,196-217", "docs/ROADMAP-PLATFORM.yaml:984-1016 (CD.28 follow-ons unlanded)"]
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "OPEN. v6.0 contract declares bedrock dispatch ACTIVE + copilot-sdk/gemini-cli active tiers; CD.28 retired Bedrock architecturally (Tier 1=DeepSeek-direct via LiteLLM). PLAN-update-inference-provider-contract NOT landed. Canonical contract on pre-pivot tier model."
+
+  - id: F-C04
+    affected_ids: [copilot-cli.md]
+    verdict_or_classification: open
+    evidence: ["docs/contracts/copilot-cli.md (Copilot CLI deprecated Decision 52/53)", "no live inference call site for copilot_wrapper"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "OPEN (dormant). Describes deprecated Copilot CLI input semantics; no live inference consumer. copilot_wrapper.py present but only kill_process_tree is imported (test_coverage_checker). dead_but_provisioned."
+
+  - id: F-C05
+    affected_ids: [cli-json-output.md]
+    verdict_or_classification: open
+    evidence: ["docs/contracts/cli-json-output.md:3 (self-marked DEPRECATED)", "scripts/copilot_wrapper.parse_jsonl_output dormant"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "OPEN (dormant). Contract self-declares DEPRECATED (superseded by Bedrock parsing per Decision 52). Parser present-but-unreached. Honest deprecation marker; closure = file deletion under PLAN-retire-copilot-sdk."
+
+  - id: F-C06
+    affected_ids: [delegate-cli.md]
+    verdict_or_classification: waived_prose_only
+    evidence: ["docs/contracts/delegate-cli.md (methodology for /delegate)", "gh CLI unavailable on CC-web (Decision 76)"]
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "WAIVED (prose/methodology). Names scripts/delegate_runner.py + logs/.delegate-telemetry.jsonl but no live entrypoint invokes /delegate (gh unavailable web-side). No live resource topology to close."
+
+  - id: F-C07
+    affected_ids: [log-storage.md]
+    verdict_or_classification: closed
+    evidence: ["docs/contracts/log-storage.md:91-101 (verified 2026-05-06)", "scripts/s3_log_store.py API names match"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "CLOSED (for its scope). Patterns 1/2 match s3_log_store.py; Pattern 3 explicitly PLANNED. Priority-queue Iceberg/Athena flow accurate (queue DEFERRED). One minor note: does not yet mention recs left the JSONL+Iceberg write-through for DuckLake, but log-storage governs JSONL patterns broadly, not the recs backend."
+
+  - id: F-C08
+    affected_ids: [build-lambda.md]
+    verdict_or_classification: closed
+    evidence: ["docs/contracts/build-lambda.md (handler convention)", "scripts/lambda_manifest --list-patterns resolves"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "CLOSED. build_lambda.py handler-path convention intact; matches lambda_manifest patterns + terraform/data_pipeline.tf. Tool semantics unaffected by DuckLake (the ducklake Lambdas are packaged via the same tool)."
+
+  - id: F-C09
+    affected_ids: [environment-taxonomy.md]
+    verdict_or_classification: closed
+    evidence: ["docs/contracts/environment-taxonomy.md:9-11 (enforced by validate)", "scripts/validate.py:2288-2336 + wired at :2248"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "CLOSED. Carries enforcement closure (NOT prose-only): validate_environment_taxonomy enforces the RESERVED vocabulary on changed docs and encodes current single-account-sandbox topology (section 4). Guard live in presubmit."
+
+  - id: F-C10
+    affected_ids: [instruction-architecture.md]
+    verdict_or_classification: contract_drift
+    evidence: ["docs/contracts/instruction-architecture.md:18-23 (Layer 1 = GEMINI.md, Layer 2 = copilot-instructions.md)", "actual repo: CLAUDE.md/AGENTS.md (root) + docs/PROJECT_CONTEXT.md"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "WAIVED_PROSE_ONLY with drift note. Pure methodology contract (no runtime resources), so closure waived. BUT Layer 1/2 still name GEMINI.md + copilot-instructions.md (Antigravity/Copilot-era) while the live consumer is Claude Code reading CLAUDE.md/AGENTS.md + docs/PROJECT_CONTEXT.md (Decision 76). Layer-name drift; non-load-bearing for closure."
+
+  # ---- Cross-cutting cutover findings (ranked) ----
+  - id: F-001
+    affected_ids: [T2.19, read-engine.yaml, ops-data-store.md]
+    verdict_or_classification: split_brain_risk
+    evidence: ["scripts/sync_ops.py:299-306 (_pull_single_table recs Athena fallback)", "scripts/sync_ops.py:485-497 (_rebuild_local_cache recs)", "AGENTS.md:99 (NO Athena escape hatch on ducklake)"]
+    proposed_severity: high
+    proposed_confidence: high
+    note: "READ-SIDE STALE FALLBACK under a complete recs cutover. When DuckLakeReader fails, sync_ops cache-pull/rebuild for ops_recommendations silently falls back to the Athena ops_recommendations_current view (retained but downstream-stale after the cutover) and overwrites the local read cache. This is the 'fallback hides for months then serves stale state' pattern the method names. Mitigating nuance: this is the cache-rebuild path, NOT a write-gating read (the portal's _fetch_rec_from_athena ducklake branch correctly has no Athena fallback). Severity high not critical because writes are not affected and the Athena recs view, while stale, still exists. Fix: make recs cache-pull loud-fail on the ducklake backend instead of falling to Athena, OR gate the Athena fallback behind _ops_backend()=='iceberg'."
+
+  - id: F-002
+    affected_ids: [T2.19, T2.5, read-engine.yaml]
+    verdict_or_classification: enforcement_gap
+    evidence: ["scripts/validate.py:779-842 (validate_warehouse_write_sources)", "scripts/validate.py:2219-2251 (no ducklake/OPS_STORAGE/escape-hatch guard)", "grep ducklake|ops_storage validate.py = 0 topology hits"]
+    proposed_severity: high
+    proposed_confidence: high
+    note: "NO validate.py guard encodes the DuckLake recs topology. There is no check that (a) the default backend is ducklake across the 3 flip sites, (b) the recs reader has no Athena escape hatch, or (c) sync_ops's recs Athena fallback is iceberg-gated. validate_warehouse_write_sources still whitelists OpsWriter().write('ops_*') for the recs path as fully canonical (it cannot distinguish a legit rollback write from an accidental post-cutover Iceberg write to recs). The guard exists precisely for the day something regresses the default or re-opens the recs Athena path -- today it would not catch it."
+
+  - id: F-003
+    affected_ids: [CD.28, inference-provider.md]
+    verdict_or_classification: contract_drift
+    evidence: ["scripts/bedrock_client.py exists", "src/data/handlers/scheduled_agent_handler.py:156-173,475-479", "scripts/llm_client.py (_bedrock_call)", "terraform/lambda_tooling_iam.tf:118-126", "docs/ROADMAP-PLATFORM.yaml:984-1004 (PLAN-retire-bedrock-code-paths unlanded)"]
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Bedrock is architecturally retired (CD.28) but every legacy surface PLAN-retire-bedrock-code-paths lists still exists: bedrock_client.py, _invoke_bedrock dispatch branch (reachable via provider=='bedrock'), _bedrock_call in llm_client, bedrock:Invoke* in terraform/lambda_tooling_iam.tf:118-126 (file EXISTS -- CD.28's line citation is valid), and the v6.0 inference-provider.md contract still calls bedrock 'active'. Classification dead_but_provisioned (not legacy_live): zero agents declare provider:bedrock and the EventBridge dispatcher rule is DISABLED, so the branch is unreachable in practice. NOTE: code default provider is 'github-models' (handler:435), contradicting the contract's stated 'bedrock' default."
+
+  - id: F-004
+    affected_ids: [T2.16b, T2.17]
+    verdict_or_classification: closed
+    evidence: ["terraform/personal/ (no rds_ducklake_catalog.tf)", "grep RDS/PlatformDuckLakeCatalogProvisioning terraform/personal/ = Neon comments only", "terraform/personal/ducklake_lambdas.tf:307-314 (AWS_IAM URLs)", "terraform/personal/oidc.tf:136-153,248-264 + platform_roles.tf:127-154 (DuckLake grants)"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "RDS->Neon migration permission-closed: rds_ducklake_catalog.tf deleted, PlatformDuckLakeCatalogProvisioning destroyed, 5 transitional CI Sids removed (all verified by absence). Neon DSN in Secrets Manager. DuckLake Function URLs AWS_IAM (closed boundary). github_ci + PlatformDev DuckLake-invoke grants present + scoped to writer/reader ARNs. New-surface permissions match the new topology; old-surface permissions removed. This is a model CLOSED cutover."
+
+  - id: F-005
+    affected_ids: [T2.18, ops-data-store.md]
+    verdict_or_classification: open
+    evidence: ["src/lambdas/ops-compaction/manifest.yaml:36-42 (status:active + DEPRECATED)", "terraform/scheduled_agents.tf:316 (work-root provisioning)", "docs/ROADMAP-PLATFORM.yaml:3506,3534 (ops_compaction retirement carried to T2.19)"]
+    proposed_severity: low
+    proposed_confidence: high
+    note: "ops_compaction correctly remains LIVE (manifest status:active, deprecation marker present) for the 4 DEFERRED ops tables (decisions/queue/session/plans) until the T2.19 full cutover. This is correct partial-cutover state, NOT a finding against the recs slice. Flagged open only because the deferred-table cutover (and thus ops_compaction decommission) is still pending. Note: provisioned in retired work-root terraform/scheduled_agents.tf, not terraform/personal -- verify the live deployment maps to the active account before relying on it."

@@ -3,7 +3,7 @@ name: plan-critique
 description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.md before implementation. Mandatory gate between planning and implementation."
 required-context:
   - docs/PROJECT_CONTEXT.md
-  - docs/ROADMAP-PRODUCT.md
+  - docs/ROADMAP-PRODUCT.yaml
   - docs/ROADMAP-PLATFORM.yaml
   - docs/DECISIONS.md
 ---
@@ -24,7 +24,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 2. Read `docs/PROJECT_CONTEXT.md` (for North Star and rules).
 
-3. Read `docs/ROADMAP-PRODUCT.md` (for product phase alignment) and `docs/ROADMAP-PLATFORM.yaml` (for platform tier item alignment).
+3. Read `docs/ROADMAP-PRODUCT.yaml` (for product phase alignment) and `docs/ROADMAP-PLATFORM.yaml` (for platform tier item alignment).
 
 4. Read `docs/DECISIONS.md` (for conflicts with prior decisions).
 
