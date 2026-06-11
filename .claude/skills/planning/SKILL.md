@@ -252,70 +252,58 @@ git branch --show-current
 ```
 If the result is `main`, STOP.
 
-Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.md`. After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
+Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.yaml` (schema-validated by `scripts/plan_document.py`; the legacy `PLAN-{slug}.md` form is DEPRECATED per T1.11 / CD.22 -- never author new .md plans; tooling warns on the .md path for one release cycle, then it is removed). After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
 
-## PLAN-{slug}.md Template (Workflow Step 8)
-Use exactly this structure:
-```markdown
-# Plan
+## PLAN-{slug}.yaml Template (Workflow Step 8)
+The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/plan_document.py`, enforced by `validate.py` in both tiers). Unknown keys FAIL validation (`extra="forbid"`). Use exactly this structure -- comments document field semantics:
+```yaml
+schema_version: 1                  # int; must be 1
+slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
+intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
+  ...
+plan_type: IMPLEMENTATION          # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
+verification_tier: V2              # V1 | V2 | V3
+plan_path: docs/plans/PLAN-{slug}.yaml   # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
+phase: >-                          # product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id
+  ...
+scope:                             # min 1 entry; only files listed here may be modified
+  - file: path/to/file.py
+    action: Create                 # Create | Modify | Delete
+    purpose: why this file changes
+bundled_recommendations: []        # included open recs (list of str), or []
+infrastructure_dependencies: []    # list of str; populate when .tf files appear in scope
+acceptance_criteria:               # min 1; each independently verifiable
+  - verifiable condition 1
+verification_plan:                 # min 1 step; step ids must be unique
+  - step: 1
+    phase: pre-deploy              # pre-deploy | post-deploy
+    action: exercise the feature
+    command: executable shell command   # REQUIRED non-empty -- prose-only VP steps fail the schema
+    expected: specific expected result
+    fix_if: what failure looks like
+constraints:
+  - limits from docs/PROJECT_CONTEXT.md and DECISIONS.md
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - Relevant decisions, phase dependencies, known gotchas
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:                   # REQUIRED non-empty for IMPLEMENTATION plans
+  - Specific file to create/modify -- what it must do
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []                     # STRATEGIC plans only (required there, forbidden otherwise);
+                                   # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
+rollback: optional rollback note   # optional str; omit if not applicable
+```
 
-## Intent
-[1-2 sentences: how this work contributes toward the North Star.]
-
-## Plan Type
-IMPLEMENTATION / STRATEGIC / REPORT-ONLY
-
-## Verification Tier
-V1 / V2 / V3
-
-## Plan Path
-docs/plans/PLAN-{slug}.md
-
-## Phase
-[product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id from docs/ROADMAP-PLATFORM.yaml]
-
-## Scope
-| File | Action | Purpose |
-|------|--------|---------|
-| [path] | Create / Modify / Delete | [why] |
-
-## Bundled Recommendations
-[List any included open recs, or "None".]
-
-## Infrastructure Dependencies (if applicable)
-[Only if .tf files appear in Scope.]
-
-## Acceptance Criteria
-- [ ] [verifiable condition 1]
-
-## Verification Plan
-| # | Phase | Action | Command | Expected Outcome | Fix If |
-|---|-------|--------|---------|-------------------|--------|
-| 1 | [pre-deploy] | [exercise the feature] | `[executable shell command]` | [specific expected result] | [what failure looks like] |
-
-## Constraints
-- [limits from docs/PROJECT_CONTEXT.md and DECISIONS.md]
-- No rescue agents or workaround loops (Decision 55)
-
-## Context
-- [Relevant decisions, phase dependencies, known gotchas]
-
-## Pre-Implementation Checklist
-- [ ] Branch confirmed not on `main`
-- [ ] docs/PROJECT_CONTEXT.md read
-- [ ] DECISIONS.md read
-- [ ] All files in Scope table located and readable
-- [ ] Acceptance Criteria understood and verifiable
-
-## Ordered Execution Steps
-1. [Specific file to create/modify -- what it must do]
-N. **Execute Verification Plan** -- run each step. Loop until pass. If V3 fails unrecoverably, stop and analyze root cause (Decision 55).
-N+1. Report: what was implemented, verification results.
-
-## Work Areas (STRATEGIC plans only)
-| Area | Scope | Rationale | Complexity |
-|------|-------|-----------|------------|
-| [area name] | [files affected] | [why] | XS/S/M/L/XL |
+After writing, validate before committing:
+```bash
+bin/venv-python -m scripts.plan_document docs/plans/PLAN-{slug}.yaml
 ```
 
 **Platform compatibility:** Verify shell commands are Linux/bash-compatible and use `bin/venv-python` for Python invocations.
@@ -337,7 +325,7 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
 - `subagent_type: "general-purpose"` (needs `Skill`, `Read`, and `Grep` access)
 - `description: "Plan critique gate"`
 - `prompt:` self-contained, mentions:
-  - The absolute path to `docs/plans/PLAN-{slug}.md`
+  - The absolute path to `docs/plans/PLAN-{slug}.yaml` (a `.md` path is deprecated -- surface a deprecation warning and proceed)
   - Instruction to invoke the `plan-critique` skill via the `Skill` tool against that path
   - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
   - For IMPLEMENTATION plans: instruction to also read every file in the plan's Scope table
@@ -345,7 +333,7 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
   - Forbid file edits
 
 **Example prompt body:**
-> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.md`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
+> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.yaml`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
 
 Read the critique output returned by the subagent.
 If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan. Each Agent call is a fresh window, so the re-launch genuinely re-evaluates.
@@ -357,7 +345,7 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
 
 **Applies only when Plan Type is REPORT-ONLY.** For IMPLEMENTATION and STRATEGIC plans, Step 10 is a no-op; skip to Step 11.
 
-**Why this gate exists:** the Step 9 `plan-critique` skill reviews the planning artefact (`PLAN-{slug}.md`) -- it checks that the PLAN is well-formed, has executable verification steps, aligns with decisions, etc. But for REPORT-ONLY plans, the substantive deliverable is a SEPARATE document (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`) referenced from the PLAN's Scope table. That deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent fresh-context critique before the planning agent's mission completes.
+**Why this gate exists:** the Step 9 `plan-critique` skill reviews the planning artefact (`PLAN-{slug}.yaml`) -- it checks that the PLAN is well-formed, has executable verification steps, aligns with decisions, etc. But for REPORT-ONLY plans, the substantive deliverable is a SEPARATE document (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`) referenced from the PLAN's Scope table. That deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent fresh-context critique before the planning agent's mission completes.
 
 **Methodology:**
 
@@ -407,10 +395,10 @@ Emit the handoff naming the explicit plan path so the human can paste it directl
 
 - **IMPLEMENTATION / STRATEGIC:** use this block (STRATEGIC scopes into recs; IMPLEMENTATION executes directly):
   ```
-  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.yaml.
   To implement, open a NEW Claude Code session and paste:
 
-      /implement docs/plans/PLAN-{slug}.md
+      /implement docs/plans/PLAN-{slug}.yaml
 
   Summary: {one line on what the plan does}.
   ```

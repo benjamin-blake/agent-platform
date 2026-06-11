@@ -7,7 +7,9 @@ model: sonnet
 # Implement Methodology & Rules
 
 You are using this skill to augment the `/implement` workflow. Apply these deep instructions when executing the workflow steps. The workflow defines WHAT to do and in WHAT ORDER. This skill defines HOW to do each step.
-You must treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless they are explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's Scope Table, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
+You must treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless they are explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's scope, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
+
+**Plan format (T1.11 / CD.22):** plans are `docs/plans/PLAN-{slug}.yaml`, schema-validated by `scripts/plan_document.py` (resolve via `scripts/find_plan.py`). If handed a legacy `PLAN-{slug}.md` path, emit a deprecation warning in the session output and proceed -- the .md path survives one release cycle, then is removed. Never author new .md plans.
 
 ## Behavioural Invariants
 ```yaml
@@ -45,7 +47,7 @@ This repository is agent-first. When implementing documentation changes, apply t
   field in an existing YAML?" If yes, prefer that over a new file.
 
 ## Main Divergence Check (Workflow Step 2 -- after plan load)
-Once the PLAN-{slug}.md Scope table is parsed, intersect the Scope file paths with `main_freshness.main_files_changed_since_branch` from the preflight report. If any Scope file overlaps:
+Once the PLAN-{slug}.yaml `scope` list is parsed, intersect the scope file paths with `main_freshness.main_files_changed_since_branch` from the preflight report. If any scope file overlaps:
 
 > "Main has changed [list of overlapping files] since this branch diverged, and your plan modifies the same file(s). Implementing without rebasing will produce a merge conflict at PR time after the work is already done -- and may invalidate the verification plan if the file's shape has changed. Recommend rebasing now: `git fetch origin main && git rebase origin/main` (resolve conflicts then re-run `/implement`). Options: (1) rebase now and re-enter `/implement`, (2) proceed anyway, (3) abort."
 
@@ -54,7 +56,7 @@ STOP and wait. Do not auto-rebase. If the human chooses (2), proceed with a logg
 If `main_freshness.status != "ok"`, this check cannot run -- surface the fetch failure to the human and continue.
 
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
-After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.md file before proceeding to code review.
+After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
 
 ### Why This Exists (Rationale)
 Acceptance commands prove the code landed (e.g. `grep` or `pytest`). Verification commands prove the feature works end-to-end. Examples of bugs that only verification catches:
@@ -114,7 +116,7 @@ Dispatch via the `Agent` tool with `subagent_type: code-review` -- NOT via `bin/
 Agent prompt template:
 - Pre-instruct: "Run `git fetch origin main` before any analysis so the diff base is current. The branch may have been open for hours; the local `origin/main` ref may be stale."
 - Identify the branch under review (the diff `git diff origin/main...HEAD` is the artefact under critique). Use `origin/main` (not the local `main` ref, which is only updated by an explicit pull).
-- Identify the plan file (`docs/plans/PLAN-{slug}.md`) so the subagent knows the acceptance criteria and intent.
+- Identify the plan file (`docs/plans/PLAN-{slug}.yaml`) so the subagent knows the acceptance criteria and intent.
 - Instruction: "Apply the `code-review` skill methodology to this branch. Survey the diff, read the plan to understand intent, then return a structured findings report. Do not edit files."
 - Forbid file edits.
 - Require structured output: findings grouped by severity (Critical / High / Medium / Low) with file:line references and a one-line rationale per finding.
