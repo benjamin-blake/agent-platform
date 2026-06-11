@@ -22,8 +22,15 @@ _spec.loader.exec_module(_postflight)  # type: ignore[union-attr]
 
 @pytest.fixture(autouse=True)
 def _mock_sync_ops_postflight():
-    """Prevent real AWS calls from sync_ops inside run_auto() tests."""
-    with patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}):
+    """Prevent real AWS calls from sync_ops inside run_auto() tests.
+
+    Step 8 of run_auto calls scripts.ops_data_portal.sync(), which pulls each table via
+    scripts.sync_ops._pull_single_table -- stub the pull so no test reaches the network.
+    """
+    with (
+        patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}),
+        patch("scripts.sync_ops._pull_single_table", return_value=0),
+    ):
         yield
 
 
@@ -497,7 +504,7 @@ class TestAutoMode:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("session_postflight._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test", 5, 1)
@@ -559,7 +566,7 @@ class TestAutoMode:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("session_postflight._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
@@ -588,7 +595,7 @@ class TestAutoMode:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=1),  # failure
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("session_postflight._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
@@ -609,8 +616,8 @@ class TestAutoMode:
         captured = capsys.readouterr()
         assert '"commit_failed"' in captured.out
 
-    def test_auto_recommendation_sync_in_output(self, capsys: pytest.CaptureFixture) -> None:
-        """drain_pending is called during run_auto; merged status appears in JSON output."""
+    def test_auto_refreshes_read_cache_via_portal_sync(self, capsys: pytest.CaptureFixture) -> None:
+        """Step 8: the portal sync (cache pull) runs during run_auto; merged status appears in output."""
         close_out = self._close_output("PASS")
         push_out = self._push_output("merged")
 
@@ -629,27 +636,22 @@ class TestAutoMode:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.sync_ops.check_sso", return_value=True),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 3, "skipped": 0}) as mock_drain,
-            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
-            patch("scripts.ops_data_portal.sync"),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {"ops_recommendations": 3}}) as mock_sync,
             patch("session_postflight._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
 
         assert rc == 0
-        mock_drain.assert_called_once()
+        mock_sync.assert_called_once()
         captured = capsys.readouterr()
         assert '"merged"' in captured.out
 
 
-class TestCheckSsoGating:
-    """Tests for the static-key SSO-gating logic in run_auto().
+class TestRetiredDrainBlocks:
+    """Decision 84 I-4: the pending-outbox drain blocks are gone from run_auto().
 
-    Under the static-key assume-role model, run_auto() must:
-    - Never spawn an 'aws sso login' subprocess.
-    - Skip the drain (skip-and-continue) when _check_sso returns False.
-    - Proceed with the drain when _check_sso returns True.
+    The static-key invariant survives the retirement: run_auto() must still never
+    spawn an 'aws sso login' subprocess.
     """
 
     def _close_output(self, sanity_status: str = "PASS") -> str:
@@ -685,9 +687,7 @@ class TestCheckSsoGating:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.sync_ops.check_sso", return_value=True),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
-            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("session_postflight._stage_document_derived_tables"),
             patch("subprocess.run") as mock_subprocess,
         ):
@@ -698,71 +698,11 @@ class TestCheckSsoGating:
             cmd = call_args.args[0] if call_args.args else call_args.kwargs.get("args", [])
             assert not ("sso" in cmd and "login" in cmd), f"Unexpected aws sso login call: {cmd}"
 
-    def test_false_check_sso_skips_drain_without_error(self, capsys: pytest.CaptureFixture) -> None:
-        """When check_sso returns False, drain is skipped and run_auto continues (skip-and-continue)."""
-        close_out = self._close_output()
-        push_out = self._push_output()
-
-        def fake_close() -> int:
-            print(close_out)
-            return 0
-
-        def fake_push() -> int:
-            print(push_out)
-            return 0
-
-        with (
-            patch("session_postflight.run_validate", return_value=0),
-            patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
-            patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.sync_ops.check_sso", return_value=False),
-            patch("scripts.ops_data_portal.drain_pending") as mock_drain,
-            patch("scripts.ops_data_portal.drain_pending_decisions") as mock_drain_dec,
-            patch("session_postflight._stage_document_derived_tables"),
-        ):
-            rc = _postflight.run_auto("feat: test")
-
-        # skip-and-continue: rc must be 0 (not a blocking error)
-        assert rc == 0
-        # drain must NOT be called when credentials are unavailable
-        mock_drain.assert_not_called()
-        mock_drain_dec.assert_not_called()
-        # informational skip message emitted (not an ERROR)
-        captured = capsys.readouterr()
-        assert "skipping drain" in captured.out or "Credentials unavailable" in captured.out
-
-    def test_true_check_sso_calls_drain(self, capsys: pytest.CaptureFixture) -> None:
-        """When check_sso returns True, drain_pending is called normally."""
-        close_out = self._close_output()
-        push_out = self._push_output()
-
-        def fake_close() -> int:
-            print(close_out)
-            return 0
-
-        def fake_push() -> int:
-            print(push_out)
-            return 0
-
-        with (
-            patch("session_postflight.run_validate", return_value=0),
-            patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
-            patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.sync_ops.check_sso", return_value=True),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 1, "skipped": 0}) as mock_drain,
-            patch("scripts.ops_data_portal.drain_pending_decisions", return_value={"drained": 0}),
-            patch("session_postflight._stage_document_derived_tables"),
-        ):
-            rc = _postflight.run_auto("feat: test")
-
-        assert rc == 0
-        mock_drain.assert_called_once()
+    def test_run_auto_source_has_no_drain_blocks(self) -> None:
+        """The drain_pending / drain_pending_decisions blocks are deleted; step 7b is a retirement comment."""
+        source = _MODULE_PATH.read_text(encoding="utf-8")
+        assert "drain_pending" not in source, "postflight must not reference the retired outbox drain"
+        assert "retired" in source and "7b" in source  # the step-7b retirement comment documents the removal
 
 
 class TestStageDocumentDerivedTables:
@@ -809,7 +749,7 @@ class TestStageDocumentDerivedTables:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
+            patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("session_postflight._stage_document_derived_tables") as mock_stage,
         ):
             rc = _postflight.run_auto("feat: test")
@@ -942,10 +882,10 @@ class TestPruneTelemetryLogs:
 
 
 class TestRunAutoCompactAll:
-    """Tests for ops_data_portal.sync() integration in run_auto (Decision 50)."""
+    """Tests for ops_data_portal.sync() integration in run_auto (Decision 50 / Decision 84 step 8)."""
 
     def test_compact_all_called_in_run_auto(self, capsys: pytest.CaptureFixture) -> None:
-        """ops_data_portal.sync() is called after drain_pending in run_auto."""
+        """ops_data_portal.sync() is called as step 8 of run_auto."""
         mock_sync = MagicMock(return_value=None)
 
         with (
@@ -955,7 +895,6 @@ class TestRunAutoCompactAll:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", return_value=0),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
             patch("scripts.ops_data_portal.sync", mock_sync),
         ):
             _postflight.run_auto("feat: test")
@@ -977,7 +916,6 @@ class TestRunAutoCompactAll:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
             patch("scripts.ops_data_portal.sync", side_effect=RuntimeError("sync failed!")),
         ):
             rc = _postflight.run_auto("feat: test")
@@ -999,7 +937,6 @@ class TestRunAutoCompactAll:
             patch("session_postflight.run_commit", return_value=0),
             patch("session_postflight.run_push", side_effect=fake_push),
             patch("session_postflight.run_log_housekeeping", return_value=0),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0}),
             patch("scripts.ops_data_portal.sync", side_effect=ImportError("ops_data_portal not found")),
         ):
             rc = _postflight.run_auto("feat: test")

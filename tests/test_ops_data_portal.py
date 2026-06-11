@@ -1,10 +1,16 @@
-"""Tests for scripts/ops_data_portal.py."""
+"""Tests for scripts/ops_data_portal.py (Decision 84 contracts).
+
+The offline outbox is retired: file_rec/file_decision raise loudly on failure and
+never return 'pending-...'. IDs are allocated by the ducklake_writer (file_ops) or
+supplied by the caller (decisions / migration backfill). All warehouse reads transit
+the DuckLake reader's named-verb surface.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -25,88 +31,144 @@ _VALID_FIELDS = {
     "automatable": True,
 }
 
+_VALID_DECISION_FIELDS = {
+    "title": "Test decision",
+    "status": "open",
+    "decision_id": 56,
+}
 
-@pytest.fixture(autouse=True)
-def _default_iceberg_backend(monkeypatch):
-    """Pin the legacy write/read tests to the iceberg (rollback) path.
 
-    T2.19 flipped the DEFAULT ops backend iceberg -> ducklake (signed off 2026-06-09). The tests in
-    this module that assert the OpsWriter()/DuckDBIcebergReader (iceberg) path predate the flip; pin
-    them to iceberg so they exercise the (still-live) rollback path explicitly. Tests that need the
-    ducklake transport override via `monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")`; the
-    default-value test (`test_ops_backend_default_and_flag`) `delenv`s first to see the true default.
+class _FakeResp:
+    """Minimal requests.Response stand-in for _ducklake_write transport tests."""
+
+    def __init__(self, status_code: int, body: dict | None = None, text: str = "") -> None:
+        self.status_code = status_code
+        self._body = body or {}
+        self.text = text
+
+    def json(self) -> dict:
+        return self._body
+
+
+def _patch_writer_transport(monkeypatch, responses: list[_FakeResp], sleeps: list | None = None) -> list[dict]:
+    """Install fake boto3 session / SigV4 / requests.post returning *responses* in order.
+
+    Returns the list of JSON-decoded request bodies captured per POST.
     """
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+    import time
+
+    import boto3
+    import requests
+    from botocore.auth import SigV4Auth
+
+    class _Creds:
+        access_key = "AK"
+        secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
+        token = None
+
+        def get_frozen_credentials(self):
+            return self
+
+    class _Session:
+        def __init__(self, profile_name=None):
+            pass
+
+        def get_credentials(self):
+            return _Creds()
+
+    monkeypatch.setattr(boto3, "Session", _Session)
+    monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s) if sleeps is not None else None)
+
+    bodies: list[dict] = []
+    seq = iter(responses)
+
+    def _post(url, data=None, headers=None, timeout=None):
+        bodies.append(json.loads(data))
+        return next(seq)
+
+    monkeypatch.setattr(requests, "post", _post)
+    return bodies
 
 
 class TestFileRec:
-    """Tests for file_rec()."""
+    """Tests for file_rec() -- writer-allocated IDs via the file_ops action."""
 
-    def test_file_rec_success(self, tmp_path: Path) -> None:
-        """file_rec() returns allocated ID, routes rec to DuckLake, appends to local JSONL."""
+    def test_file_rec_success_consumes_allocated_key(self, tmp_path: Path) -> None:
+        """file_rec() sends action=file_ops with an idempotency ULID and returns the writer-allocated id."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-600"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-2171"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import file_rec
 
             result = file_rec(dict(_VALID_FIELDS))
 
-        assert result == "rec-600"
+        assert result == "rec-2171"
         mock_dl_write.assert_called_once()
         call_table, call_rec = mock_dl_write.call_args[0]
         assert call_table == "ops_recommendations"
-        assert call_rec["id"] == "rec-600"
         assert call_rec["status"] == "open"
-        # write-through: local JSONL has new entry
+        assert mock_dl_write.call_args.kwargs["action"] == "file_ops"
+        ulid = mock_dl_write.call_args.kwargs["idempotency_ulid"]
+        assert isinstance(ulid, str) and len(ulid) == 32  # uuid4().hex
+        # write-through: local JSONL has new entry carrying the allocated id
         lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 1
         entry = json.loads(lines[0])
-        assert entry["id"] == "rec-600"
+        assert entry["id"] == "rec-2171"
 
-    def test_file_rec_offline(self, tmp_path: Path) -> None:
-        """file_rec() queues to pending outbox when DynamoDB is unreachable."""
-        pending_dir = tmp_path / "pending"
-
+    def test_file_rec_missing_allocated_key_raises(self, tmp_path: Path) -> None:
+        """file_rec() raises RuntimeError when the writer response carries no allocated key."""
         with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("DynamoDB unreachable")),
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
         ):
             from scripts.ops_data_portal import file_rec
 
-            result = file_rec(dict(_VALID_FIELDS))
+            with pytest.raises(RuntimeError, match="no allocated key"):
+                file_rec(dict(_VALID_FIELDS))
 
-        assert result.startswith("pending-")
-        pending_files = list(pending_dir.glob("*.json"))
-        assert len(pending_files) == 1
-        queued = json.loads(pending_files[0].read_text(encoding="utf-8"))
-        assert "id" not in queued  # no ID yet
-        assert queued["title"] == _VALID_FIELDS["title"]
+    def test_file_rec_raises_loudly_on_writer_failure(self, tmp_path: Path) -> None:
+        """file_rec() propagates the writer failure -- there is no offline outbox / 'pending-' path."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
 
-    def test_file_rec_invalid_schema(self, tmp_path: Path) -> None:
-        """file_rec() raises ValidationError when rec fields fail Pydantic validation."""
-        # Missing required 'status' field -- Recommendation.model_validate will raise
+        with (
+            patch(
+                "scripts.ops_data_portal._ducklake_write",
+                side_effect=RuntimeError("ducklake_writer file_ops ops_recommendations failed (HTTP 500)"),
+            ),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            with pytest.raises(RuntimeError, match="ducklake_writer"):
+                file_rec(dict(_VALID_FIELDS))
+
+        assert not recs_file.exists()  # nothing was written through
+
+    def test_file_rec_invalid_schema(self) -> None:
+        """file_rec() raises when rec fields fail validation (write-time gate or Pydantic)."""
         invalid_fields = dict(_VALID_FIELDS)
         invalid_fields.pop("status")
 
-        with patch("scripts.ops_data_portal._next_id", return_value="rec-601"):
-            from scripts.ops_data_portal import file_rec
+        from scripts.ops_data_portal import file_rec
 
-            with pytest.raises((ValidationError, Exception)):
-                file_rec(invalid_fields)
+        with pytest.raises((ValidationError, ValueError)):
+            file_rec(invalid_fields)
 
     def test_file_rec_date_added_if_missing(self, tmp_path: Path) -> None:
         """file_rec() adds today's date to the record if not supplied."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
-        fields = dict(_VALID_FIELDS)
-        fields.pop("status", None)  # will default to "open" via fields copy
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-602"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-602"}),
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import file_rec
@@ -118,19 +180,20 @@ class TestFileRec:
         assert entry.get("date") is not None  # date was added
 
     def test_file_rec_rejects_unregistered_source(self, tmp_path: Path) -> None:
-        """file_rec() raises ValueError when source is not in the registry."""
+        """file_rec() raises ValueError when source is not in the registry; no write is attempted."""
         fields = dict(_VALID_FIELDS)
         fields["source"] = "ghost-agent"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-999"),
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
         ):
             from scripts.ops_data_portal import file_rec
 
             with pytest.raises(ValueError, match="Unknown source 'ghost-agent'"):
                 file_rec(fields)
+
+        mock_dl_write.assert_not_called()
 
     def test_file_rec_accepts_registered_source(self, tmp_path: Path) -> None:
         """file_rec() succeeds when source is a registered canonical_id."""
@@ -139,8 +202,8 @@ class TestFileRec:
         fields["source"] = "planning"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-998"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-998"}),
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import file_rec
@@ -154,7 +217,7 @@ class TestUpdateRec:
     """Tests for update_rec()."""
 
     def test_update_rec_success(self, tmp_path: Path) -> None:
-        """update_rec() reads from Athena, merges updates, routes recs to DuckLake, appends to local JSONL."""
+        """update_rec() reads via the reader, merges updates, writes update_ops, appends to local JSONL."""
         existing = {**_VALID_FIELDS, "id": "rec-042", "date": "2026-01-01"}
         recs_file = tmp_path / ".recommendations-log.jsonl"
         recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
@@ -174,12 +237,13 @@ class TestUpdateRec:
         assert call_table == "ops_recommendations"
         assert call_rec["status"] == "closed"
         assert call_rec["execution_result"] == "success"
+        assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
         # write-through: local JSONL appended
         lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) >= 2  # original + appended update
 
     def test_update_rec_invalid_status(self) -> None:
-        """update_rec() raises ValueError for invalid status values (before Athena read)."""
+        """update_rec() raises ValueError for invalid status values (before any read)."""
         from scripts.ops_data_portal import update_rec
 
         with pytest.raises(ValueError, match="Invalid status"):
@@ -188,16 +252,15 @@ class TestUpdateRec:
     def test_update_rec_absent_rec_loud_fails(self, tmp_path: Path) -> None:
         """update_rec() loud-fails on an absent rec (referential, CD.33 cl.8 / D-5).
 
-        The prior permissive upsert-on-absent (`existing or {}`) is GONE: an update of a record
-        that does not exist in the current projection raises RuntimeError and never silently
-        creates a partial row.
+        An update of a record that does not exist in the current projection raises
+        RuntimeError and never silently creates a partial row.
         """
         recs_file = tmp_path / ".recommendations-log.jsonl"
         updates = {**_VALID_FIELDS, "id": "rec-042", "status": "closed"}
 
         with (
             patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=None),
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
@@ -206,126 +269,166 @@ class TestUpdateRec:
             with pytest.raises(RuntimeError, match="does not exist"):
                 update_rec("rec-042", updates)
 
-        # No write was staged -- the absent rec was rejected before any write path.
-        mock_opswriter.return_value.write.assert_not_called()
+        # No write happened -- the absent rec was rejected before any write path.
+        mock_dl_write.assert_not_called()
 
 
-class TestStorageBackendTransport:
-    """The OPS_STORAGE_BACKEND flag swaps transport only; the caller surface is unchanged."""
+class TestFileDecision:
+    """Tests for file_decision() -- DECISIONS.md is the numbering authority (Decision 84 I-2 exception)."""
 
-    def test_file_rec_ducklake_invokes_writer_not_opswriter(self, tmp_path: Path, monkeypatch) -> None:
-        """backend=ducklake routes file_rec through the writer Function URL, not OpsWriter (Iceberg)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-        fields = {**_VALID_FIELDS}
-
-        with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-900"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import file_rec
-
-            rec_id = file_rec(fields)
-
-        assert rec_id == "rec-900"
-        mock_write.assert_called_once()
-        assert mock_write.call_args[0][0] == "ops_recommendations"
-        assert mock_write.call_args.kwargs["action"] == "write_ops"
-        mock_opswriter.return_value.write.assert_not_called()
-
-    def test_file_rec_routes_to_ducklake_regardless_of_backend(self, tmp_path: Path, monkeypatch) -> None:
-        """recs always route to DuckLake even when backend=iceberg (Decision 81 cl.7 / T2.19 -- no iceberg escape)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-        fields = {**_VALID_FIELDS}
-
-        with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-901"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import file_rec
-
-            file_rec(fields)
-
-        mock_write.assert_called_once()
-        assert mock_write.call_args[0][0] == "ops_recommendations"
-        mock_opswriter.return_value.write.assert_not_called()
-
-    def test_update_rec_ducklake_invokes_writer_update_ops(self, tmp_path: Path, monkeypatch) -> None:
-        """backend=ducklake routes update_rec through update_ops (the in-tx referential write)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        existing = {**_VALID_FIELDS, "id": "rec-042"}
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-
-        with (
-            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import update_rec
-
-            assert update_rec("rec-042", {"status": "closed"}) is True
-
-        assert mock_write.call_args.kwargs["action"] == "update_ops"
-        mock_opswriter.return_value.write.assert_not_called()
-
-    def test_file_decision_stays_iceberg_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
-        """Recs-first slice: decisions are DEFERRED -- file_decision uses OpsWriter (Iceberg) even when
-        OPS_STORAGE_BACKEND=ducklake (NOT the DuckLake writer)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+    def test_file_decision_success_with_decision_id(self, tmp_path: Path) -> None:
+        """file_decision() forms dec-NNN from fields['decision_id'] and writes via write_ops."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
         with (
-            patch("scripts.ops_data_portal._next_id", return_value=57),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+        ):
+            from scripts.ops_data_portal import file_decision
+
+            result = file_decision(dict(_VALID_DECISION_FIELDS))
+
+        assert result == "dec-056"
+        call_table, call_rec = mock_dl_write.call_args[0]
+        assert call_table == "ops_decisions"
+        assert mock_dl_write.call_args.kwargs["action"] == "write_ops"
+        assert call_rec["decision_id"] == 56
+        assert call_rec["id"] == "dec-056"
+        assert call_rec["created_timestamp"] and call_rec["last_updated_timestamp"]
+        mock_sync.assert_called_once_with("ops_decisions")
+
+    def test_file_decision_requires_decision_id(self, tmp_path: Path) -> None:
+        """file_decision() raises ValueError when no DECISIONS.md-assigned integer is supplied."""
+        with patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write:
+            from scripts.ops_data_portal import file_decision
+
+            with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
+                file_decision({"title": "No number", "status": "open"})
+
+        mock_dl_write.assert_not_called()
+
+    def test_file_decision_rejects_non_positive_and_non_int_decision_id(self) -> None:
+        """decision_id must be a positive int -- 0 and string forms are rejected."""
+        from scripts.ops_data_portal import file_decision
+
+        with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
+            file_decision({"title": "Zero", "status": "open", "decision_id": 0})
+        with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
+            file_decision({"title": "String", "status": "open", "decision_id": "84"})
+
+    def test_file_decision_migration_int_id_takes_precedence(self, tmp_path: Path) -> None:
+        """_migration_int_id supplies the number on the backfill path (no decision_id field needed)."""
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
-            file_decision({"title": "D", "status": "open", "rationale": "x"})
+            result = file_decision({"title": "Backfill", "status": "open"}, _migration_int_id=84)
 
-        mock_opswriter.return_value.write.assert_called_once()
-        mock_dl.assert_not_called()
+        assert result == "dec-084"
+        _, call_rec = mock_dl_write.call_args[0]
+        assert call_rec["id"] == "dec-084"
+        assert call_rec["decision_id"] == 84
 
-    def test_update_decision_stays_iceberg_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
-        """update_decision stays on OpsWriter (Iceberg) even on the ducklake backend (decisions deferred)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        existing = {
-            "id": "dec-042",
-            "title": "D",
-            "status": "open",
-            "created_timestamp": "2026-05-01T00:00:00+00:00",
-            "last_updated_timestamp": "2026-05-01T00:00:00+00:00",
-        }
+
+class TestUpdateDecision:
+    """Tests for update_decision() and the reader-backed decision fetch."""
+
+    _EXISTING = {
+        "id": "dec-042",
+        "title": "D",
+        "status": "open",
+        "created_timestamp": "2026-05-01T00:00:00+00:00",
+        "last_updated_timestamp": "2026-05-01T00:00:00+00:00",
+    }
+
+    def test_update_decision_routes_update_ops(self, tmp_path: Path) -> None:
+        """update_decision() merges and writes via _ducklake_write(action='update_ops')."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_athena", return_value=dict(existing)),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
+            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=dict(self._EXISTING)),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
         ):
             from scripts.ops_data_portal import update_decision
 
             assert update_decision("dec-042", {"status": "closed"}) is True
 
-        mock_opswriter.return_value.write.assert_called_once()
-        mock_dl.assert_not_called()
+        call_table, call_rec = mock_dl_write.call_args[0]
+        assert call_table == "ops_decisions"
+        assert call_rec["status"] == "closed"
+        assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
+        mock_sync.assert_called_once_with("ops_decisions")
+
+    def test_update_decision_absent_loud_fails(self) -> None:
+        """update_decision() raises RuntimeError when the decision is absent from the projection."""
+        with (
+            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+        ):
+            from scripts.ops_data_portal import update_decision
+
+            with pytest.raises(RuntimeError, match="does not exist"):
+                update_decision("dec-042", {"status": "closed"})
+
+        mock_dl_write.assert_not_called()
+
+    def test_fetch_decision_from_reader_uses_named_verb(self) -> None:
+        """_fetch_decision_from_reader uses named('decision_by_id', id=...) on the DuckLake reader."""
+        reader = MagicMock()
+        reader.named.return_value = [dict(self._EXISTING)]
+
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            from scripts.ops_data_portal import _fetch_decision_from_reader
+
+            result = _fetch_decision_from_reader("dec-042")
+
+        assert result is not None
+        assert result["id"] == "dec-042"
+        reader.named.assert_called_once_with("decision_by_id", id="dec-042")
+
+    def test_fetch_decision_from_reader_invalid_id(self) -> None:
+        """Malformed decision_id raises ValueError before any reader call."""
+        from scripts.ops_data_portal import _fetch_decision_from_reader
+
+        with pytest.raises(ValueError, match="invalid decision_id"):
+            _fetch_decision_from_reader("rec-042")
+
+    def test_fetch_decision_athena_alias_retained(self) -> None:
+        """The historical _fetch_decision_from_athena symbol aliases the reader fetch (read-engine.yaml)."""
+        from scripts.ops_data_portal import _fetch_decision_from_athena, _fetch_decision_from_reader
+
+        assert _fetch_decision_from_athena is _fetch_decision_from_reader
+
+
+class TestRetiredSurfaces:
+    """Decision 84: the offline outbox, OpsWriter transport, and DynamoDB id allocation are gone."""
+
+    def test_outbox_and_legacy_symbols_absent(self) -> None:
+        """drain_pending / outbox dirs / _next_id / OpsWriter / backend flag no longer exist on the portal."""
+        import scripts.ops_data_portal as portal
+
+        for name in (
+            "drain_pending",
+            "drain_pending_decisions",
+            "_PENDING_OUTBOX",
+            "_DECISIONS_PENDING_OUTBOX",
+            "_next_id",
+            "OpsWriter",
+            "_ops_backend",
+            "_delete_postmortems_from_iceberg",
+            "_rewrite_jsonl_excluding_postmortems",
+        ):
+            assert not hasattr(portal, name), f"retired symbol still present: {name}"
 
     def test_portal_exposes_no_import_bypass_write_surface(self) -> None:
-        """The ONLY ops write surface is file_rec/update_rec (+ file_decision/update_decision for the
-        deferred Iceberg path). No import/bootstrap/bypass writer is exposed on the portal (Decision 81;
-        the one-time recs move is the operational maintenance seed, not a portal/agent surface)."""
+        """The ONLY ops write surface is file_rec/update_rec/file_decision/update_decision. No
+        import/bootstrap/bypass writer is exposed on the portal (Decision 81)."""
         import scripts.ops_data_portal as portal
 
         forbidden = [
@@ -336,300 +439,31 @@ class TestStorageBackendTransport:
         assert forbidden == []
 
 
-class TestFileDecision:
-    """Tests for file_decision()."""
-
-    def test_file_decision_success(self, tmp_path: Path) -> None:
-        """file_decision() returns dec-NNN string and dual-writes id + decision_id."""
-        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
-        with (
-            patch("scripts.ops_data_portal._next_id", return_value=56),
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
-        ):
-            from scripts.ops_data_portal import file_decision
-
-            result = file_decision({"title": "Test decision", "status": "open", "rationale": "For testing"})
-
-        assert result == "dec-056"
-        call_table, call_rec = mock_opswriter.return_value.write.call_args[0]
-        assert call_table == "ops_decisions"
-        assert call_rec["decision_id"] == 56
-        assert call_rec["id"] == "dec-056"
-
-    def test_file_decision_offline(self, tmp_path: Path) -> None:
-        """file_decision() returns pending-UUID and queues to outbox when DynamoDB unavailable."""
-        pending_dir = tmp_path / "pending"
-        with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("unreachable")),
-            patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", pending_dir),
-        ):
-            from scripts.ops_data_portal import file_decision
-
-            result = file_decision({"title": "Offline decision", "status": "open", "rationale": "test"})
-
-        assert result.startswith("pending-")
-
-
-class TestDrainPending:
-    """Tests for drain_pending()."""
-
-    def test_drain_pending_success(self, tmp_path: Path) -> None:
-        """drain_pending() drains queued files and routes recs to DuckLake (T2.19)."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        pending_fields = {**_VALID_FIELDS}
-        pending_fields.pop("id", None)
-        (pending_dir / "abc123.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-601"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        assert result["skipped"] == 0
-        mock_dl_write.assert_called_once()
-        assert mock_dl_write.call_args[0][0] == "ops_recommendations"
-        # pending file should be deleted
-        assert not (pending_dir / "abc123.json").exists()
-        # appended to local JSONL
-        lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) == 1
-        entry = json.loads(lines[0])
-        assert entry["id"] == "rec-601"
-
-    def test_drain_pending_routes_to_writer_on_ducklake_backend(self, tmp_path: Path, monkeypatch) -> None:
-        """On the ducklake backend, drain_pending() routes the drained rec through the writer (closed boundary).
-
-        T2.19 sign-off: the offline-outbox drain must honour the active backend, not unconditionally
-        stage to Iceberg -- otherwise an offline-queued rec resurfaces in Iceberg post-cutover.
-        """
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        pending_fields = {**_VALID_FIELDS}
-        pending_fields.pop("id", None)
-        (pending_dir / "abc123.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-601"),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
-            patch("scripts.ops_data_portal.OpsWriter") as mock_opswriter,
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        mock_dl_write.assert_called_once()
-        assert mock_dl_write.call_args[0][0] == "ops_recommendations"
-        mock_opswriter.return_value.write.assert_not_called()
-
-    def test_drain_pending_dynamo_still_down(self, tmp_path: Path) -> None:
-        """drain_pending() leaves files untouched when DynamoDB is still unreachable."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        (pending_dir / "xyz999.json").write_text(json.dumps(_VALID_FIELDS), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("still down")),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 0
-        assert result["skipped"] == 1
-        # file still exists
-        assert (pending_dir / "xyz999.json").exists()
-
-    def test_drain_pending_empty_dir(self, tmp_path: Path) -> None:
-        """drain_pending() returns zero counts when outbox is empty."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-
-        with patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 0
-        assert result["skipped"] == 0
-        assert result["deduped"] == 0
-
-    def test_drain_passes_sso_profile_to_next_id(self, tmp_path: Path) -> None:
-        """drain_pending() with no args passes _SSO_PROFILE to _next_id."""
-        from scripts.ops_data_portal import _SSO_PROFILE
-
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        pending_fields = {**_VALID_FIELDS}
-        pending_fields.pop("id", None)
-        (pending_dir / "test.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-900") as mock_next_id,
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            drain_pending()
-
-        mock_next_id.assert_called_once_with("recommendations", profile=_SSO_PROFILE)
-
-    def test_drain_pending_no_outbox_dir(self, tmp_path: Path) -> None:
-        """drain_pending() returns zero counts when outbox directory does not exist."""
-        missing_dir = tmp_path / "does_not_exist"
-
-        with patch("scripts.ops_data_portal._PENDING_OUTBOX", missing_dir):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 0
-        assert result["skipped"] == 0
-        assert result["deduped"] == 0
-
-    def test_drain_applies_compute_risk_when_file_and_effort_present(self, tmp_path: Path) -> None:
-        """drain_pending() applies compute_risk when pending record has file and effort."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        pending_fields = {**_VALID_FIELDS, "risk": "low"}
-        pending_fields.pop("id", None)
-        (pending_dir / "cr_test.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-        recs_file = tmp_path / ".recommendations-log.jsonl"
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-901"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-            patch("scripts.ops_data_portal.compute_risk", return_value="medium") as mock_cr,
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        mock_cr.assert_called_once_with(pending_fields["file"], pending_fields["effort"])
-        entry = json.loads(recs_file.read_text(encoding="utf-8").strip().splitlines()[0])
-        assert entry["risk"] == "medium"
-
-    def test_drain_skips_compute_risk_when_file_missing(self, tmp_path: Path) -> None:
-        """drain_pending() skips compute_risk when pending record lacks file field."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        no_file_fields = {k: v for k, v in _VALID_FIELDS.items() if k != "file"}
-        no_file_fields.pop("id", None)
-        (pending_dir / "nf_test.json").write_text(json.dumps(no_file_fields), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-902"),
-            patch("scripts.ops_data_portal.OpsWriter"),
-            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / ".recs.jsonl"),
-            patch("scripts.ops_data_portal.compute_risk") as mock_cr,
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            drain_pending()
-
-        mock_cr.assert_not_called()
-
-    def test_drain_pending_skips_entry_with_missing_source_key(self, tmp_path: Path) -> None:
-        """drain_pending() skips outbox entries where the source key is absent (no KeyError)."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        recs_file = tmp_path / "recs.jsonl"
-
-        no_source_entry = {k: v for k, v in _VALID_FIELDS.items() if k != "source"}
-        valid_entry = dict(_VALID_FIELDS)
-        valid_entry["source"] = "planning"
-
-        (pending_dir / "aaa_no_source.json").write_text(json.dumps(no_source_entry), encoding="utf-8")
-        (pending_dir / "bbb_valid.json").write_text(json.dumps(valid_entry), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-701"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        assert result["skipped"] == 1
-        assert (pending_dir / "aaa_no_source.json").exists()
-        assert not (pending_dir / "bbb_valid.json").exists()
-
-    def test_drain_pending_rejects_unregistered_source(self, tmp_path: Path) -> None:
-        """drain_pending() skips outbox entries with unregistered source; valid entries still drain."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        recs_file = tmp_path / "recs.jsonl"
-
-        invalid_entry = dict(_VALID_FIELDS)
-        invalid_entry["source"] = "ghost-agent"
-        valid_entry = dict(_VALID_FIELDS)
-        valid_entry["source"] = "planning"
-
-        (pending_dir / "aaa_invalid.json").write_text(json.dumps(invalid_entry), encoding="utf-8")
-        (pending_dir / "bbb_valid.json").write_text(json.dumps(valid_entry), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-700"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        assert result["skipped"] == 1
-        assert (pending_dir / "aaa_invalid.json").exists()
-        assert not (pending_dir / "bbb_valid.json").exists()
-
-
 class TestEnqueueFindings:
     """Tests for enqueue_findings()."""
 
-    def test_enqueue_findings_offline_bulk(self, tmp_path: Path) -> None:
-        """enqueue_findings() writes one outbox file per valid entry when DynamoDB is unreachable."""
-        pending_dir = tmp_path / "pending"
+    def test_enqueue_findings_bulk_success(self, tmp_path: Path) -> None:
+        """enqueue_findings() files each valid entry through file_rec (writer-allocated ids)."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
         jsonl_file = tmp_path / "findings.jsonl"
         entry = {**_VALID_FIELDS, "source": "cc-scheduled-agent-test"}
         jsonl_file.write_text("\n".join([json.dumps(entry)] * 3) + "\n", encoding="utf-8")
 
         with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("offline")),
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch(
+                "scripts.ops_data_portal._ducklake_write",
+                side_effect=[{"key": "rec-801"}, {"key": "rec-802"}, {"key": "rec-803"}],
+            ),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import enqueue_findings
 
             result = enqueue_findings(jsonl_file)
 
         assert result == {"enqueued": 3, "invalid": 0, "skipped": 0}
-        assert len(list(pending_dir.glob("*.json"))) == 3
+        ids = [json.loads(line)["id"] for line in recs_file.read_text(encoding="utf-8").strip().splitlines()]
+        assert ids == ["rec-801", "rec-802", "rec-803"]
 
     def test_enqueue_findings_invalid_entries_counted_not_raised(self, tmp_path: Path) -> None:
         """enqueue_findings() counts schema failures as invalid and JSON parse errors as skipped."""
@@ -645,8 +479,8 @@ class TestEnqueueFindings:
         jsonl_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         with (
-            patch("scripts.ops_data_portal._next_id", side_effect=["rec-801", "rec-802"]),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", side_effect=[{"key": "rec-801"}, {"key": "rec-802"}]),
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import enqueue_findings
@@ -664,8 +498,8 @@ class TestEnqueueFindings:
         assert result == {"enqueued": 0, "invalid": 0, "skipped": 0}
 
 
-class TestPostmortemDedupe:
-    """Tests for find_open_postmortem_for, drain_pending dedupe, and purge_postmortems_for."""
+class TestPostmortems:
+    """Tests for find_open_postmortem_for and the SCD2 purge (supersede) flow."""
 
     def test_find_open_postmortem_for_returns_match(self, tmp_path: Path) -> None:
         recs_file = tmp_path / "recs.jsonl"
@@ -711,138 +545,131 @@ class TestPostmortemDedupe:
 
         assert result is None
 
-    def test_drain_pending_dedupes_existing_postmortem(self, tmp_path: Path) -> None:
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        recs_file = tmp_path / "recs.jsonl"
+    @staticmethod
+    def _reader_with_rows(rows: list[dict]) -> MagicMock:
+        reader = MagicMock()
+        reader.named.return_value = rows
+        return reader
 
-        existing_postmortem = {
-            **_VALID_FIELDS,
-            "id": "rec-529",
-            "status": "open",
-            "source": "executor-postmortem",
-            "title": "Investigate executor failure for rec-100",
-            "context": "Executor failed for rec-100.",
-        }
-        recs_file.write_text(json.dumps(existing_postmortem) + "\n", encoding="utf-8")
-
-        pending_fields = {
-            "source": "executor-postmortem",
-            "title": "Investigate executor failure for rec-100",
-            "context": "Second postmortem attempt.",
-            "status": "open",
-            "effort": "S",
-            "priority": "High",
-            "automatable": False,
-            "risk": "low",
-            "file": "scripts/execute_recommendation.py",
-            "acceptance": "grep -q 'rec-100' logs/.recommendations-log.jsonl",
-        }
-        pending_file = pending_dir / "dup-uuid.json"
-        pending_file.write_text(json.dumps(pending_fields), encoding="utf-8")
+    def test_purge_postmortems_dry_run_matches_without_writing(self) -> None:
+        """dry_run reports the matched (non-superseded executor-postmortem) recs and writes nothing."""
+        rows = [
+            {"id": "rec-529", "source": "executor-postmortem", "status": "open"},
+            {"id": "rec-530", "source": "executor-postmortem", "status": "superseded"},
+            {"id": "rec-531", "source": "code-review", "status": "open"},
+        ]
+        reader = self._reader_with_rows(rows)
 
         with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-            patch("scripts.ops_data_portal._next_id") as mock_next_id,
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing_postmortem)),
-            patch("scripts.ops_data_portal._sync_table"),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["deduped"] == 1
-        assert result["drained"] == 0
-        mock_next_id.assert_not_called()
-        mock_dl_write.assert_called_once()
-        write_table, write_rec = mock_dl_write.call_args[0]
-        assert write_table == "ops_recommendations"
-        assert write_rec["id"] == "rec-529"
-        assert not pending_file.exists()
-
-    def test_purge_postmortems_for_dry_run(self, tmp_path: Path) -> None:
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        recs_file = tmp_path / "recs.jsonl"
-
-        postmortem = {
-            "id": "rec-529",
-            "status": "open",
-            "source": "executor-postmortem",
-            "title": "Investigate executor failure for rec-100",
-        }
-        recs_file.write_text(json.dumps(postmortem) + "\n", encoding="utf-8")
-        pending_fields = {"source": "executor-postmortem", "title": "Investigate executor failure for rec-100"}
-        pending_file = pending_dir / "abc.json"
-        pending_file.write_text(json.dumps(pending_fields), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            patch("src.common.iceberg_reader.make_reader", return_value=reader),
+            patch("scripts.ops_data_portal.update_rec") as mock_update,
         ):
             from scripts.ops_data_portal import purge_postmortems_for
 
             result = purge_postmortems_for("rec-100", dry_run=True)
 
-        assert result["pending_files"] == 1
-        assert result["jsonl_entries"] == 1
-        assert pending_file.exists()
-        assert "rec-529" in recs_file.read_text(encoding="utf-8")
+        assert result == {"matched": ["rec-529"], "superseded": 0}
+        reader.named.assert_called_once_with("recs_by_title_prefix", title_prefix="Investigate executor failure for rec-100%")
+        mock_update.assert_not_called()
 
-    def test_purge_postmortems_for_executes_full_cleanup(self, tmp_path: Path) -> None:
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        recs_file = tmp_path / "recs.jsonl"
-
-        rec_100 = {**_VALID_FIELDS, "id": "rec-100", "date": "2026-01-01", "title": "target rec"}
-        postmortem = {
-            "id": "rec-529",
-            "status": "open",
-            "source": "executor-postmortem",
-            "title": "Investigate executor failure for rec-100",
-        }
-        recs_file.write_text(
-            json.dumps(rec_100) + "\n" + json.dumps(postmortem) + "\n",
-            encoding="utf-8",
-        )
-
-        pending_fields = {"source": "executor-postmortem", "title": "Investigate executor failure for rec-100"}
-        pending_file = pending_dir / "abc.json"
-        pending_file.write_text(json.dumps(pending_fields), encoding="utf-8")
+    def test_purge_postmortems_supersedes_and_declines(self) -> None:
+        """Each matched postmortem becomes status=superseded via update_rec; the failed rec is declined."""
+        rows = [
+            {"id": "rec-529", "source": "executor-postmortem", "status": "open"},
+            {"id": "rec-533", "source": "executor-postmortem", "status": "open"},
+        ]
+        reader = self._reader_with_rows(rows)
 
         with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-            patch("scripts.ops_data_portal._delete_postmortems_from_iceberg", return_value=-1) as mock_iceberg,
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(rec_100)),
-            patch("scripts.ops_data_portal._sync_table"),
+            patch("src.common.iceberg_reader.make_reader", return_value=reader),
+            patch("scripts.ops_data_portal.update_rec") as mock_update,
         ):
             from scripts.ops_data_portal import purge_postmortems_for
 
             result = purge_postmortems_for("rec-100", dry_run=False)
 
-        assert result["pending_files"] == 1
-        assert result["jsonl_entries"] == 1
-        assert result["iceberg_delete_attempted"] is True
-        mock_iceberg.assert_called_once_with("rec-100", profile=None)
-        assert not pending_file.exists()
-        remaining = recs_file.read_text(encoding="utf-8")
-        assert "rec-529" not in remaining
+        assert result["matched"] == ["rec-529", "rec-533"]
+        assert result["superseded"] == 2
+        statuses = {call.args[0]: call.args[1]["status"] for call in mock_update.call_args_list}
+        assert statuses["rec-529"] == "superseded"
+        assert statuses["rec-533"] == "superseded"
+        assert statuses["rec-100"] == "declined"
+        assert mock_update.call_count == 3
+
+    def test_purge_postmortems_invalid_rec_id_raises(self) -> None:
+        """Malformed rec id raises ValueError before any reader call."""
+        from scripts.ops_data_portal import purge_postmortems_for
+
+        with pytest.raises(ValueError, match="Invalid rec ID"):
+            purge_postmortems_for("'; DROP TABLE ops_recommendations; --")
+
+
+class TestBackfillDecisionsFromMd:
+    """Tests for backfill_decisions_from_md() -- DECISIONS.md -> ops_decisions ETL."""
+
+    def test_backfill_writes_coerced_entries(self) -> None:
+        """Each parsed entry is filed via file_decision(_migration_int_id=n, _skip_sync=True)."""
+        entries = [
+            {
+                "decision_id": 84,
+                "title": "Decision 84",
+                "status": "Decided",
+                "problem": "p",
+                "decision_text": "d",
+                "context": "c",
+                "decided_date": "2026-06-10",
+                "related_decisions": "[81, 79]",
+                "not_a_backfill_col": "dropped",
+            },
+            {"decision_id": "", "title": "no number"},  # skipped
+        ]
+        with (
+            patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
+            patch("scripts.ops_data_portal.file_decision", return_value="dec-084") as mock_fd,
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 1, "failed": 0, "skipped": 1}
+        mock_fd.assert_called_once()
+        fields = mock_fd.call_args.args[0]
+        assert fields["related_decisions"] == [81, 79]
+        assert "not_a_backfill_col" not in fields and "decision_id" not in fields
+        assert mock_fd.call_args.kwargs["_migration_int_id"] == 84
+        assert mock_fd.call_args.kwargs["_skip_sync"] is True
+        mock_sync.assert_called_once_with("ops_decisions")
+
+    def test_backfill_isolates_per_row_failures(self) -> None:
+        """A failing row increments failed without aborting the run; no sync when nothing written."""
+        entries = [
+            {"decision_id": 1, "title": "boom", "status": "Decided"},
+            {"decision_id": "not-an-int", "title": "skip me"},
+        ]
+        with (
+            patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
+            patch("scripts.ops_data_portal.file_decision", side_effect=RuntimeError("writer down")),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 0, "failed": 1, "skipped": 1}
+        mock_sync.assert_not_called()
 
 
 class TestCLI:
     """Tests for the CLI entrypoint."""
 
     def test_cli_file_rec_success(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """CLI --file-rec prints the allocated rec ID to stdout."""
+        """CLI --file-rec prints the writer-allocated rec ID to stdout."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-700"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import main
@@ -918,9 +745,31 @@ class TestCLI:
         assert rc == 0
         mock_enqueue.assert_called_once_with(Path(str(jsonl_file)), profile=None)
 
+    def test_cli_backfill_decisions_md_dispatches(self, capsys: pytest.CaptureFixture) -> None:
+        """CLI --backfill-decisions-md runs the ETL and exits 1 when any row failed."""
+        with patch(
+            "scripts.ops_data_portal.backfill_decisions_from_md",
+            return_value={"written": 5, "failed": 0, "skipped": 1},
+        ) as mock_backfill:
+            from scripts.ops_data_portal import main
+
+            rc = main(["--backfill-decisions-md"])
+
+        assert rc == 0
+        mock_backfill.assert_called_once_with(profile=None)
+        assert '"written": 5' in capsys.readouterr().out
+
+        with patch(
+            "scripts.ops_data_portal.backfill_decisions_from_md",
+            return_value={"written": 4, "failed": 1, "skipped": 0},
+        ):
+            from scripts.ops_data_portal import main
+
+            assert main(["--backfill-decisions-md"]) == 1
+
 
 class TestWriteTimeDispatch:
-    """Tests for _load_write_time_validators, _derive_computed_fields, and related drain/file_rec paths."""
+    """Tests for _load_write_time_validators and _derive_computed_fields via file_rec."""
 
     def test_write_time_validators_loaded(self) -> None:
         """_load_write_time_validators returns >= 6 validators for ops_recommendations."""
@@ -946,62 +795,42 @@ class TestWriteTimeDispatch:
         with pytest.raises(ValueError, match="status"):
             file_rec(fields)
 
-    def test_drain_pending_computes_automatable(self, tmp_path: Path) -> None:
-        """drain_pending() derives and sets automatable for outbox entries that lack it."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
+    def test_file_rec_computes_automatable(self, tmp_path: Path) -> None:
+        """file_rec() derives and sets automatable for records that lack it."""
         recs_file = tmp_path / "recs.jsonl"
-
         fields_no_automatable = {k: v for k, v in _VALID_FIELDS.items() if k != "automatable"}
-        fields_no_automatable.pop("id", None)
-        (pending_dir / "test_auto.json").write_text(json.dumps(fields_no_automatable), encoding="utf-8")
-
-        written_records: list[dict] = []
 
         with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-950"),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-950"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
             patch("scripts.ops_data_portal._write_time_validators_cache", {}),
         ):
-            mock_dl_write.side_effect = lambda _t, rec, **kw: written_records.append(rec)
-            from scripts.ops_data_portal import drain_pending
+            from scripts.ops_data_portal import file_rec
 
-            result = drain_pending()
+            file_rec(fields_no_automatable)
 
-        assert result["drained"] == 1, f"Expected drained=1, got {result}"
-        assert len(written_records) == 1
-        assert written_records[0].get("automatable") is not None, "automatable should be derived and non-null"
+        _, written = mock_dl_write.call_args[0]
+        assert written.get("automatable") is not None, "automatable should be derived and non-null"
 
-    def test_drain_pending_created_timestamp_full_precision(self, tmp_path: Path) -> None:
-        """drain_pending() sets created_timestamp with a time component, not a date-only midnight fallback."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
+    def test_file_rec_created_timestamp_full_precision(self, tmp_path: Path) -> None:
+        """file_rec() sets created_timestamp with a time component, not a date-only midnight fallback."""
         recs_file = tmp_path / "recs.jsonl"
-
         fields = dict(_VALID_FIELDS)
-        fields.pop("id", None)
         fields.pop("created_timestamp", None)
-        (pending_dir / "test_ts.json").write_text(json.dumps(fields), encoding="utf-8")
-
-        written_records: list[dict] = []
 
         with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value="rec-951"),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-951"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
             patch("scripts.ops_data_portal._write_time_validators_cache", {}),
         ):
-            mock_dl_write.side_effect = lambda _t, rec, **kw: written_records.append(rec)
-            from scripts.ops_data_portal import drain_pending
+            from scripts.ops_data_portal import file_rec
 
-            result = drain_pending()
+            file_rec(fields)
 
-        assert result["drained"] == 1, f"Expected drained=1, got {result}"
-        assert len(written_records) == 1
-        ts = written_records[0].get("created_timestamp", "")
+        _, written = mock_dl_write.call_args[0]
+        ts = written.get("created_timestamp", "")
         assert ts, "created_timestamp must be set"
         assert "T" in ts, f"created_timestamp must contain a time component (got {ts!r})"
         assert len(ts) > 10, f"created_timestamp must be a full ISO datetime, not date-only (got {ts!r})"
@@ -1046,15 +875,15 @@ class TestCiRcaSourceFileGate:
 
     def test_accepts_populated_file(self, tmp_path: Path) -> None:
         fields = dict(self._MINIMAL_CI_RCA_FIELDS)
-        pending_dir = tmp_path / "pending"
         from scripts.ops_data_portal import file_rec
 
         with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("DynamoDB unreachable")),
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-1234"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
         ):
             result = file_rec(fields)
-        assert result.startswith("pending-")
+        assert result == "rec-1234"
 
 
 class TestComputeRisk:
@@ -1171,14 +1000,14 @@ class TestComputeRisk:
         ):
             from scripts.ops_data_portal import compute_risk
 
-            # C=12, S=0.1 (XS), M=0.1 -> R = 1.2*0.1/0.1 = wait, R=(12*0.1)/0.1=12 -> medium
+            # C=12, S=0.1 (XS), M=0.1 -> R=(12*0.1)/0.1=12 -> medium
             assert compute_risk("file.py", "XS") == "medium"
 
 
 class TestPipelineConsolidation:
-    """Tests for the ops pipeline consolidation changes (Decision 69)."""
+    """Tests for the ops pipeline consolidation changes (Decision 69 / Decision 84)."""
 
-    def test_update_rec_reads_from_athena_not_jsonl(self, tmp_path: Path) -> None:
+    def test_update_rec_reads_from_reader_not_jsonl(self, tmp_path: Path) -> None:
         """update_rec() calls _fetch_rec_from_reader (warehouse reader) not a local JSONL read."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
         existing = dict(_VALID_FIELDS, id="rec-042", status="open")
@@ -1217,8 +1046,7 @@ class TestPipelineConsolidation:
         recs_file = tmp_path / ".recommendations-log.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-700"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
@@ -1228,62 +1056,47 @@ class TestPipelineConsolidation:
 
         mock_sync.assert_called_once_with("ops_recommendations")
 
-    def test_sync_returns_report(self) -> None:
-        """sync() returns a structured report with compacted, pulled, and views_refreshed keys."""
-        with (
-            patch("scripts.ops_data_portal.OpsWriter") as mock_writer,
-            patch("scripts.ops_data_portal.sync") as _,  # prevent re-import collision
-        ):
-            mock_writer.return_value.compact.return_value = 5
-            mock_writer.return_value._refresh_view.return_value = None
-
-            import sys
-
-            sys.modules.pop("scripts.ops_data_portal", None)
-
-        with (
-            patch("scripts.ops_data_portal.OpsWriter") as mock_writer,
-            patch("scripts.sync_ops.drain", return_value={}),
-            patch("scripts.sync_ops._pull_single_table", return_value=10),
-        ):
-            mock_writer.return_value.compact.return_value = 5
-            mock_writer.return_value._refresh_view.return_value = None
-
+    def test_sync_returns_pull_only_report(self) -> None:
+        """sync() returns {'pulled': ...} only -- no drain/compact/view-refresh keys (Decision 84 I-4)."""
+        with patch("scripts.sync_ops._pull_single_table", return_value=10):
             from scripts.ops_data_portal import sync
 
             result = sync(["ops_recommendations"])
 
-        assert "compacted" in result
-        assert "pulled" in result
-        assert "views_refreshed" in result
-        assert result["compacted"]["ops_recommendations"] == 5
-        assert result["pulled"]["ops_recommendations"] == 10
-        assert "ops_recommendations" in result["views_refreshed"]
+        assert result == {"pulled": {"ops_recommendations": 10}}
 
-    def test_update_rec_raises_on_athena_unreachable(self, tmp_path: Path) -> None:
+    def test_sync_defaults_to_all_migrated_tables(self) -> None:
+        """sync() with no args pulls recs, decisions, and the priority queue."""
+        pulled: list[str] = []
+        with patch("scripts.sync_ops._pull_single_table", side_effect=lambda t: pulled.append(t) or 1):
+            from scripts.ops_data_portal import sync
+
+            result = sync()
+
+        assert pulled == ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
+        assert result == {"pulled": {t: 1 for t in pulled}}
+
+    def test_update_rec_raises_on_reader_unreachable(self, tmp_path: Path) -> None:
         """update_rec() propagates RuntimeError when _fetch_rec_from_reader raises."""
-        import pytest
-
         with (
             patch(
                 "scripts.ops_data_portal._fetch_rec_from_reader",
-                side_effect=RuntimeError("Athena unreachable"),
+                side_effect=RuntimeError("reader unreachable"),
             ),
         ):
             from scripts.ops_data_portal import update_rec
 
-            with pytest.raises(RuntimeError, match="Athena unreachable"):
+            with pytest.raises(RuntimeError, match="reader unreachable"):
                 update_rec("rec-042", {"status": "closed"})
 
 
 class TestMigrationParams:
-    """Tests for the private migration params on file_rec / file_decision / drain_pending."""
+    """Tests for the private migration params on file_rec / file_decision."""
 
-    def test_file_rec_migration_int_id_pads_to_three_digits(self, tmp_path: Path) -> None:
-        """_migration_int_id bypasses _next_id and pads to rec-NNN (FK-compatible)."""
+    def test_file_rec_migration_int_id_pads_and_uses_write_ops(self, tmp_path: Path) -> None:
+        """_migration_int_id preserves the historical id via a caller-keyed write_ops upsert."""
         with (
-            patch("scripts.ops_data_portal._next_id") as mock_next_id,
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table"),
         ):
@@ -1292,13 +1105,15 @@ class TestMigrationParams:
             result = file_rec(dict(_VALID_FIELDS), _migration_int_id=5, _migration_mode=True, _skip_sync=True)
 
         assert result == "rec-005"
-        mock_next_id.assert_not_called()
+        _, call_rec = mock_dl_write.call_args[0]
+        assert call_rec["id"] == "rec-005"
+        assert mock_dl_write.call_args.kwargs["action"] == "write_ops"
+        assert "idempotency_ulid" not in mock_dl_write.call_args.kwargs
 
     def test_file_rec_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
         """_skip_sync=True defers the per-row _sync_table flush."""
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-700"),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
         ):
@@ -1315,7 +1130,6 @@ class TestMigrationParams:
         thin = {**_VALID_FIELDS, "context": "too short", "acceptance": ""}
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value="rec-701"),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table"),
@@ -1329,63 +1143,22 @@ class TestMigrationParams:
             # With migration mode it imports.
             assert file_rec(dict(thin), _migration_int_id=701, _migration_mode=True, _skip_sync=True) == "rec-701"
 
-    def test_file_rec_migration_id_bypasses_next_id_even_when_dynamo_down(self, tmp_path: Path) -> None:
-        """A migration row never goes to the portal outbox: _migration_int_id skips _next_id entirely."""
-        pending_dir = tmp_path / "pending"
-        with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("unreachable")),
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
-            patch("scripts.ops_data_portal._sync_table"),
-        ):
-            from scripts.ops_data_portal import file_rec
-
-            result = file_rec(dict(_VALID_FIELDS), _migration_int_id=42, _migration_mode=True, _skip_sync=True)
-
-        assert result == "rec-042"
-        assert not pending_dir.exists() or not list(pending_dir.glob("*.json"))
-
     def test_file_decision_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
         """_skip_sync=True on file_decision defers the per-row flush."""
         with (
-            patch("scripts.ops_data_portal._next_id", return_value=77),
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
         ):
             from scripts.ops_data_portal import file_decision
 
-            file_decision({"title": "d", "status": "open"}, _skip_sync=True)
+            file_decision({"title": "d", "status": "open", "decision_id": 77}, _skip_sync=True)
             mock_sync.assert_not_called()
 
-    def test_drain_pending_honors_migration_int_id(self, tmp_path: Path) -> None:
-        """A pending rec carrying migration markers drains to the preserved padded id, no _next_id."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir(parents=True)
-        payload = {**_VALID_FIELDS, "context": "short", "_migration_int_id": 8, "_migration_mode": True}
-        payload.pop("id", None)
-        (pending_dir / "m.json").write_text(json.dumps(payload), encoding="utf-8")
 
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id") as mock_next_id,
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
-        ):
-            from scripts.ops_data_portal import drain_pending
-
-            result = drain_pending()
-
-        assert result["drained"] == 1
-        mock_next_id.assert_not_called()
-        _, call_rec = mock_dl_write.call_args[0]
-        assert call_rec["id"] == "rec-008"
-
-
-class TestFetchRecFromAthena:
-    """Tests for _fetch_rec_from_reader reader path (Decision 69 / CD.8)."""
+class TestFetchRecFromReader:
+    """Tests for _fetch_rec_from_reader -- the rec_by_id named verb (Decision 84 I-3)."""
 
     _REC_ROW = {
         "id": "rec-042",
@@ -1403,11 +1176,12 @@ class TestFetchRecFromAthena:
         "created_timestamp": "2026-05-01T00:00:00Z",
     }
 
-    def test_reader_path_returns_record(self) -> None:
-        """DuckDBIcebergReader success -> returns sanitised record without Athena."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = [dict(self._REC_ROW)]
+    def test_named_verb_returns_record(self) -> None:
+        """Reader named('rec_by_id', id=...) success -> returns sanitised record."""
+        reader = MagicMock()
+        reader.named.return_value = [dict(self._REC_ROW)]
 
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
             from scripts.ops_data_portal import _fetch_rec_from_reader
 
             result = _fetch_rec_from_reader("rec-042")
@@ -1415,42 +1189,33 @@ class TestFetchRecFromAthena:
         assert result is not None
         assert result["id"] == "rec-042"
         assert result["status"] == "open"
-        MockReader.return_value.current_state.assert_called_once()
+        reader.named.assert_called_once_with("rec_by_id", id="rec-042")
 
-    def test_reader_raises_loud_fail_no_athena_fallback(self) -> None:
-        """Iceberg-backend reader failure loud-fails directly -- no Athena fallback (view dropped at T2.7)."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader broken")
+    def test_reader_failure_loud_fails(self) -> None:
+        """Reader failure propagates -- no Athena fallback, no local-cache fallback (Decision 69)."""
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("ducklake_reader 'named_read' failed (HTTP 500)")
 
-            # boto3 must never be touched (the Athena fallback was removed with the view drop).
-            import boto3
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            from scripts.ops_data_portal import _fetch_rec_from_reader
 
-            with patch.object(
-                boto3,
-                "Session",
-                lambda *a, **k: (_ for _ in ()).throw(AssertionError("Athena fallback used")),
-            ):
-                from scripts.ops_data_portal import _fetch_rec_from_reader
-
-                with pytest.raises(RuntimeError, match="Iceberg reader failed"):
-                    _fetch_rec_from_reader("rec-042")
+            with pytest.raises(RuntimeError, match="ducklake_reader"):
+                _fetch_rec_from_reader("rec-042")
 
     def test_reader_returns_none_when_row_not_found(self) -> None:
-        """Reader returns empty list -> function returns None without calling Athena."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = []
+        """Reader returns empty list -> function returns None."""
+        reader = MagicMock()
+        reader.named.return_value = []
 
-            with patch("scripts.ops_data_portal.resolve_aws_profile") as mock_profile:
-                from scripts.ops_data_portal import _fetch_rec_from_reader
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            from scripts.ops_data_portal import _fetch_rec_from_reader
 
-                result = _fetch_rec_from_reader("rec-999")
-
-            mock_profile.assert_not_called()
+            result = _fetch_rec_from_reader("rec-999")
 
         assert result is None
 
     def test_invalid_rec_id_raises_value_error(self) -> None:
-        """Malformed rec_id raises ValueError before any reader or Athena call (security guard)."""
+        """Malformed rec_id raises ValueError before any reader call (security guard)."""
         from scripts.ops_data_portal import _fetch_rec_from_reader
 
         with pytest.raises(ValueError, match="invalid rec_id"):
@@ -1458,18 +1223,7 @@ class TestFetchRecFromAthena:
 
 
 class TestDuckLakeTransportHelpers:
-    """Coverage for the DuckLake transport helpers (T2.19): URL resolve, projection, SigV4 write."""
-
-    def test_ops_backend_default_and_flag(self, monkeypatch) -> None:
-        import scripts.ops_data_portal as p
-
-        # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
-        monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
-        assert p._ops_backend() == "ducklake"
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ICEBERG")
-        assert p._ops_backend() == "iceberg"
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "DUCKLAKE")
-        assert p._ops_backend() == "ducklake"
+    """Coverage for the DuckLake transport helpers: URL resolve, projection, SigV4 write, retry."""
 
     def test_resolve_writer_url_env(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
@@ -1521,56 +1275,33 @@ class TestDuckLakeTransportHelpers:
         import scripts.ops_data_portal as p
 
         monkeypatch.setenv("DUCKLAKE_WRITER_URL", "https://writer.example/")
-        captured: dict = {}
+        bodies = _patch_writer_transport(monkeypatch, [_FakeResp(200, {"ok": True, "key": "rec-1"})])
 
-        class _Creds:
-            access_key = "AK"
-            secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
-            token = None
-
-            def get_frozen_credentials(self):
-                return self
-
-        class _Session:
-            def __init__(self, profile_name=None):
-                pass
-
-            def get_credentials(self):
-                return _Creds()
-
-        class _Resp:
-            status_code = 200
-
-            def json(self):
-                return {"ok": True, "key": "rec-1"}
-
-        import boto3
-        import requests
-        from botocore.auth import SigV4Auth
-
-        monkeypatch.setattr(boto3, "Session", _Session)
-        monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
-
-        def _post(url, data=None, headers=None, timeout=None):
-            captured["body"] = json.loads(data)
-            return _Resp()
-
-        monkeypatch.setattr(requests, "post", _post)
         out = p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
         assert out["ok"] is True
-        assert captured["body"]["action"] == "write_ops"
-        assert captured["body"]["table"] == "ops_recommendations"
+        assert bodies[0]["action"] == "write_ops"
+        assert bodies[0]["table"] == "ops_recommendations"
+        assert "idempotency_ulid" not in bodies[0]
+
+    def test_ducklake_write_carries_idempotency_ulid(self, monkeypatch) -> None:
+        """When the caller passes idempotency_ulid it is included in the request payload."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setenv("DUCKLAKE_WRITER_URL", "https://writer.example/")
+        bodies = _patch_writer_transport(monkeypatch, [_FakeResp(200, {"key": "rec-9"})])
+
+        out = p._ducklake_write(
+            "ops_recommendations", {"status": "open", "title": "t"}, action="file_ops", idempotency_ulid="abc123"
+        )
+        assert out["key"] == "rec-9"
+        assert bodies[0]["idempotency_ulid"] == "abc123"
+        assert bodies[0]["action"] == "file_ops"
 
     def test_ducklake_write_referential_409_maps_to_runtimeerror(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
         monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
-
-        class _Resp:
-            status_code = 409
-            text = "absent"
-
-        self._patch_sig(monkeypatch, _Resp())
+        _patch_writer_transport(monkeypatch, [_FakeResp(409, text="absent")])
         with pytest.raises(RuntimeError, match="referential"):
             p._ducklake_write("ops_recommendations", {"id": "rec-x", "status": "closed"}, action="update_ops")
 
@@ -1578,71 +1309,91 @@ class TestDuckLakeTransportHelpers:
         import scripts.ops_data_portal as p
 
         monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
-
-        class _Resp:
-            status_code = 422
-            text = "bad field"
-
-        self._patch_sig(monkeypatch, _Resp())
+        _patch_writer_transport(monkeypatch, [_FakeResp(422, text="bad field")])
         with pytest.raises(ValueError, match="schema-gate"):
             p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
 
-    @staticmethod
-    def _patch_sig(monkeypatch, resp) -> None:
-        class _Creds:
-            access_key = "AK"
-            secret_key = "SK"  # noqa: S105 -- fake fixture  # pragma: allowlist secret
-            token = None
-
-            def get_frozen_credentials(self):
-                return self
-
-        class _Session:
-            def __init__(self, profile_name=None):
-                pass
-
-            def get_credentials(self):
-                return _Creds()
-
-        import boto3
-        import requests
-        from botocore.auth import SigV4Auth
-
-        monkeypatch.setattr(boto3, "Session", _Session)
-        monkeypatch.setattr(SigV4Auth, "add_auth", lambda self, req: None)
-        monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
-
-
-class TestSyncBackendAware:
-    """sync()/_sync_table cache-pull behaviour per backend (T2.19)."""
-
-    def test_sync_table_ducklake_pull_only(self, monkeypatch) -> None:
+    def test_ducklake_write_transient_503_retries_when_idempotent(self, monkeypatch) -> None:
+        """A 503 (Neon cold-resume) retries when idempotency_ulid is set; the retry consumes the 200."""
         import scripts.ops_data_portal as p
 
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        sleeps: list = []
+        bodies = _patch_writer_transport(
+            monkeypatch,
+            [_FakeResp(503, text="cold"), _FakeResp(200, {"key": "rec-77"})],
+            sleeps=sleeps,
+        )
+
+        out = p._ducklake_write(
+            "ops_recommendations", {"status": "open", "title": "t"}, action="file_ops", idempotency_ulid="u1"
+        )
+        assert out["key"] == "rec-77"
+        assert len(bodies) == 2  # exactly one retry
+        assert len(sleeps) == 1  # backed off once
+        assert bodies[0] == bodies[1]  # the retried request is the identical idempotent payload
+
+    def test_ducklake_write_transient_503_no_retry_without_idempotency(self, monkeypatch) -> None:
+        """A non-idempotent write (write_ops without ULID is caller-keyed but file-path-unsafe) fails fast."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        bodies = _patch_writer_transport(monkeypatch, [_FakeResp(503, text="cold")])
+
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
+        assert len(bodies) == 1  # no retry attempted
+
+    def test_ducklake_write_update_ops_retries_transient(self, monkeypatch) -> None:
+        """update_ops is idempotent by id, so transient 5xx retries even without a ULID."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        sleeps: list = []
+        bodies = _patch_writer_transport(
+            monkeypatch, [_FakeResp(502, text="cold"), _FakeResp(200, {"ok": True})], sleeps=sleeps
+        )
+
+        out = p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "closed"}, action="update_ops")
+        assert out == {"ok": True}
+        assert len(bodies) == 2
+
+    def test_ducklake_write_transient_exhausts_after_three_attempts(self, monkeypatch) -> None:
+        """Three transient failures exhaust the retry budget and raise loudly."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        bodies = _patch_writer_transport(
+            monkeypatch,
+            [_FakeResp(503, text="cold")] * 3,
+            sleeps=[],
+        )
+
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            p._ducklake_write(
+                "ops_recommendations", {"status": "open", "title": "t"}, action="file_ops", idempotency_ulid="u2"
+            )
+        assert len(bodies) == 3
+
+
+class TestSyncTable:
+    """_sync_table / sync are a pure reader cache-pull (no drain, no compaction)."""
+
+    def test_sync_table_pulls_single_table(self, monkeypatch) -> None:
+        import scripts.ops_data_portal as p
+
         calls: list[str] = []
         monkeypatch.setattr("scripts.sync_ops._pull_single_table", lambda t: calls.append(t) or 0)
-        with patch("scripts.ops_data_portal.OpsWriter") as mock_ow:
-            p._sync_table("ops_recommendations")
-        mock_ow.return_value.compact.assert_not_called()
-        assert calls == ["ops_recommendations"]
-
-    def test_sync_ducklake_no_outbox_drain(self, monkeypatch) -> None:
-        import scripts.ops_data_portal as p
-
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        monkeypatch.setattr("scripts.sync_ops._pull_single_table", lambda t: 3)
-        result = p.sync(["ops_recommendations"])
-        assert result == {"compacted": {}, "pulled": {"ops_recommendations": 3}, "views_refreshed": []}
+        p._sync_table("ops_recommendations")
+        p._sync_table("ops_decisions")
+        assert calls == ["ops_recommendations", "ops_decisions"]
 
 
 class TestSelftests:
     """--selftest-read / --selftest-roundtrip portal probes (VP14/15)."""
 
-    def test_selftest_read(self, monkeypatch) -> None:
+    def test_selftest_read_reports_ducklake(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
-
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
 
         class _Reader:
             def current_state(self, table, **kw):
@@ -1650,12 +1401,11 @@ class TestSelftests:
 
         monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
         out = p.selftest_read()
-        assert out["backend"] == "iceberg" and out["row_count"] == 1 and out["sample_id"] == "rec-1"
+        assert out["backend"] == "ducklake" and out["row_count"] == 1 and out["sample_id"] == "rec-1"
 
     def test_selftest_roundtrip_ducklake(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
         written: dict = {}
         monkeypatch.setattr(p, "_ducklake_write", lambda t, r, *, action, profile=None: written.update(id=r["id"]))
 
@@ -1670,8 +1420,6 @@ class TestSelftests:
     def test_selftest_roundtrip_loud_fails_when_not_read_back(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
-        # selftest_roundtrip always calls _ducklake_write for recs (T2.19); mock it to no-op
         monkeypatch.setattr(p, "_ducklake_write", lambda *a, **k: {"ok": True})
 
         class _Reader:
@@ -1683,55 +1431,14 @@ class TestSelftests:
             p.selftest_roundtrip()
 
 
-class TestPurgePostmortemsLoudFailDuckLake:
-    """purge_postmortems_for() must raise NotImplementedError on the ducklake backend (Step 8)."""
-
-    def test_raises_not_implemented_on_ducklake_backend(self, monkeypatch) -> None:
-        """DuckLake backend -> NotImplementedError before any side effects (Step 8 guard)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        from scripts.ops_data_portal import purge_postmortems_for
-
-        with pytest.raises(NotImplementedError, match="purge_postmortems_for"):
-            purge_postmortems_for("rec-100")
-
-    def test_error_message_mentions_iceberg_rollback_path(self, monkeypatch) -> None:
-        """Error message includes guidance to use OPS_STORAGE_BACKEND=iceberg rollback."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-        from scripts.ops_data_portal import purge_postmortems_for
-
-        with pytest.raises(NotImplementedError, match="OPS_STORAGE_BACKEND=iceberg"):
-            purge_postmortems_for("rec-100")
-
-    def test_does_not_raise_on_iceberg_backend(self, tmp_path: Path, monkeypatch) -> None:
-        """Iceberg backend -> no guard fires (existing tests cover full cleanup path)."""
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        recs_file = tmp_path / "recs.jsonl"
-        recs_file.write_text("", encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-        ):
-            from scripts.ops_data_portal import purge_postmortems_for
-
-            result = purge_postmortems_for("rec-100", dry_run=True)
-
-        assert isinstance(result, dict)
-        assert result["pending_files"] == 0
-
-
 class TestClosedBoundaryNoAthenaFallback:
-    """On the ducklake backend a reader failure must NOT fall back to Athena (OQ.7, code-review #review)."""
+    """A reader failure must NOT fall back to Athena (OQ.7 / Decision 84 I-1)."""
 
-    def test_fetch_rec_ducklake_no_athena_fallback(self, monkeypatch) -> None:
+    def test_fetch_rec_no_athena_fallback(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-
         class _Reader:
-            def current_state(self, table, **kw):
+            def named(self, verb, **params):
                 raise RuntimeError("reader down")
 
         monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())

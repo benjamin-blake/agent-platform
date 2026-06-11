@@ -231,7 +231,18 @@ def action_catalog_reinit(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     data_path = event.get("data_path")
     if not isinstance(data_path, str) or not data_path.startswith("s3://"):
         raise rt.DuckLakeRuntimeError("catalog_reinit requires a 'data_path' s3:// URI (the production DuckLake path)")
-    meta_schema = _require_identifier(event.get("meta_schema", rt.META_SCHEMA))
+    raw_schema = event.get("meta_schema")
+    if not raw_schema:
+        raise rt.DuckLakeRuntimeError(
+            "catalog_reinit requires an EXPLICIT 'meta_schema' (no production default: a no-arg invoke "
+            "must never drop the live catalog -- destructive-action guard, Decision 84)"
+        )
+    if event.get("confirm") != raw_schema:
+        raise rt.DuckLakeRuntimeError(
+            f"catalog_reinit is DESTRUCTIVE and IRREVERSIBLE for meta_schema {raw_schema!r}: "
+            f"pass confirm={raw_schema!r} to proceed"
+        )
+    meta_schema = _require_identifier(raw_schema)
 
     # Drop the squatting catalog AND leave an empty meta-schema for the ATTACH to initialize into.
     dropped = _drop_meta_schema(meta_schema, recreate=True)

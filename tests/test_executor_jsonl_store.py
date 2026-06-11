@@ -531,3 +531,12 @@ class TestRecommendationSchema:
         }
         rec = Recommendation.model_validate(data)
         assert len(rec.title) == 200
+
+
+class TestGetNextRecIdRetired:
+    """get_next_rec_id() is retired (Decision 84 I-2): the ducklake_writer owns the rec-NNN keyspace."""
+
+    def test_warns_and_raises(self) -> None:
+        with pytest.warns(DeprecationWarning, match="ducklake_writer"):
+            with pytest.raises(RuntimeError, match="retired"):
+                store_mod.get_next_rec_id()

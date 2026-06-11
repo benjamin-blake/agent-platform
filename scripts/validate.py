@@ -781,7 +781,7 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
 
     Every call to OpsWriter().write("ops_*", ...) must originate from a
     whitelisted file. The whitelist captures the four legitimate write paths:
-    1. Portal calls (file_rec/update_rec/file_decision/update_decision/drain_pending)
+    1. Portal calls (file_rec/update_rec/file_decision/update_decision)
     2. Canonical ETL from a non-warehouse source of truth (DECISIONS.md -> ops_decisions)
     3. Outbox drain (write-once transient buffer, never replayable)
     4. Fresh in-memory writes (e.g. priority queue enrichment, execution plan save)

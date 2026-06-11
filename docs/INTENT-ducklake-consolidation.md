@@ -1,165 +1,175 @@
 # INTENT: DuckLake Consolidation - Single-Backend Ops Store
 
-Status: PROPOSED (architecture ratified in session 2026-06-11; Decision entry pending human sign-off)
-Author: architecture session 2026-06-11 (Claude Code on the web)
-Consumed by: /plan sessions deriving the phase plans below; decision-scout; plan-critique.
+Status: RATIFIED as Decision 84 (2026-06-11). Implementation in progress on branch
+claude/youthful-fermi-yglm7v (Phases 1-2 full; Phase 3 decisions/queue slice).
+Revision 2: incorporates the two zero-context design reviews (adversarial architecture
++ fact-check feasibility, 2026-06-11). Material corrections from review are marked [R].
+Consumed by: /plan sessions deriving follow-up plans; decision-scout; plan-critique.
 
 ## Ratified premises (stated by the owner, 2026-06-11)
 
 | # | Premise | Consequence |
 |---|---------|-------------|
-| P1 | All dev sessions run on Claude Code on the web. There is no local dev environment. | "Offline" is not a real client state. Write buffering for offline survival protects nothing and creates loss windows on ephemeral containers. |
-| P2 | All data currently stored in Athena/Iceberg ops tables is discardable. | No reverse-migration or dual-read compatibility work is needed. Tables are recreated on DuckLake, not migrated. |
-| P3 | ops_decisions is recreatable from docs/DECISIONS.md (existing ETL pattern). | Decisions cutover = create table + re-run ETL. Zero data-migration risk. |
-| P4 | The ops store is small (~900 rows recs, ~44 decisions) and single-writer in practice. | Engine-scale concerns (Athena large-scan escape hatch) do not apply to the ops store. Market-data engine choice is explicitly OUT of scope here. |
+| P1 | All dev sessions run on Claude Code on the web. There is no local dev environment. | "Offline" is not a real client state. Write buffering protects nothing and creates loss windows on ephemeral containers. |
+| P2 | All data currently stored in Athena/Iceberg ops tables is discardable. | No reverse-migration or dual-read compatibility work. Tables are recreated on DuckLake, not migrated. [R] P2 EXPIRES at demolition: once the Athena copy is gone, DuckLake is the sole copy and the DR posture below becomes load-bearing. |
+| P3 | ops_decisions is recreatable from docs/DECISIONS.md. | Decisions cutover = create table + author-and-run the DECISIONS.md ETL ([R] the previous backfill script was deleted; only the parser survives -- "re-run" was wrong). |
+| P4 | The ops store is small (~900 rows recs, ~63 decisions) and single-writer in practice. | Engine-scale concerns do not apply. Market-data engine choice is OUT of scope. |
 
-## Problem statement
+## Problem statement (verified by review; all six claims held)
 
-The T2.19 recs cutover left the platform straddling two warehouses. The dual state is
-now producing live faults, not just maintenance cost:
-
-1. **The Iceberg "rollback" for recs is already fictional.** The retained copy is frozen
-   at the 2026-06-09 cutover; DuckLake has accrued every write since (rec-2120..rec-2170+).
-   Setting OPS_STORAGE_BACKEND=iceberg today silently time-travels the rec queue back two
-   days. An insurance policy that can no longer pay out costs premiums AND blocks demolition.
-2. **Half-migrated read semantics caused a silent false zero** (rec-2170): the preflight
-   open/aging/non-automatable counts have read 0 on every session since cutover because
-   current_state's row_filter parameterisation drops the column name and the reader binds
-   the value against the merge key (WHERE id = 'open').
-3. **The offline outbox inverts its purpose on CC-web** (premise P1): logs/.ops-outbox/ is
-   gitignored, so a pending rec queued in an ephemeral container is LOST when the container
-   is reclaimed unless drained in-session. Observed live 2026-06-11: a file_rec under the
-   admin profile (no dynamodb:UpdateItem) buffered a misconfiguration instead of loud-failing.
-4. **CI DQ checks error on the DuckLake path** (rec-2150/2151/2153): 20 errored checks on
-   main while Athena verifiers pass in the same run. The recs checks route to the DuckLake
-   reader (apply_backend_routing) but CI defines no DUCKLAKE_READER_URL and the OIDC CI
-   roles' reader access (ssm:GetParameter + lambda:InvokeFunctionUrl) is unverified.
-5. **Preflight burns minutes on a dead estate**: telemetry Athena queries poll tables that
-   have not existed since the 2026-05-28 account migration (TABLE_NOT_FOUND every session);
-   decisions/priority-queue reads walk a reader-fallback-Athena chain with VarChar
-   re-coercion. Observed wall time 2026-06-11: 4m40s.
-6. **The boundary does not own its keyspace**: callers allocate rec-NNN client-side from a
-   DynamoDB counter and the writer accepts any id (write_ops has no require-absent gate), so
-   entity-id integrity depends on every caller's correctness rather than on the boundary.
+1. The Iceberg "rollback" for recs is fictional -- and worse than stated [R]: with
+   OPS_STORAGE_BACKEND=iceberg, recs WRITES still routed to DuckLake unconditionally while
+   reads flipped to the frozen table: an incoherent read/write split, not a rollback.
+2. Half-migrated read semantics caused the rec-2170 silent false zero (preflight open/aging/
+   non-automatable counts read 0 since cutover). [R] A SEVENTH affected call site exists
+   beyond the six preflight ones: the rec-curator preload in
+   src/data/handlers/scheduled_agent_handler.py (same row_filter shape).
+3. The offline outbox inverts its purpose on CC-web (gitignored pending files die with the
+   container); observed live 2026-06-11 buffering a misconfiguration instead of loud-failing.
+4. CI DQ checks error on the DuckLake path (rec-2150/2151/2153). [R] The CI OIDC roles
+   ALREADY hold lambda:InvokeFunction + InvokeFunctionUrl + GetFunctionUrlConfig on
+   reader+writer (terraform/personal/oidc.tf; applied at cutover), and CI's designed URL
+   resolution is the GetFunctionUrlConfig fallback -- so the root cause is NOT missing
+   grants and remains genuinely undiagnosed (rec-2153). Phase 1 carries a diagnosis step,
+   not an IAM step.
+5. Preflight burned ~minutes polling Athena telemetry tables dead since 2026-05-28.
+6. The boundary does not own its keyspace: callers allocate rec-NNN via DynamoDB; write_ops
+   has no require-absent gate, so a colliding create silently MERGEs.
 
 ## Target end-state
 
-One warehouse (DuckLake on Neon catalog + S3 Parquet), one write authority that owns its
-keyspace, one read boundary that accepts named verbs rather than SQL, zero client-side
-buffering, zero Athena/Iceberg in the ops path.
+One warehouse (DuckLake on Neon catalog + S3 Parquet), one write authority that owns the
+rec keyspace, one read boundary on named verbs, zero client-side buffering, zero
+Athena/Iceberg in the ops path.
 
-```
-agent/skill/script (CC-web, CI)
-        |            SigV4 Function URL (AWS_IAM)
-        v
-ducklake_reader  -- named verbs only: no caller SQL crosses the boundary
-ducklake_writer  -- file_ops allocates id atomically with the insert; update_ops
-        |           require-exists; create collisions rejected (require-absent)
-        v
-Neon catalog (DuckLake metadata) + S3 Parquet (data) -- atomic commit, no compaction,
-                                                        no views, no staging, no outbox
-```
+Invariants carried forward unchanged: warehouse-as-source-of-truth; local JSONL files are
+read caches only; Single Portal write surface; SCD2 append-only with status=superseded as
+the deletion model; loud failure over silent degradation (Decision 55).
 
-Invariants (carry forward unchanged): warehouse-as-source-of-truth; local JSONL files are
-read caches only; single portal write surface (file_rec / update_rec / sync); SCD2
-append-only with status=superseded as the deletion model; loud failure over silent
-degradation (Decision 55).
+New invariants (Decision 84; scoping refined per review [R]):
+- **I-1 Single backend.** OPS_STORAGE_BACKEND deleted. DuckDBIcebergReader survives as an
+  importable class ONLY for non-ops Iceberg surfaces (schema-integrity drift checks)
+  until demolition.
+- **I-2 Writer-owned keyspace -- scoped to rec-NNN.** file_ops allocates inside the write
+  transaction: counter row updated in the SAME catalog commit (a guaranteed write-write
+  OCC conflict is the serialization point; allocation sits INSIDE the retry loop and
+  re-reads on retry; the counter self-seeds from the history-table numeric max, scoped to
+  the canonical ^rec-[0-9]+$ keyspace so probe/churn ids cannot poison the seed).
+  Invocation idempotency: the portal mints a per-call ULID; the writer's in-transaction
+  replay check returns the original allocation on a response-lost retry, so retries never
+  double-file. Sanctioned exceptions: dec-NNN follows DECISIONS.md numbering (caller
+  supplies decision_id; this very document pre-allocated "Decision 84"); test-/probe
+  prefixes stay caller-keyed on write_ops.
+  [R] Alternatives considered and rejected: max(id)+1 without a counter row (serialization
+  depends on unverified MERGE-vs-MERGE same-key conflict detection under snapshot
+  isolation); a native Postgres SEQUENCE via the baked postgres extension (separate
+  transaction domain from the DuckLake commit -- not atomic, though gap-tolerant);
+  moving the DynamoDB call into the writer (smallest protocol change but retains the
+  second remote system and its IAM surface).
+- **I-3 Named-verb read boundary -- STAGED.** Application reads use server-side registry
+  verbs (no caller SQL). [R] query_ops is RETAINED for the DQ harness: its ~20 check
+  shapes (including history-table checks that address ops_catalog.<hist> directly) are not
+  expressible in the verb set; removal is a follow-up gated on a dq_check verb family or a
+  caller-allowlist restriction. Structural {column, value} filters replace SQL-fragment
+  row filters everywhere (rec-2170 fix), validated server-side against the table contract.
+  Registry responses carry registry_version for skew diagnosis.
+- **I-4 No write buffering -- per-table staging [R].** The recs and decisions pending
+  outboxes are deleted NOW (their write paths are fully on the boundary). The OpsWriter
+  staging outbox survives ONLY for not-yet-migrated writers -- telemetry emit, ops_session_log,
+  ops_execution_plans -- and retires with them. "No outbox of any kind" is the Phase 3/4
+  end state, not a Phase 1 fact. The deleted buffer is replaced by: transient-5xx retry in
+  _ducklake_write (licensed by the idempotency key) + a writer-error CloudWatch alarm so
+  loud failures reach a human, not just an unattended caller.
 
-New invariants (introduced by this program):
-- **I-1 Single backend**: OPS_STORAGE_BACKEND flag deleted; there is no second path to keep honest.
-- **I-2 Keyspace ownership**: only the writer mints entity ids (rec-NNN, dec-NNN), allocated
-  in the same Neon transaction as the insert. No DynamoDB counter, no client-side ids.
-- **I-3 No SQL across the read boundary**: query_ops (caller-supplied SELECT) is removed;
-  reads are named verbs with typed params, registered server-side in the reader Lambda.
-- **I-4 No write buffering**: a failed write fails loudly at the call site. There is no
-  outbox of any kind. (Premise P1 makes the buffered case worthless; the rec text always
-  survives in the session transcript.)
+## Deployment protocol [R]
 
-## Phases (each = one IMPLEMENTATION plan via /plan; STRATEGIC remains suspended)
+Every phase is additive-then-subtractive: deploy new Lambda actions ALONGSIDE old ones,
+merge the client migration, confirm main runs the new clients, THEN remove old actions in
+a follow-up deploy. Live consumers on main (ci-rca filing recs from GitHub Actions,
+concurrent CC-web sessions) must never meet a Lambda that dropped an action they still
+call. Rollback runbook: any revert of the portal to DynamoDB allocation MUST first reseed
+the DynamoDB counter from the DuckLake max (reseed_recommendations_counter) or stale ids
+will silently overwrite writer-allocated recs.
 
-### Phase 1 - recs sole-backend + read-boundary hardening
-Bundles: rec-2170, rec-2150, rec-2151, rec-2153 (and rec-2120/2121 if investigation shows
-the ci-rca log-fetch guard from PLAN-ducklake-recs-cutover-completion did not land/work).
-- Delete the pending outbox + drain_pending; file_rec loud-fails when it cannot complete.
-- Delete OPS_STORAGE_BACKEND and every iceberg-backend branch for recs (make_reader
-  simplification; DuckDBIcebergReader remains ONLY for the deferred tables until Phase 3).
-- Replace purge_postmortems_for's Athena DML with status=superseded via the portal
-  (SCD2 deletion model); archive scripts/cleanup_ops_rec_orphans.py (targets a dropped view).
-- Read verbs (fixes rec-2170): reader Lambda gains a named-verb registry replacing
-  query_ops; initial verbs: open_recs, rec_by_id, ci_rca_open, ci_rca_since,
-  forward_fix_recursion, budget_bypass_recent, count_by_status. current_state row_filter
-  either passes {column, value} structurally or is removed in favour of verbs. Client
-  call sites (preflight x6, portal, sync_ops, DQ runner) move onto verbs.
-- CI reader access: grant/verify ssm:GetParameter (/agent-platform/ducklake/*) and
-  lambda:InvokeFunctionUrl on the reader for agent-platform-github-ci-branch/-pr roles;
-  DQ recs checks then execute in CI (closes rec-2150/2151/2153 at root cause).
-- Preflight: remove the telemetry Athena health check (stub returning "not-migrated" with
-  zero queries) until Phase 4; reclaim the dead polling minutes.
-- Drop the frozen Iceberg recs table + Glue entries + remaining recs references in
-  schema_integrity / validate lints (recs-specific OpsWriter guards become dead and are
-  removed WITH the OpsWriter recs path itself).
-- Contracts: AGENTS.md (rollback clause, outbox role), read-engine.yaml, ops-data-store.md.
-- Lambda artifacts affected: ducklake_reader (verb registry) -> build + deploy + smoke (V3).
-  Terraform: Iceberg recs table drop is a DESTROY -> human-gated manual apply.
+## Destructive-surface hardening (Phase 1, shipped) [R]
 
-### Phase 2 - writer-owned ID allocation
-- ducklake_writer gains file_ops: allocate next id from a counters table in the Neon meta
-  schema INSIDE the insert transaction; return the id. Seed counter from
-  max(DynamoDB counter value, max id in DuckLake current) with a one-shot migration step.
-- write_ops gains require-absent semantics for creates (or file_ops becomes the only
-  create path and write_ops is demoted to backfill-only).
-- Portal file_rec: drop _next_id; one remote call; id comes back in the response.
-- update_rec unchanged (already require-exists).
-- The recommendations DynamoDB counter is retired logically (table destroy waits for
-  Phase 3 when the decisions counter also moves).
-- Lambda artifacts: ducklake_writer -> build + deploy + smoke (V3). EC8/churn smoke
-  re-run (single-write unit now includes allocation).
+The boundary hardening is asymmetric without this: create_ops_tables(force_recreate) can
+DROP a production table pair and ducklake_maintenance catalog_reinit defaulted to the
+PRODUCTION meta-schema (a no-arg invoke nuked the live catalog). Both now require explicit
+confirm parameters; catalog_reinit has no default schema. The smoke/probe actions operate
+on the dedicated smoke tables and stay.
 
-### Phase 3 - remaining ops tables + Athena ops estate demolition
-- field_semantics.yaml already declares ops_decisions, ops_priority_queue,
-  ops_session_log, ops_execution_plans: create them on DuckLake (create_ops_tables),
-  re-run the DECISIONS.md -> ops_decisions ETL (premise P3), start priority_queue /
-  session_log / execution_plans EMPTY (premise P2; executor is paused per CD.17).
-- Repoint every deferred-table read: sync_ops pull, portal decisions fetch/update,
-  preflight priority-queue + _get_latest_decision_ts, rec-curator preload.
-- Decisions id allocation moves into the writer (completes I-2); DynamoDB counters
-  table destroyed.
-- Demolish: OpsWriter, sync_ops Athena fallback + ALL _coerce_athena_* VarChar coercion,
-  ops_compaction Lambda + schedule, ops_decisions_current / ops_priority_queue_current
-  views (T2.7 completion), iceberg_tables.tf, AthenaViewsVerifier, the
-  warehouse-write-source validate lints that police the now-impossible split-brain.
-- Terraform: multiple DESTROYs -> human-gated manual apply session.
+## Phases
 
-### Phase 4 - telemetry on DuckLake (clean slate)
-- New telemetry tables defined in field_semantics.yaml; writes via ducklake_writer from
-  the telemetry hooks; preflight health check re-enabled against the reader.
-- No migration: the work-account Athena telemetry data is unreachable/dead (premise P2).
-- Scope intentionally thin here; Phase 4 gets its own intent refinement once Phases 1-3
-  land and observed write volumes are known.
+### Phase 1 + 2 (implemented together this session)
+Recs sole-backend; named verbs (open_recs, rec_by_id, recs_by_title_prefix, ci_rca_open,
+ci_rca_since, forward_fix_recursion, budget_bypass_recent, count_by_status, decision_by_id,
+decisions_max_updated, priority_queue_current); structural filters; outbox deletion (recs +
+decisions); writer-owned rec ids via file_ops; purge-postmortems becomes SCD2 supersede;
+telemetry preflight stub; destructive-action guards; DQ checks routed to DuckLake for the
+three migrated tables; CI DQ root-cause diagnosis (rec-2150/2151/2153); contracts updated.
+Lambda artifacts: ducklake_reader + ducklake_writer + ducklake_maintenance -> build +
+deploy + smoke (V3, Decision 79). [R] The bundled-clause matters: these three bundle
+src/common/ducklake_runtime.py, which changed.
 
-## Decision entry (DRAFT for DECISIONS.md - requires owner ratification)
+### Phase 3 -- decisions/queue slice (implemented this session); remainder gated
+ops_decisions: created on DuckLake + DECISIONS.md ETL (backfill_decisions_from_md;
+idempotent caller-keyed upsert) + portal read/write repointed. ops_priority_queue: created
+empty + reads repointed (Decision 70 semantics preserved INSIDE the priority_queue_current
+verb -- [R] the generic latest-per-key projection would silently change queue semantics).
+[R] NOT migrated here, per review: ops_session_log (T-1.9 proposes retirement -- migrate
+OR retire per that decision, do not migrate blindly) and ops_execution_plans (live writers:
+scripts/executor/plan.py, scripts/s3_log_store.py routing); OpsWriter itself is the LIVE
+TELEMETRY write path (scripts/executor/telemetry.py, src/data/handlers/agent_telemetry.py)
+and survives until Phase 4. The queue PRODUCER flow (rec-curator findings -> staging ->
+ops_compaction S3 trigger) is dormant (Lambdas disabled) and repoints in T2.26.
+GATE [R]: T2.26's hard start gate (rec-2113 pg_restore drill; the pgclient layer ships
+pg_dump but NOT pg_restore, and the nightly dump is --format=custom while the drill used
+plain SQL) is NOT engaged by this slice because every row written is externally
+recreatable (DECISIONS.md) or empty -- but it BINDS the demolition step and any
+non-recreatable migration. rec-2113 stays open and gating.
 
-> Decision 84: DuckLake is the sole ops-store backend; the Athena/Iceberg ops estate is
-> retired without data migration (all Athena-resident ops data declared discardable;
-> ops_decisions re-created from DECISIONS.md). The offline outbox and OPS_STORAGE_BACKEND
-> rollback flag are removed (CC-web-only operation; loud failure replaces buffering).
-> Entity ids are allocated by the ducklake_writer atomically with the insert, retiring the
-> DynamoDB counters table. The read boundary accepts named verbs only; caller-supplied SQL
-> (query_ops) is removed. Supersedes the Decision 81 cl.7 rollback clause and the CD.8/
-> CD.15 Athena escape hatch FOR OPS TABLES (market-data engine choice unaffected).
+### Phase 3-demolition (post-merge, human-gated)
+Athena DDL drops + null_resource removal in terraform/personal/main.tf ([R] NOT
+terraform/iceberg_tables.tf -- that file is the retired work-account root; the live ops
+estate is null_resource Athena DDL, and the live ops_compaction deployment is
+terraform-managed in the retired work root, audit F-038); ops_compaction retirement
+(manifest flip + runbook Section 5); DynamoDB counters table destroy (AFTER confirming no
+rollback window is wanted: the reseed CLIs in scripts/sync_recommendations.py are the
+rollback tool and retire last); schema_integrity Athena map prune; AthenaViewsVerifier
+retire/repoint; sync_athena_to_pgvector.py delete (audit F-037). All destroys human-gated
+(Decision 77 fail-closed guard).
 
-## Risk register
+### Phase 4 -- telemetry on DuckLake (own intent refinement)
+New telemetry tables in field_semantics.yaml; OpsWriter.emit replaced by writer-boundary
+writes; preflight health check re-enabled against the reader; the OpsWriter staging outbox
+and the remaining VarChar coercion retire here. [R] Maintenance cadence: "no compaction"
+in the end-state means no SCD2-dedup compaction JOB -- DuckLake file merge / snapshot
+expiry (the existing ducklake_maintenance merge/GC with its circuit breaker) must be
+POINTED AT the production catalog before telemetry's write volume lands; Neon storage and
+S3 small-file growth get measured thresholds then.
+
+## Risk register (corrected per review [R])
 
 | Risk | Mitigation |
 |------|------------|
-| Neon catalog is the single metadata authority (free tier, scale-to-zero). | Already mitigated for reads (cold-resume retry). Add a catalog backup step to ducklake_maintenance (nightly pg_dump or Neon branch snapshot) in Phase 1; data files are already durable in S3. |
-| Loud-fail with no buffer: a writer outage blocks rec filing. | Acceptable for a sole-dev platform; the rec content survives in the session transcript and can be re-filed. Outage visibility is the point (Decision 55). |
-| Counter seed race during Phase 2 cutover. | One-shot seed = max(DynamoDB, DuckLake max id) executed inside the writer deploy window; write_ops require-absent makes a double-issue loud, not silent. |
-| Named-verb registry too rigid for future reads. | Verbs are data (registry in the reader), adding one is a small PR + redeploy; this friction is the feature (pre-established queries are reviewable). |
-| ci-rca volume during the transition. | Phase plans bundle the open DQ recs; the ci-rca hard block does not bind because the work is directly related to the open recs. |
+| Neon catalog is the single metadata authority. | EXISTING ducklake_catalog_dr (nightly pg_dump --format=custom to a versioned DR bucket + >25h freshness alarm) -- the intent's earlier "add a backup step" was stale. The REAL gap is restore-side: rec-2113 (pg_restore missing from the layer; dump-format mismatch with the old drill). Fix gates demolition. |
+| Loud-fail with no buffer: a writer outage blocks rec filing. | Transient-5xx retry (idempotent), CloudWatch alarm on writer errors, and for headless ci-rca the failure surfaces in the workflow log; acceptable for a sole-dev platform. "The rec text survives in the transcript" holds for interactive sessions only. |
+| Counter seed/rollback races during the id-ownership cutover. | Self-seeding counter from history max inside the first file_ops transaction; require-absent belt check is terminal (never retried past); rollback requires reseed-from-DuckLake first (runbook step above). Main-branch writers continue on DynamoDB+write_ops until merge -- the residual same-second collision window is accepted (P4, sole writer in practice). |
+| Named-verb registry rigidity / version skew. | Verbs are data in the schema module; adding one is a small PR + reader redeploy; responses carry registry_version; verb-consumer call sites distinguish unreachable (degraded signal) from empty. |
+| Destructive actions on the write/maintenance surface (P2 expiry). | Explicit-confirm guards shipped (Phase 1); smoke actions are smoke-table-scoped. |
+| ci-rca volume during transition. | The open DQ recs are bundled as this program's Phase 1 diagnosis; the ci-rca hard block does not bind related work. |
+
+## Contract/doc surfaces updated (Phase 1-3 slice) [R: expanded per review]
+AGENTS.md (source-of-truth section, Single Portal Invariant's DynamoDB sentence, outbox
+roles, merge protocol untouched); docs/contracts/read-engine.yaml; docs/contracts/
+ops-data-store.md; docs/PROJECT_CONTEXT.md (rollback-flag mentions); docs/runbooks/
+ducklake-catalog-operations.md (flag mentions); ROADMAP-PLATFORM.yaml (T2.26 progress +
+gate note; T2.27 closure; new T2.28 named-verb/id-ownership carrier); stale docstrings
+(ops_storage_backend was claiming "default iceberg"). Deep-frozen .github/copilot-*.md
+files are NOT edited (AGENTS.md freeze) -- [R] they still teach DynamoDB id authority and
+outbox draining; the freeze exemption decision is left to the owner, flagged here.
 
 ## Out of scope
-
-- Market-data lakehouse engine choice (future; the Athena retirement here is ops-tables only).
-- Executor re-enable (CD.17) and STRATEGIC plan re-enable (T4.2) - unchanged by this program.
-- The deep-frozen .github/prompts/ and .github/agents/ artefacts.
+Market-data lakehouse engine choice; executor re-enable (CD.17); STRATEGIC plan re-enable
+(T4.2); deep-frozen .github/prompts|agents artefacts.

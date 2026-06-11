@@ -23,12 +23,13 @@ _spec.loader.exec_module(_preflight)  # type: ignore[union-attr]
 
 
 @pytest.fixture(autouse=True)
-def _disable_athena_queries(request: pytest.FixtureRequest):
-    """Prevent all tests from hitting real Athena and from doing real git fetches.
+def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
+    """Prevent all tests from hitting the real DuckLake reader and from doing real git fetches.
 
-    Athena: returns [] for ops_priority_queue_current queries so read_priority_queue() does
-    not sys.exit(1) in tests that exercise main(). Returns None for all other queries,
-    which preserves the JSONL fallback path in count_recommendations() and other consumers.
+    Reader: every warehouse read in this module transits _make_reader().named(verb)
+    (Decision 84 I-3). The default stub returns [] for every verb so read_priority_queue()
+    does not sys.exit(1) and the rec counters report empty rather than reaching the network.
+    Tests that need specific rows or failures re-patch session_preflight._make_reader.
 
     Git fetch: check_main_freshness() shells out to ``git fetch origin main``; patch it to
     a deterministic stub for every test except TestCheckMainFreshness (which exercises the
@@ -36,10 +37,9 @@ def _disable_athena_queries(request: pytest.FixtureRequest):
     """
     from contextlib import ExitStack  # noqa: PLC0415
 
-    def _stub(sql: str) -> list | None:
-        if "ops_priority_queue_current" in sql:
-            return []
-        return None
+    reader_stub = MagicMock()
+    reader_stub.named.return_value = []
+    reader_stub.current_state.return_value = []
 
     freshness_stub = {
         "status": "ok",
@@ -51,9 +51,9 @@ def _disable_athena_queries(request: pytest.FixtureRequest):
     class_name = request.cls.__name__ if request.cls else ""
 
     with ExitStack() as stack:
-        stack.enter_context(patch("session_preflight._run_athena_query", side_effect=_stub))
-        stack.enter_context(patch("session_preflight._athena_run_query", return_value=[]))
+        stack.enter_context(patch("session_preflight._make_reader", return_value=reader_stub))
         stack.enter_context(patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}))
+        stack.enter_context(patch("session_preflight._sync_ops_pull", return_value={}))
         if class_name != "TestCheckMainFreshness":
             stack.enter_context(patch("session_preflight.check_main_freshness", return_value=freshness_stub))
         yield
@@ -487,7 +487,10 @@ class TestGracefulMissingFiles:
 
     def test_missing_recommendations(self, tmp_path: Path) -> None:
         missing = tmp_path / "RECOMMENDATIONS.md"
-        with patch("session_preflight.RECOMMENDATIONS_FILE", missing):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", missing),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 0
         assert aging_count == 0
@@ -510,10 +513,13 @@ class TestNonAutomatableRecommendations:
     )
 
     def test_non_automatable_count_and_details(self, tmp_path: Path) -> None:
-        """count_recommendations returns non-automatable count and details."""
+        """count_recommendations returns non-automatable count and details (cache fallback path)."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
         recs_file.write_text(self._REC_001 + self._REC_002 + self._REC_003, encoding="utf-8")
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 2
         assert non_auto_count == 1
@@ -531,7 +537,10 @@ class TestNonAutomatableRecommendations:
         )
         lines = [_line.format(i=i) for i in range(1, 16)]
         recs_file.write_text("".join(lines), encoding="utf-8")
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 15
         assert len(non_auto_details) == 10
@@ -585,7 +594,10 @@ class TestNonAutomatableRecommendations:
             '{"id": "rec-001", "status": "open", "title": "No automatable field", "date": "2026-01-01", "context": "ctx"}\n',
             encoding="utf-8",
         )
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 0
         assert non_auto_details == []
@@ -597,7 +609,10 @@ class TestNonAutomatableRecommendations:
             '{"id": "rec-001", "status": "open", "date": "not-a-date", "title": "Bad date", "context": "ctx"}\n',
             encoding="utf-8",
         )
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 1
         assert aging_count == 0  # malformed date is not counted as aging
@@ -863,83 +878,27 @@ class TestLogSync:
 
 
 class TestTelemetryHealth:
-    """Tests for check_telemetry_health() and --health CLI flag."""
+    """Tests for the check_telemetry_health() stub (telemetry re-lands on DuckLake in Phase 4)."""
 
-    def _make_boto3_mock(self, session_raises: Exception | None = None) -> MagicMock:
-        """Return a standalone boto3 module mock. boto3 is imported locally inside
-        check_telemetry_health(), so we inject it via patch.dict(sys.modules)."""
-        mock_boto3 = MagicMock()
-        if session_raises is not None:
-            mock_boto3.Session.side_effect = session_raises
-        return mock_boto3
+    def test_stub_returns_not_migrated_shape(self) -> None:
+        """The stub reports the fixed not-migrated payload compatible with print_telemetry_health()."""
+        result = _preflight.check_telemetry_health()
+        assert result == {
+            "overall": "unknown",
+            "checks": [{"check": "telemetry-store", "value": "not migrated (Phase 4)", "severity": "unknown"}],
+            "friction_patterns": [],
+        }
 
-    def test_athena_returns_session_data(self) -> None:
-        """When _athena_run_query returns session rows, health metrics are computed."""
-        from datetime import timedelta
+    def test_stub_makes_no_aws_calls(self) -> None:
+        """The stub must not touch boto3 or shell out -- the Athena polling loop is retired."""
+        import boto3
 
-        now = datetime.now(timezone.utc)
-        recent_ts = (now - timedelta(hours=1)).isoformat()
-        sessions_rows = [["total", "success_count", "latest"], ["10", "8", recent_ts]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
         with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
+            patch.object(boto3, "Session", side_effect=AssertionError("stub must not construct a boto3 Session")),
+            patch("session_preflight.subprocess.run", side_effect=AssertionError("stub must not shell out")),
         ):
             result = _preflight.check_telemetry_health()
-
-        assert result["overall"] in ("ok", "warning")
-        assert "friction_patterns" in result
-        names = [c["check"] for c in result["checks"]]
-        assert "sessions-7d" in names
-        assert "success-rate-7d" in names
-
-    def test_athena_unreachable_returns_unknown(self) -> None:
-        """When boto3.Session raises (SSO expired), returns overall: unknown."""
-        mock_boto3 = self._make_boto3_mock(session_raises=Exception("auth error"))
-        with patch.dict(sys.modules, {"boto3": mock_boto3}):
-            result = _preflight.check_telemetry_health()
-
         assert result["overall"] == "unknown"
-        assert any(c["check"] == "athena-query" for c in result["checks"])
-
-    def test_athena_no_data_rows(self) -> None:
-        """When _athena_run_query returns only a header row, sessions-7d is 0."""
-        sessions_rows = [["total", "success_count", "latest"]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
-        with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
-        ):
-            result = _preflight.check_telemetry_health()
-
-        sessions_check = next((c for c in result["checks"] if c["check"] == "sessions-7d"), None)
-        assert sessions_check is not None
-        assert sessions_check["value"] == "0"
-
-    def test_low_success_rate_flags_warning(self) -> None:
-        """Success rate < 50% triggers a warning check."""
-        from datetime import timedelta
-
-        now = datetime.now(timezone.utc)
-        recent_ts = (now - timedelta(hours=1)).isoformat()
-        sessions_rows = [["total", "success_count", "latest"], ["10", "4", recent_ts]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
-        with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
-        ):
-            result = _preflight.check_telemetry_health()
-
-        rate_check = next((c for c in result["checks"] if c["check"] == "success-rate-7d"), None)
-        assert rate_check is not None
-        assert rate_check["severity"] == "warning"
-        assert result["overall"] in ("warning", "critical")
 
     def test_open_session_creates_state_file(self, tmp_path: Path) -> None:
         """open_telemetry_session writes state file with correct schema."""
@@ -1032,30 +991,19 @@ class TestTelemetryHealth:
             _preflight.print_telemetry_health(health)
 
 
-class TestReadPriorityQueueAthena:
-    """Tests for read_priority_queue() -- Athena path and degraded-mode cache fallback."""
+class TestReadPriorityQueueDegraded:
+    """Tests for read_priority_queue() -- verb hard-fail and degraded-mode cache fallback."""
 
-    def test_success_path_returns_correct_shape(self) -> None:
-        """Athena rows are parsed into correctly shaped dicts with int rank."""
-        rows = [
-            {"rec_id": "rec-100", "rank": "1", "rationale": "First", "north_star_impact": "high"},
-            {"rec_id": "rec-200", "rank": "2", "rationale": "Second", "north_star_impact": "medium"},
-        ]
-        with patch("session_preflight._run_athena_query", return_value=rows):
-            result = _preflight.read_priority_queue()
-        assert len(result) == 2
-        assert result[0]["rec_id"] == "rec-100"
-        assert result[0]["rank"] == 1  # Athena returns strings; parser must cast to int
-        assert set(result[0].keys()) == {"rank", "rec_id", "rationale", "north_star_impact"}
-
-    def test_hard_fail_on_none(self) -> None:
-        """_run_athena_query returning None causes SystemExit(1)."""
-        with patch("session_preflight._run_athena_query", return_value=None):
+    def test_hard_fail_when_verb_fails_with_creds_ok(self) -> None:
+        """A verb failure with credentials ok is an infrastructure fault -> SystemExit(1) (Decision 60)."""
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("ducklake_reader 'named_read' failed (HTTP 500)")
+        with patch("session_preflight._make_reader", return_value=reader):
             with pytest.raises(SystemExit):
-                _preflight.read_priority_queue()
+                _preflight.read_priority_queue(creds_status="ok")
 
     def test_cache_fallback_returns_rows_when_creds_unavailable(self, tmp_path: Path) -> None:
-        """creds_status != 'ok' -> rows from the local cache, Athena never queried."""
+        """creds_status != 'ok' -> rows from the local cache, the reader never queried."""
         cache = tmp_path / ".priority-queue.jsonl"
         cache.write_text(
             '{"rec_id": "rec-9", "rank": "1", "rationale": "cached", "north_star_impact": "high"}\n'
@@ -1065,10 +1013,10 @@ class TestReadPriorityQueueAthena:
         )
         with (
             patch.object(_preflight, "PRIORITY_QUEUE_FILE", cache),
-            patch("session_preflight._run_athena_query") as mock_q,
+            patch("session_preflight._make_reader") as mock_reader,
         ):
             result = _preflight.read_priority_queue(creds_status="unavailable")
-        mock_q.assert_not_called()
+        mock_reader.assert_not_called()
         assert [r["rec_id"] for r in result] == ["rec-9", "rec-8"]
         assert result[0]["rank"] == 1
 
@@ -1268,7 +1216,7 @@ class TestMainIncludesPriorityQueue:
         assert "priority_queue" in data
         assert len(data["priority_queue"]) == 1
         assert data["priority_queue"][0]["rec_id"] == "rec-500"
-        assert data.get("priority_queue_source") == "athena"
+        assert data.get("priority_queue_source") == "ducklake_reader"
 
     def test_terminal_output_includes_queue_section(
         self,
@@ -1432,27 +1380,30 @@ class TestCiRcaLivenessAlert:
 
 
 class TestForwardFixRecursion:
-    """Tests for _check_forward_fix_recursion() -- DuckLake reader path (T2.19)."""
+    """Tests for _check_forward_fix_recursion() -- forward_fix_recursion named verb."""
 
     def test_alert_set_at_threshold(self) -> None:
         rows = [{"file": "scripts/validate.py", "cnt": "3"}]
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = rows
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_forward_fix_recursion()
         assert result is not None
         assert result["file"] == "scripts/validate.py"
         assert result["count"] == 3
         assert result["threshold"] == 3
+        verb, kwargs = MockReader.return_value.named.call_args[0][0], MockReader.return_value.named.call_args.kwargs
+        assert verb == "forward_fix_recursion"
+        assert "since_ts" in kwargs  # the 24h cutoff is bound as a verb param
 
     def test_alert_none_when_no_groups(self) -> None:
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = []
+            MockReader.return_value.named.return_value = []
             result = _preflight._check_forward_fix_recursion()
         assert result is None
 
     def test_alert_none_when_reader_unavailable(self) -> None:
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = None
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
             result = _preflight._check_forward_fix_recursion()
         assert result is None
 
@@ -1505,7 +1456,6 @@ class TestCredentialsOrderingInMain:
             patch("session_preflight.check_data_quality_coverage", return_value={}),
             patch("session_preflight._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0, "deduped": 0}),
         ):
             _preflight.main()
 
@@ -1517,7 +1467,7 @@ class TestCredentialsOrderingInMain:
 
 
 class TestBudgetBypassAlert:
-    """Tests for _check_budget_bypass_alert() -- DuckLake reader path (T2.19)."""
+    """Tests for _check_budget_bypass_alert() -- budget_bypass_recent named verb."""
 
     def test_returns_none_under_threshold(self) -> None:
         """Returns None when fewer than 3 bypass recs exist in 7 days."""
@@ -1526,9 +1476,10 @@ class TestBudgetBypassAlert:
             {"id": "rec-002", "context": "bypass 2", "created_timestamp": "2026-05-11 10:00:00"},
         ]
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = rows
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is None
+        MockReader.return_value.named.assert_called_once_with("budget_bypass_recent")
 
     def test_returns_dict_at_threshold(self) -> None:
         """Returns dict with count and entries when >= 3 bypass recs exist."""
@@ -1538,7 +1489,7 @@ class TestBudgetBypassAlert:
             {"id": "rec-003", "context": "bypass 3", "created_timestamp": "2026-05-10 10:00:00"},
         ]
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = rows
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is not None
         assert result["count"] == 3
@@ -1547,14 +1498,14 @@ class TestBudgetBypassAlert:
     def test_returns_none_on_reader_failure(self) -> None:
         """Returns None (not raises) when reader raises an exception (Decision 55)."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.side_effect = RuntimeError("reader unreachable")
+            MockReader.return_value.named.side_effect = RuntimeError("reader unreachable")
             result = _preflight._check_budget_bypass_alert()
         assert result is None
 
-    def test_returns_none_when_reader_returns_none(self) -> None:
-        """Returns None when reader.query returns None."""
+    def test_returns_none_when_verb_returns_empty(self) -> None:
+        """Returns None when the verb returns an empty row list (count 0 < 3)."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.query.return_value = None
+            MockReader.return_value.named.return_value = []
             result = _preflight._check_budget_bypass_alert()
         assert result is None
 
@@ -1578,47 +1529,44 @@ class TestActivateHint:
 
 
 class TestReadPriorityQueueReader:
-    """Tests for read_priority_queue() -- DuckDB reader path (CD.8)."""
+    """Tests for read_priority_queue() -- priority_queue_current named verb (Decision 84 I-3)."""
 
     _PQ_ROWS = [
-        {"rec_id": "rec-10", "rank": 1, "rationale": "top", "north_star_impact": "high"},
         {"rec_id": "rec-20", "rank": 2, "rationale": "second", "north_star_impact": "low"},
+        {"rec_id": "rec-10", "rank": 1, "rationale": "top", "north_star_impact": "high"},
     ]
 
-    def test_reader_path_returns_shaped_rows(self) -> None:
-        """DuckDBIcebergReader success -> rows shaped and sorted without Athena call."""
+    def test_reader_path_returns_shaped_sorted_rows(self) -> None:
+        """Verb success -> rows shaped {rank, rec_id, rationale, north_star_impact} and rank-sorted."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.return_value = list(self._PQ_ROWS)
+            MockReader.return_value.named.return_value = list(self._PQ_ROWS)
 
             result = _preflight.read_priority_queue()
 
+        MockReader.assert_called_once_with(table="ops_priority_queue")
+        MockReader.return_value.named.assert_called_once_with("priority_queue_current")
         assert len(result) == 2
-        assert result[0]["rec_id"] == "rec-10"
+        assert result[0]["rec_id"] == "rec-10"  # sorted by rank
+        assert result[0]["rank"] == 1
+        assert set(result[0].keys()) == {"rank", "rec_id", "rationale", "north_star_impact"}
+
+    def test_reader_string_rank_cast_to_int(self) -> None:
+        """String ranks from the reader are cast to int during shaping."""
+        rows = [{"rec_id": "rec-99", "rank": "1", "rationale": "r", "north_star_impact": "medium"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+
+            result = _preflight.read_priority_queue()
+
         assert result[0]["rank"] == 1
 
-    def test_reader_failure_falls_back_to_athena(self) -> None:
-        """Reader raises -> Athena fallback is used (success path)."""
-        athena_rows = [
-            {"rec_id": "rec-99", "rank": "1", "rationale": "athena-row", "north_star_impact": "medium"},
-        ]
-        with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
-
-            with patch("session_preflight._run_athena_query", return_value=athena_rows):
-                result = _preflight.read_priority_queue()
-
-        assert len(result) == 1
-        assert result[0]["rec_id"] == "rec-99"
-
     def test_reader_empty_returns_empty_list(self) -> None:
-        """Reader returns [] -> function returns [] without calling Athena."""
+        """Verb returns [] -> function returns [] (empty queue, not an error)."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.return_value = []
+            MockReader.return_value.named.return_value = []
 
-            with patch("session_preflight._run_athena_query") as mock_q:
-                result = _preflight.read_priority_queue()
+            result = _preflight.read_priority_queue()
 
-        mock_q.assert_not_called()
         assert result == []
 
 
@@ -1643,12 +1591,13 @@ class TestCountRecommendationsReader:
     ]
 
     def test_reader_path_returns_counts(self) -> None:
-        """DuckLake reader success -> counts returned as tuple."""
+        """open_recs verb success -> counts returned as tuple."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.return_value = list(self._OPEN_ROWS)
+            MockReader.return_value.named.return_value = list(self._OPEN_ROWS)
 
             result = _preflight._count_recommendations_reader()
 
+        MockReader.return_value.named.assert_called_once_with("open_recs")
         assert isinstance(result, tuple)
         open_count, _aging, non_auto_count, _details = result
         assert open_count == 2
@@ -1657,7 +1606,7 @@ class TestCountRecommendationsReader:
     def test_reader_failure_returns_reader_unreachable_string(self) -> None:
         """Reader raises -> returns 'reader_unreachable' string (no Athena fallback, Decision 55)."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
 
             result = _preflight._count_recommendations_reader()
 
@@ -1666,7 +1615,7 @@ class TestCountRecommendationsReader:
     def test_reader_failure_only_returns_reader_unreachable(self) -> None:
         """Reader fails -> 'reader_unreachable' string, never None (T2.19: no Athena escape)."""
         with patch("session_preflight._make_reader") as MockReader:
-            MockReader.return_value.current_state.side_effect = ConnectionError("timeout")
+            MockReader.return_value.named.side_effect = ConnectionError("timeout")
 
             result = _preflight._count_recommendations_reader()
 
@@ -1730,3 +1679,139 @@ class TestRecsReadStatusDegradation:
         assert data.get("recs_read_status") == "reader_unreachable"
         # open_recommendations sentinel is 0 on degradation -- distinguish via recs_read_status
         assert data.get("open_recommendations") == 0
+
+
+class TestFetchCiRcaRecs:
+    """_fetch_ci_rca_recs / _fetch_ci_rca_recs_since transit the ci_rca_* named verbs."""
+
+    def test_fetch_ci_rca_recs_uses_ci_rca_open_verb(self) -> None:
+        rows = [{"id": "rec-900", "title": "CI broken", "priority": "critical"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+            result = _preflight._fetch_ci_rca_recs()
+        assert result == rows
+        MockReader.return_value.named.assert_called_once_with("ci_rca_open")
+
+    def test_fetch_ci_rca_recs_degrades_to_empty_with_warning(self, capsys: pytest.CaptureFixture) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            result = _preflight._fetch_ci_rca_recs()
+        assert result == []
+        assert "reader unreachable" in capsys.readouterr().err
+
+    def test_fetch_ci_rca_recs_since_binds_since_ts(self) -> None:
+        rows = [{"id": "rec-901"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+            result = _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z")
+        assert result == rows
+        MockReader.return_value.named.assert_called_once_with("ci_rca_since", since_ts="2026-06-10T00:00:00Z")
+
+    def test_fetch_ci_rca_recs_since_returns_empty_on_failure(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            assert _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z") == []
+
+
+class TestGetLatestDecisionTs:
+    """_get_latest_decision_ts() reads via the decisions_max_updated verb."""
+
+    def test_returns_ts_from_first_row(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = [{"ts": "2026-06-10T12:00:00+00:00"}]
+            result = _preflight._get_latest_decision_ts()
+        assert result == "2026-06-10T12:00:00+00:00"
+        MockReader.assert_called_once_with(table="ops_decisions")
+        MockReader.return_value.named.assert_called_once_with("decisions_max_updated")
+
+    def test_returns_none_on_empty_rows(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = []
+            assert _preflight._get_latest_decision_ts() is None
+
+    def test_returns_none_on_empty_ts_value(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = [{"ts": ""}]
+            assert _preflight._get_latest_decision_ts() is None
+
+    def test_returns_none_on_reader_failure(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            assert _preflight._get_latest_decision_ts() is None
+
+
+class TestReadContextFilesRecsCount:
+    """read_context_files() counts open recs via the open_recs verb (Decision 84 I-3)."""
+
+    def test_recommendations_count_is_len_of_open_recs_rows(self, tmp_path: Path) -> None:
+        reader = MagicMock()
+        reader.named.return_value = [{"id": "rec-1"}, {"id": "rec-2"}, {"id": "rec-3"}]
+        with (
+            patch("session_preflight._make_reader", return_value=reader),
+            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+        ):
+            result = _preflight.read_context_files()
+        assert result["recommendations_count"] == 3
+        reader.named.assert_called_once_with("open_recs")
+
+    def test_recommendations_count_zero_on_reader_failure(self, tmp_path: Path) -> None:
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("reader down")
+        with (
+            patch("session_preflight._make_reader", return_value=reader),
+            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+        ):
+            result = _preflight.read_context_files()
+        assert result["recommendations_count"] == 0
+
+
+class TestRetiredAthenaEstate:
+    """Decision 84: the Athena query helpers and the outbox drain are gone from preflight."""
+
+    def test_athena_helpers_deleted(self) -> None:
+        for name in ("_run_athena_query", "_athena_run_query"):
+            assert not hasattr(_preflight, name), f"retired symbol still present: {name}"
+        athena_constants = [n for n in dir(_preflight) if n.startswith("_ATHENA")]
+        assert athena_constants == [], f"retired Athena constants still present: {athena_constants}"
+
+    def test_main_no_longer_drains_pending(self) -> None:
+        source = _MODULE_PATH.read_text(encoding="utf-8")
+        assert "drain_pending" not in source, "preflight must not reference the retired outbox drain"
+
+
+class TestPriorityQueueSourceCache:
+    """priority_queue_source reports 'cache' when credentials are unavailable."""
+
+    def test_report_source_cache_when_creds_down(self, tmp_path: Path) -> None:
+        preflight_report = tmp_path / ".preflight-report.json"
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="unavailable"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight._count_recommendations_reader", return_value=(0, 0, 0, [])),
+            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 2",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        data = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert data["creds_status"] == "unavailable"
+        assert data["priority_queue_source"] == "cache"

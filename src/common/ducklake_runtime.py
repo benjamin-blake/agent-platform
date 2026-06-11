@@ -1,3 +1,4 @@
+# complexity-waiver: decision-43
 """DuckLake operational-lakehouse runtime (T2.17 / CD.33, Decision 81).
 
 Single ATTACH/connection authority plus the CD.33 write/read primitives shared by the
@@ -43,9 +44,12 @@ from src.common.ducklake_scd2_schema import (
     _FIELD_SEMANTICS_ENV,  # noqa: F401 -- re-exported for backward compat
     _PY_TYPE_FOR_SQL,  # noqa: F401 -- re-exported for backward compat
     CATALOG_ALIAS,
+    NAMED_READS,
+    NAMED_READS_VERSION,  # noqa: F401 -- re-exported for the reader handler response envelope
     SMOKE_CURRENT_TABLE,  # noqa: F401 -- re-exported for backward compat
     SMOKE_HISTORY_TABLE,  # noqa: F401 -- re-exported for backward compat
     DuckLakeRuntimeError,
+    NamedRead,  # noqa: F401 -- re-exported for tests/clients introspecting the registry
     ReferentialError,
     ScdTableSpec,  # noqa: F401 -- re-exported for backward compat
     SchemaGateError,
@@ -455,6 +459,194 @@ def write_scd2(
     )
 
 
+# ---------------------------------------------------------------------------
+# Writer-owned entity-id allocation (Decision 84 I-2)
+# ---------------------------------------------------------------------------
+
+# Plain (non-SCD2) DuckLake bookkeeping table. The counter row is the keyspace serialization
+# point: a concurrent file_scd2 pair both UPDATE the same row, which is a guaranteed write-write
+# catalog conflict -- one commits, the other OCC-retries and re-allocates. Internal to the writer;
+# never exposed through the read boundary.
+ENTITY_COUNTERS_TABLE = "ops_entity_counters"
+
+
+def ensure_entity_counters_table(con: Any) -> None:
+    """Idempotently create the entity-counters bookkeeping table."""
+    con.execute(
+        f"CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} "
+        "(counter_name VARCHAR NOT NULL, current_value BIGINT NOT NULL)"
+    )
+
+
+def bootstrap_entity_counter(con: Any, spec: Any) -> int:
+    """Serially (re)seed the counter row for *spec* from the history-table numeric max.
+
+    MUST run as a one-time serial bootstrap (create_ops_tables), never on the allocation hot
+    path: a concurrent self-seed INSERT race under snapshot isolation creates duplicate counter
+    rows that each transaction increments privately -- observed live 2026-06-11 as four
+    concurrent file_ops all allocating the same id. DELETE + single INSERT here is idempotent
+    and also repairs that duplicate-row state. Returns the seeded value.
+    """
+    if not spec.entity_id_prefix:
+        raise DuckLakeRuntimeError(f"table {spec.table!r} declares no entity_id_prefix: it has no allocation counter to seed")
+    prefix = spec.entity_id_prefix
+    ensure_entity_counters_table(con)
+    con.execute("BEGIN TRANSACTION")
+    try:
+        seed_row = con.execute(
+            f"SELECT coalesce(max(CAST(regexp_extract({spec.merge_key}, '^{prefix}([0-9]+)$', 1) AS BIGINT)), 0) "
+            f"FROM {CATALOG_ALIAS}.{spec.history_table} "
+            f"WHERE {spec.merge_key} LIKE '{prefix}%' AND regexp_matches({spec.merge_key}, '^{prefix}[0-9]+$')"
+        ).fetchone()
+        seed = int(seed_row[0]) if seed_row and seed_row[0] is not None else 0
+        con.execute(f"DELETE FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?", [spec.table])
+        con.execute(f"INSERT INTO {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} VALUES (?, ?)", [spec.table, seed])
+        con.execute("COMMIT")
+    except Exception:
+        _safe_rollback(con)
+        raise
+    return seed
+
+
+def _allocate_entity_id(con: Any, spec: Any) -> str:
+    """Allocate the next <prefix>NNN id for *spec* INSIDE the caller's open transaction.
+
+    Requires the counter row to exist (bootstrap_entity_counter): every allocating transaction
+    then UPDATEs the SAME shared row, which is the write-write conflict DuckLake's OCC detects --
+    one committer wins, the rest retry and re-read. A missing or duplicated counter row is a
+    terminal loud-fail (never self-seeded here; see bootstrap_entity_counter for why).
+    """
+    prefix = spec.entity_id_prefix
+    if not prefix:
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} declares no entity_id_prefix: file_ops allocation is not enabled for it"
+        )
+    counter = f"{spec.table}"
+    rows = con.execute(
+        f"SELECT current_value FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?", [counter]
+    ).fetchall()
+    if len(rows) != 1:
+        raise DuckLakeRuntimeError(
+            f"entity counter for {counter!r} has {len(rows)} rows (expected exactly 1): "
+            "run create_ops_tables to bootstrap/repair the counter (Decision 84 I-2). "
+            "Allocation never self-seeds -- the concurrent-seed race mints duplicate ids."
+        )
+    # DuckLake does not support UPDATE ... RETURNING; the UPDATE is the write-write conflict
+    # point and the follow-up SELECT reads our own uncommitted increment inside the transaction.
+    con.execute(
+        f"UPDATE {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} SET current_value = current_value + 1 WHERE counter_name = ?",
+        [counter],
+    )
+    allocated = con.execute(
+        f"SELECT current_value FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?",
+        [counter],
+    ).fetchone()
+    n = int(allocated[0])
+    return f"{prefix}{n:03d}"
+
+
+def file_scd2(
+    con: Any,
+    record: dict[str, Any],
+    *,
+    table: str,
+    identity: WriteIdentity | None = None,
+    semantics: dict[str, Any] | None = None,
+    max_attempts: int = OCC_MAX_ATTEMPTS,
+    metric_sink: Optional[Callable[[str, float], None]] = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> WriteResult:
+    """Create one record, allocating its merge key INSIDE the write transaction (Decision 84 I-2).
+
+    The record arrives WITHOUT the merge key; allocation, the require-absent check, and both MERGEs
+    commit atomically. An OCC retry re-runs the whole transaction including allocation, so the
+    retried attempt picks up a fresh max -- the counter-row UPDATE is the serialization point.
+
+    Invocation idempotency (response-lost retry): `identity` is minted by the CALLER per logical
+    file operation and replayed unchanged on retry. The in-transaction replay check (history ULID
+    lookup) returns the originally allocated id instead of allocating anew, so a client retry after
+    a lost response never double-files.
+    """
+    semantics = semantics if semantics is not None else load_field_semantics()
+    spec = resolve_table_spec(table, semantics)
+    if not spec.entity_id_prefix:
+        raise DuckLakeRuntimeError(f"table {table!r} declares no entity_id_prefix: file_ops allocation is not enabled for it")
+    if spec.merge_key in record:
+        raise SchemaGateError(f"file operation must not supply {spec.merge_key!r}: the writer allocates it (Decision 84 I-2)")
+    # Fail fast on every OTHER contract violation before touching the catalog: gate a copy with a
+    # syntactically-valid placeholder key (the real key does not exist yet).
+    schema_gate({**record, spec.merge_key: f"{spec.entity_id_prefix or 'x-'}0"}, semantics, table=table)
+
+    merge_history_sql = _build_merge_history_sql(spec)
+    merge_current_sql = _build_merge_current_sql(spec)
+    select_existing_sql = _build_select_existing_created_sql(spec)
+    identity = identity if identity is not None else mint_write_identity()
+
+    occ_retries = 0
+    start = time.perf_counter()
+    attempt = 0
+
+    while True:
+        attempt += 1
+        try:
+            con.execute("BEGIN TRANSACTION")
+            # Replay check: a retried invocation carries the same ULID; return the original allocation.
+            replay = con.execute(
+                f"SELECT {spec.merge_key}, created_timestamp FROM {CATALOG_ALIAS}.{spec.history_table} WHERE ulid = ?",
+                [identity.ulid],
+            ).fetchall()
+            if replay:
+                con.execute("COMMIT")
+                commit_ms = (time.perf_counter() - start) * 1000.0
+                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
+                return WriteResult(
+                    ulid=identity.ulid,
+                    rec_id=replay[0][0],
+                    occ_retries=occ_retries,
+                    commit_ms=commit_ms,
+                    created_timestamp=replay[0][1],
+                    last_updated_timestamp=identity.timestamp,
+                )
+            key = _allocate_entity_id(con, spec)
+            existing = con.execute(select_existing_sql, [key]).fetchall()
+            if existing:
+                raise DuckLakeRuntimeError(
+                    f"allocated {spec.merge_key}={key!r} already exists in {spec.current_table}: "
+                    "counter behind table max -- stop and RCA (Decision 55), do not retry past it"
+                )
+            params = _write_params(spec, {**record, spec.merge_key: key}, identity, identity.timestamp)
+            con.execute(merge_history_sql, params)
+            con.execute(merge_current_sql, params)
+            con.execute("COMMIT")
+            commit_ms = (time.perf_counter() - start) * 1000.0
+            _emit_write_metrics(metric_sink, occ_retries, commit_ms)
+            return WriteResult(
+                ulid=identity.ulid,
+                rec_id=key,
+                occ_retries=occ_retries,
+                commit_ms=commit_ms,
+                created_timestamp=identity.timestamp,
+                last_updated_timestamp=identity.timestamp,
+            )
+        except DuckLakeRuntimeError:
+            _safe_rollback(con)
+            raise  # contract/keyspace failures are terminal, never retried
+        except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
+            _safe_rollback(con)
+            if is_occ_collision(exc):
+                if attempt < max_attempts:
+                    occ_retries += 1
+                    _occ_backoff(attempt, sleep=sleep)
+                    continue
+                commit_ms = (time.perf_counter() - start) * 1000.0
+                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
+                raise OCCRetryExhaustedError(
+                    f"OCC retry budget exhausted after {attempt} attempts for file_ops on {table} "
+                    f"(ulid={identity.ulid}). Stop and RCA the contention (Decision 55)."
+                ) from exc
+            raise
+
+
 def _safe_rollback(con: Any) -> None:
     """Roll back the current transaction, swallowing a 'no active transaction' error only."""
     try:
@@ -477,21 +669,34 @@ def _emit_write_metrics(metric_sink: Optional[Callable[[str, float], None]], occ
 
 
 def read_current(
-    con: Any, *, table: str | None = None, rec_id: str | None = None, key: str | None = None, limit: int | None = None
+    con: Any,
+    *,
+    table: str | None = None,
+    rec_id: str | None = None,
+    key: str | None = None,
+    key_column: str | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return rows from the current write-through projection (latest version per merge key).
 
     `table=None` reads the smoke current table (T2.17); a name selects an ops_tables entry (T2.19).
-    `key` (or the back-compat `rec_id` alias) filters to a single record (the bucket-partitioned
-    single-key lookup). `limit` bounds the row count. Returns a list of column-keyed dicts.
+    `key` (or the back-compat `rec_id` alias) filters to a single value; `key_column` names the
+    filtered column and is VALIDATED against the spec (defaults to the merge key). The structural
+    (column, value) pair replaces SQL-fragment filters at this boundary (rec-2170: a value bound
+    against the wrong column returned a silent false zero). `limit` bounds the row count.
     """
     spec = resolve_table_spec(table)
     cols = ", ".join(c for c, _ in spec.ordered_columns)
     sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table}"
     filter_value = key if key is not None else rec_id
+    filter_column = key_column if key_column is not None else spec.merge_key
+    if filter_column not in spec.fields:
+        raise DuckLakeRuntimeError(
+            f"unknown filter column {filter_column!r} for {spec.current_table}: not in the field-semantics contract"
+        )
     params: list[Any] = []
     if filter_value is not None:
-        sql += f" WHERE {spec.merge_key} = ?"
+        sql += f" WHERE {filter_column} = ?"
         params.append(filter_value)
     sql += f" ORDER BY {spec.merge_key}"
     if limit is not None:
@@ -537,6 +742,30 @@ def assert_read_only_sql(sql: str) -> None:
         )
     if ";" in sql.rstrip().rstrip(";"):
         raise SchemaGateError("read-only boundary: multi-statement SQL is rejected on the reader path (OQ.7).")
+
+
+def named_read(con: Any, *, verb: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Execute a pre-established read verb from the NAMED_READS registry (Decision 84 I-3).
+
+    The SQL is server-side registry content; the caller supplies only the verb name and named
+    bind params. Param presence is validated against the verb's declared param list; `{tbl}` and
+    `{hist}` resolve to the verb's table current/history pair. Loud-fail on an unknown verb or a
+    missing/extra param.
+    """
+    entry = NAMED_READS.get(verb)
+    if entry is None:
+        raise DuckLakeRuntimeError(f"unknown read verb {verb!r}: expected one of {sorted(NAMED_READS)}")
+    supplied = dict(params or {})
+    if set(supplied) != set(entry.params):
+        raise DuckLakeRuntimeError(f"read verb {verb!r} requires params {list(entry.params)}; got {sorted(supplied)}")
+    spec = resolve_table_spec(entry.table)
+    final_sql = entry.sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}").replace(
+        "{hist}", f"{CATALOG_ALIAS}.{spec.history_table}"
+    )
+    bound = [supplied[name] for name in entry.params]
+    cursor = con.execute(final_sql, bound) if bound else con.execute(final_sql)
+    col_names = [desc[0] for desc in cursor.description]
+    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
 
 
 def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[Any, ...] = ()) -> list[dict[str, Any]]:

@@ -109,12 +109,43 @@ def action_write_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
 
 
 def action_read_ops_current(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """Production: return current-projection rows for an ops_* table (optional single-key filter)."""
+    """Production: return current-projection rows for an ops_* table (optional single-column filter).
+
+    Filter forms (newest first): `filter: {column, value}` -- structural, column validated against
+    the field-semantics contract (rec-2170 fix); `key`/`id` -- legacy merge-key-only equality.
+    """
     table = event.get("table")
     _require_ops_table(table)
     key = event.get("key") if event.get("key") is not None else event.get("id")
-    rows = rt.read_current(con, table=table, key=key, limit=event.get("limit"))
+    key_column = None
+    flt = event.get("filter")
+    if isinstance(flt, dict):
+        key_column = flt.get("column")
+        key = flt.get("value")
+    rows = rt.read_current(con, table=table, key=key, key_column=key_column, limit=event.get("limit"))
     return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_named_read(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: execute a pre-established read verb (Decision 84 I-3).
+
+    The caller names a verb and binds named params; the SQL is registry content inside this
+    Lambda's bundle. No caller SQL crosses the boundary on this path.
+    """
+    verb = event.get("verb")
+    if not isinstance(verb, str) or not verb:
+        raise rt.DuckLakeRuntimeError("named_read requires a non-empty 'verb' string")
+    params = event.get("params") or {}
+    if not isinstance(params, dict):
+        raise rt.DuckLakeRuntimeError("named_read 'params' must be an object of named bind values")
+    rows = rt.named_read(con, verb=verb, params=params)
+    return {
+        "ok": True,
+        "verb": verb,
+        "registry_version": rt.NAMED_READS_VERSION,
+        "rows": _json_safe(rows),
+        "row_count": len(rows),
+    }
 
 
 def action_read_ops_history(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -161,6 +192,7 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "write_probe": action_write_probe,
     "read_ops_current": action_read_ops_current,
     "read_ops_history": action_read_ops_history,
+    "named_read": action_named_read,
     "query_ops": action_query_ops,
     "connect_probe": action_connect_probe,
 }

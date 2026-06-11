@@ -621,38 +621,38 @@ def test_ducklake_reader_non_transient_500_not_retried(monkeypatch):
     assert captured["sleeps"] == []
 
 
-def test_ops_storage_backend_default_and_flag(monkeypatch):
+def test_ops_storage_backend_flag_retired():
+    """Decision 84 I-1: the OPS_STORAGE_BACKEND rollback flag and its constants are deleted."""
     import src.common.iceberg_reader as ir
 
-    # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
-    monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
-    assert ir.ops_storage_backend() == "ducklake"
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "Iceberg")
-    assert ir.ops_storage_backend() == "iceberg"
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "DuckLake")
-    assert ir.ops_storage_backend() == "ducklake"
+    for name in ("ops_storage_backend", "_OPS_STORAGE_BACKEND_ENV", "_OPS_BACKEND_DEFAULT"):
+        assert not hasattr(ir, name), f"retired symbol still present: {name}"
 
 
-def test_make_reader_selects_by_flag(monkeypatch):
+def test_make_reader_always_returns_ducklake(monkeypatch):
+    """make_reader() returns DuckLakeReader unconditionally -- the env flag has no effect."""
     import src.common.iceberg_reader as ir
 
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")  # ignored: the flag is retired
     assert isinstance(ir.make_reader(), ir.DuckLakeReader)
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
-    assert isinstance(ir.make_reader(), ir.DuckDBIcebergReader)
+    monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert isinstance(ir.make_reader(), ir.DuckLakeReader)
 
 
-def test_make_reader_table_aware_recs_only(monkeypatch):
-    """Recs-first slice: on the ducklake backend ONLY ops_recommendations (or a None table) routes to
-    DuckLake; every deferred table reads from Iceberg regardless of the flag."""
+def test_make_reader_all_tables_route_to_ducklake():
+    """Every ops table (and the table=None default) transits the DuckLake boundary (Decision 84 I-1)."""
     import src.common.iceberg_reader as ir
 
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
-    assert isinstance(ir.make_reader(table="ops_recommendations"), ir.DuckLakeReader)
-    assert isinstance(ir.make_reader(), ir.DuckLakeReader)  # None -> recs-default call sites
-    # Deferred tables stay on Iceberg even when the flag is ducklake.
-    assert isinstance(ir.make_reader(table="ops_decisions"), ir.DuckDBIcebergReader)
-    assert isinstance(ir.make_reader(table="ops_priority_queue"), ir.DuckDBIcebergReader)
+    for table in (None, "ops_recommendations", "ops_decisions", "ops_priority_queue"):
+        assert isinstance(ir.make_reader(table=table), ir.DuckLakeReader), f"table={table!r}"
+
+
+def test_make_reader_passes_profile_through():
+    import src.common.iceberg_reader as ir
+
+    reader = ir.make_reader(profile="agent_platform")
+    assert isinstance(reader, ir.DuckLakeReader)
+    assert reader._profile == "agent_platform"
 
 
 def test_ducklake_reader_current_state_no_filter(monkeypatch):
@@ -714,15 +714,35 @@ def test_ducklake_reader_url_api_fallback(monkeypatch):
 
 
 def test_ducklake_reader_current_state_parameterizes_single_key(monkeypatch):
-    """row_filter `id = 'rec-1'` routes to the parameterized read_ops_current key path (High #3)."""
+    """row_filter `id = 'rec-1'` becomes the structural {column, value} filter (rec-2170, no raw SQL)."""
     captured: dict = {}
     ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-1"}]}), captured)
     ir.DuckLakeReader().current_state("ops_recommendations", row_filter="id = 'rec-1'")
     import json as _json
 
     body = _json.loads(captured["body"])
-    assert body["action"] == "read_ops_current"  # NOT query_ops -- parameterized, no raw SQL
-    assert body["key"] == "rec-1"
+    assert body == {
+        "action": "read_ops_current",  # NOT query_ops -- parameterized, no raw SQL
+        "table": "ops_recommendations",
+        "filter": {"column": "id", "value": "rec-1"},
+    }
+    assert "key" not in body  # the legacy merge-key-only field is gone on this path
+
+
+def test_ducklake_reader_current_state_non_key_filter_carries_column(monkeypatch):
+    """Regression rec-2170: a non-merge-key filter sends ITS column, not the merge key.
+
+    The previous form discarded the column and the reader bound the value against id,
+    silently returning a false zero for any `status = '...'`-style filter.
+    """
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-1", "status": "open"}]}), captured)
+    rows = ir.DuckLakeReader().current_state("ops_recommendations", row_filter="status = 'open'")
+    import json as _json
+
+    body = _json.loads(captured["body"])
+    assert body["filter"] == {"column": "status", "value": "open"}
+    assert rows == [{"id": "rec-1", "status": "open"}]
 
 
 def test_ducklake_reader_current_state_rejects_complex_filter(monkeypatch):
@@ -734,12 +754,45 @@ def test_ducklake_reader_current_state_rejects_complex_filter(monkeypatch):
 
 
 def test_parse_single_key_filter():
+    """_parse_single_key_filter returns the (column, value) pair, or None for non-matching shapes."""
     import src.common.iceberg_reader as ir
 
-    assert ir._parse_single_key_filter("id = 'rec-1'") == "rec-1"
-    assert ir._parse_single_key_filter("  status='open'  ") == "open"
+    assert ir._parse_single_key_filter("id = 'rec-1'") == ("id", "rec-1")
+    assert ir._parse_single_key_filter("  status='open'  ") == ("status", "open")
     assert ir._parse_single_key_filter("1=1 OR 2=2") is None
     assert ir._parse_single_key_filter("id IN ('a','b')") is None
+
+
+def test_ducklake_reader_named_posts_verb_and_params(monkeypatch):
+    """named() POSTs {"action": "named_read", "verb": ..., "params": {...}} and returns body rows."""
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": [{"id": "rec-9"}]}), captured)
+    rows = ir.DuckLakeReader().named("rec_by_id", id="rec-9")
+    import json as _json
+
+    body = _json.loads(captured["body"])
+    assert body == {"action": "named_read", "verb": "rec_by_id", "params": {"id": "rec-9"}}
+    assert rows == [{"id": "rec-9"}]
+
+
+def test_ducklake_reader_named_empty_params(monkeypatch):
+    """named() with no params sends an empty params object (verbs like open_recs)."""
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(payload={"rows": []}), captured)
+    rows = ir.DuckLakeReader().named("open_recs")
+    import json as _json
+
+    body = _json.loads(captured["body"])
+    assert body == {"action": "named_read", "verb": "open_recs", "params": {}}
+    assert rows == []
+
+
+def test_ducklake_reader_named_loud_fails_on_non_200(monkeypatch):
+    """named() raises on a reader failure -- never a silent empty result (Decision 55)."""
+    captured: dict = {}
+    ir = _patch_dl_invoke(monkeypatch, _FakeResp(status_code=400, text="unknown verb"), captured)
+    with pytest.raises(RuntimeError, match="named_read"):
+        ir.DuckLakeReader().named("not_a_verb")
 
 
 class TestDuckLakeReaderSSMResolution:

@@ -369,3 +369,31 @@ resource "aws_ssm_parameter" "ducklake_writer_url" {
     Purpose = "T2.19 DuckLake endpoint discovery"
   }
 }
+
+# Writer loud-failure visibility (Decision 84 I-4): with the offline outbox retired, a failed
+# write surfaces only at the call site -- which may be a headless GitHub Actions run (ci-rca).
+# This alarm makes writer errors reach a human within 15 minutes regardless of the caller.
+resource "aws_cloudwatch_metric_alarm" "ducklake_writer_errors" {
+  alarm_name          = "ducklake-writer-errors"
+  alarm_description   = "ducklake_writer Lambda errors > 0 over 15m. Decision 84 I-4: no outbox buffers a failed ops write; a sustained error here means rec/decision filing is down."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 900
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.ducklake_writer.function_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+
+  tags = {
+    Name    = "DuckLake Writer Error Alarm"
+    Purpose = "Decision 84 I-4 loud-failure visibility"
+  }
+}

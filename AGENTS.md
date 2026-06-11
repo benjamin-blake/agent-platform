@@ -88,27 +88,27 @@ skills, slash commands -- are optimised for agent loading efficiency, not human 
 When a slash command instructs you to "apply" or "invoke" a skill, use the `Skill` tool — do **not** manually `Read` `SKILL.md` files. The Skill tool loads them on demand.
 
 ## Operational data governance — Single Portal Invariant
-All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. IDs are allocated atomically via DynamoDB; the local JSONL files are read-only caches.
+All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`, Decision 84 I-2) -- never client-side; decision numbering authority is `DECISIONS.md` (callers supply `decision_id`). The local JSONL files are read-only caches.
 
-Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity via the `agent_platform` (PlatformDev) assume-role profile. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model.
+Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Portal calls require the `agent_platform` (PlatformDev) assume-role profile to reach the reader/writer Function URLs. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model. A write that cannot complete FAILS LOUDLY at the call site -- there is no offline outbox (Decision 84 I-4); re-file after restoring connectivity.
 
 ## Warehouse-as-source-of-truth invariant
 This is an append-only lakehouse. The warehouse is the single source of truth for all operational data; local files are never upstream of it.
 
-**Source-of-truth by table (T2.19 cutover, signed off 2026-06-09):**
-- **`ops_recommendations` = DuckLake-on-Neon by DEFAULT.** Recs reads/writes transit the closed `ducklake_reader`/`ducklake_writer` Function-URL boundary (Decision 81 cl.7); there is NO Athena escape hatch on the `ducklake` backend. Set `OPS_STORAGE_BACKEND=iceberg` to roll back to the (intact, retained) Iceberg path.
-- **All OTHER ops tables (`ops_decisions`, `ops_session_log`, `ops_execution_plans`, `ops_priority_queue`) = Athena (over Iceberg).** These remain DEFERRED on the Iceberg/Athena path; `ops_compaction` stays live for them.
+**Source-of-truth by table (Decision 84 consolidation, 2026-06-11):**
+- **`ops_recommendations`, `ops_decisions`, `ops_priority_queue` = DuckLake-on-Neon, SOLE backend.** Reads transit the closed `ducklake_reader` boundary via NAMED VERBS (Decision 84 I-3; no caller SQL); writes transit `ducklake_writer` (`file_ops` allocates rec ids in-transaction). There is NO Athena path and NO rollback flag (`OPS_STORAGE_BACKEND` retired -- the frozen Iceberg copy stopped being coherent the day writes moved). `ops_decisions` rebuilds from `DECISIONS.md` via `ops_data_portal --backfill-decisions-md`.
+- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (`docs/INTENT-ducklake-consolidation.md`).
 
-The write surface is unchanged on both backends: `file_rec`/`update_rec` via the portal; only the transport underneath swaps. Local files have exactly two valid roles:
+Local files have exactly two valid roles:
 
-1. **Outbox** (`logs/.ops-outbox/`) — write-ahead buffer for offline writes. Drained once into S3 staging (Iceberg) or the writer (DuckLake), then deleted. Never replayable. Each entry is a *new write that has not yet propagated*, never a *replay of an existing warehouse row*.
-2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM the warehouse via `sync_ops pull` (recs from the DuckLake reader; decisions from Athena). Downstream of the warehouse, never upstream.
+1. **Legacy staging outbox** (`logs/.ops-outbox/`) — survives ONLY for the not-yet-migrated OpsWriter paths (telemetry, session_log, execution_plans) and retires with them. Migrated-table dirs and `*_pending` dirs are never drained (Decision 84 I-4); the recs/decisions pending outboxes are deleted.
+2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM the warehouse via `sync_ops pull` (all migrated tables from the DuckLake reader). Downstream of the warehouse, never upstream.
 
 **Hard rule: a read cache is never a write source.** Reading any file in `logs/` and calling `OpsWriter.write()` (or otherwise putting data into S3 staging) is the CRUD anti-pattern in lakehouse clothing. The Iceberg-DELETE-resurrection caveat below is scoped to the still-Iceberg tables: Iceberg DELETE only removes a snapshot; if the same row is restaged from a stale local file on any clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe (because `_prepare_record` refreshes `last_updated_timestamp = now`). The result is an infinite resurrection loop where deletes never stick. (`ops_recommendations` on DuckLake is not Iceberg-snapshot-based, but the same "never re-stage from a read cache" rule applies -- recs writes go only through the writer.)
 
 The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and (b) ETL from a non-warehouse source of truth (e.g., `DECISIONS.md` -> `ops_decisions`). Anything else that ends in `OpsWriter.write()` must be reviewed for replay-from-cache violations.
 
-If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls from the warehouse -- recs from the DuckLake reader, decisions from Athena -- and overwrites local). Never fix drift by re-staging from the local file.
+If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls every migrated table from the DuckLake reader and overwrites local). Never fix drift by re-staging from the local file.
 
 ## Merge protocol
 - **Authoritative pre-merge gate**: remote CI (`validate.py` on GitHub-hosted runners with OIDC, CD.21) is the authoritative gate. A branch is not merge-ready until CI passes.

@@ -441,7 +441,11 @@ that drains to the old Iceberg store, causing ops data loss.
 
 ## Section 6 -- T2.19 ops cutover, rollback, and restore-drill (Decision 81 / Decision 82)
 
-The ops persistence layer is selected by the `OPS_STORAGE_BACKEND` env flag, read by
+> **SUPERSEDED (Decision 84, 2026-06-11):** the `OPS_STORAGE_BACKEND` flag is retired; DuckLake is
+> the sole ops backend and the commands below that set the flag are historical (the env var is
+> ignored). Retained for the cutover audit trail only.
+
+The ops persistence layer WAS selected by the `OPS_STORAGE_BACKEND` env flag, read by
 `scripts/ops_data_portal.py`, `src/common/iceberg_reader.make_reader`, and
 `scripts/data_quality_runner.py`:
 

@@ -4274,7 +4274,20 @@ tier_items:
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): decomposed per_table into atomic IMPLEMENTATION plans
-    status: not_started
+    status: in_progress
+    progress_note: |
+      2026-06-11 (Decision 84 consolidation session): ops_decisions and ops_priority_queue migrated --
+      tables created on DuckLake, DECISIONS.md ETL authored (ops_data_portal.backfill_decisions_from_md)
+      and run, portal/preflight/sync_ops reads+writes repointed through the closed boundary (Decision 70
+      queue semantics preserved inside the priority_queue_current verb). START-GATE disposition: the
+      rec-2113 pg_restore drill remains OPEN and was NOT bypassed -- this slice writes only externally
+      recreatable data (decisions re-ETL from DECISIONS.md; queue created empty), so the gate's
+      sole-custody-data risk is not engaged. rec-2113 continues to gate the Athena-estate demolition and
+      any non-recreatable migration. REMAINING: ops_session_log (retire-or-migrate per T-1.9),
+      ops_execution_plans (live writers: executor plan.py + s3_log_store routing), queue producer flow
+      repoint, ops_compaction retirement + view drops (human-gated applies), DynamoDB counters destroy
+      (after the reseed-rollback window closes). OpsWriter survives for telemetry until Phase 4
+      (docs/INTENT-ducklake-consolidation.md).
 
   - id: T2.27
     tier: T2
@@ -4301,7 +4314,54 @@ tier_items:
     related_candidate_decisions: [CD.31, CD.33, CD.25]
     effort: XS
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-11"
+    note: |
+      Closed by the Decision 84 consolidation session: read-engine.yaml and ops-data-store.md rewritten
+      for the single-backend topology (which supersedes the per-backend split this item originally
+      described -- drift closed at a stronger contract than specified).
+
+  - id: T2.28
+    tier: T2
+    name: Closed-boundary hardening - named-verb reads + writer-owned rec keyspace (Decision 84)
+    intent: |
+      Carrier for the Decision 84 boundary invariants beyond the table migrations. Landed
+      2026-06-11: named-verb read registry (ducklake_reader `named_read` action; 11 verbs;
+      registry in src/common/ducklake_scd2_schema.py with registry_version), structural
+      {column,value} filters replacing SQL-fragment row filters end-to-end (rec-2170 root
+      fix incl. the seventh call site in the rec-curator preload), writer-owned rec-NNN
+      allocation (`file_ops`: counter-row-in-transaction serialization, self-seeding from
+      history max, client idempotency ULID replay), recs+decisions offline outboxes deleted
+      (loud-fail + idempotent transient retry + writer-error CloudWatch alarm), destructive
+      action guards (create_ops_tables force confirm; catalog_reinit explicit schema +
+      confirm), telemetry preflight stub (Phase 4 pending), purge-postmortems moved to the
+      SCD2 supersede model.
+    depends_on: [T2.19]
+    files_in_scope:
+      - src/common/ducklake_scd2_schema.py
+      - src/common/ducklake_runtime.py
+      - src/lambdas/ducklake_reader/handler.py
+      - src/lambdas/ducklake_writer/handler.py
+      - src/lambdas/ducklake_maintenance/handler.py
+      - scripts/ops_data_portal.py
+      - scripts/session_preflight.py
+      - scripts/sync_ops.py
+    exit_criteria:
+      - "All application rec/decision/queue reads transit named verbs; rg 'reader.query(' over scripts/ returns only the DQ harness"
+      - "file_rec allocates via the writer (no DynamoDB next_id import in the portal); concurrent file_ops yield distinct ids (live churn probe)"
+      - "No pending-outbox code path remains (drain_pending symbols absent); writer-error alarm applied"
+      - "rec-2170 regression locked: current_state(row_filter=\"status = 'open'\") produces a structural filter and live open-rec counts are non-zero"
+    related_candidate_decisions: [CD.33]
+    related_decisions: [84]
+    effort: M
+    strategic: false
+    status: in_progress
+    progress_note: |
+      2026-06-11: implemented + deployed (reader/writer/maintenance V3 build+deploy+smoke).
+      OPEN TAIL: query_ops retirement is gated on a dq_check verb family or caller allowlist
+      (Decision 84 I-3 staging); the write_ops rec-NNN create-guard (require file_ops for
+      canonical recs) deploys AFTER main's clients migrate (additive-then-subtractive
+      protocol); DQ ci-rca recs 2150/2151/2153 diagnosis tracked in-session.
 
   # ----- T3: Trust loop closure -----
   - id: T3.1

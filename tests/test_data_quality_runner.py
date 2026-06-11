@@ -284,7 +284,7 @@ def test_main_no_matching_filters():
         with patch("scripts.data_quality_runner.load_checks", return_value=([], {"database": "db"})):
             with (
                 patch("sys.argv", ["runner.py", "--table", "non_existent"]),
-                patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+                patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
             ):
                 assert main() == 0
 
@@ -356,11 +356,10 @@ def test_run_checks_profile_hard_default(monkeypatch):
     mock_session.assert_called_once_with(profile_name="agent_platform")
 
 
-def test_apply_backend_routing_ducklake_rewrites_recs(monkeypatch):
-    """ducklake backend: recs checks -> reader (backend=ducklake, {tbl} SQL); non-recs untouched."""
+def test_apply_backend_routing_rewrites_all_migrated_tables():
+    """All _DUCKLAKE_OPS_TABLES checks route to the reader; non-migrated tables stay on Athena."""
     import scripts.data_quality_runner as dq
 
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "ducklake")
     recs = Check(
         "ops_recommendations",
         "file",
@@ -369,7 +368,7 @@ def test_apply_backend_routing_ducklake_rewrites_recs(monkeypatch):
         "recs file not null",
         "error",
     )
-    other = Check(
+    decisions = Check(
         "ops_decisions",
         "status",
         "not_null",
@@ -377,17 +376,28 @@ def test_apply_backend_routing_ducklake_rewrites_recs(monkeypatch):
         "dec status",
         "error",
     )
-    dq.apply_backend_routing([recs, other], "agent_platform")
+    deferred = Check(
+        "ops_session_log",
+        "session_id",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_session_log_current WHERE session_id IS NULL",
+        "session log id",
+        "error",
+    )
+    dq.apply_backend_routing([recs, decisions, deferred], "agent_platform")
     assert recs.backend == "ducklake"
     assert "{tbl}" in recs.sql
     assert "ops_recommendations_current" not in recs.sql
-    # ops_decisions is NOT migrated -- stays on Athena, SQL unchanged.
-    assert other.backend == "athena"
-    assert "ops_decisions_current" in other.sql
+    # ops_decisions is migrated too (Decision 84 I-1) -- routed to the reader.
+    assert decisions.backend == "ducklake"
+    assert "{tbl}" in decisions.sql
+    # ops_session_log stays on Athena until its T2.26 disposition.
+    assert deferred.backend == "athena"
+    assert "ops_session_log_current" in deferred.sql
 
 
-def test_apply_backend_routing_iceberg_noop(monkeypatch):
-    """iceberg backend (rollback): no rewrite, no clause-8 append -- byte-identical to pre-cutover."""
+def test_apply_backend_routing_ignores_env_flag(monkeypatch):
+    """The OPS_STORAGE_BACKEND env flag is retired: routing applies regardless of its value."""
     import scripts.data_quality_runner as dq
 
     monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
@@ -400,8 +410,8 @@ def test_apply_backend_routing_iceberg_noop(monkeypatch):
         "error",
     )
     out = dq.apply_backend_routing([recs], "agent_platform")
-    assert recs.backend == "athena"
-    assert out == [recs]
+    assert recs.backend == "ducklake"
+    assert recs in out
 
 
 def test_print_results_json(capsys):
@@ -429,8 +439,11 @@ def test_main_full(mock_run, mock_load, mock_dq_dir):
     mock_dq_dir.glob.return_value = [Path("test.yaml")]
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     mock_run.return_value = RunResult(verdict="PASS")
-    # Force iceberg backend: ducklake path reads _DQ_DIR/"ops.yaml" via MagicMock which hangs yaml.safe_load.
-    with patch("sys.argv", ["runner.py"]), patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}):
+    # Stub routing: it reads _DQ_DIR/"ops.yaml" which is a MagicMock here; routing has dedicated tests.
+    with (
+        patch("sys.argv", ["runner.py"]),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+    ):
         assert main() == 0
 
 
@@ -453,7 +466,7 @@ def test_main_severity_error(mock_load, mock_dq_dir, _mock_tombstones):
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
     with (
         patch("sys.argv", ["runner.py", "--severity", "error", "--dry-run"]),
-        patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
     ):
         with patch("builtins.print") as mock_print:
             main()
@@ -472,7 +485,7 @@ def test_main_severity_warn(mock_load, mock_dq_dir):
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
     with (
         patch("sys.argv", ["runner.py", "--severity", "warn", "--dry-run"]),
-        patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
     ):
         with patch("builtins.print") as mock_print:
             main()
@@ -486,7 +499,10 @@ def test_main_json(mock_load, mock_dq_dir):
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     with patch("scripts.data_quality_runner.run_checks") as mock_run:
         mock_run.return_value = RunResult(verdict="PASS")
-        with patch("sys.argv", ["runner.py", "--json"]), patch.dict("os.environ", {"OPS_STORAGE_BACKEND": "iceberg"}):
+        with (
+            patch("sys.argv", ["runner.py", "--json"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
             with patch("builtins.print") as mock_print:
                 main()
                 # Check that print was called with JSON (one of the calls should be the JSON string)
@@ -813,14 +829,20 @@ def test_print_results_json_includes_unenforced_fail(capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_ops_backend_default(monkeypatch):
+def test_ops_backend_unconditionally_ducklake(monkeypatch):
     import scripts.data_quality_runner as dq
 
-    # T2.19 cutover (signed off 2026-06-09): the default flipped iceberg -> ducklake.
+    # Decision 84 I-1: DuckLake is the sole ops backend; the env rollback flag is retired.
     monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
     assert dq._ops_backend() == "ducklake"
-    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
-    assert dq._ops_backend() == "iceberg"
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")  # ignored: no env read remains
+    assert dq._ops_backend() == "ducklake"
+
+
+def test_ducklake_ops_tables_set():
+    import scripts.data_quality_runner as dq
+
+    assert dq._DUCKLAKE_OPS_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
 
 
 def test_to_ducklake_sql_rewrites_table_and_regexp():
