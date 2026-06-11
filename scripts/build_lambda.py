@@ -112,7 +112,7 @@ _LAMBDA_SCRIPTS = [
     "tool_runtime.py",
 ]
 
-_COPILOT_SDK_PACKAGE = "github-copilot-sdk==0.2.2"
+_COPILOT_SDK_PACKAGE = "github-copilot-sdk==0.2.3"  # 0.2.2 yanked from PyPI; manifest pip_packages is the live pin
 
 _LAMBDA_FUNCTION_NAMES = [
     "agent-platform-scheduled-agent-dispatcher",
