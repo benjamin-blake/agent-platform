@@ -22,9 +22,16 @@ as a single larger IMPLEMENTATION plan, as that constraint explicitly sanctions.
 V2
 
 (Python source with no external integration: Pydantic schema + validate.py wiring + pure-file tooling.
-Skill edits are V1 docs; highest tier wins -> V2. Decision-scout grounding: no scope file appears in any
-`src/lambdas/*/manifest.yaml`, so no per-Lambda build/deploy/smoke-test steps apply (Decision 79). No .tf
-files in scope, so no Infrastructure Assessment.)
+Skill edits are V1 docs; highest tier wins -> V2. Lambda Deployment Assessment (Decision 79, CD.16):
+`compute_affected_artifacts` maps the scope to `{'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}` --
+the roadmap YAML is a bundled `assets[]` entry of the `status: active` data-pipeline artifact
+(`src/lambdas/data-pipeline/manifest.yaml`). Step 12b is VACUOUSLY SATISFIED: the edit is a
+non-executable status-text change to a bundled asset (T1.11 status / CD.22 state fields), and the
+scheduled-agent dispatcher that consumes it is disabled (May-2026 migration to Claude Code scheduled
+agents), so no rebuild/deploy/smoke-test is warranted -- same documented exemption as the merged
+precedents `PLAN-branch-protection-reconciliation.md`, `PLAN-ducklake-catalog-neon-migration-impl.md`,
+and `PLAN-ducklake-rds-retirement.md`. V2 stands. No other scope file appears in any Lambda manifest.
+No .tf files in scope, so no Infrastructure Assessment.)
 
 ## Plan Path
 docs/plans/PLAN-t1-11-plan-yaml-migration.md
@@ -67,8 +74,11 @@ clause-3 handoff text they embed) still reference `PLAN-{slug}.md`; reconcile to
 Portal call: `file_rec` (queues to outbox if the DuckLake writer is unreachable locally).
 
 ## Infrastructure Dependencies (if applicable)
-None. No `.tf` files in scope; no Lambda-packaged files in scope (`config/agent/` not touched;
-decision-scout verified no scope file is named in any Lambda manifest).
+None. No `.tf` files in scope. One scope file is Lambda-packaged: `docs/ROADMAP-PLATFORM.yaml` is an
+`assets[]` entry of the active `data-pipeline` artifact -- see the Verification Tier note for the
+documented vacuous-satisfaction exemption (non-executable status-text edit; dispatcher disabled; no
+build/deploy/smoke-test warranted, per merged precedent). No other scope file is named in any Lambda
+manifest; `config/agent/` is not touched.
 
 ## In-flight plan enumeration (T1.11 exit criterion 3)
 Audit method: the repo's public history begins at the initial commit (2026-05-28). Every PLAN-*.md present
@@ -110,7 +120,9 @@ in the working tree and in commit history; none are retroactively converted.
 | 10 | pre-deploy | Full presubmit parity before push | `bin/venv-python -m scripts.validate` | exit 0 (credential-dependent verifiers may SKIP in degraded mode) | RCA the failing check; CI remains authoritative |
 
 ## Constraints
-- Structure-only migration: do NOT rewrite plan content while porting this plan to YAML.
+- Structure-only migration: do NOT rewrite plan content while porting this plan to YAML. Carve-out: the
+  ported `plan_path` field value necessarily changes `.md` -> `.yaml` to satisfy the schema validator
+  (`plan_path == f"docs/plans/PLAN-{slug}.yaml"`); that field update is structural, not a content rewrite.
 - Only the files in Scope are modified. `.claude/commands/*.md` references to PLAN-{slug}.md are explicitly OUT of scope -> follow-up rec (see Bundled Recommendations).
 - Historical PLAN-*.md files: untouched (no deletion, no conversion, no edits).
 - Main-validate DQ red and the alerts_email pipeline are owned elsewhere -- out of scope.
