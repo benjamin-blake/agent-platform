@@ -1,8 +1,16 @@
 # Boundary Contract: Ops Data Store
 
+> **Decision 84 (2026-06-11) supersedes the two-backend split below for `ops_recommendations`,
+> `ops_decisions`, and `ops_priority_queue`: all three are on the DuckLake closed boundary as
+> the SOLE backend (no `OPS_STORAGE_BACKEND` flag, no Athena path, no offline outbox; rec ids
+> writer-allocated via `file_ops`; reads via named verbs). `ops_session_log` /
+> `ops_execution_plans` remain as described pending T2.26. Authoritative topology:
+> `docs/contracts/read-engine.yaml` (version 3) + `docs/INTENT-ducklake-consolidation.md`.
+> Athena/Iceberg sections below are retained for the demolition audit trail.**
+
 ## Overview
 
-Operational structured logs are stored across two backends (T2.19 cutover, Decision 81):
+Operational structured logs were stored across two backends (T2.19 cutover, Decision 81):
 
 **ops_recommendations** -- DuckLake closed boundary (T2.19 / Decision 81 cl.7).
 - Authoritative store: Neon serverless-Postgres DuckLake catalog (`/ducklake/` S3 prefix).

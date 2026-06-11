@@ -7,7 +7,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -164,10 +164,8 @@ class TestPreflightProductRoadmapBlock:
             "platform_cd_consumers": {"CD.9": ["L0.1"]},
         }
 
-        def _athena_stub(sql: str) -> list | None:
-            if "ops_priority_queue_current" in sql:
-                return []
-            return None
+        reader_stub = MagicMock()
+        reader_stub.named.return_value = []
 
         with (
             patch("session_preflight.check_venv", return_value=True),
@@ -192,8 +190,7 @@ class TestPreflightProductRoadmapBlock:
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
             patch("session_preflight._check_ci_rca_liveness", return_value=None),
-            patch("session_preflight._run_athena_query", side_effect=_athena_stub),
-            patch("session_preflight._athena_run_query", return_value=[]),
+            patch("session_preflight._make_reader", return_value=reader_stub),
             patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}),
             patch("session_preflight.platform_roadmap.compute_state_dict", return_value={}),
             patch("session_preflight.product_roadmap_module.compute_state_dict", return_value=_product_state),

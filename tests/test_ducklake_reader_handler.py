@@ -166,12 +166,52 @@ def test_open_reader_connection(monkeypatch):
 
 def test_action_read_ops_current(monkeypatch):
     rows = [{"id": "rec-1", "status": "open", "created_timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)}]
-    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, limit: rows)
+    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, key_column, limit: rows)
     out = h.action_read_ops_current({"table": "ops_recommendations", "id": "rec-1"}, FakeCon())
     assert out["ok"] is True
     assert out["row_count"] == 1
     # datetime is coerced to ISO string for the JSON body
     assert isinstance(out["rows"][0]["created_timestamp"], str)
+
+
+def test_action_read_ops_current_structural_filter(monkeypatch):
+    """rec-2170: a {column, value} filter binds the NAMED column, not the merge key."""
+    seen = {}
+
+    def _read(con, *, table, key, key_column, limit):  # noqa: ARG001
+        seen.update(key=key, key_column=key_column)
+        return []
+
+    monkeypatch.setattr(rt, "read_current", _read)
+    out = h.action_read_ops_current(
+        {"table": "ops_recommendations", "filter": {"column": "status", "value": "open"}}, FakeCon()
+    )
+    assert out["ok"] is True
+    assert seen == {"key": "open", "key_column": "status"}
+
+
+def test_action_named_read(monkeypatch):
+    captured = {}
+
+    def _named(con, *, verb, params):  # noqa: ARG001
+        captured.update(verb=verb, params=params)
+        return [{"id": "rec-9"}]
+
+    monkeypatch.setattr(rt, "named_read", _named)
+    out = h.action_named_read({"verb": "rec_by_id", "params": {"id": "rec-9"}}, FakeCon())
+    assert out["ok"] is True
+    assert out["registry_version"] == rt.NAMED_READS_VERSION
+    assert captured == {"verb": "rec_by_id", "params": {"id": "rec-9"}}
+
+
+def test_action_named_read_requires_verb():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="non-empty 'verb'"):
+        h.action_named_read({"params": {}}, FakeCon())
+
+
+def test_action_named_read_rejects_non_dict_params():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="must be an object"):
+        h.action_named_read({"verb": "rec_by_id", "params": ["rec-9"]}, FakeCon())
 
 
 def test_action_read_ops_history(monkeypatch):
@@ -198,7 +238,7 @@ def test_require_ops_table_rejects_unknown():
 
 def test_handler_read_ops_current_end_to_end(monkeypatch):
     monkeypatch.setattr(h, "_open_reader_connection", lambda: FakeCon())
-    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, limit: [{"id": "rec-1"}])
+    monkeypatch.setattr(rt, "read_current", lambda con, *, table, key, key_column, limit: [{"id": "rec-1"}])
     resp = h.handler({"action": "read_ops_current", "table": "ops_recommendations"})
     assert resp["statusCode"] == 200
     assert json.loads(resp["body"])["row_count"] == 1
@@ -275,3 +315,11 @@ def test_handler_connect_probe_success(monkeypatch):
 def test_connect_probe_in_connectionless_actions():
     """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_reader_connection."""
     assert "connect_probe" in h._CONNECTIONLESS_ACTIONS
+
+
+def test_action_read_ops_current_rejects_malformed_filter():
+    """A filter missing 'value' must loud-fail, never degrade to an unfiltered full-table read."""
+    with pytest.raises(rt.DuckLakeRuntimeError, match="BOTH 'column' and 'value'"):
+        h.action_read_ops_current({"table": "ops_recommendations", "filter": {"column": "status"}}, FakeCon())
+    with pytest.raises(rt.DuckLakeRuntimeError, match="BOTH 'column' and 'value'"):
+        h.action_read_ops_current({"table": "ops_recommendations", "filter": "status=open"}, FakeCon())

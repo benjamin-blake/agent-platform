@@ -33,11 +33,10 @@ _DEFAULT_DATABASE = "agent_platform"
 _DEFAULT_REGION = "eu-west-2"
 _DEFAULT_CATALOG_NAME = "agent_platform"
 
-# Storage-backend selector (T2.19 / Decision 81). `make_reader()` returns the DuckLake reader when
-# OPS_STORAGE_BACKEND=ducklake, else the legacy DuckDB-on-Iceberg reader (rollback target). Both
-# satisfy the Reader protocol so call sites (portal, sync_ops, preflight) are unchanged.
-_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
-_DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
+# DuckLake is the SOLE ops-store backend (Decision 84 I-1; the OPS_STORAGE_BACKEND rollback flag
+# was retired -- the frozen Iceberg copy stopped being a coherent rollback target the day writes
+# moved to DuckLake). DuckDBIcebergReader remains importable for non-ops Iceberg surfaces
+# (schema-integrity drift checks against the retained estate) until the demolition apply lands.
 _DUCKLAKE_READER_URL_ENV = "DUCKLAKE_READER_URL"
 _DUCKLAKE_READER_FUNCTION_NAME = "agent-platform-ducklake-reader"
 
@@ -68,15 +67,20 @@ _ORDER_BY_DEFAULT = "last_updated_timestamp"
 # Valid SQL identifier pattern -- used to guard column-name interpolation
 _COL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 
-# Single-key equality row_filter: `<col> = '<value>'` (the only shape the portal passes). The value
-# is extracted and bound as a parameter on the reader's key-filtered path -- never interpolated.
-_SINGLE_KEY_FILTER_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*'([^']*)'\s*$")
+# Single-key equality row_filter: `<col> = '<value>'`. Both sides are extracted and sent as a
+# STRUCTURAL {column, value} filter -- never interpolated into SQL.
+_SINGLE_KEY_FILTER_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'\s*$")
 
 
-def _parse_single_key_filter(row_filter: str) -> str | None:
-    """Return the quoted value of a `<col> = '<value>'` filter, or None if it is not that shape."""
+def _parse_single_key_filter(row_filter: str) -> tuple[str, str] | None:
+    """Return the (column, value) pair of a `<col> = '<value>'` filter, or None if not that shape.
+
+    rec-2170: the previous form returned only the value, discarding the column; the reader then
+    bound it against the merge key (WHERE id = '<value>') -- a silent false zero for any
+    non-merge-key filter. Keeping the pair makes the filter structural end to end.
+    """
     m = _SINGLE_KEY_FILTER_RE.match(row_filter)
-    return m.group(1) if m else None
+    return (m.group(1), m.group(2)) if m else None
 
 
 def _resolve_function_url_via_ssm(ssm_path: str, *, profile: str | None, region: str) -> str | None:
@@ -393,7 +397,7 @@ class DuckLakeReader:
             f"{_DUCKLAKE_READER_URL_ENV} not set, SSM {_DUCKLAKE_READER_SSM_PATH!r} unavailable, "
             "terraform output 'ducklake_reader_function_url' unavailable, and "
             "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake reader "
-            "(OPS_STORAGE_BACKEND=ducklake)."
+            "(Decision 84: DuckLake is the sole ops backend)."
         )
 
     def _invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -453,21 +457,32 @@ class DuckLakeReader:
         if row_filter is None:
             body = self._invoke({"action": "read_ops_current", "table": table})
             return list(body.get("rows", []))
-        # Parameterize the single-key equality form (`<col> = '<value>'`) into the safe, key-filtered
-        # read_ops_current path rather than interpolating raw SQL (parity with the pyiceberg reader's
-        # parsed row_filter; closes the injection surface). The portal only ever passes `id = '<id>'`.
-        key = _parse_single_key_filter(row_filter)
-        if key is None:
+        # Parameterize the single-key equality form (`<col> = '<value>'`) into the structural
+        # {column, value} filter (rec-2170: the column travels with the value, and the reader
+        # validates it against the table contract). Never interpolated into SQL.
+        parsed = _parse_single_key_filter(row_filter)
+        if parsed is None:
             raise ValueError(
                 f"DuckLakeReader.current_state: row_filter must be a single-key equality "
-                f"(\"<col> = '<value>'\"); got {row_filter!r}. Use query() for arbitrary read-only SQL."
+                f"(\"<col> = '<value>'\"); got {row_filter!r}. Use named() for pre-established reads."
             )
-        body = self._invoke({"action": "read_ops_current", "table": table, "key": key})
+        column, value = parsed
+        body = self._invoke({"action": "read_ops_current", "table": table, "filter": {"column": column, "value": value}})
         return list(body.get("rows", []))
 
     def latest_snapshot(self, table: str) -> int | None:
         """DuckLake current is a live projection (no Iceberg snapshot id). Returns None by contract."""
         return None
+
+    def named(self, verb: str, **params: Any) -> list[dict]:
+        """Execute a pre-established read verb on the reader (Decision 84 I-3).
+
+        The SQL lives server-side in the reader's registry; the caller names the verb and binds
+        params. Loud-fail on an unknown verb, a param mismatch, or an unreachable reader -- a
+        failure is never a silent empty result (Decision 55).
+        """
+        body = self._invoke({"action": "named_read", "verb": verb, "params": params})
+        return list(body.get("rows", []))
 
     def query(
         self,
@@ -486,22 +501,11 @@ class DuckLakeReader:
             return None
 
 
-def ops_storage_backend() -> str:
-    """Return the active ops storage backend ('iceberg' | 'ducklake'); default iceberg until cutover."""
-    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
-
-
 def make_reader(profile: str | None = None, table: str | None = None) -> Reader:
-    """Return the flag-selected operational Reader for *table*.
+    """Return the operational Reader: DuckLakeReader for every ops table (Decision 84 I-1).
 
-    RECS-FIRST SLICE: `ops_recommendations` is the ONLY table on DuckLake. So
-    OPS_STORAGE_BACKEND=ducklake -> DuckLakeReader (closed boundary) ONLY for recs (or a None table,
-    which the recs-default call sites pass); every other named table -- ops_decisions and the deferred
-    ops_* tables -- reads from DuckDBIcebergReader regardless of the flag (they stay on Iceberg until
-    their own migration). Else (rollback / iceberg backend) DuckDBIcebergReader. Both satisfy the
-    Reader protocol, so call sites need not branch beyond passing the table they intend to read.
+    The *table* parameter is retained for call-site compatibility; all ops_* tables transit the
+    closed DuckLake boundary. DuckDBIcebergReader is no longer reachable from here -- it survives
+    as an importable class for non-ops Iceberg surfaces until the estate demolition lands.
     """
-    recs_path = table in (None, "ops_recommendations")
-    if recs_path and ops_storage_backend() == "ducklake":
-        return DuckLakeReader(profile=profile)
-    return DuckDBIcebergReader(profile=profile)
+    return DuckLakeReader(profile=profile)

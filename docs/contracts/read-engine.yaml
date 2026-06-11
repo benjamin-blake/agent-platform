@@ -1,170 +1,92 @@
 ---
 # Engine-choice contract for the ops-store read layer.
-# Authoritative reference for CD.8 (engine-agnostic), CD.15 (Athena escape-hatch),
-# and T2.19 / Decision 81 (DuckLake closed boundary for recs).
+# Authoritative reference for the Decision 84 single-backend topology (supersedes the CD.15
+# Athena escape-hatch and the T2.19 per-backend split for ops tables).
 # Consumed by: agents, planning sessions, T0.7c query Lambda implementors.
 
-version: 2
-last_updated: "2026-06-09"
-decisions_cited: [CD.8, CD.15, CD.16, Decision-56, Decision-69, Decision-70, Decision-78, Decision-81]
+version: 3
+last_updated: "2026-06-11"
+decisions_cited: [CD.8, CD.33, Decision-56, Decision-69, Decision-70, Decision-79, Decision-81, Decision-84]
 
-# T2.19 (2026-06-09): ops_recommendations is now on the DuckLake closed boundary.
-# - Reads: make_reader() -> DuckLakeReader -> ducklake_reader Function URL (Decision 81 cl.7).
-# - Writes: ops_data_portal.file_rec / update_rec -> ducklake_writer Function URL.
-# - NO Athena escape hatch for recs on the ducklake backend.
-# - ops_recommendations_current Athena view DROPPED (T2.7 scoped partial; siblings deferred).
+single_backend:
+  status: ratified (Decision 84 I-1)
+  backend: DuckLake-on-Neon (catalog) + S3 Parquet (data), fronted by the closed
+    ducklake_reader / ducklake_writer Function-URL boundary (AWS_IAM, SigV4).
+  tables_on_boundary: [ops_recommendations, ops_decisions, ops_priority_queue]
+  tables_pending: [ops_session_log, ops_execution_plans]   # T2.26 disposition (session_log may retire per T-1.9)
+  rollback_flag: RETIRED (OPS_STORAGE_BACKEND deleted; the frozen Iceberg copy stopped being a
+    coherent rollback target the day writes moved to DuckLake)
+  athena_escape_hatch: NONE for boundary tables (CD.15 scope now empty for ops; market-data
+    engine choice unaffected and out of scope)
 
-t2_19_recs_cutover:
-  status: complete
-  completed_at: "2026-06-09"
-  recs_read_engine: DuckLakeReader (src/common/iceberg_reader.py)
-  recs_write_engine: ducklake_writer Function URL via ops_data_portal
-  athena_fallback_for_recs: FORBIDDEN (Decision 81 cl.7)
-  ops_recommendations_current_view: DROPPED
+read_surface:
+  named_verbs:
+    status: primary application read surface (Decision 84 I-3)
+    mechanism: >
+      The caller names a verb and binds named params; the SQL is registry content inside the
+      reader Lambda's bundle (src/common/ducklake_scd2_schema.py NAMED_READS). No caller SQL
+      crosses the boundary on this path. Responses carry registry_version.
+    verbs:
+      ops_recommendations: [open_recs, rec_by_id, recs_by_title_prefix, ci_rca_open,
+        ci_rca_since, forward_fix_recursion, budget_bypass_recent, count_by_status]
+      ops_decisions: [decision_by_id, decisions_max_updated]
+      ops_priority_queue: [priority_queue_current]
+  structural_reads:
+    read_ops_current: full current projection, or a structural {column, value} equality filter
+      validated server-side against the field-semantics contract (rec-2170 root fix -- the
+      column travels with the value; never a SQL fragment).
+    read_ops_history: append-history rows (optional merge-key filter).
+  query_ops:
+    status: RETAINED for the DQ harness only (Decision 84 I-3 staging)
+    rationale: >
+      The ~20 ops.yaml check shapes (including history-table checks) are not yet expressible
+      as verbs. Retirement is a follow-up gated on a dq_check verb family or a caller
+      allowlist. The read-only verb guard (assert_read_only_sql: SELECT/WITH only,
+      single-statement) and the S3-read-only execution role bound what caller SQL can do.
 
-t2_7_view_retirement:
-  status: in_progress
-  progress_note: "2026-06-09: ops_recommendations_current dropped (T2.19 scoped partial)"
-  remaining:
-    - ops_decisions_current (deferred until ops_decisions migrates to DuckLake)
-    - ops_priority_queue_current (deferred until ops_priority_queue migrates)
-
-default_engine:
-  name: DuckDB
-  module: src/common/iceberg_reader.py
-  class: DuckDBIcebergReader
-  rationale: >
-    In-process, zero-cost, Arrow-native. Removes Athena from the operational read
-    hot-path (ops store; scales to billions-of-rows market-data path via same
-    interface). Reference implementation for the product's future T0.7c query Lambda.
-  note: >
-    ops_recommendations uses DuckLakeReader (not DuckDBIcebergReader) since T2.19.
-    Non-recs ops tables remain on DuckDBIcebergReader.
-
-catalog_resolution:
-  type: pyiceberg GlueCatalog
-  identifier_form: "agent_platform.<table>"
-  region: eu-west-2
-  credential_chain: >
-    resolve_aws_profile() returns the named agent_platform profile when present
-    (local / Claude-Code-on-the-web). Returns None when AWS_ACCESS_KEY_ID is set
-    in the environment (CI OIDC, Lambda execution role), letting boto3 fall
-    through to ambient credentials. No hardcoded metadata.json paths anywhere in
-    the reader.
-  catalog_properties:
-    client.region: eu-west-2
-    s3.region: eu-west-2
-    client.profile-name: "<agent_platform if resolved, else omitted>"
-    s3.profile-name: "<agent_platform if resolved, else omitted>"
+write_surface:
+  file_ops: >
+    CREATE with writer-owned id allocation (Decision 84 I-2): the entity counter row is
+    updated inside the same catalog transaction as the MERGEs -- the shared-row write-write
+    conflict is the serialization point; allocation re-runs inside the OCC retry loop. The
+    counter NEVER self-seeds on the hot path (the concurrent-seed race mints duplicate ids;
+    observed live 2026-06-11); create_ops_tables owns the serial bootstrap/repair
+    (bootstrap_entity_counter). Client idempotency ULID makes response-lost retries return
+    the original allocation. Scope: tables declaring entity_id_prefix (ops_recommendations).
+  write_ops: caller-keyed upsert -- DECISIONS.md backfill (dec-NNN), test-/probe prefixes.
+  update_ops: in-transaction referential existence check (CD.33 cl.8); absent key -> 409.
+  destructive_guards: create_ops_tables(force_recreate) requires confirm_force_recreate=<table>;
+    maintenance catalog_reinit requires explicit meta_schema + confirm (no production default).
 
 current_state_qualification:
-  ops_recommendations:
-    pattern: ROW_NUMBER
-    sql: >
-      SELECT * EXCLUDE(row_num) FROM (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-        FROM <table>
-      ) WHERE row_num = 1
-    decision: Decision-56
-  ops_decisions:
-    pattern: ROW_NUMBER
-    sql: >
-      SELECT * EXCLUDE(row_num) FROM (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-        FROM <table>
-      ) WHERE row_num = 1
-    decision: Decision-56
+  ops_recommendations: {pattern: write-through current projection, decision: Decision-56 semantics materialised in DuckLake}
+  ops_decisions: {pattern: write-through current projection, decision: Decision-56}
   ops_priority_queue:
-    pattern: correlated_subquery
-    sql: >
-      SELECT * FROM <table>
-      WHERE queue_run_id = (
-        SELECT queue_run_id FROM <table>
-        ORDER BY last_updated_timestamp DESC LIMIT 1
-      )
+    pattern: correlated_subquery INSIDE the priority_queue_current verb
     rationale: >
-      Returns ALL entries from the latest curator run, not one row per entity.
-      Decision 70 explicitly forbids the ROW_NUMBER pattern here.
+      Decision 70: the queue's current state is ALL entries of the latest curator run. The
+      generic latest-per-merge-key projection would silently change these semantics; the verb
+      is the only sanctioned queue read.
     decision: Decision-70
 
-snapshot_pinning:
-  supported: true
-  default: latest snapshot
-  parameter: snapshot_id (int | None)
-  guarantee: >
-    Two calls with the same snapshot_id on the same table return identical bytes,
-    regardless of concurrent writes. Reproducibility proof: VP step 3.
-
-predicate_pushdown:
-  enabled: true
-  mechanism: >
-    row_filter and selected_fields are passed into pyiceberg .scan() before Arrow
-    materialisation. Partition pruning happens at the Iceberg scan level; no full
-    table scans for filtered reads.
-  verified_by: >
-    tests/test_iceberg_reader.py::TestDuckDBIcebergReader::test_scan_args_pushdown
-
 single_portal_invariant:
-  decision: Decision-69
+  decision: Decision-69 (unchanged)
   rule: >
-    ops_data_portal fetch-before-update reads (_fetch_rec_from_athena --
-    function name retained for back-compat) read the warehouse via the configured
-    reader: DuckLakeReader for recs (ducklake backend), DuckDBIcebergReader for
-    decisions (iceberg backend). On reader failure RuntimeError is raised --
-    no local JSONL fallback (Decision 69); no Athena fallback for recs
-    (Decision 81 cl.7).
+    ops_data_portal fetch-before-update reads use the rec_by_id / decision_by_id verbs.
+    On reader failure RuntimeError is raised -- no local JSONL fallback, no Athena fallback.
 
-athena_escape_hatch:
-  policy: CD.8 / CD.15
-  trigger: >
-    DuckDBIcebergReader raises any exception (credential failure, network error,
-    pyiceberg incompatibility). The fallback path runs the original Athena query
-    via boto3 and returns the same coerced row list.
-  scope: >
-    Non-recs ops tables only (sync_ops, ops_data_portal for decisions,
-    session_preflight for priority_queue/decisions). REMOVED for recs (Decision 81 cl.7).
-  retirement: >
-    ops_decisions_current and ops_priority_queue_current Athena views retire in T2.7,
-    after those tables migrate to DuckLake. ops_recommendations_current ALREADY DROPPED.
-  note: >
-    ops_recommendations reads have NO Athena escape hatch as of T2.19. Any reader
-    failure for recs surfaces as recs_read_status=reader_unreachable in the preflight
-    report (Decision 55: loud degraded signal, never a false zero).
+failure_semantics:
+  policy: Decision 55 / Decision 84 I-4
+  rule: >
+    No offline outbox for boundary tables. A failed write raises at the call site; transient
+    5xx (Neon cold-resume) is retried only when idempotent (file_ops ULID / update_ops).
+    Reader failures surface as degraded signals (recs_read_status), never silent zeros.
+    Writer Lambda errors alarm via CloudWatch (ducklake-writer-errors).
 
-interim_direct_engine_exposure:
-  note: >
-    CD.8 specifies that the engine is hidden behind typed query verbs (T0.7c /
-    T0.8). Today, scripts/sync_ops.py, scripts/ops_data_portal.py, and
-    scripts/session_preflight.py call DuckDBIcebergReader directly as a pre-Lambda
-    bridge. Engine-hiding is restored when T0.7c (query Lambda) and T0.8 (typed
-    query verbs) land. Documented here to distinguish intentional interim from
-    accidental leakage.
-
-materialization_escalation_trigger:
-  description: >
-    For tables with high row-version counts (e.g., billions-of-rows market-data
-    path), full Arrow materialisation into DuckDB in-process is not viable.
-    Escalation path: use Iceberg partition pruning + S3 Select for column
-    projection, or delegate to Athena for the large-scan case.
-  threshold: >
-    Revisit when any single Iceberg table exceeds 10M rows or Arrow materialisation
-    exceeds 2 GB RAM. Monitor via DuckDB memory_usage() after each large scan.
-  current_state: >
-    Not triggered. Ops store is 722 rows (recs) / 38 rows (decisions) as of
-    2026-05-31. Market-data tables not yet provisioned.
-
-fast_follow_plans:
-  - slug: write-path-swap
-    scope: >
-      Route view refresh (CREATE OR REPLACE VIEW), to_iceberg compaction, and
-      DELETE DML off Athena/awswrangler onto DuckDB/pyiceberg (non-recs tables).
-  - slug: current-view-retirement
-    roadmap: T2.7
-    scope: >
-      Drop ops_decisions_current, ops_priority_queue_current Athena views once
-      those tables migrate to DuckLake. ops_recommendations_current ALREADY DROPPED.
-  - slug: query-lambda-wiring
-    roadmap: T0.7c
-    scope: >
-      Wire the T0.7c query Lambda to import src/common/iceberg_reader.py directly.
-      DuckDBIcebergReader was designed so this import works without modification.
+legacy_iceberg_reader:
+  class: DuckDBIcebergReader (src/common/iceberg_reader.py)
+  status: >
+    No longer reachable via make_reader(). Importable for non-ops Iceberg surfaces
+    (schema-integrity drift checks against the retained estate) until the Phase-3 demolition
+    apply lands; ops_session_log / ops_execution_plans reads stay on their existing paths
+    pending T2.26.

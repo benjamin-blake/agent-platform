@@ -30,7 +30,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`main_freshness.commits_behind > 20`** -- Surface as planning context warning: "Branch is N commits behind `origin/main`. Plan-critique (Step 9) reads `docs/PROJECT_CONTEXT.md`, `DECISIONS.md`, and `ROADMAP-PLATFORM.yaml` from the working tree; if these have moved on main, the critique evaluates against stale context. Recommend rebasing before continuing." Non-blocking but prompt the human to decide.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 4 Main Divergence Assessment. Non-blocking at this step.
 - **`cron_review_fresh: false`** -- Note to human (non-blocking).
-- **`outbox_synced: false`** -- Run `bin/venv-python -m scripts.sync_ops pull` to drain outbox and sync data (Decision 51). If fails, STOP.
+- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file the content via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync_ops sync`. If that fails, STOP.
 - **`open_recommendations > 0`** -- Surface counts and ask whether to address. Wait.
 - **`non_automatable_recommendations > 0`** -- Informational. Surface counts; do not require per-rec discussion. Individual review is suspended per Decision 73 until CD.17 / T4.2 reverses (Decision 67's Lambda-deploy clause was lifted by Decision 79; the STRATEGIC clause survives).
   - If `non_automatable_softcap_breached` is true (count > 250), surface as a planning context note.
@@ -48,7 +48,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Session metrics** (from Athena): session count over 7 days, success rate, and staleness of the latest session. These answer: "Is the system producing telemetry records and are they reaching Athena?"
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (consolidation Phase 4, docs/INTENT-ducklake-consolidation.md). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 

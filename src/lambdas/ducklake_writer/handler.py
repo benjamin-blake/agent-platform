@@ -1,3 +1,4 @@
+# complexity-waiver: decision-43
 """ducklake_writer Lambda entrypoint (T2.17 / CD.33, Decision 81).
 
 Write-scoped DuckLake runtime Lambda invoked over an AWS_IAM-signed Function URL. Dispatches a set
@@ -129,6 +130,38 @@ def action_write_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     }
 
 
+def action_file_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: CREATE one ops_* record, allocating its entity id inside the write transaction.
+
+    The record arrives WITHOUT the merge key (Decision 84 I-2: the writer owns the keyspace).
+    `idempotency_ulid` (client-minted, replayed unchanged on retry) makes a response-lost retry
+    return the originally allocated id instead of double-filing. The allocated id is returned
+    as `key`.
+    """
+    table = event.get("table")
+    record = event.get("record") or {}
+    _require_ops_table(table)
+    identity = None
+    idem = event.get("idempotency_ulid")
+    if idem is not None:
+        import re as _re  # noqa: PLC0415
+
+        if not isinstance(idem, str) or not _re.fullmatch(r"[0-9A-Za-z]{10,40}", idem):
+            raise WriterActionError(f"invalid idempotency_ulid {idem!r}: expected a 10-40 char alphanumeric ULID")
+        import dataclasses  # noqa: PLC0415
+
+        identity = dataclasses.replace(rt.mint_write_identity(), ulid=idem)
+    result = rt.file_scd2(con, record, table=table, identity=identity, metric_sink=rt.make_metric_sink())
+    return {
+        "ok": True,
+        "table": table,
+        "ulid": result.ulid,
+        "key": result.rec_id,
+        "occ_retries": result.occ_retries,
+        "commit_ms": round(result.commit_ms, 2),
+    }
+
+
 def action_update_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     """Production: update an existing ops_* record. Loud-fail (referential) if the merge key is absent.
 
@@ -159,9 +192,25 @@ def action_create_ops_tables(event: dict[str, Any], con: Any) -> dict[str, Any]:
     table = event.get("table")
     _require_ops_table(table)
     force = bool(event.get("force_recreate_tables", False))
+    if force and event.get("confirm_force_recreate") != table:
+        raise WriterActionError(
+            f"force_recreate_tables on {table!r} DROPS the production table pair: pass "
+            f"confirm_force_recreate={table!r} to proceed (destructive-action guard, Decision 84)"
+        )
     rt.create_scd2_tables(con, table=table, force_recreate=force)
     spec = rt.resolve_table_spec(table)
-    return {"ok": True, "table": table, "tables": [spec.history_table, spec.current_table], "force_recreate": force}
+    counter_seed = None
+    if spec.entity_id_prefix and spec.id_keyspace == "writer":
+        # Serial bootstrap/repair of the allocation counter (Decision 84 I-2): the hot path
+        # never self-seeds, so provisioning owns the seed (and repairs duplicate-row state).
+        counter_seed = rt.bootstrap_entity_counter(con, spec)
+    return {
+        "ok": True,
+        "table": table,
+        "tables": [spec.history_table, spec.current_table],
+        "force_recreate": force,
+        "counter_seed": counter_seed,
+    }
 
 
 def _require_ops_table(table: Any) -> None:
@@ -534,6 +583,7 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "create_tables": action_create_tables,
     "write": action_write,
     "write_ops": action_write_ops,
+    "file_ops": action_file_ops,
     "update_ops": action_update_ops,
     "create_ops_tables": action_create_ops_tables,
     "idempotency_probe": action_idempotency_probe,

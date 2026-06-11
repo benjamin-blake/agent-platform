@@ -126,9 +126,8 @@ def test_automatable_override_warning(caplog):
     }
     with (
         patch("scripts.ops_data_portal.validate_source"),
-        patch("scripts.ops_data_portal._next_id", return_value="rec-999"),
         patch("scripts.ops_data_portal.Recommendation.model_validate"),
-        patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+        patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-999"}),
         patch("scripts.ops_data_portal._append_to_local_jsonl"),
         patch("scripts.ops_data_portal._sync_table"),
         caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),

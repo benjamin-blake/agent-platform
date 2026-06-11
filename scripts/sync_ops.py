@@ -1,8 +1,8 @@
 # complexity-waiver: decision-43
 """sync_ops -- bidirectional sync between local JSONL files and the Iceberg ops tables.
 
-Read path: DuckDBIcebergReader (src/common/iceberg_reader.py) is tried first.
-Athena is retained as a fallback path (CD.8/CD.15 escape-hatch clause).
+Read path: the DuckLake closed reader, for every migrated table. There is no Athena
+fallback (Decision 84 I-1); on reader failure the cache is left untouched with a loud warning.
 
 Provides one CLI subcommand:
   sync   -- drain outbox then pull all tables from Iceberg
@@ -10,7 +10,7 @@ Provides one CLI subcommand:
 Internal helpers (not for direct agent use):
   drain              -- flush outbox entries to S3 via OpsWriter
   _rebuild_local_cache -- read Iceberg current-state and overwrite local JSONL files
-  _pull_single_table -- pull a single table from Iceberg (Athena fallback)
+  _pull_single_table -- pull a single table from the DuckLake reader (no fallback)
 
 Never raises to callers. All functions catch and log exceptions internally.
 """
@@ -21,7 +21,6 @@ import argparse
 import json
 import logging
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,13 +40,9 @@ _TABLE_TO_LOCAL: dict[str, str] = {
     "ops_priority_queue": "priority-queue/.priority-queue.jsonl",
 }
 
-# Maps Iceberg table name -> Athena view/table to query
-# ops_recommendations is EXCLUDED: recs transit the DuckLake closed boundary (Decision 81 cl.7).
-# No Athena fallback for recs -- the reader is the only allowed read path.
-_TABLE_TO_VIEW: dict[str, str] = {
-    "ops_decisions": "ops_decisions_current",
-    "ops_priority_queue": "ops_priority_queue_current",
-}
+# Tables on the DuckLake closed boundary: their outbox dirs are never drained to Iceberg
+# (stale-store hazard) and their pulls have no Athena fallback (Decision 84 I-1).
+_DUCKLAKE_MIGRATED_TABLES: frozenset[str] = frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
 
 _DATABASE = "agent_platform"
 _WORKGROUP = "agent-platform-production"
@@ -58,17 +53,21 @@ _REQUIRED_REC_FIELDS = ["title", "source", "effort", "priority"]
 
 
 def _pull_via_reader(table: str) -> list[dict] | None:
-    """Return current-state rows for *table* via the configured reader.
+    """Return current-state rows for *table* via the DuckLake reader.
 
-    For ops_recommendations (DuckLake closed boundary): returns None on any
-    exception -- no Athena fallback (Decision 81 cl.7).
-    For other ops_* tables: returns None on any exception so the caller can
-    fall back to Athena (Iceberg reader; escape-hatch retained until their migration).
+    Returns None on any exception so the caller can degrade LOUDLY (warn + cache
+    not updated). There is no Athena fallback for any migrated table (Decision 84 I-1).
     """
     try:
         from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        return make_reader(table=table).current_state(table)
+        reader = make_reader(table=table)
+        if table == "ops_priority_queue":
+            # Decision 70: the queue current state is ALL entries of the LATEST curator run.
+            # The generic latest-per-merge-key projection would silently change these semantics,
+            # so the verb is the only sanctioned queue read (Decision 84 I-3).
+            return reader.named("priority_queue_current")
+        return reader.current_state(table)
     except Exception as exc:  # noqa: BLE001
         logger.warning("sync_ops._pull_via_reader: reader failed for %s: %s", table, exc)
         return None
@@ -265,11 +264,12 @@ def drain() -> dict[str, int]:
             if not table_dir.is_dir():
                 continue
             table = table_dir.name
-            if table == "ops_recommendations":
+            if table in _DUCKLAKE_MIGRATED_TABLES or table.endswith("_pending"):
                 logger.warning(
-                    "sync_ops.drain: skipping ops_recommendations outbox dir -- recs transit the "
-                    "DuckLake closed boundary (Decision 81 cl.7 / T2.19). A recs entry here is an "
-                    "anomaly; drain it via ops_data_portal.file_rec / update_rec instead."
+                    "sync_ops.drain: skipping %s outbox dir -- the table transits the DuckLake "
+                    "closed boundary (Decision 84 I-1) and the offline outbox is retired (I-4). "
+                    "An entry here is an anomaly; re-file it via the portal instead.",
+                    table,
                 )
                 continue
             drained = 0
@@ -293,11 +293,10 @@ def drain() -> dict[str, int]:
 
 
 def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
-    """Pull a single ops table and overwrite the local JSONL file.
+    """Pull a single ops table from the DuckLake reader and overwrite the local JSONL file.
 
-    ops_recommendations: DuckLake reader only -- no Athena fallback (Decision 81 cl.7 / T2.19).
-    Other tables: DuckDBIcebergReader first; Athena fallback on failure (CD.8/CD.15 escape hatch).
-    Returns number of rows pulled, or 0 on failure.
+    No Athena fallback for any migrated table (Decision 84 I-1): on reader failure the
+    cache is left untouched with a loud warning. Returns number of rows pulled, or 0 on failure.
     """
     local_rel = _TABLE_TO_LOCAL.get(table)
     if not local_rel:
@@ -309,16 +308,12 @@ def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
         rows = _coerce_rows_list(table, reader_rows)
         return _write_rows_to_local(table, rows, local_rel)
 
-    if table == "ops_recommendations":
-        logger.warning(
-            "sync_ops._pull_single_table: DuckLake reader unreachable for ops_recommendations -- "
-            "no Athena fallback (Decision 81 cl.7). Local cache not updated."
-        )
-        return 0
-
-    # Athena fallback for non-recs tables (CD.8/CD.15 escape hatch)
-    logger.info("sync_ops._pull_single_table: using Athena fallback for %s", table)
-    return _pull_single_table_athena(table, profile, local_rel)
+    logger.warning(
+        "sync_ops._pull_single_table: DuckLake reader unreachable for %s -- no fallback "
+        "(Decision 84 I-1). Local cache not updated.",
+        table,
+    )
+    return 0
 
 
 def _coerce_rows_list(table: str, raw_rows: list[dict]) -> list[dict]:
@@ -366,135 +361,23 @@ def _write_rows_to_local(table: str, rows: list[dict], local_rel: str) -> int:
     return len(rows)
 
 
-def _pull_single_table_athena(table: str, profile: str, local_rel: str) -> int:
-    """Athena fallback: query the _current view and write the local JSONL file.
-
-    This is the escape-hatch path (CD.8/CD.15). Called only when the DuckDB
-    reader fails or is unavailable.
-    """
-    if not check_sso(profile):
-        logger.warning("sync_ops._pull_single_table_athena: SSO credentials not available for %s", table)
-        return 0
-
-    view = _TABLE_TO_VIEW.get(table)
-    if not view:
-        logger.warning("sync_ops._pull_single_table_athena: unknown table %r", table)
-        return 0
-
-    try:
-        import boto3 as _boto3  # noqa: PLC0415
-
-        session = _boto3.Session(profile_name=profile)
-        athena = session.client("athena", region_name="eu-west-2")
-
-        query = f"SELECT * FROM {_DATABASE}.{view}"
-        response = athena.start_query_execution(QueryString=query, WorkGroup=_WORKGROUP)
-        execution_id = response["QueryExecutionId"]
-
-        for _ in range(60):
-            time.sleep(2)
-            status_resp = athena.get_query_execution(QueryExecutionId=execution_id)
-            state = status_resp["QueryExecution"]["Status"]["State"]
-            if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-                break
-
-        if state != "SUCCEEDED":
-            reason = status_resp["QueryExecution"]["Status"].get("StateChangeReason", "unknown")
-            logger.warning("sync_ops._pull_single_table_athena: query for %s ended with state %s: %s", table, state, reason)
-            return 0
-
-        rows: list[dict] = []
-        rejected_count = 0
-        paginator = athena.get_paginator("get_query_results")
-        header: list[str] = []
-        is_first_page = True
-
-        for page in paginator.paginate(QueryExecutionId=execution_id):
-            page_rows = page.get("ResultSet", {}).get("Rows", [])
-            for row_index, raw_row in enumerate(page_rows):
-                data = [col.get("VarCharValue", "") for col in raw_row.get("Data", [])]
-                if is_first_page and row_index == 0:
-                    header = data
-                    is_first_page = False
-                    continue
-                if not header:
-                    continue
-                row: dict = dict(zip(header, data))
-                row.pop("_rn", None)
-                row.pop("row_num", None)
-                if table == "ops_recommendations":
-                    row = _coerce_ops_rec_row(row)  # type: ignore[assignment]
-                    if row is None:
-                        rejected_count += 1
-                        continue
-                    missing = [f for f in _REQUIRED_REC_FIELDS if not row.get(f) or not str(row[f]).strip()]
-                    if missing:
-                        _write_sync_reject(row, f"missing/empty required fields: {missing}")
-                        rejected_count += 1
-                        continue
-                elif table == "ops_priority_queue":
-                    row = _coerce_ops_priority_queue_row(row)
-                elif table == "ops_decisions":
-                    row = _coerce_ops_decisions_row(row)
-                elif table == "ops_session_log":
-                    row = _coerce_ops_session_log_row(row)
-                rows.append(row)
-
-        if rejected_count:
-            logger.warning(
-                "sync_ops._pull_single_table_athena: rejected %d invalid rows for %s (see %s)",
-                rejected_count,
-                table,
-                _SYNC_REJECTS_LOG,
-            )
-        return _write_rows_to_local(table, rows, local_rel)
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("sync_ops._pull_single_table_athena: failed for %s: %s", table, exc)
-        return 0
-
-
 def _rebuild_local_cache(profile: str = _SSO_PROFILE) -> dict[str, int]:
     """Read current-state and overwrite local JSONL files with fresh data.
 
-    DESTRUCTIVE: overwrites local JSONL files with warehouse state.
-    ops_recommendations: DuckLake reader (no Athena fallback, Decision 81 cl.7).
-    Other tables: DuckDBIcebergReader first, Athena fallback (CD.8/CD.15).
+    DESTRUCTIVE: overwrites local JSONL files with warehouse state. Every migrated
+    table pulls from the DuckLake reader; there is no Athena fallback (Decision 84 I-1).
 
     Returns:
         Dict mapping table name to number of rows pulled.
     """
     counts: dict[str, int] = {}
-
-    # ops_recommendations is excluded from _TABLE_TO_VIEW (DuckLake closed boundary).
-    # Pull it via the DuckLake reader path in _pull_single_table.
-    recs_pulled = _pull_single_table("ops_recommendations", profile=profile)
-    counts["ops_recommendations"] = recs_pulled
-
-    for table in _TABLE_TO_VIEW:
-        local_rel = _TABLE_TO_LOCAL.get(table)
-        if not local_rel:
-            continue
-
-        reader_rows = _pull_via_reader(table)
-        if reader_rows is not None:
-            rows = _coerce_rows_list(table, reader_rows)
-            counts[table] = _write_rows_to_local(table, rows, local_rel)
-            logger.info("sync_ops._rebuild_local_cache: pulled %d rows for %s", counts[table], table)
-            continue
-
-        # Athena fallback (CD.8/CD.15 escape hatch)
-        logger.info("sync_ops._rebuild_local_cache: reader failed for %s, using Athena fallback", table)
-        if not check_sso(profile):
-            logger.warning("sync_ops._rebuild_local_cache: SSO credentials not available for Athena fallback on %s", table)
-            continue
-        counts[table] = _pull_single_table_athena(table, profile, local_rel)
-
+    for table in _TABLE_TO_LOCAL:
+        counts[table] = _pull_single_table(table, profile=profile)
     return counts
 
 
 def sync(profile: str = _SSO_PROFILE) -> dict[str, dict[str, int]]:
-    """Drain outbox then rebuild local cache from Iceberg (DuckDB reader, Athena fallback).
+    """Drain the legacy staging outbox then rebuild the local cache from the DuckLake reader.
 
     Drain runs first so any locally-queued entries reach S3 before pulling,
     ensuring the pulled snapshot includes recently-drained data.
@@ -529,7 +412,7 @@ def outbox_summary() -> dict[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sync ops Iceberg tables to local JSONL cache")
+    parser = argparse.ArgumentParser(description="Sync ops tables from the DuckLake reader to local JSONL cache")
     parser.add_argument("command", choices=["sync"], help="Subcommand to run")
     parser.add_argument("--profile", default=_SSO_PROFILE, help=f"AWS SSO profile (default: {_SSO_PROFILE})")
     args = parser.parse_args()

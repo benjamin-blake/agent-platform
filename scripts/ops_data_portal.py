@@ -5,9 +5,10 @@ All writes to ops_recommendations and ops_decisions MUST go through this
 module. Direct appends to logs/.recommendations-log.jsonl are forbidden and
 caught by validate.py.
 
-Offline mode (DynamoDB unreachable): recommendations are queued to
-logs/.ops-outbox/ops_recommendations_pending/ and drained by drain_pending()
-on the next session-close postflight run.
+Failure mode (Decision 84 I-4): a write that cannot complete fails LOUDLY at
+the call site -- there is no offline outbox. Entity ids (rec-NNN) are allocated
+by the ducklake_writer atomically with the insert (I-2); decision numbering
+authority is DECISIONS.md (the caller supplies decision_id).
 
 Usage:
     from scripts.ops_data_portal import file_rec, update_rec
@@ -41,18 +42,12 @@ from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.acceptance_lint import lint_acceptance_command
 from scripts.executor.jsonl_store import _VALID_STATUSES, DECISIONS_JSONL, RECS_JSONL, Decision, Recommendation
 from scripts.executor.rec_write_guidance import validate_source
-from scripts.ops_writer import OpsWriter
-from scripts.sync_recommendations import next_id as _next_id
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_PENDING_OUTBOX = _REPO_ROOT / "logs" / ".ops-outbox" / "ops_recommendations_pending"
-_DECISIONS_PENDING_OUTBOX = _REPO_ROOT / "logs" / ".ops-outbox" / "ops_decisions_pending"
 _SSO_PROFILE = "agent_platform"
 
-_ATHENA_DATABASE = "agent_platform"
-_ATHENA_WORKGROUP = "agent-platform-production"
 _AWS_REGION = "eu-west-2"
 
 _EFFORT_SCALE: dict[str, float] = {"XS": 0.1, "S": 0.5, "M": 1.0, "L": 3.0, "XL": 5.0}
@@ -62,13 +57,11 @@ _OPS_YAML_PATH = _REPO_ROOT / "config" / "agent" / "data_quality" / "ops.yaml"
 _capabilities_cache: Optional[dict] = None
 _write_time_validators_cache: dict[str, list] = {}
 
-# --- Storage-backend transport flag (T2.19 / Decision 81) -----------------------------------------
+# --- DuckLake closed-boundary transport (T2.19 / Decision 81; sole backend per Decision 84 I-1) ----
 # The Single-Portal caller surface (file_rec/update_rec/file_decision/update_decision/sync) is
-# unchanged; ONLY the transport underneath swaps. `iceberg` = OpsWriter()/Athena (legacy, rollback
-# target); `ducklake` = the closed writer/reader Function-URL boundary.
-# Default is `ducklake` (T2.19 cutover signed off 2026-06-09); set OPS_STORAGE_BACKEND=iceberg to roll back.
-_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
-_DEFAULT_OPS_STORAGE_BACKEND = "ducklake"
+# unchanged; the transport underneath is the closed writer/reader Function-URL boundary. The
+# OPS_STORAGE_BACKEND rollback flag was retired by Decision 84 (the frozen Iceberg copy stopped
+# being a coherent rollback target the day writes moved to DuckLake).
 _DUCKLAKE_WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 _DUCKLAKE_WRITER_FUNCTION_NAME = "agent-platform-ducklake-writer"
 _AWS_LAMBDA_SERVICE = "lambda"
@@ -78,10 +71,15 @@ _DUCKLAKE_WRITER_SSM_PATH = "/agent-platform/ducklake/writer_url"
 # Portal table -> DuckLake ops_* table (the writer/reader select schema by this name).
 _PORTAL_TABLE_NAMES = ("ops_recommendations", "ops_decisions")
 
+# DECISIONS.md columns carried by the backfill ETL. Excludes id + decision_id (passed via
+# _migration_int_id) and the timestamps (portal/runtime stamp them; the store is recreatable).
+_DECISION_BACKFILL_COLS = ("title", "status", "problem", "decision_text", "context", "decided_date", "related_decisions")
 
-def _ops_backend() -> str:
-    """Return the active storage backend ('iceberg' | 'ducklake'); default ducklake (T2.19 cutover)."""
-    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or _DEFAULT_OPS_STORAGE_BACKEND).strip().lower()
+# Writer 5xx statuses retried once the request is idempotent (Neon scale-to-zero cold resume --
+# same rationale as the reader's transient retry, src/common/iceberg_reader.py).
+_WRITER_TRANSIENT_STATUS = (502, 503, 504)
+_WRITER_MAX_ATTEMPTS = 3
+_WRITER_RETRY_BACKOFF_S = (2.0, 5.0)
 
 
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
@@ -127,7 +125,7 @@ def _resolve_writer_url(profile: Optional[str] = None) -> str:
         f"{_DUCKLAKE_WRITER_URL_ENV} not set, SSM {_DUCKLAKE_WRITER_SSM_PATH!r} unavailable, "
         "terraform output 'ducklake_writer_function_url' unavailable, and "
         "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake writer "
-        "(OPS_STORAGE_BACKEND=ducklake)."
+        "(Decision 84: DuckLake is the sole ops backend)."
     )
 
 
@@ -145,12 +143,25 @@ def _project_ops_record(table: str, record: dict) -> dict:
     return {k: v for k, v in record.items() if k in inputs}
 
 
-def _ducklake_write(table: str, record: dict, *, action: str, profile: Optional[str] = None) -> dict:
+def _ducklake_write(
+    table: str,
+    record: dict,
+    *,
+    action: str,
+    profile: Optional[str] = None,
+    idempotency_ulid: Optional[str] = None,
+) -> dict:
     """Invoke the ducklake_writer Function URL (SigV4) for a production ops write. Loud-fail on error.
 
-    action is 'write_ops' (file) or 'update_ops' (update; the writer enforces the in-tx referential
-    existence check). Maps the writer's loud-fail status codes back to portal exceptions.
+    action is 'file_ops' (create; the writer allocates the entity id and returns it as `key`),
+    'write_ops' (caller-keyed upsert: ETL backfill + test- probes), or 'update_ops' (update; the
+    writer enforces the in-tx referential existence check). `idempotency_ulid` makes file_ops
+    replay-safe, which is what licenses the transient-5xx retry below (Neon cold-resume): a retried
+    request returns the originally allocated id instead of double-filing. Maps the writer's
+    loud-fail status codes back to portal exceptions.
     """
+    import time as _time  # noqa: PLC0415
+
     import boto3  # noqa: PLC0415
     import requests  # noqa: PLC0415
     from botocore.auth import SigV4Auth  # noqa: PLC0415
@@ -158,21 +169,60 @@ def _ducklake_write(table: str, record: dict, *, action: str, profile: Optional[
 
     url = _resolve_writer_url(profile=profile)
     payload = {"action": action, "table": table, "record": _project_ops_record(table, record)}
+    if idempotency_ulid is not None:
+        payload["idempotency_ulid"] = idempotency_ulid
     body = json.dumps(payload)
     headers = {"Content-Type": "application/json"}
     session = boto3.Session(profile_name=resolve_aws_profile(profile, default=_SSO_PROFILE))
     creds = session.get_credentials().get_frozen_credentials()
-    aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
-    SigV4Auth(creds, _AWS_LAMBDA_SERVICE, _AWS_REGION).add_auth(aws_req)
-    resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
-    if resp.status_code == 200:
-        return resp.json()
-    detail = resp.text[:400]
-    if resp.status_code == 409:
-        raise RuntimeError(f"ducklake_writer referential failure ({action} {table}): {detail}")
-    if resp.status_code == 422:
-        raise ValueError(f"ducklake_writer schema-gate rejection ({action} {table}): {detail}")
-    raise RuntimeError(f"ducklake_writer {action} {table} failed (HTTP {resp.status_code}): {detail}")
+
+    retryable = idempotency_ulid is not None or action == "update_ops"
+    last_status: Optional[int] = None
+    last_text = ""
+    for attempt in range(_WRITER_MAX_ATTEMPTS):
+        # Re-sign per attempt: SigV4 carries a timestamp.
+        aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+        SigV4Auth(creds, _AWS_LAMBDA_SERVICE, _AWS_REGION).add_auth(aws_req)
+        try:
+            resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+        except requests.RequestException as exc:
+            # The response-lost case the idempotency key exists FOR: the write may have committed.
+            # Retrying with the SAME body/ULID makes the writer replay-check return the original
+            # allocation instead of double-filing.
+            last_status, last_text = None, f"{type(exc).__name__}: {exc}"
+            if retryable and attempt < _WRITER_MAX_ATTEMPTS - 1:
+                logger.warning(
+                    "ducklake_writer %s connection failure (attempt %d/%d): %s -- retrying same ULID",
+                    action,
+                    attempt + 1,
+                    _WRITER_MAX_ATTEMPTS,
+                    exc,
+                )
+                _time.sleep(_WRITER_RETRY_BACKOFF_S[attempt])
+                continue
+            raise RuntimeError(f"ducklake_writer {action} {table} failed ({last_text})") from exc
+        if resp.status_code == 200:
+            return resp.json()
+        last_status, last_text = resp.status_code, resp.text[:400]
+        if resp.status_code == 409:
+            raise RuntimeError(f"ducklake_writer referential failure ({action} {table}): {last_text}")
+        if resp.status_code == 422:
+            raise ValueError(f"ducklake_writer schema-gate rejection ({action} {table}): {last_text}")
+        if resp.status_code == 503 and '"occ_exhausted"' in last_text:
+            # OCC budget exhaustion is stop-and-RCA (Decision 55), never blindly re-driven.
+            raise RuntimeError(f"ducklake_writer OCC budget exhausted ({action} {table}): {last_text}")
+        if retryable and resp.status_code in _WRITER_TRANSIENT_STATUS and attempt < _WRITER_MAX_ATTEMPTS - 1:
+            logger.warning(
+                "ducklake_writer %s HTTP %d (attempt %d/%d) -- retrying after cold-resume backoff",
+                action,
+                resp.status_code,
+                attempt + 1,
+                _WRITER_MAX_ATTEMPTS,
+            )
+            _time.sleep(_WRITER_RETRY_BACKOFF_S[attempt])
+            continue
+        break
+    raise RuntimeError(f"ducklake_writer {action} {table} failed (HTTP {last_status}): {last_text}")
 
 
 def _compute_risk_score(file_path: str, effort: str) -> float:
@@ -290,7 +340,7 @@ def _check_not_null(v: object, col: str) -> None:
 def _derive_computed_fields(fields: dict) -> None:
     """Derive and set risk, automatable, and created_timestamp in-place.
 
-    Called from both file_rec() and drain_pending() to ensure a single shared
+    Called from file_rec() to ensure a single shared
     derivation path -- prevents the dual-maintenance drift that produced rec-001
     (automatable=NULL) and rec-742 (created_timestamp midnight fallback).
     """
@@ -382,23 +432,21 @@ def file_rec(
     _skip_sync: bool = False,
     _migration_mode: bool = False,
 ) -> str:
-    """Allocate a new recommendation ID and stage the record to OpsWriter.
+    """File a new recommendation; the ducklake_writer allocates its ID atomically with the insert.
 
-    On success returns the allocated ID (e.g. 'rec-522').
-    If DynamoDB is unreachable (RuntimeError), the record is queued to the
-    pending outbox and 'pending-<uuid>' is returned. Validation is deferred
-    until drain_pending() allocates a real ID.
+    On success returns the allocated ID (e.g. 'rec-2171'). On any failure the
+    call raises LOUDLY (Decision 84 I-4) -- there is no offline outbox; the
+    transient-5xx retry inside _ducklake_write (idempotent via the per-call
+    ULID) is the only retry.
 
     Args:
         fields: Rec fields (MUST include at minimum: title, file, status,
                 source, effort, priority, context, acceptance, risk).
         profile: Optional AWS profile override (uses AWS_PROFILE env var by default).
-        _migration_int_id: PRIVATE. Used only by the Phase C migration script to
-            bypass the DynamoDB allocator and preserve historical integer IDs.
-            When set, the id is formed as f"rec-{n:03d}" (same zero-padding as
-            next_id) so dependency / priority-queue FKs to padded ids still match.
-            Threaded through the offline outbox + drain_pending so a DynamoDB blip
-            cannot silently renumber a migrated rec. Must not be used elsewhere.
+        _migration_int_id: PRIVATE. Backfill-only: preserves a historical integer ID
+            via a caller-keyed write_ops upsert instead of writer allocation. The id
+            is formed as f"rec-{n:03d}" (zero-padded under 1000) so dependency /
+            priority-queue FKs to padded ids still match. Must not be used elsewhere.
         _skip_sync: PRIVATE. When True, suppress the per-row _sync_table() flush so
             a bulk import can call sync() exactly once at the end. Migration-only.
         _migration_mode: PRIVATE. When True, bypass the write-time CONTENT-quality
@@ -409,7 +457,7 @@ def file_rec(
             Recommendation schema (model_validate) remain enforced. Migration-only.
 
     Returns:
-        Allocated ID string ('rec-NNN') or 'pending-<uuid>' when offline.
+        Allocated ID string ('rec-NNN'). Raises on failure (no offline mode).
 
     Raises:
         ValueError: If any required non-empty field is absent or blank.
@@ -438,34 +486,35 @@ def file_rec(
         if not lint_ok:
             raise ValueError(lint_msg)
 
-    try:
-        if _migration_int_id is not None:
-            rec_id = f"rec-{_migration_int_id:03d}"
-        else:
-            rec_id = _next_id("recommendations", profile=profile)
-    except Exception as exc:
-        # Reached only when _next_id raises -- i.e. NON-migration writes (migration rows set
-        # _migration_int_id, which bypasses _next_id, so they never reach here). Migration id
-        # preservation under S3 flakiness is handled by OpsWriter's own outbox, which stages the
-        # record with its already-resolved id. drain_pending still honours a migration marker if
-        # one is present in a payload, but file_rec does not produce such a payload.
-        logger.warning("[PORTAL] DynamoDB unreachable or credentials missing, queuing rec to pending outbox: %s", exc)
-        pending_id = str(uuid.uuid4())
-        _PENDING_OUTBOX.mkdir(parents=True, exist_ok=True)
-        pending_file = _PENDING_OUTBOX / f"{pending_id}.json"
-        pending_fields = dict(fields)
-        pending_fields.pop("id", None)  # no ID yet
-        pending_file.write_text(json.dumps(pending_fields), encoding="utf-8")
-        return f"pending-{pending_id}"
-
     merged = dict(fields)
-    merged["id"] = str(rec_id)
+    merged.pop("id", None)
     merged.setdefault("date", date.today().isoformat())
 
-    Recommendation.model_validate(merged)  # raises ValidationError on schema failure
+    if _migration_int_id is not None:
+        # Backfill path: the historical id is preserved via a caller-keyed write_ops upsert.
+        rec_id = f"rec-{_migration_int_id:03d}"
+        merged["id"] = rec_id
+        Recommendation.model_validate(merged)
+        _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
+    else:
+        # Fail fast client-side with a placeholder id; the writer's schema gate is authoritative.
+        Recommendation.model_validate({**merged, "id": "rec-0"})
+        # The writer allocates rec-NNN atomically with the insert (Decision 84 I-2). The
+        # idempotency ULID makes a response-lost retry return the original allocation.
+        from src.common.ducklake_runtime import mint_write_identity  # noqa: PLC0415
 
-    # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
-    _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
+        response = _ducklake_write(
+            "ops_recommendations",
+            merged,
+            action="file_ops",
+            profile=profile,
+            idempotency_ulid=mint_write_identity().ulid,
+        )
+        rec_id = response.get("key", "")
+        if not rec_id:
+            raise RuntimeError(f"ducklake_writer file_ops returned no allocated key: {response}")
+        merged["id"] = str(rec_id)
+
     _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Filed %s: %s", rec_id, merged.get("title", ""))
     if not _skip_sync:
@@ -474,14 +523,12 @@ def file_rec(
 
 
 def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Fetch a single ops_recommendations record by id from the warehouse reader.
+    """Fetch a single ops_recommendations record by id via the rec_by_id read verb.
 
-    ducklake backend (default): reads via DuckLakeReader Function URL (closed boundary,
-    Decision 81 cl.7 -- no Athena fallback). iceberg backend (rollback): reads via
-    DuckDBIcebergReader with predicate pushdown (row_filter="id = '<rec_id>'").
-
-    Decision 69: raises RuntimeError if the reader is unreachable. Never falls back
-    to the local JSONL cache.
+    Closed boundary (Decision 81 cl.7 / Decision 84 I-3): the read transits the
+    ducklake_reader named-verb surface; no SQL leaves the client. Decision 69:
+    raises RuntimeError if the reader is unreachable. Never falls back to the
+    local JSONL cache.
 
     Returns the record dict (coerced and sanitised) or None if not found.
     """
@@ -489,56 +536,24 @@ def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Option
         raise ValueError(f"_fetch_rec_from_reader: invalid rec_id: {rec_id!r}")
 
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    # -- DuckLake closed-boundary path (no Athena fallback -- OQ.7) --
-    if _ops_backend() == "ducklake":
-        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
-
-        rows = make_reader().current_state("ops_recommendations", row_filter=f"id = '{rec_id}'")
-        if not rows:
-            return None
-        coerced = _coerce_ops_rec_row(dict(rows[0]))
-        return _sanitize_athena_record(coerced) if coerced is not None else None
-
-    # -- DuckDB-on-Iceberg reader path (rollback backend; Athena view dropped at T2.7 -- reader-only) --
-    try:
-        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
-
-        reader = DuckDBIcebergReader()
-        rows = reader.current_state(
-            "ops_recommendations",
-            row_filter=f"id = '{rec_id}'",
-        )
-        if rows:
-            coerced = _coerce_ops_rec_row(dict(rows[0]))
-            if coerced is None:
-                return None
-            return _sanitize_athena_record(coerced)
+    rows = make_reader(profile=profile).named("rec_by_id", id=rec_id)
+    if not rows:
         return None
-    except Exception as reader_exc:
-        raise RuntimeError(
-            f"ops_data_portal._fetch_rec_from_reader: Iceberg reader failed for {rec_id} "
-            f"(Athena fallback removed -- view dropped at T2.7): {reader_exc}"
-        ) from reader_exc
+    coerced = _coerce_ops_rec_row(dict(rows[0]))
+    return _sanitize_athena_record(coerced) if coerced is not None else None
 
 
 def _sync_table(table: str) -> None:
-    """Refresh the local read-cache for one ops table from the active backend.
+    """Refresh the local read-cache for one ops table from the DuckLake reader.
 
-    DuckLake: the atomic catalog commit means there is no compaction/view-refresh step (Decision 81
-    cl.4) -- the write already landed in `current`, so a cache-pull from the DuckLake reader suffices.
-    Iceberg (rollback): compact + refresh the view + pull (legacy). Raises on infrastructure failure.
+    The atomic catalog commit means there is no compaction/view-refresh step (Decision 81 cl.4) --
+    the write already landed in `current`, so a cache-pull from the reader suffices for every
+    migrated table (Decision 84 I-1). Raises on infrastructure failure.
     """
     from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
 
-    # Only ops_recommendations follows the DuckLake backend this slice; decisions + other tables are
-    # DEFERRED and always rebuild from Iceberg/Athena (compact + refresh + pull).
-    if table == "ops_recommendations" and _ops_backend() == "ducklake":
-        _pull_single_table(table)
-        return
-
-    OpsWriter().compact(table)
-    OpsWriter()._refresh_view(table)
     _pull_single_table(table)
 
 
@@ -602,158 +617,76 @@ def file_decision(
     _migration_int_id: Optional[int] = None,
     _skip_sync: bool = False,
 ) -> str:
-    """Allocate a new decision ID and stage the record to OpsWriter.
+    """File a decision row for a DECISIONS.md entry (numbering authority: DECISIONS.md).
 
-    Args:
-        fields: Decision fields (title, status at minimum).
-        profile: Optional AWS profile override.
-        _migration_int_id: PRIVATE. Used only by the Phase C migration script to
-            bypass the DynamoDB allocator and preserve historical integer IDs.
-            Must not be used by any other caller.
-        _skip_sync: PRIVATE. When True, suppress the per-row _sync_table() flush so
-            a bulk import can call sync() exactly once at the end. Migration-only.
+    Decision 84 I-2 exception: decision numbers are human-assigned in DECISIONS.md before
+    any write, so the caller supplies the integer number via fields['decision_id'] (the
+    backfill path passes _migration_int_id). The id is formed as dec-{n:03d}. The write is
+    a caller-keyed write_ops upsert, so re-running the backfill refreshes the same id
+    rather than duplicating it.
 
     Returns:
-        Allocated decision ID string (e.g. 'dec-073'), or 'pending-<uuid>' when
-        DynamoDB is unreachable and the record is queued to the outbox.
+        The decision ID string (e.g. 'dec-084'). Raises LOUDLY on any failure (no outbox).
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     merged = dict(fields)
 
-    try:
-        if _migration_int_id is not None:
-            n = _migration_int_id
-        else:
-            n = int(_next_id("decisions", profile=profile))  # type: ignore[arg-type]
+    n = _migration_int_id if _migration_int_id is not None else merged.get("decision_id")
+    if not isinstance(n, int) or n <= 0:
+        raise ValueError(
+            "file_decision requires the DECISIONS.md-assigned integer decision number "
+            "(fields['decision_id'] or _migration_int_id): decisions are authored in "
+            "DECISIONS.md FIRST (Decision 84 I-2 exception)"
+        )
 
-        dec_id = f"dec-{n:03d}"
-        merged["id"] = dec_id
-        merged["decision_id"] = n
-        merged.setdefault("created_timestamp", now_iso)
-        merged["last_updated_timestamp"] = now_iso
+    dec_id = f"dec-{n:03d}"
+    merged["id"] = dec_id
+    merged["decision_id"] = n
+    merged.setdefault("created_timestamp", now_iso)
+    merged["last_updated_timestamp"] = now_iso
 
-        for _col, _validator in _load_write_time_validators("ops_decisions"):
-            _validator(merged.get(_col), _col)
+    for _col, _validator in _load_write_time_validators("ops_decisions"):
+        _validator(merged.get(_col), _col)
 
-        Decision.model_validate(merged)
+    Decision.model_validate(merged)
 
-        # Decisions are DEFERRED from the recs-first DuckLake cutover (their source of truth is
-        # DECISIONS.md, so they rebuild rather than migrate). They STAY on the Iceberg/OpsWriter path
-        # regardless of OPS_STORAGE_BACKEND until their own migration.
-        OpsWriter().write("ops_decisions", merged)
-        _append_to_local_jsonl(DECISIONS_JSONL, merged)
-        logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
-        if not _skip_sync:
-            _sync_table("ops_decisions")
-        return dec_id
-
-    except RuntimeError as exc:
-        logger.warning("[PORTAL] DynamoDB unreachable for decision, queuing to outbox: %s", exc)
-        pending_id = str(uuid.uuid4())
-        _DECISIONS_PENDING_OUTBOX.mkdir(parents=True, exist_ok=True)
-        payload = dict(fields)
-        if _migration_int_id is not None:
-            payload["_migration_int_id"] = _migration_int_id
-        (_DECISIONS_PENDING_OUTBOX / f"{pending_id}.json").write_text(json.dumps(payload), encoding="utf-8")
-        return f"pending-{pending_id}"
+    _ducklake_write("ops_decisions", merged, action="write_ops", profile=profile)
+    _append_to_local_jsonl(DECISIONS_JSONL, merged)
+    logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
+    if not _skip_sync:
+        _sync_table("ops_decisions")
+    return dec_id
 
 
-def _fetch_decision_from_athena(decision_id: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Fetch a single ops_decisions record by id from the warehouse.
+def _fetch_decision_from_reader(decision_id: str, profile: Optional[str] = None) -> Optional[dict]:
+    """Fetch a single ops_decisions record by id via the decision_by_id read verb.
 
-    Reads the current-state snapshot via DuckDBIcebergReader with predicate
-    pushdown (row_filter="id = '<decision_id>'"), falling back to Athena on
-    reader failure.
-
-    Decision 69: raises RuntimeError if the warehouse is unreachable. Never
-    falls back to the local JSONL cache.
-
-    Returns the record dict or None if not found.
+    Closed boundary (Decision 84 I-1/I-3): decisions read from DuckLake like every migrated
+    ops table; the Athena fallback retired with the estate. Decision 69: raises on reader
+    failure; never returns cache. Returns the coerced record dict or None if not found.
     """
-    from scripts.sync_ops import _coerce_ops_decisions_row  # noqa: PLC0415
-
     if not re.fullmatch(r"dec-\d+", decision_id):
-        raise ValueError(f"_fetch_decision_from_athena: invalid decision_id: {decision_id!r}")
+        raise ValueError(f"_fetch_decision_from_reader: invalid decision_id: {decision_id!r}")
 
-    # Decisions are DEFERRED from the DuckLake cutover -- they read from Iceberg/Athena regardless of
-    # OPS_STORAGE_BACKEND (no DuckLake closed-boundary path for decisions this slice).
-    # -- DuckDB-on-Iceberg reader path (Athena fallback retained) --
-    try:
-        from src.common.iceberg_reader import DuckDBIcebergReader  # noqa: PLC0415
+    from scripts.sync_ops import _coerce_ops_decisions_row  # noqa: PLC0415
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        reader = DuckDBIcebergReader()
-        rows = reader.current_state(
-            "ops_decisions",
-            row_filter=f"id = '{decision_id}'",
-        )
-        if rows:
-            rec = dict(rows[0])
-            rec.pop("row_num", None)
-            return _sanitize_athena_record(_coerce_ops_decisions_row(rec))
+    rows = make_reader(profile=profile).named("decision_by_id", id=decision_id)
+    if not rows:
         return None
-    except Exception as reader_exc:  # noqa: BLE001
-        logger.warning(
-            "ops_data_portal._fetch_decision_from_athena: reader failed for %s, using Athena fallback: %s",
-            decision_id,
-            reader_exc,
-        )
+    rec = _coerce_ops_decisions_row(dict(rows[0]))
+    return _sanitize_athena_record(rec) if rec is not None else None
 
-    # -- Athena fallback (Decision 69: must raise on unreachable; never return cache) --
-    import time  # noqa: PLC0415
 
-    import boto3 as _boto3  # noqa: PLC0415
-
-    effective_profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
-    try:
-        session = _boto3.Session(profile_name=effective_profile)
-        athena = session.client("athena", region_name=_AWS_REGION)
-        eid = athena.start_query_execution(
-            QueryString=(f"SELECT * FROM {_ATHENA_DATABASE}.ops_decisions_current WHERE id = '{decision_id}' LIMIT 1"),
-            WorkGroup=_ATHENA_WORKGROUP,
-        )["QueryExecutionId"]
-    except Exception as exc:
-        raise RuntimeError(f"ops_data_portal._fetch_decision_from_athena: warehouse unreachable: {exc}") from exc
-
-    deadline = time.time() + 60
-    state = "RUNNING"
-    status: dict = {}
-    while time.time() < deadline:
-        resp = athena.get_query_execution(QueryExecutionId=eid)
-        status = resp["QueryExecution"]["Status"]
-        state = status["State"]
-        if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-            break
-        time.sleep(2)
-    else:
-        raise RuntimeError(f"ops_data_portal._fetch_decision_from_athena: query timed out for {decision_id}")
-
-    if state != "SUCCEEDED":
-        raise RuntimeError(
-            f"ops_data_portal._fetch_decision_from_athena: query {state} for {decision_id}: "
-            f"{status.get('StateChangeReason', 'unknown')}"
-        )
-
-    paginator = athena.get_paginator("get_query_results")
-    header: list[str] = []
-    for page in paginator.paginate(QueryExecutionId=eid):
-        for i, row in enumerate(page.get("ResultSet", {}).get("Rows", [])):
-            data = [col.get("VarCharValue", "") for col in row.get("Data", [])]
-            if i == 0 and not header:
-                header = data
-                continue
-            if not header:
-                continue
-            rec = dict(zip(header, data))
-            rec.pop("row_num", None)
-            return _sanitize_athena_record(_coerce_ops_decisions_row(rec))
-    return None
+# Back-compat alias: read-engine.yaml's single_portal_invariant names the historical symbol.
+_fetch_decision_from_athena = _fetch_decision_from_reader
 
 
 def update_decision(decision_id: str, updates: dict, profile: Optional[str] = None) -> bool:
-    """Merge update fields into an existing decision and stage via OpsWriter.
+    """Merge update fields into an existing decision via the DuckLake writer.
 
-    Reads the current record from Athena ops_decisions_current (requires SSO
-    connectivity). Merges updates, validates, and stages via OpsWriter.
+    Reads the current record through the decision_by_id verb, merges updates,
+    validates, and writes via update_ops (in-transaction referential check).
 
     Args:
         decision_id: Decision ID string to update (e.g. 'dec-072').
@@ -767,7 +700,7 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
         RuntimeError: If Athena is unreachable.
         ValidationError: If the merged record fails schema validation.
     """
-    existing = _fetch_decision_from_athena(decision_id, profile=profile)
+    existing = _fetch_decision_from_reader(decision_id, profile=profile)
     if existing is None:
         raise RuntimeError(
             f"update_decision: {decision_id} does not exist in the current projection -- an absent decision "
@@ -778,213 +711,82 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
 
     Decision.model_validate(merged)
 
-    # Decisions are DEFERRED from the DuckLake cutover -- they STAY on Iceberg/OpsWriter regardless of
-    # OPS_STORAGE_BACKEND until their own migration.
-    OpsWriter().write("ops_decisions", merged)
+    _ducklake_write("ops_decisions", merged, action="update_ops", profile=profile)
     _append_to_local_jsonl(DECISIONS_JSONL, merged)
     logger.info("[PORTAL] Updated %s: %s", decision_id, list(updates.keys()))
     _sync_table("ops_decisions")
     return True
 
 
-def drain_pending_decisions(profile: Optional[str] = None) -> dict:
-    """Drain queued pending decisions by allocating IDs and staging to OpsWriter.
+def backfill_decisions_from_md(profile: Optional[str] = None) -> dict:
+    """ETL DECISIONS.md -> ops_decisions (premise P3: the markdown is the source of truth).
 
-    Scans logs/.ops-outbox/ops_decisions_pending/ for *.json files. For each file:
-    allocates a real ID from DynamoDB (or uses preserved _migration_int_id),
-    validates, writes to OpsWriter, appends to local JSONL, and deletes the file.
-
-    Returns:
-        {"drained": N, "skipped": M}
-    """
-    drained = 0
-    skipped = 0
-
-    if not _DECISIONS_PENDING_OUTBOX.exists():
-        return {"drained": 0, "skipped": 0}
-
-    for pending_file in sorted(_DECISIONS_PENDING_OUTBOX.glob("*.json")):
-        try:
-            fields = json.loads(pending_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("[PORTAL] Cannot read pending decision file %s: %s", pending_file, exc)
-            skipped += 1
-            continue
-
-        migration_int_id = fields.pop("_migration_int_id", None)
-
-        try:
-            result = file_decision(fields, profile=profile, _migration_int_id=migration_int_id)
-            if result.startswith("pending-"):
-                logger.warning("[PORTAL] DynamoDB still unreachable; leaving %s in outbox", pending_file.name)
-                skipped += 1
-                continue
-            pending_file.unlink(missing_ok=True)
-            drained += 1
-            logger.info("[PORTAL] Drained pending decision -> %s", result)
-        except (ValidationError, ValueError, OSError) as exc:
-            logger.warning("[PORTAL] Cannot drain decision %s: %s", pending_file.name, exc)
-            skipped += 1
-
-    return {"drained": drained, "skipped": skipped}
-
-
-def drain_pending(profile: str | None = None) -> dict:
-    """Drain queued pending recommendations by allocating IDs and staging to OpsWriter.
-
-    Scans logs/.ops-outbox/ops_recommendations_pending/ for *.json files.
-    For each file: allocates a real ID from DynamoDB, validates, writes to
-    OpsWriter, appends to local JSONL, and deletes the pending file.
-
-    Postmortem deduplication: if a pending file has source == "executor-postmortem"
-    and an open postmortem for the same failed rec already exists in the local JSONL,
-    the existing record's context is updated with an attempt counter and the
-    pending file is deleted without allocating a new ID.
-
-    If DynamoDB is still unreachable during drain, the file is left for the next
-    drain attempt.
+    Idempotent: each entry is a caller-keyed write_ops upsert on dec-{n:03d}, so re-running
+    refreshes current rows (one SCD2 append per run) instead of duplicating.
 
     Returns:
-        {"drained": N, "skipped": M, "deduped": P}
+        {"written": N, "failed": M, "skipped": K}
     """
-    drained = 0
-    skipped = 0
-    deduped = 0
+    from scripts.decisions_md import parse_decisions_md  # noqa: PLC0415
+    from scripts.sync_ops import _coerce_athena_array  # noqa: PLC0415
 
-    if not _PENDING_OUTBOX.exists():
-        return {"drained": 0, "skipped": 0, "deduped": 0}
-
-    for pending_file in sorted(_PENDING_OUTBOX.glob("*.json")):
+    written = failed = skipped = 0
+    for entry in parse_decisions_md():
         try:
-            fields = json.loads(pending_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("[PORTAL] Cannot read pending file %s: %s", pending_file, exc)
+            n = int(str(entry.get("decision_id", "")).strip())
+        except ValueError:
+            n = 0
+        if n <= 0:
             skipped += 1
             continue
-
-        # Migration markers (preserved through the outbox so a DynamoDB blip cannot
-        # renumber a migrated rec or re-impose content validation on a historical row).
-        migration_int_id = fields.pop("_migration_int_id", None)
-        migration_mode = bool(fields.pop("_migration_mode", False))
-
+        fields = {k: v for k, v in entry.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
+        # Archive entries may carry no status marker; the column is non-nullable, so be honest.
+        fields.setdefault("status", "unspecified")
+        if "related_decisions" in fields:
+            fields["related_decisions"] = _coerce_athena_array(fields["related_decisions"], elem_type=int)
         try:
-            validate_source(fields.get("source", ""))
-        except ValueError as exc:
-            logger.warning("[PORTAL] drain_pending: skipping entry with invalid source -- %s", exc)
-            skipped += 1
-            continue
-
-        if fields.get("source") == "executor-postmortem":
-            m = re.search(r"rec-\d+", fields.get("title", ""))
-            if m:
-                parent_id = m.group(0)
-                existing = find_open_postmortem_for(parent_id)
-                if existing:
-                    try:
-                        now_iso = datetime.now(timezone.utc).isoformat()
-                        ctx = existing.get("context", "")
-                        attempt_count = ctx.count("; attempt ") + 2
-                        update_rec(
-                            existing["id"],
-                            {
-                                "context": ctx + f"; attempt {attempt_count} at {now_iso}",
-                                "last_updated_timestamp": now_iso,
-                            },
-                        )
-                        pending_file.unlink(missing_ok=True)
-                        deduped += 1
-                        logger.info("[PORTAL] Deduped pending postmortem for %s -> updated %s", parent_id, existing["id"])
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("[PORTAL] Deduplication failed for %s: %s", pending_file.name, exc)
-                        skipped += 1
-                    continue
-
-        if migration_int_id is not None:
-            rec_id = f"rec-{int(migration_int_id):03d}"
-        else:
-            try:
-                rec_id = _next_id("recommendations", profile=profile or _SSO_PROFILE)
-            except RuntimeError as exc:
-                logger.warning("[PORTAL] DynamoDB still unreachable during drain, skipping %s: %s", pending_file.name, exc)
-                skipped += 1
-                continue
-
-        try:
-            merged = dict(fields)
-            merged["id"] = str(rec_id)
-            merged.setdefault("date", date.today().isoformat())
-            _derive_computed_fields(merged)
-            if not migration_mode:
-                for _col, _validator in _load_write_time_validators("ops_recommendations"):
-                    _validator(merged.get(_col), _col)
-            Recommendation.model_validate(merged)
-            # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
-            _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
-            _append_to_local_jsonl(RECS_JSONL, merged)
-            pending_file.unlink(missing_ok=True)
-            drained += 1
-            logger.info("[PORTAL] Drained pending rec -> %s", rec_id)
-        except (ValidationError, ValueError, OSError) as exc:
-            logger.warning("[PORTAL] Cannot drain %s: %s", pending_file.name, exc)
-            skipped += 1
-
-    return {"drained": drained, "skipped": skipped, "deduped": deduped}
+            file_decision(fields, profile=profile, _migration_int_id=n, _skip_sync=True)
+            written += 1
+        except Exception as exc:  # noqa: BLE001 -- per-row isolation; the summary surfaces failures
+            logger.warning("[PORTAL] backfill_decisions_from_md: dec-%03d failed: %s", n, exc)
+            failed += 1
+    if written:
+        _sync_table("ops_decisions")
+    return {"written": written, "failed": failed, "skipped": skipped}
 
 
 def sync(tables: Optional[list] = None) -> dict:
-    """Compact Iceberg tables, refresh views, and pull local cache.
-
-    This is the single flush primitive for the ops pipeline. Agents should call
-    this instead of managing drain/compact/refresh/pull steps manually.
+    """Pull the local read-cache fresh from the DuckLake reader (the single flush primitive).
 
     Args:
         tables: Ops table names to sync. Defaults to ops_recommendations,
                 ops_decisions, ops_priority_queue.
 
     Returns:
-        {"compacted": {table: rows}, "pulled": {table: rows}, "views_refreshed": [...]}
+        {"pulled": {table: rows}}
 
     Raises:
-        RuntimeError: If the backend infrastructure is unreachable.
+        RuntimeError: If the reader boundary is unreachable.
     """
     from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
-    from scripts.sync_ops import drain as _drain_outbox  # noqa: PLC0415
 
     ops_tables = tables or ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
-    backend = _ops_backend()
 
-    # Drain the Iceberg outbox first: it buffers offline decisions writes (always Iceberg) and any
-    # pre-cutover recs (the VP10 "drain to Iceberg before backfill" step). Idempotent when empty.
-    _drain_outbox()
-
-    compacted: dict[str, int] = {}
-    pulled: dict[str, int] = {}
-    views_refreshed: list[str] = []
-
-    for table in ops_tables:
-        # ops_recommendations on DuckLake: the atomic catalog commit eliminates compact/view-refresh
-        # (Decision 81 cl.4) -- `current` is already live, so a cache-pull from the reader suffices.
-        if table == "ops_recommendations" and backend == "ducklake":
-            pulled[table] = _pull_single_table(table)
-            continue
-        # Deferred tables (decisions/queue) + recs-on-Iceberg rollback: compact + refresh + pull.
-        compacted[table] = OpsWriter().compact(table)
-        OpsWriter()._refresh_view(table)
-        views_refreshed.append(table)
-        pulled[table] = _pull_single_table(table)
-
-    return {"compacted": compacted, "pulled": pulled, "views_refreshed": views_refreshed}
+    # Every migrated table is a live `current` projection behind the atomic catalog commit
+    # (Decision 84 I-1): a cache pull per table is the whole job -- no drain/compact/view-refresh.
+    pulled: dict[str, int] = {table: _pull_single_table(table) for table in ops_tables}
+    return {"pulled": pulled}
 
 
 def selftest_read(table: str = "ops_recommendations", profile: Optional[str] = None) -> dict:
     """Read a sample row from *table* via the ACTIVE backend's reader (VP14 rollback rehearsal).
 
-    Proves the flag-selected read path serves rows on whichever backend OPS_STORAGE_BACKEND names.
+    Proves the DuckLake read path serves rows (the boundary is the sole backend, Decision 84).
     Returns {"backend": ..., "table": ..., "row_count": ..., "sample_id": ...}.
     """
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    backend = _ops_backend()
+    backend = "ducklake"
     rows = make_reader(profile=profile).current_state(table) or []
     sample_id = (rows[0].get("id") if rows else None) if rows else None
     return {"backend": backend, "table": table, "row_count": len(rows), "sample_id": sample_id}
@@ -999,7 +801,7 @@ def selftest_roundtrip(profile: Optional[str] = None) -> dict:
     """
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    backend = _ops_backend()
+    backend = "ducklake"
     probe_id = f"test-roundtrip-{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     record = {
@@ -1129,204 +931,55 @@ def find_open_postmortem_for(failed_rec_id: str) -> Optional[dict]:
     return None
 
 
-def _delete_postmortems_from_iceberg(failed_rec_id: str, profile: Optional[str] = None) -> int:
-    """Delete executor postmortem rows for failed_rec_id from the Iceberg ops_recommendations table.
+def purge_postmortems_for(failed_rec_id: str, dry_run: bool = False, profile: Optional[str] = None) -> dict:
+    """Supersede all executor postmortems for failed_rec_id and decline the rec itself.
 
-    Runs an Athena DML DELETE and polls until the query completes.
-    Returns 0 on failure or when boto3 is unavailable; returns -1 on success
-    (Athena DML does not report affected-row counts).
+    SCD2 deletion model (Decision 84): postmortems become status=superseded via update_rec --
+    no DML DELETE, no local-JSONL rewrite. The cache refresh after each update reflects the
+    new current rows; history retains the full audit trail.
 
-    Raises:
-        ValueError: If failed_rec_id does not match the rec-\\d+ pattern.
+    Returns:
+        {"matched": [rec ids], "superseded": N}
     """
     if not re.fullmatch(r"rec-\d+", failed_rec_id):
         raise ValueError(f"Invalid rec ID for purge: {failed_rec_id!r}. Must match rec-\\d+.")
 
-    try:
-        import boto3  # noqa: PLC0415
-    except ImportError:
-        logger.warning("[PURGE] boto3 not available; skipping Iceberg delete for %s", failed_rec_id)
-        return 0
-
-    _profile = resolve_aws_profile(profile, default=_SSO_PROFILE)
-    session = boto3.Session(profile_name=_profile, region_name=_AWS_REGION)
-    athena = session.client("athena", region_name=_AWS_REGION)
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
     title_prefix = f"Investigate executor failure for {failed_rec_id}"
-    query = (
-        f"DELETE FROM {_ATHENA_DATABASE}.ops_recommendations "
-        f"WHERE source = 'executor-postmortem' "
-        f"AND title LIKE '{title_prefix}%'"
-    )
-    bucket = os.environ.get("S3_LOG_BUCKET", "agent-platform-data-lake")
-
-    try:
-        response = athena.start_query_execution(
-            QueryString=query,
-            WorkGroup=_ATHENA_WORKGROUP,
-            ResultConfiguration={"OutputLocation": f"s3://{bucket}/athena-results/"},
-        )
-        exec_id = response["QueryExecutionId"]
-
-        import time  # noqa: PLC0415
-
-        state = "RUNNING"
-        status_resp: dict = {}
-        for _ in range(60):
-            time.sleep(2)
-            status_resp = athena.get_query_execution(QueryExecutionId=exec_id)
-            state = status_resp["QueryExecution"]["Status"]["State"]
-            if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-                break
-
-        if state != "SUCCEEDED":
-            reason = status_resp.get("QueryExecution", {}).get("Status", {}).get("StateChangeReason", "unknown")
-            logger.warning("[PURGE] Iceberg DELETE ended with state %s: %s", state, reason)
-            return 0
-
-        logger.info("[PURGE] Iceberg DELETE completed for %s", failed_rec_id)
-        return -1  # Athena DML does not return affected-row counts
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[PURGE] Iceberg delete failed for %s: %s", failed_rec_id, exc)
-        return 0
-
-
-def _rewrite_jsonl_excluding_postmortems(postmortem_ids: set) -> None:
-    """Rewrite local JSONL removing all lines belonging to postmortem_ids.
-
-    Uses the rename-create-delete pattern to prevent partial-write corruption on
-    Windows: write to .jsonl.new, rename canonical to .jsonl.old, rename .new to
-    canonical, delete .old.
-    """
-    try:
-        lines = RECS_JSONL.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, OSError):
-        return
-
-    kept: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            kept.append(line)
-            continue
-        try:
-            entry = json.loads(stripped)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        if entry.get("id") in postmortem_ids:
-            continue
-        kept.append(line)
-
-    content = "\n".join(kept)
-    if not content.endswith("\n"):
-        content += "\n"
-
-    path_new = Path(str(RECS_JSONL) + ".new")
-    path_old = Path(str(RECS_JSONL) + ".old")
-    path_new.write_text(content, encoding="utf-8", newline="\n")
-    RECS_JSONL.rename(path_old)
-    path_new.rename(RECS_JSONL)
-    path_old.unlink(missing_ok=True)
-
-
-def purge_postmortems_for(failed_rec_id: str, dry_run: bool = False, profile: Optional[str] = None) -> dict:
-    """Discover and optionally hard-delete all executor postmortems for failed_rec_id.
-
-    Steps (when dry_run=False):
-      1. Delete pending outbox files whose title references failed_rec_id.
-      2. Run Athena DML DELETE to remove matching rows from the Iceberg table.
-      3. Rewrite local JSONL excluding the postmortem entries (rename-create-delete).
-      4. Update failed_rec_id itself to status=declined.
-
-    Returns:
-        {"pending_files": N, "jsonl_entries": M, "iceberg_delete_attempted": bool}
-    """
-    # Guard: purge operates on Iceberg/Athena DML DELETE. After T2.19, ops_recommendations lives
-    # on DuckLake (Decision 81 cl.7) and this Athena DELETE path is invalid. Fail loud BEFORE any
-    # JSONL rewrite or update_rec side effects (Decision 55: never a silent false-zero).
-    _backend = os.environ.get(_OPS_STORAGE_BACKEND_ENV, _DEFAULT_OPS_STORAGE_BACKEND)
-    if _backend != "iceberg":
-        raise NotImplementedError(
-            f"purge_postmortems_for: Iceberg/Athena DML DELETE is not supported on the "
-            f"{_backend!r} backend (OPS_STORAGE_BACKEND={_backend!r}). "
-            "Set OPS_STORAGE_BACKEND=iceberg to use the (still-live) Iceberg rollback path, "
-            "or use the DuckLake admin interface to delete postmortem rows."
-        )
-
-    # Discover pending files
-    pending_matches: list[Path] = []
-    if _PENDING_OUTBOX.exists():
-        for f in sorted(_PENDING_OUTBOX.glob("*.json")):
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                if failed_rec_id in data.get("title", ""):
-                    pending_matches.append(f)
-            except (json.JSONDecodeError, OSError):
-                pass
-
-    # Discover JSONL postmortem entries (last-wins per ID)
-    try:
-        lines = RECS_JSONL.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, OSError):
-        lines = []
-
-    by_id: dict = {}
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        try:
-            entry = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        rec_id = entry.get("id")
-        if rec_id:
-            by_id[rec_id] = entry
-
-    postmortem_ids: set = {
-        rec["id"]
-        for rec in by_id.values()
-        if rec.get("source") == "executor-postmortem" and failed_rec_id in rec.get("title", "")
-    }
-
-    result = {
-        "pending_files": len(pending_matches),
-        "jsonl_entries": len(postmortem_ids),
-        "iceberg_delete_attempted": False,
-    }
+    rows = make_reader(profile=profile).named("recs_by_title_prefix", title_prefix=f"{title_prefix}%")
+    id_re = re.compile(rf"Investigate executor failure for {re.escape(failed_rec_id)}(?![0-9])")
+    matched = [
+        r["id"]
+        for r in rows
+        if r.get("source") == "executor-postmortem"
+        and r.get("status") != "superseded"
+        and id_re.match(r.get("title", ""))  # LIKE 'rec-1%' also matches rec-10/rec-1NN -- re-filter exactly
+    ]
+    result: dict = {"matched": matched, "superseded": 0}
 
     if dry_run:
-        logger.info(
-            "[PURGE] Dry-run for %s: %d pending files, %d JSONL entries would be removed.",
-            failed_rec_id,
-            len(pending_matches),
-            len(postmortem_ids),
-        )
+        logger.info("[PURGE] Dry-run for %s: %d postmortems would be superseded.", failed_rec_id, len(matched))
         return result
 
-    for f in pending_matches:
-        f.unlink(missing_ok=True)
-        logger.info("[PURGE] Deleted pending file %s", f.name)
-
-    iceberg_result = _delete_postmortems_from_iceberg(failed_rec_id, profile=profile)
-    result["iceberg_delete_attempted"] = iceberg_result != 0
-
-    if postmortem_ids:
-        _rewrite_jsonl_excluding_postmortems(postmortem_ids)
+    for rec_id in matched:
+        update_rec(
+            rec_id,
+            {
+                "status": "superseded",
+                "resolution": f"Superseded via ops_data_portal --purge-postmortems-for {failed_rec_id}.",
+            },
+            profile=profile,
+        )
+        result["superseded"] += 1
 
     resolution = (
         f"SCP block prevents IAM/OIDC operations required by {failed_rec_id}. "
-        "Executor postmortems purged via ops_data_portal --purge-postmortems-for."
+        "Executor postmortems superseded via ops_data_portal --purge-postmortems-for."
     )
     update_rec(failed_rec_id, {"status": "declined", "resolution": resolution}, profile=profile)
 
-    logger.info(
-        "[PURGE] Complete for %s: %d pending deleted, %d JSONL entries removed.",
-        failed_rec_id,
-        len(pending_matches),
-        len(postmortem_ids),
-    )
+    logger.info("[PURGE] Complete for %s: %d postmortems superseded.", failed_rec_id, result["superseded"])
     return result
 
 
@@ -1348,7 +1001,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     action.add_argument(
         "--update-decision", metavar="DECISION_ID", type=str, help="Update an existing decision (e.g. dec-072)"
     )
-    action.add_argument("--purge-postmortems-for", metavar="REC_ID", help="Hard-delete all executor postmortems for REC_ID")
+    action.add_argument(
+        "--purge-postmortems-for", metavar="REC_ID", help="Supersede all executor postmortems for REC_ID (SCD2)"
+    )
+    action.add_argument(
+        "--backfill-decisions-md",
+        action="store_true",
+        help="ETL DECISIONS.md -> ops_decisions on DuckLake (idempotent caller-keyed upsert)",
+    )
     action.add_argument(
         "--enqueue-findings",
         metavar="PATH",
@@ -1362,7 +1022,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     action.add_argument(
         "--sync",
         action="store_true",
-        help="Drain + refresh the local read-cache from the active backend (OPS_STORAGE_BACKEND)",
+        help="Refresh the local read-cache from the DuckLake reader",
     )
     action.add_argument(
         "--selftest-read",
@@ -1403,6 +1063,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     dec = parser.add_argument_group("--file-decision fields")
     dec.add_argument("--rationale")
     dec.add_argument("--decision-status", choices=["open", "closed", "superseded"], dest="decision_status")
+    dec.add_argument(
+        "--decision-id",
+        type=int,
+        dest="decision_arg_id",
+        help="DECISIONS.md-assigned integer number (numbering authority is DECISIONS.md, Decision 84)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1471,14 +1137,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             if actually_missing:
                 print(f"ERROR: --file-decision requires: {', '.join(actually_missing)}", file=sys.stderr)
                 return 1
+        if not args.decision_arg_id:
+            print("ERROR: --file-decision requires --decision-id (DECISIONS.md number)", file=sys.stderr)
+            return 1
         dec_fields: dict = {
             "title": args.title,
             "status": args.decision_status,
-            "rationale": args.rationale,
+            "decision_text": args.rationale,
+            "decision_id": args.decision_arg_id,
         }
-        decision_id = file_decision(dec_fields, profile=args.profile)
-        if decision_id == -1:
-            print("queued-pending", file=sys.stderr)
+        try:
+            decision_id = file_decision(dec_fields, profile=args.profile)
+        except (ValidationError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         print(decision_id)
         return 0
@@ -1495,6 +1166,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         update_decision(args.update_decision, dec_updates, profile=args.profile)
         print(f"Updated decision {args.update_decision}")
         return 0
+
+    if args.backfill_decisions_md:
+        result = backfill_decisions_from_md(profile=args.profile)
+        print(json.dumps(result))
+        return 0 if result.get("failed", 0) == 0 else 1
 
     if args.purge_postmortems_for:
         result = purge_postmortems_for(args.purge_postmortems_for, dry_run=args.dry_run, profile=args.profile)

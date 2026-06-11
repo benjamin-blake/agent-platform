@@ -395,7 +395,7 @@ def validate_outbox_staleness(failed: list[str]) -> None:
             if age_hours > 24:
                 stale_count += 1
     if stale_count > 0:
-        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync_ops drain"
+        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync_ops sync"
         print(msg)
         # Warning only, not a hard failure (SSO may be legitimately unavailable).
     else:
@@ -663,13 +663,13 @@ def _is_inside_try(content: str, pos: int) -> bool:
 def validate_decisions_local_writes(failed: list[str]) -> None:
     """Enforce that no .py file directly writes to .decisions-index.jsonl.
 
-    The local decisions cache is a read-only downstream projection of Athena.
+    The local decisions cache is a read-only downstream projection of the DuckLake reader.
     All writes must go through scripts.ops_data_portal (file_decision, update_decision)
     which handles write-through. Cache rebuild happens via sync_ops pull only.
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (write-through cache update)
-      - scripts/sync_ops.py         (cache rebuild from Athena)
+      - scripts/sync_ops.py         (cache rebuild from the DuckLake reader)
     """
     print("\n=== Decisions JSONL write-path enforcement ===")
     scripts_dir = ROOT / "scripts"
@@ -720,8 +720,8 @@ def validate_rec_write_paths(failed: list[str]) -> None:
     """Enforce that no .py file directly writes to the recommendations JSONL.
 
     All writes must go through scripts.ops_data_portal (file_rec, update_rec).
-    Direct JSONL appends bypass DynamoDB ID allocation, Pydantic validation,
-    and OpsWriter S3 staging.
+    Direct JSONL appends bypass writer-owned ID allocation (Decision 84 I-2), Pydantic validation,
+    and the closed ducklake_writer boundary.
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (the portal itself)
@@ -781,7 +781,7 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
 
     Every call to OpsWriter().write("ops_*", ...) must originate from a
     whitelisted file. The whitelist captures the four legitimate write paths:
-    1. Portal calls (file_rec/update_rec/file_decision/update_decision/drain_pending)
+    1. Portal calls (file_rec/update_rec/file_decision/update_decision)
     2. Canonical ETL from a non-warehouse source of truth (DECISIONS.md -> ops_decisions)
     3. Outbox drain (write-once transient buffer, never replayable)
     4. Fresh in-memory writes (e.g. priority queue enrichment, execution plan save)
@@ -812,15 +812,20 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']ops_'),
     ]
 
-    # Table-specific block: ops_recommendations must NEVER route to OpsWriter/Iceberg after T2.19.
-    # This catches any site (including whitelisted files) that re-introduces the split-brain.
+    # Table-specific block: the DuckLake-migrated tables (recs, decisions, priority_queue) must
+    # NEVER route to OpsWriter/Iceberg after Decision 84 I-1 -- readers serve DuckLake, so an
+    # Iceberg write is a silent split-brain. Catches any site, including whitelisted files.
     # Self-excluded: validate.py itself contains the pattern strings and would otherwise self-flag.
-    _RECS_BLOCK_PATTERNS = [
-        re.compile(r'OpsWriter\(\)\.write\(\s*["\']ops_recommendations'),
-        re.compile(r'OpsWriter\(\)\.compact\(\s*["\']ops_recommendations'),
-        re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']ops_recommendations'),
-        re.compile(r'\b(?:writer|ops|_writer)\.compact\(\s*["\']ops_recommendations'),
+    # Tracked exemption: scripts/s3_log_store.py's dormant queue producer (T2.26 repoint; the
+    # scheduled-agent Lambdas that drive it are disabled -- see the AGENTS.md re-enable runbook caveat).
+    _MIGRATED = r"ops_(?:recommendations|decisions|priority_queue)"
+    _MIGRATED_BLOCK_PATTERNS = [
+        re.compile(r'OpsWriter\(\)\.write\(\s*["\']' + _MIGRATED),
+        re.compile(r'OpsWriter\(\)\.compact\(\s*["\']' + _MIGRATED),
+        re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']' + _MIGRATED),
+        re.compile(r'\b(?:writer|ops|_writer)\.compact\(\s*["\']' + _MIGRATED),
     ]
+    _MIGRATED_BLOCK_EXEMPT = {scripts_dir / "s3_log_store.py"}  # dormant queue producer, T2.26
 
     errors: list[str] = []
     for search_dir in [scripts_dir, src_dir]:
@@ -832,15 +837,15 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
             except OSError:
                 continue
 
-            # Table-specific ops_recommendations block (applies to ALL files, including whitelist).
-            if py_file != scripts_dir / "validate.py":
-                for recs_pat in _RECS_BLOCK_PATTERNS:
+            # Table-specific migrated-tables block (applies to ALL files, including whitelist).
+            if py_file != scripts_dir / "validate.py" and py_file not in _MIGRATED_BLOCK_EXEMPT:
+                for recs_pat in _MIGRATED_BLOCK_PATTERNS:
                     if recs_pat.search(content):
                         rel = py_file.relative_to(ROOT)
                         errors.append(
-                            f"{rel}: writes/compacts ops_recommendations via OpsWriter -- "
-                            "recs transit the DuckLake closed boundary (Decision 81 cl.7 / T2.19). "
-                            "Use ops_data_portal.file_rec / update_rec."
+                            f"{rel}: writes/compacts a DuckLake-migrated table via OpsWriter -- "
+                            "recs/decisions/priority_queue transit the closed boundary (Decision 84 I-1). "
+                            "Use the ops_data_portal surface."
                         )
                         break
 
@@ -1412,7 +1417,10 @@ def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant
     except Exception:  # noqa: BLE001
         import traceback  # noqa: PLC0415
 
-        print(f"WARNING: budget breach rec filing failed (outbox may handle): {traceback.format_exc()}", file=sys.stderr)
+        print(
+            f"WARNING: budget breach rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
+            file=sys.stderr,
+        )
 
 
 def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], reason: str | None) -> None:
@@ -1446,7 +1454,10 @@ def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], r
     except Exception:  # noqa: BLE001
         import traceback  # noqa: PLC0415
 
-        print(f"WARNING: budget bypass rec filing failed (outbox may handle): {traceback.format_exc()}", file=sys.stderr)
+        print(
+            f"WARNING: budget bypass rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
+            file=sys.stderr,
+        )
 
 
 def run_lint_checks(failed: list[str], files: list[str] | None = None) -> None:

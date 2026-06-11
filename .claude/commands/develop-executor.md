@@ -35,9 +35,9 @@ bin/venv-python -m scripts.ops_data_portal --file-rec \
     --verification-tier <V1|V2|V3>
 ```
 
-- The portal allocates the next `rec-NNN` ID atomically via DynamoDB.
+- The ducklake_writer allocates the next `rec-NNN` ID atomically with the insert (`file_ops`, Decision 84 I-2).
 - RCA recommendations derive `automatable=false` automatically -- executor files match the boundary patterns in `config/agent/executor/capabilities.yaml` (Decision 44). The `--automatable` CLI flag has been removed; the portal formula handles it.
-- If AWS credentials are missing, the portal queues to `logs/.ops-outbox/`. Drain later with `bin/venv-python -m scripts.ops_data_portal --drain --profile agent_platform`.
+- If AWS credentials are missing, the write FAILS LOUDLY (Decision 84 I-4 -- no outbox). Restore the chain (`aws sts get-caller-identity --profile agent_platform`) and re-file.
 
 ## 4. Stop Cleanly
 - **CRITICAL INVARIANT:** Do not attempt to repair the failure. Do not apply workarounds.

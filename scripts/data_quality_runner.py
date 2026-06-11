@@ -70,15 +70,16 @@ _OPS_TABLES: frozenset[str] = frozenset(
     {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_session_log", "ops_execution_plans"}
 )
 # RECS-FIRST SLICE: only ops_recommendations is migrated to DuckLake. Every other ops table stays on
-# Athena/Iceberg regardless of OPS_STORAGE_BACKEND until its own migration, so only this set routes to
+# Athena/Iceberg until their T2.26 disposition (Decision 84), so only this set routes to
 # the DuckLake reader when the flag is set.
-_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset({"ops_recommendations"})
-_OPS_STORAGE_BACKEND_ENV = "OPS_STORAGE_BACKEND"
+# Tables on the DuckLake closed boundary (Decision 84 I-1): their checks route to the reader.
+# ops_session_log / ops_execution_plans stay on the Athena views until their T2.26 disposition.
+_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
 
 
 def _ops_backend() -> str:
-    """Return the active ops storage backend ('iceberg' | 'ducklake'); default ducklake (T2.19 cutover)."""
-    return (os.environ.get(_OPS_STORAGE_BACKEND_ENV) or "ducklake").strip().lower()
+    """DuckLake is the sole ops backend (Decision 84 I-1; the rollback flag is retired)."""
+    return "ducklake"
 
 
 @dataclass
@@ -641,9 +642,9 @@ def _execute_check(
 
 
 def apply_backend_routing(all_checks: list[Check], database: str, *, table_filter: str | None = None) -> list[Check]:
-    """Route the migrated recs checks to the active ops storage backend (T2.19 / Decision 81).
+    """Route the migrated-table checks to the DuckLake reader (sole backend, Decision 84 I-1).
 
-    When OPS_STORAGE_BACKEND=ducklake (default post-cutover), rewrite every check on a migrated
+    Rewrite every check on a migrated
     recs table to the DuckLake closed reader (DuckDB dialect over the `current` TABLE) and append
     the CD.33 clause-8 checks. iceberg (rollback) leaves all checks on the Athena views.
 
@@ -651,8 +652,6 @@ def apply_backend_routing(all_checks: list[Check], database: str, *, table_filte
     reader -- NOT the dropped ops_recommendations_current Athena view (which would TABLE_NOT_FOUND).
     Mutates and returns *all_checks*.
     """
-    if _ops_backend() != "ducklake":
-        return all_checks
     for c in all_checks:
         if c.table in _DUCKLAKE_OPS_TABLES:
             c.sql = to_ducklake_sql(c.sql, c.table, database)
@@ -889,7 +888,7 @@ def main() -> int:
     tombstones = load_tombstones()
     all_checks.extend(build_tombstone_checks(tombstones, table_filter=args.table, database=database))
 
-    # Dual-backend dispatch (T2.19 / Decision 81): when OPS_STORAGE_BACKEND=ducklake, route ONLY the
+    # Backend dispatch (Decision 84): route ONLY the
     # migrated recs checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
     # CD.33 clause-8 checks for recs. ops_decisions + the deferred ops_* tables + telemetry stay on
     # Athena (recs-first slice). iceberg (default) leaves everything on the Athena views -- the rollback

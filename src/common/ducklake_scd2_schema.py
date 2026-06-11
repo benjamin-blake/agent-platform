@@ -143,6 +143,8 @@ class ScdTableSpec:
     ordered_columns: tuple[tuple[str, str], ...]  # (name, sql_type) in physical (DDL/INSERT) order
     partition_history: str
     partition_current: str
+    entity_id_prefix: str | None = None  # canonical id shape <prefix>NNN (None = no canonical keyspace)
+    id_keyspace: str = "caller"  # "writer" => file_ops allocates + write_ops advances the counter (Decision 84 I-2)
 
 
 def _order_columns(fields: dict[str, Any], merge_key: str) -> tuple[tuple[str, str], ...]:
@@ -188,6 +190,8 @@ def resolve_table_spec(table: str | None = None, semantics: dict[str, Any] | Non
         ordered_columns=_order_columns(fields, merge_key),
         partition_history=part.get("history", "day(created_timestamp)"),
         partition_current=part.get("current", f"bucket(8, {merge_key})"),
+        entity_id_prefix=spec.get("entity_id_prefix"),
+        id_keyspace=spec.get("id_keyspace", "caller"),
     )
 
 
@@ -251,6 +255,121 @@ def _write_params(spec: ScdTableSpec, record: dict[str, Any], identity: WriteIde
         else:
             params.append(record.get(name))
     return params
+
+
+# ---------------------------------------------------------------------------
+# Named-read registry -- the pre-established read verbs the reader Lambda serves (Decision 84 I-3).
+# Verb SQL is server-side trusted content: callers name a verb and bind params; no caller SQL
+# crosses the boundary on this path. `{tbl}` = current projection, `{hist}` = history table.
+# ---------------------------------------------------------------------------
+
+NAMED_READS_VERSION = 2
+
+
+@dataclass(frozen=True)
+class NamedRead:
+    """One pre-established read verb: fixed SQL over a fixed table with named bind params."""
+
+    verb: str
+    table: str
+    sql: str
+    params: tuple[str, ...] = ()
+    description: str = ""
+
+
+NAMED_READS: dict[str, NamedRead] = {
+    nr.verb: nr
+    for nr in (
+        NamedRead(
+            verb="open_recs",
+            table="ops_recommendations",
+            sql=("SELECT id, title, context, created_timestamp, automatable FROM {tbl} WHERE status = 'open' ORDER BY id"),
+            description="Open recommendations with the fields the preflight tally consumes.",
+        ),
+        NamedRead(
+            verb="rec_by_id",
+            table="ops_recommendations",
+            sql="SELECT * FROM {tbl} WHERE id = ?",
+            params=("id",),
+            description="Single recommendation by id (portal fetch-before-update).",
+        ),
+        NamedRead(
+            verb="recs_by_title_prefix",
+            table="ops_recommendations",
+            sql="SELECT id, title, status, source FROM {tbl} WHERE title LIKE ? ORDER BY id",
+            params=("title_prefix",),
+            description="Recommendations whose title starts with the bound prefix (postmortem supersede sweep).",
+        ),
+        NamedRead(
+            verb="ci_rca_open",
+            table="ops_recommendations",
+            sql=(
+                "SELECT id, title, priority, created_timestamp FROM {tbl} "
+                "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
+                "ORDER BY created_timestamp DESC LIMIT 5"
+            ),
+            description="Most recent open/in-progress CI-RCA recommendations (preflight hard-block surface).",
+        ),
+        NamedRead(
+            verb="ci_rca_since",
+            table="ops_recommendations",
+            sql=("SELECT id FROM {tbl} WHERE source = 'ci_rca' AND created_timestamp > CAST(? AS TIMESTAMPTZ)"),
+            params=("since_ts",),
+            description="CI-RCA recommendations created after the bound timestamp (liveness alert).",
+        ),
+        NamedRead(
+            verb="forward_fix_recursion",
+            table="ops_recommendations",
+            sql=(
+                "SELECT file, COUNT(*) AS cnt FROM {tbl} "
+                "WHERE source = 'ci_rca' AND created_timestamp > CAST(? AS TIMESTAMPTZ) "
+                "GROUP BY file HAVING COUNT(*) >= 3"
+            ),
+            params=("since_ts",),
+            description="Files targeted by >=3 CI-RCA recommendations since the bound timestamp.",
+        ),
+        NamedRead(
+            verb="budget_bypass_recent",
+            table="ops_recommendations",
+            sql=(
+                "SELECT id, context, created_timestamp FROM {tbl} "
+                "WHERE source = 'budget_bypass' "
+                "AND created_timestamp > (current_timestamp - INTERVAL 7 DAY) "
+                "ORDER BY created_timestamp DESC LIMIT 10"
+            ),
+            description="budget_bypass recommendations filed in the last 7 days (fast-tier drift alert).",
+        ),
+        NamedRead(
+            verb="count_by_status",
+            table="ops_recommendations",
+            sql="SELECT status, COUNT(*) AS n FROM {tbl} GROUP BY status ORDER BY status",
+            description="Recommendation count per lifecycle status.",
+        ),
+        NamedRead(
+            verb="decision_by_id",
+            table="ops_decisions",
+            sql="SELECT * FROM {tbl} WHERE id = ?",
+            params=("id",),
+            description="Single decision by dec-NNN id (portal fetch-before-update).",
+        ),
+        NamedRead(
+            verb="decisions_max_updated",
+            table="ops_decisions",
+            sql="SELECT max(last_updated_timestamp) AS ts FROM {tbl}",
+            description="Latest decision update timestamp (roadmap freshness input).",
+        ),
+        NamedRead(
+            verb="priority_queue_current",
+            table="ops_priority_queue",
+            sql=(
+                "SELECT * FROM {tbl} WHERE queue_run_id = ("
+                "SELECT queue_run_id FROM {tbl} ORDER BY last_updated_timestamp DESC LIMIT 1) "
+                "ORDER BY rank"
+            ),
+            description="All entries of the latest curator run (Decision 70 correlated-subquery pattern).",
+        ),
+    )
+}
 
 
 # ---------------------------------------------------------------------------

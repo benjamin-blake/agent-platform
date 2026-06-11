@@ -7,7 +7,7 @@ Outputs JSON to logs/.preflight-report.json for use by plan.prompt.md.
 Exits 1 on critical failure (wrong venv), 0 otherwise.
 
 Usage:
-    python scripts/session_preflight.py
+    bin/venv-python -m scripts.session_preflight
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,10 +44,6 @@ PRIORITY_QUEUE_FILE = ROOT / "logs" / "priority-queue" / ".priority-queue.jsonl"
 
 TELEMETRY_ACTIVE_SESSION_FILE = ROOT / "logs" / ".telemetry-active-session.json"
 
-_ATHENA_DATABASE = "agent_platform"
-_ATHENA_WORKGROUP = "agent-platform-production"
-_ATHENA_OUTPUT_LOCATION = "s3://agent-platform-data-lake/athena-results/"
-_ATHENA_POLL_TIMEOUT_SECONDS = 10
 _NON_AUTOMATABLE_SOFTCAP = 250
 
 
@@ -303,7 +298,8 @@ def _handle_credentials_startup(creds_status: str) -> str:
             f"       Verify the chain: aws sts get-caller-identity --profile {profile}\n"
             "       There is no interactive login to recover; if the agent_static\n"
             "       key was rotated, refresh ~/.aws/credentials. Continuing in DEGRADED mode:\n"
-            "       Athena-backed reads fall back to the local cache or empty results.",
+            "       warehouse reads (DuckLake reader for recs; Iceberg/Athena for deferred tables)\n"
+            "       fall back to the local cache or empty results.",
             file=sys.stderr,
         )
     return creds_status
@@ -318,122 +314,6 @@ def parse_last_session() -> str:
     return matches[-1] if matches else ""
 
 
-def _run_athena_query(sql: str) -> list[dict] | None:
-    """Execute *sql* against the Athena ops views and return rows as dicts.
-
-    Returns ``None`` on any failure (timeout, unavailable credentials, missing
-    CLI) so callers can fall back to local file reads.  Each row is a dict keyed
-    by column name with string values (Athena ``get-query-results`` returns
-    everything as VarChar).
-    """
-    profile = resolve_aws_profile()
-    profile_args = ["--profile", profile] if profile else []
-    cmd_start = [
-        "aws",
-        "athena",
-        "start-query-execution",
-        "--query-string",
-        sql,
-        "--work-group",
-        _ATHENA_WORKGROUP,
-        "--query-execution-context",
-        f"Database={_ATHENA_DATABASE}",
-        "--result-configuration",
-        f"OutputLocation={_ATHENA_OUTPUT_LOCATION}",
-        *profile_args,
-        "--output",
-        "text",
-        "--query",
-        "QueryExecutionId",
-    ]
-    try:
-        result = subprocess.run(
-            cmd_start,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-        execution_id = result.stdout.strip()
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-
-    # Poll for completion (up to ~30 s)
-    for _ in range(15):
-        time.sleep(2)
-        cmd_status = [
-            "aws",
-            "athena",
-            "get-query-execution",
-            "--query-execution-id",
-            execution_id,
-            *profile_args,
-            "--output",
-            "text",
-            "--query",
-            "QueryExecution.Status.State",
-        ]
-        try:
-            sr = subprocess.run(
-                cmd_status,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-            state = sr.stdout.strip()
-        except (subprocess.TimeoutExpired, OSError):
-            continue
-        if state == "SUCCEEDED":
-            break
-        if state in ("FAILED", "CANCELLED"):
-            return None
-    else:
-        return None
-
-    # Fetch results as JSON
-    cmd_results = [
-        "aws",
-        "athena",
-        "get-query-results",
-        "--query-execution-id",
-        execution_id,
-        *profile_args,
-        "--output",
-        "json",
-    ]
-    try:
-        rr = subprocess.run(
-            cmd_results,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-        if rr.returncode != 0:
-            return None
-        payload = json.loads(rr.stdout)
-    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
-        return None
-
-    rows_raw = payload.get("ResultSet", {}).get("Rows", [])
-    if len(rows_raw) < 2:
-        return []
-
-    # First row is the header
-    headers = [col.get("VarCharValue", "") for col in rows_raw[0].get("Data", [])]
-    results: list[dict] = []
-    for row in rows_raw[1:]:
-        values = [col.get("VarCharValue", "") for col in row.get("Data", [])]
-        results.append(dict(zip(headers, values)))
-    return results
-
-
 def _count_recommendations_reader() -> tuple[int, int, int, list[dict]] | str:
     """Return open recommendation counts from the DuckLake reader.
 
@@ -442,14 +322,8 @@ def _count_recommendations_reader() -> tuple[int, int, int, list[dict]] | str:
     false zero; no Athena fallback on the ducklake backend).
     """
     try:
-        reader = _make_reader()
-        rows = reader.current_state(
-            "ops_recommendations",
-            row_filter="status = 'open'",
-            selected_fields=("id", "title", "context", "created_timestamp", "automatable"),
-        )
-        if rows is not None:
-            return _tally_rec_counts(rows, source="reader")
+        rows = _make_reader().named("open_recs")
+        return _tally_rec_counts(rows, source="reader")
     except Exception as exc:  # noqa: BLE001
         import logging as _log  # noqa: PLC0415
 
@@ -486,7 +360,8 @@ def _tally_rec_counts(
                     aging_count += 1
             except (ValueError, AttributeError, TypeError):
                 pass
-        # Athena returns booleans as strings "true"/"false"; reader returns Python bool or string
+        # Reader rows carry native Python bools; rows migrated from the legacy Athena path may
+        # still serialise booleans as the strings "true"/"false" -- normalise both forms.
         raw_auto = entry.get("automatable", True)
         if isinstance(raw_auto, bool):
             automatable = raw_auto
@@ -510,10 +385,14 @@ def _tally_rec_counts(
 def count_recommendations() -> tuple[int, int, int, list[dict]]:
     """Count open, aging (>30 days), and non-automatable recommendations.
 
-    Reads exclusively from the DuckLake reader (Decision 81 cl.7 / T2.19 cutover).
-    On reader failure, emits a LOUD recs_read_status=reader_unreachable signal and
-    returns a sentinel (0,0,0,[]) -- never a false zero silently (Decision 55).
-    The degraded status is surfaced in the preflight report for human attention.
+    Reads from the DuckLake reader first (Decision 81 cl.7 / T2.19 cutover); there is
+    no Athena fallback. On reader failure, emits a LOUD reader_unreachable warning
+    (Decision 55: never a silent false zero) and degrades to counting from the local
+    read cache (S3 backend or logs/.recommendations-log.jsonl), which may be stale.
+
+    Note: main() does not call this function -- it calls _count_recommendations_reader()
+    directly and reports the sentinel (0,0,0,[]) plus recs_read_status=reader_unreachable
+    on failure. This cache-counting fallback is retained for non-main consumers.
     """
     result = _count_recommendations_reader()
     if result != "reader_unreachable":
@@ -577,9 +456,20 @@ def count_recommendations() -> tuple[int, int, int, list[dict]]:
 
 
 def _shape_priority_queue_rows(rows: list[dict], max_items: int) -> list[dict]:
-    """Normalise raw rows into the {rank, rec_id, rationale, north_star_impact} shape."""
+    """Normalise rows into the {rank, rec_id, rationale, north_star_impact} shape, rank-sorted.
+
+    Sort BEFORE slicing: with more rows than max_items, slice-then-sort presented an arbitrary
+    subset as the top N (unparseable ranks sort last).
+    """
+
+    def _rank_key(row: dict) -> tuple:
+        try:
+            return (False, int(row.get("rank", 0)))
+        except (ValueError, TypeError):
+            return (True, 0)
+
     result = []
-    for row in rows[:max_items]:
+    for row in sorted(rows, key=_rank_key)[:max_items]:
         try:
             rank = int(row.get("rank", 0))
         except (ValueError, TypeError):
@@ -630,19 +520,18 @@ def _read_priority_queue_cache(max_items: int) -> list[dict]:
 
 
 def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[dict]:
-    """Read the priority queue from the warehouse (DuckDB reader, Athena fallback).
+    """Read the priority queue via the priority_queue_current read verb (DuckLake reader).
 
-    Decision 70: priority queue uses the correlated-subquery current-state pattern
-    (all entries from the latest curator run); DuckDBIcebergReader handles this
-    internally.
+    Decision 70: the verb's correlated subquery returns ALL entries of the latest
+    curator run -- the generic latest-per-key current projection would silently
+    change these semantics.
 
     When *creds_status* is not "ok" credentials are unavailable: fall back to the
     local read-cache with a staleness warning (empty-with-warning when absent; never
     crash -- T2.5 graceful-degradation requirement).
 
-    When credentials ARE "ok" but both reader and Athena return None, that is a
-    genuine infrastructure fault -- hard-exit with code 1 rather than masking it
-    (Decision 60: source of truth; never silently weaken a gate).
+    When credentials ARE "ok" and the verb fails, that is a genuine infrastructure
+    fault -- hard-exit with code 1 rather than masking it (Decision 60).
 
     Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
     Returns [] if the queue is empty.
@@ -650,35 +539,20 @@ def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[di
     if creds_status != "ok":
         return _read_priority_queue_cache(max_items)
 
-    # -- DuckDB reader path (Decision 70: correlated subquery applied internally) --
-    # ops_priority_queue is DEFERRED from the DuckLake cutover -- pass the table so make_reader returns
-    # the Iceberg reader regardless of OPS_STORAGE_BACKEND (only recs are on DuckLake this slice).
+    # Decision 70 semantics (all entries of the LATEST curator run) are preserved inside the
+    # priority_queue_current verb's correlated subquery -- not by the generic current projection.
     try:
-        reader = _make_reader(table="ops_priority_queue")
-        reader_rows = reader.current_state("ops_priority_queue")
-        if reader_rows is not None:
-            shaped = _shape_priority_queue_rows(reader_rows, max_items)
-            shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
-            return shaped
+        reader_rows = _make_reader(table="ops_priority_queue").named("priority_queue_current")
+        shaped = _shape_priority_queue_rows(reader_rows, max_items)
+        shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
+        return shaped
     except Exception as exc:  # noqa: BLE001
-        import logging as _log  # noqa: PLC0415
-
-        _log.getLogger(__name__).warning("session_preflight.read_priority_queue: reader failed: %s", exc)
-
-    # -- Athena fallback --
-    rows = _run_athena_query(
-        "SELECT rec_id, rank, rationale, north_star_impact "
-        f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
-        "ORDER BY CAST(rank AS INTEGER)"
-    )
-    if rows is None:
         print(
-            "[ERROR] ops_priority_queue_current query failed -- infrastructure problem, not masking with fallback",
+            f"[ERROR] priority_queue_current verb failed ({exc}) -- infrastructure problem, "
+            "not masking with fallback (Decision 60)",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    return _shape_priority_queue_rows(rows, max_items)
 
 
 def print_priority_queue(items: list[dict]) -> None:
@@ -702,19 +576,9 @@ def _fetch_ci_rca_recs() -> list[dict]:
     Returns [] with a loud warning on reader failure (Decision 55 / Decision 81 cl.7:
     no Athena fallback; loud degraded signal).
     """
-    sql = (
-        "SELECT id, title, priority, created_timestamp "
-        "FROM {tbl} "
-        "WHERE source = ? AND status IN (?, ?) "
-        "ORDER BY created_timestamp DESC LIMIT 5"
-    )
     _reader_exc: Exception | None = None
     try:
-        reader = _make_reader()
-        rows = reader.query("ops_recommendations", sql, params=("ci_rca", "open", "in_progress"))
-        if rows is not None:
-            return rows
-        return []
+        return _make_reader().named("ci_rca_open")
     except Exception as exc:  # noqa: BLE001
         _reader_exc = exc
 
@@ -737,14 +601,7 @@ def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
     Returns [] on any failure (Decision 81 cl.7: no Athena fallback).
     """
     try:
-        reader = _make_reader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT id FROM {tbl} WHERE source = ? AND created_timestamp > ?",
-            params=("ci_rca", ts),
-        )
-        if rows is not None:
-            return rows
+        return _make_reader().named("ci_rca_since", since_ts=ts)
     except Exception:  # noqa: BLE001
         pass
     return []
@@ -821,14 +678,7 @@ def _check_forward_fix_recursion() -> dict | None:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        reader = _make_reader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT file, COUNT(*) AS cnt FROM {tbl} "
-            "WHERE source = ? AND created_timestamp > ? "
-            "GROUP BY file HAVING COUNT(*) >= 3",
-            params=("ci_rca", cutoff),
-        )
+        rows = _make_reader().named("forward_fix_recursion", since_ts=cutoff)
         if rows is not None:
             if not rows:
                 return None
@@ -850,14 +700,7 @@ def _check_budget_bypass_alert() -> dict | None:
     Returns None when count < 3 or the warehouse is unreachable.
     """
     try:
-        reader = _make_reader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT id, context, created_timestamp FROM {tbl} WHERE source = ? "
-            "AND created_timestamp > (current_timestamp - INTERVAL 7 DAY) "
-            "ORDER BY created_timestamp DESC LIMIT 10",
-            params=("budget_bypass",),
-        )
+        rows = _make_reader().named("budget_bypass_recent")
         if rows is not None:
             if len(rows) < 3:
                 return None
@@ -1044,17 +887,10 @@ def read_context_files() -> dict:
             except ValueError:
                 continue
 
-    # recommendations_count: reader-only (Decision 81 cl.7 / T2.19); no Athena fallback
+    # recommendations_count: reader-only via the open_recs verb (Decision 84 I-3)
     recommendations_count = 0
     try:
-        reader = _make_reader()
-        rec_rows = reader.current_state(
-            "ops_recommendations",
-            row_filter="status = 'open'",
-            selected_fields=("id",),
-        )
-        if rec_rows is not None:
-            recommendations_count = len(rec_rows)
+        recommendations_count = len(_make_reader().named("open_recs"))
     except Exception:  # noqa: BLE001
         pass
 
@@ -1093,153 +929,19 @@ def sync_copilot_instructions() -> None:
             )
 
 
-def _athena_run_query(client: object, sql: str, *, poll_timeout: int = _ATHENA_POLL_TIMEOUT_SECONDS) -> list[list[str]]:
-    """Execute a SQL query via Athena and return rows as lists of string values.
-
-    Polls for completion up to *poll_timeout* seconds.  Returns an empty list
-    on timeout; raises on execution error.  The first row is always the column
-    header row and is included in the return value.
-    """
-    response = client.start_query_execution(  # type: ignore[union-attr]
-        QueryString=sql,
-        WorkGroup=_ATHENA_WORKGROUP,
-        QueryExecutionContext={"Database": _ATHENA_DATABASE},
-        ResultConfiguration={"OutputLocation": _ATHENA_OUTPUT_LOCATION},
-    )
-    execution_id = response["QueryExecutionId"]
-    deadline = time.monotonic() + poll_timeout
-    while time.monotonic() < deadline:
-        status = client.get_query_execution(QueryExecutionId=execution_id)  # type: ignore[union-attr]
-        state = status["QueryExecution"]["Status"]["State"]
-        if state in ("SUCCEEDED",):
-            break
-        if state in ("FAILED", "CANCELLED"):
-            reason = status["QueryExecution"]["Status"].get("StateChangeReason", "")
-            raise RuntimeError(f"Athena query {state}: {reason}")
-        time.sleep(0.5)
-    else:
-        return []  # timeout -- treat as empty result
-
-    results = client.get_query_results(QueryExecutionId=execution_id)  # type: ignore[union-attr]
-    rows: list[list[str]] = []
-    for row in results.get("ResultSet", {}).get("Rows", []):
-        rows.append([datum.get("VarCharValue", "") for datum in row.get("Data", [])])
-    return rows
-
-
 def check_telemetry_health() -> dict:
-    """Query Athena for telemetry session metrics and return health dict.
-
-    Uses ``agent_platform.telemetry_sessions_current`` (7-day window) to
-    compute session count, success rate, and latest session staleness.  Also
-    queries ``telemetry_process_events`` for the top-5 recent friction patterns.
-
-    Telemetry tables were NOT migrated to the personal account (public-migration,
-    2026-05-28); these queries therefore fail with TABLE_NOT_FOUND and are caught
-    below, degrading to a non-fatal warning rather than raising.
-
-    Degrades gracefully when credentials are unavailable or Athena is unreachable --
-    returns ``overall: "unknown"`` with a single ``athena-query`` check entry.
+    """Telemetry health stub: the Athena telemetry tables died with the 2026-05-28 account
+    migration, so the previous implementation polled TABLE_NOT_FOUND for ~a minute every
+    session. Telemetry re-lands on DuckLake in consolidation Phase 4 (Decision 84); until
+    then this reports not_migrated WITHOUT issuing any query.
 
     Returns a dict compatible with ``print_telemetry_health()``.
     """
-    checks: list[dict] = []
-    friction_patterns: list[dict] = []
-    has_warning = False
-    has_critical = False
-
-    try:
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=resolve_aws_profile())
-        client = session.client("athena", region_name="eu-west-2")
-
-        # -- Session count + success rate + latest session staleness --
-        sessions_sql = (
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) AS success_count, "
-            "MAX(started_at) AS latest "
-            f"FROM {_ATHENA_DATABASE}.telemetry_sessions_current "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY"
-        )
-        try:
-            rows = _athena_run_query(client, sessions_sql)
-            if len(rows) >= 2:
-                _header, data_row = rows[0], rows[1]
-                total = int(data_row[0]) if data_row[0].isdigit() else 0
-                success_count = int(data_row[1]) if data_row[1].isdigit() else 0
-                latest_ts_str = data_row[2] if len(data_row) > 2 else ""
-
-                checks.append({"check": "sessions-7d", "value": str(total), "severity": "ok"})
-                if total > 0:
-                    success_rate = success_count / total
-                    rate_display = f"{success_rate:.0%}"
-                    rate_severity = "ok"
-                    if success_rate < 0.5:
-                        rate_severity = "warning"
-                        has_warning = True
-                    checks.append({"check": "success-rate-7d", "value": rate_display, "severity": rate_severity})
-
-                if latest_ts_str:
-                    try:
-                        latest_ts = datetime.fromisoformat(latest_ts_str.replace("Z", "+00:00"))
-                        if latest_ts.tzinfo is None:
-                            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
-                        now = datetime.now(timezone.utc)
-                        staleness_h = (now - latest_ts).total_seconds() / 3600.0
-                        stale_display = f"{staleness_h:.1f}h"
-                        stale_severity = "ok"
-                        if staleness_h >= 168:
-                            stale_severity = "critical"
-                            has_critical = True
-                        elif staleness_h >= 72:
-                            stale_severity = "warning"
-                            has_warning = True
-                        checks.append(
-                            {
-                                "check": "latest-session-staleness",
-                                "value": stale_display,
-                                "severity": stale_severity,
-                            }
-                        )
-                    except (ValueError, TypeError):
-                        pass
-            else:
-                checks.append({"check": "sessions-7d", "value": "0", "severity": "ok"})
-        except Exception as exc:  # noqa: BLE001
-            checks.append({"check": "sessions-query", "value": str(exc)[:60], "severity": "warning"})
-            has_warning = True
-
-        # -- Top-5 friction patterns from process events --
-        friction_sql = (
-            "SELECT category, description, COUNT(*) AS occurrences "
-            f"FROM {_ATHENA_DATABASE}.telemetry_process_events "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY "
-            "GROUP BY category, description "
-            "ORDER BY occurrences DESC LIMIT 5"
-        )
-        try:
-            fp_rows = _athena_run_query(client, friction_sql)
-            for row in fp_rows[1:]:  # skip header row
-                if len(row) >= 3:
-                    friction_patterns.append(
-                        {"category": row[0], "description": row[1], "occurrences": int(row[2]) if row[2].isdigit() else 0}
-                    )
-        except Exception:  # noqa: BLE001
-            pass  # friction patterns are informational; failure is non-critical
-
-    except Exception:  # noqa: BLE001
-        # credentials unavailable, boto3 missing, or other connectivity failure -- degrade gracefully
-        checks.append({"check": "athena-query", "value": "unavailable", "severity": "unknown"})
-        return {"overall": "unknown", "checks": checks, "friction_patterns": friction_patterns}
-
-    overall = "ok"
-    if has_critical:
-        overall = "critical"
-    elif has_warning:
-        overall = "warning"
-
-    return {"overall": overall, "checks": checks, "friction_patterns": friction_patterns}
+    return {
+        "overall": "unknown",
+        "checks": [{"check": "telemetry-store", "value": "not migrated (Phase 4)", "severity": "unknown"}],
+        "friction_patterns": [],
+    }
 
 
 def check_data_quality_coverage() -> dict:
@@ -1323,12 +1025,15 @@ def print_telemetry_health(health: dict) -> None:
 
 
 def _get_latest_decision_ts() -> str | None:
-    """Return the max last_updated_timestamp from ops_decisions_current, or None on any failure."""
-    rows = _run_athena_query("SELECT max(last_updated_timestamp) AS ts FROM ops_decisions_current")
+    """Return the max decision last_updated_timestamp via the decisions_max_updated verb, or None."""
+    try:
+        rows = _make_reader(table="ops_decisions").named("decisions_max_updated")
+    except Exception:  # noqa: BLE001
+        return None
     if not rows:
         return None
-    ts = rows[0].get("ts", "")
-    return ts if ts else None
+    ts = rows[0].get("ts") or ""
+    return str(ts) if ts else None
 
 
 def main() -> int:
@@ -1364,21 +1069,13 @@ def main() -> int:
     creds_status = _handle_credentials_startup(check_credentials())
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Pull ops_recommendations (and all ops tables) from Athena into local cache (best-effort)
+    # Rebuild the local read cache from the warehouse (best-effort): all migrated
+    # tables via the DuckLake reader (Decision 84 I-1; no fallback).
     try:
         recommendation_sync = _sync_ops_pull()
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"WARNING: sync_ops.pull failed: {exc}", file=sys.stderr)
         recommendation_sync = {}
-
-    try:
-        from scripts.ops_data_portal import drain_pending  # noqa: PLC0415
-
-        _drain = drain_pending()
-        if _drain.get("drained", 0) > 0:
-            print(f"[preflight] Drained {_drain['drained']} pending rec(s)", file=sys.stderr)
-    except Exception:  # noqa: BLE001
-        pass
 
     # Outbox summary (always available, even without credentials)
     try:
@@ -1400,7 +1097,7 @@ def main() -> int:
             pulled = sum(result.get("pulled", {}).values())
             if drained or pulled:
                 print(
-                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from Athena",
+                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from the warehouse",
                     file=sys.stderr,
                 )
         except Exception:  # noqa: BLE001
@@ -1447,7 +1144,7 @@ def main() -> int:
         "aging_recommendations": aging_recommendations,
         "non_automatable_recommendations": non_automatable_count,
         "priority_queue": priority_queue,
-        "priority_queue_source": "athena" if creds_status == "ok" else "cache",
+        "priority_queue_source": "ducklake_reader" if creds_status == "ok" else "cache",
         "recs_read_status": recs_read_status,
         "ci_rca_recs": ci_rca_recs,
         "friction_patterns": telemetry_health.get("friction_patterns", []),

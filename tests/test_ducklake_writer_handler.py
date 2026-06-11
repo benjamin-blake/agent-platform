@@ -587,10 +587,92 @@ def test_action_create_ops_tables(monkeypatch):
         calls.update(table=table, force=force_recreate)
 
     monkeypatch.setattr(rt, "create_scd2_tables", _create)
-    out = h.action_create_ops_tables({"table": "ops_decisions", "force_recreate_tables": True}, FakeCon())
+    out = h.action_create_ops_tables(
+        {"table": "ops_decisions", "force_recreate_tables": True, "confirm_force_recreate": "ops_decisions"},
+        FakeCon(),
+    )
     assert out["ok"] is True
     assert calls == {"table": "ops_decisions", "force": True}
     assert out["tables"] == ["ops_decisions_history", "ops_decisions_current"]
+
+
+def test_action_create_ops_tables_force_requires_confirm(monkeypatch):
+    """Destructive-action guard (Decision 84): force_recreate without confirm loud-fails."""
+    monkeypatch.setattr(rt, "create_scd2_tables", lambda con, *, table, force_recreate: None)
+    with pytest.raises(h.WriterActionError, match="confirm_force_recreate"):
+        h.action_create_ops_tables({"table": "ops_decisions", "force_recreate_tables": True}, FakeCon())
+
+
+def test_action_create_ops_tables_plain_create_needs_no_confirm(monkeypatch):
+    calls = {}
+
+    def _create(con, *, table, force_recreate):  # noqa: ARG001
+        calls.update(table=table, force=force_recreate)
+
+    monkeypatch.setattr(rt, "create_scd2_tables", _create)
+    out = h.action_create_ops_tables({"table": "ops_priority_queue"}, FakeCon())
+    assert out["ok"] is True
+    assert calls == {"table": "ops_priority_queue", "force": False}
+
+
+def test_action_file_ops(monkeypatch):
+    captured = {}
+
+    def _file(con, record, *, table, identity, metric_sink):  # noqa: ARG001
+        captured.update(record=dict(record), table=table, identity=identity)
+        from datetime import datetime, timezone
+
+        from src.common.ducklake_scd2_schema import WriteResult
+
+        ts = datetime(2026, 6, 11, tzinfo=timezone.utc)
+        return WriteResult(
+            ulid=identity.ulid if identity else "01AUTO",
+            rec_id="rec-2171",
+            occ_retries=0,
+            commit_ms=12.0,
+            created_timestamp=ts,
+            last_updated_timestamp=ts,
+        )
+
+    monkeypatch.setattr(rt, "file_scd2", _file)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_file_ops(
+        {
+            "table": "ops_recommendations",
+            "record": {"title": "t", "status": "open"},
+            "idempotency_ulid": "01JXQ4N9V8TEST0000000000",
+        },
+        FakeCon(),
+    )
+    assert out["ok"] is True
+    assert out["key"] == "rec-2171"
+    assert captured["table"] == "ops_recommendations"
+    assert captured["identity"].ulid == "01JXQ4N9V8TEST0000000000"
+
+
+def test_action_file_ops_rejects_bad_idempotency_ulid(monkeypatch):
+    monkeypatch.setattr(rt, "file_scd2", lambda *a, **k: None)
+    with pytest.raises(h.WriterActionError, match="idempotency_ulid"):
+        h.action_file_ops({"table": "ops_recommendations", "record": {}, "idempotency_ulid": "no spaces!"}, FakeCon())
+
+
+def test_action_file_ops_without_idempotency_mints_identity(monkeypatch):
+    captured = {}
+
+    def _file(con, record, *, table, identity, metric_sink):  # noqa: ARG001
+        captured["identity"] = identity
+        from datetime import datetime, timezone
+
+        from src.common.ducklake_scd2_schema import WriteResult
+
+        ts = datetime(2026, 6, 11, tzinfo=timezone.utc)
+        return WriteResult("01X", "rec-1", 0, 1.0, ts, ts)
+
+    monkeypatch.setattr(rt, "file_scd2", _file)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_file_ops({"table": "ops_recommendations", "record": {"title": "t"}}, FakeCon())
+    assert out["ok"] is True
+    assert captured["identity"] is None
 
 
 def test_require_ops_table_rejects_unknown():
@@ -694,3 +776,20 @@ def test_handler_connect_probe_success(monkeypatch):
 def test_connect_probe_in_connectionless_actions():
     """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_writer_connection."""
     assert "connect_probe" in h._CONNECTIONLESS_ACTIONS
+
+
+def test_action_create_ops_tables_caller_keyspace_skips_counter(monkeypatch):
+    """ops_decisions has a caller-owned keyspace (DECISIONS.md numbering): no counter is seeded."""
+    monkeypatch.setattr(rt, "create_scd2_tables", lambda con, *, table, force_recreate: None)
+    called = []
+    monkeypatch.setattr(rt, "bootstrap_entity_counter", lambda con, spec: called.append(spec.table))
+    out = h.action_create_ops_tables({"table": "ops_decisions"}, FakeCon())
+    assert out["ok"] is True
+    assert out["counter_seed"] is None
+    assert called == []
+
+
+def test_action_file_ops_rejects_caller_keyspace_table(monkeypatch):
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        h.action_file_ops({"table": "ops_decisions", "record": {"title": "t", "status": "open"}}, FakeCon())

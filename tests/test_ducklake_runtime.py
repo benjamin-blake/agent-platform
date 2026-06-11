@@ -950,3 +950,229 @@ def test_split_no_import_cycle():
 
     importlib.import_module("src.common.ducklake_scd2_schema")
     importlib.import_module("src.common.ducklake_runtime")
+
+
+# ---------------------------------------------------------------------------
+# file_scd2 / named_read / read_current structural filter (Decision 84)
+# ---------------------------------------------------------------------------
+
+
+class FileOpsCon:
+    """Scripted double for the file_scd2 transaction shape against ops_recommendations."""
+
+    def __init__(
+        self,
+        *,
+        replay_rows: list | None = None,
+        counter_value: int | None = None,
+        seed_max: int = 2170,
+        existing_rows: list | None = None,
+        occ_fail_on_update: int = 0,
+    ):
+        self.executed: list[tuple[str, list | None]] = []
+        self._replay_rows = replay_rows or []
+        self._counter_value = counter_value
+        self._seed_max = seed_max
+        self._existing_rows = existing_rows or []
+        self._occ_fail_on_update = occ_fail_on_update
+        self._update_calls = 0
+        self._last = ""
+        self.description = [("c",)]
+
+    def execute(self, sql, params=None):
+        self._last = sql
+        self.executed.append((sql, params))
+        if "UPDATE" in sql and rt.ENTITY_COUNTERS_TABLE in sql:
+            self._update_calls += 1
+            if self._update_calls <= self._occ_fail_on_update:
+                raise RuntimeError("could not serialize access due to concurrent update")
+            if self._counter_value is None:
+                self._counter_value = self._seed_max
+            self._counter_value += 1
+        if "INSERT INTO" in sql and rt.ENTITY_COUNTERS_TABLE in sql:
+            self._counter_value = params[1] if params else self._seed_max
+        return self
+
+    def fetchone(self):
+        if "SELECT current_value" in self._last:
+            return None if self._counter_value is None else (self._counter_value,)
+        if "coalesce(max(CAST(regexp_extract" in self._last:
+            return (self._seed_max,)
+        return None
+
+    def fetchall(self):
+        if "WHERE ulid = ?" in self._last:
+            return self._replay_rows
+        if self._last.startswith("SELECT created_timestamp"):
+            return self._existing_rows
+        if "SELECT current_value" in self._last:
+            return [] if self._counter_value is None else [(self._counter_value,)]
+        return []
+
+
+def test_file_scd2_allocates_next_id_from_counter():
+    con = FileOpsCon(counter_value=2170)
+    result = rt.file_scd2(con, {"status": "open", "title": "t"}, table="ops_recommendations")
+    assert result.rec_id == "rec-2171"
+    merges = [s for s, _ in con.executed if s.startswith("MERGE INTO")]
+    assert len(merges) == 2
+
+
+def test_file_scd2_missing_counter_is_terminal():
+    """The hot path NEVER self-seeds: the concurrent-seed race mints duplicate ids (live 2026-06-11)."""
+    con = FileOpsCon(counter_value=None)
+    with pytest.raises(rt.DuckLakeRuntimeError, match="run create_ops_tables"):
+        rt.file_scd2(con, {"status": "open"}, table="ops_recommendations")
+    assert ("ROLLBACK", None) in con.executed
+    assert not any(s.startswith("MERGE INTO") for s, _ in con.executed)
+
+
+def test_bootstrap_entity_counter_seeds_from_history_max():
+    con = FileOpsCon(seed_max=2178)
+    seed = rt.bootstrap_entity_counter(con, rt.resolve_table_spec("ops_recommendations"))
+    assert seed == 2178
+    deletes = [s for s, _ in con.executed if s.startswith("DELETE FROM") and rt.ENTITY_COUNTERS_TABLE in s]
+    inserts = [s for s, _ in con.executed if "INSERT INTO" in s and rt.ENTITY_COUNTERS_TABLE in s]
+    creates = [s for s, _ in con.executed if s.startswith("CREATE TABLE IF NOT EXISTS")]
+    assert deletes and inserts and creates
+    assert ("COMMIT", None) in con.executed
+
+
+def test_bootstrap_entity_counter_rejects_unprefixed_table():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no allocation counter"):
+        rt.bootstrap_entity_counter(FileOpsCon(), rt.resolve_table_spec("ops_priority_queue"))
+
+
+def test_file_scd2_zero_pads_small_ids():
+    con = FileOpsCon(counter_value=7)
+    result = rt.file_scd2(con, {"status": "open"}, table="ops_recommendations")
+    assert result.rec_id == "rec-008"
+
+
+def test_file_scd2_replay_returns_original_id_without_allocating():
+    ts = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    identity = rt.mint_write_identity()
+    con = FileOpsCon(replay_rows=[("rec-2160", ts)])
+    result = rt.file_scd2(con, {"status": "open"}, table="ops_recommendations", identity=identity)
+    assert result.rec_id == "rec-2160"
+    assert result.created_timestamp == ts
+    assert not any("UPDATE" in s and rt.ENTITY_COUNTERS_TABLE in s for s, _ in con.executed)
+    assert not any(s.startswith("MERGE INTO") for s, _ in con.executed)
+
+
+def test_file_scd2_rejects_caller_supplied_merge_key():
+    with pytest.raises(rt.SchemaGateError, match="must not supply"):
+        rt.file_scd2(FileOpsCon(), {"id": "rec-1", "status": "open"}, table="ops_recommendations")
+
+
+def test_file_scd2_rejects_table_without_prefix():
+    con = FileOpsCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        rt.file_scd2(con, {"queue_run_id": "q"}, table="ops_priority_queue")
+    assert con.executed == []
+
+
+def test_file_scd2_rejects_caller_keyspace_table():
+    """Decision 84 I-2 exception: dec-NNN follows DECISIONS.md numbering -- file_ops must refuse."""
+    con = FileOpsCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        rt.file_scd2(con, {"title": "t", "status": "open"}, table="ops_decisions")
+    assert con.executed == []
+
+
+def test_bootstrap_entity_counter_rejects_caller_keyspace():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        rt.bootstrap_entity_counter(FileOpsCon(), rt.resolve_table_spec("ops_decisions"))
+
+
+def test_write_scd2_advances_counter_for_canonical_caller_key():
+    """A caller-keyed rec-NNN write_ops (backfill / pre-merge clients) must never strand the counter."""
+    con = FileOpsCon(counter_value=2170)
+    rt.write_scd2(con, {"id": "rec-2200", "status": "open"}, table="ops_recommendations")
+    advances = [(s, p) for s, p in con.executed if "GREATEST(current_value, ?)" in s and rt.ENTITY_COUNTERS_TABLE in s]
+    assert advances and advances[0][1] == [2200, "ops_recommendations"]
+
+
+def test_write_scd2_no_counter_advance_for_noncanonical_key():
+    con = FileOpsCon(counter_value=2170)
+    rt.write_scd2(con, {"id": "test-probe-1", "status": "open"}, table="ops_recommendations")
+    assert not any("GREATEST(current_value" in s for s, _ in con.executed)
+
+
+def test_file_scd2_allocated_collision_is_terminal():
+    ts = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    con = FileOpsCon(counter_value=2170, existing_rows=[(ts,)])
+    with pytest.raises(rt.DuckLakeRuntimeError, match="already exists"):
+        rt.file_scd2(con, {"status": "open"}, table="ops_recommendations")
+    assert ("ROLLBACK", None) in con.executed
+
+
+def test_file_scd2_occ_retry_reallocates():
+    """An aborted transaction's counter increment rolls back; the retry re-issues the same number."""
+    con = FileOpsCon(counter_value=2170, occ_fail_on_update=1)
+    result = rt.file_scd2(con, {"status": "open"}, table="ops_recommendations", sleep=lambda s: None)
+    assert result.occ_retries == 1
+    assert result.rec_id == "rec-2171"
+    assert ("ROLLBACK", None) in con.executed
+
+
+def test_file_scd2_gate_blocks_before_catalog():
+    con = FileOpsCon()
+    with pytest.raises(rt.SchemaGateError):
+        rt.file_scd2(con, {"status": "open", "bogus": "x"}, table="ops_recommendations")
+    assert con.executed == []
+
+
+class NamedReadCon:
+    def __init__(self, rows=None, cols=("id",)):
+        self.executed: list[tuple[str, list | None]] = []
+        self._rows = rows or []
+        self.description = [(c,) for c in cols]
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+
+def test_named_read_executes_registry_sql():
+    con = NamedReadCon(rows=[("rec-1",)])
+    rows = rt.named_read(con, verb="rec_by_id", params={"id": "rec-1"})
+    assert rows == [{"id": "rec-1"}]
+    sql, params = con.executed[0]
+    assert "ops_catalog.ops_recommendations_current" in sql
+    assert "{tbl}" not in sql
+    assert params == ["rec-1"]
+
+
+def test_named_read_unknown_verb_loud_fails():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="unknown read verb"):
+        rt.named_read(NamedReadCon(), verb="drop_everything", params={})
+
+
+def test_named_read_param_mismatch_loud_fails():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="requires params"):
+        rt.named_read(NamedReadCon(), verb="rec_by_id", params={})
+    with pytest.raises(rt.DuckLakeRuntimeError, match="requires params"):
+        rt.named_read(NamedReadCon(), verb="open_recs", params={"sneaky": "x"})
+
+
+def test_named_read_registry_verbs_are_select_only():
+    for entry in rt.NAMED_READS.values():
+        rt.assert_read_only_sql(entry.sql)
+
+
+def test_read_current_rejects_unknown_filter_column():
+    con = NamedReadCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="unknown filter column"):
+        rt.read_current(con, table="ops_recommendations", key="open", key_column="not_a_column")
+
+
+def test_read_current_binds_named_column():
+    con = NamedReadCon(rows=[], cols=("id", "status"))
+    rt.read_current(con, table="ops_recommendations", key="open", key_column="status")
+    sql, params = con.executed[0]
+    assert "WHERE status = ?" in sql
+    assert params == ["open"]

@@ -203,7 +203,7 @@ FINDINGS:
 
 Do not write to any file. Do not edit any file. Return the findings block to the caller and stop.
 
-**The caller MUST use `bin/venv-python -m scripts.ops_data_portal` to file each finding. Never append to `logs/.recommendations-log.jsonl` directly.** This ensures ID authority via DynamoDB and persistence via the OpsWriter.
+**The caller MUST use `bin/venv-python -m scripts.ops_data_portal` to file each finding. Never append to `logs/.recommendations-log.jsonl` directly.** This ensures writer-allocated ids and persistence via the closed DuckLake writer boundary (Decision 84).
 
 ---
 

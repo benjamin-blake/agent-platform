@@ -230,16 +230,15 @@ def get_next_rec_id() -> str:  # pragma: no cover
     import warnings  # noqa: PLC0415
 
     warnings.warn(
-        "get_next_rec_id() is deprecated. Use scripts.ops_data_portal.file_rec() "
-        "which allocates IDs via DynamoDB atomic counter.",
+        "get_next_rec_id() is deprecated and disabled (Decision 84 I-2): the ducklake_writer "
+        "allocates ids atomically with the insert. Use scripts.ops_data_portal.file_rec().",
         DeprecationWarning,
         stacklevel=2,
     )
-    # Fallback: use DynamoDB counter via sync_recommendations.next_id
-    from scripts.sync_recommendations import next_id  # noqa: PLC0415
-
-    result = next_id("recommendations")
-    return str(result)
+    raise RuntimeError(
+        "get_next_rec_id() is retired (Decision 84 I-2): client-side id allocation is forbidden -- "
+        "the ducklake_writer owns the rec-NNN keyspace. File via ops_data_portal.file_rec()."
+    )
 
 
 def _create_postmortem_recommendation(failed_rec_id: str, branch: str, ci_attempts: int) -> None:

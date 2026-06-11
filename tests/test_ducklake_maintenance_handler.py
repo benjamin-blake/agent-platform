@@ -537,7 +537,15 @@ def test_catalog_reinit_drops_then_reattaches():
         patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
         patch.object(h.rt, "open_connection", return_value=con) as open_mock,
     ):
-        result = h.action_catalog_reinit({"action": "catalog_reinit", "data_path": "s3://b/ducklake/"}, None)
+        result = h.action_catalog_reinit(
+            {
+                "action": "catalog_reinit",
+                "data_path": "s3://b/ducklake/",
+                "meta_schema": "ducklake_ops",
+                "confirm": "ducklake_ops",
+            },
+            None,
+        )
     assert result["ok"] is True and result["reinitialized"] is True
     drop_mock.assert_called_once_with("ducklake_ops", recreate=True)
     assert open_mock.call_args.kwargs["data_path"] == "s3://b/ducklake/"
@@ -552,7 +560,20 @@ def test_catalog_reinit_requires_s3_data_path():
 
 def test_catalog_reinit_rejects_bad_meta_schema():
     with pytest.raises(DuckLakeRuntimeError, match="invalid SQL identifier"):
-        h.action_catalog_reinit({"data_path": "s3://b/ducklake/", "meta_schema": "bad-name;DROP"}, None)
+        h.action_catalog_reinit(
+            {"data_path": "s3://b/ducklake/", "meta_schema": "bad-name;DROP", "confirm": "bad-name;DROP"}, None
+        )
+
+
+def test_catalog_reinit_requires_explicit_meta_schema():
+    """Destructive-action guard (Decision 84): a no-arg invoke must never target the live catalog."""
+    with pytest.raises(DuckLakeRuntimeError, match="EXPLICIT 'meta_schema'"):
+        h.action_catalog_reinit({"data_path": "s3://b/ducklake/"}, None)
+
+
+def test_catalog_reinit_requires_matching_confirm():
+    with pytest.raises(DuckLakeRuntimeError, match="confirm="):
+        h.action_catalog_reinit({"data_path": "s3://b/ducklake/", "meta_schema": "ducklake_smoke"}, None)
 
 
 def _restore_drill_patches(read_rows):

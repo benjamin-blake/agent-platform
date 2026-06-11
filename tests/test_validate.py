@@ -1224,13 +1224,13 @@ class TestValidateWarehouseWriteSources:
         assert len(failed) > 0
         assert any("bad_alias.py" in e for e in failed)
 
-    def test_allows_whitelisted_portal_for_non_recs(self, tmp_path: Path, capsys) -> None:
-        """ops_data_portal.py is whitelisted for ops_decisions writes (non-recs ops_* tables)."""
+    def test_allows_whitelisted_portal_for_unmigrated_tables(self, tmp_path: Path, capsys) -> None:
+        """ops_data_portal.py stays whitelisted for the NOT-yet-migrated tables (session_log)."""
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         portal_file = scripts_dir / "ops_data_portal.py"
         portal_file.write_text(
-            'OpsWriter().write("ops_decisions", merged)\n',
+            'OpsWriter().write("ops_session_log", merged)\n',
             encoding="utf-8",
         )
         with patch("validate.ROOT", tmp_path):
@@ -1238,25 +1238,40 @@ class TestValidateWarehouseWriteSources:
             validate_warehouse_write_sources(failed)
         assert failed == []
 
-    def test_recs_opswriter_blocked_even_for_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
-        """T2.19: _RECS_BLOCK_PATTERNS apply to ALL files including the whitelist.
+    def test_migrated_tables_opswriter_blocked_even_for_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
+        """Decision 84 I-1: the migrated-tables block applies to ALL files including the whitelist.
 
-        Decision 81 cl.7: even whitelisted callers (ops_data_portal.py) must not route
-        ops_recommendations through OpsWriter after T2.19. The guard must fire regardless of
-        whitelist status.
+        Even whitelisted callers (ops_data_portal.py) must not route ops_recommendations,
+        ops_decisions, or ops_priority_queue through OpsWriter -- readers serve DuckLake, so an
+        Iceberg write is a silent split-brain. The guard must fire regardless of whitelist status.
         """
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         portal_file = scripts_dir / "ops_data_portal.py"
-        portal_file.write_text(
-            'OpsWriter().write("ops_recommendations", merged)\n',
+        for table in ("ops_recommendations", "ops_decisions", "ops_priority_queue"):
+            portal_file.write_text(
+                f'OpsWriter().write("{table}", merged)\n',
+                encoding="utf-8",
+            )
+            with patch("validate.ROOT", tmp_path):
+                failed: list[str] = []
+                validate_warehouse_write_sources(failed)
+            assert len(failed) > 0, f"migrated-table block must fire for {table}"
+            assert any("DuckLake-migrated table" in e for e in failed)
+
+    def test_s3_log_store_queue_producer_exemption(self, tmp_path: Path, capsys) -> None:
+        """The dormant queue producer keeps its tracked exemption until the T2.26 repoint."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        store_file = scripts_dir / "s3_log_store.py"
+        store_file.write_text(
+            'ops.write("ops_priority_queue", enriched)\n',
             encoding="utf-8",
         )
         with patch("validate.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
-        assert len(failed) > 0, "recs block must fire even for whitelisted portal"
-        assert any("ops_recommendations" in e for e in failed)
+        assert not any("DuckLake-migrated table" in e for e in failed)
 
     def test_clean_script_with_no_warehouse_writes_passes(self, tmp_path: Path, capsys) -> None:
         """Scripts that only call portal functions (file_rec) pass cleanly."""
