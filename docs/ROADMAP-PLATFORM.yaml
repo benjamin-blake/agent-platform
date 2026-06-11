@@ -3267,21 +3267,40 @@ tier_items:
       - scripts/copilot_wrapper.py
       - scripts/copilot_multipliers_refresher.py
       - terraform/lambda_tooling_iam.tf    # retired work-root: bedrock:Invoke* grant removed (dead_but_provisioned closure)
-      - docs/runbooks/policies/platform-dev-daily-ops.json
+      - docs/runbooks/policies/platform-dev-daily-ops.json    # absent at HEAD when implemented (PR #123) -- criterion vacuously satisfied; recorded by the plan's freshness gate
       - docs/contracts/inference-provider.md
       - tests/test_llm_client.py
       - tests/test_build_lambda.py
       - tests/test_scheduled_agent_handler.py
     exit_criteria:
       - "scripts/bedrock_client.py deleted; rg -l 'bedrock_client|_bedrock_call|_invoke_bedrock' scripts/ src/ returns zero production hits"
-      - "Affected Lambda artifacts rebuilt + deployed + smoke-tested per CD.16/Decision 79 (dispatcher smoke-test deferred until T4.3 per CD.16's surviving clause)"
-      - "bedrock:Invoke* absent from terraform/ (work root included) and docs/runbooks/policies/"
+      - "[Rewritten 2026-06-11 per the realized-differently rule -- original wording in note] Affected active Lambda artifacts (data-pipeline, ops-compaction) rebuilt clean post-sweep and staged to s3://agent-platform-data-lake/lambda-packages/ per CD.16/Decision 79; function-code deploy + smoke VACUOUS -- the dispatcher/findings-processor/ops-compaction functions are not provisioned in the personal account (only the four DuckLake functions exist; UpdateFunctionCode returns ResourceNotFoundException). Dispatcher smoke-test remains deferred until T4.3 per CD.16's surviving clause; rec-2164 owns the provisioning-vs-docs discrepancy"
+      - "bedrock:Invoke* absent from terraform/ (work root included) and docs/runbooks/policies/ (directory absent at HEAD -- vacuous)"
       - "docs/contracts/inference-provider.md describes the CD.28 tier model; provider defaults in contract and code agree; Bedrock/copilot-sdk marked retired"
       - "Bedrock-referencing tests updated in lockstep; pytest green"
     related_candidate_decisions: [CD.28, CD.16]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-11"
+    note: >-
+      Realized via PR #123 (squash 0850866; plan docs/plans/PLAN-cd28-retirement-sweeps.md rode the
+      same PR) + forward-fix PR #124 (github-copilot-sdk pin 0.2.2 -> 0.2.3 after PyPI yanked 0.2.2,
+      discovered at deploy time). pr-validate + terraform-validate green on both; post-merge
+      main-validate full tier green on both merge commits. Actual change set was wider than
+      files_in_scope -- exit-criteria greps forced addenda (scripts/build_lambda.py,
+      scripts/run_scheduled_agent.py, scripts/tool_runtime.py, both src/lambdas/*/manifest.yaml
+      includes, terraform/CLAUDE.md narrative). Original exit criterion 2 wording: "Affected Lambda
+      artifacts rebuilt + deployed + smoke-tested per CD.16/Decision 79 (dispatcher smoke-test
+      deferred until T4.3 per CD.16's surviving clause)" -- rewritten because the deploy targets do
+      not exist in the live account (Lambda-wave deferral post-CD.21); rec-2164 (High) carries the
+      ops-compaction provisioning discrepancy and possible uncompacted staged non-recs writes.
+      Replacement closure: Bedrock path dead (deletion + zero-hit greps); copilot-sdk survivor
+      explicitly owned by PLAN-resolve-scheduled-agent-provider (Decision 49 operative clause;
+      Decision 49's bedrock_client.py dormant-retention constraint superseded per CD.28 follow-on
+      inventory); residual out-of-criterion doc/config Bedrock references owned by rec-2163
+      (PLAN-sweep-bedrock-docs-references). bedrock_via_chain MOOT confirmed (verifier absent at
+      HEAD; no live surface cites it). T-1.14 unblocked to consume CD.28-aligned contract content.
 
   # ----- T2: Full state migration to personal account -----
   - id: T2.1
