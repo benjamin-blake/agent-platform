@@ -115,9 +115,10 @@ class TestResolveProvider:
         monkeypatch.setenv("LLM_PROVIDER", "gemini")
         assert resolve_provider() == "gemini"
 
-    def test_reads_env_var_bedrock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retired_bedrock_falls_back_to_gemini(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # bedrock left _VALID_PROVIDERS per CD.28; unknown values fall back
         monkeypatch.setenv("LLM_PROVIDER", "bedrock")
-        assert resolve_provider() == "bedrock"
+        assert resolve_provider() == "gemini"
 
     def test_invalid_provider_falls_back_to_gemini(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LLM_PROVIDER", "openai")
@@ -180,10 +181,12 @@ class TestResolveModelPlanning:
         assert resolve_model("planning", "XS") == "my-custom-model"
         assert resolve_model("planning", "L") == "my-custom-model"
 
-    def test_bedrock_provider_returns_none(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
+    def test_retired_provider_resolves_via_gemini_path(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
+        # LLM_PROVIDER=bedrock falls back to gemini (CD.28), so the
+        # effort-band lookup applies instead of the non-gemini None path.
         monkeypatch.setenv("LLM_PROVIDER", "bedrock")
         monkeypatch.delenv("COPILOT_MODEL_PLANNING", raising=False)
-        assert resolve_model("planning", "XS") is None
+        assert resolve_model("planning", "XS") == "gemini-3-flash-preview"
 
 
 # ---------------------------------------------------------------------------

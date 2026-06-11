@@ -1,10 +1,11 @@
 # complexity-waiver: decision-43
 """
-DEPRECATED: This module is superseded by scripts/llm_client.py (Bedrock).
+DEPRECATED: This module is superseded by scripts/llm_client.py.
 
 Subprocess wrapper for GitHub Copilot CLI with OTel metric capture.
-Retained for rollback only. Will be removed once Bedrock migration is
-confirmed stable. New code should import from scripts.llm_client instead.
+Retained for rollback only; removal is owned by CD.28's
+PLAN-retire-copilot-sdk follow-on. New code should import from
+scripts.llm_client instead.
 
 Debug mode
 ----------

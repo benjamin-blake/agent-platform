@@ -249,9 +249,9 @@ class TestLambdaScriptsAndSdkConfig:
         """tool_runtime.py is listed in _LAMBDA_SCRIPTS."""
         assert "tool_runtime.py" in _LAMBDA_SCRIPTS
 
-    def test_bedrock_client_in_lambda_scripts(self):
-        """bedrock_client.py is listed in _LAMBDA_SCRIPTS."""
-        assert "bedrock_client.py" in _LAMBDA_SCRIPTS
+    def test_bedrock_client_absent_from_lambda_scripts(self):
+        """bedrock_client.py left the bundle with the CD.28 retirement."""
+        assert "bedrock_client.py" not in _LAMBDA_SCRIPTS
 
 
 class TestBuildAppPackageSdkInstall:

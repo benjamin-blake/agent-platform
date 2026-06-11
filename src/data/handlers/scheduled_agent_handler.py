@@ -7,18 +7,18 @@ Environment variables
 ---------------------
 GITHUB_PAT_SECRET_ARN : ARN of the Secrets Manager secret containing the
     GitHub PAT. Used by ``copilot-sdk`` and ``github-models`` providers.
-BEDROCK_CREDENTIALS_SECRET_ARN : ARN of the Secrets Manager secret containing
-    cross-account Bedrock credentials (JSON with ``aws_access_key_id`` and
-    ``aws_secret_access_key``). Falls back to ``GITHUB_PAT_SECRET_ARN`` if unset.
 S3_LOG_BUCKET          : S3 bucket name for writing agent findings
     (e.g. ``agent-platform-data-lake``).
 SCHEDULED_AGENT_MODEL  : Optional model override.
 
 Providers
 ---------
-- ``bedrock``: AWS Bedrock Converse API (active); uses DeepSeek V3.2 in eu-west-2.
-- ``copilot-sdk``: GitHub Copilot SDK (dormant); uses PAT from Secrets Manager.
+- ``copilot-sdk``: GitHub Copilot SDK; uses PAT from Secrets Manager.
+  Governed by Decision 49 pending PLAN-resolve-scheduled-agent-provider.
+- ``gemini``: Gemini via Copilot SDK BYOK; needs PAT + Gemini API key.
 - ``github-models``: GitHub Models API (local/legacy; not for Lambda).
+
+Bedrock dispatch was retired per CD.28 (T1.15 sweep).
 
 Lambda trigger
 --------------
@@ -66,38 +66,6 @@ def _get_github_pat() -> str:
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to retrieve GitHub PAT from Secrets Manager: %s", exc)
         return ""
-
-
-def _get_bedrock_credentials() -> dict[str, str] | None:
-    """Retrieve Bedrock credentials from Secrets Manager for cross-account auth.
-
-    The secret (stored in the work account) contains a JSON object with
-    ``aws_access_key_id`` and ``aws_secret_access_key`` for the personal
-    Bedrock account (REDACTED-PERSONAL-ACCOUNT).
-
-    Returns dict with credential keys, or None on any failure.
-    """
-    secret_arn = os.environ.get(
-        "BEDROCK_CREDENTIALS_SECRET_ARN",
-        os.environ.get("GITHUB_PAT_SECRET_ARN", ""),
-    ).strip()
-    if not secret_arn:
-        return None
-
-    try:
-        import boto3
-
-        client = boto3.client("secretsmanager", region_name="eu-west-2")
-        response = client.get_secret_value(SecretId=secret_arn)
-        secret_str = response.get("SecretString", "").strip()
-        creds = json.loads(secret_str)
-        if "aws_access_key_id" in creds and "aws_secret_access_key" in creds:
-            return creds
-        logger.warning("Secrets Manager secret missing Bedrock credential keys")
-        return None
-    except (json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
-        logger.error("Failed to retrieve Bedrock credentials from Secrets Manager: %s", exc)
-        return None
 
 
 def _get_gemini_api_key() -> str:
@@ -151,26 +119,6 @@ def _load_manifest() -> list[dict[str, Any]]:
             return load_manifest(candidate)
     logger.error("schedule.yaml not found")
     return []
-
-
-def _invoke_bedrock(prompt_text: str, model: str, max_tokens: int = 4096) -> tuple[str, bool, str]:
-    """Invoke Bedrock converse API with cross-account credentials.
-
-    Returns (output, error, message).
-    """
-    from scripts.bedrock_client import converse
-
-    credentials = _get_bedrock_credentials()
-    response = converse(
-        prompt=prompt_text,
-        model_id=model,
-        region="eu-west-2",
-        max_tokens=max_tokens,
-        credentials=credentials,
-    )
-    if response.get("error"):
-        return "", True, response.get("message", "")
-    return response.get("content", ""), False, ""
 
 
 def _invoke_copilot_sdk(prompt_text: str, model: str, pat: str, max_tokens: int = 4096) -> tuple[str, bool, str]:
@@ -375,9 +323,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     to S3 using the convention ``agents/{name}/{timestamp}.jsonl``.
 
     Routes inference by the agent's ``provider`` field:
-    - ``bedrock``: uses Bedrock Converse API with DeepSeek V3.2 (active; eu-west-2)
-    - ``copilot-sdk``: uses GitHub Copilot SDK (dormant; retained for rollback)
-    - ``github-models``: uses GitHub Models API (local/legacy)
+    - ``copilot-sdk``: uses GitHub Copilot SDK (Decision 49)
+    - ``gemini``: uses Gemini via Copilot SDK BYOK
+    - ``github-models``: uses GitHub Models API (local/legacy; the
+      absent-field default)
+
+    Bedrock dispatch was retired per CD.28.
 
     Args:
         event: EventBridge event payload (unused but required by Lambda).
@@ -463,25 +414,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         # rec-curator requires its S3 input files injected inline because
         # the Lambda environment cannot execute bash tool calls.
-        if name == "rec-curator" and provider in ("bedrock", "copilot-sdk", "gemini"):
+        if name == "rec-curator" and provider in ("copilot-sdk", "gemini"):
             prompt_text = _preload_rec_curator_context(prompt_text)
 
         import time as _time
 
-        if provider == "bedrock":
-            # rec-curator produces a large JSON array; increase output budget.
-            max_tokens = 8192 if name == "rec-curator" else 4096
-            _t0 = _time.monotonic()
-            output, has_error, err_msg = _invoke_bedrock(prompt_text, model, max_tokens=max_tokens)
-            _call_dur = int(_time.monotonic() - _t0)
-            _record_model_call(
-                provider=provider,
-                model=model,
-                purpose="findings",
-                error=err_msg if has_error else None,
-                duration_seconds=_call_dur,
-            )
-        elif provider == "copilot-sdk":
+        if provider == "copilot-sdk":
             if not pat_checked:
                 pat = _get_github_pat()
                 pat_checked = True
