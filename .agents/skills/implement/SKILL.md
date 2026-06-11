@@ -6,7 +6,9 @@ description: Deep methodology for executing implementation plans, including live
 # Implement Methodology & Rules
 
 You are using this skill to augment the `/implement` workflow. Apply these deep instructions when executing the workflow steps. The workflow defines WHAT to do and in WHAT ORDER. This skill defines HOW to do each step.
-You must treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless they are explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's Scope Table, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
+You must treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless they are explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's scope, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
+
+**Plan format (T1.11 / CD.22):** plans are `docs/plans/PLAN-{slug}.yaml`, schema-validated by `scripts/plan_document.py` (resolve via `scripts/find_plan.py`). If handed a legacy `PLAN-{slug}.md` path, emit a deprecation warning in the session output and proceed -- the .md path survives one release cycle, then is removed. Never author new .md plans. (This legacy mirror is updated as voluntary hygiene -- `.claude/skills/implement/SKILL.md` is canonical per Decision 76; no sync obligation exists.)
 
 ## Behavioural Invariants
 ```yaml
@@ -41,7 +43,7 @@ This repository is agent-first. When implementing documentation changes, apply t
   field in an existing YAML?" If yes, prefer that over a new file.
 
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
-After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.md file before proceeding to code review.
+After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
 
 ### Why This Exists (Rationale)
 Acceptance commands prove the code landed (e.g. `grep` or `pytest`). Verification commands prove the feature works end-to-end. Examples of bugs that only verification catches:

@@ -1856,6 +1856,46 @@ def validate_lambda_deploy_gating(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_plan_documents(failed: list[str], plans_dir: Path | None = None) -> None:
+    """Validate every docs/plans/PLAN-*.yaml against the PlanDocument Pydantic schema (T1.11 / CD.22).
+
+    Runs in BOTH --pre and full presubmit: pure Python over a handful of YAML files,
+    well under the Decision 60 fast-tier budget, and PLAN-*.yaml is an active editing
+    surface (same placement rationale as validate_product_roadmap). Historical PLAN-*.md
+    files are out of scope -- only the YAML artefact class is schema-governed.
+
+    plans_dir overrides the scanned directory (test seam for malformed-fixture proofs).
+    """
+    print("\n=== Plan document schema validation ===")
+
+    target_dir = plans_dir if plans_dir is not None else ROOT / "docs" / "plans"
+    plan_paths = sorted(target_dir.glob("PLAN-*.yaml"))
+    if not plan_paths:
+        print("  PASS: no PLAN-*.yaml files to validate.")
+        return
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.plan_document import validate_paths  # noqa: PLC0415
+
+        failures = validate_paths(plan_paths)
+        for path, error in failures:
+            print(f"  FAIL: {path.name}: {error}")
+        if failures:
+            failed.append("Plan document schema validation")
+        else:
+            print(f"  PASS: {len(plan_paths)} plan document(s) validate against PlanDocument schema.")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import plan_document: {exc}")
+        failed.append("Plan document schema validation")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def validate_product_roadmap(failed: list[str]) -> None:
     """Validate docs/ROADMAP-PRODUCT.yaml against the ProductRoadmapDocument Pydantic schema.
 
@@ -2273,6 +2313,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_lambda_bundle_completeness(failed)
     validate_lambda_deploy_gating(failed)
     validate_product_roadmap(failed)
+    validate_plan_documents(failed)
     validate_pydantic_yaml_drift(failed)
     _check_graduation_guard(failed)
     validate_dq_manifest_gate(failed)
@@ -2706,6 +2747,8 @@ def main() -> None:
         validate_workflow_agent_safety(failed)
         # Product-roadmap check runs in --pre: pure Python, sub-100ms, active editing surface
         validate_product_roadmap(failed)
+        # Plan-document check runs in --pre for the same reason (T1.11 / CD.22)
+        validate_plan_documents(failed)
         # CC-gate in --pre: O(lines) AST check, per rec-859 RCA earliest_viable_gate="pre" (docs/INTENT-ci-rca-methodology.md)
         validate_cc_limits(failed)
         # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach

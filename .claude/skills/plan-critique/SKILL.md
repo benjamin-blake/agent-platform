@@ -1,6 +1,6 @@
 ---
 name: plan-critique
-description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.md before implementation. Mandatory gate between planning and implementation."
+description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.yaml before implementation. Mandatory gate between planning and implementation."
 required-context:
   - docs/PROJECT_CONTEXT.md
   - docs/ROADMAP-PRODUCT.yaml
@@ -10,7 +10,7 @@ required-context:
 
 ## Intent
 
-Challenge PLAN-*.md from a different perspective than the model that wrote it. Evaluate strategic alignment, decision consistency, and work area scoping before implementation begins.
+Challenge PLAN-*.yaml from a different perspective than the model that wrote it. Evaluate strategic alignment, decision consistency, and work area scoping before implementation begins. (Plans are YAML documents validated against the `PlanDocument` schema in `scripts/plan_document.py` per T1.11 / CD.22; the legacy PLAN-*.md form is deprecated -- if handed a .md path, emit a deprecation warning in your output and critique it anyway for one release cycle.)
 
 This is a BLOCKING gate. The critique must assess whether the plan is strategically sound, well-bounded, and aligned with the North Star. A superficial review that only checks formatting is unacceptable.
 
@@ -20,7 +20,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 ### Phase 1: Load Context (MANDATORY - Do Not Skip)
 
-1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.md`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.md` and read the most recently modified one.
+1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.yaml`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.yaml` and read the most recently modified one (fall back to `PLAN-*.md` only if no .yaml exists, and note the deprecation in your output).
 
 2. Read `docs/PROJECT_CONTEXT.md` (for North Star and rules).
 
@@ -28,7 +28,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 4. Read `docs/DECISIONS.md` (for conflicts with prior decisions).
 
-5. **For IMPLEMENTATION plans:** Read the files listed in the `## Scope` table to verify the plan's accuracy. For STRATEGIC plans, this is not required — Work Areas are high-level and do not require file-level verification.
+5. **For IMPLEMENTATION plans:** Read the files listed in the plan's `scope` list (the `## Scope` table in legacy .md plans) to verify the plan's accuracy. For STRATEGIC plans, this is not required — work areas are high-level and do not require file-level verification.
 
 ### Phase 2: Strategic Analysis
 
@@ -50,7 +50,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 12b. **Lambda deployment completeness (IMPLEMENTATION plans only):** Use `bin/venv-python -m scripts.lambda_manifest --list-patterns` to determine which scope files are Lambda-packaged and `compute_affected_artifacts()` to identify the affected artifact slug(s). For each affected artifact with `status: active` in its `src/lambdas/<slug>/manifest.yaml`, the Ordered Execution Steps MUST include: (a) a per-Lambda build step, (b) a per-Lambda deploy step, (c) a smoke-test step using `run_scheduled_agent.py --smoke-test`, and (d) model ID validation against `docs/contracts/inference-provider.md` if model IDs are changed. Blanket `build_lambda.py --deploy` (all artifacts) is acceptable only when the plan modifies all active artifacts; per-Lambda scoping is preferred. If any active-artifact deploy step is missing, recommend REVISE. Exception: stub artifacts (status: stub) require no deploy step -- V1 verification suffices. The blanket `DEFERRED: build_lambda.py --deploy` exception for Decision 67 is withdrawn; Decision 67's Lambda-deploy clause was lifted by Decision 79 (CD.16 + CD.24). Reference: Decision 47, Decision 67 (Lambda-deploy clause lifted), Decision 79, Step 4 (Lambda Deployment Assessment) of plan.prompt.md.
 
-12c. **Verification Plan executable command check (IMPLEMENTATION plans only):** Every row in the `## Verification Plan` table MUST have a `Command` column containing a literal executable shell command or Python one-liner. FAIL if any VP step has only prose in the Action column with no executable Command. For V3 plans, every VP step must be tagged `[pre-deploy]` or `[post-deploy]`. If either check fails, recommend REVISE with the specific VP rows that need commands or tags added.
+12c. **Verification Plan executable command check (IMPLEMENTATION plans only):** Every `verification_plan` entry MUST have a `command` field containing a literal executable shell command or Python one-liner (the `PlanDocument` schema rejects empty commands; your job is to judge whether the command actually exercises the feature rather than being a structural-only check). FAIL if any VP step is prose-only with no executable command. For V3 plans, every VP step's `phase` must be `pre-deploy` or `post-deploy`. If either check fails, recommend REVISE with the specific VP steps that need commands or tags added.
 
 12d. **STRATEGIC plan gate:** If the plan's `## Plan Type` is `STRATEGIC` AND `docs/DECISIONS.md` contains an active Decision 67, recommend REVISE with: "STRATEGIC plans are blocked while Decision 67 is active (telemetry tables not yet confirmed operational). Convert to an IMPLEMENTATION plan or wait for Decision 67 reversal."
 
@@ -119,9 +119,9 @@ Ask the following five questions against the plan's chosen approach. For each, w
 ## Quality Gate
 
 Before outputting your critique, verify:
-- [ ] You read EVERY file in the Scope table (not just .md files)
+- [ ] You read EVERY file in the plan's scope (not just .md files)
 - [ ] You can cite line numbers for call sites in source files
 - [ ] You can cite line numbers for mocks in test files
-- [ ] Your "Files Read" list matches the Scope table count
+- [ ] Your "Files Read" list matches the scope entry count
 
 If any checkbox is false, go back and read the missing files before proceeding.
