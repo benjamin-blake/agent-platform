@@ -1089,9 +1089,7 @@ def test_write_scd2_advances_counter_for_canonical_caller_key():
     """A caller-keyed rec-NNN write_ops (backfill / pre-merge clients) must never strand the counter."""
     con = FileOpsCon(counter_value=2170)
     rt.write_scd2(con, {"id": "rec-2200", "status": "open"}, table="ops_recommendations")
-    advances = [
-        (s, p) for s, p in con.executed if "GREATEST(current_value, ?)" in s and rt.ENTITY_COUNTERS_TABLE in s
-    ]
+    advances = [(s, p) for s, p in con.executed if "GREATEST(current_value, ?)" in s and rt.ENTITY_COUNTERS_TABLE in s]
     assert advances and advances[0][1] == [2200, "ops_recommendations"]
 
 
