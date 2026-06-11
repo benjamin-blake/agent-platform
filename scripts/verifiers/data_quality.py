@@ -106,9 +106,16 @@ class DataQualityVerifier(Verifier):
                 message=f"Data quality passed: {result.passed} passed, {result.warned} warned.",
             )
 
+        _FAIL_VERDICTS = {"FAIL", "UNENFORCED_FAIL", "ERROR", "HARD_GATE"}
+        failing = [r for r in result.results if r.verdict in _FAIL_VERDICTS]
+        lines = []
+        for r in failing[:10]:
+            col_part = f".{r.check.column}" if r.check.column else ""
+            lines.append(f"  {r.check.table}{col_part} [{r.check.test_type}] {r.verdict} ({r.violation_count} violation(s))")
+        breakdown = "\n".join(lines)
         msg = (
             f"Data quality {result.verdict}: {result.hard_gated} hard-gated, {result.failed} failed, "
-            f"{result.errored} errored, {result.warned} warned. Run validate.py --scope dq for details."
+            f"{result.errored} errored, {result.warned} warned.\n{breakdown}"
         )
         return VerifierResult(
             name=self.name,
