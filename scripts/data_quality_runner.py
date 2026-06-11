@@ -642,7 +642,7 @@ def _execute_check(
 
 
 def apply_backend_routing(all_checks: list[Check], database: str, *, table_filter: str | None = None) -> list[Check]:
-    """Route the migrated recs checks to the active ops storage backend (T2.19 / Decision 81).
+    """Route the migrated-table checks to the DuckLake reader (sole backend, Decision 84 I-1).
 
     Rewrite every check on a migrated
     recs table to the DuckLake closed reader (DuckDB dialect over the `current` TABLE) and append
@@ -652,8 +652,6 @@ def apply_backend_routing(all_checks: list[Check], database: str, *, table_filte
     reader -- NOT the dropped ops_recommendations_current Athena view (which would TABLE_NOT_FOUND).
     Mutates and returns *all_checks*.
     """
-    if _ops_backend() != "ducklake":
-        return all_checks
     for c in all_checks:
         if c.table in _DUCKLAKE_OPS_TABLES:
             c.sql = to_ducklake_sql(c.sql, c.table, database)

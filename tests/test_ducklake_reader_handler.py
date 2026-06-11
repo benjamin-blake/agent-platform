@@ -315,3 +315,11 @@ def test_handler_connect_probe_success(monkeypatch):
 def test_connect_probe_in_connectionless_actions():
     """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_reader_connection."""
     assert "connect_probe" in h._CONNECTIONLESS_ACTIONS
+
+
+def test_action_read_ops_current_rejects_malformed_filter():
+    """A filter missing 'value' must loud-fail, never degrade to an unfiltered full-table read."""
+    with pytest.raises(rt.DuckLakeRuntimeError, match="BOTH 'column' and 'value'"):
+        h.action_read_ops_current({"table": "ops_recommendations", "filter": {"column": "status"}}, FakeCon())
+    with pytest.raises(rt.DuckLakeRuntimeError, match="BOTH 'column' and 'value'"):
+        h.action_read_ops_current({"table": "ops_recommendations", "filter": "status=open"}, FakeCon())

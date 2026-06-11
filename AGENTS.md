@@ -137,7 +137,14 @@ Legacy fallbacks at `.github/prompts/` and `.github/agents/` are deep-frozen —
 
 ### Re-enable Lambda scheduled agents
 
-Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, rec-curator) were disabled in May 2026 during migration to Claude Code scheduled agents. To re-enable:
+Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, rec-curator) were disabled in May 2026 during migration to Claude Code scheduled agents.
+
+> **CAVEAT (Decision 84):** rec-curator's priority-queue producer flow still writes via the
+> OpsWriter/Iceberg staging path (`scripts/s3_log_store.py`), while ALL queue readers now serve
+> DuckLake -- re-enabling before the T2.26 producer repoint sends curator output to a store
+> nothing reads. Repoint the producer first.
+
+To re-enable:
 
 1. **Quick (AWS CLI only, no Terraform apply):**
    ```bash

@@ -1067,9 +1067,38 @@ def test_file_scd2_rejects_caller_supplied_merge_key():
 
 def test_file_scd2_rejects_table_without_prefix():
     con = FileOpsCon()
-    with pytest.raises(rt.DuckLakeRuntimeError, match="entity_id_prefix"):
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
         rt.file_scd2(con, {"queue_run_id": "q"}, table="ops_priority_queue")
     assert con.executed == []
+
+
+def test_file_scd2_rejects_caller_keyspace_table():
+    """Decision 84 I-2 exception: dec-NNN follows DECISIONS.md numbering -- file_ops must refuse."""
+    con = FileOpsCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        rt.file_scd2(con, {"title": "t", "status": "open"}, table="ops_decisions")
+    assert con.executed == []
+
+
+def test_bootstrap_entity_counter_rejects_caller_keyspace():
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        rt.bootstrap_entity_counter(FileOpsCon(), rt.resolve_table_spec("ops_decisions"))
+
+
+def test_write_scd2_advances_counter_for_canonical_caller_key():
+    """A caller-keyed rec-NNN write_ops (backfill / pre-merge clients) must never strand the counter."""
+    con = FileOpsCon(counter_value=2170)
+    rt.write_scd2(con, {"id": "rec-2200", "status": "open"}, table="ops_recommendations")
+    advances = [
+        (s, p) for s, p in con.executed if "GREATEST(current_value, ?)" in s and rt.ENTITY_COUNTERS_TABLE in s
+    ]
+    assert advances and advances[0][1] == [2200, "ops_recommendations"]
+
+
+def test_write_scd2_no_counter_advance_for_noncanonical_key():
+    con = FileOpsCon(counter_value=2170)
+    rt.write_scd2(con, {"id": "test-probe-1", "status": "open"}, table="ops_recommendations")
+    assert not any("GREATEST(current_value" in s for s, _ in con.executed)
 
 
 def test_file_scd2_allocated_collision_is_terminal():

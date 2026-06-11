@@ -1,8 +1,8 @@
 # complexity-waiver: decision-43
 """sync_ops -- bidirectional sync between local JSONL files and the Iceberg ops tables.
 
-Read path: DuckDBIcebergReader (src/common/iceberg_reader.py) is tried first.
-Athena is retained as a fallback path (CD.8/CD.15 escape-hatch clause).
+Read path: the DuckLake closed reader, for every migrated table. There is no Athena
+fallback (Decision 84 I-1); on reader failure the cache is left untouched with a loud warning.
 
 Provides one CLI subcommand:
   sync   -- drain outbox then pull all tables from Iceberg
@@ -10,7 +10,7 @@ Provides one CLI subcommand:
 Internal helpers (not for direct agent use):
   drain              -- flush outbox entries to S3 via OpsWriter
   _rebuild_local_cache -- read Iceberg current-state and overwrite local JSONL files
-  _pull_single_table -- pull a single table from Iceberg (Athena fallback)
+  _pull_single_table -- pull a single table from the DuckLake reader (no fallback)
 
 Never raises to callers. All functions catch and log exceptions internally.
 """
@@ -61,7 +61,13 @@ def _pull_via_reader(table: str) -> list[dict] | None:
     try:
         from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-        return make_reader(table=table).current_state(table)
+        reader = make_reader(table=table)
+        if table == "ops_priority_queue":
+            # Decision 70: the queue current state is ALL entries of the LATEST curator run.
+            # The generic latest-per-merge-key projection would silently change these semantics,
+            # so the verb is the only sanctioned queue read (Decision 84 I-3).
+            return reader.named("priority_queue_current")
+        return reader.current_state(table)
     except Exception as exc:  # noqa: BLE001
         logger.warning("sync_ops._pull_via_reader: reader failed for %s: %s", table, exc)
         return None
@@ -406,7 +412,7 @@ def outbox_summary() -> dict[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sync ops Iceberg tables to local JSONL cache")
+    parser = argparse.ArgumentParser(description="Sync ops tables from the DuckLake reader to local JSONL cache")
     parser.add_argument("command", choices=["sync"], help="Subcommand to run")
     parser.add_argument("--profile", default=_SSO_PROFILE, help=f"AWS SSO profile (default: {_SSO_PROFILE})")
     args = parser.parse_args()

@@ -426,6 +426,7 @@ def write_scd2(
             params = _write_params(spec, record, identity, created_ts)
             con.execute(merge_history_sql, params)
             con.execute(merge_current_sql, params)
+            _advance_entity_counter(con, spec, key)
             con.execute("COMMIT")
             break
         except ReferentialError:
@@ -487,8 +488,11 @@ def bootstrap_entity_counter(con: Any, spec: Any) -> int:
     concurrent file_ops all allocating the same id. DELETE + single INSERT here is idempotent
     and also repairs that duplicate-row state. Returns the seeded value.
     """
-    if not spec.entity_id_prefix:
-        raise DuckLakeRuntimeError(f"table {spec.table!r} declares no entity_id_prefix: it has no allocation counter to seed")
+    if not spec.entity_id_prefix or spec.id_keyspace != "writer":
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
+            "it has no allocation counter to seed"
+        )
     prefix = spec.entity_id_prefix
     ensure_entity_counters_table(con)
     con.execute("BEGIN TRANSACTION")
@@ -517,9 +521,10 @@ def _allocate_entity_id(con: Any, spec: Any) -> str:
     terminal loud-fail (never self-seeded here; see bootstrap_entity_counter for why).
     """
     prefix = spec.entity_id_prefix
-    if not prefix:
+    if not prefix or spec.id_keyspace != "writer":
         raise DuckLakeRuntimeError(
-            f"table {spec.table!r} declares no entity_id_prefix: file_ops allocation is not enabled for it"
+            f"table {spec.table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
+            "file_ops allocation is not enabled for it (Decision 84 I-2)"
         )
     counter = f"{spec.table}"
     rows = con.execute(
@@ -543,6 +548,26 @@ def _allocate_entity_id(con: Any, spec: Any) -> str:
     ).fetchone()
     n = int(allocated[0])
     return f"{prefix}{n:03d}"
+
+
+def _advance_entity_counter(con: Any, spec: Any, key: Any) -> None:
+    """Advance the allocation counter to cover a caller-keyed canonical id, in the open transaction.
+
+    write_ops accepts caller-keyed <prefix>NNN ids (backfill; pre-merge main clients on the old
+    allocator). Without this, any such id above the counter strands file_ops on the terminal
+    "counter behind table max" guard until an operator re-bootstraps. No-op when the table has no
+    writer-owned keyspace, the key is non-canonical, or the counter row is absent (not bootstrapped).
+    """
+    if spec.id_keyspace != "writer" or not spec.entity_id_prefix:
+        return
+    m = re.fullmatch(re.escape(spec.entity_id_prefix) + r"([0-9]+)", str(key))
+    if not m:
+        return
+    con.execute(
+        f"UPDATE {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} SET current_value = GREATEST(current_value, ?) "
+        "WHERE counter_name = ?",
+        [int(m.group(1)), spec.table],
+    )
 
 
 def file_scd2(
@@ -569,8 +594,11 @@ def file_scd2(
     """
     semantics = semantics if semantics is not None else load_field_semantics()
     spec = resolve_table_spec(table, semantics)
-    if not spec.entity_id_prefix:
-        raise DuckLakeRuntimeError(f"table {table!r} declares no entity_id_prefix: file_ops allocation is not enabled for it")
+    if not spec.entity_id_prefix or spec.id_keyspace != "writer":
+        raise DuckLakeRuntimeError(
+            f"table {table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
+            "file_ops allocation is not enabled for it (Decision 84 I-2)"
+        )
     if spec.merge_key in record:
         raise SchemaGateError(f"file operation must not supply {spec.merge_key!r}: the writer allocates it (Decision 84 I-2)")
     # Fail fast on every OTHER contract violation before touching the catalog: gate a copy with a

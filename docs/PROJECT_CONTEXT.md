@@ -34,10 +34,10 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 ### Recommendation & Decision Logging
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
 - **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See `docs/INTENT-ducklake-consolidation.md`.
-- **ID Authority:** Recommendation and decision IDs are allocated atomically via DynamoDB. The local JSONL files are read-only caches, not the source of truth.
-- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` reads recs from the DuckLake reader (and other ops tables from Athena), via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
-- **Offline/Pending Outbox:** If AWS credentials (profile `agent_platform`) are missing or services are unreachable, the portal automatically queues records to `logs/.ops-outbox/`. Call `ops_data_portal.sync()` once connectivity is restored to drain and compact.
-- **SCD Type 2:** Both backends use append-only SCD2 semantics. On Iceberg, deduplication to the latest record happens at query time via the `ops_recommendations_current` / `ops_decisions_current` views; on DuckLake the reader returns current-state directly (DuckLake-side dedup).
+- **ID Authority (Decision 84 I-2):** Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`); decision numbering authority is DECISIONS.md (callers supply `decision_id`). The local JSONL files are read-only caches, not the source of truth.
+- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Reads and writes transit the closed DuckLake reader/writer boundary via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
+- **Failure mode (Decision 84 I-4):** there is NO offline outbox. A write that cannot complete FAILS LOUDLY at the call site (after an idempotent transient-5xx retry); re-file after restoring connectivity (verify with `aws sts get-caller-identity --profile agent_platform`). `sync()` only refreshes the local read cache and returns `{"pulled": ...}`.
+- **SCD Type 2:** Append-only SCD2 semantics; the DuckLake reader serves the current-state projection directly (no query-time view dedup).
 
 ### Data Quality Enforcement
 
@@ -98,7 +98,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 - **Profile**: `agent_platform` (PlatformDev, runtime; static-key assume-role) -- agents use this profile for all operations. `agent_platform_admin` (PlatformAdmin) is used for provisioning (IAM + OIDC) only.
   - Environment promotion is human-triggered via GitHub Actions, not agent-initiated
   - **Credential model (static-key, supersedes Decision 57's SSO-recovery semantics):** the near-powerless `agent_static` IAM key assumes `PlatformDev`/`PlatformAdmin` via STS; sessions auto-refresh and there is no interactive login. Autonomous executors (Lambda) skip credential-dependent verifiers (emitting SKIPPED) to prevent pipeline deadlocks; they never attempt recovery.
-  - `creds_status: "unavailable"` -- **Static-key recovery (non-fatal, Decision 60):** verify the chain with `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if `agent_static` was rotated. Do NOT block -- preflight continues in degraded mode (Athena-backed reads fall back to local cache or empty).
+  - `creds_status: "unavailable"` -- **Static-key recovery (non-fatal, Decision 60):** verify the chain with `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if `agent_static` was rotated. Do NOT block -- preflight continues in degraded mode (warehouse reads degrade loudly (recs_read_status / verb failures), cache fallback where designed).
   - See Decision 24 in `docs/DECISIONS.md` for rationale
 - **Glue database**: agent_platform
 - **Athena workgroups**:
@@ -228,9 +228,9 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 ## Known Gotchas
 
 - **Rec/Decision Write Portal (Critical):** Never append to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly. All writes MUST go through `python -m scripts.ops_data_portal` or the Python API.
-  - **ID Authority:** IDs are allocated via DynamoDB. The local JSONL is a read-only cache. Use `ops_data_portal.sync()` to flush pending writes and rebuild.
-  - **Offline Mode:** If credentials (profile `agent_platform`) are missing, the portal queues to `logs/.ops-outbox/`. Restore the static-key chain (verify with `aws sts get-caller-identity --profile agent_platform`), then call `ops_data_portal.sync()` to drain.
-  - **Deduplication:** The store uses SCD Type 2 append-only semantics; Athena views select the latest record.
+  - **ID Authority (Decision 84 I-2):** rec-NNN ids are allocated by the ducklake_writer atomically with the insert; decision ids follow DECISIONS.md numbering. The local JSONL is a read-only cache; `ops_data_portal.sync()` only rebuilds it from the reader.
+  - **Failure mode (Decision 84 I-4):** there is NO offline outbox. A failed write raises loudly -- re-file after restoring the static-key chain (verify with `aws sts get-caller-identity --profile agent_platform`).
+  - **Deduplication:** SCD Type 2 append-only semantics; the DuckLake reader serves the current-state projection.
   Direct file writes are caught by `validate.py` and will fail CI. Status changes (closing recs) must also use the portal.
 
 - **Git branching workflow:** On Claude Code on the web the harness creates the per-session branch; do NOT create `agent/` branches. Never commit directly to `main`. Merge via a GitHub MCP PR (no local `gh`); wait for CI event-driven via `subscribe_pr_activity`, then squash-merge via `merge_pull_request`. See Decision 76.

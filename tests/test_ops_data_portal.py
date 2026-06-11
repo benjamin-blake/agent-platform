@@ -114,7 +114,7 @@ class TestFileRec:
         assert call_rec["status"] == "open"
         assert mock_dl_write.call_args.kwargs["action"] == "file_ops"
         ulid = mock_dl_write.call_args.kwargs["idempotency_ulid"]
-        assert isinstance(ulid, str) and len(ulid) == 32  # uuid4().hex
+        assert isinstance(ulid, str) and len(ulid) == 26  # ULID (time-ordered tiebreak for history reads)
         # write-through: local JSONL has new entry carrying the allocated id
         lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 1
@@ -554,9 +554,25 @@ class TestPostmortems:
     def test_purge_postmortems_dry_run_matches_without_writing(self) -> None:
         """dry_run reports the matched (non-superseded executor-postmortem) recs and writes nothing."""
         rows = [
-            {"id": "rec-529", "source": "executor-postmortem", "status": "open"},
-            {"id": "rec-530", "source": "executor-postmortem", "status": "superseded"},
-            {"id": "rec-531", "source": "code-review", "status": "open"},
+            {
+                "id": "rec-529",
+                "source": "executor-postmortem",
+                "status": "open",
+                "title": "Investigate executor failure for rec-100 (attempt 2)",
+            },
+            {
+                "id": "rec-530",
+                "source": "executor-postmortem",
+                "status": "superseded",
+                "title": "Investigate executor failure for rec-100",
+            },
+            {"id": "rec-531", "source": "code-review", "status": "open", "title": "Investigate executor failure for rec-100"},
+            {
+                "id": "rec-532",
+                "source": "executor-postmortem",
+                "status": "open",
+                "title": "Investigate executor failure for rec-1001",
+            },
         ]
         reader = self._reader_with_rows(rows)
 
@@ -575,8 +591,18 @@ class TestPostmortems:
     def test_purge_postmortems_supersedes_and_declines(self) -> None:
         """Each matched postmortem becomes status=superseded via update_rec; the failed rec is declined."""
         rows = [
-            {"id": "rec-529", "source": "executor-postmortem", "status": "open"},
-            {"id": "rec-533", "source": "executor-postmortem", "status": "open"},
+            {
+                "id": "rec-529",
+                "source": "executor-postmortem",
+                "status": "open",
+                "title": "Investigate executor failure for rec-100",
+            },
+            {
+                "id": "rec-533",
+                "source": "executor-postmortem",
+                "status": "open",
+                "title": "Investigate executor failure for rec-100 (attempt 2)",
+            },
         ]
         reader = self._reader_with_rows(rows)
 

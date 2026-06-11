@@ -3,7 +3,7 @@
 ```yaml
 runbook: ducklake-catalog-operations
 tier: T2.17-T2.18
-decisions: [81, 82, 78, 39, 37, 35, 77, 79, 62, 55]
+decisions: [84, 81, 82, 78, 39, 37, 35, 77, 79, 62, 55]
 exit_criteria: [EC3, EC12]
 sections:
   - id: 1
@@ -401,10 +401,11 @@ drills are T2.19 scope).
 
 ## Section 5 -- ops_compaction decommission runbook (T2.19-gated)
 
-**CURRENT STATE:** `ops_compaction` (`agent-platform-ops-compaction` Lambda) is the LIVE Iceberg
-ops write path. S3 ObjectCreated events on the `staging/` prefix trigger it; every `file_rec` and
-`update_rec` call depends on it. Do NOT disable or remove it before T2.19 (Decision 78 clause 7 /
-Decision 70 Single-Portal invariant).
+**CURRENT STATE (Decision 84):** `ops_compaction` serves ONLY the not-yet-migrated staging
+paths (`ops_session_log`, `ops_execution_plans`, telemetry). The migrated tables (recs,
+decisions, priority_queue) never touch it -- their reads AND writes transit the DuckLake closed
+boundary, and `sync_ops.drain` quarantines their outbox dirs. Do NOT disable or remove it before
+the T2.26 disposition of the remaining tables (the rec-2113 restore drill gates the demolition).
 
 The deprecation marker in `src/data/handlers/ops_compaction_handler.py` and the `notes` line in
 `src/lambdas/ops-compaction/manifest.yaml` are informational only -- no behavioural change.
@@ -416,7 +417,7 @@ the DuckLake writer is the proven live write path:
 
 ```yaml
 decommission_steps:
-  gate: T2.19 ops_data_portal.py write path confirmed live on DuckLake writer
+  gate: T2.26 disposition of ops_session_log/ops_execution_plans complete + rec-2113 restore drill passed (Decision 84)
   steps:
     - id: 1
       action: Disable the S3 trigger on agent-platform-ops-compaction

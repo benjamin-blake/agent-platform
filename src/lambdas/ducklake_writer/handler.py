@@ -144,7 +144,9 @@ def action_file_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     identity = None
     idem = event.get("idempotency_ulid")
     if idem is not None:
-        if not isinstance(idem, str) or not (10 <= len(idem) <= 40) or not idem.isalnum():
+        import re as _re  # noqa: PLC0415
+
+        if not isinstance(idem, str) or not _re.fullmatch(r"[0-9A-Za-z]{10,40}", idem):
             raise WriterActionError(f"invalid idempotency_ulid {idem!r}: expected a 10-40 char alphanumeric ULID")
         import dataclasses  # noqa: PLC0415
 
@@ -198,7 +200,7 @@ def action_create_ops_tables(event: dict[str, Any], con: Any) -> dict[str, Any]:
     rt.create_scd2_tables(con, table=table, force_recreate=force)
     spec = rt.resolve_table_spec(table)
     counter_seed = None
-    if spec.entity_id_prefix:
+    if spec.entity_id_prefix and spec.id_keyspace == "writer":
         # Serial bootstrap/repair of the allocation counter (Decision 84 I-2): the hot path
         # never self-seeds, so provisioning owns the seed (and repairs duplicate-row state).
         counter_seed = rt.bootstrap_entity_counter(con, spec)

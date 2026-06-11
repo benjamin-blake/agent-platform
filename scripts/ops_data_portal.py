@@ -183,7 +183,24 @@ def _ducklake_write(
         # Re-sign per attempt: SigV4 carries a timestamp.
         aws_req = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
         SigV4Auth(creds, _AWS_LAMBDA_SERVICE, _AWS_REGION).add_auth(aws_req)
-        resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+        try:
+            resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
+        except requests.RequestException as exc:
+            # The response-lost case the idempotency key exists FOR: the write may have committed.
+            # Retrying with the SAME body/ULID makes the writer replay-check return the original
+            # allocation instead of double-filing.
+            last_status, last_text = None, f"{type(exc).__name__}: {exc}"
+            if retryable and attempt < _WRITER_MAX_ATTEMPTS - 1:
+                logger.warning(
+                    "ducklake_writer %s connection failure (attempt %d/%d): %s -- retrying same ULID",
+                    action,
+                    attempt + 1,
+                    _WRITER_MAX_ATTEMPTS,
+                    exc,
+                )
+                _time.sleep(_WRITER_RETRY_BACKOFF_S[attempt])
+                continue
+            raise RuntimeError(f"ducklake_writer {action} {table} failed ({last_text})") from exc
         if resp.status_code == 200:
             return resp.json()
         last_status, last_text = resp.status_code, resp.text[:400]
@@ -191,6 +208,9 @@ def _ducklake_write(
             raise RuntimeError(f"ducklake_writer referential failure ({action} {table}): {last_text}")
         if resp.status_code == 422:
             raise ValueError(f"ducklake_writer schema-gate rejection ({action} {table}): {last_text}")
+        if resp.status_code == 503 and '"occ_exhausted"' in last_text:
+            # OCC budget exhaustion is stop-and-RCA (Decision 55), never blindly re-driven.
+            raise RuntimeError(f"ducklake_writer OCC budget exhausted ({action} {table}): {last_text}")
         if retryable and resp.status_code in _WRITER_TRANSIENT_STATUS and attempt < _WRITER_MAX_ATTEMPTS - 1:
             logger.warning(
                 "ducklake_writer %s HTTP %d (attempt %d/%d) -- retrying after cold-resume backoff",
@@ -437,7 +457,7 @@ def file_rec(
             Recommendation schema (model_validate) remain enforced. Migration-only.
 
     Returns:
-        Allocated ID string ('rec-NNN') or 'pending-<uuid>' when offline.
+        Allocated ID string ('rec-NNN'). Raises on failure (no offline mode).
 
     Raises:
         ValueError: If any required non-empty field is absent or blank.
@@ -481,12 +501,14 @@ def file_rec(
         Recommendation.model_validate({**merged, "id": "rec-0"})
         # The writer allocates rec-NNN atomically with the insert (Decision 84 I-2). The
         # idempotency ULID makes a response-lost retry return the original allocation.
+        from src.common.ducklake_runtime import mint_write_identity  # noqa: PLC0415
+
         response = _ducklake_write(
             "ops_recommendations",
             merged,
             action="file_ops",
             profile=profile,
-            idempotency_ulid=uuid.uuid4().hex,
+            idempotency_ulid=mint_write_identity().ulid,
         )
         rec_id = response.get("key", "")
         if not rec_id:
@@ -516,7 +538,7 @@ def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Option
     from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    rows = make_reader().named("rec_by_id", id=rec_id)
+    rows = make_reader(profile=profile).named("rec_by_id", id=rec_id)
     if not rows:
         return None
     coerced = _coerce_ops_rec_row(dict(rows[0]))
@@ -926,7 +948,14 @@ def purge_postmortems_for(failed_rec_id: str, dry_run: bool = False, profile: Op
 
     title_prefix = f"Investigate executor failure for {failed_rec_id}"
     rows = make_reader(profile=profile).named("recs_by_title_prefix", title_prefix=f"{title_prefix}%")
-    matched = [r["id"] for r in rows if r.get("source") == "executor-postmortem" and r.get("status") != "superseded"]
+    id_re = re.compile(rf"Investigate executor failure for {re.escape(failed_rec_id)}(?![0-9])")
+    matched = [
+        r["id"]
+        for r in rows
+        if r.get("source") == "executor-postmortem"
+        and r.get("status") != "superseded"
+        and id_re.match(r.get("title", ""))  # LIKE 'rec-1%' also matches rec-10/rec-1NN -- re-filter exactly
+    ]
     result: dict = {"matched": matched, "superseded": 0}
 
     if dry_run:
@@ -1034,6 +1063,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     dec = parser.add_argument_group("--file-decision fields")
     dec.add_argument("--rationale")
     dec.add_argument("--decision-status", choices=["open", "closed", "superseded"], dest="decision_status")
+    dec.add_argument(
+        "--decision-id",
+        type=int,
+        dest="decision_arg_id",
+        help="DECISIONS.md-assigned integer number (numbering authority is DECISIONS.md, Decision 84)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1102,14 +1137,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             if actually_missing:
                 print(f"ERROR: --file-decision requires: {', '.join(actually_missing)}", file=sys.stderr)
                 return 1
+        if not args.decision_arg_id:
+            print("ERROR: --file-decision requires --decision-id (DECISIONS.md number)", file=sys.stderr)
+            return 1
         dec_fields: dict = {
             "title": args.title,
             "status": args.decision_status,
-            "rationale": args.rationale,
+            "decision_text": args.rationale,
+            "decision_id": args.decision_arg_id,
         }
-        decision_id = file_decision(dec_fields, profile=args.profile)
-        if decision_id == -1:
-            print("queued-pending", file=sys.stderr)
+        try:
+            decision_id = file_decision(dec_fields, profile=args.profile)
+        except (ValidationError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         print(decision_id)
         return 0

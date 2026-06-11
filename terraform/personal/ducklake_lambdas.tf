@@ -20,7 +20,7 @@
 #
 # SINGLE-PORTAL NOTE (Decision 78/81): at T2.19 these Function URLs become the CLOSED ops boundary --
 # the writer is the sole ops_* write authority, the reader the sole read authority. ops_data_portal
-# transits them (transport-swapped behind OPS_STORAGE_BACKEND); the caller surface is unchanged. This
+# transits them unconditionally (sole backend, Decision 84 I-1); the caller surface is unchanged. This
 # apply widens both roles to the production ducklake/ data path + flips DUCKLAKE_DATA_PATH smoke->prod.
 
 locals {

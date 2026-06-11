@@ -119,9 +119,14 @@ def action_read_ops_current(event: dict[str, Any], con: Any) -> dict[str, Any]:
     key = event.get("key") if event.get("key") is not None else event.get("id")
     key_column = None
     flt = event.get("filter")
-    if isinstance(flt, dict):
-        key_column = flt.get("column")
-        key = flt.get("value")
+    if flt is not None:
+        if not isinstance(flt, dict) or "column" not in flt or "value" not in flt:
+            raise rt.DuckLakeRuntimeError(
+                "read_ops_current 'filter' must be an object with BOTH 'column' and 'value' -- "
+                "a malformed filter must never degrade to an unfiltered full-table read"
+            )
+        key_column = flt["column"]
+        key = flt["value"]
     rows = rt.read_current(con, table=table, key=key, key_column=key_column, limit=event.get("limit"))
     return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
 

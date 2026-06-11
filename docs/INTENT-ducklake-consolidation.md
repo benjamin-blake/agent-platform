@@ -53,8 +53,11 @@ New invariants (Decision 84; scoping refined per review [R]):
 - **I-2 Writer-owned keyspace -- scoped to rec-NNN.** file_ops allocates inside the write
   transaction: counter row updated in the SAME catalog commit (a guaranteed write-write
   OCC conflict is the serialization point; allocation sits INSIDE the retry loop and
-  re-reads on retry; the counter self-seeds from the history-table numeric max, scoped to
-  the canonical ^rec-[0-9]+$ keyspace so probe/churn ids cannot poison the seed).
+  re-reads on retry; the counter is seeded ONLY by the serial create_ops_tables bootstrap
+  from the history-table numeric max, scoped to the canonical ^rec-[0-9]+$ keyspace -- the
+  hot path NEVER self-seeds, because a concurrent self-seed under snapshot isolation mints
+  duplicate counter rows and duplicate ids, observed live 2026-06-11; write_ops advances
+  the counter past caller-keyed canonical ids in the same transaction).
   Invocation idempotency: the portal mints a per-call ULID; the writer's in-transaction
   replay check returns the original allocation on a response-lost retry, so retries never
   double-file. Sanctioned exceptions: dec-NNN follows DECISIONS.md numbering (caller
@@ -155,7 +158,7 @@ S3 small-file growth get measured thresholds then.
 |------|------------|
 | Neon catalog is the single metadata authority. | EXISTING ducklake_catalog_dr (nightly pg_dump --format=custom to a versioned DR bucket + >25h freshness alarm) -- the intent's earlier "add a backup step" was stale. The REAL gap is restore-side: rec-2113 (pg_restore missing from the layer; dump-format mismatch with the old drill). Fix gates demolition. |
 | Loud-fail with no buffer: a writer outage blocks rec filing. | Transient-5xx retry (idempotent), CloudWatch alarm on writer errors, and for headless ci-rca the failure surfaces in the workflow log; acceptable for a sole-dev platform. "The rec text survives in the transcript" holds for interactive sessions only. |
-| Counter seed/rollback races during the id-ownership cutover. | Self-seeding counter from history max inside the first file_ops transaction; require-absent belt check is terminal (never retried past); rollback requires reseed-from-DuckLake first (runbook step above). Main-branch writers continue on DynamoDB+write_ops until merge -- the residual same-second collision window is accepted (P4, sole writer in practice). |
+| Counter seed/rollback races during the id-ownership cutover. | Serial bootstrap seeding via create_ops_tables (hot path never self-seeds); write_ops advances the counter past caller-keyed ids; require-absent belt check is terminal (never retried past); rollback requires reseed-from-DuckLake first (runbook step above). Main-branch writers continue on DynamoDB+write_ops until merge -- the residual same-second collision window is accepted (P4, sole writer in practice). |
 | Named-verb registry rigidity / version skew. | Verbs are data in the schema module; adding one is a small PR + reader redeploy; responses carry registry_version; verb-consumer call sites distinguish unreachable (degraded signal) from empty. |
 | Destructive actions on the write/maintenance surface (P2 expiry). | Explicit-confirm guards shipped (Phase 1); smoke actions are smoke-table-scoped. |
 | ci-rca volume during transition. | The open DQ recs are bundled as this program's Phase 1 diagnosis; the ci-rca hard block does not bind related work. |

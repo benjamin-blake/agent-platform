@@ -22,9 +22,9 @@ Design invariants (CD.33 / Decision 81):
   - cleanup_all is NEVER passed as True in scheduled runs (CD.33 H1/R-3/O-3/M-3).
 
 T2.19 expansion forward pointer:
-  GC_TABLE_SCOPE is scoped to ducklake_smoke_* for T2.18 FP-A. At T2.19, the scope
+  GC_TABLE_SCOPE is scoped to ducklake_smoke_* for T2.18 FP-A. At the Phase-4 maintenance repoint (Decision 84), the scope
   GENERALISES to the full ducklake_ops catalog and the real ops_* business tables
-  (ops_recommendations, ops_decisions, etc.). Wiring this up is a T2.19 exit criterion.
+  (ops_recommendations, ops_decisions, etc.). Wiring rides Phase 4; the restore drill is rec-2113 (T2.26 gate).
 
 CALL signature notes (verified against live DuckDB 1.5.3 / DuckLake v1.0):
   - All maintenance functions are table functions, not SQL CALL procedures.
@@ -46,7 +46,7 @@ from typing import Any
 from src.common.ducklake_runtime import CATALOG_ALIAS, SMOKE_CURRENT_TABLE, SMOKE_HISTORY_TABLE
 
 # ---------------------------------------------------------------------------
-# Scope -- smoke tables only for T2.18 FP-A (see module docstring for T2.19 forward pointer)
+# Scope -- smoke tables only for T2.18 FP-A (production repoint = consolidation Phase 4, Decision 84)
 # ---------------------------------------------------------------------------
 
 GC_TABLE_SCOPE: tuple[str, ...] = (SMOKE_HISTORY_TABLE, SMOKE_CURRENT_TABLE)

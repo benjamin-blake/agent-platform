@@ -456,9 +456,20 @@ def count_recommendations() -> tuple[int, int, int, list[dict]]:
 
 
 def _shape_priority_queue_rows(rows: list[dict], max_items: int) -> list[dict]:
-    """Normalise raw rows into the {rank, rec_id, rationale, north_star_impact} shape."""
+    """Normalise rows into the {rank, rec_id, rationale, north_star_impact} shape, rank-sorted.
+
+    Sort BEFORE slicing: with more rows than max_items, slice-then-sort presented an arbitrary
+    subset as the top N (unparseable ranks sort last).
+    """
+
+    def _rank_key(row: dict) -> tuple:
+        try:
+            return (False, int(row.get("rank", 0)))
+        except (ValueError, TypeError):
+            return (True, 0)
+
     result = []
-    for row in rows[:max_items]:
+    for row in sorted(rows, key=_rank_key)[:max_items]:
         try:
             rank = int(row.get("rank", 0))
         except (ValueError, TypeError):
@@ -1058,8 +1069,8 @@ def main() -> int:
     creds_status = _handle_credentials_startup(check_credentials())
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Rebuild the local read cache from the warehouse (best-effort): recs via the
-    # DuckLake reader (no Athena fallback), deferred ops tables via Iceberg/Athena.
+    # Rebuild the local read cache from the warehouse (best-effort): all migrated
+    # tables via the DuckLake reader (Decision 84 I-1; no fallback).
     try:
         recommendation_sync = _sync_ops_pull()
     except (OSError, RuntimeError, ValueError) as exc:

@@ -776,3 +776,20 @@ def test_handler_connect_probe_success(monkeypatch):
 def test_connect_probe_in_connectionless_actions():
     """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_writer_connection."""
     assert "connect_probe" in h._CONNECTIONLESS_ACTIONS
+
+
+def test_action_create_ops_tables_caller_keyspace_skips_counter(monkeypatch):
+    """ops_decisions has a caller-owned keyspace (DECISIONS.md numbering): no counter is seeded."""
+    monkeypatch.setattr(rt, "create_scd2_tables", lambda con, *, table, force_recreate: None)
+    called = []
+    monkeypatch.setattr(rt, "bootstrap_entity_counter", lambda con, spec: called.append(spec.table))
+    out = h.action_create_ops_tables({"table": "ops_decisions"}, FakeCon())
+    assert out["ok"] is True
+    assert out["counter_seed"] is None
+    assert called == []
+
+
+def test_action_file_ops_rejects_caller_keyspace_table(monkeypatch):
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
+        h.action_file_ops({"table": "ops_decisions", "record": {"title": "t", "status": "open"}}, FakeCon())
