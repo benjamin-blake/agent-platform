@@ -100,7 +100,6 @@ PINNED_PG_MAJOR = "16"
 _LAMBDA_SCRIPTS = [
     "__init__.py",
     "aws_profile.py",
-    "bedrock_client.py",
     "copilot_sdk_client.py",
     "copilot_wrapper.py",
     "github_models_client.py",
@@ -574,7 +573,7 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
     --profile.  Ref: ``docs/contracts/inference-provider.md`` for
-    the packaging requirement that ``bedrock_client.py`` be bundled.
+    the inference-client packaging requirements.
     """
     if only_ducklake:
         # Scope the deploy to the two DuckLake functions ONLY: data-pipeline + ops-compaction are

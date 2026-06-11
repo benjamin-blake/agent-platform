@@ -181,93 +181,34 @@ class TestRunAgent:
             result = run_agent(agent)
         assert result is False
 
-    def test_successful_json_run(self, tmp_path: Path, prompt_file: Path) -> None:
-        agent = self._make_agent(prompt_file.name)
-        findings = [{"title": "issue 1", "priority": "low"}]
-        mock_result = {"content": json.dumps(findings), "error": False, "message": ""}
-
-        with (
-            patch.object(sched_mod, "_REPO_ROOT", prompt_file.parent),
-            patch("scripts.run_scheduled_agent.converse", return_value=mock_result),
-            patch(
-                "scripts.ops_data_portal.enqueue_findings",
-                return_value={"enqueued": 1, "invalid": 0, "skipped": 0},
-            ) as mock_enqueue,
-            patch("src.data.handlers.agent_telemetry.open_invocation"),
-        ):
-            result = run_agent(agent)
-
-        assert result is True
-        assert mock_enqueue.call_count == 1
-
-    def test_non_json_output_wrapped_as_raw(self, tmp_path: Path, prompt_file: Path) -> None:
-        agent = self._make_agent(prompt_file.name)
-        mock_result = {"content": "This is not JSON output", "error": False, "message": ""}
-
-        captured_entries: list[dict] = []
-
-        def _capture(path: Path) -> dict:
-            captured_entries.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
-            return {"enqueued": len(captured_entries), "invalid": 0, "skipped": 0}
-
-        with (
-            patch.object(sched_mod, "_REPO_ROOT", prompt_file.parent),
-            patch("scripts.run_scheduled_agent.converse", return_value=mock_result),
-            patch("scripts.ops_data_portal.enqueue_findings", side_effect=_capture),
-            patch("src.data.handlers.agent_telemetry.open_invocation"),
-        ):
-            result = run_agent(agent)
-
-        assert result is True
-        assert len(captured_entries) == 1
-        assert "raw" in captured_entries[0]
-
-    def test_copilot_exception_returns_false(self, tmp_path: Path, prompt_file: Path) -> None:
+    def test_live_invocation_retired_returns_false(
+        self, tmp_path: Path, prompt_file: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # CD.28 retired the local direct (Bedrock) inference path; live
+        # invocation must fail loudly and point at --trigger-lambda.
         agent = self._make_agent(prompt_file.name)
 
         with (
             patch.object(sched_mod, "_REPO_ROOT", prompt_file.parent),
-            patch("scripts.run_scheduled_agent.converse", side_effect=RuntimeError("fail")),
-            patch("scripts.run_scheduled_agent.append_jsonl", return_value=True),
-            patch("src.data.handlers.agent_telemetry.open_invocation"),
+            patch("scripts.ops_data_portal.enqueue_findings") as mock_enqueue,
         ):
             result = run_agent(agent)
 
         assert result is False
+        assert mock_enqueue.call_count == 0
+        assert "retired per CD.28" in caplog.text
+        assert "--trigger-lambda" in caplog.text
 
-    def test_model_override_used(self, tmp_path: Path, prompt_file: Path) -> None:
+    def test_model_override_still_resolves_before_retirement_error(self, tmp_path: Path, prompt_file: Path) -> None:
+        # The override is resolved during validation (dry-run shows it);
+        # the live path still returns False under retirement.
         agent = self._make_agent(prompt_file.name)
-        mock_result = {"content": "[]", "error": False, "message": ""}
-
         with (
             patch.object(sched_mod, "_REPO_ROOT", prompt_file.parent),
             patch.object(sched_mod, "_MODEL_OVERRIDE", "override-model"),
-            patch("scripts.run_scheduled_agent.converse", return_value=mock_result) as mock_call,
-            patch("scripts.run_scheduled_agent.append_jsonl", return_value=True),
-            patch("src.data.handlers.agent_telemetry.open_invocation"),
         ):
-            run_agent(agent)
-
-        mock_call.assert_called_once()
-        _, kwargs = mock_call.call_args
-        assert kwargs.get("model_id") == "override-model"
-
-    def test_run_agent_tolerates_telemetry_failure(self, tmp_path: Path, prompt_file: Path) -> None:
-        agent = self._make_agent(prompt_file.name)
-        mock_result = {"content": "[]", "error": False, "message": ""}
-
-        with (
-            patch.object(sched_mod, "_REPO_ROOT", prompt_file.parent),
-            patch("scripts.run_scheduled_agent.converse", return_value=mock_result),
-            patch("scripts.run_scheduled_agent.append_jsonl", return_value=True),
-            patch(
-                "src.data.handlers.agent_telemetry.close_invocation",
-                side_effect=RuntimeError("telemetry failure"),
-            ),
-        ):
-            result = run_agent(agent)
-
-        assert result is True
+            assert run_agent(agent, dry_run=True) is True
+            assert run_agent(agent) is False
 
     def test_disabled_agents_skipped(self) -> None:
         agent = self._make_agent("whatever.md")
@@ -392,37 +333,20 @@ class TestRealManifest:
 
 
 class TestRunAgentFindings:
-    """Tests for run_agent specific findings behaviors."""
+    """The findings-write path left run_agent with the CD.28 retirement."""
 
-    @patch("scripts.run_scheduled_agent.converse")
-    @patch("scripts.run_scheduled_agent.append_jsonl")
-    @patch("src.data.handlers.agent_telemetry.open_invocation")
-    def test_rec_curator_local_findings_write(self, mock_env, mock_append, mock_call, tmp_path):
-        """test_rec_curator_local_findings_write verifies append_jsonl uses curator findings key."""
-        import os
-
-        from scripts.run_scheduled_agent import _CURATOR_FINDINGS_KEY, run_agent
-
-        # We need a prompt_path that exists or we must mock exists
+    def test_rec_curator_live_path_retired(self, tmp_path: Path) -> None:
         prompt_file = tmp_path / "test.prompt.md"
         prompt_file.write_text("Hello", encoding="utf-8")
 
         agent_def = {
             "name": "rec-curator",
             "model": "gpt-4.1-mini",
-            "prompt_path": str(prompt_file.relative_to(tmp_path.parent.parent)),
+            "prompt_path": prompt_file.name,
         }
 
-        mock_call.return_value = {"content": '[{"id": "rec-999"}]', "error": False, "message": ""}
-
-        with patch("scripts.run_scheduled_agent._REPO_ROOT", tmp_path.parent.parent):
-            with patch.dict(os.environ, {}, clear=True):  # Ensure no AWS_LAMBDA_FUNCTION_NAME
-                run_agent(agent_def)
-
-        assert mock_append.call_count == 1
-        call_args = mock_append.call_args[0]
-        assert call_args[0] == _CURATOR_FINDINGS_KEY
-        assert call_args[1]["id"] == "rec-999"
+        with patch("scripts.run_scheduled_agent._REPO_ROOT", tmp_path):
+            assert run_agent(agent_def) is False
 
 
 class TestTriggerLambda:

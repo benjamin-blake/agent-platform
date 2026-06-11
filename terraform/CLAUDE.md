@@ -85,9 +85,9 @@ inline policy (slated for removal) -- re-creating infra elsewhere will not resto
   with `-target` on the two role resources (the unrelated `null_resource` Athena-DDL replacements from a
   later main.tf edit were deliberately excluded). Trust policy verified unchanged at apply time.
   Reconciliation at import time (the role was NOT permissionless, contrary to the prior PENDING note):
-    - A stale pre-rename `DailyOps` (dead `bblake-*` targets + a live `bedrock:InvokeModel*` grant) already
+    - A stale pre-rename `DailyOps` (dead `bblake-*` targets + a live Bedrock invoke-model grant) already
       existed and was imported; the apply overwrote it with the agent-platform grant. Net live capability
-      dropped: `bedrock:InvokeModel*` (treated as unused -- `AgentPlatformRuntime` never granted Bedrock
+      dropped: the Bedrock invoke-model grant (treated as unused -- `AgentPlatformRuntime` never granted Bedrock
       and ops works without it; no Bedrock consumer was found for this role, but no exhaustive audit was run).
     - A separate out-of-band `AgentPlatformRuntime` inline policy already granted the same agent-platform
       ops set, so ops calls succeeded both before and after this change. It is now a redundant duplicate of

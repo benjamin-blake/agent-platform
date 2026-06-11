@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = Path("config/agent/copilot/model_routing.yaml")
 _CONFIG: dict | None = None
 
-_VALID_PROVIDERS = frozenset(["gemini", "bedrock"])
+_VALID_PROVIDERS = frozenset(["gemini"])  # bedrock retired per CD.28
 _DEFAULT_EXECUTOR_PROVIDER = "gemini"
 
 _ENV_OVERRIDE_MAP: dict[str, str] = {
