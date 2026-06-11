@@ -209,3 +209,84 @@ class TestFindPlanFileExplicit:
         captured = capsys.readouterr()
         assert rc == 0
         assert captured.out.strip() == "NOT_FOUND"
+
+
+class TestYamlFirstResolution:
+    def test_yaml_preferred_over_md_for_branch(self, tmp_path: Path) -> None:
+        """Branch resolution returns PLAN-{slug}.yaml when both .yaml and .md exist."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan_yaml = tmp_path / "docs" / "plans" / "PLAN-foo-bar.yaml"
+        plan_yaml.write_text("slug: foo-bar", encoding="utf-8")
+        plan_md = tmp_path / "docs" / "plans" / "PLAN-foo-bar.md"
+        plan_md.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/foo-bar")),
+            patch("find_plan.ROOT", tmp_path),
+        ):
+            result = find_plan_file()
+
+        assert result == plan_yaml
+
+    def test_md_branch_fallback_emits_deprecation_warning(self, tmp_path: Path, caplog) -> None:
+        """Resolving PLAN-{slug}.md (no .yaml) warns that the .md path is deprecated."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan_md = tmp_path / "docs" / "plans" / "PLAN-foo-bar.md"
+        plan_md.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/foo-bar")),
+            patch("find_plan.ROOT", tmp_path),
+            caplog.at_level("WARNING", logger="find_plan"),
+        ):
+            result = find_plan_file()
+
+        assert result == plan_md
+        assert any("deprecated" in r.message for r in caplog.records)
+
+    def test_yaml_resolution_emits_no_warning(self, tmp_path: Path, caplog) -> None:
+        """Resolving PLAN-{slug}.yaml emits no deprecation warning."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan_yaml = tmp_path / "docs" / "plans" / "PLAN-foo-bar.yaml"
+        plan_yaml.write_text("slug: foo-bar", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("agent/foo-bar")),
+            patch("find_plan.ROOT", tmp_path),
+            caplog.at_level("WARNING", logger="find_plan"),
+        ):
+            result = find_plan_file()
+
+        assert result == plan_yaml
+        assert not caplog.records
+
+    def test_explicit_md_path_emits_deprecation_warning(self, tmp_path: Path, caplog) -> None:
+        """An explicit .md path still resolves but warns."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        plan_md = tmp_path / "docs" / "plans" / "PLAN-explicit.md"
+        plan_md.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch("find_plan.ROOT", tmp_path),
+            caplog.at_level("WARNING", logger="find_plan"),
+        ):
+            result = find_plan_file(explicit=str(plan_md))
+
+        assert result == plan_md
+        assert any("deprecated" in r.message for r in caplog.records)
+
+    def test_legacy_plan_md_fallback_warns(self, tmp_path: Path, caplog) -> None:
+        """Legacy PLAN.md fallback also emits the deprecation warning."""
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        legacy = tmp_path / "docs" / "plans" / "PLAN.md"
+        legacy.write_text("# Legacy", encoding="utf-8")
+
+        with (
+            patch("find_plan.subprocess.run", return_value=_mock_git("main")),
+            patch("find_plan.ROOT", tmp_path),
+            caplog.at_level("WARNING", logger="find_plan"),
+        ):
+            result = find_plan_file()
+
+        assert result == legacy
+        assert any("deprecated" in r.message for r in caplog.records)

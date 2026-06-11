@@ -9,6 +9,27 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-11] - t1-11-plan-yaml-migration: T1.11 COMPLETE, CD.22 ratified (Decision 84, dec-1091)
+
+Autonomous /goal session (plan #126 -> implement). PLAN-*.md -> PLAN-*.yaml migration landed:
+- `scripts/plan_document.py`: PlanDocument Pydantic schema (schema_version 1, extra=forbid; enums, unique VP
+  step ids, non-empty VP commands, STRATEGIC<->work_areas coupling, plan_path/slug/filename consistency) +
+  loader + PASS/FAIL CLI, mirroring the T-1.5 RoadmapDocument pattern.
+- `validate.py`: `validate_plan_documents` wired into BOTH --pre and full presubmit (product-roadmap placement
+  rationale); `plans_dir` override is the malformed-fixture test seam (fixtures live under
+  `tests/fixtures/plan_documents/`, never docs/plans/).
+- Read path: `find_plan.py` resolves .yaml first (.md fallback warns, one release cycle); `plan_audit.py`
+  parses YAML scope with deprecated markdown-table fallback; planning/implement/plan-critique skills updated
+  in `.claude/skills/` (canonical) and `.agents/skills/` (voluntary legacy hygiene -- Decision 76 supersedes
+  the Decision 58 sync obligation).
+- In-flight conversion list (1 of 1): PLAN-t1-11-plan-yaml-migration.md -> .yaml (the plan itself; audit of
+  all 41 post-initial-commit plans found none other in flight). Historical .md plans untouched.
+- Bookkeeping: T1.11 complete; CD.22 ratified via Decision 84 (dec-1091, filed through the portal), including
+  the Decision 76 clause-3 artefact amendment (.md -> .yaml). Follow-up rec filed for .claude/commands
+  plan/implement .md-reference reconciliation.
+- Decision-scout flagged (resolved in plan): .agents mirror voluntary-only; Decision 76 cl.3 amendment;
+  Decision 73 L5 check vs degraded reader (ci_rca_recs=[] from synced cache).
+
 ## [2026-06-09] - ducklake-ops-finalize: T2.19 recs cutover SIGNED OFF (PHASE 2/3 tail)
 
 Completed the recs-first DuckLake cutover (PLAN-ducklake-ops-finalize, resuming from VP9 after #108/#109/#111).
