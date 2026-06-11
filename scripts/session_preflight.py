@@ -7,7 +7,7 @@ Outputs JSON to logs/.preflight-report.json for use by plan.prompt.md.
 Exits 1 on critical failure (wrong venv), 0 otherwise.
 
 Usage:
-    python scripts/session_preflight.py
+    bin/venv-python -m scripts.session_preflight
 """
 
 from __future__ import annotations
@@ -303,7 +303,8 @@ def _handle_credentials_startup(creds_status: str) -> str:
             f"       Verify the chain: aws sts get-caller-identity --profile {profile}\n"
             "       There is no interactive login to recover; if the agent_static\n"
             "       key was rotated, refresh ~/.aws/credentials. Continuing in DEGRADED mode:\n"
-            "       Athena-backed reads fall back to the local cache or empty results.",
+            "       warehouse reads (DuckLake reader for recs; Iceberg/Athena for deferred tables)\n"
+            "       fall back to the local cache or empty results.",
             file=sys.stderr,
         )
     return creds_status
@@ -486,7 +487,8 @@ def _tally_rec_counts(
                     aging_count += 1
             except (ValueError, AttributeError, TypeError):
                 pass
-        # Athena returns booleans as strings "true"/"false"; reader returns Python bool or string
+        # Reader rows carry native Python bools; rows migrated from the legacy Athena path may
+        # still serialise booleans as the strings "true"/"false" -- normalise both forms.
         raw_auto = entry.get("automatable", True)
         if isinstance(raw_auto, bool):
             automatable = raw_auto
@@ -510,10 +512,14 @@ def _tally_rec_counts(
 def count_recommendations() -> tuple[int, int, int, list[dict]]:
     """Count open, aging (>30 days), and non-automatable recommendations.
 
-    Reads exclusively from the DuckLake reader (Decision 81 cl.7 / T2.19 cutover).
-    On reader failure, emits a LOUD recs_read_status=reader_unreachable signal and
-    returns a sentinel (0,0,0,[]) -- never a false zero silently (Decision 55).
-    The degraded status is surfaced in the preflight report for human attention.
+    Reads from the DuckLake reader first (Decision 81 cl.7 / T2.19 cutover); there is
+    no Athena fallback. On reader failure, emits a LOUD reader_unreachable warning
+    (Decision 55: never a silent false zero) and degrades to counting from the local
+    read cache (S3 backend or logs/.recommendations-log.jsonl), which may be stale.
+
+    Note: main() does not call this function -- it calls _count_recommendations_reader()
+    directly and reports the sentinel (0,0,0,[]) plus recs_read_status=reader_unreachable
+    on failure. This cache-counting fallback is retained for non-main consumers.
     """
     result = _count_recommendations_reader()
     if result != "reader_unreachable":
@@ -1364,7 +1370,8 @@ def main() -> int:
     creds_status = _handle_credentials_startup(check_credentials())
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Pull ops_recommendations (and all ops tables) from Athena into local cache (best-effort)
+    # Rebuild the local read cache from the warehouse (best-effort): recs via the
+    # DuckLake reader (no Athena fallback), deferred ops tables via Iceberg/Athena.
     try:
         recommendation_sync = _sync_ops_pull()
     except (OSError, RuntimeError, ValueError) as exc:
@@ -1400,7 +1407,7 @@ def main() -> int:
             pulled = sum(result.get("pulled", {}).values())
             if drained or pulled:
                 print(
-                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from Athena",
+                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from the warehouse",
                     file=sys.stderr,
                 )
         except Exception:  # noqa: BLE001
