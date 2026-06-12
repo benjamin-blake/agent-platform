@@ -111,4 +111,6 @@ class TestParseResolvesTrailer:
     def test_multiple_trailer_lines(self) -> None:
         msg = "Resolves: rec-100\nResolves: rec-200"
         assert parse_resolves_trailer(msg) == ["rec-100", "rec-200"]
+
+
 # VP7 autoclose test marker
