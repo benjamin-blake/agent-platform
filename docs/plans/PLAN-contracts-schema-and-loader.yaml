@@ -50,7 +50,7 @@ acceptance_criteria:
   - "contracts_schema.py defines ContractStatus (exactly: draft, ratified, provisional_v0, deprecated, superseded), ChangeClass (exactly the closed 8-value vocabulary: field_add, not_null_tighten, type_widen, join_add, prose_improvement, governance_note_add, accepted_values_narrow, accepted_values_extend), and ContractClass (A, B, C); every Pydantic model sets ConfigDict(extra=\"forbid\")."
   - "load_contract(path) parses and schema-validates a contract YAML and raises a typed ContractValidationError on malformed input (unknown field, missing contract_version, status/change_class outside the enum, wrong class shape, non-mapping YAML)."
   - "resolve_refs() resolves docs/contracts/{name}.yaml#/contract/fields/{field} single-hop references and raises ContractValidationError on: (a) a field carrying both $ref and an inline definition, (b) a $ref whose target is another $ref (chain depth > 1 / non-leaf Class-C rule), (c) a $ref target file or pointer that does not exist, (d) a dq_intent_local/governance_notes_local override that loosens rather than tightens the referenced field."
-  - "validate_status_transition(old, new) returns/raises per Invariant 6 (ratified->deprecated allowed; deprecated->* forbidden by default; unknown status values rejected)."
+  - "validate_status_transition(old, new) returns/raises per Invariant 6: ratified->deprecated allowed; deprecated->* forbidden BY DEFAULT (the ceremonial deprecated->ratified revival path at contract_version N+1 per INTENT line 560 is intentionally NOT implemented here -- the helper must encode default-forbidden, not permanent terminality); unknown status values rejected."
   - "Both new source modules are each < 500 non-blank SLOC (Decision 43) -- validate_sloc_limits passes with no waiver."
   - "tests/test_contracts_schema.py and tests/test_contracts.py pass at 100% per-file coverage for their corresponding source modules; full `bin/venv-python -m scripts.validate` exits 0."
 verification_plan:
@@ -74,8 +74,8 @@ verification_plan:
     phase: pre-deploy
     action: "Status state machine (Invariant 6) accepts legal transitions and rejects illegal ones."
     command: "bin/venv-python -m pytest tests/test_contracts.py::TestStatusTransitions -q"
-    expected: "ratified->deprecated passes; deprecated->ratified and unknown-status inputs raise ContractValidationError."
-    fix_if: "deprecated is treated as non-terminal or an unknown status is accepted -- correct the transition table in validate_status_transition."
+    expected: "ratified->deprecated passes; deprecated->ratified (the default-forbidden path) and unknown-status inputs raise ContractValidationError. Assert the DEFAULT posture rejects -- do not encode deprecated as permanently un-revivable."
+    fix_if: "deprecated is treated as a normal mutable state, an unknown status is accepted, or the test encodes permanent terminality instead of default-forbidden -- correct the transition table in validate_status_transition."
   - step: 4
     phase: pre-deploy
     action: "Full presubmit -- lint, format, SLOC gate, per-file coverage, import safety."
@@ -98,6 +98,7 @@ context:
   - "Decision 84 precedent: ConfigDict(extra=\"forbid\") closed-schema discipline (the writer's un-bypassable schema chokepoint) is the model for rejecting unknown contract fields."
   - "Decision 48: V2 tier is correct -- pure-Python scripts/ module, pytest unit tests, no Lambda/handler/Terraform/cross-service surface in scope. Unit tests ARE the end-to-end verification here because there is no external system; the tests exercise real YAML parsing + real Pydantic validation + real resolver logic (no mocks)."
   - "No ritual-format contract YAML exists on disk yet: docs/contracts/read-engine.yaml uses the PRE-ritual free-form schema (top-level version:, not contract.contract_version:) and is NOT a Class A/B/C contract. load_all_contracts must therefore only validate files that declare a top-level `contract:` mapping with a `class:` field, and skip the rest. The first real Class A contract (ops_recommendations.yaml) is a later deliverable -- this plan is exercised entirely against tmp_path fixtures."
+  - "Subset-(e) handoff note (plan-critique advisory): the two-file split means the canonical ContractStatus / ChangeClass / ContractClass enums and the Pydantic models live in scripts/contracts_schema.py, while the loader/resolver public API (load_contract, load_all_contracts, resolve_refs, validate_status_transition, ContractValidationError) lives in scripts/contracts.py. INTENT Part 8 and ROADMAP T-1.12 name only the single file scripts/contracts.py; the split is additive and SLOC-driven (Decision 43). The subset-(e) CI drift gate must import enums/models from scripts/contracts_schema, not scripts/contracts."
   - "Branch claude/platform-roadmap-priorities-wxvy8f is 0 commits behind / 0 ahead of origin/main at planning time; no Main Divergence Assessment overlap. Preflight ran in degraded warehouse-read mode (DuckLake cold-resume 502, non-fatal per Decision 60); no ci_rca recs open, no hard blocks."
 pre_implementation_checklist:
   - "Branch confirmed not on main (claude/platform-roadmap-priorities-wxvy8f)."
