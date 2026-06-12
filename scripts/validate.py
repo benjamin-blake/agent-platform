@@ -2289,6 +2289,46 @@ def validate_hermeticity_flags(failed: list[str], _cmd: list[str] | None = None)
             failed.append(f"hermeticity-flags: {flag!r} missing from pytest invocation")
 
 
+def validate_intent_doc_freeze(failed: list[str]) -> None:
+    """Reject any standing prose-architecture doc not in the grandfather set (Decision 86).
+
+    The grandfather set derives from docs/intent-migration/MANIFEST.yaml: a doc path is
+    allowed iff it has a documents[] entry with disposition_state != done. As each wave
+    flips an entry to disposition_state: done and deletes the file, the allowed set shrinks
+    automatically with no manual edits.
+
+    Scan model: enumerates on-disk docs via dirlist (NOT get_changed_files) so a committed
+    but undiffed doc is always caught. Scope: docs/INTENT-*.md anywhere under docs/ except
+    docs/contracts/ and docs/intent-migration/. Fail-open (warning, no failure) if the
+    manifest is absent or unreadable.
+    """
+    print("\n=== Intent doc freeze (Decision 86) ===")
+    manifest_path = ROOT / "docs" / "intent-migration" / "MANIFEST.yaml"
+    try:
+        import yaml  # noqa: PLC0415
+
+        manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        allowed: set[str] = {
+            f"docs/INTENT-{doc['id']}.md"
+            for doc in manifest_data.get("documents", [])
+            if doc.get("disposition_state", "pending") != "done"
+        }
+    except Exception as exc:
+        print(f"WARNING: intent-doc-freeze: manifest unreadable ({exc}); check skipped (fail-open).")
+        return
+
+    excluded_dirs = {"contracts", "intent-migration"}
+    docs_dir = ROOT / "docs"
+
+    for candidate in sorted(docs_dir.rglob("INTENT-*.md")):
+        parts = candidate.relative_to(docs_dir).parts
+        if parts[0] in excluded_dirs:
+            continue
+        rel = str(candidate.relative_to(ROOT)).replace("\\", "/")
+        if rel not in allowed:
+            failed.append(f"intent-doc-freeze: {rel} is not in the manifest grandfather set (Decision 86)")
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2324,6 +2364,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_complexity(failed)
     validate_scheduled_agent_logs(failed)
     validate_hermeticity_flags(failed)
+    validate_intent_doc_freeze(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
@@ -2754,6 +2795,8 @@ def main() -> None:
         # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach
         # missed pre-merge in PR #106 because it ran in full-tier only (rec-2106 RCA).
         validate_sloc_limits(failed)
+        # Intent-doc-freeze in --pre: O(dirlist) scan, Decision 86; prevents new INTENT docs before CI catches them.
+        validate_intent_doc_freeze(failed)
 
         elapsed = time.monotonic() - _t0
 

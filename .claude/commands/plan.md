@@ -58,6 +58,7 @@ Suggest 3-5 open recommendations from `logs/.recommendations-log.jsonl` that ali
 3. Conduct an Infrastructure Assessment if `.tf` files are in scope.
 4. Conduct a Lambda Deployment Assessment if Lambda-packaged files are in scope.
 5. Conduct a Complexity Assessment to determine if this is STRATEGIC or IMPLEMENTATION.
+6. Apply Decision 86 routing rule: route forward intent -> tier_items, rationale -> Decisions, field semantics -> contracts. No new standing prose-architecture docs under docs/. Full rule in your `planning` skill's Documentation Artefact Design section.
 *(Apply the exact assessment rules from your `planning` skill).*
 
 ## Step 5: Verification Tier and Verification Plan

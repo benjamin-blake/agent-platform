@@ -172,6 +172,12 @@ apply these rules:
   Do not create a separate briefing doc for the same information.
 - When a plan step proposes a new document, ask: "Could this information be a metadata
   field in an existing YAML?" If yes, prefer that over a new file.
+- Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
+  route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
+  Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
+  forbidden. The validate.py intent-doc-freeze guard enforces this on-disk.
+  Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml and
+  retire as extraction waves complete.
 
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
 **Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.

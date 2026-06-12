@@ -79,6 +79,11 @@ skills, slash commands -- are optimised for agent loading efficiency, not human 
   post-rejection error. Call `get_rec_write_guidance()` before `file_rec()`. Anti-pattern:
   storing semantics only in ops.yaml without surfacing them at agent write time produces
   structurally-valid but semantically-thin content from agents without prior context.
+- No new standing prose-architecture docs (Decision 86): forward intent to tier_items,
+  rationale to Decisions, field semantics to contracts. Creating docs/INTENT-*.md or any
+  equivalent standing prose-architecture doc under docs/ is forbidden. The validate.py
+  intent-doc-freeze guard enforces this on-disk. Existing INTENT docs are grandfathered via
+  docs/intent-migration/MANIFEST.yaml and retire as extraction waves complete.
 
 ## Skills and slash commands
 - `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.md`. Invokes the `planning` skill.

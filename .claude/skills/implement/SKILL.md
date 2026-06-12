@@ -45,6 +45,12 @@ This repository is agent-first. When implementing documentation changes, apply t
   Do not create a separate briefing doc for the same information.
 - When a plan step proposes a new document, ask: "Could this information be a metadata
   field in an existing YAML?" If yes, prefer that over a new file.
+- Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
+  route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
+  Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
+  forbidden. The validate.py intent-doc-freeze guard enforces this on-disk.
+  Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml and
+  retire as extraction waves complete.
 
 ## Main Divergence Check (Workflow Step 2 -- after plan load)
 Once the PLAN-{slug}.yaml `scope` list is parsed, intersect the scope file paths with `main_freshness.main_files_changed_since_branch` from the preflight report. If any scope file overlaps:
