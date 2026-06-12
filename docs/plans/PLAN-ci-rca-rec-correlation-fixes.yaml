@@ -28,9 +28,9 @@ scope:
   - file: tests/test_session_preflight.py
     action: Modify
     purpose: >-
-      Add precision cases to TestCorrelateCiRcaWithMain asserting prior substring
-      false-positives no longer correlate while legitimate path-suffix matches
-      still do.
+      Add precision cases to the existing TestCiRcaCorrelation class asserting
+      prior substring false-positives no longer correlate while legitimate
+      path-suffix matches still do.
 bundled_recommendations:
   - rec-2195
   - rec-2196
@@ -61,16 +61,19 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Run the existing + new TestCorrelateCiRcaWithMain unit tests. The new
-      precision cases must pass with the fix in place (and would fail against the
-      old bidirectional-substring logic).
-    command: "bin/venv-python -m pytest tests/test_session_preflight.py::TestCorrelateCiRcaWithMain -q"
-    expected: "All cases pass, including the new substring-false-positive and path-suffix cases."
+      Run the existing + new TestCiRcaCorrelation unit tests. The new precision
+      cases must pass with the fix in place (and would fail against the old
+      bidirectional-substring logic). The trailing grep asserts at least one test
+      actually ran, so a future class rename cannot silently no-op this gate.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py::TestCiRcaCorrelation -q | tee /tmp/vp1.txt && grep -Eq '[1-9][0-9]* passed' /tmp/vp1.txt"
+    expected: "All cases pass, including the new substring-false-positive and path-suffix cases; the summary line reports N passed with N>0."
     fix_if: >-
-      A false-positive case still correlates -> the suffix matcher is matching on
-      a non-component boundary; tighten to split('/') component comparison. A
-      legitimate suffix case fails -> the matcher is too strict (e.g. requires
-      full-path equality); allow trailing-component suffix match.
+      No "N passed" line (grep fails) -> the class node-id collected zero tests;
+      confirm the class name is TestCiRcaCorrelation. A false-positive case still
+      correlates -> the suffix matcher is matching on a non-component boundary;
+      tighten to split('/') component comparison. A legitimate suffix case fails
+      -> the matcher is too strict (e.g. requires full-path equality); allow
+      trailing-component suffix match.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -172,7 +175,8 @@ execution_steps:
     keeping {commit_sha}. Do not alter the trailer-parse, sync, idempotency, or
     update_rec control flow.
   - >-
-    tests/test_session_preflight.py -- in TestCorrelateCiRcaWithMain, add cases:
+    tests/test_session_preflight.py -- in the existing TestCiRcaCorrelation class
+    (line ~1823), add cases:
     (a) a rec whose file is a basename substring of an unrelated changed path is
     classified UNRESOLVED; (b) a rec whose file is a basename that is a true
     trailing component of a changed path is classified LIKELY-RESOLVED; (c) a
