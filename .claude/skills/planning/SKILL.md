@@ -39,7 +39,8 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`token_anomalies` non-empty** -- Surface as planning context: "Context file token warning: [file list] exceed the 50K token threshold."
 - **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: "Data quality checks failing ([N] failures across [tables]). Run `bin/venv-python -m scripts.data_quality_runner` for details." Non-blocking but relevant if the plan touches data pipelines or table schemas.
 - **`data_quality.last_run` is null** -- Note: "Data quality checks have never been run. After fixing the pipeline, run `bin/venv-python -m scripts.data_quality_runner` to establish a baseline." Non-blocking.
-- **`ci_rca_recs` non-empty** -- **HARD BLOCK**. `/plan` cannot scope unrelated work while any open ci-rca rec exists. Surface the list at the top of the planning context. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section.
+- **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK**. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Surface the list at the top of the planning context. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.)
+- **`ci_rca_likely_resolved_recs` non-empty** -- **SOFT PROMPT** (not a block). These recs appear to have been fixed by a recent main commit but were not closed automatically. Surface as: "LIKELY RESOLVED -- verify and close before /plan: `bin/venv-python -m scripts.ops_data_portal --update-rec <id> --status closed --resolution 'Fixed by ...'`". Do NOT hard-block on these; close them and proceed.
 - **`ci_rca_liveness_alert` non-null** -- **HARD ALERT**. Main CI has been red with no corresponding ci-rca rec for >30 minutes. Triage before continuing.
 - **`forward_fix_recursion_alert` non-null** -- **HARD ALERT**. Three or more ci-rca recs targeting the same file were filed in the last 24 hours. Triage before continuing.
 - **`budget_bypass_alert` non-null** -- **Informational**. Surface the count and recent bypass reasons as planning context: "Fast-tier budget bypassed N times in 7 days." Repeated `--ignore-budget` use indicates fast-tier drift and likely warrants a planning session to revisit the budget or identify which check is slow.
@@ -310,11 +311,21 @@ bin/venv-python -m scripts.plan_document docs/plans/PLAN-{slug}.yaml
 
 ## Related-Work Check (Workflow Step 8, when ci-rca recs are open)
 
-If `ci_rca_recs` is non-empty when writing the PLAN file, confirm the plan satisfies at least one of the following conditions before committing. A plan failing all three must include a logged deferral rationale in its Context section; otherwise write is refused.
+If `ci_rca_unresolved_recs` is non-empty when writing the PLAN file (or `ci_rca_recs` if the report predates the correlation field), confirm the plan satisfies at least one of the following conditions before committing. A plan failing all three must include a logged deferral rationale in its Context section; otherwise write is refused.
 
 1. **Same file**: the plan's Scope table includes the same file the ci-rca rec cites as `source_file`.
 2. **Same Decision Record**: the plan addresses the same Decision Record the ci-rca rec references (if any).
 3. **Same failure category**: the plan addresses the same failure category as the rec. Canonical categories: DQ check failure, schema verifier failure, validate.py false negative, terraform validate failure, pytest regression, mypy regression, prompt-compliance failure, V3 harness failure.
+
+## Closure Obligation (Workflow Step 8, CONDITIONAL)
+
+Apply this check when writing the PLAN file. It is CONDITIONAL -- additive plans that neither resolve recs nor retire a surface are exempt.
+
+**Trigger conditions (either/both):**
+1. **Rec-resolving plan**: the plan's scope or intent explicitly fixes one or more open recommendations. The plan MUST declare them in `bundled_recommendations` AND include a VP step that verifies each rec closed (e.g. grep the local cache after sync).
+2. **Surface-retiring plan**: the plan's scope includes a `Delete` row OR an explicit `X -> Y` migration/cutover (file, Lambda, write path, config flag, or backend). The plan MUST include a stale-reference sweep VP step that confirms the old surface is unreachable or deleted.
+
+**Enforcement:** a plan that meets a trigger condition but omits its closure obligation fails the plan-critique gate (see `plan-critique` skill, closure-obligation criterion). Surface the violation during Step 6 presentation and require the plan author to add the missing declaration or VP step before writing is allowed.
 
 ## Critique Gate (Workflow Step 9)
 **DO NOT output the completion message until this step completes.**

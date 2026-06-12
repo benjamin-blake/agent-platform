@@ -295,6 +295,8 @@ class TestFormatPreflightSummary:
             "open_recommendations": 12,
             "non_automatable_recommendations": 4,
             "ci_rca_recs": [{"id": "rec-1"}, {"id": "rec-2"}],
+            "ci_rca_unresolved_recs": [{"id": "rec-1"}],
+            "ci_rca_likely_resolved_recs": [{"id": "rec-2"}],
         }
         summary = _preflight._format_preflight_summary(report, Path("/tmp/foo.json"))
         assert "/tmp/foo.json" in summary
@@ -302,7 +304,8 @@ class TestFormatPreflightSummary:
         assert "3 behind" in summary
         assert "1 ahead" in summary
         assert "open_recs=12" in summary
-        assert "ci_rca=2" in summary
+        assert "ci_rca_unresolved=1" in summary
+        assert "ci_rca_likely_resolved=1" in summary
         assert "Read the report file" in summary
 
     def test_summary_handles_missing_main_freshness(self) -> None:
@@ -1815,3 +1818,168 @@ class TestPriorityQueueSourceCache:
         data = json.loads(preflight_report.read_text(encoding="utf-8"))
         assert data["creds_status"] == "unavailable"
         assert data["priority_queue_source"] == "cache"
+
+
+class TestCiRcaCorrelation:
+    """Tests for correlate_ci_rca_with_main() -- soft/hard classification."""
+
+    def _make_rec(self, rec_id: str, file: str = "scripts/foo.py", created: str = "2026-06-10T10:00:00Z") -> dict:
+        return {"id": rec_id, "file": file, "title": "CI failure", "priority": "critical", "created_timestamp": created}
+
+    def _make_commit(self, sha: str, date: str, subject: str, files: list[str] | None = None) -> dict:
+        return {"sha": sha, "date": date, "subject": subject, "files": files or []}
+
+    # --- LIKELY-RESOLVED cases ---
+
+    def test_correlated_by_file_classified_likely_resolved(self) -> None:
+        rec = self._make_rec("rec-2187", file="scripts/foo.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("abc1234", "2026-06-11T10:00:00+00:00", "fix: repair foo", files=["scripts/foo.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_correlated_by_rec_id_in_subject_classified_likely_resolved(self) -> None:
+        rec = self._make_rec("rec-2188", file="scripts/bar.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("def5678", "2026-06-11T10:00:00+00:00", "fix(ci): closes rec-2188 mypy issue", files=[])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    # --- UNRESOLVED / HARD BLOCK retained ---
+
+    def test_no_matching_commit_classified_unresolved(self) -> None:
+        rec = self._make_rec("rec-2190", file="scripts/baz.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "fff9999", "2026-06-11T10:00:00+00:00", "feat: unrelated change", files=["scripts/other.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_commit_before_rec_creation_does_not_correlate(self) -> None:
+        rec = self._make_rec("rec-2191", file="scripts/foo.py", created="2026-06-12T10:00:00Z")
+        commit = self._make_commit("aaa1111", "2026-06-11T10:00:00+00:00", "fix: repair foo", files=["scripts/foo.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_empty_recs_returns_empty(self) -> None:
+        commit = self._make_commit("abc1234", "2026-06-11T10:00:00+00:00", "fix: something")
+        result = _preflight.correlate_ci_rca_with_main([], [commit])
+        assert result == {"likely_resolved": [], "unresolved": []}
+
+    def test_empty_commits_all_unresolved(self) -> None:
+        rec = self._make_rec("rec-9999", file="scripts/x.py")
+        result = _preflight.correlate_ci_rca_with_main([rec], [])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    # --- mixed batch ---
+
+    def test_mixed_batch_split_correctly(self) -> None:
+        rec_corr = self._make_rec("rec-100", file="scripts/a.py", created="2026-06-10T10:00:00Z")
+        rec_not = self._make_rec("rec-101", file="scripts/b.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("aaa2222", "2026-06-11T10:00:00+00:00", "fix: patch a", files=["scripts/a.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec_corr, rec_not], [commit])
+        assert result["likely_resolved"] == [rec_corr]
+        assert result["unresolved"] == [rec_not]
+
+
+class TestPrintCiRcaRecsWithCorrelation:
+    """Tests for the new correlation-aware print_ci_rca_recs() output."""
+
+    def _capture_output(self, recs: list[dict], correlation: dict | None) -> str:
+        printed: list[str] = []
+
+        def capture(*args: object, **kwargs: object) -> None:
+            printed.append(" ".join(str(a) for a in args))
+
+        with patch("builtins.print", side_effect=capture):
+            _preflight.print_ci_rca_recs(recs, correlation=correlation)
+        return "\n".join(printed)
+
+    def test_hard_block_shown_for_unresolved_rec(self) -> None:
+        rec = {"id": "rec-9999", "title": "CI broken", "priority": "critical", "created_timestamp": "2026-05-13"}
+        correlation = {"likely_resolved": [], "unresolved": [rec]}
+        output = self._capture_output([rec], correlation)
+        assert "HARD BLOCK" in output
+        assert "SOFT" not in output
+        assert "rec-9999" in output
+
+    def test_soft_prompt_shown_for_likely_resolved_rec(self) -> None:
+        rec = {"id": "rec-2187", "title": "mypy fail", "priority": "critical", "created_timestamp": "2026-06-10"}
+        correlation = {"likely_resolved": [rec], "unresolved": []}
+        output = self._capture_output([rec], correlation)
+        assert "SOFT" in output
+        assert "LIKELY RESOLVED" in output
+        assert "HARD BLOCK" not in output
+        assert "rec-2187" in output
+        assert "--update-rec rec-2187" in output
+
+    def test_both_soft_and_hard_block_when_mixed(self) -> None:
+        r_soft = {"id": "rec-100", "title": "old fail", "priority": "critical", "created_timestamp": "2026-06-10"}
+        r_hard = {"id": "rec-101", "title": "new fail", "priority": "critical", "created_timestamp": "2026-06-12"}
+        correlation = {"likely_resolved": [r_soft], "unresolved": [r_hard]}
+        output = self._capture_output([r_soft, r_hard], correlation)
+        assert "SOFT" in output
+        assert "HARD BLOCK" in output
+        assert "rec-100" in output
+        assert "rec-101" in output
+
+    def test_none_correlation_falls_back_to_all_hard_block(self) -> None:
+        rec = {"id": "rec-999", "title": "CI broken", "priority": "critical", "created_timestamp": "2026-05-13"}
+        output = self._capture_output([rec], correlation=None)
+        assert "HARD BLOCK" in output
+        assert "SOFT" not in output
+
+    def test_empty_recs_shows_none(self) -> None:
+        output = self._capture_output([], correlation={"likely_resolved": [], "unresolved": []})
+        assert "(none)" in output
+
+
+class TestGetRecentMainCommits:
+    """Tests for _get_recent_main_commits()."""
+
+    _GIT_LOG_OUTPUT = (
+        "COMMIT:abc12345|2026-06-12T10:00:00+00:00|feat(scope): fix bar\n"
+        "scripts/foo.py\n"
+        "scripts/bar.py\n"
+        "\n"
+        "COMMIT:def67890|2026-06-11T09:00:00+00:00|fix: repair baz\n"
+        "scripts/baz.py\n"
+    )
+
+    def _make_git_result(self, stdout: str, returncode: int = 0) -> MagicMock:
+        r = MagicMock()
+        r.returncode = returncode
+        r.stdout = stdout
+        return r
+
+    def test_returns_list_of_commits(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result(self._GIT_LOG_OUTPUT)):
+            result = _preflight._get_recent_main_commits()
+        assert len(result) == 2
+        assert result[0]["sha"] == "abc12345"
+        assert result[0]["subject"] == "feat(scope): fix bar"
+        assert "scripts/foo.py" in result[0]["files"]
+        assert result[1]["sha"] == "def67890"
+
+    def test_returns_empty_on_nonzero_exit(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result("", returncode=1)):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_returns_empty_on_oserror(self) -> None:
+        with patch("session_preflight.subprocess.run", side_effect=OSError("git not found")):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_returns_empty_on_timeout(self) -> None:
+        with patch("session_preflight.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 15)):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_empty_output_returns_empty(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result("")):
+            result = _preflight._get_recent_main_commits()
+        assert result == []

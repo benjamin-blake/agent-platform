@@ -266,9 +266,17 @@ git rebase origin/main   # STOP on conflict
 git push -u origin HEAD   # this session's harness branch
 ```
 Then via GitHub MCP (owner/repo from `git remote get-url origin`):
-1. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="feat({slug}): {brief-description}", body="Implemented by /implement. Verification plan passed.")`
-2. `mcp__github__subscribe_pr_activity(...)`; end the turn (see "Wait-for-CI").
-3. On green wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
+1. Build the PR body. If the plan has a non-empty `bundled_recommendations` list, append a `Resolves:` trailer to the body:
+   ```
+   Implemented by /implement. Verification plan passed.
+
+   Resolves: rec-NNNN, rec-MMMM
+   ```
+   This triggers the `rec-autoclose` workflow to close each named rec after the squash-merge lands on main. If `bundled_recommendations` is empty, omit the trailer.
+2. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="feat({slug}): {brief-description}", body=<body from step 1>)`
+3. `mcp__github__subscribe_pr_activity(...)`; end the turn (see "Wait-for-CI").
+4. On green wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
+5. **Post-merge closeout fallback**: after the merge, verify that the `rec-autoclose` workflow closed each bundled rec (check via `bin/venv-python -m scripts.ops_data_portal --sync` then `grep rec-NNNN logs/.recommendations-log.jsonl`). If a rec is still open after ~5 min, close it directly: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "Resolved by merge of {slug} -- autoclose fallback"`.
 
 ### STRATEGIC Commit Flow
 STRATEGIC plans are suspended (Decision 67). When restored, use the same MCP PR/subscribe/merge pattern, committing `docs/plans/briefings/` with a `scope({slug}): ...` message.
