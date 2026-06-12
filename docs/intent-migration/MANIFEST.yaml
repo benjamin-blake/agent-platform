@@ -49,6 +49,18 @@ manifest:
       `disposition` MUST be the archetype's `disposition` value.
     - `cross_cutting_findings` are drift signals that span multiple docs; the
       wave that first touches an affected doc owns surfacing the relevant one.
+    - INBOUND-REFERENCE SWEEP (exit criterion for every delete disposition):
+      before deleting a doc, run `rg -n "INTENT-<slug>" .claude/ scripts/ src/
+      terraform/ tests/ .github/ docs/` and repoint or remove EVERY hit. "Every
+      reference swept" means code/infra/test references (X6) and Decision/CD
+      prose pointers (X1/X2/X7), not just the latter. A delete is not done while
+      any inbound reference resolves to the deleted path.
+
+  effort_legend:                       # decomposition signal, not wall-clock (mirrors ROADMAP-PLATFORM effort markers)
+    XS: "single-file / single-pointer; <1 session"
+    S:  "one doc, low drift; 1 session"
+    M:  "one doc, real drift reconciliation; 1 session"
+    L:  "one large/high-applied doc; may split across sessions"
 
 # --------------------------------------------------------------------------
 # Per-archetype disposition rules (the owner chose per-archetype, not uniform).
@@ -138,6 +150,28 @@ cross_cutting_findings:
       provider-agnostic-executor. Extraction must reconcile the two rather than
       create a second provider contract.
     affects: [provider-agnostic-executor]
+  - id: X6
+    finding: >-
+      Load-bearing CODE/INFRA/TEST references cite INTENT docs by path and are
+      invisible to the X1-X5 prose-pointer findings. Verified inbound refs (sweep
+      and repoint before the owning wave deletes the doc):
+      scripts/execute_recommendation.py:17 (recommendation-executor);
+      scripts/verifiers/__init__.py:25 (session-log-architecture);
+      scripts/telemetry_schemas.py:8 + terraform/iceberg_tables.tf:1171
+      (telemetry-system); scripts/validate.py:2378 (ci-cd-architecture -- a
+      literal entry in the environment-taxonomy allowlist SET, so deletion leaves
+      a dead allowlist member); scripts/validate.py:2752 (ci-rca-methodology,
+      comment); tests/test_platform_roadmap.py:490 (pre-codegen). Re-run the rg
+      sweep at each wave -- this list is a 2026-06-12 snapshot, not authoritative.
+    affects: [recommendation-executor, session-log-architecture, telemetry-system, ci-cd-architecture, ci-rca-methodology, pre-codegen-contract-ratification]
+  - id: X7
+    finding: >-
+      Decision 84's Related line cites docs/INTENT-ducklake-consolidation.md BY
+      PATH as the "full program". Wave 1 deletes that doc with only a pointer TO
+      Decision 84 -- a circular dangling pointer. Same redirect discipline as X2:
+      before delete, repoint Decision 84's reference to the surviving target
+      (the Decision itself / the carrier tier_items T2.26-T2.28).
+    affects: [ducklake-consolidation]
 
 # --------------------------------------------------------------------------
 # Wave sequencing. Wave 0 is enforcement (no INTENT extraction); Waves 1-5
@@ -151,8 +185,8 @@ waves:
     actions:
       - "Edit .claude/commands/plan.md + .claude/skills/planning/SKILL.md (Documentation Artefact Design): route forward intent to tier_items, rationale to Decisions, field semantics to contracts; forbid new docs/INTENT-*.md."
       - "Edit AGENTS.md (Agent-First Repository section): add the no-new-prose-INTENT rule with a pointer to Decision 86."
-      - "Roadmap-bookkeeping in ROADMAP-PLATFORM.yaml: mark CD.14 state: superseded (by Decision 86); repoint tier_item T5.5 from demote-and-footer to extract-and-retire-per-this-manifest."
-      - "Add a scripts/validate.py guard rejecting NEW docs/INTENT-*.md files, grandfathering the existing 18 via an allowlist that shrinks as waves delete them."
+      - "Roadmap-bookkeeping in ROADMAP-PLATFORM.yaml: mark CD.14 state: superseded (by Decision 86); repoint tier_item T5.5 from demote-and-footer to extract-and-retire-per-this-manifest; AND sweep CD.14's now-stale retires_intents (line 535) + demotes_intents (line 536) arrays so the roadmap's self-contained invariant (agent_instructions lines 124-125) is not left asserting demotion of docs this manifest deletes."
+      - "Add a scripts/validate.py guard rejecting new standing prose-architecture docs. Grandfather mechanism (single source of truth, auto-shrinking): the guard derives the allowed set from THIS manifest -- a doc is permitted to exist iff it has a documents[] entry with disposition_state != done. As each wave flips an entry to disposition_state: done and deletes the file, the guard's allowed set shrinks automatically with no hand-edit. The guard rejects any docs/INTENT-*.md without a non-done manifest entry (and per Decision 86, any new standing prose-deliberation doc under docs/ matching the broader pattern)."
     gate: "Decision 86 merged to main"
     follow_on_plan: "docs/plans/PLAN-intent-migration-wave0-enforcement.yaml"
     rationale: "Authored immediately after this plan while context is hot; tiny, high-leverage, prevents corpus growth during the multi-wave extraction."
@@ -169,6 +203,15 @@ waves:
     plan_type: IMPLEMENTATION
     docs: [session-log-architecture, terraform-cicd-agent-native, pre-codegen-contract-ratification, aws-migration-platform-evolution]
     gate: "WAVE-1 complete"
+    cross_wave_gate: >-
+      project_id thread: aws-migration Part 2 is the ORIGIN of the monorepo +
+      project_id commitment that multi-product (Wave 5, still alive) references
+      BY PATH (multi-product lines 3, 10). aws-migration's project_id content
+      MUST be extracted to its tier_item/contract target AND multi-product's
+      inbound path reference repointed to that target BEFORE aws-migration's
+      prose is deleted. If that repoint cannot land in Wave 2, DEFER only
+      aws-migration Part 2's deletion to Wave 5 (delete the rest of the doc, keep
+      Part 2 until multi-product is dispositioned).
     rationale: "Each has an explicit Application Status / proposed-tier-items section -- extraction is bounded by reconciling applied-vs-residual against the live roadmap."
 
   - id: WAVE-3
@@ -176,6 +219,14 @@ waves:
     plan_type: IMPLEMENTATION
     docs: [ops-decisions-graduation, dq-enforcement, validation-architecture, ci-cd-architecture, ci-rca-methodology]
     gate: "WAVE-2 complete"
+    cross_wave_gate: >-
+      Contract-substrate dependency: extract_to_contract(s) dispositions target
+      docs/contracts/*.yaml, but the docs/contracts/ .md -> .yaml cutover is
+      governed by CD.25 / T-1.12 and is still PENDING (today the dir is mostly
+      .md). A wave session must EITHER gate its contract extraction on the cutover
+      landing for the target file, OR emit the contract as .yaml directly and
+      record it so CD.25's conversion skips the already-converted file. Do not
+      create a lone .yaml beside un-converted .md peers without recording it.
     rationale: "Phase-structured arcs with mixed landed/pending state. ci-rca-methodology is the methodology_contract; the rest are living arcs."
 
   - id: WAVE-4
@@ -183,6 +234,11 @@ waves:
     plan_type: IMPLEMENTATION
     docs: [recommendation-executor, telemetry-system, verification-system, provider-agnostic-executor, autonomous-improvement-control-plane]
     gate: "WAVE-3 complete"
+    cross_wave_gate: >-
+      Same contract-substrate dependency as WAVE-3 (telemetry/verification/
+      inference-provider contracts depend on the CD.25 / T-1.12 .md -> .yaml
+      cutover; X5 also requires reconciling provider-agnostic into the existing
+      docs/contracts/inference-provider.md rather than creating a duplicate).
     rationale: "Highest drift (predate the CD.27/28 executor pivot and Decision 78/84 DuckLake move). The control-plane umbrella synthesises the other four, so it migrates LAST once its children have landed."
 
   - id: WAVE-5
@@ -274,7 +330,7 @@ documents:
     lines: 287
     current_status: "PROPOSED -- candidate decision CD.NN (unratified); Section 8 tier_items to transcribe."
     disposition: extract_to_roadmap
-    primary_targets: ["T2.20", "T2.16b", "candidate_decisions (CD.NN)"]
+    primary_targets: ["T2.20", "T2.16b", "candidate_decisions (ALLOCATE a real CD number -- 'CD.NN' is the doc's unallocated placeholder, not a resolvable id; or fold into existing CD.35)"]
     content_blocks:
       - block: "Target architecture + component designs + autonomy boundary (s4-s6)"
         target: "Ratify CD.NN (or fold into existing CD.35); tier_item T2.20"
@@ -365,6 +421,7 @@ documents:
 
   - id: validation-architecture
     archetype: living_strategic_arc
+    archetype_provisional: true          # see drift_findings: if Decision 60 migration is complete this is feasibility_graduated -> delete+pointer
     lines: 169
     current_status: "Architectural anchor; two-tier validate.py migration. AGENTS.md states 'Decision 60 migration complete'."
     disposition: extract_to_roadmap_and_contracts
