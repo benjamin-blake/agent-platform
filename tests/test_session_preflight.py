@@ -1874,6 +1874,46 @@ class TestCiRcaCorrelation:
         assert result["unresolved"] == [rec]
         assert result["likely_resolved"] == []
 
+    # --- precision: component-boundary path matching ---
+
+    def test_basename_substring_of_unrelated_path_not_correlated(self) -> None:
+        # "utils.py" must NOT match "scripts/test_utils.py" (substring crosses component boundary).
+        rec = self._make_rec("rec-2195a", file="utils.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "bbb1111", "2026-06-11T10:00:00+00:00", "fix: update test_utils", files=["scripts/test_utils.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_ci_py_not_matched_by_cli_py(self) -> None:
+        # "ci.py" must NOT match "scripts/cli.py".
+        rec = self._make_rec("rec-2195b", file="ci.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("ccc2222", "2026-06-11T10:00:00+00:00", "feat: cli improvements", files=["scripts/cli.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_basename_only_rec_matches_full_path_with_same_basename(self) -> None:
+        # "session_preflight.py" (basename) must match "scripts/session_preflight.py".
+        rec = self._make_rec("rec-2195c", file="session_preflight.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "ddd3333", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_full_path_exact_match_correlated(self) -> None:
+        # "scripts/session_preflight.py" must match "scripts/session_preflight.py" exactly.
+        rec = self._make_rec("rec-2195d", file="scripts/session_preflight.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "eee4444", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
     # --- mixed batch ---
 
     def test_mixed_batch_split_correctly(self) -> None:

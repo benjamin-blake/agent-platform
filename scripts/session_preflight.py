@@ -782,12 +782,28 @@ def _get_recent_main_commits(n: int = 5) -> list[dict]:
     return commits
 
 
+def _file_paths_correlate(rec_file: str, changed: str) -> bool:
+    """Return True when rec_file and changed refer to the same repository file.
+
+    Matches on exact equality or a trailing path-component suffix match: split
+    both on "/" and compare the last N components (N = min of the two lengths).
+    A bare basename rec file therefore matches any changed path that ends with
+    that basename, but a substring that crosses a component boundary does not.
+    """
+    if rec_file == changed:
+        return True
+    parts_rec = rec_file.split("/")
+    parts_changed = changed.split("/")
+    n = min(len(parts_rec), len(parts_changed))
+    return parts_rec[-n:] == parts_changed[-n:]
+
+
 def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[str, list[dict]]:
     """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
 
     A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
     AFTER the rec's created_timestamp either:
-      - modified the rec's ``file`` field (path prefix match), or
+      - modified the rec's ``file`` field (path-suffix / basename match), or
       - mentions the rec's ``id`` in its subject line.
 
     Recs whose file/id cannot be correlated with any newer main commit retain
@@ -829,7 +845,7 @@ def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[st
             # Check changed files for the rec's source file.
             if rec_file:
                 for changed in commit.get("files") or []:
-                    if rec_file in changed or changed in rec_file:
+                    if _file_paths_correlate(rec_file, changed):
                         correlated = True
                         break
             if correlated:
