@@ -2730,6 +2730,8 @@ tier_items:
       - "String-assuming `acceptance` consumers updated in lockstep for the scalar-or-list union (run_acceptance in step_runner.py; validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command in acceptance_lint.py); DqNotNull-on-list semantics defined (round-2 critic MED)"
       - "Every DERIVED field (priority, effort, automatable, risk) carries a `derivation` block: formula + inputs + recompute_trigger + failure/degradation_policy"
       - "priority ratified as OPTIONAL input + source-informed default + NOT NULL after derivation (encoding int 1-4, 1=Critical..4=Low), with a recorded acyclicity invariant (priority derivation must not feed risk/automatable/effort) -- resolves the original required-vs-derived / circular-dependency question"
+      - "priority `derivation` block specifies the CONCRETE source->priority mapping (e.g. ci_rca->1, security_advisory->1, ...; every registered source mapped, with a documented fallback) -- not a thin placeholder; this is the formula T2.29 implements (avoids the structurally-valid-but-semantically-thin anti-pattern)"
+      - "priority/effort int encodings are recorded as contract TARGET-STATE with a realization pointer to T2.30/T2.31 and an explicit contract-vs-live skew note (mirrors the acceptance field-shape-early/enforcement-late skew note), so the contract_version:1 doc is not read as describing a column type that the live table does not yet have"
       - "All currently-undocumented fields ratified (verification, verification_tier, dependencies, tags, resolution, execution_result/date/branch/pr_url/steps); execution_* entries record Decision 63 DQ-exclusion + non-denormalisation (documented, not enforced/derived)"
       - "Stale facts corrected in the contract: `id` = writer/file_ops-allocated (Decision 84 I-2, not DynamoDB); risk + automatable documented as portal-derived, not role:input (config/lambda/ducklake/field_semantics.yaml reconciliation is T2.29 scope)"
       - "Decision 65 supersession recorded: Class A contract + src/schemas/rec.py Annotated model are the canonical field-semantic authority for ops_recommendations; ops.yaml retirement deferred to T1.6 (explicit citation, not a silent fork)"
@@ -4453,10 +4455,11 @@ tier_items:
       - tests/test_ops_data_portal.py
       - tests/test_ops_data_portal_validators.py
     exit_criteria:
-      - "priority is optional input with a source-informed default applied at portal write time, NOT NULL after derivation; acyclicity preserved (priority derivation does not feed risk/automatable/effort); covered by tests; correctness no longer relies on the batch.py r.get(...,'Medium') fallback"
+      - "priority is optional input with a source-informed default applied at portal write time (implementing the concrete source->priority mapping ratified in T0.12.5), NOT NULL after derivation; acyclicity preserved (priority derivation does not feed risk/automatable/effort); covered by tests; correctness no longer relies on the batch.py r.get(...,'Medium') fallback"
+      - "priority casing normalized at the portal: the live production file_rec calls in validate.py (_file_budget_breach_rec/_file_budget_bypass_rec) emit lowercase 'medium'/'low' that violate the Critical/High/Medium/Low enum -- this resolves the existing open rec-2156 and must land BEFORE the T2.30 enum-to-int conversion or those writes break"
       - "automatable recompute job re-derives stored values on a capabilities.yaml maturity_ceiling change, with a one-off backfill; meaning unchanged vs Decision 44 (no merge-mode extension, Decision 73 cl.6)"
       - "risk AND automatable no longer persist silent degraded values when radon/coverage.xml are unavailable -- both loud-fail or mark the row for recompute (they share _compute_risk_score); covered by a test simulating the missing-tool path for each"
-      - "NEW min_length write-time validator-type handler added to the validator registry; title min-length enforced at the portal (a short title is rejected); the false ops.yaml:53 'min 10 chars' claim corrected"
+      - "NEW min_length write-time validator-type handler added to the validator registry; title min-length enforced at the portal (a short title is rejected); the false ops.yaml:53 'min 10 chars' claim corrected; the validator is exclude_before-gated like the other write_time tests so the ~889 existing short-title rows are grandfathered (updates to them do not retro-fail)"
       - "write-time validator registry (_load_write_time_validators) repointed to the Annotated SSOT, OR explicitly designated the last ops.yaml runtime reader with T1.6 as retirement owner -- no silent ops.yaml/Annotated enforcement drift"
       - "get_rec_write_guidance() sources semantics from the Annotated SSOT / Class A contract, not ops.yaml (Decision 66 Tier A preserved)"
       - "config/lambda/ducklake/field_semantics.yaml marks risk + automatable as derived; no role:input mismatch remains for portal-overridden fields"
@@ -4484,8 +4487,8 @@ tier_items:
       re-based in lockstep or the urgency sort silently breaks. All readers move in lockstep: batch.py
       PRIORITY_ORDER (re-based) + its import in execute_recommendation.py, the ducklake_reader named verbs /
       current-projection label derivation (Decision 84 I-3, owned by T2.28), the writer schema gate (Decision
-      81 cl.5), validate.py (incl. its hardcoded string-priority test fixtures), and DQ. V3 (deploys + invokes
-      the live DuckLake write path).
+      81 cl.5), validate.py LIVE budget-rec file_rec producers (NOT test fixtures), and DQ. V3 (deploys +
+      invokes the live DuckLake write path).
     depends_on: [T0.12.5, T2.29, T2.19, T2.28]
     files_in_scope:
       - src/common/ducklake_scd2_schema.py
@@ -4495,6 +4498,7 @@ tier_items:
       - scripts/execute_recommendation.py
       - scripts/ops_data_portal.py
       - scripts/validate.py
+      - config/lambda/ducklake/field_semantics.yaml
       - config/agent/data_quality/ops.yaml
       - src/schemas/rec.py
     exit_criteria:
@@ -4503,7 +4507,8 @@ tier_items:
       - "priority stored as int 1-4 on the DuckLake ops_recommendations table; ORDER BY priority ASC yields urgency order"
       - "string labels derived in the `current` projection (CASE); no consumer reads a stored string priority"
       - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last"
-      - "all readers migrated in lockstep: batch.py PRIORITY_ORDER RE-BASED from 0-indexed to the 1-4 contract + execute_recommendation.py import, ducklake_reader verbs, writer gate, validate.py (incl. hardcoded string-priority test fixtures ~lines 1409/1446), DQ; rg finds no string-priority comparison left in production OR test code"
+      - "all readers/producers migrated in lockstep: batch.py PRIORITY_ORDER RE-BASED from 0-indexed to the 1-4 contract + execute_recommendation.py import, ducklake_reader verbs, writer gate, the LIVE production file_rec calls in validate.py (_file_budget_breach_rec/_file_budget_bypass_rec, lines ~1409-1410/1446-1447 -- these are producers, NOT test fixtures), DQ; rg finds no string-priority literal or comparison left in production OR test code"
+      - "config/lambda/ducklake/field_semantics.yaml priority sql_type updated VARCHAR -> integer (the column-type contract follows the table change; T2.29 fixes role, this item fixes sql_type)"
       - "int VALUE derived for ALL rows incl. Decision 64 bootstrap rows (exclude_before 2026-05-01) -- else COALESCE/ORDER BY breaks on history; the _contract_version STAMP is the only thing withheld from bootstrap rows (value derived, version not re-stamped); reads COALESCE"
       - "history immutable + `current` deterministically rebuildable from history post-migration (Decision 81 cl.8)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer + ducklake_reader (V3 per Decision 79)"
@@ -4538,14 +4543,16 @@ tier_items:
       - src/lambdas/ducklake_reader/handler.py
       - scripts/ops_data_portal.py
       - scripts/validate.py
+      - config/lambda/ducklake/field_semantics.yaml
       - config/agent/data_quality/ops.yaml
       - src/schemas/rec.py
     exit_criteria:
       - "START GATE 1: T2.28 (closed-boundary named-verb reads + writer keyspace) is COMPLETE before this item edits the ducklake_reader current-projection label derivation -- co-editing shared reader verbs with in-progress T2.28 is disallowed"
+      - "config/lambda/ducklake/field_semantics.yaml effort sql_type updated VARCHAR -> integer (column-type contract follows the table change)"
       - "START GATE 2: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1); rollback path documented and tested"
       - "effort LOC weights DEFINED in config/agent/executor/capabilities.yaml (they did not exist before this item); _EFFORT_SCALE in ops_data_portal reconciled to read them, not a hardcoded dict"
       - "effort stored as a LOC-weighted integer on the DuckLake ops_recommendations table; t-shirt labels derived in the `current` projection from integer thresholds"
-      - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last; rg finds no string-effort comparison left in production OR test code (incl. validate.py hardcoded 'effort' test fixtures ~lines 1409/1446)"
+      - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last; rg finds no string-effort literal or comparison left in production OR test code (incl. the LIVE production file_rec calls in validate.py _file_budget_breach_rec/_file_budget_bypass_rec, lines ~1409-1410/1446-1447 -- producers, NOT test fixtures)"
       - "risk thresholds RE-VALIDATED after the effort scale magnitude changes (R<=5/<=15 were tuned to the old 0.1..5.0 scale; LOC-weighted ints re-tier every risk value unless thresholds or scale normalisation are adjusted); covered by a test asserting representative recs keep their intended risk tier"
       - "int VALUE derived for ALL rows incl. Decision 64 bootstrap rows (exclude_before 2026-05-01) -- else COALESCE/ORDER BY breaks on history; only the _contract_version STAMP is withheld from bootstrap rows; reads COALESCE; history immutable + current rebuildable (Decision 81 cl.8)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer + ducklake_reader (V3 per Decision 79)"
