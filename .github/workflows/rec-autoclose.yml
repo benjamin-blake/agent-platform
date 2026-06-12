@@ -1,0 +1,110 @@
+name: rec-autoclose
+# Layer 2 durable closure edge: reads Resolves: rec-NNNN trailers from the squash-merge
+# commit and closes each named rec via the ops portal (Decision 84 single-portal invariant).
+# Idempotency lives here: the workflow checks current status before writing and tolerates
+# absent-id errors.  No-op when no trailer is present.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  autoclose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Configure AWS credentials (OIDC -- branch role)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Close resolved recs from Resolves trailer
+        env:
+          DUCKLAKE_WRITER_URL: ${{ secrets.DUCKLAKE_WRITER_URL }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git log -1 --format=%B HEAD > /tmp/commit_msg.txt
+
+          .venv/bin/python << 'PYEOF'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, os.environ.get("GITHUB_WORKSPACE", str(Path.cwd())))
+
+          from scripts.rec_trailer import parse_resolves_trailer
+          from scripts.ops_data_portal import update_rec, sync
+
+          commit_sha = os.environ.get("GITHUB_SHA", "unknown")
+          repo = os.environ.get("GITHUB_REPOSITORY", "unknown")
+          run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
+          pr_url = f"https://github.com/{repo}/actions/runs/{run_id}"
+
+          commit_msg = Path("/tmp/commit_msg.txt").read_text(encoding="utf-8")
+          ids = parse_resolves_trailer(commit_msg)
+          if not ids:
+              print("rec-autoclose: no Resolves trailer found -- no-op")
+              sys.exit(0)
+
+          print(f"rec-autoclose: found trailer ids: {ids}")
+
+          # Sync local cache so status checks reflect current warehouse state.
+          try:
+              sync()
+          except Exception as exc:
+              print(f"rec-autoclose: sync warning ({exc}); continuing with possibly stale cache")
+
+          # Read local cache to check current status before writing (idempotency).
+          recs_cache: dict = {}
+          cache_path = Path("logs/.recommendations-log.jsonl")
+          if cache_path.exists():
+              for line in cache_path.read_text(encoding="utf-8").splitlines():
+                  if line.strip():
+                      try:
+                          r = json.loads(line)
+                          recs_cache[r["id"]] = r
+                      except (json.JSONDecodeError, KeyError):
+                          pass
+
+          resolution = (
+              f"Auto-closed by rec-autoclose workflow: merge commit {commit_sha} "
+              f"({pr_url})"
+          )
+          exit_code = 0
+
+          for rec_id in ids:
+              existing = recs_cache.get(rec_id)
+              if existing and existing.get("status") == "closed":
+                  print(f"rec-autoclose: {rec_id} already closed -- skipping (idempotent)")
+                  continue
+              try:
+                  update_rec(rec_id, {"status": "closed", "resolution": resolution})
+                  print(f"rec-autoclose: closed {rec_id}")
+              except RuntimeError as exc:
+                  print(f"rec-autoclose: WARN {rec_id} not found in portal ({exc}) -- skipping")
+              except Exception as exc:
+                  print(f"rec-autoclose: ERROR closing {rec_id}: {exc}", file=sys.stderr)
+                  exit_code = 1
+
+          sys.exit(exit_code)
+          PYEOF

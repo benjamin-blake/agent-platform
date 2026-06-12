@@ -54,6 +54,17 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 12d. **STRATEGIC plan gate:** If the plan's `## Plan Type` is `STRATEGIC` AND `docs/DECISIONS.md` contains an active Decision 67, recommend REVISE with: "STRATEGIC plans are blocked while Decision 67 is active (telemetry tables not yet confirmed operational). Convert to an IMPLEMENTATION plan or wait for Decision 67 reversal."
 
+12k. **Closure obligation check (CONDITIONAL -- IMPLEMENTATION plans only):** This check fires ONLY when the plan meets one of the two trigger conditions below. Additive plans that do neither are explicitly exempt.
+
+Trigger condition 1 -- **Rec-resolving plan**: the plan's `intent`, `context`, `scope`, or `acceptance_criteria` explicitly names one or more open recommendation IDs as the motivation for the work (e.g. "closes rec-2187", "resolves ci_rca recs", "fixes the open rec").
+- Required: `bundled_recommendations` in the YAML must be non-empty and list the rec ids.
+- Required: at least one VP step must verify each rec closed (grep the local cache after sync, or use `ops_data_portal --sync && grep rec-NNNN logs/.recommendations-log.jsonl`).
+- If either is missing, recommend REVISE: "Rec-resolving plan omits closure obligation: add bundled_recommendations list and a VP step to verify each rec closed."
+
+Trigger condition 2 -- **Surface-retiring plan**: the plan's `scope` includes a row with `action: Delete` OR an explicit X->Y migration/cutover (old path deleted, Lambda retired, write path swapped, config flag removed, backend superseded).
+- Required: at least one VP step that confirms the old surface is unreachable or deleted (grep for call sites, `test -f` for deleted files, import smoke-test, etc.).
+- If missing, recommend REVISE: "Surface-retiring plan omits stale-reference sweep VP step: add a VP step that verifies the old surface is dead."
+
 ### Phase 2b: Frame Challenge (MANDATORY)
 
 Phase 2 checks the plan's *details* against the existing frame. This phase challenges the *frame itself*. See Decision 75 (Frame-Lock Anti-Pattern in Architectural Planning) for the failure mode this phase is designed to catch.

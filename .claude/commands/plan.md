@@ -40,6 +40,13 @@ If the request references a recommendation ID, search `logs/.recommendations-log
 
 Also surface `preflight.platform_roadmap.next_eligible` and `preflight.platform_roadmap.strategic_pending` to the human so the eligibility surface is visible without manually grepping the YAML. Apply the **Platform Roadmap Eligibility** rules from your `planning` skill to print the summary line and handle soft-warn exception categories.
 
+**CI RCA Recs (soft/hard distinction):** The preflight report now differentiates two ci_rca fields:
+- `ci_rca_unresolved_recs` -- **HARD BLOCK** (no related-work exemption). Do not scope unrelated work.
+- `ci_rca_likely_resolved_recs` -- **SOFT PROMPT** (not a block). Surface as "LIKELY RESOLVED -- verify and close before proceeding" and assist the user to close them. Once closed, proceed normally.
+- `recent_main_commits` -- Planning context only; surface the last 5 main commits so the human can see what landed recently.
+
+Apply the soft/hard distinction from your `planning` skill's Preflight Constraints section.
+
 ## Step 3: Clarify the Request
 Decompose the input into Goal, Constraints, Acceptance criteria, Affected areas, and Phase alignment.
 If vague, ask 2-5 questions. Watch for ROADMAP misalignment (the platform/product roadmap state is already in the preflight JSON `next_eligible` / `strategic_pending` fields). Decision-contradiction checking is delegated to the `decision-scout` subagent gate in Step 6 -- do NOT read `docs/DECISIONS.md` from the planning agent to look for contradictions, that's a 25k-token cost the subagent avoids.

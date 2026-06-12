@@ -711,12 +711,167 @@ def _check_budget_bypass_alert() -> dict | None:
     return None
 
 
-def print_ci_rca_recs(recs: list[dict]) -> None:
-    """Print the CI RCA Recs section to terminal."""
+def _parse_ts_utc(ts: str) -> datetime | None:
+    """Parse an ISO-like timestamp string into a UTC-aware datetime, or None on failure."""
+    ts = ts.strip()
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(ts, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
+def _get_recent_main_commits(n: int = 5) -> list[dict]:
+    """Return the last *n* commits on origin/main as structured dicts.
+
+    Each dict has keys: sha, date (ISO), subject, files (list of changed paths).
+    Returns [] on subprocess failure or when origin/main is unreachable.
+    Does NOT call git fetch -- relies on origin/main already being fresh from
+    check_main_freshness().
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "log",
+                "origin/main",
+                f"-n{n * 3 + 5}",
+                "--format=COMMIT:%H|%aI|%s",
+                "--name-only",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            cwd=ROOT,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    commits: list[dict] = []
+    current: dict | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("COMMIT:"):
+            if current is not None and len(commits) < n:
+                commits.append(current)
+            parts = line[7:].split("|", 2)
+            current = {
+                "sha": parts[0] if len(parts) > 0 else "",
+                "date": parts[1] if len(parts) > 1 else "",
+                "subject": parts[2] if len(parts) > 2 else "",
+                "files": [],
+            }
+        elif line.strip() and current is not None:
+            current["files"].append(line.strip())
+    if current is not None and len(commits) < n:
+        commits.append(current)
+    return commits
+
+
+def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[str, list[dict]]:
+    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+
+    A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
+    AFTER the rec's created_timestamp either:
+      - modified the rec's ``file`` field (path prefix match), or
+      - mentions the rec's ``id`` in its subject line.
+
+    Recs whose file/id cannot be correlated with any newer main commit retain
+    the HARD BLOCK designation (UNRESOLVED).
+
+    Args:
+        recs:    Open ci_rca recs from _fetch_ci_rca_recs().
+        commits: Recent main commits from _get_recent_main_commits().
+
+    Returns:
+        Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
+    """
+    if not recs:
+        return {"likely_resolved": [], "unresolved": []}
+
+    likely_resolved: list[dict] = []
+    unresolved: list[dict] = []
+
+    for rec in recs:
+        rec_id = (rec.get("id") or "").lower()
+        rec_file = (rec.get("file") or "").strip()
+        rec_created_dt = _parse_ts_utc(rec.get("created_timestamp") or "")
+
+        correlated = False
+        for commit in commits:
+            commit_dt = _parse_ts_utc(commit.get("date") or "")
+
+            # Only consider commits that landed AFTER the rec was created.
+            if rec_created_dt is not None and commit_dt is not None:
+                if commit_dt <= rec_created_dt:
+                    continue
+
+            # Check subject for explicit rec id mention.
+            subject_lower = (commit.get("subject") or "").lower()
+            if rec_id and rec_id in subject_lower:
+                correlated = True
+                break
+
+            # Check changed files for the rec's source file.
+            if rec_file:
+                for changed in commit.get("files") or []:
+                    if rec_file in changed or changed in rec_file:
+                        correlated = True
+                        break
+            if correlated:
+                break
+
+        if correlated:
+            likely_resolved.append(rec)
+        else:
+            unresolved.append(rec)
+
+    return {"likely_resolved": likely_resolved, "unresolved": unresolved}
+
+
+def _print_recent_main_commits(commits: list[dict]) -> None:
+    """Print the Recent main commits context block."""
+    print("\n--- Recent main commits ---")
+    if not commits:
+        print("  (none fetched -- offline or origin/main unreachable)")
+    else:
+        for c in commits:
+            sha_short = (c.get("sha") or "")[:8]
+            date_part = (c.get("date") or "")[:10]
+            subject = c.get("subject") or ""
+            print(f"  {date_part} {sha_short} {subject}")
+    print()
+
+
+def print_ci_rca_recs(recs: list[dict], correlation: dict[str, list[dict]] | None = None) -> None:
+    """Print the CI RCA Recs section to terminal.
+
+    When ``correlation`` is provided, recs are split into LIKELY-RESOLVED
+    (soft verify+close prompt) and UNRESOLVED (HARD BLOCK retained).
+    When ``correlation`` is None all recs are treated as UNRESOLVED (backward compat).
+    """
     print("\n--- CI RCA Recs (open) ---")
     if not recs:
         print("  (none)")
-    else:
+        print()
+        return
+
+    if correlation is None:
+        # Backward-compat path: all recs are HARD BLOCK.
         print("  [HARD BLOCK] /plan cannot scope unrelated work while these recs are open.")
         for rec in recs:
             rec_id = rec.get("id", "unknown")
@@ -724,6 +879,36 @@ def print_ci_rca_recs(recs: list[dict]) -> None:
             priority = rec.get("priority", "")
             created = rec.get("created_timestamp", "")
             print(f"  {rec_id} [{priority}] {created}: {title}")
+        print()
+        return
+
+    likely_resolved = correlation.get("likely_resolved") or []
+    unresolved = correlation.get("unresolved") or []
+
+    if likely_resolved:
+        print(
+            "  [SOFT -- LIKELY RESOLVED] A recent main commit appears to have fixed these recs. Verify and close before /plan:"
+        )
+        for rec in likely_resolved:
+            rec_id = rec.get("id", "unknown")
+            title = rec.get("title", "")
+            priority = rec.get("priority", "")
+            created = rec.get("created_timestamp", "")
+            print(f"  {rec_id} [{priority}] {created}: {title}")
+            print(
+                f"    -> bin/venv-python -m scripts.ops_data_portal --update-rec {rec_id}"
+                ' --status closed --resolution "Verified resolved by main commit"'
+            )
+
+    if unresolved:
+        print("  [HARD BLOCK] /plan cannot scope unrelated work while these recs remain open.")
+        for rec in unresolved:
+            rec_id = rec.get("id", "unknown")
+            title = rec.get("title", "")
+            priority = rec.get("priority", "")
+            created = rec.get("created_timestamp", "")
+            print(f"  {rec_id} [{priority}] {created}: {title}")
+
     print()
 
 
@@ -1113,12 +1298,12 @@ def main() -> int:
         recs_read_status = "ok"
         open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = _rec_result  # type: ignore[misc]
     ci_rca_recs = _fetch_ci_rca_recs()
-    if ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs)
+    recent_main_commits = _get_recent_main_commits()
+    correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits)
+    print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     priority_queue = read_priority_queue(creds_status=creds_status)
     print_priority_queue(priority_queue)
-    if not ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs)
+    _print_recent_main_commits(recent_main_commits)
     context = read_context_files()
     platform_roadmap_state = platform_roadmap.compute_state_dict(
         ROADMAP_PLATFORM_PATH, latest_decision_ts=_get_latest_decision_ts()
@@ -1147,6 +1332,9 @@ def main() -> int:
         "priority_queue_source": "ducklake_reader" if creds_status == "ok" else "cache",
         "recs_read_status": recs_read_status,
         "ci_rca_recs": ci_rca_recs,
+        "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
+        "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
+        "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
         "recommendation_sync": recommendation_sync,
@@ -1203,13 +1391,19 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
     ahead = mf.get("commits_ahead", "?")
     recs_status = report.get("recs_read_status", "ok")
     recs_status_suffix = "" if recs_status == "ok" else f" [DEGRADED: recs_read_status={recs_status}]"
+    ci_rca_unresolved = len(report.get("ci_rca_unresolved_recs") or [])
+    ci_rca_likely = len(report.get("ci_rca_likely_resolved_recs") or [])
+    if ci_rca_unresolved or ci_rca_likely:
+        ci_rca_summary = f"ci_rca_unresolved={ci_rca_unresolved} ci_rca_likely_resolved={ci_rca_likely}"
+    else:
+        ci_rca_summary = "ci_rca=0"
     return (
         f"Preflight OK -> {report_path}\n"
         f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
         f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
         f"  open_recs={report.get('open_recommendations')} "
         f"non_automatable={report.get('non_automatable_recommendations')} "
-        f"ci_rca={len(report.get('ci_rca_recs') or [])}{recs_status_suffix}\n"
+        f"{ci_rca_summary}{recs_status_suffix}\n"
         f"  Read the report file for full constraint detail."
     )
 
