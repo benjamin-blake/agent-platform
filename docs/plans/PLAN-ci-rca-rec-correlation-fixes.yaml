@@ -1,0 +1,187 @@
+schema_version: 1
+slug: "ci-rca-rec-correlation-fixes"
+intent: >-
+  Resolve the two open source=ci_rca recommendations (rec-2195, rec-2196) that
+  block the /plan planning queue, restoring a clean preflight HARD-BLOCK surface so
+  future T1.13 (CI-RCA methodology contract) sessions can be scoped.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-rec-correlation-fixes.yaml
+phase: >-
+  Platform T1 (clears the ci_rca planning-queue HARD BLOCK that gates T1.13
+  CI-RCA methodology-contract work); not itself a tier_item -- ci_rca/ad_hoc_rec
+  exception category.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      rec-2195 -- replace the bidirectional substring file-correlation test in
+      correlate_ci_rca_with_main() with a precise basename / path-suffix
+      component match, and correct the docstring's inaccurate "path prefix match"
+      wording.
+  - file: .github/workflows/rec-autoclose.yml
+    action: Modify
+    purpose: >-
+      rec-2196 -- rename the mislabeled pr_url variable (it holds the Actions run
+      URL, not a PR URL) to run_url and clarify the auto-close resolution message
+      so the link is labelled as the workflow run; closure logic is unchanged.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Add precision cases to TestCorrelateCiRcaWithMain asserting prior substring
+      false-positives no longer correlate while legitimate path-suffix matches
+      still do.
+bundled_recommendations:
+  - rec-2195
+  - rec-2196
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    correlate_ci_rca_with_main() no longer correlates a rec whose file field is a
+    substring of an unrelated changed path (e.g. rec file "utils.py" vs changed
+    "scripts/test_utils.py", or "ci.py" vs "scripts/cli.py"), but still correlates
+    a true path-suffix match (e.g. rec file "scripts/session_preflight.py" vs
+    changed "scripts/session_preflight.py", and a basename-only rec file vs a full
+    path ending in that basename).
+  - >-
+    The correlate_ci_rca_with_main() docstring describes the matching rule
+    accurately (path-suffix / basename, not "path prefix match").
+  - >-
+    .github/workflows/rec-autoclose.yml contains no pr_url identifier; the URL is
+    held in run_url and the resolution message labels it as the workflow run while
+    retaining the merge commit SHA as the durable reference. The closure control
+    flow (trailer parse, idempotency check, update_rec calls, exit codes) is
+    byte-for-byte equivalent in behaviour.
+  - >-
+    Full presubmit (scripts.validate, no flags) passes on the branch.
+  - >-
+    After squash-merge with a "Resolves: rec-2195, rec-2196" trailer, both recs
+    reach status=closed in the warehouse (via the rec-autoclose workflow).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the existing + new TestCorrelateCiRcaWithMain unit tests. The new
+      precision cases must pass with the fix in place (and would fail against the
+      old bidirectional-substring logic).
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py::TestCorrelateCiRcaWithMain -q"
+    expected: "All cases pass, including the new substring-false-positive and path-suffix cases."
+    fix_if: >-
+      A false-positive case still correlates -> the suffix matcher is matching on
+      a non-component boundary; tighten to split('/') component comparison. A
+      legitimate suffix case fails -> the matcher is too strict (e.g. requires
+      full-path equality); allow trailing-component suffix match.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the rec-autoclose workflow no longer references pr_url, now defines
+      run_url, and that the file is valid YAML.
+    command: "! grep -n 'pr_url' .github/workflows/rec-autoclose.yml && grep -n 'run_url' .github/workflows/rec-autoclose.yml && bin/venv-python -c \"import yaml,sys; yaml.safe_load(open('.github/workflows/rec-autoclose.yml')); print('yaml-ok')\""
+    expected: "No pr_url match (grep returns non-zero, negated to success); run_url present; prints yaml-ok."
+    fix_if: >-
+      pr_url still present -> a reference was missed (check both the assignment and
+      the f-string interpolation in the resolution message). YAML parse error ->
+      indentation drift inside the heredoc block; restore exact YAML structure.
+  - step: 3
+    phase: pre-deploy
+    action: "Run the full presubmit suite identical to CI."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Presubmit passes (lint, format, prompts, tests, schema validation)."
+    fix_if: >-
+      A check fails -> address the specific check; do NOT add or remove checks from
+      ci.yml (validate.py is the single source of truth).
+  - step: 4
+    phase: post-deploy
+    action: >-
+      After the squash-merge (whose body carries the Resolves: rec-2195, rec-2196
+      trailer) lands on main and the rec-autoclose workflow runs, sync the local
+      cache and confirm both recs are closed.
+    command: "bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c \"import json; recs={json.loads(l)['id']:json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()}; print('rec-2195', recs.get('rec-2195',{}).get('status')); print('rec-2196', recs.get('rec-2196',{}).get('status'))\""
+    expected: "Both rec-2195 and rec-2196 print status closed."
+    fix_if: >-
+      A rec is still open -> the Resolves trailer was malformed or missing from the
+      squash-merge body; re-close manually via
+      bin/venv-python -m scripts.ops_data_portal --update-rec <id> --status closed
+      --resolution "Fixed by PLAN-ci-rca-rec-correlation-fixes".
+constraints:
+  - "Only modify the three files in scope; out-of-scope bugs become recommendations (AGENTS.md)."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "rec-autoclose.yml closure behaviour must not change -- the edit is a variable rename plus message-string clarification only."
+  - "Do not add or remove any check in .github/workflows/ci.yml; validate.py is the single source of truth (AGENTS.md merge protocol)."
+  - "Python 3.12+, type hints, ruff format, line length 127, no emojis, ASCII hyphens only (AGENTS.md code style)."
+  - "Closure transits the ops portal -> ducklake_writer via update_rec; never edit logs/.recommendations-log.jsonl directly (Decision 84 single-portal invariant)."
+context:
+  - >-
+    Both recs are source=ci_rca code-review findings filed against the just-landed
+    closure-loop branch (PR #131 / commits ae1de4d, 0abdf87). They are a preflight
+    HARD BLOCK on the /plan queue.
+  - >-
+    Decision 73 clause 4 (planning-queue governance) is the source of the HARD
+    BLOCK and the design correlate_ci_rca_with_main() implements (L5 surfacing).
+    Decision 72 (RCA-as-Plan-Source) defines the ci_rca rec contract; this plan is
+    the /plan-routed fix the AGENTS.md "do not inline-patch ci_rca" rule requires,
+    not an inline patch. Decision 70 governs closure via lifecycle state, not
+    deletion -- the rec-autoclose workflow uses update_rec status transitions.
+  - >-
+    Decision 84 context: ops_recommendations lives on DuckLake-on-Neon (sole
+    backend). This plan does not write to the table directly; closure transits the
+    rec-autoclose workflow -> ops portal -> ducklake_writer. A workflow variable
+    rename does not touch the closed reader/writer boundary.
+  - >-
+    rec-2195 fix detail: scripts/session_preflight.py:832 currently uses
+    `rec_file in changed or changed in rec_file`. Replace with a helper that
+    returns True on exact path equality or a trailing-path-component suffix match
+    (split on "/", compare the last N components), so a basename-only rec file
+    still matches a full path ending in that basename, but a substring that
+    crosses a component boundary does not.
+  - >-
+    rec-2196 fix detail: .github/workflows/rec-autoclose.yml:61 sets
+    `pr_url = f"https://github.com/{repo}/actions/runs/{run_id}"`. Deriving the
+    true PR URL from a push event is not reliable, so the rec endorses the
+    distinct-variable-name path: rename to run_url and word the resolution message
+    e.g. "Auto-closed by rec-autoclose workflow: merge commit {commit_sha} (run:
+    {run_url})".
+  - >-
+    Closure obligation (rec-resolving plan): both recs are declared in
+    bundled_recommendations and VP step 4 verifies closure post-merge. The
+    /implement skill emits the Resolves: rec-2195, rec-2196 trailer into the
+    squash-merge body.
+  - >-
+    Scope satisfies the ci_rca Related-Work "same file" condition: the plan edits
+    scripts/session_preflight.py (rec-2195's file) and
+    .github/workflows/rec-autoclose.yml (rec-2196's file).
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/adoring-brown-6ltfvy)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Decision references (73, 72, 70, 84) understood; no DECISIONS.md inline edits."
+  - "All three scope files located and readable."
+  - "Acceptance criteria understood and verifiable via the V2 plan."
+execution_steps:
+  - >-
+    scripts/session_preflight.py -- add a small module-level helper (e.g.
+    _file_paths_correlate(rec_file: str, changed: str) -> bool) that returns True
+    on exact equality or a component-boundary path-suffix match (split both on
+    "/", take min length N, compare trailing N components), and call it in place of
+    the bidirectional substring test at line ~832. Update the
+    correlate_ci_rca_with_main() docstring so the file-match bullet reads
+    "path-suffix / basename match" instead of "path prefix match".
+  - >-
+    .github/workflows/rec-autoclose.yml -- rename pr_url to run_url at its
+    assignment (line ~61) and at its use inside the resolution f-string (line ~91),
+    and reword the resolution message to label the link as the workflow run while
+    keeping {commit_sha}. Do not alter the trailer-parse, sync, idempotency, or
+    update_rec control flow.
+  - >-
+    tests/test_session_preflight.py -- in TestCorrelateCiRcaWithMain, add cases:
+    (a) a rec whose file is a basename substring of an unrelated changed path is
+    classified UNRESOLVED; (b) a rec whose file is a basename that is a true
+    trailing component of a changed path is classified LIKELY-RESOLVED; (c) a
+    full-path exact match remains LIKELY-RESOLVED. Use commit dates after the rec
+    created_timestamp so the date guard does not mask the path logic.
+  - "Execute Verification Plan -- run each step; loop until pre-deploy steps pass; step 4 runs post-merge."
+  - "Report: what was implemented, verification results, and confirmation both recs closed post-merge."
+work_areas: []
+rollback: >-
+  Revert the single squash-merge commit; the changes are isolated to three files
+  with no schema or data migration. If recs were auto-closed, they can be reopened
+  via the ops portal update_rec if a revert is needed.
