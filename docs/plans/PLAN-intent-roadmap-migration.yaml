@@ -1,0 +1,92 @@
+schema_version: 1
+slug: "intent-roadmap-migration"
+intent: >-
+  Scope the migration of the 18 prose docs/INTENT-*.md documents into the
+  machine-parseable roadmap, Decisions, and contracts, and ratify the governance
+  shift that stops new prose-intent docs being created -- serving the North Star's
+  self-improving-system goal by making the owner's architectural intent readable
+  to agents as YAML dependency edges instead of 10k+ lines of drifting narrative.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-intent-roadmap-migration.yaml
+phase: >-
+  Phase Platform (automation/governance infrastructure). Relates to ROADMAP-PLATFORM.yaml
+  tier_item T5.5 (INTENT retirement) and candidate decision CD.14 (superseded by Decision 86).
+scope:
+  - file: docs/intent-migration/MANIFEST.yaml
+    action: Create
+    purpose: >-
+      The migration work-breakdown: per-doc archetype, disposition, content-block
+      inventory, drift flags, effort, and wave assignment, plus the wave sequencing
+      and per-archetype disposition rules. The substantive REPORT-ONLY deliverable.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 86 -- the governance act: supersede CD.14, establish the
+      forward routing rule (no new INTENT-*.md), record the fast-track rationale,
+      and name the enforcement + extraction follow-ons.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "docs/intent-migration/MANIFEST.yaml is valid YAML and contains a documents[] entry for every docs/INTENT-*.md file on disk (18)."
+  - "Every documents[] entry carries archetype, disposition, primary_targets, content_blocks, drift_findings, effort, wave, and disposition_state; each disposition equals its archetype's disposition value."
+  - "MANIFEST.yaml waves[] cover WAVE-0 through WAVE-5 and every document is assigned to exactly one wave that exists."
+  - "docs/DECISIONS.md contains a Decision 86 entry that supersedes CD.14 and states the no-new-INTENT routing rule."
+  - "Decision 86 is reconciled into the ops_decisions warehouse table as dec-086 after merge."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Confirm the manifest parses and covers all 18 INTENT docs with no orphans in either direction."
+    command: "bin/venv-python -c \"import yaml,glob,os; m=yaml.safe_load(open('docs/intent-migration/MANIFEST.yaml')); ids={d['id'] for d in m['documents']}; files={os.path.basename(p)[7:-3] for p in glob.glob('docs/INTENT-*.md')}; assert ids==files, ('mismatch', ids^files); print('OK', len(ids), 'docs covered')\""
+    expected: "Prints 'OK 18 docs covered' (set equality between manifest ids and on-disk INTENT slugs)."
+    fix_if: "AssertionError lists the symmetric difference -- a doc on disk missing a manifest entry, or a manifest entry naming a non-existent doc."
+  - step: 2
+    phase: pre-deploy
+    action: "Validate per-entry required keys and that each disposition matches its archetype's declared disposition."
+    command: "bin/venv-python -c \"import yaml; m=yaml.safe_load(open('docs/intent-migration/MANIFEST.yaml')); req={'archetype','disposition','primary_targets','content_blocks','drift_findings','effort','wave','disposition_state'}; arch={k:v['disposition'] for k,v in m['archetypes'].items()}; waves={w['id'] for w in m['waves']}; [ (lambda d: (req.issubset(d) or (_ for _ in ()).throw(AssertionError(('keys',d['id'],req-set(d)))), d['disposition']==arch[d['archetype']] or (_ for _ in ()).throw(AssertionError(('disp',d['id']))), d['wave'] in waves or (_ for _ in ()).throw(AssertionError(('wave',d['id'])))) )(d) for d in m['documents']]; print('OK all entries valid')\""
+    expected: "Prints 'OK all entries valid'."
+    fix_if: "AssertionError tags the failing entry id and reason ('keys' missing field, 'disp' disposition!=archetype rule, 'wave' unknown wave)."
+  - step: 3
+    phase: pre-deploy
+    action: "Confirm Decision 86 exists in DECISIONS.md, supersedes CD.14, and carries the no-new-INTENT routing rule."
+    command: "bin/venv-python -c \"t=open('docs/DECISIONS.md').read(); import re; b=t.split('## Decision 86')[1].split('## Decision 85')[0]; assert 'CD.14' in b and 'superseded' in b.lower(); assert 'INTENT-*.md' in b or 'no new' in b.lower(); print('OK Decision 86 present and well-formed')\""
+    expected: "Prints 'OK Decision 86 present and well-formed'."
+    fix_if: "IndexError means the Decision 86 heading is missing or out of order; AssertionError means the supersession or routing-rule language is absent."
+  - step: 4
+    phase: post-deploy
+    action: "After merge, reconcile Decision 86 into the ops_decisions warehouse and confirm the dec-086 row is present (scout-flagged Single-Portal reconciliation)."
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m scripts.ops_data_portal --sync && grep -q 'dec-086\\|\"decision_id\": 86' logs/.decisions-index.jsonl && echo 'OK dec-086 reconciled'"
+    expected: "Backfill reports written>=1; the local decisions cache contains the dec-086 / decision_id 86 row; prints 'OK dec-086 reconciled'."
+    fix_if: "Backfill failure usually means the agent_platform static-key chain is unreachable -- verify with `aws sts get-caller-identity --profile agent_platform` and re-run; a missing row means DECISIONS.md parsing skipped Decision 86 (check heading format)."
+constraints:
+  - "Agent-first repository (NS.4, CD.13): the deliverable is machine-parseable YAML, not prose. The manifest is the artefact, not a human-readable companion."
+  - "Single Portal Invariant (Decision 84): DECISIONS.md is the numbering authority; ops_decisions rebuilds FROM it via --backfill-decisions-md. Never edit logs/.decisions-index.jsonl directly."
+  - "Decision 67 / CD.17 STRATEGIC freeze: every follow-on wave is an IMPLEMENTATION plan; no STRATEGIC plan-artefacts."
+  - "Planning sessions do not edit skills/commands/source -- the instruction-doc enforcement and roadmap bookkeeping are deferred to the Wave 0 IMPLEMENTATION plan, not done here."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Supersedes pending CD.14 (demote-and-keep-prose) with Decision 86 (extract-and-retire). T5.5 repoint + CD.14 state change land in Wave 0 (roadmap bookkeeping), not here."
+  - "Decision-scout gate verdict: FLAGS_FOUND (2 NOTE flags, no BLOCK). Flag 1 (Decision 84 Single Portal) resolved by VP step 4 backfill. Flag 2 (ratified-vs-pending) resolved by explicit framing in Decision 86 and this plan."
+  - "Cross-cutting drift the manifest carries forward: Decision 57 authority grants (amend on retire), Decision 75 frame-lock pointers (preserve redirects), CD.32 exploratory designation of multi-product-platform, and the existing docs/contracts/inference-provider.md duplication."
+  - "Branch was level with origin/main at planning time (rebased onto PR #136 which closed the open ci-rca recs rec-2195/rec-2196). No deferral needed."
+  - "Per-doc live-state-vs-intended-state drift is FLAGGED here, reconciled in each wave's follow-on session (owner's explicit direction)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/beautiful-turing-z1eq9o)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision numbering confirmed (latest = 85; new = 86) and backfill keying confirmed (dec-086)
+  - All 18 INTENT docs inventoried (headers + H2 sections + target/decision references)
+  - Acceptance criteria understood and verifiable via the V1 commands above
+execution_steps:
+  - "Write docs/intent-migration/MANIFEST.yaml -- the per-doc inventory, per-archetype disposition rules, cross-cutting findings, and WAVE-0..WAVE-5 sequencing (done in this session)."
+  - "Add Decision 86 to docs/DECISIONS.md -- supersede CD.14, establish the routing rule, record fast-track rationale, name the follow-ons (done in this session)."
+  - "Run Verification Plan steps 1-3 pre-merge; loop until pass. Run step 4 post-merge to reconcile the warehouse."
+  - "Report: the manifest + Decision 86, the wave sequencing, and the named Wave 0 enforcement follow-on."
+work_areas: []
+rollback: >-
+  Both deliverables are additive docs. To revert: delete docs/intent-migration/MANIFEST.yaml and
+  remove the Decision 86 block from DECISIONS.md. If VP step 4 already backfilled the warehouse,
+  the dec-086 row does NOT disappear when the markdown block is removed and WILL resurrect on the
+  next `--backfill-decisions-md` run by any workflow -- so the revert must also mark it superseded
+  via `bin/venv-python -m scripts.ops_data_portal --update-decision dec-086 --status superseded`
+  (note: update_decision raises if the row is absent, so only run it post-backfill), and must land
+  before the next backfill re-reads the markdown. CD.14 stays pending until Wave 0 edits it.
