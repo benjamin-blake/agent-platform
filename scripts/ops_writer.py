@@ -121,7 +121,7 @@ class OpsWriter:
 
     Usage:
         writer = OpsWriter()
-        writer.write("ops_decisions", {"id": "dec-042", ...})
+        writer.write("ops_session_log", {"session_id": "s-042", ...})
 
         # At session close (session_postflight.py):
         counts = writer.compact_all()
