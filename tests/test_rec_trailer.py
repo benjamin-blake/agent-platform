@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from scripts.rec_trailer import parse_resolves_trailer
 
 
