@@ -1300,13 +1300,10 @@ def main() -> int:
     ci_rca_recs = _fetch_ci_rca_recs()
     recent_main_commits = _get_recent_main_commits()
     correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits)
-    if ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs, correlation=correlation)
+    print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     priority_queue = read_priority_queue(creds_status=creds_status)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
-    if not ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs, correlation=None)
     context = read_context_files()
     platform_roadmap_state = platform_roadmap.compute_state_dict(
         ROADMAP_PLATFORM_PATH, latest_decision_ts=_get_latest_decision_ts()
