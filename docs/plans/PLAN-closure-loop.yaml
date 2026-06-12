@@ -42,14 +42,25 @@ scope:
     purpose: >-
       Layer 2 durable fix. Push-to-main workflow: read the HEAD commit message, parse_resolves_trailer,
       assume the OIDC role, and close each named rec via `ops_data_portal --update-rec ID
-      --status closed` (resolution cites the merge commit/PR). Idempotent: no-op for
-      already-closed/nonexistent recs and when no trailer is present.
+      --status closed` (resolution cites the merge commit/PR). The workflow MUST export
+      DUCKLAKE_WRITER_URL explicitly (the branch role lacks ssm:GetParameter for the writer-url
+      param; relying on SSM resolution will fail on the runner). Idempotency is implemented IN
+      THE WORKFLOW, not assumed from the portal: update_rec re-appends an SCD2 row on an
+      already-closed rec and RAISES on a nonexistent id (ops_data_portal.py:596-600), so the
+      workflow must check current status before calling update_rec and tolerate the
+      absent-id error. No-op when no trailer is present.
   - file: terraform/personal/oidc.tf
     action: Modify
     purpose: >-
       Grant the post-merge workflow's OIDC role permission to reach the ops portal writer
-      Function URL (assume PlatformDev / invoke writer) so the auto-close workflow can transit
-      the portal. IAM change -> human-gated apply (apply guard fail-closes on IAM, Decision 77).
+      Function URL so the auto-close workflow can transit the portal. FIRST confirm whether a
+      grant is even needed: the branch role github_ci_branch already holds DuckLakeInvokeCI
+      (lambda:InvokeFunctionUrl / GetFunctionUrlConfig on aws_lambda_function.ducklake_writer,
+      oidc.tf:144-153) with trust scoped to refs/heads/main. If the workflow assumes
+      github_ci_branch, this grant is a NO-OP (and this scope row + VP6 collapse) -- do not
+      manufacture an empty IAM change. If a new dedicated role is used instead, author its trust
+      policy too. Any real grant is an IAM change -> human-gated apply (guard fail-closes on IAM,
+      Decision 77).
   - file: AGENTS.md
     action: Modify
     purpose: "Document the `Resolves: rec-NNNN` trailer convention in the Merge protocol section."
@@ -86,10 +97,14 @@ infrastructure_dependencies:
     runner, no Lambda packaging). It exists on main only after this plan merges, so the
     end-to-end auto-close round-trip is a post-deploy VP step.
   - >-
-    terraform/personal/oidc.tf OIDC grant is an IAM change. terraform/personal auto-applies on
-    push-to-main behind the deterministic guard, BUT scripts/terraform_apply_guard.py
-    fail-closes on any IAM/trust change (Decision 77) -> the grant does NOT auto-apply and
-    requires a human-gated terraform apply. The apply must precede the post-deploy round-trip.
+    terraform/personal/oidc.tf OIDC grant: the existing branch role github_ci_branch already
+    invokes ducklake_writer (DuckLakeInvokeCI, oidc.tf:144-153, trust = refs/heads/main), so a
+    push-to-main workflow assuming that role needs NO new grant -- in which case the scope row
+    and VP6 are no-ops, not an IAM change. Author a grant ONLY if a new dedicated role is used;
+    a real grant is an IAM change that the apply guard fail-closes (Decision 77), requiring a
+    human-gated apply that must precede the post-deploy round-trip. The runner must also have
+    DUCKLAKE_WRITER_URL exported so portal writer-url resolution succeeds (branch role lacks
+    ssm:GetParameter for the writer-url param).
   - >-
     Ops portal writer Function URL (defined in terraform/personal/ducklake_lambdas.tf) is the
     closure write target, reached via assume-role per the Decision 84 single-portal invariant.
@@ -102,7 +117,9 @@ acceptance_criteria:
   - >-
     A `Resolves: rec-NNNN[, rec-MMMM]` trailer in a squash-merge commit on main triggers the
     rec-autoclose workflow, which closes each named rec via the ops portal (status=closed,
-    resolution citing the PR) and is idempotent for already-closed/nonexistent recs.
+    resolution citing the PR) and is idempotent for already-closed/nonexistent recs -- the
+    idempotency realized in workflow logic (status check + tolerate absent-id error), since the
+    portal does not no-op natively.
   - >-
     The implement skill emits the `Resolves:` trailer into the squash-merge body from
     bundled_recommendations and includes a post-merge closeout fallback.
@@ -159,8 +176,10 @@ verification_plan:
     command: terraform -chdir=terraform/personal init -backend=false >/dev/null && terraform -chdir=terraform/personal validate
     expected: >-
       Configuration validates. A subsequent `terraform -chdir=terraform/personal plan` shows
-      ONLY the additive OIDC grant (no destroys, no unexpected trust changes). Present the plan
-      output to the human; the apply is human-gated because the guard fail-closes on IAM.
+      EITHER no diff (the workflow assumes github_ci_branch, which already invokes ducklake_writer
+      -- the grant was unnecessary and the oidc.tf scope row is dropped) OR ONLY the additive grant
+      for a new dedicated role (no destroys, no unexpected trust changes). Present the plan output
+      to the human; a real apply is human-gated because the guard fail-closes on IAM.
     fix_if: validate errors, or plan shows unexpected destroys / IAM / trust diffs beyond the intended grant.
   - step: 7
     phase: post-deploy
@@ -175,13 +194,18 @@ verification_plan:
     fix_if: Workflow run fails (OIDC/portal auth) or the rec stays open -> inspect the Action logs and fix the grant or portal invocation.
   - step: 8
     phase: post-deploy
-    action: Confirm the workflow fired on this plan's own merge commit.
-    command: bin/venv-python -m scripts.session_preflight 2>&1 | grep -E "Recent main commits"
+    action: >-
+      Confirm the no-trailer no-op path: this plan's own merge commit carries no `Resolves:`
+      trailer, so the workflow must parse to zero closures and exit without a portal write.
+      Assert that locally against the merge commit, and corroborate via the GitHub MCP that the
+      workflow run actually fired and concluded success.
+    command: |-
+      git log -1 --format=%B origin/main | bin/venv-python -c "import sys; from scripts.rec_trailer import parse_resolves_trailer; ids=parse_resolves_trailer(sys.stdin.read()); print('ids=', ids); assert ids == []"
     expected: >-
-      Via the GitHub MCP (pull_request_read / actions_list), a rec-autoclose workflow run
-      exists for the merge commit and concluded success (a no-trailer run that no-ops is also
-      success). The grep command confirms preflight still renders post-merge.
-    fix_if: No workflow run was created (trigger misconfigured) or the run errored.
+      Prints `ids= []` and exits 0 (no closures from a no-trailer merge). Corroborate via the
+      GitHub MCP (actions_list / pull_request_read): a rec-autoclose workflow run exists for the
+      merge commit and concluded success (a no-trailer run that no-ops is also success).
+    fix_if: Parser returns non-empty for a no-trailer commit, or the MCP check shows no run was created (trigger misconfigured) or the run errored.
 constraints:
   - >-
     Closure transits the ops portal update_rec only (Decision 84 single-portal invariant,
@@ -237,6 +261,10 @@ pre_implementation_checklist:
   - >-
     Confirm where the ops portal writer Function URL and OIDC CI roles are defined
     (terraform/personal/ducklake_lambdas.tf, oidc.tf) before authoring the grant
+  - >-
+    Determine which OIDC role the autoclose workflow assumes and whether github_ci_branch's
+    existing DuckLakeInvokeCI grant already covers writer invocation (so the oidc.tf change is a
+    no-op) -- decided before writing the workflow or the terraform
 execution_steps:
   - >-
     Create scripts/rec_trailer.py with parse_resolves_trailer(message: str) -> list[str]: a pure
@@ -255,13 +283,17 @@ execution_steps:
     BLOCK retained, and recent-commits surfacing.
   - >-
     Create .github/workflows/rec-autoclose.yml: on push to main; checkout; set up the venv; OIDC
-    assume the CI role; read the HEAD commit message; call scripts.rec_trailer.parse_resolves_trailer
-    then ops_data_portal --update-rec ID --status closed --resolution citing the commit/PR;
-    idempotent and no-op when no trailer is present.
+    assume the CI role; export DUCKLAKE_WRITER_URL so portal writer-url resolution succeeds on the
+    runner; read the HEAD commit message; call scripts.rec_trailer.parse_resolves_trailer then, for
+    each id, check the rec's current status and call ops_data_portal --update-rec ID --status closed
+    --resolution citing the commit/PR ONLY if still open; tolerate the RuntimeError update_rec
+    raises on an absent id; no-op when no trailer is present (idempotency lives here, not in the portal).
   - >-
-    Modify terraform/personal/oidc.tf: grant the post-merge workflow's OIDC role permission to reach
-    the ops portal writer Function URL. Run terraform validate + plan, present to the human, and
-    apply human-gated (guard fail-closes on IAM).
+    Decide the workflow's OIDC role FIRST. If it assumes github_ci_branch (already grants
+    DuckLakeInvokeCI on ducklake_writer, oidc.tf:144-153), NO terraform change is needed -- drop the
+    terraform/personal/oidc.tf scope row and VP6. Only if a new dedicated role is used, modify
+    terraform/personal/oidc.tf to add the role + trust policy + writer-invoke grant, run terraform
+    validate + plan, present to the human, and apply human-gated (guard fail-closes on IAM).
   - "Modify AGENTS.md Merge protocol: document the `Resolves: rec-NNNN` trailer convention."
   - >-
     Modify .claude/skills/implement/SKILL.md and .claude/commands/implement.md: emit the
