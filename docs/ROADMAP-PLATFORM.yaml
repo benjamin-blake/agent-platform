@@ -2695,8 +2695,12 @@ tier_items:
       its field contract was settled: semantics are documented in ops.yaml but for several fields the
       documented derivation is never calculated or enforced. For every DERIVED field the contract MUST carry
       an explicit `derivation` block -- formula, inputs, recompute_trigger, failure/degradation_policy -- not
-      just prose semantics: priority (target int 1-4, view-derived labels, source-informed write-time
-      default), effort (target LOC-weighted integer, t-shirt labels derived from thresholds; the weights do
+      just prose semantics: priority (target int 1-4 with 1=Critical..4=Low so ORDER BY ASC sorts by
+      urgency; view-derived labels; resolves the original required-vs-derived question as OPTIONAL input +
+      source-informed default + NOT NULL after derivation, mirroring risk/automatable; the contract records an
+      ACYCLICITY INVARIANT -- priority derivation must never feed risk/automatable/effort, verified
+      2026-06-12 that those derive solely from file+effort, retiring the original circular-dependency
+      concern), effort (target LOC-weighted integer, t-shirt labels derived from thresholds; the weights do
       NOT yet exist in capabilities.yaml and are defined by T2.31), automatable (recompute_trigger =
       capabilities.yaml maturity_ceiling change; meaning preserved per Decision 44 / Decision 73 cl.6), risk
       (degradation_policy for absent radon / coverage.xml -- today it silently degrades to low). Capture
@@ -2725,6 +2729,7 @@ tier_items:
       - "ops_recommendations contract evolves the existing `acceptance` field to a typed checks structure (per-check `type` + `severity`; scalar-string still valid via union) and absorbs the executor `verification` projection -- no field rename; behavioural-vs-mechanical preserved as `type`; default severity required; amendment_log records change_class + the field-shape-early/enforcement-late skew (CD.29)"
       - "String-assuming `acceptance` consumers updated in lockstep for the scalar-or-list union (run_acceptance in step_runner.py; validate_acceptance_feasibility / lint_acceptance_command / _extract_acceptance_command in acceptance_lint.py); DqNotNull-on-list semantics defined (round-2 critic MED)"
       - "Every DERIVED field (priority, effort, automatable, risk) carries a `derivation` block: formula + inputs + recompute_trigger + failure/degradation_policy"
+      - "priority ratified as OPTIONAL input + source-informed default + NOT NULL after derivation (encoding int 1-4, 1=Critical..4=Low), with a recorded acyclicity invariant (priority derivation must not feed risk/automatable/effort) -- resolves the original required-vs-derived / circular-dependency question"
       - "All currently-undocumented fields ratified (verification, verification_tier, dependencies, tags, resolution, execution_result/date/branch/pr_url/steps); execution_* entries record Decision 63 DQ-exclusion + non-denormalisation (documented, not enforced/derived)"
       - "Stale facts corrected in the contract: `id` = writer/file_ops-allocated (Decision 84 I-2, not DynamoDB); risk + automatable documented as portal-derived, not role:input (config/lambda/ducklake/field_semantics.yaml reconciliation is T2.29 scope)"
       - "Decision 65 supersession recorded: Class A contract + src/schemas/rec.py Annotated model are the canonical field-semantic authority for ops_recommendations; ops.yaml retirement deferred to T1.6 (explicit citation, not a silent fork)"
@@ -4408,19 +4413,31 @@ tier_items:
       First implementation slice of the ops-recommendations-field-semantics work (planning session
       2026-06-12). Closes the "semantics captured but never calculated/enforced" gaps that do NOT require a
       column-type change, building to the T0.12.5-ratified derivation blocks:
-      (1) source-informed `priority` default at portal write time -- today priority is a mandatory hand-typed
-      string with no defaulting, and consumers compensate via batch.py PRIORITY_ORDER .get(...,"Medium");
+      (1) `priority` becomes an OPTIONAL input with a source-informed default applied at write time and NOT
+      NULL after derivation (mirrors risk/automatable; resolves the original required-vs-derived question per
+      T0.12.5). Acyclicity verified 2026-06-12: risk + automatable derive solely from file + effort and never
+      read priority (ops_data_portal.py compute_risk/compute_automatable/_derive_computed_fields), so deriving
+      priority is acyclic -- the original circular-dependency concern no longer applies; an acyclicity
+      invariant is recorded in the contract so a future change cannot reintroduce it. Today priority is a
+      mandatory hand-typed string and consumers compensate via batch.py:130 r.get("priority","Medium");
       (2) `automatable` recompute job + one-off backfill triggered on a capabilities.yaml maturity_ceiling
       change -- today it is computed once at write time and never refreshed; meaning preserved per Decision 44
       / Decision 73 cl.6 (recompute only, no merge-mode / semantic drift);
-      (3) `risk` offline-degradation fidelity -- compute_risk silently degrades to low when radon /
-      coverage.xml are absent (C->1.0, M->0.1); make it loud-fail or queue-for-recompute instead of
-      persisting a false low-risk value;
-      (4) enforce the documented-but-missing write-time validators (e.g. `title` minimum length, documented in
-      ops.yaml but not enforced in ops_data_portal);
+      (3) `risk` AND `automatable` offline-degradation fidelity -- both call _compute_risk_score, which
+      silently degrades to low when radon / coverage.xml are absent (C->1.0, M->0.1); make BOTH loud-fail or
+      queue-for-recompute instead of persisting a false low-risk / false-automatable value;
+      (4) write-time validator gap: the `title` "min 10 chars" semantics documented in ops.yaml:53 is FICTION
+      -- the title column carries only a not_null test and _load_write_time_validators has no min_length
+      branch. Add a NEW min_length validator-type handler (a registry-mechanism extension, not just config)
+      and correct the false ops.yaml claim;
       (5) repoint get_rec_write_guidance() at the new SSOT (rec.py Annotated / Class A contract) so Tier A
       precision-context injection no longer sources from the retiring ops.yaml (Decision 66);
-      (6) reconcile config/lambda/ducklake/field_semantics.yaml so risk + automatable are marked derived, not
+      (6) MIGRATE the write-time validator registry: _load_write_time_validators (ops_data_portal.py:372) is a
+      LIVE runtime ops.yaml consumer that BUILDS enforcement from tests[].write_time -- moving semantics off
+      ops.yaml while the portal still reads it for enforcement is exactly the drift this work warns against.
+      Repoint it to the Annotated SSOT, or explicitly designate it the last ops.yaml runtime reader with T1.6
+      as retirement owner;
+      (7) reconcile config/lambda/ducklake/field_semantics.yaml so risk + automatable are marked derived, not
       role:input.
       New/changed field semantics land in src/schemas/rec.py Annotated (the future SSOT), NOT in ops.yaml
       (retiring via T1.6); the T0.12 drift detector covers the coexistence window. V3 only if a ducklake
@@ -4436,10 +4453,11 @@ tier_items:
       - tests/test_ops_data_portal.py
       - tests/test_ops_data_portal_validators.py
     exit_criteria:
-      - "Source-informed priority default applied at portal write time when the caller omits priority; covered by tests; correctness no longer relies on the batch.py .get(...,'Medium') fallback"
+      - "priority is optional input with a source-informed default applied at portal write time, NOT NULL after derivation; acyclicity preserved (priority derivation does not feed risk/automatable/effort); covered by tests; correctness no longer relies on the batch.py r.get(...,'Medium') fallback"
       - "automatable recompute job re-derives stored values on a capabilities.yaml maturity_ceiling change, with a one-off backfill; meaning unchanged vs Decision 44 (no merge-mode extension, Decision 73 cl.6)"
-      - "risk no longer persists a silent low-risk value when radon/coverage.xml are unavailable -- it loud-fails or marks the row for recompute; covered by a test simulating the missing-tool path"
-      - "Documented write-time validators enforced in ops_data_portal (title min-length etc.); a write violating them is rejected at the portal"
+      - "risk AND automatable no longer persist silent degraded values when radon/coverage.xml are unavailable -- both loud-fail or mark the row for recompute (they share _compute_risk_score); covered by a test simulating the missing-tool path for each"
+      - "NEW min_length write-time validator-type handler added to the validator registry; title min-length enforced at the portal (a short title is rejected); the false ops.yaml:53 'min 10 chars' claim corrected"
+      - "write-time validator registry (_load_write_time_validators) repointed to the Annotated SSOT, OR explicitly designated the last ops.yaml runtime reader with T1.6 as retirement owner -- no silent ops.yaml/Annotated enforcement drift"
       - "get_rec_write_guidance() sources semantics from the Annotated SSOT / Class A contract, not ops.yaml (Decision 66 Tier A preserved)"
       - "config/lambda/ducklake/field_semantics.yaml marks risk + automatable as derived; no role:input mismatch remains for portal-overridden fields"
       - "If a ducklake_writer/reader artifact changes: per-Lambda build + deploy + smoke-test (V3 per Decision 79)"
@@ -4461,10 +4479,13 @@ tier_items:
       string, flip every reader, then drop the string column LAST. Stamp _contract_version; reads COALESCE.
       Preserve the Decision 64 bootstrap anchor (exclude_before 2026-05-01) in the dual-derive -- do not
       re-stamp or re-gate bootstrap rows. History stays source of truth; `current` remains deterministically
-      rebuildable (Decision 81 cl.8). All readers move in lockstep: scripts/executor/batch.py PRIORITY_ORDER
-      (+ its import in execute_recommendation.py), the ducklake_reader named verbs / current-projection label
-      derivation (Decision 84 I-3, owned with T2.28), the writer schema gate (Decision 81 cl.5), validate.py,
-      and DQ. V3 (deploys + invokes the live DuckLake write path).
+      rebuildable (Decision 81 cl.8). ENCODING NOTE: scripts/executor/batch.py PRIORITY_ORDER is today
+      0-indexed (Critical=0..Low=3); the 1-4 contract is an off-by-one change and that constant MUST be
+      re-based in lockstep or the urgency sort silently breaks. All readers move in lockstep: batch.py
+      PRIORITY_ORDER (re-based) + its import in execute_recommendation.py, the ducklake_reader named verbs /
+      current-projection label derivation (Decision 84 I-3, owned by T2.28), the writer schema gate (Decision
+      81 cl.5), validate.py (incl. its hardcoded string-priority test fixtures), and DQ. V3 (deploys + invokes
+      the live DuckLake write path).
     depends_on: [T0.12.5, T2.29, T2.19, T2.28]
     files_in_scope:
       - src/common/ducklake_scd2_schema.py
@@ -4477,12 +4498,13 @@ tier_items:
       - config/agent/data_quality/ops.yaml
       - src/schemas/rec.py
     exit_criteria:
-      - "START GATE: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1 -- destructive migration on sole-custody, non-recreatable data); rollback path documented and tested"
+      - "START GATE 1: T2.28 (closed-boundary named-verb reads + writer keyspace) is COMPLETE before this item edits the ducklake_reader current-projection label derivation -- co-editing the shared reader verbs with in-progress T2.28 is disallowed"
+      - "START GATE 2: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1 -- destructive migration on sole-custody, non-recreatable data); rollback path documented and tested"
       - "priority stored as int 1-4 on the DuckLake ops_recommendations table; ORDER BY priority ASC yields urgency order"
       - "string labels derived in the `current` projection (CASE); no consumer reads a stored string priority"
       - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last"
-      - "all readers migrated in lockstep (batch.py PRIORITY_ORDER + execute_recommendation.py import, ducklake_reader verbs, writer gate, validate.py, DQ); rg finds no string-priority comparison left"
-      - "_contract_version stamped on migrated rows; reads COALESCE; Decision 64 bootstrap rows (exclude_before 2026-05-01) not re-stamped/re-gated"
+      - "all readers migrated in lockstep: batch.py PRIORITY_ORDER RE-BASED from 0-indexed to the 1-4 contract + execute_recommendation.py import, ducklake_reader verbs, writer gate, validate.py (incl. hardcoded string-priority test fixtures ~lines 1409/1446), DQ; rg finds no string-priority comparison left in production OR test code"
+      - "int VALUE derived for ALL rows incl. Decision 64 bootstrap rows (exclude_before 2026-05-01) -- else COALESCE/ORDER BY breaks on history; the _contract_version STAMP is the only thing withheld from bootstrap rows (value derived, version not re-stamped); reads COALESCE"
       - "history immutable + `current` deterministically rebuildable from history post-migration (Decision 81 cl.8)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer + ducklake_reader (V3 per Decision 79)"
     related_candidate_decisions: [CD.33, CD.34]
@@ -4503,8 +4525,11 @@ tier_items:
       ops_data_portal.py (the risk-formula scale factor that consumes effort). Same additive-then-subtractive
       discipline on the live SCD2 table as T2.30: add the int column, dual-derive, flip readers, drop the
       string column LAST; _contract_version stamping; COALESCE reads; Decision 64 bootstrap anchor preserved;
-      history immutable + current deterministically rebuildable (Decision 81 cl.8). V3 (deploys + invokes the
-      live DuckLake write path).
+      history immutable + current deterministically rebuildable (Decision 81 cl.8). RISK-COUPLING NOTE: the
+      compute_risk thresholds (R<=5 low / <=15 med) were tuned to the old XS..XL 0.1..5.0 scale; changing S to
+      a LOC-weighted integer changes its magnitude and silently re-tiers every risk value unless the
+      thresholds or a scale normalisation are re-validated. V3 (deploys + invokes the live DuckLake write
+      path).
     depends_on: [T0.12.5, T2.29, T2.19, T2.28]
     files_in_scope:
       - config/agent/executor/capabilities.yaml
@@ -4516,12 +4541,13 @@ tier_items:
       - config/agent/data_quality/ops.yaml
       - src/schemas/rec.py
     exit_criteria:
-      - "START GATE: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1); rollback path documented and tested"
+      - "START GATE 1: T2.28 (closed-boundary named-verb reads + writer keyspace) is COMPLETE before this item edits the ducklake_reader current-projection label derivation -- co-editing shared reader verbs with in-progress T2.28 is disallowed"
+      - "START GATE 2: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1); rollback path documented and tested"
       - "effort LOC weights DEFINED in config/agent/executor/capabilities.yaml (they did not exist before this item); _EFFORT_SCALE in ops_data_portal reconciled to read them, not a hardcoded dict"
       - "effort stored as a LOC-weighted integer on the DuckLake ops_recommendations table; t-shirt labels derived in the `current` projection from integer thresholds"
-      - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last"
-      - "risk derivation still correct after effort becomes int (the effort scale factor S resolves from the new representation); covered by a test"
-      - "_contract_version stamped; reads COALESCE; Decision 64 bootstrap rows not re-stamped/re-gated; history immutable + current rebuildable (Decision 81 cl.8)"
+      - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last; rg finds no string-effort comparison left in production OR test code (incl. validate.py hardcoded 'effort' test fixtures ~lines 1409/1446)"
+      - "risk thresholds RE-VALIDATED after the effort scale magnitude changes (R<=5/<=15 were tuned to the old 0.1..5.0 scale; LOC-weighted ints re-tier every risk value unless thresholds or scale normalisation are adjusted); covered by a test asserting representative recs keep their intended risk tier"
+      - "int VALUE derived for ALL rows incl. Decision 64 bootstrap rows (exclude_before 2026-05-01) -- else COALESCE/ORDER BY breaks on history; only the _contract_version STAMP is withheld from bootstrap rows; reads COALESCE; history immutable + current rebuildable (Decision 81 cl.8)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer + ducklake_reader (V3 per Decision 79)"
     related_candidate_decisions: [CD.33, CD.34]
     related_decisions: [64, 81, 84]
@@ -4550,10 +4576,12 @@ tier_items:
       canonical exemplar table, so this item establishes it and cites AGENTS.md as the governing norm.
       KNOWN GAP (recorded, not owned here): DuckLake DDL-generation-from-contract is not owned -- T0.13
       covers Iceberg only; full schema-as-code generation for the DuckLake table is a follow-on.
+      NOTE: docs/contracts/ops_recommendations.yaml does not exist yet -- it is AUTHORED by the T0.12.5
+      dependency; this capstone reads/extends it (the exemplar gate asserts against it), it does not create it.
     depends_on: [T0.12.5, T2.29, T2.30, T2.31]
     files_in_scope:
       - scripts/validate.py
-      - docs/contracts/ops_recommendations.yaml
+      - docs/contracts/ops_recommendations.yaml  # authored by T0.12.5; read/extended here
       - config/agent/data_quality/ops.yaml
     exit_criteria:
       - "Machine-parseable exemplar completeness gate asserts: full per-field contract metadata incl. derivation blocks for derived fields; 100% DQ field coverage with the Decision 63 execution_* carve-out; closed-boundary verbs only; causal-chain verifier present; writer-error alarm + SLOs defined; rec-2113 DR drill green"
