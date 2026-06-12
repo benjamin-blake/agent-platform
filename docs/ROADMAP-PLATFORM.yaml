@@ -525,25 +525,16 @@ candidate_decisions:
   - id: CD.14
     title: Roadmap is self-contained; INTENT-compute-and-account-topology retired
     detail: |
-      docs/INTENT-compute-and-account-topology.md is retired. Its content is inlined into this roadmap
-      (north_star, rebuild_vs_refactor, T2 tier items, partition strategy via CD.9, cost_projection
-      top-level section). The other 10 INTENT docs (including provider-agnostic-executor, newly added
-      to main during this planning session) become detail-companions — they retain their content but
-      are downgraded from authoritative to reference-only.
+      SUPERSEDED BY Decision 86 (2026-06-12). Decision 86 adopts an extract-and-retire model
+      (per docs/intent-migration/MANIFEST.yaml) in place of CD.14's demote-and-keep approach.
+      The 18 INTENT docs are scheduled for full extraction into tier_items/Decisions/contracts
+      and deletion; demotion-with-footer is retired. Original scope: retire INTENT-compute-and-
+      account-topology (content inlined into this roadmap) and demote the other 10 INTENT docs
+      to detail-companions. That demote-and-keep model is replaced by extract-and-delete.
     gates: [T-1.1, T5.5]
-    state: pending
-    retires_intents: [compute-and-account-topology]
-    demotes_intents:
-      - recommendation-executor
-      - telemetry-system
-      - verification-system
-      - autonomous-improvement-control-plane
-      - ops-pipeline-consolidation
-      - validation-architecture
-      - dq-enforcement
-      - ops-decisions-graduation
-      - ci-cd-architecture
-      - provider-agnostic-executor    # round-2 architect MED-6: list sync with T5.5.files_in_scope
+    state: superseded
+    retires_intents: []
+    demotes_intents: []
   - id: CD.15
     title: Reads go through typed query Lambda exposing verbs; Athena _current views retired in new account
     detail: |
@@ -5060,15 +5051,17 @@ tier_items:
     status: not_started
   - id: T5.5
     tier: T5
-    name: INTENT-* document retirement / demotion
+    name: INTENT-* document extraction and retirement
     intent: |
-      Per CD.14. Retire INTENT-compute-and-account-topology (its content inlined here) and sweep all consumer
-      references. Demote the other 10 INTENTs (including the recently-merged provider-agnostic-executor) to
-      detail-companions with a header line "Non-authoritative — see ROADMAP-PLATFORM.yaml tier_item <Tx.y>
-      for current platform sequencing." Rule for divergence: roadmap wins; demoted INTENT footer must say so;
-      validate.py check enforces footer presence.
+      Per Decision 86 (supersedes CD.14's demote-and-keep model). Extract content from each
+      docs/INTENT-*.md into the canonical machine-parseable surfaces (tier_items, Decisions,
+      docs/contracts/*.yaml) and delete the prose, wave by wave per docs/intent-migration/MANIFEST.yaml.
+      CD.14's demotion approach is retired; all 18 INTENT docs are scheduled for extract-and-delete.
+      The validate.py intent-doc-freeze guard (WAVE-0 enforcement) prevents new INTENT docs from being
+      added while the multi-wave extraction proceeds.
     depends_on: [T-1.1, T-1.5]
     files_in_scope:
+      - docs/intent-migration/MANIFEST.yaml    # governs per-doc disposition and wave sequencing
       - docs/INTENT-recommendation-executor.md
       - docs/INTENT-telemetry-system.md
       - docs/INTENT-verification-system.md
@@ -5079,24 +5072,27 @@ tier_items:
       - docs/INTENT-ops-decisions-graduation.md
       - docs/INTENT-ci-cd-architecture.md
       - docs/INTENT-provider-agnostic-executor.md
-      - scripts/validate.py    # add INTENT-footer-presence check + reference sweep
-    consumer_fixups:
-      - docs/PROJECT_CONTEXT.md    # 6 mentions of INTENT-compute-and-account-topology
-      - docs/plans/briefings/BRIEFING-linux-container-migration.md    # 3 mentions
-      - docs/INTENT-ci-cd-architecture.md    # 2 mentions
-      - docs/INTENT-ops-pipeline-consolidation.md    # mentions
-      - docs/DECISIONS.md    # mentions (deleted entirely in T5.4 so dependency-ordered)
-      - docs/SESSION_LOG_ARCHIVE.md    # historical mentions retained
+      - docs/INTENT-bazel-feasibility.md
+      - docs/INTENT-ducklake-consolidation.md
+      - docs/INTENT-session-log-architecture.md
+      - docs/INTENT-terraform-cicd-agent-native.md
+      - docs/INTENT-pre-codegen-contract-ratification.md
+      - docs/INTENT-aws-migration-platform-evolution.md
+      - docs/INTENT-ci-rca-methodology.md
+      - docs/INTENT-multi-product-platform.md
+      - scripts/validate.py    # intent-doc-freeze guard (WAVE-0, already wired)
     exit_criteria:
-      - "INTENT-compute-and-account-topology.md deleted"
-      - "Each remaining INTENT has a non-authoritative header note pointing at the roadmap"
-      - "grep -rn 'INTENT-compute-and-account-topology' --exclude-dir=.git returns zero (or only SESSION_LOG_ARCHIVE.md historical mentions)"
-      - "validate.py rejects PRs where a demoted INTENT lacks the non-authoritative footer"
-      - "Rule documented: when roadmap and demoted INTENT disagree, roadmap wins"
+      - "All 18 docs/INTENT-*.md files deleted (each wave flips disposition_state: done in MANIFEST)"
+      - "Every extracted block landed in a tier_item, Decision, or docs/contracts/*.yaml target"
+      - "docs/intent-migration/MANIFEST.yaml: all documents[] entries at disposition_state: done"
+      - "grep -rn 'INTENT-' --include='*.md' --include='*.py' --include='*.tf' --include='*.yaml' docs/ scripts/ src/ terraform/ tests/ returns only SESSION_LOG_ARCHIVE.md historical mentions and MANIFEST.yaml itself"
+      - "validate.py intent-doc-freeze guard stays wired (WAVE-0 condition: not regressed)"
     related_candidate_decisions: [CD.14]
-    effort: S
+    note: "CD.14 superseded by Decision 86; this item now executes the extract-and-retire model from docs/intent-migration/MANIFEST.yaml. WAVE-0 enforcement (validate.py guard + skill/command updates) shipped in PLAN-intent-migration-wave0-enforcement."
+    effort: L
     strategic: false
-    status: not_started
+    status: in_progress
+    progress_note: "WAVE-0 enforcement shipped 2026-06-12: validate.py intent-doc-freeze guard wired, skills/AGENTS.md updated, CD.14 superseded."
 
 cross_tier_gates:
   - id: G.1
