@@ -1,0 +1,80 @@
+schema_version: 1
+slug: "ops-recommendations-field-semantics"
+intent: >-
+  Finalise the field calculations and semantics for the ops_recommendations table, which went live before
+  its field contract was settled, and raise it to a self-contained gold-standard reference for all future
+  operational tables. Toward the North Star, a trustworthy recommendation store is the substrate the
+  self-improving control loop reads from and writes to.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-ops-recommendations-field-semantics.yaml
+phase: >-
+  PLATFORM tier T0/T2 ops-data infrastructure. Deliverable amends T0.12.5 and adds T2.29, T2.30, T2.31,
+  T2.32 to docs/ROADMAP-PLATFORM.yaml. Maps to no prior next_eligible item; classified
+  user_explicit_out_of_scope / ad-hoc ops-infra hardening (soft-warn, proceed).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      THE deliverable. Amend T0.12.5 (field-semantics ratification incl. derivation blocks, undocumented
+      fields, stale-fact corrections, Decision 65 supersession) and add four new tier_items: T2.29 (portal
+      field-derivation correctness, no schema change), T2.30 (priority string-to-int SCD2 migration), T2.31
+      (effort string-to-LOC-weighted-int SCD2 migration), T2.32 (exemplar completeness gate + reusable
+      table-onboarding pattern).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema (scripts.platform_roadmap)."
+  - "T0.12.5 amended to require a `derivation` block per derived field, ratify the 10 currently-undocumented fields, correct the id/role:input stale facts, and record the Decision 65 supersession."
+  - "T2.29/T2.30/T2.31/T2.32 exist with status not_started and all depends_on ids resolving to real tier_items."
+  - "T2.30 and T2.31 each carry the rec-2113 catalog-DR restore-drill START GATE and additive-then-subtractive discipline in exit_criteria, and depend on T2.28."
+  - "T2.32 establishes the exemplar bar + a machine-parseable onboarding pattern and records the DuckLake-DDL-generation known gap."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Roadmap document validates against its Pydantic schema.
+    command: "bin/venv-python -m scripts.platform_roadmap"
+    expected: "Prints 'PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.'"
+    fix_if: "A schema error or unknown-key error indicates a malformed tier_item; fix the offending key/field."
+  - step: 2
+    phase: pre-deploy
+    action: All new/amended items parse and every depends_on resolves to an existing item.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); items={i['id']:i for i in d['tier_items']}; ids=set(items); miss={t:[x for x in items[t]['depends_on'] if x not in ids] for t in ['T2.29','T2.30','T2.31','T2.32']}; assert not any(miss.values()), miss; print('deps OK')\""
+    expected: "Prints 'deps OK'."
+    fix_if: "A non-empty missing list means a depends_on points at a non-existent id; correct the reference."
+  - step: 3
+    phase: pre-deploy
+    action: The two migration items carry the rec-2113 DR START GATE.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); items={i['id']:i for i in d['tier_items']}; assert all(any('rec-2113' in c and 'START GATE' in c for c in items[t]['exit_criteria']) for t in ['T2.30','T2.31']); print('DR gate present')\""
+    expected: "Prints 'DR gate present'."
+    fix_if: "Assertion failure means a migration item is missing the START GATE bullet; add it."
+  - step: 4
+    phase: pre-deploy
+    action: Full presubmit passes (roadmap schema check runs inside validate.py).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit code 0; lint/format/schema checks pass."
+    fix_if: "Address any reported lint/format/schema failure on the edited YAML."
+constraints:
+  - "REPORT-ONLY: only docs/ROADMAP-PLATFORM.yaml is modified this session; no source code is touched."
+  - "STRATEGIC plan-type is frozen (AGENTS.md / Decision 67); all authored tier_items are IMPLEMENTATION work, not STRATEGIC."
+  - "Roadmap edits are the SOLE-EXCEPTION roadmap-authoring permitted in a planning session; no implementation is performed."
+  - "New field semantics belong in the Annotated SSOT (src/schemas/rec.py) + Class A contract, NOT in the retiring ops.yaml (Decision 65 supersession; ops.yaml retires via T1.6)."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Today-vs-intended gap (the trigger): risk is the only field actually calculated to spec; priority and effort are hand-typed strings whose derivation is documentation-only (dangling migration recs rec-627/rec-628 are absent from the catalog); automatable computes once and never refreshes; ~10 execution/metadata fields have no captured semantics."
+  - "Canonical contract direction: schema-as-code (T0.12 complete, Annotated Pydantic in src/schemas/rec.py) + Class A contract YAML (T0.12.5). ops.yaml is a backup slated for retirement by T1.6. Semantics finalisation is owned by T0.12.5; the calculation/derivation half was unowned -> the new items."
+  - "Decision-scout (two runs) returned FLAGS_FOUND, no BLOCK. Citations baked into the items: Decision 84 (writer keyspace / named verbs / no-Athena), Decision 81 cl.5/cl.7/cl.8 + CD.33/CD.34 (SCD2 writer gate, DR, rebuildable current), Decision 65 (supersession note), Decision 66 (repoint get_rec_write_guidance), Decision 44 + Decision 73 cl.6 (automatable meaning preserved), Decision 63 (execution_* DQ-exclusion carve-out), Decision 64 (bootstrap anchor preserved in dual-derive), Decision 79 (per-Lambda V3 deploy), Decision 57 (causal-chain verifier intent), AGENTS.md Agent-First (exemplar/onboarding artifact governance)."
+  - "Dependency corrections from the best-practice review: T2.30/T2.31 now depend on T2.28 (named-verb reader registry + writer keyspace) and are gated on the rec-2113 catalog-DR restore drill because they are in-place schema-type migrations on sole-custody, non-recreatable production data (~889 recs)."
+  - "Known gap recorded in T2.32: DuckLake DDL-generation-from-contract is unowned (T0.13 covers Iceberg only)."
+  - "ci_rca DEFERRAL (Related-Work check): the open ci_rca recs rec-2195 (session_preflight file-path correlation) and rec-2196 (rec-autoclose var rename) are UNRELATED to ops_recommendations field semantics and are being handled by another planning agent per explicit human direction this session; they are deferred here with this logged rationale. The forward_fix_recursion_alert on scripts/ops_writer.py (rec-2187/2188/2189) was triaged: all three are already closed (a docstring example tripping three Decision-84 boundary validators) -- resolved, low severity, not in scope."
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main_files_changed_since_branch."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/inspiring-darwin-fe71uk)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision alignment checked via decision-scout gate (two runs, no BLOCK)
+  - Deliverable file (docs/ROADMAP-PLATFORM.yaml) located, readable, and schema-valid
+  - Acceptance criteria understood and verifiable
+rollback: >-
+  Revert the docs/ROADMAP-PLATFORM.yaml edits (the T0.12.5 amendment and the T2.29/T2.30/T2.31/T2.32
+  additions). No code or infrastructure is touched, so revert is a single-file git revert with no further
+  cleanup.
