@@ -23,6 +23,14 @@ scope:
     purpose: >-
       Same Documentation Artefact Design section exists here; keep the two skill copies consistent
       with the planning skill's new routing rule (avoid drift between the two consumers).
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Decision 86 clause 4 names plan.md explicitly. The command delegates the Documentation Artefact
+      Design methodology to the planning skill, so the edit here is a light pointer: in the step that
+      writes documentation artefacts, add a one-line reference to Decision 86's routing rule (forward
+      intent -> tier_items, rationale -> Decisions, semantics -> contracts; no new standing prose docs)
+      so a /plan operator sees it in the command surface, with the full rule in the skill.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -45,8 +53,13 @@ scope:
       pattern to docs/INTENT-*.md plus the broader standing-prose heuristic, EXCLUDING docs/contracts/
       and docs/intent-migration/ and any .yaml (so it cannot reject the manifest or new .md contracts
       during the CD.25 .md->.yaml cutover). Fail-closed iff the manifest is readable; fail-open with a
-      loud warning iff the manifest is absent/mid-edit. Wire into both validate tiers (the check is an
-      O(dirlist) scan, cheap enough for --pre).
+      loud warning iff the manifest is absent/mid-edit. SCAN MODEL: the guard MUST enumerate on-disk
+      docs (a glob/dirlist over docs/), NOT get_changed_files() git-diff -- a diff-based guard would
+      miss a committed-but-undiffed doc and would make VP steps 3-4 pass falsely (they create a
+      working-tree file without git add). Do NOT copy the get_changed_files() idiom from
+      validate_environment_taxonomy. WIRING is TWO edits in this codebase, not one registry entry: add
+      the call in BOTH the full-tier sequence (run_python_checks, ~line 2292) AND the --pre block
+      (~lines 2743-2756); confirm both. The check is an O(dirlist) scan, cheap enough for --pre.
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
@@ -65,10 +78,10 @@ acceptance_criteria:
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: "Confirm the routing rule landed in both skills and AGENTS.md."
-    command: "bin/venv-python -c \"import pathlib; ok=all('Decision 86' in pathlib.Path(p).read_text() for p in ['.claude/skills/planning/SKILL.md','.claude/skills/implement/SKILL.md','AGENTS.md']); print('OK' if ok else 'MISSING')\""
-    expected: "Prints OK (all three files reference Decision 86)."
-    fix_if: "Prints MISSING -- one of the three files lacks the Decision 86 routing-rule edit."
+    action: "Confirm the routing rule landed in both skills, the plan command, and AGENTS.md."
+    command: "bin/venv-python -c \"import pathlib; ok=all('Decision 86' in pathlib.Path(p).read_text() for p in ['.claude/skills/planning/SKILL.md','.claude/skills/implement/SKILL.md','.claude/commands/plan.md','AGENTS.md']); print('OK' if ok else 'MISSING')\""
+    expected: "Prints OK (all four files reference Decision 86)."
+    fix_if: "Prints MISSING -- one of the four files lacks the Decision 86 routing-rule edit."
   - step: 2
     phase: pre-deploy
     action: "Confirm the roadmap bookkeeping: CD.14 superseded and T5.5 repointed to the manifest."
@@ -78,7 +91,7 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: "Negative test: a NEW INTENT doc not in the manifest must be rejected by the guard; a grandfathered one must pass."
-    command: "cp docs/INTENT-bazel-feasibility.md /tmp/keep_grandfathered.txt; printf '# rogue\\n' > docs/INTENT-zzz-guardtest.md; bin/venv-python -c \"import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('REJECTED' if any('zzz-guardtest' in x for x in f) else 'LEAKED'); print('GRANDFATHER_OK' if not any('bazel-feasibility' in x for x in f) else 'FALSE_POSITIVE')\"; rm -f docs/INTENT-zzz-guardtest.md"
+    command: "printf '# rogue\\n' > docs/INTENT-zzz-guardtest.md; bin/venv-python -c \"import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('REJECTED' if any('zzz-guardtest' in x for x in f) else 'LEAKED'); print('GRANDFATHER_OK' if not any('bazel-feasibility' in x for x in f) else 'FALSE_POSITIVE')\"; rm -f docs/INTENT-zzz-guardtest.md"
     expected: "Prints REJECTED then GRANDFATHER_OK (new doc blocked; existing grandfathered doc not flagged)."
     fix_if: "LEAKED means the guard missed a new INTENT doc; FALSE_POSITIVE means it wrongly flagged a grandfathered doc still in the manifest."
   - step: 4
@@ -89,10 +102,10 @@ verification_plan:
     fix_if: "WRONGLY_REJECTED means the guard pattern is too greedy and would block legitimate new .md contracts."
   - step: 5
     phase: pre-deploy
-    action: "Run the new guard's unit tests and the full presubmit."
-    command: "bin/venv-python -m pytest tests/test_validate.py -k intent_doc_freeze -q && bin/venv-python -m scripts.validate 2>&1 | tail -3"
-    expected: "The targeted tests pass and the full presubmit prints 'All checks passed.'"
-    fix_if: "A failing unit test names the unmet guard behaviour; a presubmit failure names the failing check."
+    action: "Run the new guard's unit tests (class-path selector, not -k) and the full presubmit."
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestIntentDocFreeze -q && bin/venv-python -m scripts.validate 2>&1 | tail -3"
+    expected: "The TestIntentDocFreeze class passes and the full presubmit prints 'All checks passed.'"
+    fix_if: "A failing unit test names the unmet guard behaviour; a presubmit failure names the failing check. (If the test class is named differently, use that class path -- avoid -k per the PROJECT_CONTEXT pytest -k gotcha.)"
 constraints:
   - "Planning sessions cannot edit skills/commands/source -- THIS is the IMPLEMENTATION plan where those edits are legitimate (Decision 86 clause 4)."
   - "Decision 58's skill-sync obligation is superseded by Decision 76; the planning+implement SKILL edits are kept consistent as deliberate hygiene, not an obligation. Do not also edit the .agents/ mirrors unless asked."
@@ -117,8 +130,8 @@ execution_steps:
   - "Edit .claude/skills/planning/SKILL.md and .claude/skills/implement/SKILL.md Documentation Artefact Design sections: add the Decision 86 routing rule + no-new-standing-prose-doc rule."
   - "Edit AGENTS.md Agent-First Repository section: add the no-new-prose-INTENT rule + Decision 86 pointer."
   - "Edit docs/ROADMAP-PLATFORM.yaml: CD.14 state -> superseded (note: by Decision 86); repoint T5.5 intent to extract-and-retire per docs/intent-migration/MANIFEST.yaml; sweep CD.14 retires_intents/demotes_intents arrays."
-  - "Add validate_intent_doc_freeze(failed) to scripts/validate.py per the scope purpose (manifest-derived allowlist, exclusions, fail-open-on-missing-manifest); wire it into both tiers' check sequence."
-  - "Add unit tests to tests/test_validate.py covering reject-new / pass-grandfathered / exclude-contracts / fail-open-on-missing-manifest."
+  - "Add validate_intent_doc_freeze(failed) to scripts/validate.py per the scope purpose (on-disk dirlist scan NOT git-diff; manifest-derived allowlist; exclude docs/contracts/ + docs/intent-migration/ + .yaml; fail-open-on-missing-manifest). Wire the call into BOTH the full-tier sequence (run_python_checks, ~2292) AND the --pre block (~2743-2756) -- two edits, not one."
+  - "Add a TestIntentDocFreeze class to tests/test_validate.py covering reject-new / pass-grandfathered / exclude-contracts / fail-open-on-missing-manifest (keep the class name aligned with VP step 5)."
   - "Execute the Verification Plan steps 1-5; loop until all pass. On an unrecoverable failure, stop and RCA (Decision 55) rather than papering over it."
   - "Report: the files changed, the guard behaviour, and presubmit results."
 work_areas: []
