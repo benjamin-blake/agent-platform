@@ -1,0 +1,524 @@
+# docs/intent-migration/MANIFEST.yaml
+#
+# Canonical work-breakdown for migrating the prose docs/INTENT-*.md corpus into
+# machine-parseable roadmap tier_items, Decisions, and contracts, then retiring
+# the prose. Agent-first artefact. Produced by PLAN-intent-roadmap-migration
+# (REPORT-ONLY). Governed by Decision 86, which supersedes the pending CD.14
+# (demote-and-keep-prose) model.
+#
+# This manifest INVENTORIES and CLASSIFIES. It does NOT adjudicate drift: every
+# drift_finding below is a FLAG that the owning wave's follow-on session must
+# reconcile with the human before extracting the affected block. "Live state vs
+# intended state" is resolved per-doc, in conversation, not here.
+
+manifest:
+  id: INTENT-MIGRATION-MANIFEST
+  version: 1
+  governed_by: "Decision 86"
+  supersedes: "CD.14 (roadmap self-contained; INTENT demote-and-keep model)"
+  produced_by: "docs/plans/PLAN-intent-roadmap-migration.yaml"
+  corpus_size: 18                      # docs/INTENT-*.md on disk at 2026-06-12
+  purpose: >-
+    Stop deliverables being lost inside long prose INTENT docs and stop those
+    docs drifting from live roadmap/decision state, by extracting their
+    forward-looking content into the canonical machine-parseable surfaces
+    (ROADMAP-PLATFORM.yaml tier_items, DECISIONS.md, docs/contracts/*.yaml) and
+    retiring the prose. The corpus was originally authored to persist the
+    owner's vision across agent sessions; the roadmap + decisions now serve that
+    role with explicit YAML dependency edges agents can read without parsing
+    10k+ lines of narrative.
+  authority: >-
+    Canonical for the migration work-breakdown and per-doc disposition. NOT
+    authoritative for tier sequencing (that stays in ROADMAP-PLATFORM.yaml) or
+    for rationale (that stays in DECISIONS.md). Retires itself once every
+    document entry reaches disposition_state: done.
+
+  agent_instructions: |
+    - Each `documents[]` entry is a unit of migration work owned by exactly one
+      wave. A doc is migrated when its disposition is fully applied AND (for
+      delete dispositions) the file is deleted with every reference swept.
+    - `drift_findings` are FLAGS, not conclusions. Do not extract a flagged block
+      until its wave session has reconciled the intended-vs-live discrepancy with
+      the human. Reconciliation may change the target or drop the block entirely.
+    - Reference docs by `id` (the slug). Targets are tier_item ids (e.g. T4.2),
+      Decision numbers (e.g. Decision 84), candidate-decision ids (e.g. CD.25),
+      or contract paths (docs/contracts/*.yaml).
+    - Waves are ordered. A wave's `gate` must hold before the next wave starts.
+      Lowest-drift docs go first so the pipeline is proven before the hard ones.
+    - Per-archetype disposition rules live in `archetypes`. An entry's
+      `disposition` MUST be the archetype's `disposition` value.
+    - `cross_cutting_findings` are drift signals that span multiple docs; the
+      wave that first touches an affected doc owns surfacing the relevant one.
+
+# --------------------------------------------------------------------------
+# Per-archetype disposition rules (the owner chose per-archetype, not uniform).
+# --------------------------------------------------------------------------
+archetypes:
+  feasibility_graduated:
+    summary: "Decision-input / feasibility doc whose verdict has already ratified into a numbered Decision."
+    disposition: delete_pointer
+    rule: >-
+      Content already lives in the Decision. Delete the prose and leave a pointer
+      to the Decision. BEFORE deleting, preserve any still-live trigger, watch-
+      signal, or pending-phase as a roadmap tier_item -- a graduated verdict does
+      not mean every forward hook in the doc has landed.
+
+  tier_item_deliverable:
+    summary: "REPORT-ONLY deliverable that proposed candidate decisions and/or tier_items for the roadmap."
+    disposition: extract_to_roadmap
+    rule: >-
+      Extract residual UNBUILT proposed CDs/tier_items into ROADMAP-PLATFORM.yaml
+      (or ratify the proposed CD), flag and drop already-applied parts (check the
+      doc's own Application Status log against the live roadmap), then delete.
+
+  living_strategic_arc:
+    summary: "Multi-session maturity arc describing an evolving subsystem; heavily cross-superseded."
+    disposition: extract_to_roadmap_and_contracts
+    rule: >-
+      Highest-drift archetype -- needs the most reconciliation. Extract phase
+      tables -> tier_items; data-models / verifier catalogues / event taxonomies
+      -> docs/contracts/*.yaml; ratified rationale -> Decision pointers; mark
+      already-landed phases complete; then delete. Many of these predate Decision
+      78/84 (DuckLake) and describe a retired substrate -- reconcile against live
+      architecture, never extract stale instructions verbatim.
+
+  methodology_contract:
+    summary: "Canonical specification of what an agent/process must produce."
+    disposition: extract_to_contract
+    rule: >-
+      Extract the contract body -> docs/contracts/{name}.yaml (the agent-first
+      home for enforced semantics). Named follow-on tier_items already exist;
+      cross-link them. Delete the prose once the contract is the live source.
+
+  exploratory_anchor:
+    summary: "Vocabulary and boundaries for an unbuilt direction; no migration committed, nothing in the repo."
+    disposition: defer_or_contract
+    rule: >-
+      Do NOT delete content a governing CD still references. Either keep as a
+      contract (vocabulary/boundaries) or seed a future tier_item gated on its
+      Open Decisions. Reconcile with the governing CD so the reference is not
+      orphaned.
+
+# --------------------------------------------------------------------------
+# Cross-cutting drift findings (span multiple docs; surfaced by the decision
+# scout gate). The wave that first touches an affected doc owns the relevant one.
+# --------------------------------------------------------------------------
+cross_cutting_findings:
+  - id: X1
+    finding: >-
+      Decision 57 grants several INTENT docs (telemetry-system, verification-
+      system, recommendation-executor, autonomous-improvement-control-plane)
+      "authoritative for their domain" status. Extraction re-scopes that grant;
+      Decision 57 must be amended (or a superseding decision filed) as each is
+      retired, or the deleted docs leave dangling authority claims.
+    affects: [telemetry-system, verification-system, recommendation-executor, autonomous-improvement-control-plane]
+  - id: X2
+    finding: >-
+      Decision 75 (frame-lock anti-pattern) cites recommendation-executor and
+      provider-agnostic-executor BY PATH as the frame-locking source artefacts.
+      Deleting them breaks Decision 75's historical pointers -- preserve a
+      redirect (Decision 75 -> the extracted tier_item/contract) on delete.
+    affects: [recommendation-executor, provider-agnostic-executor]
+  - id: X3
+    finding: >-
+      CD.32 designates multi-product-platform as an exploratory/REPORT-ONLY
+      record. A delete disposition would orphan CD.32's reference; the exploratory
+      archetype keeps it (as contract or gated tier_item) instead.
+    affects: [multi-product-platform]
+  - id: X4
+    finding: >-
+      CD.14 enumerated only 10 docs to demote + 1 to retire; 18 INTENT docs now
+      exist on disk. The demotion list is itself drifted -- direct evidence of the
+      problem Decision 86 fixes. Wave 0 must mark CD.14 superseded rather than
+      patch its stale list.
+    affects: [all]
+  - id: X5
+    finding: >-
+      docs/contracts/inference-provider.md already exists and partly duplicates
+      provider-agnostic-executor. Extraction must reconcile the two rather than
+      create a second provider contract.
+    affects: [provider-agnostic-executor]
+
+# --------------------------------------------------------------------------
+# Wave sequencing. Wave 0 is enforcement (no INTENT extraction); Waves 1-5
+# extract, lowest-drift first.
+# --------------------------------------------------------------------------
+waves:
+  - id: WAVE-0
+    theme: "Stop the bleeding -- wire Decision 86 into the workflow"
+    plan_type: IMPLEMENTATION
+    docs: []
+    actions:
+      - "Edit .claude/commands/plan.md + .claude/skills/planning/SKILL.md (Documentation Artefact Design): route forward intent to tier_items, rationale to Decisions, field semantics to contracts; forbid new docs/INTENT-*.md."
+      - "Edit AGENTS.md (Agent-First Repository section): add the no-new-prose-INTENT rule with a pointer to Decision 86."
+      - "Roadmap-bookkeeping in ROADMAP-PLATFORM.yaml: mark CD.14 state: superseded (by Decision 86); repoint tier_item T5.5 from demote-and-footer to extract-and-retire-per-this-manifest."
+      - "Add a scripts/validate.py guard rejecting NEW docs/INTENT-*.md files, grandfathering the existing 18 via an allowlist that shrinks as waves delete them."
+    gate: "Decision 86 merged to main"
+    follow_on_plan: "docs/plans/PLAN-intent-migration-wave0-enforcement.yaml"
+    rationale: "Authored immediately after this plan while context is hot; tiny, high-leverage, prevents corpus growth during the multi-wave extraction."
+
+  - id: WAVE-1
+    theme: "Feasibility docs already graduated to Decisions -> delete + pointer"
+    plan_type: IMPLEMENTATION
+    docs: [bazel-feasibility, ducklake-consolidation, ops-pipeline-consolidation]
+    gate: "WAVE-0 complete"
+    rationale: "Lowest drift -- verdicts already ratified. Proves the delete+pointer pipeline. Watch for surviving triggers/phases (see per-doc drift)."
+
+  - id: WAVE-2
+    theme: "Tier-item deliverables (mostly landed) -> extract residual + delete"
+    plan_type: IMPLEMENTATION
+    docs: [session-log-architecture, terraform-cicd-agent-native, pre-codegen-contract-ratification, aws-migration-platform-evolution]
+    gate: "WAVE-1 complete"
+    rationale: "Each has an explicit Application Status / proposed-tier-items section -- extraction is bounded by reconciling applied-vs-residual against the live roadmap."
+
+  - id: WAVE-3
+    theme: "Living arcs: ops + CI/CD + validation layer"
+    plan_type: IMPLEMENTATION
+    docs: [ops-decisions-graduation, dq-enforcement, validation-architecture, ci-cd-architecture, ci-rca-methodology]
+    gate: "WAVE-2 complete"
+    rationale: "Phase-structured arcs with mixed landed/pending state. ci-rca-methodology is the methodology_contract; the rest are living arcs."
+
+  - id: WAVE-4
+    theme: "Living arcs: executor + telemetry + verification (+ umbrella last)"
+    plan_type: IMPLEMENTATION
+    docs: [recommendation-executor, telemetry-system, verification-system, provider-agnostic-executor, autonomous-improvement-control-plane]
+    gate: "WAVE-3 complete"
+    rationale: "Highest drift (predate the CD.27/28 executor pivot and Decision 78/84 DuckLake move). The control-plane umbrella synthesises the other four, so it migrates LAST once its children have landed."
+
+  - id: WAVE-5
+    theme: "Exploratory anchor -> reconcile with CD.32"
+    plan_type: IMPLEMENTATION
+    docs: [multi-product-platform]
+    gate: "WAVE-4 complete"
+    rationale: "Nothing built; defer_or_contract. Kept until last because its disposition depends on whether CD.31/CD.32 ratify first."
+
+# --------------------------------------------------------------------------
+# Per-document inventory. content_blocks and drift_findings are the wave
+# session's starting point, not an exhaustive extraction.
+# --------------------------------------------------------------------------
+documents:
+  - id: bazel-feasibility
+    archetype: feasibility_graduated
+    lines: 493
+    current_status: "Assessment (decision-input). Verdict NOT RECOMMENDED; graduated to Decision 80."
+    disposition: delete_pointer
+    primary_targets: ["Decision 80"]
+    content_blocks:
+      - block: "Verdict + Claims-Verification Matrix (C1-C10) + Quantified Findings"
+        target: "Decision 80 (already captured)"
+      - block: "Recommendation (phased) -- wired re-evaluation trigger"
+        target: "ROADMAP watch-signal (preserve before delete)"
+    drift_findings:
+      - "The re-evaluation TRIGGER (revisit Bazel/Pants when T4.4 concurrency>1 AND a KG.13 caching tier_item is filed OR a measured fast-tier budget breach recurs) must survive as a roadmap signal before delete, else the conditional intent is lost."
+    related_decisions: [80]
+    effort: S
+    wave: WAVE-1
+    disposition_state: pending
+
+  - id: ducklake-consolidation
+    archetype: feasibility_graduated
+    lines: 178
+    current_status: "RATIFIED as Decision 84 (2026-06-11). Implementation in progress (Phases 1-2 done; Phase 3 slice)."
+    disposition: delete_pointer
+    primary_targets: ["Decision 84", "T2.26", "T2.27", "T2.28", "T4.2"]
+    content_blocks:
+      - block: "Ratified premises + Problem statement + Target end-state"
+        target: "Decision 84 (already captured)"
+      - block: "Phases (Phase 4 telemetry repoint, T2.26 producer repoint still pending)"
+        target: "tier_items T2.26/T2.27/T2.28 (confirm they exist + carry the pending phases)"
+    drift_findings:
+      - "IN-FLIGHT: do not delete until Decision 84 implementation completes. Reconcile which phases landed vs pending; the pending Phase 4 (telemetry on DuckLake) and rec-curator producer repoint must be live tier_items before delete."
+    related_decisions: [84]
+    effort: S
+    wave: WAVE-1
+    disposition_state: pending
+
+  - id: ops-pipeline-consolidation
+    archetype: feasibility_graduated
+    lines: 295
+    current_status: "NOT_STARTED -- incident-analysis planning context (2026-05-09)."
+    disposition: delete_pointer
+    primary_targets: ["Decision 84"]
+    content_blocks:
+      - block: "Recommended architecture (single agent-facing ops API)"
+        target: "Largely subsumed by Decision 84 (single portal / closed reader-writer boundary)"
+      - block: "Decisions the planner will need to make"
+        target: "Reconcile against Decision 84; surface any unresolved as open questions"
+    drift_findings:
+      - "Likely SUPERSEDED by Decision 84's single-portal consolidation -- confirm overlap. If fully subsumed, delete+pointer to Decision 84; if a residual gap remains (e.g. telemetry path), file it as a tier_item."
+    related_decisions: [57, 84]
+    effort: XS
+    wave: WAVE-1
+    disposition_state: pending
+
+  - id: session-log-architecture
+    archetype: tier_item_deliverable
+    lines: 659
+    current_status: "Drafted; deliverable for tier_item T-1.9; awaits CD ratification (CD.23/CD.25/CD.26 etc)."
+    disposition: extract_to_roadmap
+    primary_targets: ["T-1.9", "T1.10", "candidate_decisions"]
+    content_blocks:
+      - block: "Two-tier event/aggregate split + verb-shape decision + log-turn Lambda design"
+        target: "tier_items under T-1.9 / T1.10 + a session-log contract"
+      - block: "Named CDs proposed (s12) + Follow-on IMPLEMENTATION plan stubs (s13)"
+        target: "candidate_decisions + tier_items"
+    drift_findings:
+      - "T-1.9 already marked complete in the roadmap (its deliverable landed); confirm whether the proposed CDs and plan stubs were filed or are residual. Extract only residual."
+    related_decisions: [75]
+    effort: M
+    wave: WAVE-2
+    disposition_state: pending
+
+  - id: terraform-cicd-agent-native
+    archetype: tier_item_deliverable
+    lines: 287
+    current_status: "PROPOSED -- candidate decision CD.NN (unratified); Section 8 tier_items to transcribe."
+    disposition: extract_to_roadmap
+    primary_targets: ["T2.20", "T2.16b", "candidate_decisions (CD.NN)"]
+    content_blocks:
+      - block: "Target architecture + component designs + autonomy boundary (s4-s6)"
+        target: "Ratify CD.NN (or fold into existing CD.35); tier_item T2.20"
+      - block: "Roadmap decomposition (s8) -- explicitly 'transcribe to ROADMAP after ratification'"
+        target: "tier_items (the doc names the roadmap as canonical home)"
+    drift_findings:
+      - "Doc self-declares the roadmap as canonical home for its tier_items. Confirm CD.NN was never assigned a real number; ratify or supersede before extracting. Section 2 notes a stale apply-workflow comment to sweep."
+    related_decisions: [77, 78, 81]
+    effort: M
+    wave: WAVE-2
+    disposition_state: pending
+
+  - id: pre-codegen-contract-ratification
+    archetype: tier_item_deliverable
+    lines: 1476
+    current_status: "DRAFT v3; proposes CD.25 + T-1.11..T-1.19 + T0.12.5/.6/.7. Application Status: PLAN-cd25 applied Parts 7/8A/8B/8C."
+    disposition: extract_to_roadmap
+    primary_targets: ["CD.25", "T-1.11", "T-1.12", "T-1.13..T-1.19", "docs/contracts/*"]
+    content_blocks:
+      - block: "Ratification ritual + canonical contract home docs/contracts/{name}.yaml (Parts 2-3)"
+        target: "Decision/contract (the contract-as-source-of-truth pattern)"
+      - block: "Contract versioning + safe evolution + cross-contract joins (Parts 4-5)"
+        target: "docs/contracts/ + tier_items"
+      - block: "Proposed CD.25 + roadmap edits (Parts 7-8)"
+        target: "ALREADY APPLIED per Application Status -- flag, do not re-extract"
+    drift_findings:
+      - "Largest doc (1476 lines) and most-applied. Parts 7/8A/8B/8C already landed via PLAN-cd25; subsets (c)-(g) of T-1.12 deferred to named follow-ons. Reconcile applied-vs-residual carefully; the residual is the contract-versioning ritual, not the roadmap edits."
+    related_decisions: [67]
+    effort: L
+    wave: WAVE-2
+    disposition_state: pending
+
+  - id: aws-migration-platform-evolution
+    archetype: tier_item_deliverable
+    lines: 708
+    current_status: "DRAFT v5; proposes CDs (Part 7) + tier_items (Part 8). Application Status shows account + credential decisions applied."
+    disposition: extract_to_roadmap
+    primary_targets: ["T0.x", "T2.x", "candidate_decisions (Part 7)"]
+    content_blocks:
+      - block: "Monorepo + project_id commitment (Part 2)"
+        target: "Decision/contract (cross-links multi-product-platform)"
+      - block: "AWS naming convention + repo rename + project_id schema (Parts 3-5)"
+        target: "tier_items + contract"
+      - block: "Proposed CDs (Part 7) + Proposed tier_items (Part 8) + follow-on outline (Part 11)"
+        target: "candidate_decisions + tier_items (flag those already in the roadmap)"
+    drift_findings:
+      - "Application Status shows the account (REDACTED-PERSONAL-ACCOUNT) and static-key credential model already landed; Part 3's SSO references are explicitly superseded. Many T0.x tiers already exist. Extract only residual; the project_id thread overlaps multi-product-platform (Wave 5) -- coordinate."
+    related_decisions: [36, 67, 77, 78]
+    effort: L
+    wave: WAVE-2
+    disposition_state: pending
+
+  - id: ops-decisions-graduation
+    archetype: living_strategic_arc
+    lines: 1077
+    current_status: "PARTIALLY SUPERSEDED by Decision 84. Surviving scope: DQ graduation arc + DECISIONS.md decommission question."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["Decision 84", "tier_items (DQ graduation)", "contracts/ops.yaml"]
+    content_blocks:
+      - block: "Storage/transport mechanics (DynamoDB counter, outbox, Athena reads)"
+        target: "DELETE -- retired by Decision 84"
+      - block: "DQ graduation arc (Phases 5) + DECISIONS.md decommission question"
+        target: "tier_items + an open question"
+    drift_findings:
+      - "Half the doc is explicitly retired by Decision 84 (header banner). Only the DQ graduation arc and the DECISIONS.md-decommission question survive. Heavy delete; extract the thin surviving slice."
+    related_decisions: [37, 50, 65, 84]
+    effort: M
+    wave: WAVE-3
+    disposition_state: pending
+
+  - id: dq-enforcement
+    archetype: living_strategic_arc
+    lines: 737
+    current_status: "Strategic anchor; 5+ phase arc with a phase-status table."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["tier_items (Phases 0-5)", "config/agent/data_quality/*.yaml"]
+    content_blocks:
+      - block: "Phase Overview + Phases 0-5 (status table)"
+        target: "tier_items (one per pending phase; mark landed phases complete)"
+      - block: "Agent Instructions + Decision Registry"
+        target: "DQ contract / remediation methodology doc (already partly exists)"
+    drift_findings:
+      - "Phase status table is the drift surface -- reconcile each phase's claimed status against validate.py DQ integration + dq-latest.json. data_quality.last_run is currently null (never run) per preflight; some phases may be stale."
+    related_decisions: [63, 65, 67]
+    effort: M
+    wave: WAVE-3
+    disposition_state: pending
+
+  - id: validation-architecture
+    archetype: living_strategic_arc
+    lines: 169
+    current_status: "Architectural anchor; two-tier validate.py migration. AGENTS.md states 'Decision 60 migration complete'."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["Decision 60", "tier_items (if residual)"]
+    content_blocks:
+      - block: "Two-Tier Model + Naming + Substrate + Migration Sequence"
+        target: "Decision 60 (likely already complete) -> pointer"
+    drift_findings:
+      - "AGENTS.md Merge Protocol says the Decision 60 two-tier migration is COMPLETE. If so this is closer to feasibility_graduated -> delete+pointer to Decision 60. References STRATEGIC plans (now frozen) -- stale. Confirm completeness; if done, downgrade effort to XS delete."
+    related_decisions: [48, 51, 55, 60, 73]
+    effort: S
+    wave: WAVE-3
+    disposition_state: pending
+
+  - id: ci-cd-architecture
+    archetype: living_strategic_arc
+    lines: 747
+    current_status: "Authoritative design specification (Decision 73)."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["Decision 73", "tier_items (promotion train, future-state)", "contracts"]
+    content_blocks:
+      - block: "Two-Tier CI + L1-L10 layered model + forward-fix merge gate (s2-s4)"
+        target: "Decision 73 / contract (much already ratified)"
+      - block: "Promotion Train (future-state design, s6) + Planning Queue Governance (s5)"
+        target: "tier_items (these are the unbuilt forward designs)"
+    drift_findings:
+      - "Mixed landed (Decision 60/72/73) vs future-state (promotion train). Extract only the future-state designs as tier_items; fold the ratified mechanism to Decision pointers."
+    related_decisions: [60, 72, 73, 77, 83]
+    effort: M
+    wave: WAVE-3
+    disposition_state: pending
+
+  - id: ci-rca-methodology
+    archetype: methodology_contract
+    lines: 529
+    current_status: "Draft methodology contract; canonical spec for the ci-rca agent (Decision 72/66). Follow-on tiers T1.13/T3.4 named."
+    disposition: extract_to_contract
+    primary_targets: ["docs/contracts/ci-rca.yaml", "T1.13", "T3.4"]
+    content_blocks:
+      - block: "The contract (structured context schema + evidence-bundle + cross-check rule)"
+        target: "docs/contracts/ci-rca.yaml (enforced at portal write time)"
+      - block: "Follow-on plans"
+        target: "tier_items T1.13 / T3.4 (cross-link)"
+    drift_findings:
+      - "Decision 66 (Precision Context Injection) is the mechanism this extends -- confirm the structured-context schema is expressed as a contract the portal can enforce, not re-narrated. T1.13 numbering shifted (was T1.12) per pre-codegen Application Status; verify the live id."
+    related_decisions: [66, 72]
+    effort: M
+    wave: WAVE-3
+    disposition_state: pending
+
+  - id: recommendation-executor
+    archetype: living_strategic_arc
+    lines: 348
+    current_status: "Foundational executor design (Decisions 31/44/50). In CD.14 demote list. Predates the CD.27/28 substrate pivot."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["T4.x", "contracts (executor lifecycle/boundary)", "Decision 44"]
+    content_blocks:
+      - block: "Architecture + Recovery Mechanisms + Recommendation Lifecycle"
+        target: "tier_items T4.x + contract (reconcile against CD.27/28 substrate)"
+      - block: "Self-Modification Boundary"
+        target: "contract (Decision 44 -- already in PROJECT_CONTEXT/AGENTS.md)"
+    drift_findings:
+      - "Describes the PRE-pivot executor (Copilot SDK / Fargate / Bedrock), all retired by CD.27/CD.28. High drift -- most architecture sections are stale. Frame-lock (Decision 75, X2) cites this by path: preserve a redirect on delete."
+    related_decisions: [31, 44, 50, 75]
+    effort: M
+    wave: WAVE-4
+    disposition_state: pending
+
+  - id: telemetry-system
+    archetype: living_strategic_arc
+    lines: 757
+    current_status: "Authoritative telemetry spec (Decisions 34/50/51). 7-table star schema. Predates Decision 78/84 DuckLake."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["docs/contracts/telemetry.yaml", "tier_items (Phase 4 telemetry)", "Decision 84"]
+    content_blocks:
+      - block: "Data Model: 7-table star schema + Process Event Framework"
+        target: "docs/contracts/telemetry.yaml (reconcile to DuckLake)"
+      - block: "Athena Views + Implementation Phasing"
+        target: "Phase 4 tier_items (telemetry re-lands on DuckLake per Decision 84)"
+    drift_findings:
+      - "Schema predates Decision 78/84 -- the Athena/Iceberg star schema is being rebuilt on DuckLake (consolidation Phase 4). Cross-references ducklake-consolidation (Wave 1) and X1 (Decision 57 authority). Reconcile schema to DuckLake before extracting to a contract."
+    related_decisions: [34, 50, 51, 84]
+    effort: L
+    wave: WAVE-4
+    disposition_state: pending
+
+  - id: verification-system
+    archetype: living_strategic_arc
+    lines: 668
+    current_status: "Three-layer programmatic verification spec (Decisions 44/48/51). In CD.14 demote list."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["docs/contracts/verification.yaml", "tier_items", "Decision 48"]
+    content_blocks:
+      - block: "Verifier Catalogue (target state) + Coverage Requirements"
+        target: "docs/contracts/verification.yaml (registered verifiers)"
+      - block: "Automation + Implementation Phasing"
+        target: "tier_items (which verifiers are built vs target)"
+    drift_findings:
+      - "Verifier catalogue is target-state; validate.py already implements a subset. Reconcile built-vs-target before extracting. X1 (Decision 57 authority) applies."
+    related_decisions: [44, 48, 51]
+    effort: M
+    wave: WAVE-4
+    disposition_state: pending
+
+  - id: provider-agnostic-executor
+    archetype: living_strategic_arc
+    lines: 484
+    current_status: "DRAFT; CD.27/CD.28 pivot. Supersedes Decision 40 + CD.7. In CD.14 demote list."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["docs/contracts/inference-provider.md", "T4.x", "CD.27", "CD.28"]
+    content_blocks:
+      - block: "Provider Strategy + Model Selection + Tool Layer (MCP)"
+        target: "docs/contracts/inference-provider.md (ALREADY EXISTS -- merge, do not duplicate; see X5)"
+      - block: "Migration Stages + Health Signals/SLOs + Triggers"
+        target: "tier_items T4.x"
+    drift_findings:
+      - "X5: docs/contracts/inference-provider.md already exists and partly duplicates this -- reconcile into one contract. X2: Decision 75 frame-lock cites this by path -- preserve redirect. Authoritative only after Decision-40/CD.7 supersession is filed via log-decision (T0.7b) -- file the supersession decision as part of extraction."
+    related_decisions: [39, 40, 49, 67]
+    effort: M
+    wave: WAVE-4
+    disposition_state: pending
+
+  - id: autonomous-improvement-control-plane
+    archetype: living_strategic_arc
+    lines: 411
+    current_status: "Umbrella synthesis over telemetry/verification/executor/workflow INTENTs (Decision 55)."
+    disposition: extract_to_roadmap_and_contracts
+    primary_targets: ["tier_items (Ordered Roadmap section)", "Decision 55"]
+    content_blocks:
+      - block: "Target Control Loop + Architectural Principles + 6 Workstreams"
+        target: "tier_items (the workstreams map to tiers)"
+      - block: "Ordered Roadmap + Success Criteria + What Not To Do"
+        target: "tier_items + Decision pointers"
+    drift_findings:
+      - "UMBRELLA: synthesises the other four Wave-4 docs. Migrate LAST -- once its children's content has landed in tier_items, the umbrella's value is mostly its ordering, which becomes depends_on edges. X1 (Decision 57 authority) applies."
+    related_decisions: [55]
+    effort: M
+    wave: WAVE-4
+    disposition_state: pending
+
+  - id: multi-product-platform
+    archetype: exploratory_anchor
+    lines: 162
+    current_status: "Exploratory architectural anchor (CD.31/CD.32). Nothing built; project_id unbuilt."
+    disposition: defer_or_contract
+    primary_targets: ["CD.31", "CD.32", "docs/contracts/ (project_id vocabulary)", "future tier_items"]
+    content_blocks:
+      - block: "Two orthogonal axes + platform data plane (project_id origin)"
+        target: "contract (vocabulary/boundaries) OR future tier_item gated on Open Decisions"
+      - block: "Open Decisions (require ratification before implementation)"
+        target: "candidate_decisions"
+    drift_findings:
+      - "X3: CD.32 designates this exploratory/REPORT-ONLY -- do NOT delete-orphan. Extends aws-migration Part 2 (Wave 2) -- coordinate the project_id thread. Disposition depends on whether CD.31/CD.32 ratify first; keep until Wave 5."
+    related_decisions: [67, 75, 77, 78]
+    effort: S
+    wave: WAVE-5
+    disposition_state: pending
