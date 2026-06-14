@@ -1,0 +1,363 @@
+schema_version: 1
+slug: "terraform-cicd-convergence"
+intent: >-
+  Implement T2.20 (CD.35 Wave 1): make sandbox terraform-apply outcomes sticky and
+  observed so a later green run cannot mask an earlier apply failure, ci-rca sees
+  apply failures, and PRs carry an advisory convergence signal -- the server-side
+  substrate every later CD.35 wave (T2.21-T2.25) reads or writes.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-cicd-convergence.yaml
+phase: >-
+  Platform tier_item T2.20 (CD.35 Wave 1). Foundation for T2.21-T2.25. Depends on
+  T2.12 (security gate / branch protection), which landed 2026-06-08 (Decision 83).
+scope:
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Add (a) an always-run (if: always()) convergence-record write step after apply
+      that writes status=green on success / status=red on failure to
+      s3://agent-platform-data-lake/convergence/personal/sandbox.json (its OWN prefix,
+      NOT under tfstate/); (b) a read-precondition step BEFORE apply that refuses
+      (distinguishable refusal marker, record NOT overwritten) when the record is red
+      -- the sole hard block; (c) a workflow_dispatch acknowledge-and-retry input
+      (names the red commit or rec id) that is the ONLY path allowed to clear red; a
+      red record clears only when an apply from that dispatch path succeeds; (d) a
+      read-only pull_request-triggered job that reads the record (github_ci_pr role)
+      and posts the advisory terraform-converged commit status; (e) a best-effort
+      post-merge SHA->PR wake. The existing concurrency group (cancel-in-progress:
+      false) already satisfies the serialization criterion -- verify, do not re-add.
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Add terraform-apply-sandbox to the workflow_run.workflows trigger list so apply
+      failures file a source=ci_rca rec; dedupe refusals-while-red against the open
+      red-record rec (distinguishable refusal marker -> one underlying failure, one
+      rec) using the existing commit-status dedup mechanism.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add a shared record-writer IAM policy statement (apply identity at Wave 1)
+      granting s3:PutObject + s3:GetObject scoped to the convergence record prefix
+      only (convergence/personal/*); grant the PR role (github_ci_pr) s3:GetObject on
+      that prefix for the advisory status. This IAM change is in the guard's
+      fail-closed set, so it lands via the manual human-gated admin-apply loop, NOT
+      the sandbox auto-apply (the self-grant bootstrap remains until T2.23 Wave 4).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the hold-subscription-through-apply convention for terraform/personal PRs:
+      the agent holds its PR subscription through the post-merge apply so the
+      best-effort SHA->PR wake can re-engage it; poll-free (Decision 76), next
+      planning session is the baseline re-check.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Document the server-side convergence anchor (the durable S3 record + red-record
+      refusal), the advisory terraform-converged PR status, and the dispatch-ack
+      unlatch protocol. Re-ground the "Apply posture (future, not yet reliable)"
+      paragraph to describe the now-sticky record-backed pipeline.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf adds an S3 record-writer IAM grant (apply identity)
+    and a PR-role read grant on convergence/personal/*. IAM is in the guard's
+    fail-closed set, so this change CANNOT auto-apply via terraform-apply-sandbox.yml
+    -- it lands via the iterative human-gated admin-apply loop (agent runs terraform
+    plan -> presents -> human accepts -> agent applies under agent_platform_admin),
+    per terraform/CLAUDE.md and Decision 35/77. IAM apply MUST precede any reliance
+    on the new write/read paths.
+  - >-
+    The convergence record lives at
+    s3://agent-platform-data-lake/convergence/personal/sandbox.json -- its own S3
+    prefix OUTSIDE tfstate/, so the PR role can be granted read on the record prefix
+    only (github_ci_pr cannot and must not read tfstate). plan_sha in the record is
+    null until T2.21 Wave 2 introduces saved plans.
+acceptance_criteria:
+  - >-
+    A forced apply failure writes status=red to the convergence record via the
+    always-run step; the NEXT push-triggered apply is refused server-side against the
+    red record, and the refusal does NOT overwrite the record.
+  - >-
+    The same forced apply failure files exactly one source=ci_rca rec
+    (terraform-apply-sandbox wired into ci-rca.yml); subsequent refusals-while-red
+    file NO duplicate recs (distinguishable refusal marker + dedupe against the open
+    rec); the synthetic verification rec is closed via update_rec annotated synthetic.
+  - >-
+    The advisory terraform-converged status is posted on PRs, shows red on a
+    non-converged main, and is NOT present in the main-protection required_status_checks
+    (this plan does not modify the ruleset).
+  - >-
+    A red record clears ONLY via the workflow_dispatch acknowledge-and-retry path
+    (input names the red commit or rec id); a plain push does NOT clear it; a
+    successful apply from the acknowledge path writes status=green.
+  - >-
+    Applies serialize via the existing workflow concurrency group
+    (cancel-in-progress: false); a passing apply writes the first convergence record
+    from absent (pass-on-absent).
+  - >-
+    Record write-IAM is restricted to the pipeline apply identity (github_ci_apply);
+    the PR role (github_ci_pr) has read-only on the record prefix and no tfstate read.
+  - >-
+    CD.35 is ratified as a numbered Decision via the ops-portal log-decision path on
+    ship (DECISIONS.md not hand-edited; mirrors CD.31->Decision 78, CD.33->Decision 81).
+  - "Full presubmit (scripts.validate, no flags) passes on the branch."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Validate the oidc.tf change is well-formed HCL and the record-writer policy is
+      scoped to the convergence prefix only (no tfstate/, no bucket-wide write).
+    command: "cd terraform/personal && terraform init -input=false -backend-config=backend-sandbox.hcl >/dev/null 2>&1; terraform validate && cd ../.. && grep -nE 'convergence/personal' terraform/personal/oidc.tf && ! grep -nE 'PutObject[^]]*tfstate' terraform/personal/oidc.tf"
+    expected: >-
+      terraform validate reports success; the record-writer statement references the
+      convergence/personal prefix; no PutObject grant touches tfstate.
+    fix_if: >-
+      validate fails -> fix HCL syntax / unbalanced jsonencode block. Prefix missing
+      -> the record-writer Resource ARN must end in convergence/personal/*. A tfstate
+      PutObject match -> the record-writer grant is mis-scoped; narrow it to the
+      record prefix only.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Parse terraform-apply-sandbox.yml and assert the Wave 1 structure is present:
+      an always-run record-write step (if: always()), a pre-apply read-precondition,
+      a workflow_dispatch acknowledge input, a pull_request advisory-status job, and
+      the still-present concurrency group with cancel-in-progress false.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); assert d['concurrency']['cancel-in-progress'] is False; on=d[True] if True in d else d['on']; assert 'pull_request' in on and 'workflow_dispatch' in on; body=open('.github/workflows/terraform-apply-sandbox.yml').read(); assert 'if: always()' in body; assert 'convergence/personal/sandbox.json' in body; assert 'terraform-converged' in body; print('structure-ok')\""
+    expected: "Prints structure-ok; all asserts pass."
+    fix_if: >-
+      An assert fails -> the named element is missing or misspelled; add the missing
+      step/trigger. concurrency assert fails -> do not remove the existing group.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm ci-rca.yml lists terraform-apply-sandbox in its workflow_run trigger and
+      the file is valid YAML.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('.github/workflows/ci-rca.yml')); on=d[True] if True in d else d['on']; wfs=on['workflow_run']['workflows']; assert 'terraform-apply-sandbox' in wfs, wfs; print('ci-rca-trigger-ok', wfs)\""
+    expected: "Prints ci-rca-trigger-ok with terraform-apply-sandbox in the workflows list."
+    fix_if: >-
+      terraform-apply-sandbox absent -> add it to the workflows: list (keep CI and
+      Main Canary). YAML error -> restore indentation under workflow_run.
+  - step: 4
+    phase: pre-deploy
+    action: "Run the full presubmit suite identical to CI."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Presubmit passes (lint, format, prompts, tests, schema validation, prompt-compliance)."
+    fix_if: >-
+      A check fails -> address the specific check; do NOT add or remove checks from
+      ci.yml (validate.py is the single source of truth, AGENTS.md merge protocol).
+  - step: 5
+    phase: post-deploy
+    action: >-
+      After the oidc.tf IAM change is applied via the admin-apply loop and the
+      workflows are on main, FORCE an apply failure (workflow_dispatch a run against a
+      commit with a deliberately failing terraform/personal change, OR inject a
+      transient failing step), let it complete, then read the convergence record.
+    command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c \"import json,sys; r=json.load(sys.stdin); assert r['status']=='red', r; print('red OK', r.get('commit_sha'))\""
+    expected: "The record exists and status=red with the failing commit's SHA."
+    fix_if: >-
+      No object / AccessDenied -> the record-writer IAM grant did not apply or is
+      mis-scoped (see step 1); confirm the admin apply landed. status not red -> the
+      record-write step is not gated on apply failure or not running if: always().
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Capture the red record's ETag, trigger another PUSH-path apply attempt, and
+      confirm it is REFUSED server-side (refusal marker in the run) AND the record is
+      unchanged (same ETag) -- the refusal must not overwrite the record.
+    command: "B=$(aws s3api head-object --bucket agent-platform-data-lake --key convergence/personal/sandbox.json --profile agent_platform --query ETag --output text); echo \"before=$B\"; A=$(aws s3api head-object --bucket agent-platform-data-lake --key convergence/personal/sandbox.json --profile agent_platform --query ETag --output text); echo \"after=$A\"; test \"$B\" = \"$A\" && echo 'record-unchanged OK'"
+    expected: >-
+      The refused run exits non-zero with the refusal marker (confirm in run logs via
+      GitHub MCP); the record ETag is identical before and after the refused attempt.
+    fix_if: >-
+      ETag changed -> the refusal path is overwriting the record; the precondition
+      must exit before the always-run write, or the write must skip on refusal. No
+      refusal -> the read-precondition is not gating apply on a red record.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Sync ops recs and confirm the forced apply failure filed exactly ONE source=ci_rca
+      rec referencing terraform-apply-sandbox, and that refusals-while-red filed no
+      duplicates. Then close the synthetic verification rec via update_rec annotated
+      synthetic.
+    command: "bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()]; m=[r for r in rows if r.get('source')=='ci_rca' and 'terraform-apply-sandbox' in (r.get('title','')+r.get('context','')+r.get('file',''))]; print('ci_rca terraform-apply recs:', len(m)); assert len(m)==1, m\""
+    expected: "Exactly one source=ci_rca rec references terraform-apply-sandbox for the forced failure."
+    fix_if: >-
+      Zero recs -> terraform-apply-sandbox not wired into ci-rca workflow_run (step 3)
+      or the fork/non-fork gate skipped it. More than one -> the refusal dedup is not
+      matching the open red-record rec; align the refusal marker / dedup context.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the advisory terraform-converged status is posted on a PR and reflects
+      red while main is non-converged, and verify (via GitHub MCP get_status +
+      ruleset read) it is NOT in main-protection required_status_checks. Assert the
+      plan did not modify any branch-protection config.
+    command: "git diff --name-only origin/main | grep -Ev '^(terraform/github/|.github/.*ruleset)' >/dev/null; echo 'no-ruleset-change-in-scope OK'; bin/venv-python -c \"body=open('.github/workflows/terraform-apply-sandbox.yml').read(); assert 'statuses' in body and 'terraform-converged' in body; print('advisory-status-job-present OK')\""
+    expected: >-
+      The advisory-status job posts context terraform-converged (state derived from
+      the red record); GitHub MCP confirms terraform-converged is absent from the
+      required checks; no ruleset file is in this plan's diff.
+    fix_if: >-
+      terraform-converged appears in required checks -> it must stay advisory (do NOT
+      add it to the ruleset); a required status would wedge the autonomous fix-merge.
+      Status not posted -> the pull_request job lacks statuses:write or did not run.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Clear the red record via the ONLY sanctioned path: workflow_dispatch the
+      acknowledge-and-retry run with the input naming the red commit/rec. On a
+      successful apply from that path, confirm the record flips to green.
+    command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c \"import json,sys; r=json.load(sys.stdin); assert r['status']=='green', r; print('green OK after dispatch-ack', r.get('commit_sha'))\""
+    expected: "After the acknowledge-and-retry apply succeeds, the record status=green."
+    fix_if: >-
+      Still red -> the acknowledge path did not write green on success; confirm the
+      dispatch input is validated and the green-write runs on apply success. Green
+      without dispatch -> a plain push cleared red; the unlatch must require the
+      dispatch-ack input (auto-allow-descendants is rejected by design).
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Confirm CD.35 is ratified as a numbered Decision via the ops-portal log-decision
+      path (not a hand-edit of DECISIONS.md), mirroring CD.31->Decision 78 /
+      CD.33->Decision 81.
+    command: "bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.decisions-index.jsonl') if l.strip()]; m=[d for d in rows if 'CD.35' in (d.get('title','')+d.get('summary','')+str(d.get('supersedes_candidate','')))]; print('CD.35 ratification decision rows:', len(m)); assert len(m)>=1, 'no numbered Decision ratifying CD.35 found'\""
+    expected: "A numbered Decision ratifying CD.35 (Wave 1 ship) is present in the decisions index."
+    fix_if: >-
+      No row -> file the ratification Decision via the log-decision portal path with
+      the CD.35 reference; do NOT hand-edit DECISIONS.md while pending.
+constraints:
+  - "Only modify the five files in scope; out-of-scope bugs become recommendations via the ops portal (AGENTS.md)."
+  - "No rescue agents, no auto-remediation, no workaround loops (Decision 55) -- failures alarm and file recs; the dispatch-ack unlatch is the ONLY sanctioned deterministic recovery."
+  - "Do NOT add terraform-converged to the main-protection required_status_checks -- it is advisory only (Decision 83 / CD.35); a required status would wedge the autonomous fix-merge and is admin-bypassable anyway (strict=false, bypass_mode=always)."
+  - "The convergence record lives in its OWN S3 prefix (convergence/personal/), never under tfstate/; the PR role gets read on that prefix only and must not gain tfstate read (re-asserted by T2.21)."
+  - "Record write-IAM is pipeline-apply-identity-only at Wave 1 (the T2.24 drift identity joins the shared record-writer policy at Wave 5); never PR roles, never laptops."
+  - "The oidc.tf IAM change lands via the manual admin-apply loop (guard fail-closed on IAM); do not attempt to push it through the sandbox auto-apply."
+  - "Do NOT edit DECISIONS.md to ratify CD.35; ratification transits the ops-portal log-decision path (Single Portal Invariant, Decision 84; precedent CD.31->Decision 78, CD.33->Decision 81)."
+  - "Do not add or remove any check in ci.yml; validate.py is the single source of truth (AGENTS.md merge protocol)."
+  - "Bash only, no PowerShell; bin/venv-python for Python; Python 3.12+, type hints, ruff format, line length 127, no emojis, ASCII hyphens only (AGENTS.md)."
+  - "Plan must remain IMPLEMENTATION type (Decision 67 STRATEGIC clause retained; CD.35 discipline: each of T2.20-T2.25 is a standalone IMPLEMENTATION plan)."
+context:
+  - >-
+    T2.20 is CD.35 Wave 1, the foundation the other five waves (T2.21-T2.25) read or
+    write. CD.35 is state: pending, filed_via pending_log_decision_lambda; it is
+    ratified as a numbered Decision when Wave 1 ships (this plan), and does NOT edit
+    DECISIONS.md while pending.
+  - >-
+    Current deployment posture (terraform/CLAUDE.md): the sandbox auto-apply pipeline
+    (terraform-apply-sandbox.yml: plan -> deterministic guard fail-closed on
+    destroy/IAM/trust -> subagent plan review -> apply the same plan) exists but is
+    marked "future, not yet reliable"; in practice the agent uses the iterative
+    human-gated loop (plan -> present -> human accepts -> apply). The core gap CD.35
+    closes: apply is decoupled from CI and non-sticky -- a later green run masks an
+    earlier apply failure and ci-rca never sees it. T2.20 makes the outcome sticky.
+  - >-
+    Decision 77 governs the sandbox auto-apply + guard; the convergence read-precondition
+    and record-write COMPOSE with the guard (guard runs first; the record refusal is a
+    separate server-side hard block), never bypass it. Decision 35 keeps human-in-the-loop
+    for apply; the red-record block tightens (never loosens) the pipeline, staying inside
+    the Decision 35/77 envelope.
+  - >-
+    Decision 83: main-protection ruleset is live (strict_required_status_checks_policy=false,
+    admin bypass_mode=always) and explicitly notes terraform-converged is advisory-only
+    (CD.35). The anti-masking anchor is SERVER-SIDE (apply refuses on a red record), not
+    the PR check, precisely because a required status would be bypassable and would wedge
+    the autonomous fix-merge.
+  - >-
+    Decision 55: nothing auto-remediates -- apply failures wire into ci-rca (Decision 72
+    RCA-as-Plan-Source rec contract, source=ci_rca priority=critical), refusals dedupe to
+    one rec; drift detection (T2.24) and the rest alarm + file recs. The dispatch-ack
+    unlatch is deterministic recovery, the sanctioned exception.
+  - >-
+    Decision 76: poll-free, event-driven PR handling. The best-effort post-merge SHA->PR
+    wake and the implement-skill hold-subscription-through-apply convention must not
+    introduce sleep/loop polling; next planning session is the baseline re-check
+    (workflow_run.pull_requests[] is empty for push, hence resolve PR from the merge SHA).
+  - >-
+    Decision 67 STRATEGIC clause retained (AGENTS.md): this is a standalone IMPLEMENTATION
+    plan (5 files, V3) per CD.35 discipline; the complexity-split heuristic is suspended
+    during the freeze.
+  - >-
+    Closure obligation: this plan retires/changes a write+read surface (new convergence
+    record contract; advisory PR status). VP step 6 confirms the record is the
+    authoritative server-side anchor and the refusal path does not corrupt it; step 8
+    confirms the advisory status is not promoted to a required check. No open recs are
+    bundled (additive substrate), so no rec-closure VP step is required.
+  - >-
+    The deep-dive design is docs/INTENT-terraform-cicd-agent-native.md (architect +
+    adversarial-risk zero-context review, converged over three rounds) and CD.35's nine
+    load-bearing points; the implement agent should read both. The 2026-06-10 amendment
+    settled the four under-specified points: (a) dispatch-ack unlatch (no
+    auto-allow-descendants), (b) serialization via concurrency group (already present),
+    (c) record placement + write identity (own prefix, apply identity, plan_sha null at
+    Wave 1), (d) RCA dedupe + honest framing (refusal marker, no overclaim against
+    workflow self-edit -- that residual is the Wave-4 authority-budget class).
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/stoic-brahmagupta-dekroh)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "docs/INTENT-terraform-cicd-agent-native.md and CD.35 (ROADMAP-PLATFORM.yaml) read."
+  - "Decision references (77, 35, 55, 72, 73, 83, 76, 67, 84, 81/78) understood; no DECISIONS.md inline edits (CD.35 ratified via log-decision path)."
+  - "All five scope files located and readable; existing concurrency group in terraform-apply-sandbox.yml noted (do not remove)."
+  - "compute_affected_artifacts confirmed empty (no Lambda build/deploy steps)."
+  - "Acceptance criteria understood and verifiable via the V3 plan (forced-failure demonstrations)."
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf -- add a shared record-writer policy statement to the
+    github_ci_apply role (Sid e.g. ConvergenceRecordWrite) granting s3:PutObject +
+    s3:GetObject on arn:.../convergence/personal/* ONLY; add an S3ReadConvergenceRecord
+    statement to the github_ci_pr role granting s3:GetObject on the same prefix. Keep
+    least-privilege; do not widen any existing statement. This change applies via the
+    manual admin-apply loop (guard fail-closed on IAM) -- present the plan and apply
+    under agent_platform_admin BEFORE relying on the new paths.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml -- (1) add a workflow_dispatch input
+    (e.g. acknowledge_red_commit) used by the acknowledge-and-retry path; (2) add a
+    read-precondition step BEFORE the apply step that reads the convergence record and,
+    if status=red, refuses with a distinguishable marker (e.g. ::error::CONVERGENCE_RED)
+    and exits non-zero WITHOUT writing the record -- UNLESS this run is the dispatch-ack
+    path naming that red commit/rec; (3) add an always-run (if: always()) record-write
+    step AFTER apply that writes status=green on apply success / status=red on failure
+    (commit_sha, run_id, timestamp; plan_sha=null) to
+    s3://agent-platform-data-lake/convergence/personal/sandbox.json; (4) add a
+    pull_request trigger + a separate read-only advisory-status job (github_ci_pr role,
+    permissions: statuses:write + id-token:write + contents:read) that reads the record
+    and posts the terraform-converged commit status (red when the record is red);
+    (5) add a best-effort post-merge wake that resolves the PR from the merge commit SHA.
+    Per-job permissions blocks; do not grant the advisory job apply privileges. Verify
+    the existing concurrency group (cancel-in-progress: false) remains.
+  - >-
+    .github/workflows/ci-rca.yml -- add "terraform-apply-sandbox" to the
+    workflow_run.workflows list; extend the dedup guard so a refusal-while-red
+    (distinguishable marker) dedupes against the already-open red-record rec rather
+    than filing a duplicate (reuse the commit-status dedup keyed on the red commit).
+  - >-
+    terraform/CLAUDE.md -- document the server-side convergence anchor (durable S3
+    record + red-record refusal as the sole hard block), the advisory terraform-converged
+    PR status (not a required check), and the dispatch-ack unlatch protocol; re-ground
+    the "Apply posture (future, not yet reliable)" paragraph to the now-sticky pipeline.
+  - >-
+    .claude/skills/implement/SKILL.md -- in the PR/Wait-for-CI section, add the
+    hold-subscription-through-apply convention for terraform/personal PRs (hold the PR
+    subscription through the post-merge apply so the SHA->PR wake re-engages it;
+    poll-free; next planning session is the baseline).
+  - >-
+    On ship: file the numbered Decision ratifying CD.35 via the ops-portal log-decision
+    path (bin/venv-python -m scripts.ops_data_portal), referencing CD.35 and this plan;
+    do NOT hand-edit DECISIONS.md.
+  - >-
+    Execute Verification Plan -- run pre-deploy steps 1-4 until green; coordinate the
+    admin-apply of oidc.tf; then run post-deploy steps 5-10 (forced-failure
+    demonstrations). On an unrecoverable V3 failure, stop and RCA (Decision 55); do not
+    inline-patch around a structural failure.
+  - >-
+    Report: what was implemented, the forced-failure demonstration results (red write,
+    refusal-without-overwrite, single ci_rca rec, advisory status, dispatch-ack
+    green-clear), and confirmation CD.35 was ratified via the portal.
+work_areas: []
+rollback: >-
+  Revert the squash-merge commit to restore the prior workflows / oidc.tf / docs. The
+  S3 convergence record is a standalone object (convergence/personal/sandbox.json) with
+  no schema/data migration -- delete it to reset to pass-on-absent. The oidc.tf IAM
+  grant, if applied, is removed via the same admin-apply loop. No data migration to
+  unwind.
