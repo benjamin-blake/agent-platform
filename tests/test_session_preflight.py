@@ -1992,6 +1992,10 @@ class TestSyncCollapse:
             patch("session_preflight.check_terraform_pending", return_value=False),
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
+            # Phase B / pre-Phase-A subprocess users -- patch by name so main() never
+            # shells out to real git (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
             patch(
                 "session_preflight.read_context_files",
                 return_value={
@@ -2120,6 +2124,10 @@ class TestVerbDedup:
             patch("session_preflight.check_terraform_pending", return_value=False),
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
+            # Patch subprocess users by name so the verb-count assertions are not perturbed
+            # by real git calls (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
             patch("session_preflight._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
