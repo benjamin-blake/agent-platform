@@ -247,13 +247,26 @@ The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks +
 1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
 2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
 3. On wake, confirm status (`mcp__github__pull_request_read` with `method=get_status`/`get_check_runs`):
-   - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge.
+   - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).
    - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
    - **Still running** -> end the turn; a later event wakes you.
 
 The slow full tier runs post-merge on `main` (Decision 73); on failure the ci-rca agent files a `priority=critical`, `source=ci_rca` rec that hard-blocks the next planning session. You do not babysit main CI.
 
 Robustness note: a genuinely lost webhook leaves the PR open (safe). The bulletproof upgrade is GitHub-native auto-merge (server-side merge on green, container fully out of the loop); branch protection + required status checks are now LIVE (Decision 83 / T2.12, applied 2026-06-08), so auto-merge is unblocked -- adopt via a small follow-up plan if desired. See Decision 76.
+
+### Hold subscription through apply (terraform/personal PRs -- CD.35 / T2.20)
+For a PR that touches `terraform/personal/**`, the sandbox CD apply runs **post-merge** on `main`
+(`terraform-apply-sandbox.yml`), and that apply -- not the merge -- is the real outcome (it writes the
+convergence record green/red). After the squash-merge, **do not unsubscribe**: hold the PR subscription so
+the apply job's best-effort post-merge SHA->PR wake (it resolves the PR from the merge commit SHA, since
+`workflow_run.pull_requests[]` is empty for push) can re-engage this session. The wake is best-effort and
+likely fights the `subscribe_pr_activity` contract (unsubscribe-at-merge, open-PR-scoped); **the
+authoritative baseline is the next planning session's convergence-record re-check** -- poll-free, never a
+`sleep`/`/loop` (Decision 76). If the apply reds the record, `ci-rca` files a `source=ci_rca` rec; clear red
+only via the `workflow_dispatch` acknowledge-and-retry path (naming the red commit/rec) after the rec is
+reviewed -- never an inline workaround (Decision 55). Unsubscribe once the record is green (apply converged)
+or the next planning session has assumed the baseline.
 
 ### Pre-Push Rebase (applies to both flows)
 After the local commit, before pushing, refresh and rebase so the PR opens against current main:

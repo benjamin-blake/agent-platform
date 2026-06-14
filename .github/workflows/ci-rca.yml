@@ -5,7 +5,11 @@ name: CI RCA
 
 on:
   workflow_run:
-    workflows: ["CI", "Main Canary"]
+    # CD.35 / T2.20: terraform-apply-sandbox is wired in so sandbox apply FAILURES (and the
+    # refusals-while-red they cause) file source=ci_rca recs. The dedup step below anchors
+    # terraform-apply-sandbox failures on the red convergence record's commit so one underlying
+    # apply failure + every later refusal collapse to ONE rec.
+    workflows: ["CI", "Main Canary", "terraform-apply-sandbox"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -88,6 +92,10 @@ jobs:
           RUN_ID_RAW: ${{ github.event.workflow_run.id || github.event.inputs.run_id }}
           HEAD_SHA_RAW: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_NAME_RAW: ${{ github.event.workflow_run.name }}
+          # CD.35 / T2.20: the convergence record (its own prefix, outside tfstate/). The branch role
+          # already reads the whole data-lake bucket, so no extra IAM grant is needed here.
+          CONVERGENCE_BUCKET: agent-platform-data-lake
+          CONVERGENCE_KEY: convergence/personal/sandbox.json
         run: |
           RUN_ID=$(printf '%s' "$RUN_ID_RAW" | tr -cd '0-9')
           HEAD_SHA="$HEAD_SHA_RAW"
@@ -103,18 +111,37 @@ jobs:
           WORKFLOW_SLUG=$(echo "$WORKFLOW_NAME" | tr '[:upper:]' '[:lower:]' | tr ' /' '_-' | sed 's/[^a-z0-9_-]//g')
           CONTEXT="ci-rca/${WORKFLOW_SLUG}"
 
+          # Convergence-refusal dedup (CD.35 5.5d): a terraform-apply-sandbox apply FAILURE and the
+          # refusals-while-red it causes on LATER commits are ONE underlying failure. Anchor the
+          # dedup on the RED record's commit (not the refusing run's head_sha) so the first failure
+          # files one rec and every later refusal dedupes against it. Non-apply-sandbox workflows and
+          # a green/absent record fall back to head_sha (unchanged behaviour).
+          ANCHOR_SHA="$HEAD_SHA"
+          if [ "$WORKFLOW_SLUG" = "terraform-apply-sandbox" ]; then
+            REC_JSON=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+            if [ -n "$REC_JSON" ]; then
+              REC_STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+              REC_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))" 2>/dev/null || echo "")
+              if [ "$REC_STATUS" = "red" ] && [ -n "$REC_COMMIT" ]; then
+                ANCHOR_SHA="$REC_COMMIT"
+                echo "Convergence dedup: anchoring on red-record commit ${REC_COMMIT} (run head ${HEAD_SHA})."
+              fi
+            fi
+          fi
+
           ALREADY_FILED="false"
-          if [ -n "$HEAD_SHA" ]; then
-            STATE=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/statuses" \
+          if [ -n "$ANCHOR_SHA" ]; then
+            STATE=$(gh api "repos/${{ github.repository }}/commits/${ANCHOR_SHA}/statuses" \
               --jq ".[] | select(.context == \"${CONTEXT}\") | .state" 2>/dev/null | head -1)
             if [ "$STATE" = "success" ]; then
               ALREADY_FILED="true"
-              echo "Dedup: ci-rca already filed for ${WORKFLOW_NAME}@${HEAD_SHA}; skipping."
+              echo "Dedup: ci-rca already filed for ${WORKFLOW_NAME}@${ANCHOR_SHA}; skipping."
             fi
           fi
 
           echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "anchor_sha=${ANCHOR_SHA}" >> "$GITHUB_OUTPUT"
           echo "context=${CONTEXT}" >> "$GITHUB_OUTPUT"
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
 
@@ -180,10 +207,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          HEAD_SHA="${{ steps.dedup.outputs.head_sha }}"
+          # Mark the dedup ANCHOR (CD.35 5.5d): for terraform-apply-sandbox the anchor is the red
+          # record's commit, so a later refusal-while-red finds this success status and dedupes.
+          # For every other workflow the anchor IS head_sha (unchanged behaviour).
+          ANCHOR_SHA="${{ steps.dedup.outputs.anchor_sha }}"
           CONTEXT="${{ steps.dedup.outputs.context }}"
-          if [ -n "$HEAD_SHA" ] && [ -n "$CONTEXT" ]; then
-            gh api "repos/${{ github.repository }}/statuses/${HEAD_SHA}" \
+          if [ -n "$ANCHOR_SHA" ] && [ -n "$CONTEXT" ]; then
+            gh api "repos/${{ github.repository }}/statuses/${ANCHOR_SHA}" \
               --method POST \
               --field state=success \
               --field context="${CONTEXT}" \

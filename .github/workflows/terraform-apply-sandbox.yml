@@ -8,31 +8,71 @@ name: terraform-apply-sandbox
 # TOCTOU). Branch protection is now active (main-protection ruleset, Decision 83 / CD.20), but
 # deliberately non-wedging -- the guard plus the subagent review ARE the plan-content gate, and both fail closed.
 #
+# CD.35 / T2.20 (Wave 1) adds the server-side convergence anchor on top of the above:
+#   - A read-PRECONDITION before apply REFUSES (distinguishable marker CONVERGENCE_RED, record NOT
+#     overwritten) when the durable convergence record is red -- the SOLE hard block, unbypassable
+#     by any merge-path actor. An absent record = first-apply-allowed (pass-on-absent).
+#   - An ALWAYS-run record-write after apply writes status=green on success / status=red on failure
+#     to s3://agent-platform-data-lake/convergence/personal/sandbox.json (its OWN prefix, NOT under
+#     tfstate/), so a failed apply can never leave a stale green. Write-IAM is apply-identity-only.
+#   - A red record clears ONLY via the workflow_dispatch acknowledge-and-retry path (input names the
+#     red commit or rec id); a plain push never clears red (auto-allow-descendants is rejected --
+#     on linear-history main every commit is a descendant, so the latch would never latch).
+#   - A read-only pull_request job posts the ADVISORY terraform-converged commit status (NOT a
+#     required check, Decision 83) under the read-only PR role.
+#   - A best-effort post-merge SHA->PR wake (Decision 76 poll-free; next-planning-session re-check
+#     is the authoritative baseline). Apply failures wire into ci-rca.yml (Decision 72/55).
+#
 # Trust: assumes agent-platform-github-ci-apply, which trusts refs/heads/main ONLY (oidc.tf). A PR
-# or agent/* branch cannot assume it, so auto-apply is reachable only via a merge to main.
+# or agent/* branch cannot assume it, so auto-apply is reachable only via a merge to main. The
+# advisory PR job assumes the read-only agent-platform-github-ci-pr role (refs/pull/*).
 
 on:
   push:
     branches: [ main ]
     paths:
       - 'terraform/personal/**'
-  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'terraform/personal/**'
+  workflow_dispatch:
+    inputs:
+      acknowledge_red_commit:
+        description: >-
+          Unlatch a RED convergence record: name the red commit SHA (or the open rec id, rec-NNNN).
+          This is the ONLY sanctioned path to clear red; a successful apply from this run writes
+          green. Leave blank for a routine manual apply (refused if the record is red).
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  # Serialise applies against shared S3 state; never cancel an in-flight apply.
+  # Serialise applies against shared S3 state; never cancel an in-flight apply. This group also
+  # closes the read-precondition -> apply -> write-record race between rapid merges (CD.35 5.5b).
   group: terraform-apply-sandbox
   cancel-in-progress: false
 
+env:
+  # The convergence record lives in its OWN S3 prefix, OUTSIDE tfstate/ (CD.35 5.5c): the read-only
+  # PR role gets read on this prefix only and must never gain tfstate read.
+  CONVERGENCE_BUCKET: agent-platform-data-lake
+  CONVERGENCE_KEY: convergence/personal/sandbox.json
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Apply job: push to main + the sanctioned workflow_dispatch unlatch ONLY.
+  # NOT pull_request (PRs get the read-only advisory job below; a PR cannot assume the apply role).
+  # ---------------------------------------------------------------------------
   apply-sandbox:
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      id-token: write   # REQUIRED for OIDC token minting
+      id-token: write       # REQUIRED for OIDC token minting
       contents: read
+      pull-requests: write  # best-effort post-merge SHA->PR wake comment (CD.35 5.3)
 
     env:
       AWS_DEFAULT_REGION: eu-west-2
@@ -74,13 +114,66 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Convergence precondition (refuse on red record -- sole hard block)
+        id: precond
+        # CD.35 5.5: the SOLE server-side hard block. Read the durable convergence record; if main
+        # is non-converged (status=red) REFUSE this run and do NOT overwrite the record -- UNLESS
+        # this is the workflow_dispatch acknowledge-and-retry path naming the red commit/rec. An
+        # absent record = first-apply-allowed (pass-on-absent). The refusal emits a distinguishable
+        # marker (CONVERGENCE_RED) so ci-rca can dedupe refusals against the open red-record rec.
+        env:
+          ACK: ${{ github.event.inputs.acknowledge_red_commit }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Fail-CLOSED read: the precondition is the SOLE hard block, so a read it cannot complete
+          # must NOT silently degrade to pass-on-absent. Distinguish a genuinely-absent record
+          # (NoSuchKey/404 -> first-apply-allowed) from any other error (transient / AccessDenied ->
+          # REFUSE without overwriting; the operator re-runs once S3 is reachable). s3api get-object
+          # (not `s3 cp`) so the error class is inspectable.
+          set +e
+          READ_ERR=$(aws s3api get-object --bucket "$CONVERGENCE_BUCKET" --key "$CONVERGENCE_KEY" /tmp/convergence-record.json 2>&1 1>/dev/null)
+          READ_RC=$?
+          set -e
+          if [ "$READ_RC" -ne 0 ]; then
+            if printf '%s' "$READ_ERR" | grep -qiE 'NoSuchKey|Not Found|404'; then
+              echo "No convergence record (pass-on-absent): first apply allowed."
+              echo "refused=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            echo "::error::CONVERGENCE_READ_ERROR could not read the convergence record; failing CLOSED (NOT pass-on-absent) and NOT overwriting it. Re-run once S3 is reachable. Details: ${READ_ERR}"
+            exit 1
+          fi
+          REC_JSON=$(cat /tmp/convergence-record.json)
+          STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
+          RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))")
+          echo "Convergence record: status=${STATUS} commit=${RED_COMMIT}"
+          if [ "$STATUS" != "red" ]; then
+            echo "Main is converged (status=${STATUS}); proceeding."
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # status == red. The ONLY clear path is a workflow_dispatch acknowledge-and-retry whose
+          # input names the red record's commit SHA or an open rec id (rec-NNNN). The dispatch actor
+          # + input are the audit trail (Decision 55/72); the agent may dispatch after rec review.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$ACK" ] && { [ "$ACK" = "$RED_COMMIT" ] || printf '%s' "$ACK" | grep -qiE '^rec-[0-9]+$'; }; then
+            echo "::notice::CONVERGENCE_ACK acknowledge-and-retry for red commit ${RED_COMMIT} (input=${ACK}); proceeding to clear red on a successful apply."
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "refused=true" >> "$GITHUB_OUTPUT"
+          echo "::error::CONVERGENCE_RED main is non-converged at commit ${RED_COMMIT}; apply REFUSED and the record was NOT overwritten. Unlatch via workflow_dispatch acknowledge_red_commit=${RED_COMMIT} (or the open rec id) after the failure is reviewed (Decision 55/72)."
+          exit 1
+
       - name: Terraform init (S3 backend, sandbox)
+        if: success()
         working-directory: ${{ env.WORKDIR }}
         run: terraform init -input=false -backend-config=backend-sandbox.hcl
 
       - name: Assert required Terraform variables are present
         # Fail-closed (Decision 77): a missing secret or variable reds the run before plan.
         # Never use continue-on-error here -- a silent empty var would pass plan with wrong defaults.
+        if: success()
         run: |
           : "${TF_VAR_account_id:?TF_VAR_account_id is empty -- set the AWS_ACCOUNT_ID repo variable}" \
             "${TF_VAR_owner_email:?TF_VAR_owner_email is empty -- set the OWNER_EMAIL repo variable}" \
@@ -89,6 +182,7 @@ jobs:
 
       - name: Terraform plan
         id: plan
+        if: success()
         working-directory: ${{ env.WORKDIR }}
         run: |
           terraform plan -input=false -lock-timeout=120s -out=plan.bin
@@ -98,6 +192,7 @@ jobs:
         id: guard
         # No continue-on-error: ANY non-zero exit (2 tripped OR 1 internal error) fails this step
         # and, via the success() gate below, blocks apply. This step is the load-bearing control.
+        if: success()
         working-directory: ${{ env.WORKDIR }}
         run: python ../../scripts/terraform_apply_guard.py plan.json
 
@@ -128,8 +223,130 @@ jobs:
           fi
 
       - name: Terraform apply (same plan file the guard inspected)
-        # Gated on success() of all prior steps (guard + subagent review). Applies plan.bin -- the
-        # exact artefact the guard parsed via plan.json -- with no intervening re-plan (no TOCTOU).
+        id: apply
+        # Gated on success() of all prior steps (precondition + guard + subagent review). Applies
+        # plan.bin -- the exact artefact the guard parsed via plan.json -- with no intervening
+        # re-plan (no TOCTOU).
         if: success()
         working-directory: ${{ env.WORKDIR }}
         run: terraform apply -input=false -lock-timeout=120s plan.bin
+
+      - name: Write convergence record (always-run, red-on-failure)
+        id: record_write
+        # CD.35 5.5 integrity anchor: apply-identity-only write, ALWAYS-run so a failed apply writes
+        # red (never leaves a stale green that would defeat the precondition). The step itself is
+        # `if: always()`; it SKIPS the S3 write when the precondition refused, so a refused run never
+        # overwrites/corrupts the record (its ETag must be identical before and after a refused
+        # attempt). green iff the apply step succeeded; red on any non-success (plan/guard/review/apply).
+        if: always()
+        env:
+          REFUSED: ${{ steps.precond.outputs.refused }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          if [ "$REFUSED" = "true" ]; then
+            echo "Precondition refused on a red record; NOT overwriting the convergence record (anchor integrity)."
+            exit 0
+          fi
+          if [ "$APPLY_OUTCOME" = "success" ]; then
+            STATUS="green"
+          else
+            STATUS="red"
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          # plan_sha is null until T2.21 (Wave 2) introduces saved plans.
+          export STATUS TS SHA RUN_ID RUN_URL
+          RECORD=$(python3 -c "import json,os; print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':None}))")
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+          echo "Wrote convergence record: ${RECORD}"
+
+      - name: Best-effort post-merge SHA->PR wake
+        # CD.35 5.3 / Decision 76 (poll-free): the push event's workflow_run.pull_requests[] is
+        # empty, so resolve the originating PR from the merge commit SHA and comment to re-engage a
+        # held subscription. BEST-EFFORT ONLY (continue-on-error) -- the authoritative baseline is
+        # the next-planning-session record re-check; nothing depends on this wake. Skipped on
+        # refusal (no apply ran).
+        if: ${{ always() && github.event_name == 'push' && steps.precond.outputs.refused != 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          PR_NUM=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            echo "No originating PR resolved for ${SHA}; next-planning-session baseline applies."
+            exit 0
+          fi
+          if [ "$APPLY_OUTCOME" = "success" ]; then
+            MSG="sandbox terraform-apply converged GREEN for ${SHA}; convergence record updated. (Best-effort wake; next planning session re-checks the record.)"
+          else
+            MSG="sandbox terraform-apply did NOT converge (RED) for ${SHA}; ci-rca will file a source=ci_rca rec. After review, unlatch via the workflow_dispatch acknowledge-and-retry path. (Best-effort wake.)"
+          fi
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
+
+  # ---------------------------------------------------------------------------
+  # Advisory status job: pull_request ONLY, read-only (CD.35 5.5).
+  # Reads the convergence record under the read-only PR role and posts the ADVISORY
+  # terraform-converged commit status. NOT a required check (Decision 83) -- a required status would
+  # wedge the autonomous fix-merge once a record is red, or be admin-bypassed anyway. Same-repo only
+  # (fork PRs cannot mint the OIDC token / write statuses; mirrors ci-rca.yml's fork gate).
+  # ---------------------------------------------------------------------------
+  advisory-status:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write     # OIDC for the read-only PR role
+      contents: read
+      statuses: write     # post the advisory terraform-converged commit status
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - name: Configure AWS credentials (OIDC -- PR read-only role)
+        # Best-effort: this advisory job must NEVER red a PR. Before the oidc.tf trust+read grant is
+        # applied (the bootstrap window), or on any transient OIDC hiccup, the assume-role fails --
+        # continue-on-error lets the job carry on and post the pass-on-absent (green) advisory rather
+        # than failing the check. Post-apply the assume succeeds and the record is read for real.
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-pr
+          aws-region: eu-west-2
+
+      - name: Read convergence record and post advisory terraform-converged status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # pass-on-absent (and on read-denied pre-IAM-apply): treat a missing record as converged.
+          REC_JSON=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          if [ -z "$REC_JSON" ]; then
+            STATE="success"
+            DESC="No convergence record yet (pass-on-absent); main treated as converged. Advisory only."
+          else
+            STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
+            RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))")
+            if [ "$STATUS" = "red" ]; then
+              STATE="failure"
+              DESC="main is non-converged (last sandbox apply RED at ${RED_COMMIT}). Advisory only -- not a required check."
+            else
+              STATE="success"
+              DESC="main is converged (last sandbox apply GREEN). Advisory only."
+            fi
+          fi
+          TARGET="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            --method POST \
+            --field state="${STATE}" \
+            --field context="terraform-converged" \
+            --field description="${DESC}" \
+            --field target_url="${TARGET}"
