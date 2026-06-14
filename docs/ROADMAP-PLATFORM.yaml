@@ -4990,6 +4990,112 @@ tier_items:
     effort: XL
     strategic: true
     status: not_started
+  - id: T4.5
+    tier: T4
+    name: Plan / critique / revision warehouse entities (ops_plans, ops_plan_revisions) + verb-RBAC
+    intent: |
+      Promote the git-authoritative PLAN-{slug}.yaml artefact (Decision 85, PlanDocument
+      schema_version 1) into first-class warehouse entities, per Decision 87. Three surfaces:
+      ops_plans (SCD2: plan document + status gate pending -> approved | rejected | needs-revision),
+      ops_plan_revisions (machine-actionable revision directives -- the imperative the planning
+      agent consumes), and existing telemetry (critique deliberation/rationale -- not duplicated here).
+      Until the T4.6 authority-flip, ops_plans is a downstream read-projection of the git-authoritative
+      PLAN-*.yaml, populated by git->warehouse ETL -- the same sanctioned "ETL from a non-warehouse
+      source of truth" pattern as DECISIONS.md -> ops_decisions, so the Decision 84 warehouse-SoT
+      invariant holds (plans scoped as projection-until-T4.x). RBAC enforced at the DuckLake writer
+      verb layer (extends Decision 84 I-2/I-3, Decision 81 cl.2): planning personas get insert_plan
+      (hardcodes status=pending, cannot mutate status); critique personas get set_plan_status +
+      insert_revision (cannot author plan bodies). All writes transit ops_data_portal (Single-Portal
+      Invariant, Decisions 69/78); ids writer-allocated. Deferred per Decision 87 -- no warehouse
+      consumer of plans exists until the T4.6 loop; built when that consumer lands, not before.
+    depends_on: [T4.2]
+    files_in_scope:
+      - docs/contracts/plan-entities.yaml  # new
+      - scripts/ops_data_portal.py
+    exit_criteria:
+      - "ops_plans and ops_plan_revisions tables exist on the DuckLake-on-Neon SCD2 substrate"
+      - "Schema + verb-RBAC documented in docs/contracts/plan-entities.yaml (no standing prose doc, per Decision 86)"
+      - "insert_plan / set_plan_status / insert_revision verbs live behind the closed writer boundary, role-scoped"
+      - "git->warehouse ETL projects PLAN-{slug}.yaml into ops_plans; round-trip parity test passes"
+      - "Read access via named verbs (no caller SQL); plan<->rec linkage queryable"
+    related_decisions: [87]
+    related_candidate_decisions: [CD.17]
+    effort: L
+    strategic: true
+    status: not_started
+    decomposition_hints:
+      split_by: surface
+      atomic_plans:
+        - "ops_plans table + SCD2 status-gate schema + named read verbs (umbrella atomic plan)"
+        - "ops_plan_revisions table + insert_revision verb + planning-agent read inbox"
+        - "Verb-RBAC: insert_plan / set_plan_status role scoping at the ducklake_writer boundary"
+        - "git->warehouse ETL of PLAN-{slug}.yaml + round-trip parity smoke-test"
+      rationale: |
+        Per Decision 87 the three surfaces split by purpose (state / directive / deliberation). Each
+        table + its verbs is independently testable; the ETL projection waits on nothing but the
+        PlanDocument schema (Decision 85, live), so it can land first as the queryability slice.
+        strategic: true, status: not_started -- deferred forward intent; when pulled forward under the
+        CD.17 freeze each atomic plan is an IMPLEMENTATION-type plan (no STRATEGIC plan authored).
+  - id: T4.6
+    tier: T4
+    name: Autonomous plan -> critique -> revision loop + git->warehouse authority-flip
+    intent: |
+      Wire the T4.2 agent personas (plan_agent, plan_critic) into the closed plan -> critique ->
+      revision loop over the T4.5 entities, per Decision 87. plan_agent emits a plan (insert_plan,
+      status=pending); plan_critic either flips status=approved or sets status=needs-revision and
+      inserts one or more ops_plan_revisions rows (the imperative); plan_agent reads its open-revision
+      inbox, emits revision N+1, marks rows resolved. This is where the authority-flip lands: once a
+      machine produces plans at frequency, warehouse-authoritative becomes the right model and
+      ops_plans stops being a git projection and becomes the source of truth. At that point Decision
+      85's git-authoritative clause for plans is superseded (pre-recorded in Decision 87's forward
+      note). Gated behind the CD.17 executor-freeze reversal via T4.2 stability -- the autonomous
+      producer whose existence Decision 87 ties the flip to.
+    depends_on: [T4.2, T4.5]
+    files_in_scope: []
+    exit_criteria:
+      - "plan_critic can set_plan_status(approved) and set_plan_status(needs-revision)+insert_revision but cannot author plan bodies"
+      - "plan_agent consumes its open-revision inbox and emits revision N+1 as a new ops_plans SCD2 row"
+      - "Closed loop runs end-to-end on a fixture rec: plan -> needs-revision -> revised plan -> approved"
+      - "Authority-flip executed: ops_plans is source of truth; PLAN-{slug}.yaml retired or demoted to export; Decision 85 plan clause marked superseded"
+      - "CD.17 reversal preconditions satisfied (T4.2 complete + grace period) before flip lands"
+    related_decisions: [87]
+    related_candidate_decisions: [CD.17]
+    effort: L
+    strategic: true
+    status: not_started
+    decomposition_hints:
+      split_by: lifecycle_stage
+      atomic_plans:
+        - "Critique write-path: set_plan_status + insert_revision wired to plan_critic persona"
+        - "Revision read-path: plan_agent open-revision inbox + revision N+1 emission + resolve"
+        - "Authority-flip cutover: ops_plans becomes SoT, git PLAN-*.yaml demoted, Decision 85 superseded"
+      rationale: |
+        Per Decision 87 the loop is the consumer that justifies the warehouse entities and triggers the
+        authority-flip. Split by lifecycle stage (critique-write / revision-read / cutover) so the read
+        and write halves are independently testable before the irreversible cutover. strategic: true,
+        status: not_started -- gated on T4.2 (personas) and the CD.17 reversal.
+  - id: T4.7
+    tier: T4
+    name: Plan-staleness story -- precondition for planning/implementation decoupling
+    intent: |
+      Today planning and implementation are sequentially coupled, and that coupling masks staleness: a
+      plan written against repo state S0 is silently stale once other implementations move the repo to
+      S1. Decision 87 cl.6 gates any decoupling (plans written faster than implemented) on a staleness
+      story this item delivers: pin each plan to a base-commit SHA, detect divergence between that base
+      and HEAD at implement time, and re-validate (or auto-route to a revision) before an implementation
+      runs against a stale plan. Without this, decoupling produces implementations against stale repo
+      state -- the failure mode Decision 87 names explicitly.
+    depends_on: [T4.5]
+    files_in_scope: []
+    exit_criteria:
+      - "ops_plans carries a base_commit_sha captured at plan authoring time"
+      - "Implement-time divergence check compares base_commit_sha to HEAD and classifies staleness"
+      - "Stale plans are blocked or auto-routed to needs-revision before implementation runs"
+      - "Decoupling (plan-ahead-of-implement) is documented as unblocked once this gate is live"
+    related_decisions: [87]
+    effort: M
+    strategic: true
+    status: not_started
 
   # ----- T5: Decommissioning & cleanup -----
   - id: T5.1
