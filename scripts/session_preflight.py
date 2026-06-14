@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from scripts import platform_roadmap
 from scripts import product_roadmap as product_roadmap_module
 from scripts.aws_profile import resolve_aws_profile
 from scripts.s3_log_store import get_backend, read_jsonl
-from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull
+from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull  # noqa: F401  (kept for back-compat test patch targets)
 from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader  # noqa: F401  (kept for back-compat refs)
 from src.common.iceberg_reader import make_reader as _make_reader
 
@@ -279,6 +280,28 @@ def check_credentials() -> str:
         return "ok" if result.returncode == 0 else "unavailable"
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "unavailable"
+
+
+def _prime_reader_url(creds_status: str) -> None:
+    """Resolve the DuckLake reader URL once and cache it in DUCKLAKE_READER_URL.
+
+    Subsequent _make_reader() calls find the env override and skip SSM
+    (Decision 79 first-priority resolution). Non-fatal on failure: if URL
+    resolution raises, the env var stays unset and each reader falls through
+    to its own SSM resolution as before.
+    """
+    if creds_status != "ok":
+        return
+    if os.environ.get("DUCKLAKE_READER_URL"):
+        return  # already primed (CI override or earlier call)
+    try:
+        url = _make_reader()._reader_url()  # type: ignore[union-attr]
+        if isinstance(url, str) and url:
+            os.environ["DUCKLAKE_READER_URL"] = url
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log  # noqa: PLC0415
+
+        _log.getLogger(__name__).warning("session_preflight._prime_reader_url: URL resolution failed: %s", exc)
 
 
 def _handle_credentials_startup(creds_status: str) -> str:
@@ -1027,8 +1050,15 @@ def run_log_sync() -> dict:
     return {"status": "committed", "files": log_files}
 
 
-def read_context_files() -> dict:
+def read_context_files(open_recs_count: int | None = None) -> dict:
     """Read key context documents and return a summary dict for plan.prompt.md.
+
+    Args:
+        open_recs_count: Pre-computed open-recs count from the caller. When provided,
+            the open_recs verb query is skipped (dedup: avoids a second named() call
+            when main() has already fetched the count via _count_recommendations_reader).
+            Standalone callers (e.g. tests) may omit it; the function falls back to
+            its own open_recs query in that case.
 
     Returns:
         Dict with keys: roadmap_phase, open_decisions_count, recent_sessions,
@@ -1088,12 +1118,16 @@ def read_context_files() -> dict:
             except ValueError:
                 continue
 
-    # recommendations_count: reader-only via the open_recs verb (Decision 84 I-3)
-    recommendations_count = 0
-    try:
-        recommendations_count = len(_make_reader().named("open_recs"))
-    except Exception:  # noqa: BLE001
-        pass
+    # recommendations_count: use pre-computed count when available (avoids a second
+    # open_recs verb call when main() already fetched the count in Phase B).
+    if open_recs_count is not None:
+        recommendations_count = open_recs_count
+    else:
+        recommendations_count = 0
+        try:
+            recommendations_count = len(_make_reader().named("open_recs"))
+        except Exception:  # noqa: BLE001
+            pass
 
     return {
         "roadmap_phase": roadmap_phase,
@@ -1264,24 +1298,31 @@ def main() -> int:
     if log_sync_result.get("status") == "committed":
         uncommitted = False
 
-    main_freshness = check_main_freshness()
+    # Phase A: run credential check, git freshness, and terraform check concurrently.
+    # creds_status and main_freshness must be resolved before Phase B starts.
+    with ThreadPoolExecutor(max_workers=3) as phase_a:
+        fut_creds = phase_a.submit(check_credentials)
+        fut_freshness = phase_a.submit(check_main_freshness)
+        fut_terraform = phase_a.submit(check_terraform_pending)
+        creds_result = fut_creds.result()
+        main_freshness = fut_freshness.result()
+        terraform_pending = fut_terraform.result()
 
-    terraform_pending = check_terraform_pending()
-    creds_status = _handle_credentials_startup(check_credentials())
+    creds_status = _handle_credentials_startup(creds_result)
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Rebuild the local read cache from the warehouse (best-effort): all migrated
-    # tables via the DuckLake reader (Decision 84 I-1; no fallback).
-    try:
-        recommendation_sync = _sync_ops_pull()
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"WARNING: sync_ops.pull failed: {exc}", file=sys.stderr)
-        recommendation_sync = {}
+    # Prime the DuckLake reader URL once so all subsequent named() calls skip SSM
+    # (Decision 79 first-priority resolution). The remaining reader fan-out in Phase B
+    # then hits the Lambda URL directly rather than re-resolving SSM on each call.
+    _prime_reader_url(creds_status)
 
-    # Outbox summary (always available, even without credentials)
+    # Single sync: drain outbox then pull fresh warehouse data. This also serves as the
+    # serial warm-up call that absorbs Neon cold-resume before the Phase B fan-out
+    # (Decision 82: warm before fanning out to keep Neon p95 bounded).
+    outbox: dict = {}
+    recommendation_sync: dict = {}
     try:
         from scripts.sync_ops import outbox_summary  # noqa: PLC0415
-        from scripts.sync_ops import sync as sync_ops_sync
 
         outbox = outbox_summary()
         if outbox:
@@ -1290,10 +1331,12 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         outbox = {}
 
-    # Drain outbox + pull fresh data if credentials are available
     if creds_status == "ok":
         try:
+            from scripts.sync_ops import sync as sync_ops_sync  # noqa: PLC0415
+
             result = sync_ops_sync()
+            recommendation_sync = result.get("pulled", {})
             drained = sum(result.get("drained", {}).values())
             pulled = sum(result.get("pulled", {}).values())
             if drained or pulled:
@@ -1305,7 +1348,30 @@ def main() -> int:
             pass  # sync is best-effort
 
     last_session = parse_last_session()
-    _rec_result = _count_recommendations_reader()
+
+    # Phase B: fan out independent reads and subprocess calls after the serial warm-up.
+    # Cap at <=4 concurrent workers to avoid Neon connect p95 inflation (Decision 82).
+    # Retrieve every future via .result() so exceptions and SystemExit (read_priority_queue
+    # hard-exits on verb failure with creds ok) re-raise in the main thread (Decision 55/81).
+    with ThreadPoolExecutor(max_workers=4) as phase_b:
+        fut_rec_count = phase_b.submit(_count_recommendations_reader)
+        fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs)
+        fut_pq = phase_b.submit(read_priority_queue, creds_status=creds_status)
+        fut_commits = phase_b.submit(_get_recent_main_commits)
+        fut_decision_ts = phase_b.submit(_get_latest_decision_ts)
+        fut_ci_liveness = phase_b.submit(_check_ci_rca_liveness, creds_status)
+        fut_forward_fix = phase_b.submit(_check_forward_fix_recursion)
+        fut_budget = phase_b.submit(_check_budget_bypass_alert)
+
+        _rec_result = fut_rec_count.result()
+        ci_rca_recs = fut_ci_rca.result()
+        priority_queue = fut_pq.result()
+        recent_main_commits = fut_commits.result()
+        latest_decision_ts = fut_decision_ts.result()
+        ci_rca_liveness_alert = fut_ci_liveness.result()
+        forward_fix_alert = fut_forward_fix.result()
+        budget_bypass_alert = fut_budget.result()
+
     recs_read_status: str
     if _rec_result == "reader_unreachable":
         recs_read_status = "reader_unreachable"
@@ -1313,21 +1379,24 @@ def main() -> int:
     else:
         recs_read_status = "ok"
         open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = _rec_result  # type: ignore[misc]
-    ci_rca_recs = _fetch_ci_rca_recs()
-    recent_main_commits = _get_recent_main_commits()
+
     correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits)
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
-    priority_queue = read_priority_queue(creds_status=creds_status)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
-    context = read_context_files()
-    platform_roadmap_state = platform_roadmap.compute_state_dict(
-        ROADMAP_PLATFORM_PATH, latest_decision_ts=_get_latest_decision_ts()
-    )
+
+    # Dedupe open_recs: count already computed in Phase B; pass to read_context_files
+    # to skip the second open_recs verb call (Decision 84 I-3: closed named-verb boundary).
+    open_recs_count = open_recommendations if recs_read_status == "ok" else None
+    context = read_context_files(open_recs_count=open_recs_count)
+
+    # Dedupe decisions_max_updated: timestamp fetched once in Phase B; reuse for both
+    # roadmap compute_state_dict calls rather than re-issuing the verb.
+    platform_roadmap_state = platform_roadmap.compute_state_dict(ROADMAP_PLATFORM_PATH, latest_decision_ts=latest_decision_ts)
     product_roadmap_state = product_roadmap_module.compute_state_dict(
         ROADMAP_PRODUCT_PATH,
         platform_yaml_path=ROADMAP_PLATFORM_PATH,
-        latest_decision_ts=_get_latest_decision_ts(),
+        latest_decision_ts=latest_decision_ts,
     )
 
     report: dict = {
@@ -1363,9 +1432,8 @@ def main() -> int:
     }
 
     report["non_automatable_softcap_breached"] = _check_non_automatable_softcap(non_automatable_count)
-    report["ci_rca_liveness_alert"] = _check_ci_rca_liveness(creds_status)
-    report["forward_fix_recursion_alert"] = _check_forward_fix_recursion()
-    budget_bypass_alert = _check_budget_bypass_alert()
+    report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
+    report["forward_fix_recursion_alert"] = forward_fix_alert
     report["budget_bypass_alert"] = budget_bypass_alert
     if budget_bypass_alert is not None:
         print(
