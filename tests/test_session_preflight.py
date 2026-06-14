@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -432,7 +433,7 @@ class TestJsonOutputSchema:
             assert key in data, f"Missing key: {key}"
 
     def test_recommendation_sync_field_in_output(self, tmp_path: Path) -> None:
-        """recommendation_sync field appears in output and _sync_ops_pull is called."""
+        """recommendation_sync field appears in output and is derived from sync_ops.sync()['pulled']."""
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
@@ -453,8 +454,8 @@ class TestJsonOutputSchema:
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
-                "session_preflight._sync_ops_pull",
-                return_value={"ops_recommendations": 5},
+                "scripts.sync_ops.sync",
+                return_value={"drained": {}, "pulled": {"ops_recommendations": 5}},
             ) as mock_sync,
             patch(
                 "session_preflight.read_context_files",
@@ -1412,19 +1413,19 @@ class TestForwardFixRecursion:
 
 
 class TestCredentialsOrderingInMain:
-    """Verify that the credential check runs before ops pull in main()."""
+    """Verify that the credential check runs before ops sync in main()."""
 
-    def test_credentials_startup_precedes_pull(self, tmp_path: Path) -> None:
-        """_handle_credentials_startup is called before _sync_ops_pull in main()."""
+    def test_credentials_startup_precedes_sync(self, tmp_path: Path) -> None:
+        """_handle_credentials_startup is called before scripts.sync_ops.sync in main()."""
         call_order: list[str] = []
 
         def _track_creds(status: str) -> str:
             call_order.append("creds")
             return "ok"
 
-        def _track_pull() -> dict:
-            call_order.append("pull")
-            return {}
+        def _track_sync(profile: str = "agent_platform") -> dict:
+            call_order.append("sync")
+            return {"drained": {}, "pulled": {}}
 
         preflight_report = tmp_path / ".preflight-report.json"
 
@@ -1441,7 +1442,7 @@ class TestCredentialsOrderingInMain:
             patch("session_preflight.check_terraform_pending", return_value=False),
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight._handle_credentials_startup", side_effect=_track_creds),
-            patch("session_preflight._sync_ops_pull", side_effect=_track_pull),
+            patch("scripts.sync_ops.sync", side_effect=_track_sync),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight.read_priority_queue", return_value=[]),
@@ -1463,9 +1464,9 @@ class TestCredentialsOrderingInMain:
             _preflight.main()
 
         assert "creds" in call_order
-        assert "pull" in call_order
-        assert call_order.index("creds") < call_order.index("pull"), (
-            f"credential check must precede pull; got order: {call_order}"
+        assert "sync" in call_order
+        assert call_order.index("creds") < call_order.index("sync"), (
+            f"credential check must precede sync; got order: {call_order}"
         )
 
 
@@ -1975,6 +1976,208 @@ class TestPrintCiRcaRecsWithCorrelation:
     def test_empty_recs_shows_none(self) -> None:
         output = self._capture_output([], correlation={"likely_resolved": [], "unresolved": []})
         assert "(none)" in output
+
+
+class TestSyncCollapse:
+    """sync_ops.sync is called exactly once; the standalone _sync_ops_pull is not called in main()."""
+
+    _FULL_MAIN_PATCHES: dict = {}  # class-level placeholder; built per test
+
+    @staticmethod
+    def _full_main_ctx(tmp_path: Path, extra: dict | None = None):
+        """Return a list of patch context managers sufficient to run main() in isolation."""
+        patches = [
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            # Phase B / pre-Phase-A subprocess users -- patch by name so main() never
+            # shells out to real git (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 1.5",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", tmp_path / ".preflight-report.json"),
+            patch("builtins.print"),
+        ]
+        if extra:
+            for tgt, kwargs in extra.items():
+                patches.append(patch(tgt, **kwargs))
+        return patches
+
+    def test_sync_called_exactly_once(self, tmp_path: Path) -> None:
+        """scripts.sync_ops.sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
+        sync_call_count: list[int] = []
+
+        def tracking_sync(profile: str = "agent_platform") -> dict:
+            sync_call_count.append(1)
+            return {"drained": {}, "pulled": {"ops_recommendations": 10}}
+
+        from contextlib import ExitStack  # noqa: PLC0415
+
+        with ExitStack() as stack:
+            for p in self._full_main_ctx(tmp_path):
+                stack.enter_context(p)
+            stack.enter_context(patch("scripts.sync_ops.sync", side_effect=tracking_sync))
+            _preflight.main()
+
+        assert len(sync_call_count) == 1, f"sync called {len(sync_call_count)} times; expected exactly 1"
+        report_path = tmp_path / ".preflight-report.json"
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["recommendation_sync"] == {"ops_recommendations": 10}
+
+    def test_sync_ops_pull_not_called_in_main(self, tmp_path: Path) -> None:
+        """_sync_ops_pull (= _rebuild_local_cache) is never called from main() after the sync collapse."""
+        pull_calls: list[int] = []
+
+        from contextlib import ExitStack  # noqa: PLC0415
+
+        with ExitStack() as stack:
+            for p in self._full_main_ctx(tmp_path):
+                stack.enter_context(p)
+            stack.enter_context(patch("session_preflight._sync_ops_pull", side_effect=lambda: pull_calls.append(1) or {}))
+            _preflight.main()
+
+        assert pull_calls == [], "_sync_ops_pull must not be called from main() after the sync collapse"
+
+
+class TestUrlPriming:
+    """_prime_reader_url() resolves the DuckLake reader Function URL once and sets DUCKLAKE_READER_URL."""
+
+    def test_sets_env_var_when_creds_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On creds ok, DUCKLAKE_READER_URL is set from the resolved URL."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        fake_url = "https://abc123.lambda-url.eu-west-2.on.aws"
+        mock_reader = MagicMock()
+        mock_reader._reader_url.return_value = fake_url
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")
+        assert os.environ.get("DUCKLAKE_READER_URL") == fake_url
+
+    def test_skips_when_creds_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Credentials unavailable -> reader is never called and env var is not set."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        with patch("session_preflight._make_reader") as mock_make:
+            _preflight._prime_reader_url("unavailable")
+        mock_make.assert_not_called()
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+    def test_skips_if_already_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If DUCKLAKE_READER_URL is already set, the existing value is preserved."""
+        monkeypatch.setenv("DUCKLAKE_READER_URL", "https://original.url")
+        with patch("session_preflight._make_reader") as mock_make:
+            _preflight._prime_reader_url("ok")
+        mock_make.assert_not_called()
+        assert os.environ["DUCKLAKE_READER_URL"] == "https://original.url"
+
+    def test_priming_failure_is_nonfatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If URL resolution raises, _prime_reader_url does not propagate; env var is not set."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        mock_reader = MagicMock()
+        mock_reader._reader_url.side_effect = RuntimeError("SSM unavailable")
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")  # must not raise
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+    def test_non_string_url_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _reader_url() returns a non-string (e.g. MagicMock), the env var is not polluted."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        mock_reader = MagicMock()
+        mock_reader._reader_url.return_value = MagicMock()  # not a string
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+
+class TestVerbDedup:
+    """open_recs and decisions_max_updated are each queried at most once per main() run."""
+
+    @staticmethod
+    def _make_counting_reader(verb_calls: dict[str, int]) -> MagicMock:
+        """Return a reader stub that counts named() calls per verb."""
+        reader = MagicMock()
+
+        def _named(verb: str, **kwargs: object) -> list:
+            verb_calls[verb] = verb_calls.get(verb, 0) + 1
+            return []
+
+        reader.named.side_effect = _named
+        return reader
+
+    def _run_main_with_counting_reader(self, tmp_path: Path, verb_calls: dict[str, int]) -> None:
+        counting_reader = self._make_counting_reader(verb_calls)
+        preflight_report = tmp_path / ".preflight-report.json"
+        with (
+            patch("session_preflight._make_reader", return_value=counting_reader),
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            # Patch subprocess users by name so the verb-count assertions are not perturbed
+            # by real git calls (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+    def test_open_recs_called_once(self, tmp_path: Path) -> None:
+        """open_recs verb is queried exactly once even though read_context_files also needs the count."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        count = verb_calls.get("open_recs", 0)
+        assert count == 1, f"open_recs called {count} times; expected exactly 1 (dedup via open_recs_count param)"
+
+    def test_decisions_max_updated_called_once(self, tmp_path: Path) -> None:
+        """decisions_max_updated verb is queried once even though both roadmap calls need the timestamp."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        count = verb_calls.get("decisions_max_updated", 0)
+        assert count == 1, f"decisions_max_updated called {count} times; expected exactly 1 (dedup via latest_decision_ts)"
+
+
+class TestErrorPropagation:
+    """Worker thread exceptions and SystemExit propagate to the main thread via future.result()."""
+
+    def test_worker_sysexit_propagates(self, tmp_path: Path) -> None:
+        """sys.exit(1) from read_priority_queue (verb failure, creds ok) re-raises in main thread."""
+        preflight_report = tmp_path / ".preflight-report.json"
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight.read_priority_queue", side_effect=SystemExit(1)),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 1.5",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            with pytest.raises(SystemExit):
+                _preflight.main()
 
 
 class TestGetRecentMainCommits:
