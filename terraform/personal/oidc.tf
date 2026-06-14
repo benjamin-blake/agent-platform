@@ -91,6 +91,22 @@ resource "aws_iam_role_policy" "github_ci_branch" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
       },
       {
+        # CD.35 / T2.20 single-writer enforcement: the convergence record is written ONLY by the
+        # apply identity (github_ci_apply). This branch role (ci-rca, agent/* CI) MUST be able to
+        # READ the record (ci-rca anchors its refusal dedup on the red record's commit) but must NOT
+        # write or delete it -- an explicit Deny makes the "apply-identity-alone writes the record"
+        # integrity claim true at the IAM layer (explicit Deny overrides the bucket-wide S3ReadWrite
+        # Allow above; GetObject is untouched). Full privilege-tiering lands at Wave 4 (bootstrap
+        # root); this Deny is the Wave-1 enforcement among CI roles.
+        Sid    = "DenyConvergenceRecordWrite"
+        Effect = "Deny"
+        Action = [
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+      },
+      {
         Sid    = "S3List"
         Effect = "Allow"
         Action = [
@@ -177,7 +193,16 @@ resource "aws_iam_role" "github_ci_pr" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/pull/*"
+            # A pull_request-triggered job presents sub = repo:OWNER/REPO:pull_request -- NOT
+            # refs/pull/* (that is the `ref` claim, not `sub`). The advisory terraform-converged
+            # status job (terraform-apply-sandbox.yml, pull_request) assumes this read-only role, so
+            # the pull_request sub MUST be trusted. refs/pull/* is retained for any ref-scoped or
+            # customized-sub consumer. This role stays read-only (athena/iceberg/convergence reads,
+            # no tfstate, no writes), so trusting the PR sub does not widen blast radius.
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${local.github_repo}:pull_request",
+              "repo:${local.github_repo}:ref:refs/pull/*"
+            ]
           }
         }
       }
@@ -225,6 +250,17 @@ resource "aws_iam_role_policy" "github_ci_pr" {
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = ["${aws_s3_bucket.data_lake.arn}/iceberg/*"]
+      },
+      {
+        # CD.35 / T2.20 advisory terraform-converged PR status. The read-only PR role reads the
+        # convergence record at PR time to derive the advisory status. Granted on the record prefix
+        # ONLY (convergence/personal/*) -- NOT tfstate/: the "github_ci_pr cannot read tfstate"
+        # invariant must stay cleanly auditable, which is precisely why the record lives in its own
+        # prefix outside tfstate/. Read-only (GetObject); this role never writes the record.
+        Sid      = "S3ReadConvergenceRecord"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
       },
       {
         Sid    = "S3List"
@@ -340,6 +376,27 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "s3:DeleteObject"
         ]
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
+      },
+      {
+        # CD.35 / T2.20 convergence record (the server-side anti-masking anchor). Among the CI roles
+        # the apply identity is the ONLY writer of the durable convergence record -- the integrity
+        # anchor the design rests on (a commit status alone is spoofable). Enforced at the IAM layer:
+        # this grant + the explicit DenyConvergenceRecordWrite on github_ci_branch + the PR role's
+        # read-only S3ReadConvergenceRecord = apply-identity-alone writes among CI roles (full
+        # privilege-tiering, incl. removing the admin/breakglass write path, lands at Wave 4). The
+        # record lives in its OWN prefix (convergence/personal/*), OUTSIDE tfstate/, so the read-only
+        # PR role can be granted read on it without ever seeing tfstate. Scoped to the record prefix
+        # only -- no DeleteObject (the record is overwrite-only; clearing red is a green PutObject
+        # from the dispatch-ack path, not a delete). This statement is intentionally explicit so the
+        # write-identity invariant is auditable in one Sid. At Wave 5 the T2.24 drift identity joins
+        # this shared record-writer grant.
+        Sid    = "ConvergenceRecordWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
       },
       {
         # s3:GetBucketAcl + s3:GetBucketOwnershipControls are refresh-time reads the AWS provider
