@@ -424,7 +424,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "s3:GetBucketAcl",
           "s3:GetBucketOwnershipControls"
         ]
-        Resource = [aws_s3_bucket.data_lake.arn]
+        # refresh-time reads the provider issues on every plan for all managed aws_s3_bucket resources;
+        # do not prune as unused.
+        Resource = [
+          aws_s3_bucket.data_lake.arn,
+          aws_s3_bucket.ducklake_catalog_dr.arn,
+        ]
       },
       {
         # athena:ListTagsForResource is the canonical (provider 5.x) refresh-time tag-read on
@@ -550,6 +555,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = [
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
         ]
       },
       {
@@ -600,6 +609,80 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "secretsmanager:DescribeSecret"
         ]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
+      },
+      {
+        # logs:DescribeLogGroups has no resource-level scoping in IAM -- Resource: "*" is required.
+        # Refresh-time read the provider issues on every aws_cloudwatch_log_group plan; do not prune as unused.
+        Sid      = "CloudWatchLogsRead"
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups"]
+        Resource = ["*"]
+      },
+      {
+        # Refresh-time reads the provider issues on aws_lambda_layer_version + aws_lambda_function resources
+        # on every plan. GetLayerVersion covers the three ducklake layers; GetFunction et al. cover the four
+        # ducklake aws_lambda_function resources. Do not prune as unused -- apply does not exercise these
+        # but plan (and therefore CD) does. Mirrors the glue:GetTags / dynamodb:Describe* convention above.
+        Sid    = "LambdaRead"
+        Effect = "Allow"
+        Action = [
+          "lambda:GetLayerVersion",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetPolicy",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:ListVersionsByFunction",
+          "lambda:ListTags"
+        ]
+        # Literal ARNs (not resource references): a refresh-read grant should not create a
+        # Terraform dependency edge onto the resource it reads. Mirrors the IAMPlatformRolesRead
+        # literal-ARN convention.
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+        ]
+      },
+      {
+        # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
+        # All FIVE ducklake rules in state are covered (catalog-dr, maintenance-merge, maintenance-gc,
+        # maintenance-hot-merge, maintenance-merge-ops) to avoid iterative-discovery rounds.
+        # Do not prune as unused.
+        Sid    = "EventBridgeRead"
+        Effect = "Allow"
+        Action = [
+          "events:DescribeRule",
+          "events:ListTagsForResource",
+          "events:ListTargetsByRule"
+        ]
+        # Literal ARNs (not resource references): merge-ops is not yet in state, so a resource
+        # reference would force its creation; and a refresh-read grant should not depend on the
+        # lifecycle of the resource it reads. Mirrors the IAMPlatformRolesRead literal-ARN convention.
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+        ]
+      },
+      {
+        # Refresh-time reads the provider issues on aws_sns_topic every plan.
+        # Do not prune as unused.
+        Sid    = "SNSRead"
+        Effect = "Allow"
+        Action = [
+          "sns:GetTopicAttributes",
+          "sns:ListTagsForResource"
+        ]
+        Resource = [aws_sns_topic.alerts.arn]
       }
     ]
   })
