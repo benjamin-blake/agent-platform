@@ -9,16 +9,16 @@
 # parameter with no IAM/destroy/trust change passes the terraform_apply_guard.
 
 resource "aws_ssm_parameter" "ci_rca_strict_mode" {
-  name  = "/agent-platform/feature-flags/CI_RCA_STRICT_MODE"  # pragma: allowlist secret
+  name  = "/agent-platform/feature-flags/CI_RCA_STRICT_MODE" # pragma: allowlist secret
   type  = "String"
   value = try(yamldecode(file("${path.module}/../../config/feature_flags.yaml"))["CI_RCA_STRICT_MODE"], "warn")
 
   description = "CI-RCA schema enforcement mode (warn | strict). Source of truth: config/feature_flags.yaml."
 
   tags = {
-    Project     = "agent-platform"
-    Component   = "feature-flags"
-    ManagedBy   = "terraform"
-    TierItem    = "T1.13"
+    Project   = "agent-platform"
+    Component = "feature-flags"
+    ManagedBy = "terraform"
+    TierItem  = "T1.13"
   }
 }
