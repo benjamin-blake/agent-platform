@@ -104,14 +104,16 @@ infrastructure_dependencies:
     Function URL -- CC-web has no Neon 5432 egress, so a direct client connection cannot reach production.
     Decision 84/81 closed boundary; NOT Iceberg, NOT Athena. Data-preserving (905 live rows survive); NEVER DROP.
   - >-
-    Per-Lambda deploy gating (Decision 79 / CD.16): SIX active artifacts are affected by the full scope
-    (compute_affected_artifacts on field_semantics.yaml + ducklake_runtime.py + ducklake_maintenance/handler.py
-    + the docs/ROADMAP-PLATFORM.yaml data-pipeline asset). FOUR are provisioned DuckLake functions --
+    Per-Lambda deploy gating (Decision 79 / CD.16): FIVE active artifacts are affected by the full scope
+    (compute_affected_artifacts, verified post-rebase). FOUR are provisioned DuckLake functions --
     ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr -- and get real build + deploy
-    + smoke-test via build_lambda --deploy --ducklake-only. TWO -- data-pipeline and ops-compaction -- are NOT
-    provisioned in the personal account (UpdateFunctionCode -> ResourceNotFoundException); their function-code
-    deploy + smoke are VACUOUS and DEFERRED per the T1.15 / rec-2164 precedent (rebuilt + staged only, no
-    provisioned target). No deploy command is run for the two vacuous artifacts in this plan.
+    + smoke-test via build_lambda --deploy --ducklake-only. ONE -- data-pipeline -- is affected SOLELY because
+    it lists docs/ROADMAP-PLATFORM.yaml as a manifest asset; it is NOT provisioned in the personal account
+    (UpdateFunctionCode -> ResourceNotFoundException), so its function-code deploy + smoke are VACUOUS and
+    DEFERRED per the T1.15 / rec-2164 precedent (rebuilt + staged only). No deploy command is run for it here.
+    Mechanism: src/common/ducklake_runtime.py pulls in the four DuckLake functions; the maintenance handler.py
+    edit pulls in ONLY ducklake_maintenance (data-pipeline + ops-compaction excludes: the DuckLake runtime files
+    for the 262 MB ceiling); ops-compaction is NOT affected (it does not list the ROADMAP asset).
 acceptance_criteria:
   - CI_RCA_STRICT_MODE exists in config/feature_flags.yaml defaulting to warn; get_ci_rca_strict_mode() returns 'warn' and rejects values outside {warn, strict}.
   - get_rec_write_guidance('ci_rca') returns the structured context schema surfacing proximate_cause, why_chain, detection_gap, recurrence_class, corrective_action, preventive_action (Decision 66).
@@ -119,7 +121,7 @@ acceptance_criteria:
   - file_rec(source=ci_rca, context_v2_json=<deficient why_chain>) in warn mode logs a structured deficiency warning and does NOT raise; the rec is still filed.
   - file_rec(source=ci_rca) with only legacy free-text context (no context_v2_json) passes with a deprecation warning; no rejection.
   - context_v2_json column is present and nullable on ops_recommendations_history and _current; the legacy context column is preserved and still readable.
-  - The four provisioned DuckLake Lambda artifacts (writer, reader, maintenance, catalog_dr) rebuilt, deployed, and smoke-tested green (ops-read-your-write roundtrips at production scope); the two affected-but-unprovisioned artifacts (data-pipeline, ops-compaction) are rebuilt + staged with VACUOUS deploy per rec-2164.
+  - The four provisioned DuckLake Lambda artifacts (writer, reader, maintenance, catalog_dr) rebuilt, deployed, and smoke-tested green (ops-read-your-write roundtrips at production scope); the one affected-but-unprovisioned artifact (data-pipeline, pulled in via the ROADMAP asset) is rebuilt + staged with VACUOUS deploy per rec-2164.
   - docs/INTENT-ci-rca-methodology.md carries the DuckLake stale-pointer annotation + Phase-1 deferral note; docs/ROADMAP-PLATFORM.yaml T1.13 progress_note updated.
 verification_plan:
   - step: 1
@@ -143,7 +145,7 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: Warn-mode validation unit tests exercise the real file_rec code path (mocked writer).
-    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -k ci_rca -q
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaSchemaEnforcement -q
     expected: All selected tests pass -- valid context_v2_json validates; deficient why_chain warns and does NOT raise; legacy free-text passes with deprecation warning; flag default warn.
     fix_if: A warn-mode test raises -- validation is hard-rejecting in warn (must only warn); failures mean field bounds or terminus check wrong.
   - step: 5
@@ -160,10 +162,10 @@ verification_plan:
     fix_if: AssertionError -- the SSM param for the flag is not defined, or the file landed at the wrong (non-personal) path.
   - step: 7
     phase: post-deploy
-    action: Build + stage all affected artifacts, then deploy the four provisioned DuckLake functions (data-pipeline + ops-compaction stage-only / vacuous per rec-2164).
+    action: Build + stage all affected artifacts, then deploy the four provisioned DuckLake functions (data-pipeline is stage-only / vacuous per rec-2164).
     command: bin/venv-python -m scripts.build_lambda --profile agent_platform && bin/venv-python -m scripts.build_lambda --deploy --ducklake-only --profile agent_platform
-    expected: all affected artifacts built + uploaded to S3; writer, reader, maintenance, catalog-dr function code updated; exit 0. data-pipeline/ops-compaction have no provisioned function, so their code-deploy is intentionally not attempted.
-    fix_if: build/upload error -- check S3 bucket + creds; a DuckLake function-deploy error -- check function names; a ResourceNotFoundException for data-pipeline/ops-compaction is the EXPECTED vacuous outcome (rec-2164), not a failure.
+    expected: all affected artifacts built + uploaded to S3; writer, reader, maintenance, catalog-dr function code updated; exit 0. data-pipeline has no provisioned function, so its code-deploy is intentionally not attempted.
+    fix_if: build/upload error -- check S3 bucket + creds; a DuckLake function-deploy error -- check function names; a ResourceNotFoundException for data-pipeline is the EXPECTED vacuous outcome (rec-2164), not a failure.
   - step: 8
     phase: post-deploy
     action: Run the non-destructive column migration SERVER-SIDE (maintenance Lambda action against production ducklake_ops) and assert the new column is present on BOTH the history and current tables.
@@ -179,7 +181,7 @@ verification_plan:
   - step: 10
     phase: post-deploy
     action: End-to-end roundtrip of a real context_v2_json value through the production closed boundary (self-cleaning, Decision 70).
-    command: RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_ops_data_portal.py -k ci_rca_context_v2_roundtrip_live -q
+    command: RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaSchemaEnforcement::test_context_v2_roundtrip_live -q
     expected: Test passes -- files a test ci_rca rec with a valid context_v2_json, reads it back via the reader asserting context_v2_json persisted AND the legacy context summary present, then closes the rec via update_rec.
     fix_if: context_v2_json is None on read -- writer projection or the step-8 migration did not land; rec not closeable -- update_rec lifecycle path broken.
   - step: 11
@@ -218,9 +220,10 @@ constraints:
     terraform/personal/ only (Decision 77): the flag tf must land under terraform/personal/ so
     push-to-main auto-applies behind terraform_apply_guard.py. No IAM/destroy/trust changes.
   - >-
-    Per-Lambda deploy gating (Decision 79 / CD.16): SIX active artifacts are affected -- the four provisioned
-    DuckLake functions get real build + deploy + smoke-test (--ducklake-only); data-pipeline + ops-compaction
-    are unprovisioned (rec-2164) and get a VACUOUS/deferred deploy (rebuilt + staged only, no deploy command).
+    Per-Lambda deploy gating (Decision 79 / CD.16): FIVE active artifacts are affected -- the four provisioned
+    DuckLake functions get real build + deploy + smoke-test (--ducklake-only); data-pipeline (affected only via
+    the docs/ROADMAP-PLATFORM.yaml asset) is unprovisioned (rec-2164) and gets a VACUOUS/deferred deploy (rebuilt
+    + staged only, no deploy command). ops-compaction is NOT affected.
   - No rescue agents or workaround loops (Decision 55). On unrecoverable V3 failure, stop and RCA.
   - IMPLEMENTATION type only (CD.17 / Decision 67 STRATEGIC-plan freeze).
 context:
@@ -255,12 +258,13 @@ context:
     enforcement. DEFERRAL RATIONALE: per explicit human direction (2026-06-15 planning session), rec-2213 is
     owned by another in-flight agent and is excluded from this scope.
   - >-
-    Affected active Lambda artifacts (compute_affected_artifacts over the full scope -- field_semantics.yaml,
-    ducklake_runtime.py, ducklake_maintenance/handler.py, and the docs/ROADMAP-PLATFORM.yaml data-pipeline
-    asset): SIX -- ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (provisioned;
-    real deploy) + data-pipeline, ops-compaction (unprovisioned per rec-2164; vacuous deploy). catalog_dr is
-    pulled in via ducklake_runtime.py; data-pipeline/ops-compaction via the maintenance handler edit and the
-    ROADMAP data-pipeline asset entry.
+    Affected active Lambda artifacts (compute_affected_artifacts over the full scope, verified post-rebase):
+    FIVE -- ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (provisioned; real
+    deploy) + data-pipeline (unprovisioned per rec-2164; vacuous deploy). Mechanism: ducklake_runtime.py pulls
+    in the four DuckLake functions; the maintenance handler.py edit pulls in ONLY ducklake_maintenance;
+    data-pipeline is affected SOLELY because it lists docs/ROADMAP-PLATFORM.yaml as a manifest asset.
+    ops-compaction is NOT affected (data-pipeline + ops-compaction excludes: the DuckLake runtime files for the
+    262 MB ceiling, and ops-compaction does not list the ROADMAP asset).
   - >-
     The flag reader mirrors the portal's existing module-level cached yaml.safe_load (scripts/ops_data_portal.py:288):
     read once at process start, no hot-reload, default warn when key/file absent.
@@ -278,7 +282,7 @@ pre_implementation_checklist:
   - DECISIONS.md adjudicated via the decision-scout gate (84/81/72/66/60/79/48/77/86/70/55 cited)
   - docs/INTENT-ci-rca-methodology.md read in full (the methodology contract)
   - All nine files in scope located and readable
-  - compute_affected_artifacts run; six affected active artifacts confirmed (four provisioned DuckLake + data-pipeline/ops-compaction vacuous per rec-2164)
+  - compute_affected_artifacts run; five affected active artifacts confirmed (four provisioned DuckLake + data-pipeline vacuous per rec-2164; ops-compaction NOT affected)
   - AWS profile agent_platform reachable (aws sts get-caller-identity) for portal writes and Lambda deploy
   - Acceptance criteria understood and verifiable
 execution_steps:
@@ -341,12 +345,12 @@ execution_steps:
     value is sourced from config/feature_flags.yaml via try()-wrapped file()+yamldecode (AGENTS.md optional-artifact
     rule) so the YAML stays canonical. No IAM/destroy/trust changes (the fail-closed apply guard must PASS).
   - >-
-    Add/extend tests in tests/test_ops_data_portal.py: unit tests (-k ci_rca) for valid context_v2_json,
-    deficient why_chain (warns, does not raise), legacy free-text (deprecation warning, passes), flag default,
-    and guidance schema; a reconcile_table_columns re-run-safety test (second call against a temp/in-memory
-    DuckDB table is a no-op, asserting introspection-based idempotency); plus one env-gated live roundtrip test
-    (-k ci_rca_context_v2_roundtrip_live, skipped unless RUN_LIVE_DUCKLAKE=1) that files -> reads via reader ->
-    asserts persisted -> closes via update_rec.
+    Add tests in tests/test_ops_data_portal.py under a TestCiRcaSchemaEnforcement class (stable class-path
+    selector, avoiding brittle -k per tests/CLAUDE.md): valid context_v2_json; deficient why_chain (warns, does
+    not raise); legacy free-text (deprecation warning, passes); flag default; guidance schema; a
+    reconcile_table_columns re-run-safety test (second call against a temp/in-memory DuckDB table is a no-op,
+    asserting introspection-based idempotency); plus one env-gated test_context_v2_roundtrip_live (skipped unless
+    RUN_LIVE_DUCKLAKE=1) that files -> reads via reader -> asserts persisted -> closes via update_rec.
   - >-
     Annotate docs/INTENT-ci-rca-methodology.md (stale-pointer only, Decision 86): mark Sections 1/3/7
     Iceberg-ALTER / Athena-_current / Athena-telemetry wording as superseded by the DuckLake closed boundary
