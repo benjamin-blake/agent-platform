@@ -106,6 +106,21 @@ class DataQualityVerifier(Verifier):
                 message=f"Data quality passed: {result.passed} passed, {result.warned} warned.",
             )
 
+        if result.verdict == "DEGRADED":
+            unavail = [r for r in result.results if r.verdict == "UNAVAILABLE"]
+            names = [
+                f"{r.check.table}{('.' + r.check.column) if r.check.column else ''} [{r.check.test_type}]"
+                for r in unavail[:10]
+            ]
+            return VerifierResult(
+                name=self.name,
+                status=VerifierStatus.SKIPPED,
+                message=(
+                    f"DQ degraded -- backend unavailable, gate not run. "
+                    f"Unavailable checks ({len(unavail)}): {', '.join(names)}"
+                ),
+            )
+
         _FAIL_VERDICTS = {"FAIL", "UNENFORCED_FAIL", "ERROR", "HARD_GATE"}
         failing = [r for r in result.results if r.verdict in _FAIL_VERDICTS]
         lines = []
