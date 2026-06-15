@@ -56,7 +56,10 @@ scope:
       semantic error -> False); _execute_check_ducklake returns UNAVAILABLE on a transient _invoke
       raise and ERROR on a structured-500/semantic raise; run_checks aggregates DEGRADED when the
       only non-PASS results are UNAVAILABLE; main() exits 0 on DEGRADED and 1 on real FAIL; a mixed
-      unavailable+violation run aggregates to FAIL.
+      unavailable+violation run aggregates to FAIL. ALSO migrate the existing reader.query()-based
+      ducklake fakes (test_execute_check_ducklake_success, test_execute_check_ducklake_reader_none_is_error,
+      test_run_checks_routes_ducklake) to the _invoke surface so they exercise the real call path
+      rather than passing for the wrong reason.
   - file: tests/test_verifiers/test_data_quality.py
     action: Modify
     purpose: >-
@@ -190,6 +193,12 @@ constraints:
     Genuine FAIL/HARD_GATE must still flow to ci-rca on the full tier -- DEGRADED must not suppress
     the forward-fix path for real failures (Decision 73).
   - The Athena execution path (_execute_check) is left unchanged; its ERROR->FAIL behaviour is preserved.
+  - >-
+    Accepted layering compromise: the runner reads via reader._invoke (a by-convention-internal method
+    on the out-of-scope DuckLakeReader). Flag at code-review. The trade is deliberate -- the alternative
+    (editing iceberg_reader.py to add a public raising query) escalates to V3 + per-Lambda deploy
+    (Decision 79). If the reader ever renames _invoke or changes the query_ops payload shape, the
+    faithful VP step-1 mocks + step-5 live run are the guard.
   - No rescue agents or workaround loops (Decision 55). No emojis; ASCII hyphens; ruff line length 127; type hints required.
   - >-
     Acceptance/VP commands: no `pytest -k` selectors and no `python -c` one-liners (tests/CLAUDE.md);
@@ -307,7 +316,9 @@ execution_steps:
     production) -- _is_reader_unavailable (conn/timeout and `failed (HTTP 502)` no-error_type True;
     `failed (HTTP 500)` with error_type, HTTP 4xx, semantic False); _execute_check_ducklake UNAVAILABLE
     vs ERROR; run_checks DEGRADED aggregate when only UNAVAILABLE; main() exit 0 on DEGRADED; main()
-    exit 1 on real FAIL; mixed unavailable+violation -> FAIL. Use file::Class invocation, no -k, no python -c.
+    exit 1 on real FAIL; mixed unavailable+violation -> FAIL. ALSO migrate the existing .query()-based
+    ducklake fakes (test_execute_check_ducklake_success, test_execute_check_ducklake_reader_none_is_error,
+    test_run_checks_routes_ducklake) to the _invoke surface. Use file::Class invocation, no -k, no python -c.
   - >-
     tests/test_verifiers/test_data_quality.py: extend _run_result to carry an unavailable count and
     accept the DEGRADED verdict; add a test that a DEGRADED result -> VerifierStatus.SKIPPED with the
