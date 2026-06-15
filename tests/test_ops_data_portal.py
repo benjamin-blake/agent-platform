@@ -9,11 +9,17 @@ the DuckLake reader's named-verb surface.
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import duckdb
 import pytest
 from pydantic import ValidationError
+
+from src.common import ducklake_runtime as rt
+from src.common.ducklake_scd2_schema import load_field_semantics, resolve_table_spec
 
 # ---------------------------------------------------------------------------
 # Minimal valid rec fields (all required Recommendation fields)
@@ -1455,6 +1461,240 @@ class TestSelftests:
         monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
         with pytest.raises(RuntimeError, match="read-back"):
             p.selftest_roundtrip()
+
+
+_CI_RCA_FIELDS = {
+    **_VALID_FIELDS,
+    "source": "ci_rca",
+    "context": ("CI RCA test rec with sufficient length to satisfy the 80-char minimum for the legacy context column field."),
+}
+
+_VALID_CONTEXT_V2 = {
+    "schema_version": 1,
+    "proximate_cause": (
+        "validate_sloc_limits() raised: scripts/product_roadmap.py is 810 SLOC, exceeds 500 limit "
+        "(Decision 43, no complexity-waiver header found in first 10 lines)."
+    ),
+    "why_chain": [
+        "The file was committed at over 500 SLOC in a single PR with no incremental breakpoint.",
+        "No local --pre check fired because validate_sloc_limits() is presubmit-tier only.",
+        "The validate_sloc_limits() check was placed in the presubmit tier not --pre despite being O(lines); "
+        "this tier placement defect is the gap at scripts/validate.py:2294.",
+    ],
+    "detection_gap": {
+        "earliest_viable_gate": "pre",
+        "actual_gate_that_caught_it": "CI",
+        "gap_explanation": (
+            "validate_sloc_limits() gates on scope=='all' at scripts/validate.py:2294, unreachable from "
+            "--pre (exits at scripts/validate.py:2284). Gap is tier-placement, not logic."
+        ),
+    },
+    "recurrence_class": "instance_of_known_pattern",
+    "corrective_action": (
+        "Add a complexity-waiver header OR refactor the module below 500 SLOC to satisfy the "
+        "validate_sloc_limits() check in scripts/validate.py and unblock CI."
+    ),
+    "preventive_action": (
+        "Promote validate_sloc_limits() to the --pre tier at scripts/validate.py so the check fires "
+        "during local development and prevents the same tier-placement failure mode in future PRs. "
+        "Additionally gate new check additions: require a documented tier-placement rationale."
+    ),
+}
+
+
+class TestCiRcaSchemaEnforcement:
+    """Tests for the CI_RCA_STRICT_MODE feature flag, CiRcaContext schema, and file_rec warn-mode validation."""
+
+    def setup_method(self) -> None:
+        import scripts.ops_data_portal as p
+
+        p._ci_rca_strict_mode_cache = None  # reset the module-level cache before each test
+
+    def test_flag_default_is_warn(self, tmp_path: Path) -> None:
+        """get_ci_rca_strict_mode() returns 'warn' when the key is absent or file is missing."""
+        import scripts.ops_data_portal as p
+
+        with patch.object(p, "_FEATURE_FLAGS_YAML", tmp_path / "nonexistent.yaml"):
+            result = p.get_ci_rca_strict_mode()
+        assert result == "warn"
+
+    def test_flag_reads_yaml(self, tmp_path: Path) -> None:
+        """get_ci_rca_strict_mode() reads CI_RCA_STRICT_MODE from the feature flags YAML."""
+        import scripts.ops_data_portal as p
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: warn\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            result = p.get_ci_rca_strict_mode()
+        assert result == "warn"
+
+    def test_flag_rejects_unknown_value(self, tmp_path: Path) -> None:
+        """get_ci_rca_strict_mode() raises ValueError for unrecognised flag values."""
+        import scripts.ops_data_portal as p
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: debug\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_STRICT_MODE"):
+                p.get_ci_rca_strict_mode()
+
+    def test_guidance_returns_schema(self) -> None:
+        """get_rec_write_guidance('ci_rca') returns all six CiRcaContext schema fields."""
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+
+        guidance = get_rec_write_guidance(source="ci_rca")
+        assert "context_v2_json" in guidance
+        schema_fields = guidance["context_v2_json"]["schema_fields"]
+        for field in [
+            "proximate_cause",
+            "why_chain",
+            "detection_gap",
+            "recurrence_class",
+            "corrective_action",
+            "preventive_action",
+        ]:
+            assert field in schema_fields, f"schema_fields missing {field!r}"
+
+    def test_valid_context_v2_passes(self, tmp_path: Path) -> None:
+        """file_rec(source=ci_rca, context_v2_json=<valid>) succeeds and persists context_v2_json."""
+        import scripts.ops_data_portal as p
+
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9001"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=_VALID_CONTEXT_V2)
+        assert rec_id == "rec-9001"
+        entry = json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
+        assert "context_v2_json" in entry
+        stored = json.loads(entry["context_v2_json"])
+        assert stored["schema_version"] == 1
+
+    def test_deficient_why_chain_warns_not_raises(self, tmp_path: Path, caplog) -> None:
+        """In warn mode a deficient why_chain logs a warning and does NOT raise."""
+        import scripts.ops_data_portal as p
+
+        recs_file = tmp_path / "recs.jsonl"
+        deficient_ctx = {**_VALID_CONTEXT_V2, "why_chain": ["short", "also short", "still short"]}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: warn\n", encoding="utf-8")
+        with (
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9002"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=deficient_ctx)
+        assert rec_id == "rec-9002"
+        assert any("CI_RCA_STRICT_MODE=warn" in r.message for r in caplog.records)
+
+    def test_legacy_free_text_passes_with_deprecation_warning(self, tmp_path: Path, caplog) -> None:
+        """file_rec(source=ci_rca) with no context_v2_json logs a deprecation warning and passes."""
+        import scripts.ops_data_portal as p
+
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9003"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS))
+        assert rec_id == "rec-9003"
+        assert any("legacy free-text" in r.message for r in caplog.records)
+
+    def test_strict_mode_raises_on_deficiency(self, tmp_path: Path) -> None:
+        """In strict mode a deficient why_chain raises ValueError (branch exists but inert by default)."""
+        import scripts.ops_data_portal as p
+
+        deficient_ctx = {**_VALID_CONTEXT_V2, "why_chain": ["short", "also short", "still short"]}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_STRICT_MODE=strict"):
+                p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=deficient_ctx)
+
+    def test_reconcile_table_columns_rerun_safety(self) -> None:
+        """reconcile_table_columns on a table that already has context_v2_json is a no-op.
+
+        Uses real duckdb in-memory tables with CATALOG_ALIAS patched to 'memory' so that
+        information_schema queries and ALTER TABLE work without a DuckLake catalog.
+        Proves introspection-based idempotency: a second call adds nothing.
+        """
+        semantics = load_field_semantics()
+        spec = resolve_table_spec("ops_recommendations", semantics)
+
+        con = duckdb.connect(":memory:")
+
+        # Create both tables with all spec columns (including context_v2_json) up front.
+        # Note: BIGINT[] and VARCHAR[] must be written as DuckDB array types.
+        def _safe_ddl_type(sql_type: str) -> str:
+            return sql_type.replace("TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ")
+
+        cols_ddl = ", ".join(f"{col} {_safe_ddl_type(spec.fields[col].get('sql_type', 'VARCHAR'))}" for col in spec.fields)
+        con.execute(f"CREATE TABLE ops_recommendations_history ({cols_ddl})")
+        con.execute(f"CREATE TABLE ops_recommendations_current ({cols_ddl})")
+
+        # Patch CATALOG_ALIAS to 'memory' so reconcile_table_columns resolves table_fq
+        # as 'memory.ops_recommendations_*' -- valid in a plain DuckDB in-memory connection.
+        with patch("src.common.ducklake_runtime.CATALOG_ALIAS", "memory"):
+            result1 = rt.reconcile_table_columns(con, table="ops_recommendations")
+            result2 = rt.reconcile_table_columns(con, table="ops_recommendations")
+
+        # First call: context_v2_json is already present -- nothing to add.
+        assert result1["added_history"] == []
+        assert result1["added_current"] == []
+        # Second call: idempotent no-op.
+        assert result2["added_history"] == []
+        assert result2["added_current"] == []
+        con.close()
+
+    @pytest.mark.integration
+    @pytest.mark.enable_socket()
+    def test_context_v2_roundtrip_live(self) -> None:
+        """Live roundtrip: file a ci_rca rec with context_v2_json, read back, assert persisted, close.
+
+        Skipped unless RUN_LIVE_DUCKLAKE=1 (requires portal connectivity + production DuckLake).
+        """
+        if not os.environ.get("RUN_LIVE_DUCKLAKE"):
+            pytest.skip("set RUN_LIVE_DUCKLAKE=1 to run live DuckLake roundtrip")
+
+        import scripts.ops_data_portal as p
+
+        live_fields = {
+            **_CI_RCA_FIELDS,
+            "title": "test_context_v2_roundtrip_live (T1.13 VP10)",
+            "context": (
+                "Live roundtrip test for context_v2_json persistence filed by TestCiRcaSchemaEnforcement. "
+                "This rec will be immediately closed via update_rec (self-cleaning, Decision 70)."
+            ),
+        }
+        rec_id = p.file_rec(live_fields, context_v2_json=_VALID_CONTEXT_V2)
+        assert rec_id.startswith("rec-"), f"Expected rec-NNN, got {rec_id!r}"
+
+        # Read back via reader and assert context_v2_json was persisted.
+        row = p._fetch_rec_from_reader(rec_id)
+        assert row is not None, f"{rec_id} not found after filing"
+        ctx_v2 = row.get("context_v2_json")
+        assert ctx_v2 is not None, f"context_v2_json not persisted for {rec_id}: {row}"
+        if isinstance(ctx_v2, str):
+            ctx_v2 = json.loads(ctx_v2)
+        assert ctx_v2.get("schema_version") == 1
+        legacy_ctx = row.get("context", "")
+        assert len((legacy_ctx or "").strip()) >= 80, f"legacy context too short: {legacy_ctx!r}"
+
+        # Close the test rec (self-cleaning, Decision 70).
+        closed = p.update_rec(
+            rec_id,
+            {
+                "status": "closed",
+                "resolution": "test_context_v2_roundtrip_live self-cleaning close (T1.13 VP10)",
+            },
+        )
+        assert closed is True, f"update_rec failed for {rec_id}"
 
 
 class TestClosedBoundaryNoAthenaFallback:

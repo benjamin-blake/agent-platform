@@ -213,18 +213,23 @@ def _column_ddl(spec: ScdTableSpec) -> str:
 def _build_merge_history_sql(spec: ScdTableSpec) -> str:
     cols = [c for c, _ in spec.ordered_columns]
     select = ", ".join(f"? AS {c}" for c in cols)
+    col_list = ", ".join(cols)
     values = ", ".join(f"s.{c}" for c in cols)
+    # Explicit INSERT (col_list) so the mapping is by name, not by physical position.
+    # This makes MERGE safe across schema migrations that add columns via ALTER TABLE ADD COLUMN
+    # (which appends at the physical end regardless of the spec's logical order).
     return (
         f"MERGE INTO {CATALOG_ALIAS}.{spec.history_table} AS t "
         f"USING (SELECT {select}) AS s "
         "ON t.ulid = s.ulid "
-        f"WHEN NOT MATCHED THEN INSERT VALUES ({values})"
+        f"WHEN NOT MATCHED THEN INSERT ({col_list}) VALUES ({values})"
     )
 
 
 def _build_merge_current_sql(spec: ScdTableSpec) -> str:
     cols = [c for c, _ in spec.ordered_columns]
     select = ", ".join(f"? AS {c}" for c in cols)
+    col_list = ", ".join(cols)
     values = ", ".join(f"s.{c}" for c in cols)
     # created_timestamp is carried (never re-stamped on update); the merge key is the ON predicate.
     update_cols = [c for c in cols if c not in (spec.merge_key, "created_timestamp")]
@@ -234,7 +239,7 @@ def _build_merge_current_sql(spec: ScdTableSpec) -> str:
         f"USING (SELECT {select}) AS s "
         f"ON t.{spec.merge_key} = s.{spec.merge_key} "
         f"WHEN MATCHED THEN UPDATE SET {set_clause} "
-        f"WHEN NOT MATCHED THEN INSERT VALUES ({values})"
+        f"WHEN NOT MATCHED THEN INSERT ({col_list}) VALUES ({values})"
     )
 
 

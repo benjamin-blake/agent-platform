@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.acceptance_lint import lint_acceptance_command
@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SSO_PROFILE = "agent_platform"
+_FEATURE_FLAGS_YAML = _REPO_ROOT / "config" / "feature_flags.yaml"
+
+_ci_rca_strict_mode_cache: Optional[str] = None
 
 _AWS_REGION = "eu-west-2"
 
@@ -80,6 +83,116 @@ _DECISION_BACKFILL_COLS = ("title", "status", "problem", "decision_text", "conte
 _WRITER_TRANSIENT_STATUS = (502, 503, 504)
 _WRITER_MAX_ATTEMPTS = 3
 _WRITER_RETRY_BACKOFF_S = (2.0, 5.0)
+
+
+_CI_RCA_VALID_MODES = frozenset({"warn", "strict"})
+_WHY_CHAIN_SYSTEMIC_KEYWORDS = frozenset({
+    "gate", "tier", "policy", "contract", "gap", "missing",
+    "absent", "placement", "scope", "invariant", "enforcement",
+})
+_WHY_CHAIN_CITATION_RE = re.compile(r"[\w./-]+\.(py|yaml|tf|md|sh):\d+")
+
+
+def get_ci_rca_strict_mode() -> str:
+    """Return the CI_RCA_STRICT_MODE flag value ('warn' or 'strict').
+
+    Module-level cached read of config/feature_flags.yaml (no hot-reload).
+    Defaults to 'warn' when the key or file is absent. Raises ValueError for
+    unrecognised values so misconfiguration is loud (Decision 55).
+    """
+    global _ci_rca_strict_mode_cache
+    if _ci_rca_strict_mode_cache is not None:
+        return _ci_rca_strict_mode_cache
+    try:
+        data = yaml.safe_load(_FEATURE_FLAGS_YAML.read_text(encoding="utf-8")) or {}
+        value = data.get("CI_RCA_STRICT_MODE", "warn")
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        value = "warn"
+    if value not in _CI_RCA_VALID_MODES:
+        raise ValueError(
+            f"CI_RCA_STRICT_MODE={value!r} is not a valid mode; accepted: {sorted(_CI_RCA_VALID_MODES)}"
+        )
+    _ci_rca_strict_mode_cache = value
+    return value
+
+
+class _EvidenceBundleRef(BaseModel):
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    s3_uri: str = Field(pattern=r"^s3://")
+    upload_status: str
+
+
+class _DetectionGap(BaseModel):
+    earliest_viable_gate: str = Field(pattern=r"^(pre|presubmit|CI)$")
+    actual_gate_that_caught_it: str = Field(pattern=r"^(pre|presubmit|CI)$")
+    gap_explanation: str = Field(min_length=120, max_length=600)
+
+    @field_validator("gap_explanation")
+    @classmethod
+    def _gap_has_file_citation(cls, v: str) -> str:
+        if not _WHY_CHAIN_CITATION_RE.search(v):
+            raise ValueError("gap_explanation must contain a file:line citation (e.g. scripts/validate.py:284)")
+        return v
+
+
+class CiRcaContext(BaseModel):
+    """Structured context schema for source=ci_rca recommendations (INTENT Section 1).
+
+    Enforced in warn mode by file_rec() when CI_RCA_STRICT_MODE=warn; raises in strict mode.
+    Shape-only validation for prior_art_citation and evidence_bundle_ref (existence checks deferred
+    to PLAN-ci-rca-evidence-script Phase 2).
+    """
+
+    schema_version: int = Field(default=1, ge=1, le=1)
+    proximate_cause: str = Field(min_length=100, max_length=600)
+    why_chain: list[str] = Field(min_length=3, max_length=7)
+    why_chain_terminus_override: Optional[dict] = None
+    detection_gap: _DetectionGap
+    recurrence_class: str = Field(pattern=r"^(novel|instance_of_known_pattern|regression)$")
+    prior_art_citation: Optional[str] = None  # shape-only; existence check deferred (Phase 2)
+    corrective_action: str = Field(min_length=100, max_length=600)
+    preventive_action: str = Field(min_length=100, max_length=800)
+    evidence_bundle_ref: Optional[_EvidenceBundleRef] = None  # shape-only; S3 check deferred (Phase 2)
+
+    @field_validator("why_chain")
+    @classmethod
+    def _validate_why_chain_entries(cls, v: list[str]) -> list[str]:
+        for i, entry in enumerate(v):
+            if len(entry) < 40:
+                raise ValueError(f"why_chain[{i}] is too short ({len(entry)} chars; min 40)")
+            if len(entry) > 250:
+                raise ValueError(f"why_chain[{i}] is too long ({len(entry)} chars; max 250)")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_terminus(self) -> "CiRcaContext":
+        if self.why_chain_terminus_override:
+            return self
+        final = self.why_chain[-1] if self.why_chain else ""
+        lower = final.lower()
+        has_systemic = any(kw in lower for kw in _WHY_CHAIN_SYSTEMIC_KEYWORDS)
+        has_citation = bool(_WHY_CHAIN_CITATION_RE.search(final))
+        errors: list[str] = []
+        if not has_systemic:
+            errors.append(
+                f"why_chain final entry lacks a systemic keyword from {sorted(_WHY_CHAIN_SYSTEMIC_KEYWORDS)!r}"
+            )
+        if not has_citation:
+            errors.append("why_chain final entry lacks a file:line citation (e.g. scripts/validate.py:284)")
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+
+def _validate_ci_rca_context_v2(context_v2_json: dict) -> list[str]:
+    """Validate a context_v2_json dict against CiRcaContext. Returns a list of deficiency strings (empty = valid)."""
+    from pydantic import ValidationError as PydanticError  # noqa: PLC0415
+
+    try:
+        CiRcaContext.model_validate(context_v2_json)
+        return []
+    except PydanticError as exc:
+        return [str(e["msg"]) for e in exc.errors()]
 
 
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
@@ -431,6 +544,7 @@ def file_rec(
     _migration_int_id: Optional[int] = None,
     _skip_sync: bool = False,
     _migration_mode: bool = False,
+    context_v2_json: Optional[dict] = None,
 ) -> str:
     """File a new recommendation; the ducklake_writer allocates its ID atomically with the insert.
 
@@ -455,6 +569,11 @@ def file_rec(
             _load_write_time_validators loop) so historical rows that predate later
             content-rule tightening still import. validate_source and the
             Recommendation schema (model_validate) remain enforced. Migration-only.
+        context_v2_json: Optional structured CiRcaContext dict for source=ci_rca recs.
+            When provided: validated against CiRcaContext in warn mode (deficiencies log
+            a structured warning but do NOT raise); a >=80-char human summary is written
+            into the legacy context column. When absent with source=ci_rca: a deprecation
+            warning is logged and the rec is filed with legacy free-text context only.
 
     Returns:
         Allocated ID string ('rec-NNN'). Raises on failure (no offline mode).
@@ -470,6 +589,42 @@ def file_rec(
             "source='ci_rca' requires non-empty source_file (the file implicated by the failure diagnosis); "
             "see .claude/agents/scheduled/ci-rca.md"
         )
+
+    # context_v2_json warn-mode validation for source=ci_rca (CI_RCA_STRICT_MODE; INTENT Section 1).
+    # Must run before _validate_context_length so the human summary can satisfy the 80-char floor.
+    if fields.get("source") == "ci_rca":
+        if context_v2_json is not None:
+            deficiencies = _validate_ci_rca_context_v2(context_v2_json)
+            if deficiencies:
+                mode = get_ci_rca_strict_mode()
+                if mode == "strict":
+                    raise ValueError(
+                        f"[CI_RCA_STRICT_MODE=strict] context_v2_json failed validation: {'; '.join(deficiencies)}"
+                    )
+                logger.warning(
+                    "[CI_RCA_STRICT_MODE=warn] context_v2_json deficiencies (rec filed anyway): %s",
+                    "; ".join(deficiencies),
+                )
+            # Build a >=80-char human summary for the legacy context column from the structured schema.
+            parts = []
+            if context_v2_json.get("proximate_cause"):
+                parts.append(f"Proximate cause: {context_v2_json['proximate_cause'][:400]}")
+            if context_v2_json.get("corrective_action"):
+                parts.append(f"Corrective: {context_v2_json['corrective_action'][:200]}")
+            if context_v2_json.get("preventive_action"):
+                parts.append(f"Preventive: {context_v2_json['preventive_action'][:200]}")
+            summary = " | ".join(parts)
+            if len(summary) < 80:
+                summary = summary + " [ci_rca structured context -- see context_v2_json for full detail]"
+            if not fields.get("context"):
+                fields["context"] = summary
+            elif len(fields["context"].strip()) < 80:
+                fields["context"] = summary
+        elif not _migration_mode:
+            logger.warning(
+                "[PORTAL] source=ci_rca rec filed with legacy free-text context (no context_v2_json). "
+                "Migrate to context_v2_json per PLAN-ci-rca-schema-enforcement."
+            )
 
     _derive_computed_fields(fields)
 
@@ -487,6 +642,8 @@ def file_rec(
             raise ValueError(lint_msg)
 
     merged = dict(fields)
+    if context_v2_json is not None:
+        merged["context_v2_json"] = json.dumps(context_v2_json)
     merged.pop("id", None)
     merged.setdefault("date", date.today().isoformat())
 
