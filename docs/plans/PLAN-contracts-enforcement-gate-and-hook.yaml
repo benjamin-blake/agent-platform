@@ -26,10 +26,13 @@ scope:
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      Add validate_contract_drift(failed): Pass 1 validates every ritual contract under
-      docs/contracts/ via the existing contracts.load_all_contracts + resolve_refs (categories
-      1,3,4,5,8 already raise) plus check_required_inline_fields (category 2); Pass 2 resolves each
-      changed contract against the git merge-base and runs the diff-aware amendment-log and
+      Add validate_contract_drift(failed): Pass 1 iterates docs/contracts/*.yaml directly and, for
+      each candidate ritual contract, calls contracts.load_contract per file (catching
+      ContractValidationError and appending to failed) then resolve_refs -- it must NOT rely on
+      contracts.load_all_contracts, whose return dict silently swallows malformed YAML
+      (except (OSError, yaml.YAMLError): continue) and skips non-ritual/non-mapping files. This
+      surfaces categories 1,3,4,5,8; check_required_inline_fields adds category 2. Pass 2 resolves
+      each changed contract against the git merge-base and runs the diff-aware amendment-log and
       status-transition checks (categories 6,7). Register the gate in BOTH the --pre fast tier and
       the full-tier run_python_checks aggregator.
   - file: scripts/session_preflight.py
@@ -52,8 +55,11 @@ scope:
     purpose: >-
       End-to-end gate tests following the tests/test_validate_dq_drift.py pattern: build tmp_path
       fixture contract dirs and assert validate_contract_drift appends its failure label for each of
-      the six CD.25 categories, and appends nothing for a well-formed contract set and for a repo
-      with no ritual contracts (only a non-ritual doc like read-engine.yaml).
+      the eight enumerated rejection checks, and appends nothing for a well-formed contract set and for
+      a repo with no ritual contracts (only a parseable non-ritual doc like read-engine.yaml). The
+      category-1 fixture MUST be genuinely YAML-unparseable (e.g. an unclosed bracket) -- not merely
+      schema-invalid -- so it would be swallowed by load_all_contracts, proving the per-file load_contract
+      path actually surfaces it.
   - file: tests/test_session_preflight_contracts.py
     action: Create
     purpose: >-
@@ -71,7 +77,8 @@ acceptance_criteria:
     run_python_checks aggregator of scripts/validate.py (proven by tests asserting it runs in each
     path), satisfying T-1.12 exit criterion "CI drift gate runs at presubmit and full tiers".
   - >-
-    The gate rejects all six CD.25 enforcement-clause categories, each proven by a dedicated test:
+    The gate rejects all CD.25 enforcement-clause categories (six lettered groups in the enforcement clause,
+    restated as the eight finer-grained checks below in Part 9I), each proven by a dedicated test:
     (1) malformed YAML / Pydantic schema violation; (2) inline Class-A field missing
     description/semantics/populated_by/dq_intent; (3) $ref to a non-existent file or field;
     (4) $ref chain-depth > 1; (5) duplicate inline definition alongside a $ref; (6) a
@@ -79,8 +86,8 @@ acceptance_criteria:
     transition outside the Invariant-6 state machine and (8) an amendment_log change_class outside
     the closed vocabulary.
   - >-
-    Running the gate on the current repo (docs/contracts/ contains only the non-ritual read-engine.yaml,
-    which load_all_contracts skips) produces no failure: `bin/venv-python -m scripts.validate --pre`
+    Running the gate on the current repo (docs/contracts/ contains only read-engine.yaml, which parses but is
+    non-ritual -- no contract.class -- so the gate skips it) produces no failure: `bin/venv-python -m scripts.validate --pre`
     and `bin/venv-python -m scripts.validate` both pass.
   - >-
     scripts/session_preflight.py emits report["provisional_contracts_due"] (a list) on every run;
@@ -108,10 +115,10 @@ verification_plan:
     fix_if: A helper returns the wrong verdict or the safe parser accepts a malformed condition string -- fix the helper, do not loosen the test.
   - step: 2
     phase: pre-deploy
-    action: Exercise the full gate end-to-end against tmp_path fixture contract dirs for all six categories plus the clean and no-ritual-contracts cases.
+    action: Exercise the full gate end-to-end against tmp_path fixture contract dirs for all eight enumerated checks plus the clean and no-ritual-contracts cases. The category-1 fixture must be genuinely YAML-unparseable (carrying a ritual contract.class shape if it parsed) so it exercises the per-file load_contract path rather than the swallowing load_all_contracts path.
     command: bin/venv-python -m pytest tests/test_validate_contract_drift.py -q
-    expected: Each of the six categories causes validate_contract_drift to append its failure label; a well-formed contract set and an empty/non-ritual dir append nothing.
-    fix_if: A malformed-contract category is NOT rejected -- the corresponding pass is missing or mis-wired in validate_contract_drift.
+    expected: Each of the eight checks causes validate_contract_drift to append its failure label (including the genuinely-unparseable-YAML category-1 fixture); a well-formed contract set and an empty/non-ritual dir append nothing.
+    fix_if: A malformed-contract category is NOT rejected -- the corresponding pass is missing or mis-wired in validate_contract_drift; if the unparseable category-1 fixture passes silently, the gate is wrongly using load_all_contracts instead of per-file load_contract.
   - step: 3
     phase: pre-deploy
     action: Test the preflight hook's trigger evaluation in both directions with injected metrics.
@@ -163,25 +170,39 @@ context:
     hook -- the INTENT's original "T-1.12b" grouping. Subset (g) (implement/SKILL.md decomposition_hints
     inheritance) remains a separate not-yet-authored follow-on.
   - >-
-    The six rejection categories are specified in docs/INTENT-pre-codegen-contract-ratification.md
-    (enforcement clause ~line 762; Part 9I ~lines 1363-1372). Five of six already raise ContractValidationError
-    via contracts.load_all_contracts + resolve_refs and the contracts_schema Pydantic models (malformed YAML,
-    missing $ref target, chain-depth>1, duplicate-inline, out-of-vocab change_class). The genuinely new work is
-    the two diff-aware checks (category 6 description/semantics diff requires an amendment_log[] entry whose
-    change_class distinguishes prose_improvement from semantic_break; category 7 legal status transition) plus
-    the category-2 required-inline-field check, which the schema leaves optional because $ref fields omit those keys.
+    The rejection categories are specified in docs/INTENT-pre-codegen-contract-ratification.md
+    (enforcement clause ~line 762, six lettered groups; Part 9I ~lines 1363-1372, the same surface restated
+    as eight finer-grained checks -- acceptance criterion 2 uses the eight-item enumeration as the stronger
+    contract). Most structural categories already raise ContractValidationError when load_contract is called
+    PER FILE (malformed YAML / non-mapping, schema violation) and via resolve_refs (missing $ref target,
+    chain-depth>1, duplicate-inline); out-of-vocab change_class is rejected by the contracts_schema ChangeClass
+    enum at model construction. CRITICAL: contracts.load_all_contracts must NOT be used for failure detection --
+    it catches and swallows YAML/OSError and skips non-ritual files, so a malformed ritual contract would vanish
+    from its return dict rather than fail. The gate iterates files and calls load_contract per file instead. The
+    genuinely new work is the two diff-aware checks (category 6 description/semantics diff requires an
+    amendment_log[] entry whose change_class distinguishes prose_improvement from semantic_break; category 7 legal
+    status transition) plus the category-2 required-inline-field check, which the schema leaves optional because
+    $ref fields omit those keys.
   - >-
-    Gate execution model -- Pass 1 (structural) runs over ALL ritual contracts present so a malformed contract
-    is caught regardless of whether this branch touched it; Pass 2 (diff-aware, categories 6 and 7) runs only over
-    contracts changed vs `git merge-base origin/main HEAD`, because "a diff" and "a transition" require the prior
-    version. New contracts (absent on the base) skip Pass 2. If the merge-base cannot be resolved (offline), Pass 2
-    fails open with a warning while Pass 1 still runs. The base content arrives as a string from `git show` and must
-    be loadable without a temp file -- add a load-from-text path if contracts.py lacks one.
+    Gate execution model -- Pass 1 (structural) iterates docs/contracts/*.yaml directly: a *.yaml that fails
+    yaml.safe_load is a category-1 failure (an unparseable file in the contracts dir is a defect); a file that
+    parses but is NOT a ritual contract (no top-level `contract:` mapping with a `class:` field, e.g.
+    read-engine.yaml's `version:`) is skipped; a ritual contract is validated via load_contract (append any
+    ContractValidationError to failed) then resolve_refs. Pass 1 runs over ALL present ritual contracts so a
+    malformed contract is caught regardless of whether this branch touched it. Pass 2 (diff-aware, categories 6
+    and 7) runs only over contracts changed vs `git merge-base origin/main HEAD`, because "a diff" and "a
+    transition" require the prior version. New contracts (absent on the base) skip Pass 2; a contract DELETED on
+    the branch (present on base, absent on HEAD) also skips Pass 2 (no head doc to compare) -- naturally handled
+    by driving Pass 2 from changed-and-still-present files. If the merge-base cannot be resolved (offline), Pass 2
+    fails open with a warning while Pass 1 still runs. The base content arrives as a string from `git show`; it is
+    parsed and validated INSIDE scripts/contracts_enforcement.py via contracts_schema.ContractDocument.model_validate
+    (so scripts/contracts.py is NOT modified and stays out of scope); if the base fails to validate, Pass 2 skips
+    that file (fail-open -- the base already passed the gate when it merged).
   - >-
-    contracts.load_all_contracts only treats a *.yaml as a ritual contract when it has a top-level `contract:`
-    mapping carrying a `class:` field; docs/contracts/read-engine.yaml (top-level `version:`) is skipped. So the gate
-    is green on the current repo and begins enforcing the moment the first real Class A/B/C contract YAML lands.
-    Tests must therefore use tmp_path fixture contract dirs, not docs/contracts/.
+    Because the gate only fully validates ritual contracts and skips parseable non-ritual docs, it is green on the
+    current repo (docs/contracts/ holds only the non-ritual read-engine.yaml) and begins enforcing the moment the
+    first real Class A/B/C contract YAML lands. Tests must therefore use tmp_path fixture contract dirs, not
+    docs/contracts/.
   - >-
     re_ratification_trigger schema (INTENT Part 6B): contract.provisional_v0 is a dict carrying declared_at and
     re_ratification_trigger.first_of -- a list of condition strings of the form "production_invocations >= N" and
@@ -228,22 +249,27 @@ execution_steps:
     prose_improvement from semantic_break on any change); check_status_transition(base_doc, head_doc) (category 7,
     delegating to contracts.validate_status_transition only when the status actually changed); and
     evaluate_provisional_trigger(doc, metrics) plus a private safe parser for the first_of condition strings
-    (fixed LHS vocabulary + ">=" operator only; no eval/exec). Import-safe; reuse contracts_schema types.
+    (fixed LHS vocabulary + ">=" operator only; no eval/exec); and a small _load_contract_from_text(text) helper
+    (yaml.safe_load + contracts_schema.ContractDocument.model_validate) so the gate can load the git-show base
+    content without a temp file. Import-safe; reuse contracts_schema types. scripts/contracts.py is NOT modified.
   - >-
-    Add a load-from-text entry point if scripts/contracts.py cannot already validate a contract supplied as a
-    string (needed for the git-show base content); keep it minimal and covered by tests. Only touch contracts.py
-    if strictly required -- otherwise parse the base text inside contracts_enforcement / validate.
+    Add validate_contract_drift(failed) to scripts/validate.py. Pass 1: iterate docs/contracts/*.yaml directly --
+    yaml.safe_load each (an unparseable file is a category-1 failure), skip parseable non-ritual docs (no
+    contract.class), and for each ritual contract call contracts.load_contract (append ContractValidationError to
+    failed) then resolve_refs + check_required_inline_fields. Do NOT use contracts.load_all_contracts for failure
+    detection -- it swallows YAML/OSError and skips files. Pass 2: for contracts changed vs `git merge-base
+    origin/main HEAD`, load the base via `git show <base>:<path>` + _load_contract_from_text, then run
+    check_amendment_for_diff + check_status_transition; fail open on an unresolved base (Pass 1 still runs).
+    Register the gate in the --pre block (alongside the product-roadmap / plan-document / intent-doc-freeze checks)
+    AND in run_python_checks (full tier).
   - >-
-    Add validate_contract_drift(failed) to scripts/validate.py: Pass 1 over docs/contracts/ via
-    contracts.load_all_contracts + resolve_refs + check_required_inline_fields; Pass 2 over contracts changed vs
-    `git merge-base origin/main HEAD` via check_amendment_for_diff + check_status_transition, failing open on an
-    unresolved base. Register the gate in the --pre block (alongside the product-roadmap / plan-document / intent-doc-freeze
-    checks) AND in run_python_checks (full tier).
-  - >-
-    Modify scripts/session_preflight.py: add a scan that loads provisional_v0 contracts from docs/contracts/,
-    calls contracts_enforcement.evaluate_provisional_trigger with an injectable metrics provider (default returns None),
-    sets report["provisional_contracts_due"] = [...], and prints a "--- Provisional contracts due ---" section
-    matching the existing printed-section style; extend _format_preflight_summary only if a summary line is warranted.
+    Modify scripts/session_preflight.py: add a scan (a helper) that loads provisional_v0 contracts from
+    docs/contracts/ and calls contracts_enforcement.evaluate_provisional_trigger with an injectable metrics
+    provider (default returns None). Call the scan inside main() and insert its result into the literal
+    report = {...} dict assembled there; because it reads only local docs/contracts/ files (no warehouse reader,
+    no creds), it must NOT be threaded through the credential-gated Phase A/B ThreadPoolExecutor fan-out -- run it
+    inline. Print a "--- Provisional contracts due ---" section matching the existing printed-section style;
+    extend _format_preflight_summary only if a summary line is warranted.
   - >-
     Write tests/test_contracts_enforcement.py, tests/test_validate_contract_drift.py (tmp_path fixture contract dirs
     covering each of the six categories plus clean and no-ritual cases, following test_validate_dq_drift.py), and
