@@ -78,8 +78,12 @@ def _make_class_b_doc() -> ContractDocument:
     )
 
 
-def _amendment_entry() -> AmendmentLogEntry:
-    return AmendmentLogEntry(date="2026-01-01", semantic_break=False, change_class=ChangeClass.prose_improvement)
+def _amendment_entry(
+    *,
+    change_class: ChangeClass = ChangeClass.prose_improvement,
+    semantic_break: bool = False,
+) -> AmendmentLogEntry:
+    return AmendmentLogEntry(date="2026-01-01", semantic_break=semantic_break, change_class=change_class)
 
 
 class TestCheckRequiredInlineFields:
@@ -278,6 +282,63 @@ class TestCheckAmendmentForDiff:
                 dq_intent={},
             ),
         }
+        head = _make_class_a_doc(fields=head_fields)
+        assert check_amendment_for_diff(base, head) == []
+
+    def test_prose_improvement_with_semantic_break_is_mislabelled(self) -> None:
+        # prose_improvement (no meaning change) paired with semantic_break: true is inconsistent.
+        base = _make_class_a_doc(description="Old", amendment_log=[])
+        head = _make_class_a_doc(
+            description="New",
+            amendment_log=[_amendment_entry(change_class=ChangeClass.prose_improvement, semantic_break=True)],
+        )
+        errors = check_amendment_for_diff(base, head)
+        assert any("category 6" in e for e in errors)
+        assert any("semantic_break" in e for e in errors)
+
+    def test_nonprose_change_class_without_semantic_break_is_mislabelled(self) -> None:
+        # A non-prose change_class on a description diff must set semantic_break: true.
+        base = _make_class_a_doc(description="Old", amendment_log=[])
+        head = _make_class_a_doc(
+            description="New",
+            amendment_log=[_amendment_entry(change_class=ChangeClass.type_widen, semantic_break=False)],
+        )
+        errors = check_amendment_for_diff(base, head)
+        assert any("category 6" in e for e in errors)
+
+    def test_redefinition_with_semantic_break_passes(self) -> None:
+        # A genuine redefinition: any non-prose change_class with semantic_break: true is accepted.
+        base = _make_class_a_doc(description="Old", amendment_log=[])
+        head = _make_class_a_doc(
+            description="New",
+            amendment_log=[_amendment_entry(change_class=ChangeClass.type_widen, semantic_break=True)],
+        )
+        assert check_amendment_for_diff(base, head) == []
+
+    def test_field_semantics_change_with_prose_improvement_passes(self) -> None:
+        # Field-level prose_improvement + semantic_break: false is the valid non-break prose path.
+        base_fields = {
+            "f1": FieldSpec(
+                type="string",
+                nullable=False,
+                description="A field",
+                semantics="Old semantics",
+                populated_by="writer",
+                dq_intent={},
+            )
+        }
+        head_fields = {
+            "f1": FieldSpec(
+                type="string",
+                nullable=False,
+                description="A field",
+                semantics="New semantics",
+                populated_by="writer",
+                dq_intent={},
+                amendment_log=[_amendment_entry(change_class=ChangeClass.prose_improvement, semantic_break=False)],
+            )
+        }
+        base = _make_class_a_doc(fields=base_fields)
         head = _make_class_a_doc(fields=head_fields)
         assert check_amendment_for_diff(base, head) == []
 

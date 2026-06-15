@@ -21,7 +21,7 @@ import yaml
 from pydantic import ValidationError
 
 from scripts.contracts import ContractValidationError, validate_status_transition
-from scripts.contracts_schema import ContractClass, ContractDocument, ContractStatus
+from scripts.contracts_schema import ChangeClass, ContractClass, ContractDocument, ContractStatus
 
 _REQUIRED_INLINE_KEYS: tuple[str, ...] = ("description", "semantics", "populated_by", "dq_intent")
 
@@ -52,20 +52,24 @@ def check_required_inline_fields(doc: ContractDocument) -> list[str]:
 
 
 def check_amendment_for_diff(base_doc: ContractDocument, head_doc: ContractDocument) -> list[str]:
-    """Return error strings for description/semantics changes without a new amendment_log entry.
+    """Return error strings for description/semantics changes lacking a valid amendment entry.
 
-    Category 6: any change to contract.description or a field's description/semantics must
-    be accompanied by a new amendment_log[] entry added in this diff.
+    Category 6 (INTENT Invariant 3/4, Part 9I): any change to contract.description or a field's
+    description/semantics must be accompanied by a NEW amendment_log[] entry whose change_class
+    and semantic_break are consistent with the change -- either change_class: prose_improvement
+    with semantic_break: false (pure documentation polish), or any other change_class with
+    semantic_break: true (a genuine redefinition through the ritual). Both a bare diff (no new
+    entry) and a mislabelled entry (prose_improvement with semantic_break: true, or a non-prose
+    change_class with semantic_break: false) are rejected.
     """
     errors: list[str] = []
 
     base_contract_log = [e.model_dump() for e in (base_doc.amendment_log or [])]
     head_contract_log = [e.model_dump() for e in (head_doc.amendment_log or [])]
-
     if base_doc.contract.description != head_doc.contract.description:
-        new_entries = [e for e in head_contract_log if e not in base_contract_log]
-        if not new_entries:
-            errors.append("contract description changed but no new amendment_log[] entry was added (category 6)")
+        err = _amendment_error_for_change("contract description", base_contract_log, head_contract_log)
+        if err is not None:
+            errors.append(err)
 
     base_fields = base_doc.fields or {}
     head_fields = head_doc.fields or {}
@@ -73,16 +77,50 @@ def check_amendment_for_diff(base_doc: ContractDocument, head_doc: ContractDocum
         base_spec = base_fields.get(name)
         if base_spec is None:
             continue
-        base_field_log = [e.model_dump() for e in (base_spec.amendment_log or [])]
-        head_field_log = [e.model_dump() for e in (head_spec.amendment_log or [])]
         attr_changed = any(getattr(base_spec, attr) != getattr(head_spec, attr) for attr in ("description", "semantics"))
         if attr_changed:
-            new_entries = [e for e in head_field_log if e not in base_field_log]
-            if not new_entries:
-                errors.append(
-                    f"field {name!r}: description/semantics changed but no new amendment_log[] entry on the field (category 6)"
-                )
+            base_field_log = [e.model_dump() for e in (base_spec.amendment_log or [])]
+            head_field_log = [e.model_dump() for e in (head_spec.amendment_log or [])]
+            err = _amendment_error_for_change(f"field {name!r} description/semantics", base_field_log, head_field_log)
+            if err is not None:
+                errors.append(err)
     return errors
+
+
+def _amendment_error_for_change(
+    subject: str,
+    base_log: list[dict[str, Any]],
+    head_log: list[dict[str, Any]],
+) -> str | None:
+    """Return a category-6 error for ``subject`` if it changed without a valid accompanying
+    amendment_log[] entry, else None.
+
+    A new entry is a valid accompaniment iff it pairs change_class: prose_improvement with
+    semantic_break: false, or any other change_class with semantic_break: true (INTENT
+    Invariant 3/4: prose_improvement is the only non-break path for a prose change, and a
+    redefinition must set semantic_break: true).
+    """
+    new_entries = [e for e in head_log if e not in base_log]
+    if not new_entries:
+        return f"{subject} changed but no new amendment_log[] entry was added (category 6)"
+    if not any(_amendment_entry_consistent(e) for e in new_entries):
+        return (
+            f"{subject} changed but no new amendment_log[] entry pairs change_class: prose_improvement "
+            f"with semantic_break: false, or another change_class with semantic_break: true (category 6)"
+        )
+    return None
+
+
+def _amendment_entry_consistent(entry: dict[str, Any]) -> bool:
+    """True iff a single amendment entry's change_class/semantic_break pairing is valid for a
+    description/semantics diff: prose_improvement XOR semantic_break (INTENT Invariant 3/4).
+
+    prose_improvement (which by definition does not change meaning) requires semantic_break:
+    false; any other change_class on a description/semantics diff requires semantic_break: true.
+    """
+    is_prose = entry.get("change_class") == ChangeClass.prose_improvement
+    semantic_break = bool(entry.get("semantic_break"))
+    return is_prose != semantic_break
 
 
 def check_status_transition(base_doc: ContractDocument, head_doc: ContractDocument) -> list[str]:
