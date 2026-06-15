@@ -86,10 +86,21 @@ _WRITER_RETRY_BACKOFF_S = (2.0, 5.0)
 
 
 _CI_RCA_VALID_MODES = frozenset({"warn", "strict"})
-_WHY_CHAIN_SYSTEMIC_KEYWORDS = frozenset({
-    "gate", "tier", "policy", "contract", "gap", "missing",
-    "absent", "placement", "scope", "invariant", "enforcement",
-})
+_WHY_CHAIN_SYSTEMIC_KEYWORDS = frozenset(
+    {
+        "gate",
+        "tier",
+        "policy",
+        "contract",
+        "gap",
+        "missing",
+        "absent",
+        "placement",
+        "scope",
+        "invariant",
+        "enforcement",
+    }
+)
 _WHY_CHAIN_CITATION_RE = re.compile(r"[\w./-]+\.(py|yaml|tf|md|sh):\d+")
 
 
@@ -109,9 +120,7 @@ def get_ci_rca_strict_mode() -> str:
     except (FileNotFoundError, OSError, yaml.YAMLError):
         value = "warn"
     if value not in _CI_RCA_VALID_MODES:
-        raise ValueError(
-            f"CI_RCA_STRICT_MODE={value!r} is not a valid mode; accepted: {sorted(_CI_RCA_VALID_MODES)}"
-        )
+        raise ValueError(f"CI_RCA_STRICT_MODE={value!r} is not a valid mode; accepted: {sorted(_CI_RCA_VALID_MODES)}")
     _ci_rca_strict_mode_cache = value
     return value
 
@@ -174,9 +183,7 @@ class CiRcaContext(BaseModel):
         has_citation = bool(_WHY_CHAIN_CITATION_RE.search(final))
         errors: list[str] = []
         if not has_systemic:
-            errors.append(
-                f"why_chain final entry lacks a systemic keyword from {sorted(_WHY_CHAIN_SYSTEMIC_KEYWORDS)!r}"
-            )
+            errors.append(f"why_chain final entry lacks a systemic keyword from {sorted(_WHY_CHAIN_SYSTEMIC_KEYWORDS)!r}")
         if not has_citation:
             errors.append("why_chain final entry lacks a file:line citation (e.g. scripts/validate.py:284)")
         if errors:
