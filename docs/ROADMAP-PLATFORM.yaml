@@ -3977,6 +3977,17 @@ tier_items:
         - Final co-tuning numeric thresholds -> T2.26 (real high-write-rate tables enter DuckLake there)
         - pg_restore-for---format=custom restore-drill gate update -> T2.26 start-gate (rec-2113)
         - Deploy + post-deploy smoke gates (VP7-14; human-gated terraform apply pending) -- stays here
+      - 2026-06-15: Decision 84 Phase-4 maintenance repoint (merge-only slice). action_merge_ops landed:
+          connectionless handler action that discovers all live ops_*_history / ops_*_current pairs via
+          information_schema, runs maint.merge_adjacent_files per table (non-destructive only -- no
+          expire/cleanup/orphan), emits MergeOps* CloudWatch metrics, returns per-table files_before/after.
+          EventBridge rule added (cron 30 4 * * ? * -- 04:30 UTC, staggered off the 04:00 smoke merge) to
+          invoke merge_ops daily against the production catalog (ducklake_ops @ s3://.../ducklake/).
+          No new IAM (existing maintenance role already grants prod S3 RW). Manifest excludes extended in
+          data-pipeline and ops-compaction to close the latent DuckLake maintenance/DR code leak. The
+          destructive GC for production tables remains gated by rec-2113 / T2.26 (intentional deferral,
+          Decision 55). Post-deploy VP steps (9-13: live invocation + read-your-write + smoke regression
+          + EventBridge rule ENABLED) execute on next session after sandbox CD apply converges.
 
   - id: T2.19
     tier: T2

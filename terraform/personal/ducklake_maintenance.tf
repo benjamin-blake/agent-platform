@@ -288,6 +288,42 @@ resource "aws_lambda_permission" "ducklake_maintenance_hot_merge" {
 }
 
 # ---------------------------------------------------------------------------
+# EventBridge prod-merge rule: daily non-destructive merge of ALL live ops_* SCD2 table pairs
+# in the production catalog (ducklake_ops @ s3://.../ducklake/). Staggered off the 04:00 smoke
+# merge to avoid throttle under reserved_concurrent_executions=1. Non-destructive: merge_ops
+# dispatches merge_adjacent_files only -- no expire/cleanup/orphan (gated by rec-2113/T2.26).
+# Decision 84 Phase-4 maintenance repoint, merge-only slice (T2.18).
+# No new IAM: reuses the existing maintenance role (already grants S3 RW on the prod prefix).
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "ducklake_maintenance_merge_ops" {
+  name                = "agent-platform-ducklake-maintenance-merge-ops"
+  description         = "Daily production DuckLake ops_* non-destructive merge (T2.18 Phase-4 / Decision 84). cron 04:30 UTC."
+  schedule_expression = "cron(30 4 * * ? *)"
+  state               = "ENABLED"
+
+  tags = {
+    Name    = "DuckLake Maintenance Prod Merge Ops Schedule"
+    Purpose = "T2.18 Phase-4 daily production ops_* non-destructive merge"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "ducklake_maintenance_merge_ops" {
+  rule      = aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops.name
+  target_id = "ducklake-maintenance-merge-ops"
+  arn       = aws_lambda_function.ducklake_maintenance.arn
+  input     = jsonencode({ action = "merge_ops", data_path = local.ducklake_prod_data_path, meta_schema = "ducklake_ops" })
+}
+
+resource "aws_lambda_permission" "ducklake_maintenance_merge_ops" {
+  statement_id  = "AllowEventBridgeMergeOps"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ducklake_maintenance.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops.arn
+}
+
+# ---------------------------------------------------------------------------
 # Circuit-breaker CloudWatch metric alarm.
 # Fires when MaintenanceBreakerTrip >= 1 in a 5-minute window.
 # alarm_actions wired to shared SNS topic (FP-B / Decision 39).

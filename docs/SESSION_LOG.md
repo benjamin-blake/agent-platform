@@ -9,6 +9,40 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-15] - ducklake-prod-merge: Decision 84 Phase-4 maintenance repoint (merge-only slice)
+
+**Goal:** Pay down the per-read Neon catalog-metadata egress driving network transfer to 3.78/5GB (free tier)
+by adding a daily non-destructive merge cadence for the live production ops_* SCD2 tables that the existing
+scheduled maintenance skips. Also close a latent DuckLake maintenance/DR code leak in the data-pipeline and
+ops-compaction Lambda bundles.
+
+**Root cause of egress:** ~7,293 small Parquet files for ~900 rows in the production ops_* tables (inlining-off
++ SCD2 append-only). Every ops read re-reads the per-file column-stat metadata from Neon, driving transfer.
+Existing maintenance is scoped to `ducklake_smoke_*` only.
+
+**What landed:**
+- `action_merge_ops` handler action (connectionless, production catalog, information_schema discovery of
+  ops_*_history/_current pairs, maint.merge_adjacent_files per table, MergeOps* CloudWatch metrics).
+  Non-destructive only -- no expire/cleanup/orphan (gated by rec-2113/T2.26, Decision 55).
+- EventBridge rule `agent-platform-ducklake-maintenance-merge-ops` (cron 04:30 UTC, ENABLED) invoking
+  merge_ops daily against ducklake_ops @ s3://agent-platform-data-lake/ducklake/. No new IAM (reuses
+  existing maintenance role).
+- Manifest `excludes` extended in data-pipeline + ops-compaction to block `ducklake_maintenance.py`,
+  `catalog_dr.py`, `src/lambdas/ducklake_maintenance`, `src/lambdas/ducklake_catalog_dr` from those zips.
+- 9 new handler tests (100% coverage of new lines), full validate exit 0.
+
+**Deployment:** Sandbox CD auto-apply (terraform-apply-sandbox.yml, Decision 77/CD.35) handles the 3 new
+EventBridge resources post-merge. Lambda code deploy via build_lambda --ducklake-only --deploy + full
+--deploy follows. Post-deploy VP steps 9-13 (live merge_ops invocation + files_before/after proof +
+read-your-write + smoke regression + EventBridge ENABLED check) to be executed in the next session.
+
+**Honest framing:** Non-destructive merge reduces per-read current-snapshot metadata but does NOT
+immediately shrink pg_dump or reclaim storage -- the catalog row-count temporarily grows (old + merged files
+coexist) until gated GC (T2.26/rec-2113) prunes. Net egress is a win because reads >> daily dumps.
+
+**Gated follow-up:** Destructive GC for production tables (expire_snapshots + cleanup_old_files +
+delete_orphaned_files) remains gated by rec-2113 (pg_restore restore-drill) via T2.26.
+
 ## [2026-06-11] - t1-11-plan-yaml-migration: T1.11 COMPLETE, CD.22 ratified (Decision 84, dec-1091)
 
 Autonomous /goal session (plan #126 -> implement). PLAN-*.md -> PLAN-*.yaml migration landed:
