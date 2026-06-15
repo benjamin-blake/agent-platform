@@ -1,0 +1,262 @@
+schema_version: 1
+slug: "contracts-enforcement-gate-and-hook"
+intent: >-
+  Make the pre-codegen contract ritual enforceable rather than voluntary discipline by landing
+  the CI drift gate and the preflight re-ratification hook (platform tier item T-1.12 subsets e+f),
+  so the Class A/B/C contract YAMLs that anchor the AWS platform substrate cannot silently drift
+  from their ratified semantics as codegen plans build against them.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-contracts-enforcement-gate-and-hook.yaml
+phase: >-
+  Platform tier T-1.12 (Contract ritual enforcement), subsets (e) CI drift gate + (f) preflight
+  re-ratification hook -- the INTENT's "T-1.12b" grouping. T-1 bootstrap-tooling tier; gates the
+  T-1.13..T-1.19 markdown-to-YAML contract conversions and the Class B ratification wave.
+
+scope:
+  - file: scripts/contracts_enforcement.py
+    action: Create
+    purpose: >-
+      Reusable, import-safe domain logic shared by the gate and the hook: required-inline-field
+      check (category 2), description/semantics-diff-requires-amendment-log check (category 6),
+      status-transition legality check (category 7, delegating to contracts.validate_status_transition),
+      and evaluate_provisional_trigger (parses the re_ratification_trigger first_of condition strings
+      with a small safe comparator -- NO eval/exec -- against an injectable metrics mapping). Keeps
+      validate.py / session_preflight.py thin (Decision 80).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add validate_contract_drift(failed): Pass 1 validates every ritual contract under
+      docs/contracts/ via the existing contracts.load_all_contracts + resolve_refs (categories
+      1,3,4,5,8 already raise) plus check_required_inline_fields (category 2); Pass 2 resolves each
+      changed contract against the git merge-base and runs the diff-aware amendment-log and
+      status-transition checks (categories 6,7). Register the gate in BOTH the --pre fast tier and
+      the full-tier run_python_checks aggregator.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Add a scan that loads provisional_v0 contracts, evaluates each re_ratification_trigger via
+      contracts_enforcement.evaluate_provisional_trigger with an injectable metrics provider
+      (default returns None -- no production telemetry exists yet), populates a new
+      report["provisional_contracts_due"] field, and prints a "--- Provisional contracts due ---"
+      section consistent with the existing printed sections.
+  - file: tests/test_contracts_enforcement.py
+    action: Create
+    purpose: >-
+      Unit tests for every helper in contracts_enforcement.py: each rejection category fires and
+      passes correctly, the safe condition-string parser handles valid/garbage inputs, and the
+      trigger evaluator returns the met/unmet verdict (and which condition fired) for injected
+      metrics. 100% per-file coverage of the new module.
+  - file: tests/test_validate_contract_drift.py
+    action: Create
+    purpose: >-
+      End-to-end gate tests following the tests/test_validate_dq_drift.py pattern: build tmp_path
+      fixture contract dirs and assert validate_contract_drift appends its failure label for each of
+      the six CD.25 categories, and appends nothing for a well-formed contract set and for a repo
+      with no ritual contracts (only a non-ritual doc like read-engine.yaml).
+  - file: tests/test_session_preflight_contracts.py
+    action: Create
+    purpose: >-
+      Tests for the preflight hook following the tests/test_session_preflight_platform_roadmap.py
+      pattern: a fixture provisional_v0 contract whose days-elapsed condition is met (via injected
+      metrics) appears in report["provisional_contracts_due"]; an unmet one is excluded; the field is
+      always present (empty list when no provisional contracts exist).
+
+bundled_recommendations: []
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  - >-
+    validate_contract_drift(failed) is registered in BOTH the --pre tier and the full-tier
+    run_python_checks aggregator of scripts/validate.py (proven by tests asserting it runs in each
+    path), satisfying T-1.12 exit criterion "CI drift gate runs at presubmit and full tiers".
+  - >-
+    The gate rejects all six CD.25 enforcement-clause categories, each proven by a dedicated test:
+    (1) malformed YAML / Pydantic schema violation; (2) inline Class-A field missing
+    description/semantics/populated_by/dq_intent; (3) $ref to a non-existent file or field;
+    (4) $ref chain-depth > 1; (5) duplicate inline definition alongside a $ref; (6) a
+    description/semantics change with no accompanying amendment_log[] entry; plus (7) a status
+    transition outside the Invariant-6 state machine and (8) an amendment_log change_class outside
+    the closed vocabulary.
+  - >-
+    Running the gate on the current repo (docs/contracts/ contains only the non-ritual read-engine.yaml,
+    which load_all_contracts skips) produces no failure: `bin/venv-python -m scripts.validate --pre`
+    and `bin/venv-python -m scripts.validate` both pass.
+  - >-
+    scripts/session_preflight.py emits report["provisional_contracts_due"] (a list) on every run;
+    it contains exactly those provisional_v0 contracts whose re_ratification_trigger first_of
+    conditions evaluate as met given the injected metrics, and is an empty list when no provisional_v0
+    contracts exist. Satisfies T-1.12 exit criterion "surfaces v0-provisional contracts whose triggers are met".
+  - >-
+    contracts_enforcement.evaluate_provisional_trigger parses the first_of condition strings
+    ("production_invocations >= N", "days_since_first_production_invocation >= M") with a small safe
+    comparator (no eval/exec) and returns both the boolean verdict and the firing condition.
+  - >-
+    scripts/contracts_enforcement.py imports with no side effects (no module-level filesystem I/O,
+    raises nothing at import) and stays under the 500-SLOC per-file gate (Decision 43); the three new
+    test files reach 100% per-file coverage of the new module; the full presubmit suite is green.
+  - >-
+    No new documentation artefact is created under docs/ (Decision 86); docs/INTENT-pre-codegen-contract-ratification.md
+    is NOT modified.
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit-test every contracts_enforcement.py helper (each check + the safe parser + the trigger evaluator).
+    command: bin/venv-python -m pytest tests/test_contracts_enforcement.py -q
+    expected: All tests pass; each rejection helper flags its violation and passes a clean input; evaluate_provisional_trigger returns correct met/unmet verdicts for injected metrics.
+    fix_if: A helper returns the wrong verdict or the safe parser accepts a malformed condition string -- fix the helper, do not loosen the test.
+  - step: 2
+    phase: pre-deploy
+    action: Exercise the full gate end-to-end against tmp_path fixture contract dirs for all six categories plus the clean and no-ritual-contracts cases.
+    command: bin/venv-python -m pytest tests/test_validate_contract_drift.py -q
+    expected: Each of the six categories causes validate_contract_drift to append its failure label; a well-formed contract set and an empty/non-ritual dir append nothing.
+    fix_if: A malformed-contract category is NOT rejected -- the corresponding pass is missing or mis-wired in validate_contract_drift.
+  - step: 3
+    phase: pre-deploy
+    action: Test the preflight hook's trigger evaluation in both directions with injected metrics.
+    command: bin/venv-python -m pytest tests/test_session_preflight_contracts.py -q
+    expected: The met-trigger fixture appears in report["provisional_contracts_due"]; the unmet fixture is excluded; the field is present (empty list) when no provisional contracts exist.
+    fix_if: A met trigger is missed or an unmet trigger is surfaced -- fix the trigger parsing/evaluation or the scan filter.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the gate runs in the --pre fast tier, is green on the current repo, and stays within the fast-tier budget (Decision 60/73).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Passes; the contract-drift gate executes (no AWS, no pytest) and produces no false positive against the only present doc (read-engine.yaml is non-ritual and skipped); fast-tier budget not breached.
+    fix_if: False positive on read-engine.yaml means load_all_contracts is not skipping non-ritual docs; a budget breach means the diff-aware git step is too slow and must be narrowed to changed files.
+  - step: 5
+    phase: pre-deploy
+    action: Run the full presubmit suite (authoritative local gate) so the gate also runs in run_python_checks and coverage holds.
+    command: bin/venv-python -m scripts.validate
+    expected: Passes, including validate_contract_drift in the full tier and 100% coverage on the new module.
+    fix_if: Gate absent from the full tier means it was only wired into --pre; coverage < 100% means add targeted tests for the uncovered lines.
+  - step: 6
+    phase: pre-deploy
+    action: Run the real preflight and confirm the new report field is emitted and well-formed.
+    command: bin/venv-python -m scripts.session_preflight && bin/venv-python -c "import json; r=json.load(open('logs/.preflight-report.json')); assert isinstance(r['provisional_contracts_due'], list); print('provisional_contracts_due =', r['provisional_contracts_due'])"
+    expected: Exit 0; prints "provisional_contracts_due = []" (empty today because no provisional_v0 contracts exist).
+    fix_if: KeyError means the field is not wired into the report dict in session_preflight.main(); a non-list value means the scan returns the wrong type.
+  - step: 7
+    phase: pre-deploy
+    action: Confirm 100% per-file coverage of the new enforcement module (Decision 48).
+    command: bin/venv-python -m pytest tests/test_contracts_enforcement.py tests/test_validate_contract_drift.py tests/test_session_preflight_contracts.py --cov=scripts.contracts_enforcement --cov-report=term-missing
+    expected: scripts/contracts_enforcement.py reports 100% coverage with no missing lines.
+    fix_if: Missing lines reported -- add tests exercising those branches (do not add pragma-no-cover to dodge the gate).
+
+constraints:
+  - No eval()/exec() anywhere -- the re_ratification_trigger comparator is a small explicit parser over a fixed operator/operand set (AGENTS.md Safety).
+  - scripts/contracts_enforcement.py must not perform filesystem I/O at module import and must raise nothing at import time; defer all validation to explicit calls (AGENTS.md Safety; mirrors contracts.py / contracts_schema.py).
+  - Reuse the existing scripts/contracts.py API (load_contract, load_all_contracts, resolve_refs, validate_status_transition) and scripts/contracts_schema.py enums; do NOT reimplement structural validation already covered by subset (d).
+  - The gate must register in BOTH the --pre and full presubmit tiers (Decision 60, Decision 73); the --pre path must touch no AWS and run no pytest, and must keep the fast tier under its 5-minute budget -- scope the diff-aware Pass 2 to contracts changed vs the merge-base, not all contracts.
+  - Plan type is IMPLEMENTATION only; the >5-file / >8-step complexity-split heuristic is suspended under the AGENTS.md freeze (Decision 67 STRATEGIC clause / CD.17). Do not split into a STRATEGIC plan.
+  - No new standing prose-architecture docs under docs/ (Decision 86); do NOT expand the grandfathered docs/INTENT-pre-codegen-contract-ratification.md. Field/vocabulary semantics stay in the contract YAMLs and scripts/contracts_schema.py.
+  - scripts/contracts_enforcement.py stays under the 500-SLOC per-file gate (Decision 43); keep heavy logic in the new module rather than further inflating validate.py.
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable verification failure, stop and run RCA -- do not paper over it.
+  - Only modify the files listed in scope.
+
+context:
+  - >-
+    T-1.12 (Contract ritual enforcement) is in_progress. Subsets (a) roadmap edits, (b) platform_roadmap.py
+    schema amendment, (c) GAP absorption landed via PLAN-cd25-platform-gap-sequencing (2026-05-24);
+    subset (d) the contracts_schema.py models + contracts.py loader/$ref resolver/state-machine landed via
+    PLAN-contracts-schema-and-loader (2026-06-12). This plan lands (e) the CI drift gate + (f) the preflight
+    hook -- the INTENT's original "T-1.12b" grouping. Subset (g) (implement/SKILL.md decomposition_hints
+    inheritance) remains a separate not-yet-authored follow-on.
+  - >-
+    The six rejection categories are specified in docs/INTENT-pre-codegen-contract-ratification.md
+    (enforcement clause ~line 762; Part 9I ~lines 1363-1372). Five of six already raise ContractValidationError
+    via contracts.load_all_contracts + resolve_refs and the contracts_schema Pydantic models (malformed YAML,
+    missing $ref target, chain-depth>1, duplicate-inline, out-of-vocab change_class). The genuinely new work is
+    the two diff-aware checks (category 6 description/semantics diff requires an amendment_log[] entry whose
+    change_class distinguishes prose_improvement from semantic_break; category 7 legal status transition) plus
+    the category-2 required-inline-field check, which the schema leaves optional because $ref fields omit those keys.
+  - >-
+    Gate execution model -- Pass 1 (structural) runs over ALL ritual contracts present so a malformed contract
+    is caught regardless of whether this branch touched it; Pass 2 (diff-aware, categories 6 and 7) runs only over
+    contracts changed vs `git merge-base origin/main HEAD`, because "a diff" and "a transition" require the prior
+    version. New contracts (absent on the base) skip Pass 2. If the merge-base cannot be resolved (offline), Pass 2
+    fails open with a warning while Pass 1 still runs. The base content arrives as a string from `git show` and must
+    be loadable without a temp file -- add a load-from-text path if contracts.py lacks one.
+  - >-
+    contracts.load_all_contracts only treats a *.yaml as a ritual contract when it has a top-level `contract:`
+    mapping carrying a `class:` field; docs/contracts/read-engine.yaml (top-level `version:`) is skipped. So the gate
+    is green on the current repo and begins enforcing the moment the first real Class A/B/C contract YAML lands.
+    Tests must therefore use tmp_path fixture contract dirs, not docs/contracts/.
+  - >-
+    re_ratification_trigger schema (INTENT Part 6B): contract.provisional_v0 is a dict carrying declared_at and
+    re_ratification_trigger.first_of -- a list of condition strings of the form "production_invocations >= N" and
+    "days_since_first_production_invocation >= M"; the trigger fires on the FIRST satisfied condition. The schema
+    field ContractMeta.provisional_v0 is dict[str, Any], so the hook reads it structurally.
+  - >-
+    Forward-looking scaffolding (subset f): there are currently ZERO provisional_v0 contracts; the Class B Lambda
+    contracts are not authored (current T1.12 "Ratify Class B Lambda verb contracts" is not_started); and telemetry
+    is "not migrated (Phase 4)". Both trigger branches depend on production-invocation telemetry (a count and a
+    first-invocation timestamp) that only exists once a Lambda is deployed and serving -- per INTENT Part 6C the clock
+    cannot advance pre-deploy. The metrics provider therefore returns None in production today and the hook surfaces
+    nothing until Class B contracts + telemetry land; the evaluation logic is nonetheless fully built and tested via
+    injected metrics, and wiring the real source is a one-function follow-on. This is honest deferral, not a silent stub.
+  - >-
+    CD.25 (the candidate decision the ritual rides on) is state=pending, but T-1.12 is bootstrap_completion_exempt: true,
+    so starting AND completing it now is allowed under the bootstrap allowance. (The CD.25-gated, NOT-exempt item is the
+    DIFFERENT current T1.12 "Ratify Class B Lambda verb contracts" -- out of scope here.)
+  - >-
+    Decisions to cite (decision-scout NO_FLAGS verdict): Decision 60 (two-tier validate.py architecture),
+    Decision 73 (diff-aware --pre + 5-min budget + ci-rca on full-tier failure), Decision 48 (V2 tier classification),
+    Decision 43 (500-SLOC per-file gate). Decision 80 (validate.py as a thin importable check-registry) motivates the
+    separate scripts/contracts_enforcement.py module. Decision 86 (docs-free) and Decision 55 (loud-fail, no workaround)
+    are respected.
+  - >-
+    Deferral rationale (planning skill Related-Work Check): the open ci_rca rec rec-2213 (Critical, "Sandbox apply
+    workflow missing TF_VAR_alerts_email wiring") is a preflight HARD BLOCK. It is unrelated to this plan -- different
+    source file (a terraform sandbox-apply GitHub workflow vs scripts/validate.py + scripts/session_preflight.py),
+    different Decision Record, and a different failure category (terraform apply-workflow wiring vs contract enforcement).
+    Per explicit human direction it is owned by a concurrent agent and is deferred for this session.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/confident-heisenberg-1c1mxg)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md alignment checked via the decision-scout gate (NO_FLAGS; cite 60, 73, 48, 43)
+  - All six files in scope located and readable; scripts/contracts.py + scripts/contracts_schema.py API surface understood
+  - The six CD.25 rejection categories and the re_ratification_trigger first_of schema re-read from docs/INTENT-pre-codegen-contract-ratification.md
+  - Acceptance criteria understood and each independently verifiable via the verification plan
+
+execution_steps:
+  - >-
+    Create scripts/contracts_enforcement.py with: check_required_inline_fields(doc) (category 2);
+    check_amendment_for_diff(base_doc, head_doc) (category 6 -- compares contract.description and each
+    field's description/semantics, requiring a matching amendment_log[] entry whose change_class distinguishes
+    prose_improvement from semantic_break on any change); check_status_transition(base_doc, head_doc) (category 7,
+    delegating to contracts.validate_status_transition only when the status actually changed); and
+    evaluate_provisional_trigger(doc, metrics) plus a private safe parser for the first_of condition strings
+    (fixed LHS vocabulary + ">=" operator only; no eval/exec). Import-safe; reuse contracts_schema types.
+  - >-
+    Add a load-from-text entry point if scripts/contracts.py cannot already validate a contract supplied as a
+    string (needed for the git-show base content); keep it minimal and covered by tests. Only touch contracts.py
+    if strictly required -- otherwise parse the base text inside contracts_enforcement / validate.
+  - >-
+    Add validate_contract_drift(failed) to scripts/validate.py: Pass 1 over docs/contracts/ via
+    contracts.load_all_contracts + resolve_refs + check_required_inline_fields; Pass 2 over contracts changed vs
+    `git merge-base origin/main HEAD` via check_amendment_for_diff + check_status_transition, failing open on an
+    unresolved base. Register the gate in the --pre block (alongside the product-roadmap / plan-document / intent-doc-freeze
+    checks) AND in run_python_checks (full tier).
+  - >-
+    Modify scripts/session_preflight.py: add a scan that loads provisional_v0 contracts from docs/contracts/,
+    calls contracts_enforcement.evaluate_provisional_trigger with an injectable metrics provider (default returns None),
+    sets report["provisional_contracts_due"] = [...], and prints a "--- Provisional contracts due ---" section
+    matching the existing printed-section style; extend _format_preflight_summary only if a summary line is warranted.
+  - >-
+    Write tests/test_contracts_enforcement.py, tests/test_validate_contract_drift.py (tmp_path fixture contract dirs
+    covering each of the six categories plus clean and no-ritual cases, following test_validate_dq_drift.py), and
+    tests/test_session_preflight_contracts.py (met/unmet trigger via injected metrics, field always present, following
+    test_session_preflight_platform_roadmap.py).
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass. On an unrecoverable failure, stop and
+    run RCA per Decision 55; do not introduce a workaround.
+  - "Report: what was implemented (files, functions, tier wiring) and the verification results for each VP step."
+
+work_areas: []
+
+rollback: >-
+  Additive change set -- a new module plus two additive functions and one new report field. Reverting the
+  branch (or removing validate_contract_drift's registration in both tiers and the provisional-contract scan in
+  session_preflight) fully restores prior behaviour. No data migration, no infrastructure, no Lambda deploy.
