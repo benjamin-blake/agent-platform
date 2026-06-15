@@ -46,9 +46,12 @@ still runs as the safety net. Do not apply without presenting the plan and getti
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
-behind the guard + subagent plan review). It sources the same vars as `TF_VAR_*` env from GitHub repo
-variables/secrets (`AWS_ACCOUNT_ID`, `OWNER_EMAIL`, `TF_VAR_PLATFORM_DEV_EXTERNAL_ID`,
-`TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID`). Wave 1 made the apply outcome **sticky and observed**: the apply
+behind the guard + subagent plan review). It sources all no-default root-module variables from the
+`agent-platform-terraform-personal-tfvars` Secrets Manager secret: the apply role's `SecretsManagerTfvarsRead`
+grant fetches the secret body to `terraform.personal.tfvars`, which is passed to `terraform plan` via
+`-var-file`. New no-default variables only require updating that secret -- no per-variable workflow edit.
+`TF_VAR_aws_profile=""` is the sole remaining env override (blanks the named-profile default so the OIDC
+credential env vars take effect). Wave 1 made the apply outcome **sticky and observed**: the apply
 job reads a durable convergence record as a precondition and refuses on red, writes the record green/red
 (always-run) after apply, and apply failures wire into `ci-rca` -- so a later green run can no longer mask
 an earlier apply failure. The interactive human-gated loop above remains the path for **IAM/trust/destroy**

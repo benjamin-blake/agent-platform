@@ -80,14 +80,9 @@ jobs:
       # not exist on a GitHub-hosted runner. Blank it so the AWS provider uses the OIDC-exported
       # credential env vars (configure-aws-credentials) instead of a named profile.
       TF_VAR_aws_profile: ""
-      # Required root-module variables.
-      # Repo variables: AWS_ACCOUNT_ID (see repo variables -- never a committed literal), OWNER_EMAIL.
-      # Repo secrets:   TF_VAR_PLATFORM_DEV_EXTERNAL_ID, TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID
-      #                 (values from the gitignored terraform/personal/terraform.personal.tfvars).
-      TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
-      TF_VAR_owner_email: ${{ vars.OWNER_EMAIL }}
-      TF_VAR_platform_dev_external_id: ${{ secrets.TF_VAR_PLATFORM_DEV_EXTERNAL_ID }}
-      TF_VAR_platform_admin_external_id: ${{ secrets.TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID }}
+      # All other required root-module variables are sourced from the
+      # agent-platform-terraform-personal-tfvars Secrets Manager secret (fetched by the
+      # "Materialise tfvars" step below). New no-default vars only require updating that secret.
       WORKDIR: terraform/personal
 
     steps:
@@ -165,27 +160,38 @@ jobs:
           echo "::error::CONVERGENCE_RED main is non-converged at commit ${RED_COMMIT}; apply REFUSED and the record was NOT overwritten. Unlatch via workflow_dispatch acknowledge_red_commit=${RED_COMMIT} (or the open rec id) after the failure is reviewed (Decision 55/72)."
           exit 1
 
+      - name: Materialise tfvars from Secrets Manager
+        # Fetch the agent-platform-terraform-personal-tfvars secret (apply role SecretsManagerTfvarsRead
+        # grant) and write it to the gitignored terraform.personal.tfvars. Fail-closed: if the fetch
+        # fails the step exits non-zero and blocks all downstream steps (no continue-on-error).
+        if: success()
+        run: |
+          aws secretsmanager get-secret-value \
+            --secret-id agent-platform-terraform-personal-tfvars \
+            --query SecretString --output text \
+            > terraform/personal/terraform.personal.tfvars
+
+      - name: Assert tfvars file is non-empty (fail-closed)
+        # Fail-closed (Decision 77): a missing or empty tfvars file reds the run before plan.
+        # Never use continue-on-error here -- an empty file would pass plan with wrong defaults.
+        if: success()
+        run: |
+          test -s terraform/personal/terraform.personal.tfvars || {
+            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+            exit 1
+          }
+
       - name: Terraform init (S3 backend, sandbox)
         if: success()
         working-directory: ${{ env.WORKDIR }}
         run: terraform init -input=false -backend-config=backend-sandbox.hcl
-
-      - name: Assert required Terraform variables are present
-        # Fail-closed (Decision 77): a missing secret or variable reds the run before plan.
-        # Never use continue-on-error here -- a silent empty var would pass plan with wrong defaults.
-        if: success()
-        run: |
-          : "${TF_VAR_account_id:?TF_VAR_account_id is empty -- set the AWS_ACCOUNT_ID repo variable}" \
-            "${TF_VAR_owner_email:?TF_VAR_owner_email is empty -- set the OWNER_EMAIL repo variable}" \
-            "${TF_VAR_platform_dev_external_id:?TF_VAR_platform_dev_external_id is empty -- add TF_VAR_PLATFORM_DEV_EXTERNAL_ID repo secret}" \
-            "${TF_VAR_platform_admin_external_id:?TF_VAR_platform_admin_external_id is empty -- add TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID repo secret}"
 
       - name: Terraform plan
         id: plan
         if: success()
         working-directory: ${{ env.WORKDIR }}
         run: |
-          terraform plan -input=false -lock-timeout=120s -out=plan.bin
+          terraform plan -input=false -lock-timeout=120s -var-file=terraform.personal.tfvars -out=plan.bin
           terraform show -json plan.bin > plan.json
 
       - name: Deterministic apply guard (fail-closed)

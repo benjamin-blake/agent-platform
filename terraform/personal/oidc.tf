@@ -586,6 +586,20 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "secretsmanager:DescribeSecret"
         ]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
+      },
+      {
+        # Tfvars sourcing: the apply job fetches terraform.personal.tfvars from this secret
+        # (terraform-apply-sandbox.yml "Materialise tfvars" step) and passes it via -var-file.
+        # Mirrors the SecretsManagerNeonAPIKeyRead precedent. Read-only -- the secret lifecycle
+        # is human-owned, not Terraform-managed. DescribeSecret is also a refresh-time read the
+        # AWS provider issues on every plan; do not prune it as "unused".
+        Sid    = "SecretsManagerTfvarsRead"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
       }
     ]
   })
