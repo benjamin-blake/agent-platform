@@ -46,14 +46,29 @@ scope:
   - file: src/common/ducklake_runtime.py
     action: Modify
     purpose: >-
-      Add an idempotent, guarded ADD COLUMN migration (mirrors the ALTER pattern at lines 335-336 +
-      the catalog-DDL verb guard at line 760): non-destructive ALTER TABLE ... ADD COLUMN IF NOT EXISTS
-      context_v2_json VARCHAR on ops_recommendations_history and _current. Never DROP.
+      Add reconcile_table_columns(con, table): introspect the physical columns of the history+current
+      tables (DuckDB PRAGMA table_info / information_schema over the attached catalog), then ALTER TABLE
+      ADD COLUMN for any spec column that is absent. Idempotency comes from the introspection guard, NOT a
+      SQL IF NOT EXISTS clause -- there is no ADD COLUMN precedent in this codebase and DuckLake 1.5.3
+      support for the clause is unverified (the existing line 335-336 ALTERs are SET PARTITIONED BY, a
+      different statement). Never DROP. This is the non-destructive migration primitive for the live
+      ops_recommendations tables.
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Add a --migrate-ops-recs-columns operational flag (mirrors the direct-Neon _open_attached path used
+      by --attach/--restore-drill; deploy-free client, not Lambda-packaged) that calls
+      reconcile_table_columns against ops_recommendations and asserts context_v2_json is present on BOTH
+      the history and current tables. This is the in-scope invocation surface + verification command for
+      the live-table column migration -- deliberately NOT a maintenance-handler action, which
+      compute_affected_artifacts shows would pull data-pipeline + ops-compaction (unprovisioned per
+      rec-2164) into the deploy set.
   - file: tests/test_ops_data_portal.py
     action: Modify
     purpose: >-
       Add warn-mode unit tests (valid passes; deficient why_chain warns-not-raises; legacy free-text
-      warns-not-raises; flag default; guidance returns schema) and one env-gated live roundtrip test.
+      warns-not-raises; flag default; guidance returns schema), a reconcile_table_columns re-run-safety
+      test (second call against a temp table is a no-op), and one env-gated live roundtrip test.
   - file: docs/INTENT-ci-rca-methodology.md
     action: Modify
     purpose: >-
@@ -63,7 +78,8 @@ scope:
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
-      Update the T1.13 progress_note to record the Phase-1 core slice landing and the deferred checks.
+      Update the T1.13 progress_note (Phase-1 core slice landing + deferred checks) and correct the stale
+      files_in_scope path terraform/feature_flags.tf -> terraform/personal/feature_flags.tf (Decision 77).
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -72,14 +88,19 @@ infrastructure_dependencies:
     destroy/IAM/trust change, so the deterministic guard PASSES; remote terraform-validate (required
     check, Decision 83) is authoritative for HCL syntax/plan.
   - >-
-    DuckLake ops_recommendations catalog migration -- non-destructive, idempotent ALTER TABLE ADD
-    COLUMN on ops_recommendations_history and _current (Decision 84/81 closed boundary; NOT Iceberg,
-    NOT Athena). Run once post-deploy; data-preserving (905 live rows must survive).
+    DuckLake ops_recommendations catalog migration -- non-destructive ALTER TABLE ADD COLUMN on
+    ops_recommendations_history and _current, idempotent via column introspection (not a SQL IF NOT
+    EXISTS clause). Invoked once post-deploy via the deploy-free smoke client
+    (ducklake_neon_smoke_test --migrate-ops-recs-columns, direct-Neon _open_attached path). Decision 84/81
+    closed boundary; NOT Iceberg, NOT Athena. Data-preserving (905 live rows must survive); NEVER DROP.
   - >-
-    Per-Lambda deploy gating (Decision 79 / CD.16): four active DuckLake artifacts are affected
+    Per-Lambda deploy gating (Decision 79 / CD.16): EXACTLY four active DuckLake artifacts are affected
     (compute_affected_artifacts on field_semantics.yaml + ducklake_runtime.py) -- ducklake_writer,
     ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (catalog_dr packages ducklake_runtime.py).
-    Each gets build + deploy + smoke-test via build_lambda --deploy --ducklake-only.
+    Each gets build + deploy + smoke-test via build_lambda --deploy --ducklake-only. The migration is
+    invoked via the deploy-free smoke client (not a maintenance-handler action) precisely so the deploy
+    set is NOT expanded to data-pipeline + ops-compaction (which editing src/lambdas/ducklake_maintenance/
+    handler.py would pull in -- both unprovisioned per rec-2164).
 acceptance_criteria:
   - CI_RCA_STRICT_MODE exists in config/feature_flags.yaml defaulting to warn; get_ci_rca_strict_mode() returns 'warn' and rejects values outside {warn, strict}.
   - get_rec_write_guidance('ci_rca') returns the structured context schema surfacing proximate_cause, why_chain, detection_gap, recurrence_class, corrective_action, preventive_action (Decision 66).
@@ -134,17 +155,23 @@ verification_plan:
     fix_if: Deploy error -- check S3 upload and function names; ResourceNotFoundException -- function not provisioned (record as a rec, do not rescue-loop, Decision 55).
   - step: 8
     phase: post-deploy
-    action: Apply the idempotent ADD COLUMN migration on the live history+current tables, then prove the redeployed writer/reader operate at production scope (no schema regression).
-    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform
-    expected: write_ops via writer then read via reader succeeds at production scope; exit 0 (proves the redeployed writer/reader accept and project the new nullable column).
-    fix_if: schema-gate rejection on context_v2_json or 409/absent-update loud-fail -- the migration did not run on the live tables or the writer was not redeployed; re-run step 7 and the migration.
+    action: Run the non-destructive column migration against the live catalog and assert the new column is present on BOTH the history and current tables.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --migrate-ops-recs-columns --profile agent_platform
+    expected: reconcile_table_columns adds context_v2_json where absent (idempotent no-op if already present) and reports it present on ops_recommendations_history AND ops_recommendations_current; exit 0; the 905 existing rows are untouched.
+    fix_if: column absent on either table after the run -- introspection or ALTER path wrong; any DROP/recreate observed -- abort (the migration MUST be non-destructive, Decision 84/81).
   - step: 9
     phase: post-deploy
-    action: End-to-end roundtrip of a real value through the production closed boundary (self-cleaning, Decision 70).
-    command: RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_ops_data_portal.py -k ci_rca_context_v2_roundtrip_live -q
-    expected: Test passes -- files a test ci_rca rec with a valid context_v2_json, reads it back via the reader asserting context_v2_json persisted and the legacy context summary present, then closes the rec via update_rec.
-    fix_if: context_v2_json is None on read -- writer projection or column missing; rec not closeable -- update_rec lifecycle path broken.
+    action: Prove the redeployed writer/reader operate at production scope with no schema regression on the existing columns.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform
+    expected: write_ops via writer then read via reader succeeds at production scope; exit 0. (This proves no schema regression / existing-column roundtrip; the new-column persistence proof is step 10.)
+    fix_if: 409/absent-update loud-fail or a schema-gate rejection -- the writer/reader redeploy (step 7) did not take; re-run step 7.
   - step: 10
+    phase: post-deploy
+    action: End-to-end roundtrip of a real context_v2_json value through the production closed boundary (self-cleaning, Decision 70).
+    command: RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_ops_data_portal.py -k ci_rca_context_v2_roundtrip_live -q
+    expected: Test passes -- files a test ci_rca rec with a valid context_v2_json, reads it back via the reader asserting context_v2_json persisted AND the legacy context summary present, then closes the rec via update_rec.
+    fix_if: context_v2_json is None on read -- writer projection or the step-8 migration did not land; rec not closeable -- update_rec lifecycle path broken.
+  - step: 11
     phase: post-deploy
     action: Full presubmit (local mirror of CI) is green before push.
     command: bin/venv-python -m scripts.validate
@@ -155,6 +182,13 @@ constraints:
     WARN MODE ONLY: this plan introduces no hard rejections. file_rec(source=ci_rca) MUST NOT raise on
     structural deficiency while CI_RCA_STRICT_MODE=warn. The strict branch may exist but stays inert
     (flag default warn). Decision 55 loud-fail applies to write transport, not to warn-mode schema-depth warnings.
+  - >-
+    DEPLOY ORDERING (deploy-window edge): a context_v2_json-bearing write would be schema-gate-rejected
+    (writer 422 -> ValueError at ops_data_portal.py:209-210) by the CURRENTLY-deployed writer until step 7
+    redeploys it and step 8 adds the live column. The WARN-MODE no-raise guarantee therefore holds only
+    AFTER the post-deploy steps land. The window is benign: no production caller emits context_v2_json
+    until the Phase-3 agent prompt rewrite (PLAN-ci-rca-prompt-rewrite); the only context_v2_json write
+    before then is the step-10 live roundtrip, which runs post-deploy by construction.
   - >-
     DEFERRED out of scope (named follow-on atomic plans -- do NOT implement here): citation-existence
     lookup (INTENT Section 4 check 5), evidence-bundle SHA-256 S3 verification (check 7), cross-check
@@ -265,10 +299,19 @@ execution_steps:
     blocks of ops_recommendations in config/lambda/ducklake/field_semantics.yaml. Do NOT touch
     src/common/ducklake_scd2_schema.py if avoidable (keeps the change config-driven).
   - >-
-    Add an idempotent, guarded ADD COLUMN migration to src/common/ducklake_runtime.py (mirror the ALTER pattern
-    at lines 335-336 and the catalog-DDL verb guard at line 760): non-destructive ALTER TABLE
-    ops_recommendations_history ADD COLUMN IF NOT EXISTS context_v2_json VARCHAR, and the same for _current.
-    Never DROP. Expose it so it can be invoked once post-deploy.
+    Add reconcile_table_columns(con, *, table) to src/common/ducklake_runtime.py: introspect the physical
+    columns of the history+current tables (DuckDB PRAGMA table_info / information_schema over the attached
+    catalog) and run ALTER TABLE <t> ADD COLUMN <name> <sql_type> for each spec column that is absent.
+    Idempotency comes from the introspection guard, NOT a SQL IF NOT EXISTS clause (there is no ADD COLUMN
+    precedent here; the line 335-336 ALTERs are SET PARTITIONED BY, a different statement). Never DROP. Keep
+    it a pure function over an open connection so it is callable from the smoke client.
+  - >-
+    Add a --migrate-ops-recs-columns operational flag to scripts/ducklake_neon_smoke_test.py: open a direct
+    Neon connection via the existing _open_attached helper (the --attach/--restore-drill path), call
+    reconcile_table_columns(con, table="ops_recommendations"), then assert via introspection that
+    context_v2_json is present on BOTH ops_recommendations_history and _current; print the result. This is the
+    one-time migration trigger + verification (deploy-free; deliberately NOT a maintenance-handler action,
+    which would pull data-pipeline + ops-compaction into the deploy set).
   - >-
     Create terraform/personal/feature_flags.tf: provision CI_RCA_STRICT_MODE as an SSM String parameter whose
     value is sourced from config/feature_flags.yaml via try()-wrapped file()+yamldecode (AGENTS.md optional-artifact
@@ -276,8 +319,10 @@ execution_steps:
   - >-
     Add/extend tests in tests/test_ops_data_portal.py: unit tests (-k ci_rca) for valid context_v2_json,
     deficient why_chain (warns, does not raise), legacy free-text (deprecation warning, passes), flag default,
-    and guidance schema; plus one env-gated live roundtrip test (-k ci_rca_context_v2_roundtrip_live, skipped
-    unless RUN_LIVE_DUCKLAKE=1) that files -> reads via reader -> asserts persisted -> closes via update_rec.
+    and guidance schema; a reconcile_table_columns re-run-safety test (second call against a temp/in-memory
+    DuckDB table is a no-op, asserting introspection-based idempotency); plus one env-gated live roundtrip test
+    (-k ci_rca_context_v2_roundtrip_live, skipped unless RUN_LIVE_DUCKLAKE=1) that files -> reads via reader ->
+    asserts persisted -> closes via update_rec.
   - >-
     Annotate docs/INTENT-ci-rca-methodology.md (stale-pointer only, Decision 86): mark Sections 1/3/7
     Iceberg-ALTER / Athena-_current / Athena-telemetry wording as superseded by the DuckLake closed boundary
@@ -285,8 +330,9 @@ execution_steps:
     warn-mode validation + context_v2_json column) and DEFERRED citation-existence lookup, evidence SHA-256
     verification, cross-check enforcement, and Section 7 observability emission to named follow-on plans.
   - >-
-    Update docs/ROADMAP-PLATFORM.yaml T1.13 progress_note to record the Phase-1 core slice landing and the
-    deferred checks.
+    Update docs/ROADMAP-PLATFORM.yaml T1.13: append to progress_note (Phase-1 core slice landing + deferred
+    checks) AND correct the stale files_in_scope entry terraform/feature_flags.tf to
+    terraform/personal/feature_flags.tf (it auto-applies only under terraform/personal/ per Decision 77).
   - >-
     Execute the Verification Plan: run each step; loop until pass; build+deploy the four active DuckLake
     artifacts; run the migration; roundtrip via ducklake_neon_smoke_test --ops-read-your-write and the live
