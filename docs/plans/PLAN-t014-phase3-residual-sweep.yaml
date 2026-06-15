@@ -1,0 +1,219 @@
+schema_version: 1
+slug: "t014-phase3-residual-sweep"
+intent: >-
+  Finalise the Windows-assumption sweep (T0.14) so the Linux-container substrate is functional
+  end-to-end for any agent or contributor cloning the repo, and close the parked bootstrap item
+  that currently blocks the public-surface devcontainer work (T2.11a) and obscures roadmap state.
+  Supports the North Star by keeping the self-improving platform's dev substrate portable and its
+  roadmap an honest reflection of reality.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-t014-phase3-residual-sweep.yaml
+phase: >-
+  Platform tier T0.14 (Windows-assumption sweep, bootstrap T0). This is the named Phase 3
+  follow-on carrier (audit F-036) that was reserved but never written. Unblocks T2.11a
+  (.devcontainer public surface, depends_on [T0.2, T0.14]). No product-roadmap phase.
+scope:
+  - file: .agents/workflows/plan.md
+    action: Modify
+    purpose: >-
+      Reframe the "Step 0: Activate Environment" Windows-prescriptive venv-activation lines
+      (.venv/Scripts/Activate.ps1, .venv/Scripts/python.exe, source .venv/Scripts/activate) to
+      OS-agnostic bin/venv-python guidance. Windows-assumption lines only -- not a broader rewrite.
+  - file: .agents/workflows/implement.md
+    action: Modify
+    purpose: >-
+      Identical reframe of its "Step 0: Activate Environment" block to OS-agnostic bin/venv-python
+      guidance. Windows-assumption lines only.
+  - file: .agents/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Reframe the `venv_ok: false` preflight-constraint line (currently "Auto-activate venv
+      (source .venv/Scripts/activate)") to a bin/venv-python verification, matching the canonical
+      .claude planning skill. Do not touch the Behavioural Invariants block or any other line.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap-bookkeeping closeout of T0.14: flip status in_progress -> complete, add completed_at,
+      and append a closing progress_note that re-grounds exit criteria #5/#6, extends the
+      criterion-#1/#2 reinterpretation to setup.py, and records the Decision 58 supersession. Only
+      T0.14's status/completed_at/progress_note/criteria-text are touched; depends_on, files_in_scope,
+      effort, and all other tier_items are unchanged.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The 3 legacy .agents/ files carry no Windows venv prescriptions:
+    `grep -rnE '\.venv/Scripts|Activate\.ps1|python\.exe' .agents/` returns zero hits.
+  - >-
+    Each of the 3 reframed .agents/ files instructs OS-agnostic bin/venv-python usage in place of
+    the removed PowerShell/Git-Bash activation lines.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T0.14 has status: complete, a completed_at date, and a closing
+    progress_note that (a) extends the exit-criterion-#1/#2 reinterpretation to name setup.py,
+    (b) re-grounds criterion #5 onto T2.11a citing Decision 75, (c) records .github/ as
+    reviewed-and-left-frozen per AGENTS.md, and (d) records Decision 58's supersession by
+    Decision 76 (reaffirmed by Decision 85).
+  - >-
+    The plan validates against the PlanDocument schema:
+    `bin/venv-python -m scripts.plan_document docs/plans/PLAN-t014-phase3-residual-sweep.yaml`.
+  - >-
+    Lint/format/prompt checks pass after the edits: `bin/venv-python -m scripts.validate --pre`.
+  - >-
+    The roadmap YAML still parses and T0.14's depends_on/files_in_scope/effort/bootstrap flags are
+    unchanged (only status/completed_at/progress_note/criteria-text differ from the pre-edit block).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the 3 .agents/ files no longer carry any Windows venv-path prescription.
+    command: "! grep -rnE '\\.venv/Scripts|Activate\\.ps1|python\\.exe' .agents/"
+    expected: >-
+      Command exits 0. grep finds no matches (exit 1) and the leading `!` inverts that to success;
+      nothing is printed.
+    fix_if: >-
+      grep prints a line from .agents/workflows/plan.md, implement.md, or skills/planning/SKILL.md --
+      that line's reframe did not land. Re-edit the offending line to OS-agnostic bin/venv-python.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm OS-agnostic bin/venv-python guidance is present in all 3 reframed files.
+    command: "grep -lF 'bin/venv-python' .agents/workflows/plan.md .agents/workflows/implement.md .agents/skills/planning/SKILL.md | wc -l"
+    expected: "Prints 3 (every reframed file now references bin/venv-python)."
+    fix_if: >-
+      Count < 3 -- a file's reframe is missing the bin/venv-python guidance. Add it to the file
+      whose name is absent from `grep -lF 'bin/venv-python' ...`.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm T0.14 is flipped to complete with every closeout element present in its block.
+    command: "B=$(awk '/^  - id: T0.14$/,/^  - id: T1.1$/' docs/ROADMAP-PLATFORM.yaml); echo \"$B\" | grep -q 'status: complete' && echo \"$B\" | grep -q 'completed_at' && echo \"$B\" | grep -q 'T2.11a' && echo \"$B\" | grep -q 'setup.py' && echo \"$B\" | grep -q 'Decision 76' && echo CLOSEOUT_OK"
+    expected: >-
+      Prints CLOSEOUT_OK -- the T0.14 block contains status: complete, completed_at, and the
+      re-grounding references to T2.11a, setup.py, and the Decision 76 supersession.
+    fix_if: >-
+      CLOSEOUT_OK is not printed -- one closeout element is missing from the T0.14 block. Add the
+      missing status/completed_at field or the missing progress_note reference.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the plan is schema-valid and the edits pass the presubmit edit-loop tier (YAML parses, lint/format/prompts clean).
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-t014-phase3-residual-sweep.yaml && bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      plan_document reports the plan valid, and validate --pre exits 0 (ruff lint/format clean,
+      prompt-compliance clean, roadmap YAML parses).
+    fix_if: >-
+      plan_document reports a schema error -- fix the offending plan field. validate --pre fails --
+      fix the reported lint/format issue or YAML breakage in the roadmap.
+constraints:
+  - Only the 4 files in Scope may be modified.
+  - >-
+    Narrow the .agents/ edits to the Windows-prescriptive venv-activation lines ONLY. Do NOT
+    modernize other legacy staleness in those files (e.g. `python scripts/...` invocations,
+    `git pull --rebase`, the agent/{slug} branch-creation invariant) -- none of those are Windows
+    assumptions and all are out of T0.14 scope.
+  - >-
+    Do NOT edit the .github/ deep-frozen legacy fallbacks (copilot-instructions.md, prompts/,
+    agents/, instructions/) -- AGENTS.md and docs/PROJECT_CONTEXT.md mandate "do not edit unless
+    explicitly asked." They are reviewed-and-left; their Windows refs document the historical
+    Copilot-on-Windows surface.
+  - >-
+    Do NOT edit setup.py -- it is a soft-deprecated local Windows/Git-Bash escape-hatch (its own
+    header points to bin/setup-cloud-env.sh). Record its .venv/Scripts/python.exe literals in the
+    closeout note as intentional CD.3 fallbacks (Decision 27 is the historical origin).
+  - >-
+    Do NOT incur a .claude/ <-> .agents/ sync obligation. Decision 76 (reaffirmed by Decision 85)
+    removed it; .agents/ is edited as legacy hygiene only.
+  - >-
+    The roadmap edit is bookkeeping/closeout only: change T0.14 status/completed_at/progress_note
+    and re-ground criteria text. Do not alter depends_on, files_in_scope, effort, bootstrap flags,
+    or any other tier_item.
+  - Plan artefact is YAML, never .md (Decision 76 cl.3, T1.11 / CD.22).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    T0.14 was in_progress with Phase 1 (.claude/ instruction layer, 2026-05-19) and Phase 2
+    (scripts/, 2026-05-27) complete. Phase 3's remainder was deferred to a named follow-on plan
+    (PLAN-t014-phase3-residual-sweep, audit F-036, 2026-06-09) that was never written. THIS plan is
+    that carrier.
+  - >-
+    Dependencies T0.1 and T0.9 are both status: complete -- T0.14 is fully unblocked. T2.11a
+    (depends_on [T0.2, T0.14]) owns the literal devcontainer Windows-ref exit criterion that this
+    plan re-grounds criterion #5 onto.
+  - >-
+    Exit-criteria adjudication at closure: #3 (CLAUDE.md/AGENTS.md "Shell invocations" OS-agnostic)
+    already holds; #4 (preflight/validate/pytest green in a Linux container with no Windows shims)
+    already holds -- session_preflight ran green this session; #5 (.devcontainer) is re-grounded
+    onto T2.11a (the .devcontainer/ directory does not exist yet -- it is T2.11a's deliverable);
+    #1/#2 are satisfied by the .agents/ reframe plus the documented CD.3-fallback reinterpretation;
+    #6 is satisfied by the .agents/ reframe plus the reviewed-and-left disposition for .github/.
+  - >-
+    The 5 scripts/ files named in T0.14's existing criterion-#2 reinterpretation
+    (executor/formatters.py, executor/step_runner.py, session_preflight.py, llm_utils.py,
+    copilot_wrapper.py) were verified this session as properly sys.platform == "win32"-guarded and
+    CD.3-annotated. src/data/handlers/CLAUDE.md (a named Phase 3 target) is already clean and needs
+    no edit.
+  - >-
+    Decision-scout verdict NO_FLAGS. CITE: Decision 76 (.claude canonical; supersedes Decision 58;
+    .agents/ demoted to legacy with no sync obligation; PLAN-{slug}.yaml mandated), Decision 85
+    (reaffirms 76 > 58; live precedent for editing .agents/skills/ as optional legacy hygiene),
+    Decision 75 (Frame-Lock Anti-Pattern; licenses the criterion-#5 re-ground as a frame correction,
+    not a silent weakening). CD.2 (Linux-primary) and CD.3 (Windows compute-node supported) are
+    CANDIDATE decisions (state: pending) -- cite as candidate decisions, not numbered Decisions.
+    Decision 27 is setup.py's Git-Bash-activate origin. The .github/ deep-freeze is AGENTS.md /
+    PROJECT_CONTEXT.md policy, not a numbered decision.
+  - >-
+    Decision 58 (".agents as Canonical Interactive Workflow Layer", 2026-05-01) is SUPERSEDED by
+    Decision 76 and reaffirmed superseded by Decision 85. The closeout note records this
+    supersession so a future reader does not re-litigate "isn't .agents/ canonical?". It must NOT
+    be cited as governing and must NOT trigger a sync-back to .claude/.
+  - >-
+    CI-RCA deferral (required by the Related-Work Check because rec-2213 is open): rec-2213
+    ("Sandbox apply workflow missing TF_VAR_alerts_email wiring", Critical) does not match any
+    Related-Work condition for this plan -- different source_file, different decision, and a
+    different failure category (terraform CI/CD vs Windows-assumption sweep). Deferred per explicit
+    human direction (2026-06-15): rec-2213 is owned by another agent and is out of scope for this
+    Windows-sweep closeout.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness: ok); no Scope-file
+    overlap with recent main changes, so no rebase is required before implementation.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness branch claude/gracious-goodall-gena9n)
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions surfaced via decision-scout (76, 85, 75, 58 superseded, 27; candidate CD.2/CD.3)
+  - All 4 files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed src/data/handlers/CLAUDE.md already clean (no edit needed)
+  - Confirmed .github/ deep-freeze and setup.py soft-deprecation status (reviewed-and-left)
+execution_steps:
+  - >-
+    .agents/workflows/plan.md -- in "Step 0: Activate Environment", replace the two bullet lines
+    ("PowerShell (Antigravity): .venv/Scripts/Activate.ps1 ... .venv/Scripts/python.exe" and
+    "Git Bash: source .venv/Scripts/activate") with a single OS-agnostic bullet directing the use of
+    bin/venv-python for all Python invocations (wrapper auto-detects the platform; no manual venv
+    activation needed). Leave the rest of the file untouched.
+  - >-
+    .agents/workflows/implement.md -- apply the identical reframe to its "Step 0: Activate
+    Environment" block. Leave the rest of the file untouched.
+  - >-
+    .agents/skills/planning/SKILL.md -- reframe the `venv_ok: false` preflight-constraint line:
+    replace "Auto-activate venv (`source .venv/Scripts/activate`) and rerun preflight. If still
+    false, STOP." with "Verify `bin/venv-python -c \"import sys; print(sys.executable)\"` resolves
+    to the venv interpreter and rerun preflight. If still false, STOP." Do not touch the Behavioural
+    Invariants block or any other line.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T0.14 -- (a) flip `status: in_progress` to `status: complete`;
+    (b) add `completed_at: 2026-06-15`; (c) append to progress_note: Phase 3 finalised -- .agents/
+    legacy workflow/skill files reframed to OS-agnostic bin/venv-python (Decision 76/85: .agents/ is
+    legacy hygiene, no sync obligation; Decision 58 superseded); src/data/handlers/CLAUDE.md already
+    clean; criterion #1/#2 reinterpretation extended to name setup.py's .venv/Scripts/python.exe
+    literals as intentional CD.3 Windows escape-hatch fallbacks (Decision 27 origin); criterion #5
+    re-grounded onto T2.11a (which owns the literal devcontainer Windows-ref check and depends_on
+    T0.14) as a Decision 75 frame correction, with T0.14's obligation grounded in criterion #4
+    (Linux-container green, met); criterion #6 -- .github/ legacy fallbacks reviewed and
+    intentionally left deep-frozen per AGENTS.md / PROJECT_CONTEXT.md.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass. On any unrecoverable
+    failure, stop and perform RCA rather than patching around it (Decision 55).
+  - "Report: what was reframed in each .agents/ file, the T0.14 closeout fields and progress_note written, and the verification-step results."
+work_areas: []
+rollback: >-
+  Revert the 4-file diff (`git checkout -- <files>` or revert the commit). The change is
+  bookkeeping plus narrow markdown reframes with no runtime, deploy, infra, or data effect, so
+  rollback is a clean no-op beyond restoring the prior T0.14 status and the .agents/ wording.
