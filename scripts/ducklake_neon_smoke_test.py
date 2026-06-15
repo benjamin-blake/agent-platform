@@ -786,6 +786,59 @@ def catalog_restore_drill(*, profile: str | None = None, region: str = "eu-west-
     )
 
 
+def migrate_ops_recs_columns(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T1.13 VP step 8: invoke maintenance reconcile_columns SERVER-SIDE and assert context_v2_json is present.
+
+    Uses the Lambda-mediated pattern (same as ops-read-your-write) because CC-web has no Neon 5432
+    egress -- the DDL runs server-side inside the maintenance Lambda against the production catalog.
+    Asserts the response reports context_v2_json present on BOTH history and current tables.
+    Idempotent: a second run reports added_history=[] / added_current=[] (no-op).
+    """
+    import os  # noqa: PLC0415
+
+    maint_url = _function_url("maintenance")
+    data_path_env = os.environ.get("DUCKLAKE_DATA_PATH")
+    try:
+        tf_result = subprocess.run(
+            ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_writer_data_path"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        tf_data_path = tf_result.stdout.strip() if tf_result.returncode == 0 else None
+    except FileNotFoundError:
+        tf_data_path = None
+
+    data_path = data_path_env or tf_data_path or "s3://agent-platform-data-lake/ducklake/"
+    payload = {
+        "action": "reconcile_columns",
+        "data_path": data_path,
+        "meta_schema": "ducklake_ops",
+        "table": "ops_recommendations",
+    }
+    body = _ok_json(_sigv4_invoke(maint_url, payload, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MIGRATE_OPS_RECS_COLUMNS FAIL: maintenance reconcile_columns returned ok=False: {body}")
+    added_h = body.get("added_history", [])
+    added_c = body.get("added_current", [])
+    pre_existing = body.get("columns_pre_existing", {})
+    # After reconcile, context_v2_json must be present on both tables.
+    # If the column was just added, it's in added_*. If it was already there, added_* is empty
+    # but columns_pre_existing shows True (no-op run). Check both: newly added OR already present.
+    history_ok = "context_v2_json" in added_h or pre_existing.get("history") is True
+    current_ok = "context_v2_json" in added_c or pre_existing.get("current") is True
+    if not history_ok or not current_ok:
+        raise SmokeTestFailure(
+            f"MIGRATE_OPS_RECS_COLUMNS FAIL: context_v2_json not confirmed on "
+            f"history={history_ok} current={current_ok}. Response: {body}"
+        )
+    print(
+        f"MIGRATE_OPS_RECS_COLUMNS OK context_v2_json present on history+current "
+        f"added_history={added_h} added_current={added_c}"
+    )
+
+
 # NOTE: the seed_ops_recommendations payload emitter (emit_recs_seed_payload) and its
 # --emit-recs-seed-payload flag were REMOVED at the 2026-06-09 recs sign-off alongside the maintenance
 # seed action (closed boundary, Decision 81 cl.7). Re-seeding is now a break-glass operation: git-revert
@@ -912,6 +965,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         dest="connect_probe",
         help="[post-deploy] T2.19 RCA: SigV4-invoke reader+writer connect_probe; print per-phase timings",
     )
+    group.add_argument(
+        "--migrate-ops-recs-columns",
+        action="store_true",
+        dest="migrate_ops_recs_columns",
+        help="[post-deploy] T1.13 VP8: reconcile_columns SERVER-SIDE via maintenance Lambda; "
+        "assert context_v2_json present on history+current (idempotent)",
+    )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
     args = parser.parse_args(argv)
@@ -928,6 +988,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("RESTORE_OK read-your-write verified")
         elif args.ops_read_your_write:
             ops_read_your_write(profile=args.profile, region=args.region)
+        elif args.migrate_ops_recs_columns:
+            migrate_ops_recs_columns(profile=args.profile, region=args.region)
         elif args.ops_churn_regate:
             ops_churn_regate(profile=args.profile, region=args.region)
         elif args.catalog_restore_drill:

@@ -336,6 +336,54 @@ def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bo
     con.execute(f"ALTER TABLE {current} SET PARTITIONED BY ({spec.partition_current})")
 
 
+def reconcile_table_columns(con: Any, *, table: str) -> dict[str, list[str]]:
+    """Add any spec columns missing from the physical history+current tables (idempotent via introspection).
+
+    Reads the column spec from the field_semantics.yaml contract via resolve_table_spec, introspects
+    the physical tables using DuckDB information_schema, and issues ALTER TABLE ADD COLUMN for each
+    spec column absent from the live table. Idempotency is guaranteed by the pre-check (not SQL IF NOT
+    EXISTS -- there is no ADD COLUMN IF NOT EXISTS precedent in DuckLake 1.5.3). Never DROPs.
+
+    Args:
+        con: Open DuckDB connection with the production catalog attached.
+        table: ops_* table logical name (e.g. 'ops_recommendations').
+
+    Returns:
+        Dict with 'added_history' and 'added_current' lists of column names added per table.
+    """
+    spec = resolve_table_spec(table)
+    history_fq = f"{CATALOG_ALIAS}.{spec.history_table}"
+    current_fq = f"{CATALOG_ALIAS}.{spec.current_table}"
+
+    def _physical_columns(table_fq: str) -> set[str]:
+        rows = con.execute(
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_catalog = '{CATALOG_ALIAS}' "
+            f"AND table_name = '{table_fq.split('.')[-1]}' "
+            f"ORDER BY ordinal_position"
+        ).fetchall()
+        if not rows:
+            rows = con.execute(f"PRAGMA table_info('{table_fq}')").fetchall()
+            return {r[1] for r in rows}
+        return {r[0] for r in rows}
+
+    added_history: list[str] = []
+    added_current: list[str] = []
+
+    for table_fq, added_list in [(history_fq, added_history), (current_fq, added_current)]:
+        existing = _physical_columns(table_fq)
+        for col_name, col_spec in spec.fields.items():
+            if col_name in existing:
+                continue
+            sql_type = col_spec.get("sql_type", "VARCHAR")
+            nullable = col_spec.get("nullable", True)
+            null_clause = "" if nullable else " NOT NULL"
+            con.execute(f"ALTER TABLE {table_fq} ADD COLUMN {col_name} {sql_type}{null_clause}")
+            added_list.append(col_name)
+
+    return {"added_history": added_history, "added_current": added_current}
+
+
 # ---------------------------------------------------------------------------
 # The shared write primitive -- history MERGE-on-ULID + current write-through, bounded OCC retry
 # ---------------------------------------------------------------------------

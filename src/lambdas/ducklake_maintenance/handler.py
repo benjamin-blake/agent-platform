@@ -336,6 +336,59 @@ def subprocess_run(cmd: list[str]) -> Any:
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
+def action_reconcile_columns(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """OPERATIONAL: add any spec columns missing from the physical ops_* history+current tables.
+
+    Non-destructive ALTER TABLE ADD COLUMN (never DROP). Idempotent: a second run is a no-op
+    because reconcile_table_columns checks physical columns before ALTER. Requires EXPLICIT
+    data_path + meta_schema event params (refuses no-arg invokes so it can never hit the smoke
+    catalog -- mirrors catalog_reinit's guard, Decision 84/81).
+
+    Expected event:
+        {"action": "reconcile_columns", "data_path": "s3://.../ducklake/",
+         "meta_schema": "ducklake_ops", "table": "ops_recommendations"}
+    """
+    data_path = event.get("data_path")
+    if not isinstance(data_path, str) or not data_path.startswith("s3://"):
+        raise rt.DuckLakeRuntimeError(
+            "reconcile_columns requires a 'data_path' s3:// URI (the production DuckLake path); "
+            "no-arg invokes refused (smoke-catalog guard, Decision 84/81)"
+        )
+    raw_schema = event.get("meta_schema")
+    if not raw_schema:
+        raise rt.DuckLakeRuntimeError(
+            "reconcile_columns requires an EXPLICIT 'meta_schema' (e.g. 'ducklake_ops'); "
+            "no-arg invokes refused so it can never hit the smoke catalog (Decision 84/81)"
+        )
+    meta_schema = _require_identifier(raw_schema)
+    table = event.get("table")
+    if not isinstance(table, str) or not table.strip():
+        raise rt.DuckLakeRuntimeError("reconcile_columns requires a non-empty 'table' param (e.g. 'ops_recommendations')")
+
+    con = rt.open_connection(
+        dsn=rt.fetch_dsn(), data_path=data_path, meta_schema=meta_schema, extension_directory=EXTENSION_DIRECTORY
+    )
+    try:
+        result = rt.reconcile_table_columns(con, table=table)
+    finally:
+        con.close()
+    return {
+        "ok": True,
+        "action": "reconcile_columns",
+        "table": table,
+        "meta_schema": meta_schema,
+        "data_path": data_path,
+        "added_history": result["added_history"],
+        "added_current": result["added_current"],
+        # True when the spec columns were ALREADY present (no ALTER issued this run).
+        # After reconcile the columns are present either way; this flags the no-op path.
+        "columns_pre_existing": {
+            "history": not result["added_history"],
+            "current": not result["added_current"],
+        },
+    }
+
+
 def action_merge_ops(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     """OPERATIONAL: non-destructive merge over ALL live ops_* SCD2 table pairs in the production catalog.
 
@@ -419,11 +472,12 @@ _ACTIONS: dict[str, Any] = {
     "catalog_reinit": action_catalog_reinit,
     "restore_drill": action_restore_drill,
     "merge_ops": action_merge_ops,
+    "reconcile_columns": action_reconcile_columns,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops"}
+_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops", "reconcile_columns"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
