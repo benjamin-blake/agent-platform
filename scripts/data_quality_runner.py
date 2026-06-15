@@ -43,6 +43,7 @@ _DQ_DIR = _ROOT / "config" / "agent" / "data_quality"
 _TOMBSTONES_PATH = _DQ_DIR / "dq_tombstones.yaml"
 _POLL_INTERVAL = 2  # seconds between Athena status checks
 _MAX_POLL = 60  # max seconds to wait for a single query
+_TRANSIENT_HTTP_RE = re.compile(r"failed \(HTTP (?:502|503|504)\)")
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,10 @@ class RunResult:
     @property
     def hard_gated(self) -> int:
         return sum(1 for r in self.results if r.verdict == "HARD_GATE")
+
+    @property
+    def unavailable(self) -> int:
+        return sum(1 for r in self.results if r.verdict == "UNAVAILABLE")
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +529,33 @@ def build_clause8_checks(spec_yaml: dict, database: str, table_filter: str | Non
     return checks
 
 
+def _query_ops_rows(reader: Any, table: str, sql: str) -> list[dict]:
+    """Call the reader's raising _invoke surface and return the rows list."""
+    body = reader._invoke({"action": "query_ops", "table": table, "sql": sql, "params": []})
+    return list(body.get("rows", []))
+
+
+def _is_reader_unavailable(exc: BaseException) -> bool:
+    """True when exc indicates a transient DuckLake reader infra outage.
+
+    Transient: requests ConnectionError/Timeout, or a RuntimeError whose message
+    matches the reader's own transient set {502,503,504} with no structured error_type marker.
+    Structured handler errors (HTTP 500 + error_type, 4xx) are not transient -- they gate.
+    """
+    try:
+        import requests as _req  # noqa: PLC0415
+
+        if isinstance(exc, (_req.ConnectionError, _req.Timeout)):
+            return True
+    except ImportError:
+        pass
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if _TRANSIENT_HTTP_RE.search(msg) and "error_type" not in msg:
+            return True
+    return False
+
+
 def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
     """Execute a single ops-table check against DuckLake via the closed reader. DuckDB dialect.
 
@@ -548,17 +580,18 @@ def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
             from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
 
             hist = resolve_table_spec(table).history_table
-            rows = reader.query(table, sql.replace("{tbl}", f"ops_catalog.{hist}"))
+            rows = _query_ops_rows(reader, table, sql.replace("{tbl}", f"ops_catalog.{hist}"))
         else:
-            rows = reader.query(table, sql)
+            rows = _query_ops_rows(reader, table, sql)
         if rows is None:
             return CheckResult(
                 check=check, verdict="ERROR", detail="ducklake reader returned None", duration_seconds=time.time() - start
             )
         violation_count = int(next(iter(rows[0].values()))) if rows else 0
     except Exception as exc:  # noqa: BLE001
+        verdict = "UNAVAILABLE" if _is_reader_unavailable(exc) else "ERROR"
         return CheckResult(
-            check=check, verdict="ERROR", detail=f"ducklake query failed: {exc}", duration_seconds=time.time() - start
+            check=check, verdict=verdict, detail=f"ducklake query failed: {exc}", duration_seconds=time.time() - start
         )
     return _verdict_for(check, violation_count, time.time() - start)
 
@@ -714,7 +747,16 @@ def run_checks(
             result = _execute_check(check, athena, workgroup, database)
         results.append(result)
         # Log as we go
-        symbol = {"PASS": ".", "FAIL": "F", "UNENFORCED_FAIL": "U", "WARN": "W", "ERROR": "E", "SKIP": "S", "HARD_GATE": "G"}
+        symbol = {
+            "PASS": ".",
+            "FAIL": "F",
+            "UNENFORCED_FAIL": "U",
+            "WARN": "W",
+            "ERROR": "E",
+            "SKIP": "S",
+            "HARD_GATE": "G",
+            "UNAVAILABLE": "A",
+        }
         print(symbol.get(result.verdict, "?"), end="", flush=True)
 
     print()  # newline after progress dots
@@ -726,7 +768,10 @@ def run_checks(
         has_hard_gate = any(r.verdict == "HARD_GATE" for r in results)
         has_fail = any(r.verdict == "FAIL" and r.check.enforced for r in results)
         has_error = any(r.verdict == "ERROR" for r in results)
-        verdict = "HARD_GATE" if has_hard_gate else ("FAIL" if (has_fail or has_error) else "PASS")
+        has_unavailable = any(r.verdict == "UNAVAILABLE" for r in results)
+        verdict = (
+            "HARD_GATE" if has_hard_gate else "FAIL" if (has_fail or has_error) else "DEGRADED" if has_unavailable else "PASS"
+        )
 
     return RunResult(
         results=results,
@@ -752,6 +797,7 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
             "warned": run_result.warned,
             "errored": run_result.errored,
             "skipped": run_result.skipped,
+            "unavailable": run_result.unavailable,
             "duration_seconds": round(run_result.duration_seconds, 1),
             "checks": [
                 {
@@ -773,19 +819,24 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
     print(f"\n{'=' * 60}")
     print(f"Data Quality: {run_result.verdict}")
     print(f"{'=' * 60}")
+    if run_result.verdict == "DEGRADED":
+        print(f"  *** DEGRADED: {run_result.unavailable} check(s) could not reach the DuckLake backend. ***")
+        print("  *** Gate not enforced -- infra outage, not a data violation. ***")
     print(
         f"  Passed: {run_result.passed}  "
         f"Failed: {run_result.failed}  "
         f"Unenforced: {run_result.unenforced_fail}  "
         f"Warned: {run_result.warned}  "
         f"Errors: {run_result.errored}  "
-        f"Skipped: {run_result.skipped}"
+        f"Skipped: {run_result.skipped}  "
+        f"Unavailable: {run_result.unavailable}"
     )
     print(f"  Duration: {run_result.duration_seconds:.1f}s")
     print()
 
-    # Show failures and warnings
-    issues = [r for r in run_result.results if r.verdict in ("FAIL", "UNENFORCED_FAIL", "WARN", "ERROR", "HARD_GATE")]
+    # Show failures, warnings, and unavailable checks
+    _ISSUE_VERDICTS = ("FAIL", "UNENFORCED_FAIL", "WARN", "ERROR", "HARD_GATE", "UNAVAILABLE")
+    issues = [r for r in run_result.results if r.verdict in _ISSUE_VERDICTS]
     if issues:
         print("Issues:")
         for r in issues:
@@ -795,6 +846,7 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
                 "WARN": "WARN",
                 "ERROR": "ERR ",
                 "HARD_GATE": "GATE",
+                "UNAVAILABLE": "UNAVL",
             }[r.verdict]
             print(f"  [{prefix}] {r.check.description}")
             if r.detail:
@@ -934,7 +986,7 @@ def main() -> int:
     # Save latest result for preflight consumption
     _save_latest_result(result)
 
-    return 0 if result.verdict == "PASS" else 1
+    return 0 if result.verdict in {"PASS", "DEGRADED", "SKIP"} else 1
 
 
 def _save_latest_result(result: RunResult) -> None:
@@ -955,6 +1007,7 @@ def _save_latest_result(result: RunResult) -> None:
         "warned": result.warned,
         "errored": result.errored,
         "hard_gated": result.hard_gated,
+        "unavailable": result.unavailable,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "duration_seconds": round(result.duration_seconds, 1),
         "checks": [

@@ -1220,6 +1220,7 @@ def check_data_quality_coverage() -> dict:
                 "passed": data.get("passed", 0),
                 "failed": data.get("failed", 0),
                 "warned": data.get("warned", 0),
+                "unavailable": data.get("unavailable", 0),
                 "timestamp": data.get("timestamp", ""),
             }
         except Exception:  # noqa: BLE001
@@ -1255,7 +1256,12 @@ def print_telemetry_health(health: dict) -> None:
         print(f"\n  Data quality: {dq['checks_defined']} checks across {dq['tables_covered']} tables")
         if dq["last_run"]:
             lr = dq["last_run"]
-            print(f"  Last run: {lr['verdict']} ({lr['passed']}P/{lr['failed']}F/{lr['warned']}W) at {lr['timestamp']}")
+            unavail_str = f"/{lr.get('unavailable', 0)}U" if lr.get("unavailable", 0) else ""
+            verdict_tag = " [DEGRADED -- backend unavailable]" if lr["verdict"] == "DEGRADED" else ""
+            print(
+                f"  Last run: {lr['verdict']}{verdict_tag} "
+                f"({lr['passed']}P/{lr['failed']}F/{lr['warned']}W{unavail_str}) at {lr['timestamp']}"
+            )
         else:
             print("  Last run: never (run: python -m scripts.data_quality_runner)")
     print()

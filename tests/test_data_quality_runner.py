@@ -11,6 +11,8 @@ from scripts.data_quality_runner import (
     RunResult,
     _compile_column_test,
     _execute_check,
+    _execute_check_ducklake,
+    _is_reader_unavailable,
     _print_results,
     _save_latest_result,
     load_checks,
@@ -896,8 +898,8 @@ def test_execute_check_ducklake_success():
     import scripts.data_quality_runner as dq
 
     class _Reader:
-        def query(self, table, sql, **kw):
-            return [{"violation": 0}]
+        def _invoke(self, payload):
+            return {"rows": [{"violation": 0}]}
 
     check = dq.Check("ops_recommendations", "id", "not_null", "SELECT COUNT(*) v FROM {tbl}", "d", backend="ducklake")
     assert dq._execute_check_ducklake(check, _Reader()).verdict == "PASS"
@@ -914,8 +916,8 @@ def test_execute_check_ducklake_reader_none_is_error():
     import scripts.data_quality_runner as dq
 
     class _Reader:
-        def query(self, *a, **k):
-            return None
+        def _invoke(self, payload):
+            return None  # unexpected None from _invoke -- body.get() raises AttributeError -> ERROR
 
     check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
     assert dq._execute_check_ducklake(check, _Reader()).verdict == "ERROR"
@@ -925,8 +927,8 @@ def test_run_checks_routes_ducklake(monkeypatch):
     import scripts.data_quality_runner as dq
 
     class _Reader:
-        def query(self, table, sql, **kw):
-            return [{"violation": 0}]
+        def _invoke(self, payload):
+            return {"rows": [{"violation": 0}]}
 
     monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
     check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
@@ -944,3 +946,211 @@ def test_tombstone_check_rewrites_to_ducklake_no_athena():
     assert "{tbl}" in rewritten
     assert "agent_platform.ops_recommendations" not in rewritten  # no Athena escape hatch
     assert checks[0].table in dq._OPS_TABLES  # so main() flips it to backend=ducklake
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: _is_reader_unavailable classification
+# ---------------------------------------------------------------------------
+
+
+class TestIsReaderUnavailable:
+    """_is_reader_unavailable must classify transient infra outages vs structured handler errors."""
+
+    def test_requests_connection_error_is_unavailable(self):
+        import requests
+
+        assert _is_reader_unavailable(requests.ConnectionError("connection refused")) is True
+
+    def test_requests_timeout_is_unavailable(self):
+        import requests
+
+        assert _is_reader_unavailable(requests.Timeout("timed out")) is True
+
+    def test_runtime_error_502_no_error_type_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("ducklake reader failed (HTTP 502)")) is True
+
+    def test_runtime_error_503_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 503)")) is True
+
+    def test_runtime_error_504_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 504)")) is True
+
+    def test_runtime_error_502_with_error_type_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 502) error_type=runtime")) is False
+
+    def test_runtime_error_500_with_error_type_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 500) error_type=version_mismatch")) is False
+
+    def test_runtime_error_500_no_error_type_is_not_unavailable(self):
+        """HTTP 500 is NOT in the transient set {502,503,504} -- must gate as ERROR."""
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 500)")) is False
+
+    def test_runtime_error_4xx_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 403)")) is False
+
+    def test_generic_exception_is_not_unavailable(self):
+        assert _is_reader_unavailable(Exception("some error")) is False
+
+    def test_value_error_is_not_unavailable(self):
+        assert _is_reader_unavailable(ValueError("bad value")) is False
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: _execute_check_ducklake exception classification
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteCheckDucklakeUnavailable:
+    """_execute_check_ducklake must classify transient _invoke raises as UNAVAILABLE."""
+
+    def test_connection_error_returns_unavailable(self):
+        import requests
+
+        class _Reader:
+            def _invoke(self, payload):
+                raise requests.ConnectionError("connection refused")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_runtime_error_502_returns_unavailable(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 502)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_runtime_error_503_returns_unavailable(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("failed (HTTP 503)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_structured_500_with_error_type_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 500) error_type=runtime")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+    def test_runtime_error_4xx_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 403)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+    def test_semantic_error_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise ValueError("bad SQL syntax")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: run_checks aggregate
+# ---------------------------------------------------------------------------
+
+
+class TestRunChecksDegradedAggregate:
+    """run_checks must aggregate DEGRADED when the only non-PASS results are UNAVAILABLE."""
+
+    def test_only_unavailable_aggregates_to_degraded(self, monkeypatch):
+        import scripts.data_quality_runner as dq
+
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("failed (HTTP 503)")
+
+        monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+        check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        result = dq.run_checks([check], "wg", "db", dry_run=False)
+        assert result.verdict == "DEGRADED"
+        assert result.unavailable == 1
+
+    def test_mixed_unavailable_and_violation_aggregates_to_fail(self, monkeypatch):
+        import scripts.data_quality_runner as dq
+
+        call_count = {"n": 0}
+
+        class _Reader:
+            def _invoke(self, payload):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    raise RuntimeError("failed (HTTP 503)")
+                return {"rows": [{"violation": 5}]}
+
+        monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+        checks = [
+            dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake"),
+            dq.Check("ops_recommendations", "file", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake"),
+        ]
+        result = dq.run_checks(checks, "wg", "db", dry_run=False)
+        assert result.verdict == "FAIL"
+
+    def test_unavailable_property_counts_correctly(self):
+        c = Check("t", "c", "type", "sql", "d")
+        rr = RunResult(
+            results=[
+                CheckResult(c, "UNAVAILABLE"),
+                CheckResult(c, "UNAVAILABLE"),
+                CheckResult(c, "PASS"),
+            ],
+            verdict="DEGRADED",
+        )
+        assert rr.unavailable == 2
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: main() exit code
+# ---------------------------------------------------------------------------
+
+
+class TestMainExitCodeDegraded:
+    """main() must exit 0 on DEGRADED and 1 on real FAIL."""
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_0_on_degraded(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="DEGRADED")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 0
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_1_on_fail(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="FAIL")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 1
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_1_on_hard_gate(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="HARD_GATE")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 1

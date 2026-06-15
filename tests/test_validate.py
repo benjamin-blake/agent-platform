@@ -1868,6 +1868,91 @@ class TestGraduationGuard:
         mock_guard.assert_not_called()
 
 
+class TestGraduationGuardUnavailableCarveout:
+    """UNAVAILABLE per-check verdict warns (inconclusive) and does NOT block graduation."""
+
+    _OLD_YAML = (
+        "tables:\n  tbl:\n    columns:\n      col:\n        tests:\n          - not_null:\n              enforced: false\n"
+    )
+    _NEW_YAML = (
+        "tables:\n  tbl:\n    columns:\n      col:\n        tests:\n          - not_null:\n              enforced: true\n"
+    )
+
+    def _write_dq_latest(self, tmp_path: Path, checks: list) -> None:
+        import json
+
+        dq_dir = tmp_path / "logs" / "debug"
+        dq_dir.mkdir(parents=True, exist_ok=True)
+        (dq_dir / "dq-latest.json").write_text(
+            json.dumps({"verdict": "DEGRADED", "checks": checks}),
+            encoding="utf-8",
+        )
+
+    def _write_new_yaml(self, tmp_path: Path, content: str) -> None:
+        yaml_file = tmp_path / "config" / "agent" / "data_quality" / "test.yaml"
+        yaml_file.parent.mkdir(parents=True, exist_ok=True)
+        yaml_file.write_text(content, encoding="utf-8")
+
+    def _make_run(self, old_yaml: str = "", git_show_rc: int = 0):
+        def _run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            joined = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            if "--show-current" in joined:
+                result.stdout = "agent/test\n"
+            elif "--name-only" in joined:
+                result.stdout = "config/agent/data_quality/test.yaml\n"
+            elif "show" in joined and "HEAD:" in joined:
+                result.stdout = old_yaml
+                result.returncode = git_show_rc
+            else:
+                result.stdout = ""
+            return result
+
+        return _run
+
+    def test_unavailable_verdict_warns_does_not_block(self, tmp_path: Path, capsys) -> None:
+        """UNAVAILABLE per-check verdict warns (inconclusive) and does not append a graduation failure."""
+        self._write_dq_latest(
+            tmp_path,
+            [{"table": "tbl", "column": "col", "test": "not_null", "verdict": "UNAVAILABLE"}],
+        )
+        self._write_new_yaml(tmp_path, self._NEW_YAML)
+
+        with (
+            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("validate.ROOT", tmp_path),
+        ):
+            failed: list = []
+            _check_graduation_guard(failed)
+
+        assert failed == []
+        assert "UNAVAILABLE" in capsys.readouterr().out
+
+    def test_non_pass_non_skip_non_unavailable_still_blocks(self, tmp_path: Path) -> None:
+        """A genuine non-PASS/non-SKIP/non-UNAVAILABLE verdict (FAIL) still blocks graduation."""
+        dq_dir = tmp_path / "logs" / "debug"
+        dq_dir.mkdir(parents=True, exist_ok=True)
+        import json
+
+        checks_data = [{"table": "tbl", "column": "col", "test": "not_null", "verdict": "FAIL"}]
+        (dq_dir / "dq-latest.json").write_text(
+            json.dumps({"verdict": "FAIL", "checks": checks_data}),
+            encoding="utf-8",
+        )
+        self._write_new_yaml(tmp_path, self._NEW_YAML)
+
+        with (
+            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("validate.ROOT", tmp_path),
+        ):
+            failed: list = []
+            _check_graduation_guard(failed)
+
+        assert len(failed) == 1
+        assert "tbl.col.not_null" in failed[0]
+
+
 class TestValidateDqManifestGate:
     """Tests for validate_dq_manifest_gate() -- allowlist enforcement."""
 

@@ -2016,8 +2016,8 @@ def _check_graduation_guard(failed: list[str]) -> None:
             if verdict is None:
                 print(f"  WARN: {label} flipped to enforced:true but not found in dq-latest.json checks.")
                 continue
-            if verdict == "SKIP":
-                print(f"  WARN: {label} has verdict=SKIP (dry-run only, inconclusive) -- flip not blocked but unverified.")
+            if verdict in {"SKIP", "UNAVAILABLE"}:
+                print(f"  WARN: {label} has verdict={verdict} (inconclusive) -- flip not blocked but unverified.")
                 continue
             if verdict != "PASS":
                 failed.append(
