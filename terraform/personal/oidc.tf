@@ -613,9 +613,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       {
         # logs:DescribeLogGroups has no resource-level scoping in IAM -- Resource: "*" is required.
         # Refresh-time read the provider issues on every aws_cloudwatch_log_group plan; do not prune as unused.
-        Sid    = "CloudWatchLogsRead"
-        Effect = "Allow"
-        Action = ["logs:DescribeLogGroups"]
+        Sid      = "CloudWatchLogsRead"
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups"]
         Resource = ["*"]
       },
       {
@@ -634,17 +634,20 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "lambda:ListVersionsByFunction",
           "lambda:ListTags"
         ]
+        # Literal ARNs (not resource references): a refresh-read grant should not create a
+        # Terraform dependency edge onto the resource it reads. Mirrors the IAMPlatformRolesRead
+        # literal-ARN convention.
         Resource = [
-          aws_lambda_layer_version.ducklake_pgclient.arn,
-          "${aws_lambda_layer_version.ducklake_pgclient.arn}:*",
-          aws_lambda_layer_version.ducklake_deps.arn,
-          "${aws_lambda_layer_version.ducklake_deps.arn}:*",
-          aws_lambda_layer_version.ducklake_extensions.arn,
-          "${aws_lambda_layer_version.ducklake_extensions.arn}:*",
-          aws_lambda_function.ducklake_catalog_dr.arn,
-          aws_lambda_function.ducklake_writer.arn,
-          aws_lambda_function.ducklake_reader.arn,
-          aws_lambda_function.ducklake_maintenance.arn,
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
         ]
       },
       {
@@ -659,12 +662,15 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "events:ListTagsForResource",
           "events:ListTargetsByRule"
         ]
+        # Literal ARNs (not resource references): merge-ops is not yet in state, so a resource
+        # reference would force its creation; and a refresh-read grant should not depend on the
+        # lifecycle of the resource it reads. Mirrors the IAMPlatformRolesRead literal-ARN convention.
         Resource = [
-          aws_cloudwatch_event_rule.ducklake_catalog_dr.arn,
-          aws_cloudwatch_event_rule.ducklake_maintenance_merge.arn,
-          aws_cloudwatch_event_rule.ducklake_maintenance_gc.arn,
-          aws_cloudwatch_event_rule.ducklake_maintenance_hot_merge.arn,
-          aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops.arn,
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
         ]
       },
       {
