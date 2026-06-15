@@ -1,0 +1,424 @@
+schema_version: 1
+slug: neon-egress-reduction
+intent: >-
+  Reduce Neon catalog egress -- which breached the free-tier 5 GB/month cap on 2026-06-15 and
+  forced a paid-plan upgrade -- by eliminating self-inflicted DuckLake access-pattern
+  amplification, and persist a Decision that prevents the class of mistake recurring. Protects
+  the platform's near-zero-cost operating posture without weakening the DuckLake-on-Neon ACID /
+  time-travel guarantees (Decision 84 / Decision 81).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-neon-egress-reduction.yaml
+phase: >-
+  Platform T2.18 / T2.19 (DuckLake ops maintenance + live read/write path) with a CD.34 amendment.
+  Ad-hoc cost-incident remediation (soft-warn exception: free-tier egress cap breached 2026-06-15).
+  Root-cause fix for the reader-502 symptom captured in ci_rca rec-2244.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      D4. Serve Phase-B signals (ci_rca, priority_queue, forward_fix, budget, rec tallies) from the
+      local cache that the Phase-A warm-up sync just wrote, instead of re-querying the reader for
+      data already pulled. Preserve exactly one serial warm-up reader call (Neon cold-resume) before
+      any fan-out. Fix the load-bearing comment at L1328/L1361 that mis-cites "Decision 82" for the
+      cold-resume warm-up (Decision 82 is the EC8 churn-gate frame correction; audit F-033).
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      D4. Replace the post-write full-table resync (_sync_table -> _pull_single_table after every
+      file_rec/update_rec) with an incremental update of the local read-cache from the writer's
+      authoritative returned row. No warehouse round-trip per write. This is a read-cache refresh
+      downstream of the synchronous writer commit -- NOT a write outbox and NOT a replay-from-cache
+      source (the write still transits ducklake_writer; Decision 84 I-4 preserved).
+  - file: scripts/sync_ops.py
+    action: Modify
+    purpose: >-
+      D4. Add an incremental single-row cache-upsert helper consumed by ops_data_portal, and an
+      optional batched-pull path so the 3-table warm-up sync can be one reader invocation. Keep
+      _rebuild_local_cache (full pull) as the explicit `sync` fallback.
+  - file: src/common/ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      D2. Add a module-level warm-connection cache helper (get_warm_connection) layered over
+      open_connection: reuse a live cached DuckDB+ATTACH connection across sequential warm Lambda
+      invocations; detect a dead connection (Neon scale-to-zero suspended the underlying Postgres
+      session) via a cheap liveness probe and transparently reopen. Per-container global only;
+      concurrent-thread callers (churn gate) keep independent connections.
+  - file: src/lambdas/ducklake_reader/handler.py
+    action: Modify
+    purpose: >-
+      D2. Use the warm-connection helper instead of opening+closing a fresh connection per request
+      (current handler L236/L241). Keep loud-fail mapping; ensure a dead-connection reopen never
+      leaks a 5xx. Emit _connect_ms so warm reuse is observable.
+  - file: src/lambdas/ducklake_writer/handler.py
+    action: Modify
+    purpose: >-
+      D2. Use the warm-connection helper on the single-statement request path (handler L632/L637).
+      The 8-thread churn harness path MUST keep one fresh connection per thread (unchanged). Update
+      the churn/pre-warm measurement to record cold AND warm connect latency (closes rec-2096).
+  - file: src/common/ducklake_maintenance.py
+    action: Modify
+    purpose: >-
+      D3a. Expand HOT_TABLE_SCOPE (and the merge scope) to the production ops_* tables
+      (ops_recommendations, ops_decisions) -- a T2.19 exit criterion, non-destructive only. Leave
+      GC_TABLE_SCOPE (destructive expire/cleanup/orphan) SMOKE-only: expanding it to ops_* is
+      D3b, gated by rec-2113 / T2.26 and explicitly deferred by this plan.
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      D3a + measurement obligation. Ensure hot_merge honors the expanded ops_* scope, and add a
+      read-only `catalog_stats` action returning per-ops_*-table snapshot count, data_file count,
+      and file_column_stats row count / estimated catalog bytes. This is the observability the
+      measurement subagent found MISSING at planning time (every direct size read was IAM-blocked),
+      so the Decision's measurement obligation becomes enforceable rather than aspirational.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: >-
+      D3a. Point the higher-frequency hot_merge cadence at the production ops_* catalog (or raise
+      merge_ops frequency) so small-file growth between the daily merge is paid down faster,
+      shrinking the per-query ducklake_file_column_stats footprint that drives every read's Neon
+      metadata egress. Non-destructive only. (No IAM change -- the maintenance role already reads the
+      catalog; catalog_stats adds no new permission.)
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: >-
+      D1. Change the DR pg_dump schedule from daily cron(0 3 * * ? *) to weekly cron(0 3 ? * SUN *)
+      per the human's durability call (paid-tier Neon provides 7-day PITR for finer-grained
+      recovery between weekly full dumps). ~7x reduction in the session-independent pg_dump egress
+      line.
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      D2 verification. Add warm-reuse smoke actions (--lambda-warm-reuse for reader, writer variant)
+      that invoke a Lambda twice in sequence and assert the 2nd connect is reused (near-zero
+      _connect_ms, no re-ATTACH) and that a simulated cold path still reconnects. Record cold+warm
+      connect latency (rec-2096).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      The "prevent this again" artifact. Add the next sequential numbered Decision establishing
+      catalog egress as a first-class budget with four standing access-pattern invariants, a
+      measurement obligation, the CD.34 "negligible add-on" amendment, and the D3b deferral behind
+      rec-2113. Source of truth for ops_decisions (rebuilt via --backfill-decisions-md).
+  - file: tests/test_session_preflight_cache_serving.py
+    action: Create
+    purpose: D4 unit test -- Phase B issues zero reader verbs when the local cache is fresh.
+  - file: tests/test_ops_portal_incremental_cache.py
+    action: Create
+    purpose: D4 unit test -- file_rec/update_rec upsert the local cache without a full-table reader pull.
+  - file: tests/test_ducklake_runtime_warm_connection.py
+    action: Create
+    purpose: D2 unit test -- warm reuse, dead-connection reopen, and per-thread isolation.
+bundled_recommendations:
+  - rec-2096
+infrastructure_dependencies:
+  - >-
+    terraform/personal/** is the sandbox PLATFORM environment: push-to-main auto-applies behind
+    scripts/terraform_apply_guard.py (fail-closed on any destroy / IAM / trust change) plus a
+    subagent plan review (Decision 77). The DR-cron and maintenance-scope changes are
+    non-destructive and touch no IAM / trust / destroy, so the guard must stay green -- if a plan
+    diff shows any destroy/IAM delta, STOP (it means an unintended change crept in).
+  - >-
+    Per-Lambda gating (Decision 79 / CD.16+CD.24): ducklake_reader, ducklake_writer, and
+    ducklake_maintenance are active artifacts. Each modified active artifact needs per-Lambda build
+    + deploy + smoke-test + model-ID-validation steps (V3). Use
+    `bin/venv-python -m scripts.lambda_manifest --list-patterns` and compute_affected_artifacts to
+    confirm the affected set before deploying.
+acceptance_criteria:
+  - >-
+    A session preflight run with a fresh local cache issues at most the warm-up sync's reader
+    invocations (target <=3, ideally 1 if batched) and ZERO additional Phase-B reader verb calls --
+    down from ~9-10 today. Verified by unit test (mocked reader) and by CloudWatch reader-invocation
+    count per preflight.
+  - >-
+    A portal write (file_rec / update_rec) performs zero full-table resync reader calls; the local
+    read-cache reflects the written row via incremental upsert from the writer's response. The write
+    itself still transits ducklake_writer synchronously (no buffering; Decision 84 I-4 intact).
+  - >-
+    Reader and writer warm Lambda invocations reuse a cached connection: 2nd sequential invocation
+    _connect_ms is near-zero (no re-ATTACH), and a connection killed by Neon scale-to-zero is
+    detected and transparently reopened (no leaked 5xx). The 8-thread churn path keeps per-thread
+    connections.
+  - >-
+    The production ops_* tables are in the non-destructive merge (hot_merge / merge_ops) scope; no
+    destructive expire/cleanup/orphan runs against ops_* (that remains gated by rec-2113 / T2.26).
+  - >-
+    The DR pg_dump EventBridge schedule is weekly (cron(0 3 ? * SUN *)) in source and live; the
+    per-dump and monthly-egress numbers are measured and recorded in the Decision.
+  - >-
+    A new numbered Decision is persisted in docs/DECISIONS.md codifying the catalog-egress budget,
+    the four access-pattern invariants, the measurement obligation, the CD.34 amendment, and the
+    D3b deferral; ops_decisions rebuilds cleanly from it (decisions_max_updated advances).
+  - >-
+    rec-2096 is closed: the churn / pre-warm measurement records cold AND warm connect latency.
+  - Full presubmit (`bin/venv-python -m scripts.validate`) is green; remote CI is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Preflight Phase-B is served from the fresh local cache, not the reader.
+    command: bin/venv-python -m pytest tests/test_session_preflight_cache_serving.py -q
+    expected: >-
+      Pass. With a fresh cache, the ci_rca / priority_queue / forward_fix / budget / rec-tally
+      signals are computed from the local JSONL caches; the mocked reader records zero named()/
+      current_state() calls in Phase B (only the warm-up sync touches it).
+    fix_if: >-
+      Test fails or the reader mock still sees Phase-B verb calls -> the cache-serving path is not
+      wired; trace each fut_* in session_preflight Phase B to its cache source.
+  - step: 2
+    phase: pre-deploy
+    action: Portal write upserts the local cache without a full-table reader pull.
+    command: bin/venv-python -m pytest tests/test_ops_portal_incremental_cache.py -q
+    expected: >-
+      Pass. file_rec and update_rec update the local JSONL row from the writer's returned record;
+      the mocked reader records zero current_state()/_pull_single_table calls. A subsequent read of
+      the cache reflects the new/updated row.
+    fix_if: >-
+      _sync_table still calls _pull_single_table, or the cache is not updated -> reads would go stale
+      and the resync would still egress. Wire the incremental upsert in sync_ops and call it from
+      ops_data_portal.
+  - step: 3
+    phase: pre-deploy
+    action: Warm-connection reuse, dead-connection reopen, and per-thread isolation.
+    command: bin/venv-python -m pytest tests/test_ducklake_runtime_warm_connection.py -q
+    expected: >-
+      Pass. A 2nd get_warm_connection() in the same container returns the cached connection (no new
+      ATTACH); a closed/dead connection is detected by the liveness probe and a fresh one is opened;
+      two threads receive distinct connections.
+    fix_if: >-
+      Connection not reused (no saving) or dead connection not reopened (would surface as a prod 5xx
+      after Neon scale-to-zero). Add the liveness probe + reopen and the per-thread guard.
+  - step: 4
+    phase: pre-deploy
+    action: Maintenance scope includes production ops_* for non-destructive merge but NOT destructive GC.
+    command: >-
+      bin/venv-python -c "from src.common.ducklake_maintenance import HOT_TABLE_SCOPE, GC_TABLE_SCOPE;
+      assert any('ops_' in t for t in HOT_TABLE_SCOPE), ('HOT missing ops_', HOT_TABLE_SCOPE);
+      assert not any('ops_' in t for t in GC_TABLE_SCOPE), ('GC must stay smoke-only (rec-2113 gate)', GC_TABLE_SCOPE);
+      print('ok', HOT_TABLE_SCOPE, GC_TABLE_SCOPE)"
+    expected: Prints ok with ops_ tables in HOT_TABLE_SCOPE and absent from GC_TABLE_SCOPE.
+    fix_if: >-
+      ops_ missing from HOT -> D3a not done. ops_ present in GC -> D3b gate (rec-2113 / T2.26)
+      violated; revert the GC scope change immediately.
+  - step: 5
+    phase: pre-deploy
+    action: DR schedule is weekly in source.
+    command: grep -nE 'cron\(0 3 \? \* SUN \*\)' terraform/personal/ducklake_catalog_dr.tf
+    expected: One match on the DR EventBridge rule schedule_expression (daily cron(0 3 * * ? *) replaced).
+    fix_if: No match / still daily -> apply D1.
+  - step: 6
+    phase: pre-deploy
+    action: The new Decision is present and well-formed.
+    command: grep -nEi 'catalog egress.*budget|egress.*first-class' docs/DECISIONS.md
+    expected: Matches the new Decision heading/body.
+    fix_if: Missing -> author the Decision block (next sequential number) per the execution steps.
+  - step: 7
+    phase: pre-deploy
+    action: Full presubmit (identical to CI) is green.
+    command: bin/venv-python -m scripts.validate
+    expected: PASS across lint/format, schema, prompt-compliance, intent-doc-freeze, contract-drift, unit tests.
+    fix_if: Any failure -> fix before pushing; CI is authoritative.
+  - step: 8
+    phase: post-deploy
+    action: Reader Lambda warm reuse against live Neon.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-warm-reuse --json
+    expected: >-
+      JSON: two sequential reader invocations on one warm container; 1st _connect_ms > 0 (cold
+      ATTACH), 2nd _connect_ms < 5 (reused, no re-ATTACH); both return correct rows; a forced
+      cold/dead-connection variant reconnects (ok=true).
+    fix_if: 2nd _connect_ms ~= 1st (no reuse) or any 5xx on the dead-connection variant.
+  - step: 9
+    phase: post-deploy
+    action: Writer Lambda warm reuse + write correctness + cold/warm measurement (rec-2096).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-warm-reuse-writer --json
+    expected: >-
+      Warm reuse on the single-statement writer path; a file_ops/churn write still commits with OCC
+      intact; output records BOTH cold and warm connect latency.
+    fix_if: Write breaks under reuse, OCC regresses, or only warm latency is measured (rec-2096 not closed).
+  - step: 10
+    phase: post-deploy
+    action: Production ops_* non-destructive merge runs and reduces file count.
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload '{"action":"hot_merge"}' --profile agent_platform /dev/stdout
+    expected: >-
+      Response merges adjacent files across ops_recommendations/ops_decisions (merged_tables includes
+      ops_*; files_before > files_after); no expire/cleanup/orphan in the action result.
+    fix_if: ops_* absent from the merged set, or any destructive sub-action present.
+  - step: 11
+    phase: post-deploy
+    action: DR schedule is weekly live.
+    command: >-
+      aws events list-rules --name-prefix agent-platform-ducklake-catalog-dr --profile agent_platform
+      --query 'Rules[0].ScheduleExpression' --output text
+    expected: cron(0 3 ? * SUN *)
+    fix_if: Still cron(0 3 * * ? *) -> sandbox auto-apply did not converge; check the apply-RCA.
+  - step: 12
+    phase: post-deploy
+    action: Measure catalog metadata size via the new stats action and record the egress delta.
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload '{"action":"catalog_stats","meta_schema":"ducklake_ops"}'
+      --profile agent_platform /dev/stdout
+    expected: >-
+      Per-ops_*-table snapshot/data_file/file_column_stats counts + estimated catalog bytes. Catalog
+      bytes ~= per pg_dump egress; weekly cadence cuts the pg_dump line ~7x (S x 30 -> S x 4.3;
+      free-tier-safe at weekly iff dump < ~1.16 GB). Numbers folded into the Decision's measurement
+      section. (Direct DR-bucket S3 read is IAM-blocked from the dev role by design -- this action is
+      the supported measurement path.)
+    fix_if: Action missing/errors -> the catalog_stats action was not added in Phase 3.
+  - step: 13
+    phase: post-deploy
+    action: End-to-end -- reader invocations per preflight dropped.
+    command: >-
+      bin/venv-python -m scripts.session_preflight >/dev/null 2>&1; aws cloudwatch get-metric-statistics
+      --namespace AWS/Lambda --metric-name Invocations --dimensions Name=FunctionName,Value=agent-platform-ducklake-reader
+      --start-time "$(date -u -d '10 min ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" --period 300
+      --statistics Sum --profile agent_platform --query 'Datapoints[].Sum' --output text
+    expected: Reader invocations attributable to one preflight is ~1-3 (warm-up sync only), down from ~9-10.
+    fix_if: Still ~9-10 -> Phase-B cache-serving (step 1) not effective in the live path.
+  - step: 14
+    phase: post-deploy
+    action: Persist the Decision to the warehouse and confirm it lands.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m
+      scripts.sync_ops sync
+    expected: ops_decisions rebuilds from DECISIONS.md; the new decision id appears in the synced
+      .decisions-index.jsonl and decisions_max_updated advances.
+    fix_if: Backfill errors -> the Decision block is malformed; fix the heading/date/structure.
+constraints:
+  - >-
+    Named-verb closed read boundary (Decision 84 I-3): no caller SQL may cross the reader boundary.
+    Cache-serving (D4) reads LOCAL JSONL only; any genuinely-needed warehouse read uses a registered
+    verb. Do not add ad-hoc SELECTs.
+  - >-
+    No write buffering / no offline outbox (Decision 84 I-4). The incremental cache upsert (D4) is a
+    refresh of the READ cache from the writer's authoritative response AFTER a synchronous
+    ducklake_writer commit. It is NEVER a write source and must never be re-staged into S3/the
+    writer (the read-cache-is-never-a-write-source invariant). A write that cannot complete still
+    FAILS LOUDLY at the call site.
+  - >-
+    D3b is OUT OF SCOPE and gated. Do NOT expand destructive GC (expire_snapshots / cleanup_old_files
+    / delete_orphaned_files) to ops_* -- it is gated by the rec-2113 pg_restore drill / T2.26. Only
+    non-destructive merge expands to ops_* (a T2.19 exit criterion).
+  - >-
+    Decision 55 loud-failure doctrine: no rescue agents, no workaround loops, no catch-and-relax.
+    The warm-connection reopen handles ONE specific, expected condition (Neon scale-to-zero killed
+    the cached session); any other connection error still raises.
+  - >-
+    Connection reuse is a per-container module global reused only across SEQUENTIAL warm invocations.
+    The churn harness (8 threads) MUST keep one fresh connection per thread -- do not share the
+    cached connection across threads.
+  - >-
+    Preserve the serial Neon cold-resume warm-up before the preflight fan-out. D4 removes redundant
+    Phase-B reads, NOT the single warm-up call.
+  - >-
+    Per-Lambda V3 (Decision 79): build + deploy + smoke-test each modified active Lambda
+    (reader, writer, maintenance). Sandbox terraform auto-apply guard (Decision 77) must stay green.
+  - >-
+    No new standing prose-architecture doc (Decision 86): the durable rationale lives in the
+    Decision entry, not a new docs/ file. This PLAN is the only planning artifact.
+context:
+  - >-
+    Incident: Neon free-tier 5 GB/month egress cap breached 2026-06-15, forcing a paid-plan upgrade.
+    CU-hours remained well under quota -- the low-compute/high-egress signature of bulk metadata
+    transfer, not heavy computation.
+  - >-
+    Root cause (code-verified by four scouts): Neon holds only catalog METADATA (row data is S3
+    Parquet; data inlining is disabled). Egress is driven by (D1) a daily full-catalog pg_dump DR
+    job; (D2) a fresh cold DuckLake ATTACH on every reader/writer invocation with no warm reuse,
+    amplified by DuckDB's postgres scanner sequential-COPY of ducklake_file_column_stats per query
+    (ducklake issue #859); (D3) production catalog metadata never snapshot-expired (GC is smoke-only),
+    so D1/D2 grow unbounded; (D4) preflight fan-out (~9-10 reader calls/session, partially
+    de-duplicated already at session_preflight.py:1409-1414) plus a full-table resync after every
+    write.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS. CITE: Decision 84 (single backend / named-verb boundary /
+    no buffering), Decision 81 (maintenance cadence design, clause 6), Decision 82 (DIRECT-vs-pooled
+    endpoint basis -- NOT the cold-resume warm-up, which the code comment mis-cites; audit F-033),
+    Decision 55 (loud failure), Decision 86 (deliverable routing). Three NOTE-level cautions folded
+    in: fix the Decision-82 mis-citation, quote CD.34 from the roadmap (it is a pending candidate
+    decision, not a numbered Decision; it calls the daily pg_dump "a negligible add-on" -- true for
+    storage, false for egress), and keep D3b behind rec-2113 / T2.26.
+  - >-
+    CI block coordination: ci_rca rec-2244 (reader 502s) is the direct downstream symptom of this
+    egress problem and this plan fixes its root cause (Related-Work: same ducklake_reader subsystem
+    + same Neon-cap failure category). rec-2240..2243 (github_ci_apply IAM grants / apply-sandbox
+    convergence) were resolved by a parallel session per the human; this plan does not touch them.
+  - >-
+    Related open recs: rec-2087 (Neon egress posture -- IP allow-list, an access-control concern,
+    Scale-plan-only; separate from this volume work; left open). rec-2113 (DR pg_restore drill
+    HARD GATE -- the trigger that unlatches D3b; left open by design). rec-2096 (cold-connect
+    regressions invisible) is bundled and closed by D2's cold+warm measurement.
+  - >-
+    Branch was rebased onto origin/main at planning time (clean) after the parallel session turned
+    CI green and resolved the blocking ci_rca recs.
+  - >-
+    Measurement gap (found at planning time): a read-only subagent could NOT size the DR dump or the
+    catalog from the dev role -- the agent-platform-ducklake-catalog-dr bucket is locked to the DR
+    Lambda and the maintenance Lambda has no stats action; Lambda-invoke, CloudWatch, and
+    Secrets-list were all AccessDenied. Firm: DR is daily cron(0 3 * * ? *), 30-day retention;
+    daily->weekly cuts pg_dump egress ~7x. The plan therefore ADDS a catalog_stats action so the
+    measurement obligation is enforceable. The dump size S itself stays unmeasured until then;
+    weekly cadence proceeds on the human's durability call regardless.
+pre_implementation_checklist:
+  - Branch confirmed not on main (git branch --show-current = claude/pensive-ptolemy-188jnh)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md read (Decision 84, 81, 82, 55, 86) + CD.34 in docs/ROADMAP-PLATFORM.yaml
+  - All scope files located and readable; affected Lambda artifacts computed via lambda_manifest
+  - Acceptance criteria understood and each VP step's command is runnable in this environment
+  - Confirm rec-2113 is still open before touching maintenance scope (D3b stays deferred)
+execution_steps:
+  - >-
+    Phase 1 (D4, pure Python, no deploy). In sync_ops.py add an incremental single-row cache-upsert
+    helper (read JSONL -> replace/append by merge_key -> atomic rewrite) and an optional batched
+    multi-table pull. In ops_data_portal.py replace _sync_table's _pull_single_table call with the
+    upsert fed by the writer's returned row. In session_preflight.py route the Phase-B signals
+    (ci_rca, priority_queue, forward_fix, budget, rec tallies) to the freshly-synced local caches,
+    keeping exactly one serial warm-up reader call; fix the Decision-82 mis-citation comments. Add
+    tests/test_session_preflight_cache_serving.py and tests/test_ops_portal_incremental_cache.py.
+  - >-
+    Phase 2 (D2, reader+writer Lambdas, V3). In ducklake_runtime.py add get_warm_connection: a
+    per-container cached connection with a cheap liveness probe (e.g. `SELECT 1`) and transparent
+    reopen on a dead session; never shared across threads. Switch ducklake_reader/handler.py and the
+    single-statement path of ducklake_writer/handler.py to it; keep loud-fail mapping and per-thread
+    connections in the churn harness. Update the churn/pre-warm measurement to record cold AND warm
+    connect latency (rec-2096). Add tests/test_ducklake_runtime_warm_connection.py and the
+    --lambda-warm-reuse smoke actions. Build + deploy + smoke-test the reader and writer artifacts
+    (Decision 79); validate the pinned model/runtime IDs.
+  - >-
+    Phase 3 (D3a + observability, maintenance Lambda + sandbox terraform). Expand HOT_TABLE_SCOPE
+    (and merge scope) to ops_recommendations/ops_decisions in ducklake_maintenance.py --
+    non-destructive only; leave GC_TABLE_SCOPE smoke-only. Add the read-only catalog_stats action to
+    ducklake_maintenance/handler.py (snapshot / data_file / file_column_stats counts + estimated
+    bytes per ops_* table) so egress is measurable. Point hot_merge (or raise merge_ops frequency) at
+    the production catalog in ducklake_maintenance.tf. Build + deploy the maintenance artifact; let
+    the sandbox auto-apply guard converge (Decision 77) and confirm no destroy/IAM delta in the plan
+    review.
+  - >-
+    Phase 4 (D1, sandbox terraform). Change the DR EventBridge schedule in ducklake_catalog_dr.tf
+    from daily cron(0 3 * * ? *) to weekly cron(0 3 ? * SUN *). Let the sandbox apply converge.
+  - >-
+    Decision. Add the next sequential numbered Decision to docs/DECISIONS.md: catalog egress is a
+    first-class budget; four standing invariants -- (1) reuse warm catalog connections across
+    invocations, (2) never re-query data already in the local read-cache, (3) keep the catalog
+    compacted (non-destructive merge on all live tables; destructive expiry behind a proven restore
+    drill), (4) size DR cadence to the durability tier and measured egress; a measurement obligation
+    (instrument catalog size + Neon egress-by-source); an amendment to CD.34's "daily pg_dump is a
+    negligible add-on" (negligible for storage, material for egress); and the D3b deferral recorded
+    against rec-2113 / T2.26. Fold the Phase-4 measurement numbers in. Run --backfill-decisions-md.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. On an unrecoverable V3 failure
+    (e.g. a Lambda deploy or sandbox apply that will not converge), STOP and run RCA per Decision 55;
+    do not patch around it.
+  - >-
+    Report: what changed per phase, the measured before/after reader-invocation count and DR egress
+    delta, the new Decision id, and rec-2096 closure. Emit the squash-merge body with a
+    `Resolves: rec-2096` trailer.
+work_areas: []
+rollback: >-
+  Phases are independently revertible. Phase 1 (Python) reverts by restoring the full-pull
+  _sync_table and Phase-B reader calls. Phase 2 is the riskiest: revert by removing
+  get_warm_connection and redeploying reader/writer (they fall back to per-call ATTACH -- correct,
+  just less efficient). Phases 3-4 (terraform) revert via git + sandbox re-apply (cron and scope are
+  data-only, no state destruction). The Decision entry is additive (no rollback needed). No
+  destructive catalog operation is performed, so there is no data-loss path to unwind.
