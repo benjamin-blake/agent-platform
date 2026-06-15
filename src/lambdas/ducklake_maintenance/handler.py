@@ -336,6 +336,77 @@ def subprocess_run(cmd: list[str]) -> Any:
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
+def action_merge_ops(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """OPERATIONAL: non-destructive merge over ALL live ops_* SCD2 table pairs in the production catalog.
+
+    Connectionless: opens its own connection from the event's data_path + meta_schema (production).
+    Discovers ops_*_history / ops_*_current pairs via information_schema. Runs
+    maint.merge_adjacent_files per table. Non-destructive only -- no expire/cleanup/orphan (those
+    remain gated by rec-2113 / T2.26).
+
+    Loud-fail if data_path is missing or not s3://, meta_schema is missing/invalid, or no ops_*
+    table pairs are discovered (misconfigured data_path / meta_schema guard).
+    """
+    data_path = event.get("data_path")
+    if not isinstance(data_path, str) or not data_path.startswith("s3://"):
+        raise rt.DuckLakeRuntimeError("merge_ops requires a 'data_path' s3:// URI (the production DuckLake path)")
+    raw_schema = event.get("meta_schema")
+    if not raw_schema:
+        raise rt.DuckLakeRuntimeError(
+            "merge_ops requires an explicit 'meta_schema' (e.g. 'ducklake_ops') -- no default production schema"
+        )
+    meta_schema = _require_identifier(raw_schema)
+
+    dsn = rt.fetch_dsn()
+    con = rt.open_connection(dsn=dsn, data_path=data_path, meta_schema=meta_schema, extension_directory=EXTENSION_DIRECTORY)
+    try:
+        catalog = maint.CATALOG_ALIAS
+        rows = con.execute(
+            f"SELECT table_name FROM information_schema.tables "
+            f"WHERE table_catalog = '{catalog}' "
+            f"AND (table_name LIKE 'ops_%_history' OR table_name LIKE 'ops_%_current') "
+            f"ORDER BY table_name"
+        ).fetchall()
+        tables = [r[0] for r in rows]
+
+        if not tables:
+            raise rt.DuckLakeRuntimeError(
+                "merge_ops: no ops_*_history / ops_*_current tables discovered in the catalog -- "
+                "verify data_path and meta_schema point at the production DuckLake (ducklake_ops @ s3://.../ducklake/)"
+            )
+
+        t0 = time.perf_counter()
+        per_table: list[dict[str, Any]] = []
+        files_before = 0
+        files_after = 0
+        for table in tables:
+            before = maint._count_files(con, catalog, table)
+            maint.merge_adjacent_files(con, [table], catalog=catalog)
+            after = maint._count_files(con, catalog, table)
+            files_before += before
+            files_after += after
+            per_table.append({"table": table, "files_before": before, "files_after": after})
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        _emit_maintenance_metric("MergeOpsDurationMs", elapsed_ms)
+        _emit_maintenance_metric("MergeOpsFilesBeforeTotal", float(files_before))
+        _emit_maintenance_metric("MergeOpsFilesAfterTotal", float(files_after))
+        _emit_maintenance_metric("MergeOpsTablesCount", float(len(tables)))
+
+        return {
+            "ok": True,
+            "action": "merge_ops",
+            "tables": tables,
+            "files_before": files_before,
+            "files_after": files_after,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "per_table": per_table,
+        }
+    finally:
+        con.close()
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -347,11 +418,12 @@ _ACTIONS: dict[str, Any] = {
     "breaker_probe": action_breaker_probe,
     "catalog_reinit": action_catalog_reinit,
     "restore_drill": action_restore_drill,
+    "merge_ops": action_merge_ops,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill"}
+_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
