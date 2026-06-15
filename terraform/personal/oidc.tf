@@ -631,6 +631,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "lambda:GetLayerVersion",
           "lambda:GetFunction",
           "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionUrlConfig",
           "lambda:GetPolicy",
           "lambda:GetFunctionCodeSigningConfig",
           "lambda:ListVersionsByFunction",
