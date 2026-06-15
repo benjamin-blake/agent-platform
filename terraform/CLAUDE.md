@@ -137,6 +137,17 @@ Follow-up (remaining): remove the now-redundant `AgentPlatformRuntime` inline po
 (its grants are fully covered by the codified `DailyOps`). A formal Decision recording the static-key credential
 model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supersession) is filed via the ops portal.
 
+- **DuckLake refresh-reads round (rec-2223, 2026-06-15, `github_ci_apply` inline policy, out-of-band admin apply):**
+  Added refresh-time READ-only grants for the full DuckLake resource family to unblock the sandbox CD pipeline
+  (`terraform plan` was exiting 1 with ~17 AccessDenied errors on all DuckLake resources). Follows the documented
+  iterative-discovery pattern. Grants added: `DataLakeBucketManage.Resource` extended with `aws_s3_bucket.ducklake_catalog_dr`;
+  `IAMPlatformRolesRead.Resource` extended with all four ducklake IAM role ARNs; new Sids `CloudWatchLogsRead`
+  (`logs:DescribeLogGroups` at `*`), `LambdaRead` (GetLayerVersion + GetFunction family on three layers + four functions),
+  `EventBridgeRead` (`events:DescribeRule/ListTagsForResource/ListTargetsByRule` on all five ducklake rules),
+  `SNSRead` (`sns:GetTopicAttributes/ListTagsForResource` on `aws_sns_topic.alerts`). All READ-ONLY; no create/update/delete
+  on any DuckLake resource. The next plan after this admin apply may surface one or two additional refresh reads;
+  add them scoped and re-apply -- this is the expected iterative-discovery pattern.
+
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
 - `primary` (engine v2, default) — **do not use** for Iceberg DML or VACUUM. v2 doesn't support full Iceberg semantics.
