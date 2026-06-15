@@ -612,10 +612,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # logs:DescribeLogGroups has no resource-level scoping in IAM -- Resource: "*" is required.
-        # Refresh-time read the provider issues on every aws_cloudwatch_log_group plan; do not prune as unused.
+        # logs:ListTagsForResource is the per-log-group tag refresh-read the provider issues on every
+        # aws_cloudwatch_log_group plan (surfaced under github_ci_apply on the first real CD plan).
+        # Do not prune as unused.
         Sid      = "CloudWatchLogsRead"
         Effect   = "Allow"
-        Action   = ["logs:DescribeLogGroups"]
+        Action   = ["logs:DescribeLogGroups", "logs:ListTagsForResource"]
         Resource = ["*"]
       },
       {
@@ -683,6 +685,47 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "sns:ListTagsForResource"
         ]
         Resource = [aws_sns_topic.alerts.arn]
+      },
+      {
+        # sns:GetSubscriptionAttributes does NOT support resource-level permissions (SNS defines no
+        # subscription IAM resource type), so Resource: "*" is required -- a topic- or subscription-ARN
+        # scope evaluates as implicitDeny (verified via simulate-principal-policy). The provider issues
+        # it as a refresh-read on aws_sns_topic_subscription.alerts_email every plan. Do not prune.
+        Sid      = "SNSSubscriptionRead"
+        Effect   = "Allow"
+        Action   = ["sns:GetSubscriptionAttributes"]
+        Resource = ["*"]
+      },
+      {
+        # cloudwatch:DescribeAlarms has no resource-level scoping in IAM (account-wide API) -- Resource:
+        # "*" is required; ListTagsForResource is the per-alarm tag refresh-read. Both are refresh-time
+        # reads the provider issues on every aws_cloudwatch_metric_alarm plan (ducklake catalog-dr-
+        # freshness, maintenance-circuit-breaker, writer-errors). Do not prune as unused.
+        Sid    = "CloudWatchAlarmsRead"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:ListTagsForResource"
+        ]
+        Resource = ["*"]
+      },
+      {
+        # T1.13 feature-flag SSM parameters auto-apply under terraform/personal (feature_flags.tf:
+        # ci_rca_strict_mode is a plain String param, guard-PASS). The apply identity manages them, so it
+        # needs create/update + tag + refresh-read on the feature-flags path -- scoped to that path, NOT
+        # ssm:* and NOT all parameters. This is the apply-role half the T1.13 param shipped without,
+        # which latched the convergence record red.
+        Sid    = "SSMFeatureFlagsManage"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:PutParameter",
+          "ssm:AddTagsToResource",
+          "ssm:RemoveTagsFromResource",
+          "ssm:ListTagsForResource"
+        ]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/feature-flags/*"]
       }
     ]
   })
