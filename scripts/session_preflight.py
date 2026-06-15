@@ -18,9 +18,11 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from scripts import platform_roadmap
 from scripts import product_roadmap as product_roadmap_module
@@ -1385,6 +1387,19 @@ def main() -> int:
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
 
+    # Scan provisional contracts inline (reads only local docs/contracts/ -- no creds, no ThreadPoolExecutor).
+    # No production telemetry exists today, so the metrics provider returns None and nothing fires;
+    # the evaluation logic is fully built and tested via injected metrics (PLAN context: subset f deferral).
+    provisional_contracts_due = _scan_provisional_contracts()
+
+    print("\n--- Provisional contracts due ---")
+    if provisional_contracts_due:
+        for contract_id in provisional_contracts_due:
+            print(f"  {contract_id}: re_ratification_trigger fired -- ratification review required")
+    else:
+        print("  (none)")
+    print()
+
     # Dedupe open_recs: count already computed in Phase B; pass to read_context_files
     # to skip the second open_recs verb call (Decision 84 I-3: closed named-verb boundary).
     open_recs_count = open_recommendations if recs_read_status == "ok" else None
@@ -1431,6 +1446,7 @@ def main() -> int:
         "session_start": session_start,
     }
 
+    report["provisional_contracts_due"] = provisional_contracts_due
     report["non_automatable_softcap_breached"] = _check_non_automatable_softcap(non_automatable_count)
     report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
     report["forward_fix_recursion_alert"] = forward_fix_alert
@@ -1490,6 +1506,32 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
         f"{ci_rca_summary}{recs_status_suffix}\n"
         f"  Read the report file for full constraint detail."
     )
+
+
+def _scan_provisional_contracts(
+    contracts_dir: Path | None = None,
+    metrics_provider: Callable[[], dict[str, Any] | None] | None = None,
+) -> list[str]:
+    """Return contract ids whose provisional_v0 re_ratification_trigger is met.
+
+    Reads local docs/contracts/ files only -- no warehouse reader, no credentials.
+    ``metrics_provider`` is called with no arguments to obtain a dict[str, Any] | None;
+    when absent (default None), no condition can fire (fail-safe: no false positives).
+    """
+    from scripts.contracts import load_all_contracts  # noqa: PLC0415
+    from scripts.contracts_enforcement import evaluate_provisional_trigger  # noqa: PLC0415
+
+    target_dir = contracts_dir if contracts_dir is not None else ROOT / "docs" / "contracts"
+    metrics = metrics_provider() if metrics_provider is not None else None
+    due: list[str] = []
+    try:
+        for contract_id, doc in load_all_contracts(target_dir).items():
+            met, _ = evaluate_provisional_trigger(doc, metrics)
+            if met:
+                due.append(contract_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return due
 
 
 def open_telemetry_session(workflow: str, branch: str) -> str:
