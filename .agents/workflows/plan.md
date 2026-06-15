@@ -10,8 +10,7 @@ description: Interactive planning session. Run this before any implementation wo
 
 ## Step 0: Activate Environment
 Activate the Python virtual environment before running any Python commands:
-- **PowerShell (Antigravity):** `.venv/Scripts/Activate.ps1` or use the venv Python directly: `.venv/Scripts/python.exe`
-- **Git Bash:** `source .venv/Scripts/activate`
+- Use `bin/venv-python` for all Python invocations. The wrapper auto-detects the platform; no manual venv activation is needed.
 If Python is not found on PATH, this step is MANDATORY before proceeding.
 
 ## Step 1: Run Preflight
