@@ -380,7 +380,9 @@ def action_reconcile_columns(event: dict[str, Any], _con: Any) -> dict[str, Any]
         "data_path": data_path,
         "added_history": result["added_history"],
         "added_current": result["added_current"],
-        "columns_present": {
+        # True when the spec columns were ALREADY present (no ALTER issued this run).
+        # After reconcile the columns are present either way; this flags the no-op path.
+        "columns_pre_existing": {
             "history": not result["added_history"],
             "current": not result["added_current"],
         },

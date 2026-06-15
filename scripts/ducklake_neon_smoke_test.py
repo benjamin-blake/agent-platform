@@ -801,17 +801,16 @@ def migrate_ops_recs_columns(*, profile: str | None = None, region: str = "eu-we
     try:
         tf_result = subprocess.run(
             ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_writer_data_path"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         tf_data_path = tf_result.stdout.strip() if tf_result.returncode == 0 else None
     except FileNotFoundError:
         tf_data_path = None
 
-    data_path = (
-        data_path_env
-        or tf_data_path
-        or "s3://agent-platform-data-lake/ducklake/"
-    )
+    data_path = data_path_env or tf_data_path or "s3://agent-platform-data-lake/ducklake/"
     payload = {
         "action": "reconcile_columns",
         "data_path": data_path,
@@ -823,12 +822,12 @@ def migrate_ops_recs_columns(*, profile: str | None = None, region: str = "eu-we
         raise SmokeTestFailure(f"MIGRATE_OPS_RECS_COLUMNS FAIL: maintenance reconcile_columns returned ok=False: {body}")
     added_h = body.get("added_history", [])
     added_c = body.get("added_current", [])
-    col_present = body.get("columns_present", {})
+    pre_existing = body.get("columns_pre_existing", {})
     # After reconcile, context_v2_json must be present on both tables.
     # If the column was just added, it's in added_*. If it was already there, added_* is empty
-    # but columns_present shows True (no-op run). Check both: newly added OR already present.
-    history_ok = "context_v2_json" in added_h or col_present.get("history") is True
-    current_ok = "context_v2_json" in added_c or col_present.get("current") is True
+    # but columns_pre_existing shows True (no-op run). Check both: newly added OR already present.
+    history_ok = "context_v2_json" in added_h or pre_existing.get("history") is True
+    current_ok = "context_v2_json" in added_c or pre_existing.get("current") is True
     if not history_ok or not current_ok:
         raise SmokeTestFailure(
             f"MIGRATE_OPS_RECS_COLUMNS FAIL: context_v2_json not confirmed on "
