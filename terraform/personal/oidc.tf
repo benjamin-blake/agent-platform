@@ -742,6 +742,17 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "ssm:ListTagsForResource"
         ]
         Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
+      },
+      {
+        # ssm:DescribeParameters is the parameter-METADATA refresh-read the aws_ssm_parameter resource
+        # issues after GetParameter (Type/Tier/LastModified). It is a Describe/List-type action with NO
+        # resource-level scoping -- Resource: "*" is required (a parameter-ARN scope evaluates as
+        # implicitDeny; the provider calls it against arn:aws:ssm:<region>:<acct>:*). Mirrors the
+        # cloudwatch:DescribeAlarms / logs:DescribeLogGroups Resource: "*" convention. Do not prune.
+        Sid      = "SSMDescribeParameters"
+        Effect   = "Allow"
+        Action   = ["ssm:DescribeParameters"]
+        Resource = ["*"]
       }
     ]
   })
