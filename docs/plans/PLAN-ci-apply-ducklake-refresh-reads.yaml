@@ -177,9 +177,12 @@ context:
     The rec UNDER-ENUMERATED twice. (1) It listed only four EventBridge rules; the fifth,
     agent-platform-ducklake-maintenance-merge-ops, is also in state and would trigger a second
     AccessDenied round if omitted. (2) Under lambda it flagged only GetLayerVersion, but the four
-    ducklake aws_lambda_function resources are TF-managed and github_ci_apply has NO lambda read actions
-    at all -- the function refresh reads (GetFunction et al.) must be granted too. This plan covers the
-    full set to avoid repeated admin-apply rounds.
+    ducklake aws_lambda_function resources are TF-managed and the github_ci_apply policy itself grants
+    NO lambda actions (the lambda:InvokeFunction/InvokeFunctionUrl/GetFunctionUrlConfig grants in
+    oidc.tf are on the SIBLING github_ci_branch / github_ci_pr roles' DuckLakeInvokeCI Sids, not the
+    apply role's policy at lines 350-606) -- so the function refresh reads (GetFunction et al.) plus
+    GetLayerVersion must be added as a new LambdaRead Sid. This plan covers the full set to avoid
+    repeated admin-apply rounds.
   - >-
     All ducklake resources are already in Terraform state (admin-bootstrapped). Refresh only reads
     resources already in state, so the failure is purely at refresh-read time -> read-only grants are
