@@ -727,6 +727,21 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "ssm:ListTagsForResource"
         ]
         Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/feature-flags/*"]
+      },
+      {
+        # Refresh-time READ on every agent-platform SSM parameter the provider issues on each plan.
+        # Covers the ducklake function-URL params (/agent-platform/ducklake/{writer,reader}_url, managed
+        # in ducklake_lambdas.tf, admin-applied) which CD only refreshes -- read-only, since writes to the
+        # human-gated ducklake stack go via agent_platform_admin. Scoped to /agent-platform/* (NOT ssm:*
+        # and NOT all parameters). Surfaced by the post-feature-flags-grant dispatch-ack round.
+        Sid    = "SSMParameterRead"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:ListTagsForResource"
+        ]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
       }
     ]
   })
