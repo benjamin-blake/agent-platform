@@ -1,0 +1,266 @@
+schema_version: 1
+slug: "dq-gate-infra-resilience"
+intent: >-
+  Make CI durably green by fixing the data-quality merge gate so transient DuckLake-reader
+  infrastructure outages no longer hard-block merges, while genuine data violations and semantic
+  check errors still gate -- keeping the self-improving pipeline's quality signal trustworthy.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dq-gate-infra-resilience.yaml
+phase: >-
+  Platform reliability / CI hardening. ci_rca-driven, no tier_item (user_explicit_out_of_scope).
+  Resolves the DQ HARD_GATE flapping observed on main-validate / main-canary 2026-06-15.
+scope:
+  - file: scripts/data_quality_runner.py
+    action: Modify
+    purpose: >-
+      Add a distinct UNAVAILABLE per-check verdict and a non-gating DEGRADED aggregate verdict.
+      Add a _is_reader_unavailable(exc) helper and use it in _execute_check_ducklake so a reader
+      infra failure (requests connection/timeout, or a RuntimeError whose message matches the
+      reader's `failed (HTTP 5xx)` signature) classifies as UNAVAILABLE; all other exceptions
+      stay ERROR. Update RunResult counts, run_checks aggregate logic, the progress symbol map,
+      _print_results (loud DEGRADED banner), main() exit code (0 on PASS/DEGRADED/SKIP), and
+      _save_latest_result (record the unavailable count + DEGRADED verdict).
+  - file: scripts/verifiers/data_quality.py
+    action: Modify
+    purpose: >-
+      When run_checks returns the DEGRADED aggregate (infra-unavailable, no real failure), return
+      VerifierStatus.SKIPPED (non-gating) with a LOUD message naming the unavailable checks --
+      mirroring the existing creds-unavailable SKIP precedent in this file. Exclude UNAVAILABLE
+      from _FAIL_VERDICTS. Genuine FAIL/HARD_GATE still returns FAIL at HARD_GATE severity; the
+      no-yaml and zero-checks hard gates are unchanged.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      In check_data_quality_coverage(), read the new `unavailable` field from dq-latest.json,
+      include it in the last_run dict, and surface the DEGRADED verdict + unavailable count in the
+      printed line so a degraded gate is loud in preflight.
+  - file: tests/test_data_quality_runner.py
+    action: Modify
+    purpose: >-
+      Cover the new code: _is_reader_unavailable classification (conn/timeout/HTTP 5xx -> True;
+      4xx/semantic/DuckDB error -> False); _execute_check_ducklake returns UNAVAILABLE on a
+      simulated reader outage and ERROR on a semantic failure; run_checks aggregates DEGRADED when
+      the only non-PASS results are UNAVAILABLE; main() exits 0 on DEGRADED and 1 on real FAIL;
+      a mixed unavailable+violation run aggregates to FAIL.
+  - file: tests/test_verifiers/test_data_quality.py
+    action: Modify
+    purpose: >-
+      Cover the verifier: a DEGRADED run_checks result -> VerifierStatus.SKIPPED (non-gating) with
+      a message naming the unavailable checks; a mixed real-HARD_GATE + unavailable result still
+      returns FAIL at HARD_GATE severity. Extend the existing _run_result helper to carry an
+      unavailable count and the DEGRADED verdict.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A simulated DuckLake reader transient outage (a requests ConnectionError/Timeout, or a
+    RuntimeError whose message contains `failed (HTTP 5xx)`) classifies the affected check as
+    UNAVAILABLE -- not ERROR and not FAIL.
+  - >-
+    A run whose only non-PASS results are UNAVAILABLE aggregates to DEGRADED, and
+    scripts.data_quality_runner.main() returns exit code 0 (not 1) for that run.
+  - >-
+    DataQualityVerifier returns VerifierStatus.SKIPPED (non-gating) with a message naming the
+    unavailable checks when the aggregate is DEGRADED; it does not return FAIL/HARD_GATE.
+  - >-
+    Genuine data violations still hard-gate: a FAIL/HARD_GATE result yields runner exit 1 and
+    DataQualityVerifier FAIL at HARD_GATE severity (unchanged from today).
+  - >-
+    A genuine semantic check error (non-5xx -- e.g. TABLE_NOT_FOUND, a 4xx, or a DuckDB binder
+    error) still classifies as ERROR and hard-gates; infra-classification never swallows real
+    check breakage.
+  - >-
+    A mixed run (>=1 UNAVAILABLE plus >=1 real FAIL/HARD_GATE) aggregates to FAIL/HARD_GATE --
+    a real failure always dominates an unavailability.
+  - >-
+    Loud-surface invariant: UNAVAILABLE/DEGRADED is never reported as PASS; dq-latest.json records
+    the unavailable count and DEGRADED verdict, and session_preflight.check_data_quality_coverage()
+    surfaces it.
+  - >-
+    Scope boundary: no fallback or stale data is substituted on unavailability, and no behavioural
+    change is made to src/common/iceberg_reader.py, the ops portal (file_rec/update_rec), or
+    sync_ops -- the non-gating treatment is DQ-runner/verifier only.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the DQ runner and verifier test modules. These exercise the real run_checks aggregate,
+      the real _execute_check_ducklake classification, and the real DataQualityVerifier.verify with
+      only the reader/boto3 boundary mocked -- proving UNAVAILABLE->DEGRADED->exit-0/SKIPPED,
+      ERROR->FAIL, and violations->FAIL.
+    command: bin/venv-python -m pytest tests/test_data_quality_runner.py tests/test_verifiers/test_data_quality.py -v
+    expected: >-
+      All tests pass, including the new UNAVAILABLE/DEGRADED classification, exit-code, verifier
+      SKIPPED, semantic-ERROR-still-gates, and mixed-run-still-fails cases.
+    fix_if: >-
+      A test fails -- inspect whether the aggregate verdict, exit code, or verifier status mapping
+      is wrong; a real FAIL leaking to exit 0, or an UNAVAILABLE leaking to FAIL, is a defect.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Guard against vacuous green -- confirm the new verdict and the new tests actually landed in
+      both source and test files (not silently dropped by an import-block merge, per tests/CLAUDE.md).
+    command: grep -nE "UNAVAILABLE|DEGRADED" scripts/data_quality_runner.py scripts/verifiers/data_quality.py scripts/session_preflight.py tests/test_data_quality_runner.py tests/test_verifiers/test_data_quality.py
+    expected: >-
+      Matches in all five files (the new verdict in the runner/verifier/preflight surfaces and the
+      new assertions in both test files).
+    fix_if: >-
+      A file has no match -- the change or its test coverage was not applied there; add it before
+      proceeding (tests/CLAUDE.md requires 100% coverage of new code).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Dry-run the runner to confirm check compilation and backend routing are unbroken by the
+      verdict/aggregate changes (no AWS calls on the dry path).
+    command: bin/venv-python -m scripts.data_quality_runner --dry-run
+    expected: >-
+      Prints compiled SQL for the checks and exits 0 with no traceback (dry-run verdict SKIP).
+    fix_if: >-
+      A traceback or non-zero exit indicates a regression in run_checks/_print_results/_save_latest_result
+      wiring for the new verdict -- fix the aggregation or printing path.
+  - step: 4
+    phase: pre-deploy
+    action: Run the fast presubmit tier (ruff lint, ruff format, mypy, prompt checks).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Passes (lint, format, type-check, prompt-compliance all green).
+    fix_if: >-
+      ruff/mypy failures -- address line-length (127), missing type hints, or unused imports
+      (run ruff check --fix after removing/adding test classes).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Live integration check against the now-paid Neon reader -- run the real DQ runner with
+      credentials. Confirms the gate is green when the reader is reachable, and that an infra blip
+      degrades (exit 0) rather than hard-failing.
+    command: bin/venv-python -m scripts.data_quality_runner
+    expected: >-
+      Exits 0. Verdict PASS when the reader is reachable (0 violations), or DEGRADED if the reader
+      is mid-cold-start; an infra 5xx must surface as DEGRADED, never as an exit-1 FAIL. (If
+      credentials are unavailable the run SKIPs and still exits 0.)
+    fix_if: >-
+      The runner exits 1 on a reader 5xx -- the classification or aggregate is still treating
+      infra-unavailable as FAIL; re-check _is_reader_unavailable and the run_checks aggregate.
+constraints:
+  - Only modify the five files listed in scope.
+  - >-
+    Do NOT touch src/common/iceberg_reader.py -- it is Lambda-packaged into the data-pipeline and
+    ops-compaction artifacts, so editing it would escalate to V3 + per-Lambda build/deploy/smoke
+    (Decision 79). The classifier lives in the (non-packaged) runner instead.
+  - >-
+    DEGRADED != PASS. No fallback, cache, or stale data is ever substituted on unavailability
+    (Decision 60 no-silent-fallbacks; Decision 84 I-1 reader-unreachable has no fallback).
+  - >-
+    Scope the non-gating treatment to the DQ runner/verifier ONLY. Do not change the reader's
+    loud-raise behaviour or how the ops portal (file_rec/update_rec) and sync_ops surface a reader
+    failure (Decision 84 I-4 fail-loudly-at-the-call-site).
+  - >-
+    Genuine FAIL/HARD_GATE must still flow to ci-rca on the full tier -- DEGRADED must not suppress
+    the forward-fix path for real failures (Decision 73).
+  - The Athena execution path (_execute_check) is left unchanged; its ERROR->FAIL behaviour is preserved.
+  - No rescue agents or workaround loops (Decision 55). No emojis; ASCII hyphens; ruff line length 127; type hints required.
+  - >-
+    Acceptance/VP commands: no `pytest -k` selectors and no `python -c` one-liners (tests/CLAUDE.md);
+    verify tests via file::Class or grep.
+context:
+  - >-
+    RCA. main-validate (push to main) and main-canary (scheduled, every 3h) run the full
+    scripts.validate, which executes the DQ runner AND the verifier harness against the DuckLake
+    reader (resolve_aws_profile returns None under OIDC, so the branch-role env creds are used).
+    The migrated recs clause-8 checks (ulid_history_unique, current_merge_key_unique) route to the
+    Neon-backed reader. On a reader 502, _execute_check_ducklake returns verdict ERROR; run_checks
+    folds has_error into a FAIL verdict (line ~726-729) and DataQualityVerifier's _FAIL_VERDICTS
+    includes ERROR -> HARD_GATE (line ~109). Result: a transient infra outage reds the merge gate
+    with 0 violations.
+  - >-
+    Evidence. CI run 27571189587 -> ci-rca run 27572636999:
+    `ops_recommendations.ulid [ulid_history_unique] ERROR (0 violation(s))` and
+    `ops_recommendations.id [current_merge_key_unique] ERROR (0 violation(s))`, proximate cause
+    ducklake_reader Function URL HTTP 502 twice (each retried 3x with cold-resume backoff).
+    0 violations => infrastructure, not data. The writer was in the same 502 outage, so ci-rca
+    could not file the rec (no offline outbox, Decision 84 I-4).
+  - >-
+    Trigger relieved. The Neon plan was upgraded to paid on 2026-06-15, so the reader/writer 502s
+    should clear and main-validate/main-canary self-heal on their next run. This plan is the DURABLE
+    fix: even on paid Neon a cold-resume can still 502 occasionally, and the gate must not red on it.
+  - >-
+    Decision alignment (decision-scout gate verdict: NO_FLAGS). Cite Decision 84 (I-1 no fallback,
+    I-4 fail-loudly-at-call-site / no offline outbox), Decision 60 (two-tier validation;
+    no-silent-fallbacks; the SSO/creds-unavailable SKIP precedent this extends), Decision 55
+    (loud-fail doctrine), Decision 81 (clause-5 loud-fail; clause-8 DuckLake DQ checks). The scout
+    flagged two NOTE-level tensions (Decision 60 no-silent-fallbacks; Decision 84 I-1/I-4),
+    resolved by the invariant UNAVAILABLE != PASS, no data substituted, correctness gates untouched,
+    DQ-only scope.
+  - >-
+    Precedent. scripts/verifiers/data_quality.py already returns non-gating VerifierStatus.SKIPPED
+    for module-unavailable, AWS-creds-unavailable, and boto3-unavailable/dry-run; the DEGRADED ->
+    SKIPPED path is the same pattern extended to reader-unavailable (see tests
+    test_verify_credentials_unavailable and test_verify_skip_when_run_checks_returns_skip).
+  - >-
+    Symbol-map note. run_checks' progress-symbol map already uses 'U' for UNENFORCED_FAIL; assign a
+    new symbol (e.g. 'A') for UNAVAILABLE to avoid collision.
+  - >-
+    Rec/preflight gap. Preflight ops reads were unavailable at planning time (same reader outage),
+    so no open rec could be enumerated or bundled, and the DQ ci_rca rec for run 27571189587 was
+    never filed (writer in the same 502 outage). This plan IS the architectural review of that DQ
+    HARD_GATE failure (related-work condition 3: same failure category -- DQ check failure).
+    Follow-up: once the writer is reachable, file/close the rec referencing this plan.
+  - >-
+    Out of scope (explicit, per "minimum to durable-green"): the terraform apply-role IAM
+    refresh-read root-cause (converged green at round-5, run 27571200048; the next DuckLake resource
+    re-opens the iterative-discovery walk -- separate follow-up); the ci-rca FILED:-marker watchdog
+    false-negative in scripts/ci_rca_filing.py; the Neon egress investigation (user-owned); and
+    alerting on PERSISTENT DQ unavailability (reliability follow-up under the deferred harden track).
+  - >-
+    main_freshness could not be computed (preflight errored on the reader 502 before writing its
+    report); main is an ancestor of this branch (git merge-base check), so no divergence/rebase
+    risk for the five scope files.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/kind-mccarthy-q31fck)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the decision-scout gate (NO_FLAGS; cite Decisions 84, 60, 55, 81)
+  - All five scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed src/common/iceberg_reader.py is OUT of scope (Lambda-packaged) -- classifier lives in the runner
+execution_steps:
+  - >-
+    scripts/data_quality_runner.py: add the UNAVAILABLE per-check verdict and the DEGRADED aggregate.
+    Add _is_reader_unavailable(exc) -> bool: True for a requests ConnectionError/Timeout (match by
+    exception module/name to avoid a hard import) or a RuntimeError whose message matches the
+    reader's transient signature `failed (HTTP 5\d\d)`; False otherwise. In _execute_check_ducklake,
+    replace the bare `verdict=ERROR` in the except block with the classifier (UNAVAILABLE vs ERROR);
+    keep the "reader returned None" branch as ERROR. Add RunResult.unavailable. In run_checks
+    aggregate, compute has_unavailable and set verdict = HARD_GATE if has_hard_gate elif FAIL if
+    (has_fail or has_error) elif DEGRADED if has_unavailable else PASS. Add 'UNAVAILABLE':'A' to the
+    progress symbol map. In _print_results, add an Unavailable count to the summary, add UNAVAILABLE
+    to the issues list + prefix map (loud), and include `unavailable` in the JSON output. main():
+    return 0 if verdict in {PASS, DEGRADED, SKIP} else 1. _save_latest_result: record `unavailable`
+    and persist the DEGRADED verdict.
+  - >-
+    scripts/verifiers/data_quality.py: exclude UNAVAILABLE from _FAIL_VERDICTS. Before the generic
+    non-PASS FAIL branch, handle result.verdict == "DEGRADED" -> return VerifierResult(status=SKIPPED)
+    with a loud message listing the unavailable checks (table[.column] [test_type]) and a clear
+    "DQ degraded -- backend unavailable, gate not run" framing. Keep PASS -> PASS, the no-yaml and
+    zero-checks HARD_GATE FAILs, and genuine FAIL/HARD_GATE -> FAIL at HARD_GATE severity.
+  - >-
+    scripts/session_preflight.py: in check_data_quality_coverage(), read data.get("unavailable", 0)
+    into the last_run dict and update the printed summary line (~1258) to include the U count and to
+    render a DEGRADED verdict distinctly from PASS/FAIL.
+  - >-
+    tests/test_data_quality_runner.py: add tests for _is_reader_unavailable (conn/timeout/HTTP 5xx
+    True; HTTP 4xx, TABLE_NOT_FOUND, DuckDB binder error False); _execute_check_ducklake UNAVAILABLE
+    vs ERROR with a mocked reader raising each class; run_checks DEGRADED aggregate when only
+    UNAVAILABLE present; main() exit 0 on DEGRADED; main() exit 1 on real FAIL; mixed
+    unavailable+violation -> FAIL. Use file::Class invocation, no -k, no python -c.
+  - >-
+    tests/test_verifiers/test_data_quality.py: extend _run_result to carry an unavailable count and
+    accept the DEGRADED verdict; add a test that a DEGRADED result -> VerifierStatus.SKIPPED with the
+    unavailable checks named in the message, and a test that a mixed real-HARD_GATE + unavailable
+    result -> FAIL at HARD_GATE severity. Keep the existing pass/fail/skip tests green.
+  - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what changed, verification results, and confirmation that the DQ gate degrades (not reds) on a reader outage'
+work_areas: []
+rollback: >-
+  Revert the single 5-file commit. No data migration, no infra/Lambda change, no schema change to
+  persisted data -- dq-latest.json merely gains an optional `unavailable` field that older readers
+  ignore. Reverting restores the prior ERROR->FAIL hard-gating behaviour.
