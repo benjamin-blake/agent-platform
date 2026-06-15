@@ -17,11 +17,17 @@ scope:
   - file: scripts/session_preflight.py
     action: Modify
     purpose: >-
-      D4. Serve Phase-B signals (ci_rca, priority_queue, forward_fix, budget, rec tallies) from the
-      local cache that the Phase-A warm-up sync just wrote, instead of re-querying the reader for
-      data already pulled. Preserve exactly one serial warm-up reader call (Neon cold-resume) before
-      any fan-out. Fix the load-bearing comment at L1328/L1361 that mis-cites "Decision 82" for the
-      cold-resume warm-up (Decision 82 is the EC8 churn-gate frame correction; audit F-033).
+      D4. Serve Phase-B signals from the local cache that the Phase-A warm-up sync just wrote,
+      instead of re-querying the reader for data already pulled. priority_queue is read directly from
+      its already-synced cache (it IS priority_queue_current's output -- no re-derivation);
+      decisions_max_updated is a trivial aggregate over the decisions cache; the recs-derived signals
+      (open count, ci_rca_open, forward_fix_recursion, budget_bypass_recent) are filters/analytics
+      over the synced recs cache and each needs a verb-equivalence test (see VP step 1). Preserve
+      exactly ONE serial warm-up reader call (Neon cold-resume) before any fan-out. Inspect each
+      "Decision 82" comment citation INDIVIDUALLY and correct only genuine mis-citations: the L1328
+      cold-resume warm-up attribution is the arguable one; the L1361 "cap <=4 ... connect p95"
+      citation is CORRECT (Decision 82 steered N=8->4 and documented Neon connect-p95 inflation) and
+      must be left intact -- do not blanket-rewrite.
   - file: scripts/ops_data_portal.py
     action: Modify
     purpose: >-
@@ -59,33 +65,41 @@ scope:
   - file: src/common/ducklake_maintenance.py
     action: Modify
     purpose: >-
-      D3a. Expand HOT_TABLE_SCOPE (and the merge scope) to the production ops_* tables
-      (ops_recommendations, ops_decisions) -- a T2.19 exit criterion, non-destructive only. Leave
-      GC_TABLE_SCOPE (destructive expire/cleanup/orphan) SMOKE-only: expanding it to ops_* is
-      D3b, gated by rec-2113 / T2.26 and explicitly deferred by this plan.
+      D3a observability. Add a read-only catalog_stats() helper (per-ops_*-table snapshot /
+      data_file / file_column_stats counts + estimated catalog bytes) -- the genuinely-new D3a work.
+      NOTE: production ops_* non-destructive merge ALREADY ships via action_merge_ops (handler L392)
+      on a daily ENABLED schedule; HOT_TABLE_SCOPE is NOT consulted by merge_ops, so do NOT expand
+      HOT_TABLE_SCOPE (it would be inert). Leave GC_TABLE_SCOPE (destructive expire/cleanup/orphan)
+      SMOKE-only: expanding it to ops_* is D3b, gated by rec-2113 / T2.26 and explicitly deferred.
   - file: src/lambdas/ducklake_maintenance/handler.py
     action: Modify
     purpose: >-
-      D3a + measurement obligation. Ensure hot_merge honors the expanded ops_* scope, and add a
-      read-only `catalog_stats` action returning per-ops_*-table snapshot count, data_file count,
-      and file_column_stats row count / estimated catalog bytes. This is the observability the
+      D3a + measurement obligation. Add a read-only `catalog_stats` action (dispatching to the
+      ducklake_maintenance.catalog_stats helper) returning per-ops_*-table snapshot count, data_file
+      count, and file_column_stats row count / estimated catalog bytes. This is the observability the
       measurement subagent found MISSING at planning time (every direct size read was IAM-blocked),
-      so the Decision's measurement obligation becomes enforceable rather than aspirational.
+      so the Decision's measurement obligation becomes enforceable rather than aspirational. (No
+      change to action_merge_ops -- it already merges production ops_* non-destructively.)
   - file: terraform/personal/ducklake_maintenance.tf
     action: Modify
     purpose: >-
-      D3a. Point the higher-frequency hot_merge cadence at the production ops_* catalog (or raise
-      merge_ops frequency) so small-file growth between the daily merge is paid down faster,
-      shrinking the per-query ducklake_file_column_stats footprint that drives every read's Neon
-      metadata egress. Non-destructive only. (No IAM change -- the maintenance role already reads the
-      catalog; catalog_stats adds no new permission.)
+      D3a cadence. Raise the existing production merge_ops EventBridge cadence from daily
+      (cron(30 4 * * ? *)) to every 6h so small-file growth on ops_* is paid down faster, shrinking
+      the per-query ducklake_file_column_stats footprint that drives every read's Neon metadata
+      egress. This tunes the ALREADY-SHIPPED merge_ops schedule -- it does not add a new merge path.
+      Non-destructive only. (No IAM change -- the maintenance role already reads the catalog;
+      catalog_stats adds no new permission.)
   - file: terraform/personal/ducklake_catalog_dr.tf
     action: Modify
     purpose: >-
       D1. Change the DR pg_dump schedule from daily cron(0 3 * * ? *) to weekly cron(0 3 ? * SUN *)
-      per the human's durability call (paid-tier Neon provides 7-day PITR for finer-grained
-      recovery between weekly full dumps). ~7x reduction in the session-independent pg_dump egress
-      line.
+      per the human's durability call (paid-tier Neon provides 7-day PITR for finer-grained recovery
+      between weekly full dumps). ~7x reduction in the session-independent pg_dump egress line. CO-
+      REQUIRED in the SAME file: widen the ducklake_catalog_dr_freshness alarm (currently
+      evaluation_periods=25 / period=3600 / treat_missing_data=breaching = a >25h lookback) to an
+      ~8-day lookback (evaluation_periods=192, datapoints_to_alarm=192) so a weekly dump does not
+      leave the alarm perpetually in ALARM and page SNS ~6 days/week. Without this the schedule
+      change is an operational defect.
   - file: scripts/ducklake_neon_smoke_test.py
     action: Modify
     purpose: >-
@@ -119,11 +133,15 @@ infrastructure_dependencies:
     non-destructive and touch no IAM / trust / destroy, so the guard must stay green -- if a plan
     diff shows any destroy/IAM delta, STOP (it means an unintended change crept in).
   - >-
-    Per-Lambda gating (Decision 79 / CD.16+CD.24): ducklake_reader, ducklake_writer, and
-    ducklake_maintenance are active artifacts. Each modified active artifact needs per-Lambda build
-    + deploy + smoke-test + model-ID-validation steps (V3). Use
-    `bin/venv-python -m scripts.lambda_manifest --list-patterns` and compute_affected_artifacts to
-    confirm the affected set before deploying.
+    Per-Lambda gating (Decision 79 / CD.16+CD.24): compute_affected_artifacts returns FOUR active
+    artifacts -- ducklake_reader, ducklake_writer, ducklake_maintenance, AND ducklake_catalog_dr.
+    The DR artifact is affected because its handler imports src.common.ducklake_runtime (which D2
+    modifies); D2 is functionally INERT for it (the DR Lambda runs pg_dump and never opens a DuckLake
+    connection), but its bundle hash changes, so Decision 79/CD.16 still require a build + deploy
+    (rebuild-only, no behavioural change) + the existing --lambda-catalog-dr smoke gate. reader /
+    writer / maintenance get full build + deploy + smoke-test + model-ID-validation. Confirm the set
+    with `bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts; ..."`
+    before deploying.
 acceptance_criteria:
   - >-
     A session preflight run with a fresh local cache issues at most the warm-up sync's reader
@@ -140,11 +158,17 @@ acceptance_criteria:
     detected and transparently reopened (no leaked 5xx). The 8-thread churn path keeps per-thread
     connections.
   - >-
-    The production ops_* tables are in the non-destructive merge (hot_merge / merge_ops) scope; no
-    destructive expire/cleanup/orphan runs against ops_* (that remains gated by rec-2113 / T2.26).
+    Production ops_* small-file growth is paid down at least every 6h by the existing merge_ops
+    action (cadence raised from daily); a merge_ops invocation reports files_before >= files_after
+    for ops_recommendations/ops_decisions; no destructive expire/cleanup/orphan runs against ops_*
+    (GC_TABLE_SCOPE stays smoke-only; gated by rec-2113 / T2.26). The catalog_stats action returns
+    non-empty per-ops_*-table metadata counts.
   - >-
-    The DR pg_dump EventBridge schedule is weekly (cron(0 3 ? * SUN *)) in source and live; the
-    per-dump and monthly-egress numbers are measured and recorded in the Decision.
+    The DR pg_dump EventBridge schedule is weekly (cron(0 3 ? * SUN *)) in source and live, AND the
+    ducklake_catalog_dr_freshness alarm lookback is widened to ~8 days so it does not page under
+    weekly cadence (alarm not in ALARM the day after a successful weekly dump). The catalog metadata
+    size and implied monthly-egress numbers are measured (via catalog_stats) and recorded in the
+    Decision.
   - >-
     A new numbered Decision is persisted in docs/DECISIONS.md codifying the catalog-egress budget,
     the four access-pattern invariants, the measurement obligation, the CD.34 amendment, and the
@@ -158,12 +182,17 @@ verification_plan:
     action: Preflight Phase-B is served from the fresh local cache, not the reader.
     command: bin/venv-python -m pytest tests/test_session_preflight_cache_serving.py -q
     expected: >-
-      Pass. With a fresh cache, the ci_rca / priority_queue / forward_fix / budget / rec-tally
-      signals are computed from the local JSONL caches; the mocked reader records zero named()/
-      current_state() calls in Phase B (only the warm-up sync touches it).
+      Pass on BOTH assertions. (a) Absence-of-call: with a fresh cache the Phase-B signals are
+      computed locally and the mocked reader records zero named()/current_state() calls in Phase B
+      (only the warm-up sync touches it). (b) EQUIVALENCE: for a seeded fixture deliberately
+      constructed so a naive derivation would diverge from the verb (especially
+      priority_queue_current = Decision-70 "ALL entries of the LATEST curator run", NOT
+      latest-per-key; and forward_fix_recursion's same-file-24h window), the cache-served result
+      EQUALS the result the corresponding named verb returns for the same data.
     fix_if: >-
-      Test fails or the reader mock still sees Phase-B verb calls -> the cache-serving path is not
-      wired; trace each fut_* in session_preflight Phase B to its cache source.
+      Reader mock still sees Phase-B verb calls -> cache-serving not wired. Equivalence assertion
+      fails -> the client-side derivation silently changed verb semantics; either fix the derivation
+      to match the verb, or fall back to keeping that one signal as a (now-cheap-via-D2) reader call.
   - step: 2
     phase: pre-deploy
     action: Portal write upserts the local cache without a full-table reader pull.
@@ -189,16 +218,17 @@ verification_plan:
       after Neon scale-to-zero). Add the liveness probe + reopen and the per-thread guard.
   - step: 4
     phase: pre-deploy
-    action: Maintenance scope includes production ops_* for non-destructive merge but NOT destructive GC.
+    action: Destructive GC stays smoke-only (D3b gate guard) and the catalog_stats helper exists.
     command: >-
-      bin/venv-python -c "from src.common.ducklake_maintenance import HOT_TABLE_SCOPE, GC_TABLE_SCOPE;
-      assert any('ops_' in t for t in HOT_TABLE_SCOPE), ('HOT missing ops_', HOT_TABLE_SCOPE);
+      bin/venv-python -c "from src.common.ducklake_maintenance import GC_TABLE_SCOPE, catalog_stats;
       assert not any('ops_' in t for t in GC_TABLE_SCOPE), ('GC must stay smoke-only (rec-2113 gate)', GC_TABLE_SCOPE);
-      print('ok', HOT_TABLE_SCOPE, GC_TABLE_SCOPE)"
-    expected: Prints ok with ops_ tables in HOT_TABLE_SCOPE and absent from GC_TABLE_SCOPE.
+      assert callable(catalog_stats); print('ok', GC_TABLE_SCOPE)"
+    expected: >-
+      Prints ok; GC_TABLE_SCOPE contains no ops_* table (destructive expiry stays gated behind
+      rec-2113 / T2.26) and the new read-only catalog_stats helper is importable.
     fix_if: >-
-      ops_ missing from HOT -> D3a not done. ops_ present in GC -> D3b gate (rec-2113 / T2.26)
-      violated; revert the GC scope change immediately.
+      ops_ present in GC_TABLE_SCOPE -> D3b gate violated; revert immediately. catalog_stats missing
+      -> the observability helper was not added (D3a measurement obligation unmet).
   - step: 5
     phase: pre-deploy
     action: DR schedule is weekly in source.
@@ -236,14 +266,20 @@ verification_plan:
     fix_if: Write breaks under reuse, OCC regresses, or only warm latency is measured (rec-2096 not closed).
   - step: 10
     phase: post-deploy
-    action: Production ops_* non-destructive merge runs and reduces file count.
+    action: Production ops_* non-destructive merge runs against the prod catalog (merge_ops, not hot_merge).
     command: >-
       aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
-      raw-in-base64-out --payload '{"action":"hot_merge"}' --profile agent_platform /dev/stdout
+      raw-in-base64-out --payload
+      '{"action":"merge_ops","data_path":"s3://<data-lake-bucket>/ducklake/","meta_schema":"ducklake_ops"}'
+      --profile agent_platform /dev/stdout
     expected: >-
-      Response merges adjacent files across ops_recommendations/ops_decisions (merged_tables includes
-      ops_*; files_before > files_after); no expire/cleanup/orphan in the action result.
-    fix_if: ops_* absent from the merged set, or any destructive sub-action present.
+      merge_ops (the action that discovers ops_*_history/current via information_schema and merges
+      them) returns per_table[] with files_before >= files_after for ops_recommendations /
+      ops_decisions; no expire/cleanup/orphan in the result. (hot_merge with no data_path would run
+      against the smoke catalog where ops_* do not exist -- do NOT use it here.)
+    fix_if: >-
+      ops_* absent from per_table[], any destructive sub-action present, or the invoke targets the
+      smoke meta_schema.
   - step: 11
     phase: post-deploy
     action: DR schedule is weekly live.
@@ -285,6 +321,32 @@ verification_plan:
     expected: ops_decisions rebuilds from DECISIONS.md; the new decision id appears in the synced
       .decisions-index.jsonl and decisions_max_updated advances.
     fix_if: Backfill errors -> the Decision block is malformed; fix the heading/date/structure.
+  - step: 15
+    phase: pre-deploy
+    action: DR freshness alarm lookback is widened to match weekly cadence (co-required with D1).
+    command: >-
+      grep -nE 'evaluation_periods[[:space:]]*=[[:space:]]*192|datapoints_to_alarm[[:space:]]*=[[:space:]]*192'
+      terraform/personal/ducklake_catalog_dr.tf
+    expected: >-
+      Both evaluation_periods=192 and datapoints_to_alarm=192 present on
+      ducklake_catalog_dr_freshness (~8-day lookback), replacing the 25 (>25h) values, so a weekly
+      dump never leaves the alarm in perpetual ALARM.
+    fix_if: >-
+      Still 25 -> the freshness alarm was not widened alongside the weekly schedule; it will page SNS
+      ~6 days/week. Fix before merge.
+  - step: 16
+    phase: post-deploy
+    action: ducklake_catalog_dr (4th affected active artifact) is rebuilt + redeployed (Decision 79/CD.16).
+    command: >-
+      bin/venv-python -m scripts.build_lambda --lambda ducklake_catalog_dr --deploy && bin/venv-python
+      -m scripts.ducklake_neon_smoke_test --lambda-catalog-dr --json
+    expected: >-
+      DR artifact redeployed with a new code sha (bundle changed via the modified ducklake_runtime);
+      the --lambda-catalog-dr smoke gate is green (pg_dump path intact; D2 is inert for it but the
+      per-Lambda gate is still required).
+    fix_if: >-
+      Artifact not redeployed -> per-Lambda gating unmet. Smoke red -> the runtime change broke the
+      DR import path; RCA before merge.
 constraints:
   - >-
     Named-verb closed read boundary (Decision 84 I-3): no caller SQL may cross the reader boundary.
@@ -299,7 +361,9 @@ constraints:
   - >-
     D3b is OUT OF SCOPE and gated. Do NOT expand destructive GC (expire_snapshots / cleanup_old_files
     / delete_orphaned_files) to ops_* -- it is gated by the rec-2113 pg_restore drill / T2.26. Only
-    non-destructive merge expands to ops_* (a T2.19 exit criterion).
+    non-destructive merge runs on ops_*, and it ALREADY ships via action_merge_ops on a daily
+    schedule (a T2.18-FP-B -> T2.19 carry-forward); this plan only raises that cadence and adds the
+    read-only catalog_stats observability -- it does not introduce a new merge path.
   - >-
     Decision 55 loud-failure doctrine: no rescue agents, no workaround loops, no catch-and-relax.
     The warm-connection reopen handles ONE specific, expected condition (Neon scale-to-zero killed
@@ -340,10 +404,23 @@ context:
     decision, not a numbered Decision; it calls the daily pg_dump "a negligible add-on" -- true for
     storage, false for egress), and keep D3b behind rec-2113 / T2.26.
   - >-
-    CI block coordination: ci_rca rec-2244 (reader 502s) is the direct downstream symptom of this
-    egress problem and this plan fixes its root cause (Related-Work: same ducklake_reader subsystem
-    + same Neon-cap failure category). rec-2240..2243 (github_ci_apply IAM grants / apply-sandbox
-    convergence) were resolved by a parallel session per the human; this plan does not touch them.
+    CI block coordination + rec-2244 handling: ci_rca rec-2244 (ducklake_reader 502s) is still OPEN.
+    It is the downstream symptom of this egress problem -- satisfying the ci_rca Related-Work gate
+    (same ducklake_reader subsystem + same Neon-cap failure category). Its IMMEDIATE 502 symptom was
+    already relieved by the paid-plan upgrade (the cap is gone); this plan removes the UNDERLYING
+    egress pressure so it cannot recur. rec-2244 is deliberately NOT bundled and NOT auto-closed by
+    this plan: a ci_rca rec should close only on operational confirmation that the reader is stable
+    under the new egress profile (watch the reader 5xx rate post-deploy), not on a code merge. VP
+    steps 8/13 provide supporting evidence; final closure is a separate operational step.
+    rec-2240..2243 (github_ci_apply IAM grants / apply-sandbox convergence) were resolved by a
+    parallel session per the human; this plan does not touch them.
+  - >-
+    D4 boundary note (Decision 84 I-3): serving Phase-B from cache re-derives a few named verbs'
+    filter logic client-side, a maintainability drift surface. It is bounded by the VP-step-1
+    equivalence tests. If a derivation proves fragile (priority_queue_current's Decision-70 semantics
+    are the canonical trap), the implementer MAY instead keep that signal as a reader call -- cheap
+    now that D2 warms the connection -- or add a single server-side preflight_bundle verb that
+    returns all signals in one ATTACH (keeps verb logic centralized). Either fallback is acceptable.
   - >-
     Related open recs: rec-2087 (Neon egress posture -- IP allow-list, an access-control concern,
     Scale-plan-only; separate from this volume work; left open). rec-2113 (DR pg_restore drill
@@ -384,19 +461,25 @@ execution_steps:
     connections in the churn harness. Update the churn/pre-warm measurement to record cold AND warm
     connect latency (rec-2096). Add tests/test_ducklake_runtime_warm_connection.py and the
     --lambda-warm-reuse smoke actions. Build + deploy + smoke-test the reader and writer artifacts
-    (Decision 79); validate the pinned model/runtime IDs.
+    AND rebuild + deploy ducklake_catalog_dr (its bundle changed via ducklake_runtime even though D2
+    is inert for it -- rebuild-only, Decision 79/CD.16) with its --lambda-catalog-dr smoke gate;
+    validate the pinned model/runtime IDs.
   - >-
-    Phase 3 (D3a + observability, maintenance Lambda + sandbox terraform). Expand HOT_TABLE_SCOPE
-    (and merge scope) to ops_recommendations/ops_decisions in ducklake_maintenance.py --
-    non-destructive only; leave GC_TABLE_SCOPE smoke-only. Add the read-only catalog_stats action to
-    ducklake_maintenance/handler.py (snapshot / data_file / file_column_stats counts + estimated
-    bytes per ops_* table) so egress is measurable. Point hot_merge (or raise merge_ops frequency) at
-    the production catalog in ducklake_maintenance.tf. Build + deploy the maintenance artifact; let
-    the sandbox auto-apply guard converge (Decision 77) and confirm no destroy/IAM delta in the plan
-    review.
+    Phase 3 (D3a + observability, maintenance Lambda + sandbox terraform). Add a read-only
+    catalog_stats() helper to ducklake_maintenance.py (snapshot / data_file / file_column_stats
+    counts + estimated bytes per ops_* table) and a catalog_stats action to
+    ducklake_maintenance/handler.py that dispatches to it -- the genuinely-new D3a work. Do NOT touch
+    HOT_TABLE_SCOPE (merge_ops ignores it). Keep GC_TABLE_SCOPE smoke-only (D3b stays gated by
+    rec-2113 / T2.26). In ducklake_maintenance.tf RAISE the already-shipped merge_ops EventBridge
+    cadence from daily (cron(30 4 * * ? *)) to every 6h so ops_* small-file growth is paid down
+    faster. Build + deploy + smoke-test the maintenance artifact; let the sandbox auto-apply guard
+    converge (Decision 77) and confirm no destroy/IAM delta in the plan review.
   - >-
-    Phase 4 (D1, sandbox terraform). Change the DR EventBridge schedule in ducklake_catalog_dr.tf
-    from daily cron(0 3 * * ? *) to weekly cron(0 3 ? * SUN *). Let the sandbox apply converge.
+    Phase 4 (D1, sandbox terraform). In ducklake_catalog_dr.tf change the DR EventBridge schedule
+    from daily cron(0 3 * * ? *) to weekly cron(0 3 ? * SUN *) AND, in the same change, widen the
+    ducklake_catalog_dr_freshness alarm to an ~8-day lookback (evaluation_periods=192,
+    datapoints_to_alarm=192) so weekly dumps do not leave it perpetually in ALARM. Let the sandbox
+    apply converge; confirm the alarm returns to OK after the next successful dump.
   - >-
     Decision. Add the next sequential numbered Decision to docs/DECISIONS.md: catalog egress is a
     first-class budget; four standing invariants -- (1) reuse warm catalog connections across
