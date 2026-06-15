@@ -35,9 +35,11 @@ scope:
   - file: scripts/executor/rec_write_guidance.py
     action: Modify
     purpose: >-
-      get_rec_write_guidance('ci_rca') returns the CiRcaContext field semantics as authoritative
-      write-time guidance (Decision 66). One-line comment justifies the dedicated code path (nested
-      object, not a flat ops.yaml column entry -- diverges from the Wave-2 auto-population pattern by design).
+      SIGNATURE CHANGE: get_rec_write_guidance today takes (ops_yaml_path, registry_path) and auto-populates
+      from ops.yaml columns -- add an optional source parameter so get_rec_write_guidance('ci_rca') returns
+      the CiRcaContext field semantics as authoritative write-time guidance (Decision 66). A one-line comment
+      justifies the dedicated code path (nested object, not a flat ops.yaml column entry -- intentional
+      divergence from the Wave-2 auto-population pattern).
   - file: config/lambda/ducklake/field_semantics.yaml
     action: Modify
     purpose: >-
@@ -46,23 +48,30 @@ scope:
   - file: src/common/ducklake_runtime.py
     action: Modify
     purpose: >-
-      Add reconcile_table_columns(con, table): introspect the physical columns of the history+current
-      tables (DuckDB PRAGMA table_info / information_schema over the attached catalog), then ALTER TABLE
-      ADD COLUMN for any spec column that is absent. Idempotency comes from the introspection guard, NOT a
-      SQL IF NOT EXISTS clause -- there is no ADD COLUMN precedent in this codebase and DuckLake 1.5.3
-      support for the clause is unverified (the existing line 335-336 ALTERs are SET PARTITIONED BY, a
-      different statement). Never DROP. This is the non-destructive migration primitive for the live
-      ops_recommendations tables.
+      Add reconcile_table_columns(con, *, table): a pure helper that introspects the physical columns of
+      the history+current tables (DuckDB PRAGMA table_info / information_schema over the attached catalog),
+      then ALTER TABLE ADD COLUMN for any spec column that is absent. Idempotency comes from the
+      introspection guard, NOT a SQL IF NOT EXISTS clause -- there is no ADD COLUMN precedent here and the
+      existing line 335-336 ALTERs are SET PARTITIONED BY, a different statement. Never DROP. Runs inside
+      the maintenance Lambda against the production catalog (see handler action below).
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Add an action_reconcile_columns operational action mirroring action_restore_drill / action_catalog_reinit:
+      opens its OWN connection to the PRODUCTION catalog via EXPLICIT event params (data_path + meta_schema
+      = ducklake_ops; refuse no-arg invokes so it can never hit the smoke catalog, per the catalog_reinit
+      precedent), calls reconcile_table_columns(con, table="ops_recommendations"), and returns the resulting
+      per-table column presence. This is the correct Lambda-mediated surface for production catalog DDL --
+      CC-web has NO Neon 5432 egress, so the migration MUST run server-side (the round-1 smoke-client
+      _open_attached approach was wrong: that path is pinned to the smoke catalog and is unreachable from CC-web).
   - file: scripts/ducklake_neon_smoke_test.py
     action: Modify
     purpose: >-
-      Add a --migrate-ops-recs-columns operational flag (mirrors the direct-Neon _open_attached path used
-      by --attach/--restore-drill; deploy-free client, not Lambda-packaged) that calls
-      reconcile_table_columns against ops_recommendations and asserts context_v2_json is present on BOTH
-      the history and current tables. This is the in-scope invocation surface + verification command for
-      the live-table column migration -- deliberately NOT a maintenance-handler action, which
-      compute_affected_artifacts shows would pull data-pipeline + ops-compaction (unprovisioned per
-      rec-2164) into the deploy set.
+      Add a --migrate-ops-recs-columns flag that SigV4-invokes the maintenance Function URL
+      (_sigv4_invoke(_function_url("maintenance"), {"action": "reconcile_columns", "data_path": <prod>,
+      "meta_schema": "ducklake_ops", "table": "ops_recommendations"})) -- the same Lambda-mediated pattern
+      the production T2.19 gates use -- and asserts the response reports context_v2_json present on BOTH the
+      history and current tables. The client is the invocation wrapper; the DDL runs server-side.
   - file: tests/test_ops_data_portal.py
     action: Modify
     purpose: >-
@@ -89,18 +98,20 @@ infrastructure_dependencies:
     check, Decision 83) is authoritative for HCL syntax/plan.
   - >-
     DuckLake ops_recommendations catalog migration -- non-destructive ALTER TABLE ADD COLUMN on
-    ops_recommendations_history and _current, idempotent via column introspection (not a SQL IF NOT
-    EXISTS clause). Invoked once post-deploy via the deploy-free smoke client
-    (ducklake_neon_smoke_test --migrate-ops-recs-columns, direct-Neon _open_attached path). Decision 84/81
-    closed boundary; NOT Iceberg, NOT Athena. Data-preserving (905 live rows must survive); NEVER DROP.
+    ops_recommendations_history and _current, idempotent via column introspection (not a SQL IF NOT EXISTS
+    clause). Runs SERVER-SIDE in the ducklake_maintenance Lambda against the production ducklake_ops catalog
+    (explicit data_path + meta_schema event params), invoked once post-deploy by SigV4 to the maintenance
+    Function URL -- CC-web has no Neon 5432 egress, so a direct client connection cannot reach production.
+    Decision 84/81 closed boundary; NOT Iceberg, NOT Athena. Data-preserving (905 live rows survive); NEVER DROP.
   - >-
-    Per-Lambda deploy gating (Decision 79 / CD.16): EXACTLY four active DuckLake artifacts are affected
-    (compute_affected_artifacts on field_semantics.yaml + ducklake_runtime.py) -- ducklake_writer,
-    ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (catalog_dr packages ducklake_runtime.py).
-    Each gets build + deploy + smoke-test via build_lambda --deploy --ducklake-only. The migration is
-    invoked via the deploy-free smoke client (not a maintenance-handler action) precisely so the deploy
-    set is NOT expanded to data-pipeline + ops-compaction (which editing src/lambdas/ducklake_maintenance/
-    handler.py would pull in -- both unprovisioned per rec-2164).
+    Per-Lambda deploy gating (Decision 79 / CD.16): SIX active artifacts are affected by the full scope
+    (compute_affected_artifacts on field_semantics.yaml + ducklake_runtime.py + ducklake_maintenance/handler.py
+    + the docs/ROADMAP-PLATFORM.yaml data-pipeline asset). FOUR are provisioned DuckLake functions --
+    ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr -- and get real build + deploy
+    + smoke-test via build_lambda --deploy --ducklake-only. TWO -- data-pipeline and ops-compaction -- are NOT
+    provisioned in the personal account (UpdateFunctionCode -> ResourceNotFoundException); their function-code
+    deploy + smoke are VACUOUS and DEFERRED per the T1.15 / rec-2164 precedent (rebuilt + staged only, no
+    provisioned target). No deploy command is run for the two vacuous artifacts in this plan.
 acceptance_criteria:
   - CI_RCA_STRICT_MODE exists in config/feature_flags.yaml defaulting to warn; get_ci_rca_strict_mode() returns 'warn' and rejects values outside {warn, strict}.
   - get_rec_write_guidance('ci_rca') returns the structured context schema surfacing proximate_cause, why_chain, detection_gap, recurrence_class, corrective_action, preventive_action (Decision 66).
@@ -108,7 +119,7 @@ acceptance_criteria:
   - file_rec(source=ci_rca, context_v2_json=<deficient why_chain>) in warn mode logs a structured deficiency warning and does NOT raise; the rec is still filed.
   - file_rec(source=ci_rca) with only legacy free-text context (no context_v2_json) passes with a deprecation warning; no rejection.
   - context_v2_json column is present and nullable on ops_recommendations_history and _current; the legacy context column is preserved and still readable.
-  - All four affected active DuckLake Lambda artifacts (writer, reader, maintenance, catalog_dr) rebuilt, deployed, and smoke-tested green; ops-read-your-write roundtrips at production scope.
+  - The four provisioned DuckLake Lambda artifacts (writer, reader, maintenance, catalog_dr) rebuilt, deployed, and smoke-tested green (ops-read-your-write roundtrips at production scope); the two affected-but-unprovisioned artifacts (data-pipeline, ops-compaction) are rebuilt + staged with VACUOUS deploy per rec-2164.
   - docs/INTENT-ci-rca-methodology.md carries the DuckLake stale-pointer annotation + Phase-1 deferral note; docs/ROADMAP-PLATFORM.yaml T1.13 progress_note updated.
 verification_plan:
   - step: 1
@@ -149,16 +160,16 @@ verification_plan:
     fix_if: AssertionError -- the SSM param for the flag is not defined, or the file landed at the wrong (non-personal) path.
   - step: 7
     phase: post-deploy
-    action: Build and deploy all four affected active DuckLake artifacts.
-    command: bin/venv-python -m scripts.build_lambda --deploy --ducklake-only --profile agent_platform
-    expected: writer, reader, maintenance, catalog-dr function code updated; exit 0.
-    fix_if: Deploy error -- check S3 upload and function names; ResourceNotFoundException -- function not provisioned (record as a rec, do not rescue-loop, Decision 55).
+    action: Build + stage all affected artifacts, then deploy the four provisioned DuckLake functions (data-pipeline + ops-compaction stage-only / vacuous per rec-2164).
+    command: bin/venv-python -m scripts.build_lambda --profile agent_platform && bin/venv-python -m scripts.build_lambda --deploy --ducklake-only --profile agent_platform
+    expected: all affected artifacts built + uploaded to S3; writer, reader, maintenance, catalog-dr function code updated; exit 0. data-pipeline/ops-compaction have no provisioned function, so their code-deploy is intentionally not attempted.
+    fix_if: build/upload error -- check S3 bucket + creds; a DuckLake function-deploy error -- check function names; a ResourceNotFoundException for data-pipeline/ops-compaction is the EXPECTED vacuous outcome (rec-2164), not a failure.
   - step: 8
     phase: post-deploy
-    action: Run the non-destructive column migration against the live catalog and assert the new column is present on BOTH the history and current tables.
+    action: Run the non-destructive column migration SERVER-SIDE (maintenance Lambda action against production ducklake_ops) and assert the new column is present on BOTH the history and current tables.
     command: bin/venv-python -m scripts.ducklake_neon_smoke_test --migrate-ops-recs-columns --profile agent_platform
-    expected: reconcile_table_columns adds context_v2_json where absent (idempotent no-op if already present) and reports it present on ops_recommendations_history AND ops_recommendations_current; exit 0; the 905 existing rows are untouched.
-    fix_if: column absent on either table after the run -- introspection or ALTER path wrong; any DROP/recreate observed -- abort (the migration MUST be non-destructive, Decision 84/81).
+    expected: the maintenance action's reconcile_table_columns adds context_v2_json where absent (idempotent no-op if present) and the response reports it present on ops_recommendations_history AND ops_recommendations_current; exit 0; the 905 existing rows are untouched.
+    fix_if: column absent on either table after the run -- introspection or ALTER path wrong; the action resolved meta_schema to the smoke catalog -- it must require explicit production params (data_path + meta_schema=ducklake_ops); any DROP/recreate observed -- abort (must be non-destructive, Decision 84/81).
   - step: 9
     phase: post-deploy
     action: Prove the redeployed writer/reader operate at production scope with no schema regression on the existing columns.
@@ -207,8 +218,9 @@ constraints:
     terraform/personal/ only (Decision 77): the flag tf must land under terraform/personal/ so
     push-to-main auto-applies behind terraform_apply_guard.py. No IAM/destroy/trust changes.
   - >-
-    Per-Lambda deploy gating (Decision 79 / CD.16): all four affected active DuckLake artifacts get
-    build + deploy + smoke-test.
+    Per-Lambda deploy gating (Decision 79 / CD.16): SIX active artifacts are affected -- the four provisioned
+    DuckLake functions get real build + deploy + smoke-test (--ducklake-only); data-pipeline + ops-compaction
+    are unprovisioned (rec-2164) and get a VACUOUS/deferred deploy (rebuilt + staged only, no deploy command).
   - No rescue agents or workaround loops (Decision 55). On unrecoverable V3 failure, stop and RCA.
   - IMPLEMENTATION type only (CD.17 / Decision 67 STRATEGIC-plan freeze).
 context:
@@ -243,9 +255,12 @@ context:
     enforcement. DEFERRAL RATIONALE: per explicit human direction (2026-06-15 planning session), rec-2213 is
     owned by another in-flight agent and is excluded from this scope.
   - >-
-    Affected active Lambda artifacts confirmed via compute_affected_artifacts(['config/lambda/ducklake/field_semantics.yaml',
-    'src/common/ducklake_runtime.py']): ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr.
-    catalog_dr is pulled in because its manifest packages src/common/ducklake_runtime.py.
+    Affected active Lambda artifacts (compute_affected_artifacts over the full scope -- field_semantics.yaml,
+    ducklake_runtime.py, ducklake_maintenance/handler.py, and the docs/ROADMAP-PLATFORM.yaml data-pipeline
+    asset): SIX -- ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (provisioned;
+    real deploy) + data-pipeline, ops-compaction (unprovisioned per rec-2164; vacuous deploy). catalog_dr is
+    pulled in via ducklake_runtime.py; data-pipeline/ops-compaction via the maintenance handler edit and the
+    ROADMAP data-pipeline asset entry.
   - >-
     The flag reader mirrors the portal's existing module-level cached yaml.safe_load (scripts/ops_data_portal.py:288):
     read once at process start, no hot-reload, default warn when key/file absent.
@@ -253,14 +268,17 @@ context:
     T1.5 (ops_decisions graduation) is not_started, so the log_rec agent_sdk verb does not exist; schema
     enforcement targets file_rec() (the current portal handler). The INTENT soft-coupling note (migrate to
     log_rec if T1.5 lands first) is moot for now.
-  - Branch claude/confident-hopper-lq0gck was 0 commits behind origin/main at planning time -- no Main Divergence concern.
+  - >-
+    Branch was rebased onto origin/main during planning after PR #150 (679fc32, production ops_* merge cadence)
+    landed mid-session -- it added an 11-line T2.18 block to docs/ROADMAP-PLATFORM.yaml. The /implement agent
+    MUST git fetch + rebase before the ROADMAP T1.13 edit so it does not clobber that block.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/confident-hopper-lq0gck)
   - docs/PROJECT_CONTEXT.md read
   - DECISIONS.md adjudicated via the decision-scout gate (84/81/72/66/60/79/48/77/86/70/55 cited)
   - docs/INTENT-ci-rca-methodology.md read in full (the methodology contract)
   - All nine files in scope located and readable
-  - compute_affected_artifacts run; four active DuckLake artifacts confirmed for deploy
+  - compute_affected_artifacts run; six affected active artifacts confirmed (four provisioned DuckLake + data-pipeline/ops-compaction vacuous per rec-2164)
   - AWS profile agent_platform reachable (aws sts get-caller-identity) for portal writes and Lambda deploy
   - Acceptance criteria understood and verifiable
 execution_steps:
@@ -282,10 +300,11 @@ execution_steps:
     (100-800); evidence_bundle_ref{sha256 pattern, s3_uri pattern, upload_status} (SHAPE-validated only -- S3
     existence DEFERRED).
   - >-
-    Extend scripts/executor/rec_write_guidance.py so get_rec_write_guidance('ci_rca') returns the CiRcaContext
-    field semantics as authoritative write-time guidance (Decision 66). Add a one-line comment justifying the
-    dedicated code path (nested object, not a flat ops.yaml column entry -- intentional divergence from the
-    Wave-2 auto-population pattern).
+    Extend scripts/executor/rec_write_guidance.py: ADD an optional source parameter to get_rec_write_guidance
+    (today the signature is (ops_yaml_path, registry_path), auto-populated from ops.yaml) so
+    get_rec_write_guidance('ci_rca') returns the CiRcaContext field semantics as authoritative write-time
+    guidance (Decision 66). A one-line comment justifies the dedicated code path (nested object, not a flat
+    ops.yaml column entry -- intentional divergence from the Wave-2 auto-population pattern).
   - >-
     Add the warn-mode validation branch to file_rec() for source=ci_rca: accept a new context_v2_json argument.
     If provided, run CiRcaContext.model_validate + the why_chain two-layer terminus check + per-field bounds.
@@ -299,19 +318,24 @@ execution_steps:
     blocks of ops_recommendations in config/lambda/ducklake/field_semantics.yaml. Do NOT touch
     src/common/ducklake_scd2_schema.py if avoidable (keeps the change config-driven).
   - >-
-    Add reconcile_table_columns(con, *, table) to src/common/ducklake_runtime.py: introspect the physical
-    columns of the history+current tables (DuckDB PRAGMA table_info / information_schema over the attached
-    catalog) and run ALTER TABLE <t> ADD COLUMN <name> <sql_type> for each spec column that is absent.
-    Idempotency comes from the introspection guard, NOT a SQL IF NOT EXISTS clause (there is no ADD COLUMN
-    precedent here; the line 335-336 ALTERs are SET PARTITIONED BY, a different statement). Never DROP. Keep
-    it a pure function over an open connection so it is callable from the smoke client.
+    Add reconcile_table_columns(con, *, table) to src/common/ducklake_runtime.py: a pure helper that
+    introspects the physical columns of the history+current tables (DuckDB PRAGMA table_info /
+    information_schema over the attached catalog) and runs ALTER TABLE <t> ADD COLUMN <name> <sql_type> for
+    each spec column that is absent. Idempotency comes from the introspection guard, NOT a SQL IF NOT EXISTS
+    clause (no ADD COLUMN precedent here; the line 335-336 ALTERs are SET PARTITIONED BY). Never DROP.
   - >-
-    Add a --migrate-ops-recs-columns operational flag to scripts/ducklake_neon_smoke_test.py: open a direct
-    Neon connection via the existing _open_attached helper (the --attach/--restore-drill path), call
-    reconcile_table_columns(con, table="ops_recommendations"), then assert via introspection that
-    context_v2_json is present on BOTH ops_recommendations_history and _current; print the result. This is the
-    one-time migration trigger + verification (deploy-free; deliberately NOT a maintenance-handler action,
-    which would pull data-pipeline + ops-compaction into the deploy set).
+    Add action_reconcile_columns to src/lambdas/ducklake_maintenance/handler.py, mirroring action_restore_drill
+    / action_catalog_reinit: require EXPLICIT data_path + meta_schema event params (refuse no-arg invokes so it
+    can never hit the smoke catalog), open a production ducklake_ops connection, call
+    reconcile_table_columns(con, table="ops_recommendations"), and return the per-table column presence. This
+    is the production-reachable, Lambda-mediated migration surface (CC-web has no Neon 5432 egress, so the DDL
+    must run server-side).
+  - >-
+    Add a --migrate-ops-recs-columns flag to scripts/ducklake_neon_smoke_test.py that SigV4-invokes
+    _function_url("maintenance") with {"action": "reconcile_columns", "data_path": <prod>, "meta_schema":
+    "ducklake_ops", "table": "ops_recommendations"} (same pattern as the existing maintenance-action flags),
+    then asserts the response reports context_v2_json present on BOTH history and current. One-time migration
+    trigger + verification.
   - >-
     Create terraform/personal/feature_flags.tf: provision CI_RCA_STRICT_MODE as an SSM String parameter whose
     value is sourced from config/feature_flags.yaml via try()-wrapped file()+yamldecode (AGENTS.md optional-artifact
