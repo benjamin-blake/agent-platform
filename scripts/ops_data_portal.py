@@ -654,12 +654,13 @@ def file_rec(
     merged.pop("id", None)
     merged.setdefault("date", date.today().isoformat())
 
+    response: dict = {}
     if _migration_int_id is not None:
         # Backfill path: the historical id is preserved via a caller-keyed write_ops upsert.
         rec_id = f"rec-{_migration_int_id:03d}"
         merged["id"] = rec_id
         Recommendation.model_validate(merged)
-        _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
+        response = _ducklake_write("ops_recommendations", merged, action="write_ops", profile=profile)
     else:
         # Fail fast client-side with a placeholder id; the writer's schema gate is authoritative.
         Recommendation.model_validate({**merged, "id": "rec-0"})
@@ -679,10 +680,8 @@ def file_rec(
             raise RuntimeError(f"ducklake_writer file_ops returned no allocated key: {response}")
         merged["id"] = str(rec_id)
 
-    _append_to_local_jsonl(RECS_JSONL, merged)
     logger.info("[PORTAL] Filed %s: %s", rec_id, merged.get("title", ""))
-    if not _skip_sync:
-        _sync_table("ops_recommendations")
+    _refresh_cache_after_write("ops_recommendations", merged, response, RECS_JSONL, append_only=_skip_sync)
     return str(rec_id)
 
 
@@ -710,15 +709,59 @@ def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Option
 
 
 def _sync_table(table: str) -> None:
-    """Refresh the local read-cache for one ops table from the DuckLake reader.
+    """Full-pull refresh of the local read-cache for one ops table from the DuckLake reader.
 
     The atomic catalog commit means there is no compaction/view-refresh step (Decision 81 cl.4) --
     the write already landed in `current`, so a cache-pull from the reader suffices for every
     migrated table (Decision 84 I-1). Raises on infrastructure failure.
+
+    This is the EXPLICIT full-table reconciliation primitive, retained for the bulk-backfill
+    post-loop sync and the `sync()` fallback. The per-write path no longer calls it -- it uses
+    _refresh_cache_after_write (incremental upsert, no reader round-trip; neon-egress-reduction D4).
     """
     from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
 
     _pull_single_table(table)
+
+
+def _refresh_cache_after_write(
+    table: str,
+    record: dict,
+    response: dict,
+    jsonl_path: Path,
+    *,
+    append_only: bool = False,
+) -> None:
+    """Refresh the local READ cache after a synchronous ducklake_writer commit -- no reader round-trip.
+
+    Replaces the prior per-write full-table resync (_sync_table -> _pull_single_table, one reader
+    invocation per file_rec/update_rec) with an incremental single-row upsert of the just-committed
+    row (neon-egress-reduction D4). The write itself already transited ducklake_writer synchronously;
+    this is a downstream refresh of the READ cache (Decision 84 I-4 / warehouse-as-source-of-truth):
+    NEVER a write source, NEVER re-staged to S3/the writer.
+
+    The committed `record` is enriched from the writer's authoritative `response`: the minted ULID
+    (when returned) and the SCD2 timestamps. created_timestamp is set only if absent (carried
+    unchanged on update, matching the runtime's SCD2 derivation); last_updated_timestamp is stamped
+    now (the writer minted it at ~this instant; the next full `sync` reconciles any sub-second skew).
+
+    append_only=True (bulk-import `_skip_sync` path) keeps the historical append-then-final-sync
+    behaviour: the caller runs ONE explicit _sync_table after the loop, which dedups via full pull.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    record.setdefault("created_timestamp", now_iso)
+    record["last_updated_timestamp"] = now_iso
+    ulid = response.get("ulid") if isinstance(response, dict) else None
+    if ulid:
+        record["ulid"] = ulid
+
+    if append_only:
+        _append_to_local_jsonl(jsonl_path, record)
+        return
+
+    from scripts.sync_ops import upsert_cache_row  # noqa: PLC0415
+
+    upsert_cache_row(table, record, path=jsonl_path)
 
 
 def _sanitize_athena_record(record: dict) -> dict:
@@ -768,10 +811,9 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
     Recommendation.model_validate(merged)  # raises on failure
 
     # ops_recommendations always routes to DuckLake (Decision 81 cl.7 / T2.19).
-    _ducklake_write("ops_recommendations", merged, action="update_ops", profile=profile)
-    _append_to_local_jsonl(RECS_JSONL, merged)
+    response = _ducklake_write("ops_recommendations", merged, action="update_ops", profile=profile)
     logger.info("[PORTAL] Updated %s: %s", rec_id, list(updates.keys()))
-    _sync_table("ops_recommendations")
+    _refresh_cache_after_write("ops_recommendations", merged, response, RECS_JSONL)
     return True
 
 
@@ -814,11 +856,9 @@ def file_decision(
 
     Decision.model_validate(merged)
 
-    _ducklake_write("ops_decisions", merged, action="write_ops", profile=profile)
-    _append_to_local_jsonl(DECISIONS_JSONL, merged)
+    response = _ducklake_write("ops_decisions", merged, action="write_ops", profile=profile)
     logger.info("[PORTAL] Filed decision %s: %s", dec_id, merged.get("title", ""))
-    if not _skip_sync:
-        _sync_table("ops_decisions")
+    _refresh_cache_after_write("ops_decisions", merged, response, DECISIONS_JSONL, append_only=_skip_sync)
     return dec_id
 
 
@@ -875,10 +915,9 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
 
     Decision.model_validate(merged)
 
-    _ducklake_write("ops_decisions", merged, action="update_ops", profile=profile)
-    _append_to_local_jsonl(DECISIONS_JSONL, merged)
+    response = _ducklake_write("ops_decisions", merged, action="update_ops", profile=profile)
     logger.info("[PORTAL] Updated %s: %s", decision_id, list(updates.keys()))
-    _sync_table("ops_decisions")
+    _refresh_cache_after_write("ops_decisions", merged, response, DECISIONS_JSONL)
     return True
 
 

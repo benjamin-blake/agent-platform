@@ -40,10 +40,14 @@ CALL signature notes (verified against live DuckDB 1.5.3 / DuckLake v1.0):
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
-from src.common.ducklake_runtime import CATALOG_ALIAS, SMOKE_CURRENT_TABLE, SMOKE_HISTORY_TABLE
+from src.common.ducklake_runtime import CATALOG_ALIAS, SMOKE_CURRENT_TABLE, SMOKE_HISTORY_TABLE, libpq_conninfo
+
+# A bare SQL identifier (meta-schema name) -- guards the f-string-interpolated catalog_stats query.
+_META_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # ---------------------------------------------------------------------------
 # Scope -- smoke tables only for T2.18 FP-A (production repoint = consolidation Phase 4, Decision 84)
@@ -445,6 +449,89 @@ def run_hot_merge(
         "tables": list(tables),
         "files_before": files_before,
         "files_after": files_after,
+    }
+
+
+def _default_pg_connect(conninfo: str) -> Any:
+    """psycopg2.connect, imported lazily (the layer provides it; keeps module import dependency-free)."""
+    import psycopg2  # noqa: PLC0415
+
+    return psycopg2.connect(conninfo)
+
+
+def catalog_stats(
+    *,
+    meta_schema: str,
+    dsn: dict[str, str],
+    ops_table_filter: str = "ops_%",
+    _connect: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Read-only catalog observability (D3a / neon-egress measurement obligation).
+
+    Returns the Postgres catalog-metadata footprint -- the bytes a pg_dump exports and the DuckDB
+    postgres scanner sequential-COPYs per query (ducklake #859), which is the Neon egress driver this
+    plan attacks. Pure metadata read over the catalog's own Postgres tables (psycopg2): no DuckLake
+    ATTACH, no data_path needed, and NO merge/expire/cleanup/orphan -- safe to run against production.
+
+    Reports: total catalog-metadata bytes (exact, via pg_total_relation_size), per-metadata-table bytes
+    + estimated row counts (reltuples; refreshed by ANALYZE/autovacuum), the snapshot / data_file /
+    file_column_stats row estimates pulled out by name, and a best-effort per-ops_*-table data_file
+    count (joined from the metadata; degrades to a note if the catalog's column names differ).
+
+    _connect injects the connection factory for tests (defaults to psycopg2.connect).
+    """
+    if not _META_IDENT_RE.match(meta_schema or ""):
+        raise DuckLakeMaintenanceError(f"catalog_stats: invalid meta_schema identifier {meta_schema!r}")
+
+    connect = _connect or _default_pg_connect
+    conn = connect(libpq_conninfo(dsn))
+    try:
+        with conn.cursor() as cur:
+            # Exact bytes per metadata table + estimated rows, in one query (no per-table count scan).
+            cur.execute(
+                "SELECT c.relname, pg_total_relation_size(c.oid), c.reltuples::bigint "
+                "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = %s AND c.relkind = 'r' AND c.relname LIKE 'ducklake_%%' "
+                "ORDER BY pg_total_relation_size(c.oid) DESC",
+                [meta_schema],
+            )
+            metadata_tables = [
+                {"table": r[0], "bytes": int(r[1] or 0), "est_rows": max(int(r[2] or 0), 0)} for r in cur.fetchall()
+            ]
+            catalog_metadata_bytes = sum(m["bytes"] for m in metadata_tables)
+
+            def _est(name_sub: str) -> int | None:
+                for m in metadata_tables:
+                    if name_sub in m["table"]:
+                        return m["est_rows"]
+                return None
+
+            per_ops_table: list[dict[str, Any]] = []
+            per_ops_note = ""
+            try:
+                cur.execute(
+                    f"SELECT t.table_name, count(*) FROM {meta_schema}.ducklake_data_file df "
+                    f"JOIN {meta_schema}.ducklake_table t ON df.table_id = t.table_id "
+                    f"WHERE t.table_name LIKE %s GROUP BY t.table_name ORDER BY t.table_name",
+                    [ops_table_filter],
+                )
+                per_ops_table = [{"table": r[0], "data_file_count": int(r[1] or 0)} for r in cur.fetchall()]
+            except Exception as exc:  # noqa: BLE001 -- observability degrades, never crashes the stats action
+                per_ops_note = f"per-ops-table breakdown unavailable ({type(exc).__name__}); catalog totals still reported"
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "meta_schema": meta_schema,
+        "catalog_metadata_bytes": catalog_metadata_bytes,
+        "snapshot_rows_est": _est("snapshot"),
+        "data_file_rows_est": _est("data_file"),
+        "file_column_stats_rows_est": _est("file_column_stat"),
+        "metadata_table_count": len(metadata_tables),
+        "metadata_tables": metadata_tables,
+        "per_ops_table": per_ops_table,
+        "per_ops_table_note": per_ops_note,
     }
 
 

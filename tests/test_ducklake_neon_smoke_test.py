@@ -849,6 +849,62 @@ def test_lambda_reader_ok(monkeypatch, capsys):
     assert "READER OK rows=3 write_denied=true" in capsys.readouterr().out
 
 
+def _warm_reuse_invoker():
+    """Fake _sigv4_invoke: 1st attach_check is cold (reused=False), subsequent are warm (reused=True)."""
+    state = {"attach_calls": 0}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "reset_warm_connection":
+            state["attach_calls"] = 0
+            return _Resp(200, {"ok": True, "reset": True})
+        if action == "attach_check":
+            state["attach_calls"] += 1
+            cold = state["attach_calls"] == 1
+            return _Resp(200, {"ok": True, "connect_ms": 80.0 if cold else 0.0, "connect_reused": not cold})
+        if action == "write":
+            return _Resp(200, {"ok": True, "occ_retries": 0})
+        return _Resp(200, {"ok": True})
+
+    return fake_invoke
+
+
+def test_lambda_warm_reuse_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    smoke.lambda_warm_reuse(json_output=True)
+    out = capsys.readouterr().out
+    result = json.loads(out)
+    assert result["role"] == "reader"
+    assert result["warm_reuse_observed"] is True
+    assert result["warm_connect_ms"] == 0.0
+    assert result["reconnect_ok"] is True
+
+
+def test_lambda_warm_reuse_writer_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    smoke.lambda_warm_reuse_writer(json_output=True)
+    result = json.loads(capsys.readouterr().out)
+    assert result["role"] == "writer"
+    assert result["warm_reuse_observed"] is True
+    assert result["write_ok"] is True
+
+
+def test_lambda_warm_reuse_fails_when_no_reuse(monkeypatch):
+    """If reuse is never observed (connect_reused stays False), the gate loud-fails."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+
+    def never_reused(url, payload, **kw):
+        if payload["action"] == "attach_check":
+            return _Resp(200, {"ok": True, "connect_ms": 80.0, "connect_reused": False})
+        return _Resp(200, {"ok": True})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", never_reused)
+    with pytest.raises(smoke.SmokeTestFailure, match="warm reuse not observed"):
+        smoke.lambda_warm_reuse()
+
+
 def test_lambda_reader_boundary_broken_fails(monkeypatch):
     monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
 

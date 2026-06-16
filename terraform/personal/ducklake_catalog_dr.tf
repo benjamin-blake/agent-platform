@@ -234,18 +234,23 @@ resource "aws_lambda_function_url" "ducklake_catalog_dr" {
 }
 
 # ---------------------------------------------------------------------------
-# EventBridge schedule: daily cron(0 3 * * ? *) -- 03:00 UTC.
+# EventBridge schedule: weekly cron(0 3 ? * SUN *) -- 03:00 UTC Sunday.
+#
+# Lowered from daily to weekly by neon-egress-reduction (D1): the daily full-catalog pg_dump was a
+# session-independent Neon egress line (CD.34 called it "a negligible add-on" -- true for storage,
+# FALSE for egress). Paid-tier Neon provides 7-day PITR for finer-grained recovery BETWEEN the weekly
+# full dumps, so the durability floor is preserved while the pg_dump egress line drops ~7x.
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_event_rule" "ducklake_catalog_dr" {
   name                = "agent-platform-ducklake-catalog-dr"
-  description         = "Daily DuckLake catalog DR pg_dump (T2.18 FP-B / CD.34). cron 03:00 UTC."
-  schedule_expression = "cron(0 3 * * ? *)"
+  description         = "Weekly DuckLake catalog DR pg_dump (T2.18 FP-B / CD.34; neon-egress D1). cron 03:00 UTC Sunday."
+  schedule_expression = "cron(0 3 ? * SUN *)"
   state               = "ENABLED"
 
   tags = {
     Name    = "DuckLake Catalog DR Schedule"
-    Purpose = "T2.18 FP-B daily catalog DR"
+    Purpose = "T2.18 FP-B weekly catalog DR (neon-egress D1)"
   }
 }
 
@@ -264,20 +269,23 @@ resource "aws_lambda_permission" "ducklake_catalog_dr" {
 }
 
 # ---------------------------------------------------------------------------
-# Freshness alarm: >25h lookback via evaluation_periods math.
+# Freshness alarm: ~8-day lookback via evaluation_periods math.
 #
-# CloudWatch's period ceiling is 86400s (24h), so the >25h lookback is built with:
-#   period=3600, evaluation_periods=25, datapoints_to_alarm=25
-# meaning "in all 25 of the last 25 hourly periods, CatalogDumpSuccess < 1".
+# CloudWatch's period ceiling is 86400s (24h), so the lookback is built from hourly periods:
+#   period=3600, evaluation_periods=192, datapoints_to_alarm=192
+# meaning "in all 192 of the last 192 hourly periods (~8 days), CatalogDumpSuccess < 1".
+# CO-REQUIRED with the weekly schedule (neon-egress D1): the prior >25h window (25/25) would sit in
+# perpetual ALARM ~6 days out of every 7 under a weekly dump and page SNS daily. An ~8-day window
+# clears within a day of each successful weekly dump while still catching a genuinely missed week.
 # treat_missing_data=breaching: missing datapoints (no invocation) are counted as failing.
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "ducklake_catalog_dr_freshness" {
   alarm_name          = "ducklake-catalog-dr-freshness"
-  alarm_description   = "DuckLake catalog DR missed: no CatalogDumpSuccess in >25h. T2.18 FP-B CD.34."
+  alarm_description   = "DuckLake catalog DR missed: no CatalogDumpSuccess in ~8 days. T2.18 FP-B CD.34 (neon-egress D1 weekly cadence)."
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 25
-  datapoints_to_alarm = 25
+  evaluation_periods  = 192
+  datapoints_to_alarm = 192
   metric_name         = "CatalogDumpSuccess"
   namespace           = "DuckLakeCatalogDR"
   period              = 3600

@@ -11,6 +11,13 @@ Internal helpers (not for direct agent use):
   drain              -- flush outbox entries to S3 via OpsWriter
   _rebuild_local_cache -- read Iceberg current-state and overwrite local JSONL files
   _pull_single_table -- pull a single table from the DuckLake reader (no fallback)
+  warm_sync          -- drain + pull all migrated tables in one warm-up pass, returning the
+                        pulled rows in-memory plus per-table reader reachability (the preflight
+                        serves its Phase-B signals from these rows -- zero additional reader calls,
+                        neon-egress-reduction D4). The disk caches are written as a side effect.
+  upsert_cache_row   -- incremental single-row upsert into a local JSONL read-cache by merge key.
+                        A read-cache refresh DOWNSTREAM of a synchronous ducklake_writer commit
+                        (Decision 84 I-4): never a write source, never re-staged to S3/the writer.
 
 Never raises to callers. All functions catch and log exceptions internally.
 """
@@ -20,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -292,28 +300,92 @@ def drain() -> dict[str, int]:
     return counts
 
 
+def _pull_single_table_with_rows(table: str, profile: str = _SSO_PROFILE) -> tuple[int, list[dict] | None]:
+    """Pull a single ops table from the DuckLake reader; overwrite the local JSONL and return the rows.
+
+    Returns (row_count, rows). On reader failure returns (0, None) -- the second element is None
+    (NOT []) so a caller can distinguish "reader unreachable" from "genuinely empty table" without a
+    false-zero (Decision 55). No Athena fallback for any migrated table (Decision 84 I-1): on reader
+    failure the cache is left untouched with a loud warning.
+    """
+    local_rel = _TABLE_TO_LOCAL.get(table)
+    if not local_rel:
+        logger.warning("sync_ops._pull_single_table_with_rows: unknown table %r", table)
+        return 0, None
+
+    reader_rows = _pull_via_reader(table)
+    if reader_rows is not None:
+        rows = _coerce_rows_list(table, reader_rows)
+        return _write_rows_to_local(table, rows, local_rel), rows
+
+    logger.warning(
+        "sync_ops._pull_single_table_with_rows: DuckLake reader unreachable for %s -- no fallback "
+        "(Decision 84 I-1). Local cache not updated.",
+        table,
+    )
+    return 0, None
+
+
 def _pull_single_table(table: str, profile: str = _SSO_PROFILE) -> int:
     """Pull a single ops table from the DuckLake reader and overwrite the local JSONL file.
 
     No Athena fallback for any migrated table (Decision 84 I-1): on reader failure the
     cache is left untouched with a loud warning. Returns number of rows pulled, or 0 on failure.
     """
+    count, _rows = _pull_single_table_with_rows(table, profile=profile)
+    return count
+
+
+def upsert_cache_row(table: str, row: dict, *, merge_key: str = "id", path: Path | None = None) -> int:
+    """Incrementally upsert ONE row into the local JSONL read-cache by *merge_key*. Returns row count.
+
+    Reads the existing cache, replaces the row whose merge_key matches (last-wins, keeping its
+    position) or appends a new one, then atomically rewrites the file (temp + os.replace). The whole
+    file is deduplicated by merge_key as a side effect, so repeated portal writes never accumulate
+    duplicate rows in the cache.
+
+    This is a refresh of the READ cache DOWNSTREAM of a synchronous ducklake_writer commit
+    (Decision 84 I-4 / warehouse-as-source-of-truth): it is NEVER a write source and is NEVER
+    re-staged to S3 or the writer. The authoritative write already transited ducklake_writer; this
+    only keeps the local projection current without a reader round-trip (neon-egress-reduction D4).
+
+    *path* overrides the cache-file location (defaults to _LOGS_DIR/_TABLE_TO_LOCAL[table]); the
+    portal passes its own RECS_JSONL/DECISIONS_JSONL symbol so a single cache path is authoritative.
+
+    Returns 0 (no-op) for an unknown table or a row missing the merge key.
+    """
     local_rel = _TABLE_TO_LOCAL.get(table)
-    if not local_rel:
-        logger.warning("sync_ops._pull_single_table: unknown table %r", table)
+    if path is None and not local_rel:
+        logger.warning("sync_ops.upsert_cache_row: unknown table %r", table)
+        return 0
+    key_val = row.get(merge_key)
+    if not key_val:
+        logger.warning("sync_ops.upsert_cache_row: row missing merge key %r; cache not updated", merge_key)
         return 0
 
-    reader_rows = _pull_via_reader(table)
-    if reader_rows is not None:
-        rows = _coerce_rows_list(table, reader_rows)
-        return _write_rows_to_local(table, rows, local_rel)
+    local_path = path if path is not None else _LOGS_DIR / local_rel
+    by_key: dict[str, dict] = {}
+    if local_path.exists():
+        for line in local_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                existing = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            existing_key = existing.get(merge_key)
+            if existing_key:
+                by_key[existing_key] = existing
+    by_key[key_val] = row  # replace-in-place (keeps position) or append a new merge key
 
-    logger.warning(
-        "sync_ops._pull_single_table: DuckLake reader unreachable for %s -- no fallback "
-        "(Decision 84 I-1). Local cache not updated.",
-        table,
-    )
-    return 0
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = local_path.with_name(local_path.name + ".tmp")
+    with tmp_path.open("w", encoding="utf-8", newline="\n") as fh:
+        for cached in by_key.values():
+            fh.write(json.dumps(cached, ensure_ascii=False) + "\n")
+    os.replace(tmp_path, local_path)
+    return len(by_key)
 
 
 def _coerce_rows_list(table: str, raw_rows: list[dict]) -> list[dict]:
@@ -388,6 +460,35 @@ def sync(profile: str = _SSO_PROFILE) -> dict[str, dict[str, int]]:
     drain_result = drain()
     pull_result = _rebuild_local_cache(profile)
     return {"drained": drain_result, "pulled": pull_result}
+
+
+def warm_sync(profile: str = _SSO_PROFILE) -> dict[str, object]:
+    """Single warm-up pass for preflight: drain the outbox, then pull every migrated table ONCE.
+
+    This is the ONE serial reader touch that absorbs the Neon cold-resume before the preflight
+    fan-out. It returns the pulled rows in-memory so the caller can serve every Phase-B signal from
+    them WITHOUT issuing a second reader call per signal (neon-egress-reduction D4). The disk caches
+    are still written (so degraded fallbacks and other tools see fresh data); returning the rows just
+    avoids re-reading the file we literally just wrote.
+
+    Returns:
+        {
+          "drained":   {table: count},
+          "pulled":    {table: count},                 # rows written to the local cache
+          "rows":      {table: [rows] | None},         # None => that table's reader pull failed
+          "reader_ok": {table: bool},                  # per-table reachability (False on failure)
+        }
+    """
+    drain_result = drain()
+    pulled: dict[str, int] = {}
+    rows: dict[str, list[dict] | None] = {}
+    reader_ok: dict[str, bool] = {}
+    for table in _TABLE_TO_LOCAL:
+        count, table_rows = _pull_single_table_with_rows(table, profile=profile)
+        pulled[table] = count
+        rows[table] = table_rows
+        reader_ok[table] = table_rows is not None
+    return {"drained": drain_result, "pulled": pulled, "rows": rows, "reader_ok": reader_ok}
 
 
 def outbox_summary() -> dict[str, int]:

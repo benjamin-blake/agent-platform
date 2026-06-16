@@ -389,6 +389,31 @@ def action_reconcile_columns(event: dict[str, Any], _con: Any) -> dict[str, Any]
     }
 
 
+def action_catalog_stats(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """OPERATIONAL read-only: catalog-metadata footprint of the production ops_* catalog (D3a).
+
+    Connectionless and ATTACH-free: it reads the catalog's own Postgres metadata tables directly
+    (psycopg2), so it needs only an explicit meta_schema -- NO data_path (unlike merge_ops). This is
+    the supported measurement path for the neon-egress budget (the DR bucket + direct CloudWatch reads
+    are IAM-blocked from the dev role by design). Read-only: no merge/expire/cleanup/orphan.
+
+    Expected event: {"action": "catalog_stats", "meta_schema": "ducklake_ops"}
+    """
+    raw_schema = event.get("meta_schema")
+    if not raw_schema:
+        raise rt.DuckLakeRuntimeError(
+            "catalog_stats requires an explicit 'meta_schema' (e.g. 'ducklake_ops') -- no default production schema"
+        )
+    meta_schema = _require_identifier(raw_schema)
+    ops_filter = event.get("ops_table_filter", "ops_%")
+    result = maint.catalog_stats(meta_schema=meta_schema, dsn=rt.fetch_dsn(), ops_table_filter=ops_filter)
+
+    _emit_maintenance_metric("CatalogMetadataBytes", float(result.get("catalog_metadata_bytes") or 0))
+    if result.get("file_column_stats_rows_est") is not None:
+        _emit_maintenance_metric("CatalogFileColumnStatsRows", float(result["file_column_stats_rows_est"]))
+    return result
+
+
 def action_merge_ops(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     """OPERATIONAL: non-destructive merge over ALL live ops_* SCD2 table pairs in the production catalog.
 
@@ -472,12 +497,14 @@ _ACTIONS: dict[str, Any] = {
     "catalog_reinit": action_catalog_reinit,
     "restore_drill": action_restore_drill,
     "merge_ops": action_merge_ops,
+    "catalog_stats": action_catalog_stats,
     "reconcile_columns": action_reconcile_columns,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops", "reconcile_columns"}
+# catalog_stats is ATTACH-free (psycopg2 metadata read) -- also connectionless.
+_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops", "catalog_stats", "reconcile_columns"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:

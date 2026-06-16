@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -299,6 +300,150 @@ def open_connection(
         f"ATTACH 'ducklake:postgres:{conninfo}' AS {CATALOG_ALIAS} (DATA_PATH '{data_path}', META_SCHEMA '{meta_schema}')"
     )
     return con
+
+
+# ---------------------------------------------------------------------------
+# Warm-connection cache (neon-egress-reduction D2).
+#
+# A fresh ATTACH per Lambda invocation is the dominant Neon catalog-egress driver: DuckDB's postgres
+# scanner sequential-COPYs ducklake_file_column_stats per query (ducklake #859), and re-ATTACHing
+# every request pays that metadata transfer again and again. Reusing ONE connection across sequential
+# warm invocations on the same container eliminates the repeated ATTACH (and its metadata egress).
+#
+# This is a per-container module global for SEQUENTIAL request handling (a Lambda container serves one
+# invocation at a time). The 8-thread churn harness MUST NOT use it -- it opens an independent
+# connection per thread via open_connection (constraint: never share the cached connection across
+# threads). A dead session (Neon scale-to-zero) is handled as the ONE expected reopen condition
+# (Decision 55: any other error still raises).
+# ---------------------------------------------------------------------------
+
+_WARM_CONNECTION_LOCK = threading.Lock()
+_warm_connection: dict[str, Any] = {}
+
+# Connection-failure signatures treated as the expected dead-catalog-session condition (Neon
+# scale-to-zero suspended the underlying Postgres session, or the cached DuckDB connection was closed).
+# DELIBERATELY SPECIFIC PHRASES, not the bare word "connection": a capacity error ("too many
+# connections for role", "remaining connection slots are reserved") or an auth failure ("password
+# authentication failed") must FAIL LOUD, not be silently reopened+retried (Decision 55 -- the one
+# expected transient is a dropped/closed session, never pool-exhaustion or auth). See
+# test_non_dead_errors_do_not_match for the excluded false-positives.
+_DEAD_CONNECTION_SIGNATURES = (
+    "connection refused",
+    "connection reset",
+    "connection already closed",  # DuckDB closed-connection
+    "connection timed out",
+    "the connection is closed",
+    "server closed",  # "server closed the connection unexpectedly"
+    "terminating connection",
+    "could not connect",
+    "no connection to the server",
+    "ssl connection has been closed",
+    "database has been invalidated",
+)
+
+
+def is_dead_connection_error(exc: BaseException) -> bool:
+    """True iff *exc* matches the expected dead-catalog-session signature (Neon scale-to-zero / closed).
+
+    The narrow allow-list keeps the warm-connection reopen scoped to the ONE expected transient
+    (Decision 55: no catch-and-relax) -- any other failure still propagates at the call site.
+    """
+    msg = str(exc).lower()
+    return any(sig in msg for sig in _DEAD_CONNECTION_SIGNATURES)
+
+
+def _probe_connection_alive(con: Any, probe_sql: str) -> bool:
+    """Cheap liveness probe. Returns False when the probe raises (closed/dead connection)."""
+    try:
+        con.execute(probe_sql).fetchall()
+        return True
+    except Exception:  # noqa: BLE001 -- any probe failure means reopen; the reopen itself loud-fails
+        return False
+
+
+def reset_warm_connection() -> None:
+    """Close + clear the per-container warm connection (test teardown / explicit drop)."""
+    with _WARM_CONNECTION_LOCK:
+        con = _warm_connection.pop("con", None)
+        _warm_connection.pop("key", None)
+    if con is not None:
+        try:
+            con.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def get_warm_connection(
+    *,
+    dsn: dict[str, str] | None = None,
+    dsn_factory: Callable[[], dict[str, str]] | None = None,
+    opener: Callable[[], Any] | None = None,
+    data_path: str = SMOKE_DATA_PATH,
+    meta_schema: str = META_SCHEMA,
+    extension_directory: str | None = None,
+    profile: str | None = None,
+    _creds: tuple[str, str, str | None, str] | None = None,
+    probe_sql: str = "SELECT 1",
+    force_reopen: bool = False,
+) -> tuple[Any, dict[str, Any]]:
+    """Return a per-container cached DuckLake connection, reusing the ATTACH across SEQUENTIAL warm
+    invocations (neon-egress-reduction D2).
+
+    The first call in a container opens + ATTACHes and caches the connection; subsequent invocations
+    on the same warm container reuse it -- no re-ATTACH, so no per-invocation re-COPY of
+    ducklake_file_column_stats (ducklake #859) and therefore no repeated Neon metadata egress. The
+    cached connection is validated by a cheap liveness probe; a dead session (Neon scale-to-zero) or a
+    cross-catalog key change triggers a transparent reopen.
+
+    *dsn* / *dsn_factory* / *opener*: supply the catalog DSN directly, a DSN factory, or a full
+    connection opener (zero-arg). All are invoked ONLY when (re)opening, so the warm-reuse path does
+    not re-fetch Secrets Manager or re-ATTACH. *opener* takes precedence (the reader/writer handlers
+    pass their existing _open_*_connection so the open seam stays single).
+
+    Returns (connection, meta) where meta = {"reused": bool, "reopened": bool, "connect_ms": float}.
+    connect_ms is 0.0 on reuse (no ATTACH) and the real open cost on a (re)open -- so warm reuse is
+    observable in the handler response.
+
+    CONCURRENCY: per-container module global for SEQUENTIAL handling only. The churn harness opens its
+    own per-thread connections via open_connection and MUST NOT call this.
+    """
+    key = (data_path, meta_schema, extension_directory)
+    with _WARM_CONNECTION_LOCK:
+        cached = _warm_connection.get("con")
+        cached_key = _warm_connection.get("key")
+        had_cached = cached is not None
+        if not force_reopen and cached is not None and cached_key == key and _probe_connection_alive(cached, probe_sql):
+            return cached, {"reused": True, "reopened": False, "connect_ms": 0.0}
+
+        # (Re)open: discard a stale / dead / cross-catalog cached connection first.
+        if cached is not None:
+            try:
+                cached.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _warm_connection.pop("con", None)
+            _warm_connection.pop("key", None)
+
+        t0 = time.perf_counter()
+        if opener is not None:
+            con = opener()
+        else:
+            resolved_dsn = dsn if dsn is not None else (dsn_factory() if dsn_factory is not None else None)
+            if resolved_dsn is None:
+                raise DuckLakeRuntimeError("get_warm_connection requires a dsn, dsn_factory, or opener")
+            con = open_connection(
+                dsn=resolved_dsn,
+                data_path=data_path,
+                meta_schema=meta_schema,
+                extension_directory=extension_directory,
+                profile=profile,
+                _creds=_creds,
+            )
+        connect_ms = (time.perf_counter() - t0) * 1000.0
+        _warm_connection["con"] = con
+        _warm_connection["key"] = key
+        # reopened=True means a previously-cached (dead/stale) connection was replaced (not a cold start).
+        return con, {"reused": False, "reopened": had_cached, "connect_ms": round(connect_ms, 2)}
 
 
 # ---------------------------------------------------------------------------

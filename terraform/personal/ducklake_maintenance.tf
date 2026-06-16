@@ -288,23 +288,25 @@ resource "aws_lambda_permission" "ducklake_maintenance_hot_merge" {
 }
 
 # ---------------------------------------------------------------------------
-# EventBridge prod-merge rule: daily non-destructive merge of ALL live ops_* SCD2 table pairs
-# in the production catalog (ducklake_ops @ s3://.../ducklake/). Staggered off the 04:00 smoke
-# merge to avoid throttle under reserved_concurrent_executions=1. Non-destructive: merge_ops
-# dispatches merge_adjacent_files only -- no expire/cleanup/orphan (gated by rec-2113/T2.26).
-# Decision 84 Phase-4 maintenance repoint, merge-only slice (T2.18).
+# EventBridge prod-merge rule: every-6h non-destructive merge of ALL live ops_* SCD2 table pairs
+# in the production catalog (ducklake_ops @ s3://.../ducklake/). Staggered to :30 (off the 6-hourly
+# hot_merge at :00) to avoid throttle under reserved_concurrent_executions=1. Non-destructive:
+# merge_ops dispatches merge_adjacent_files only -- no expire/cleanup/orphan (gated by rec-2113/T2.26).
+# Cadence raised from daily (cron(30 4 * * ? *)) to every 6h by neon-egress-reduction (D3a): paying
+# down ops_* small-file growth faster shrinks the per-query ducklake_file_column_stats footprint that
+# drives every read's Neon metadata egress (ducklake #859).
 # No new IAM: reuses the existing maintenance role (already grants S3 RW on the prod prefix).
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_event_rule" "ducklake_maintenance_merge_ops" {
   name                = "agent-platform-ducklake-maintenance-merge-ops"
-  description         = "Daily production DuckLake ops_* non-destructive merge (T2.18 Phase-4 / Decision 84). cron 04:30 UTC."
-  schedule_expression = "cron(30 4 * * ? *)"
+  description         = "Every-6h production DuckLake ops_* non-destructive merge (T2.18 Phase-4 / Decision 84; neon-egress D3a). cron every 6h at :30 UTC."
+  schedule_expression = "cron(30 */6 * * ? *)"
   state               = "ENABLED"
 
   tags = {
     Name    = "DuckLake Maintenance Prod Merge Ops Schedule"
-    Purpose = "T2.18 Phase-4 daily production ops non-destructive merge"
+    Purpose = "T2.18 Phase-4 every-6h production ops non-destructive merge (neon-egress D3a)"
   }
 }
 
