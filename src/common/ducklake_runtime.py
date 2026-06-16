@@ -322,15 +322,22 @@ _warm_connection: dict[str, Any] = {}
 
 # Connection-failure signatures treated as the expected dead-catalog-session condition (Neon
 # scale-to-zero suspended the underlying Postgres session, or the cached DuckDB connection was closed).
+# DELIBERATELY SPECIFIC PHRASES, not the bare word "connection": a capacity error ("too many
+# connections for role", "remaining connection slots are reserved") or an auth failure ("password
+# authentication failed") must FAIL LOUD, not be silently reopened+retried (Decision 55 -- the one
+# expected transient is a dropped/closed session, never pool-exhaustion or auth). See
+# test_non_dead_errors_do_not_match for the excluded false-positives.
 _DEAD_CONNECTION_SIGNATURES = (
-    "connection",  # libpq "connection ... failed/closed/refused"
-    "server closed",
+    "connection refused",
+    "connection reset",
+    "connection already closed",  # DuckDB closed-connection
+    "connection timed out",
+    "the connection is closed",
+    "server closed",  # "server closed the connection unexpectedly"
     "terminating connection",
     "could not connect",
     "no connection to the server",
-    "connection reset",
     "ssl connection has been closed",
-    "connection already closed",  # DuckDB closed-connection
     "database has been invalidated",
 )
 

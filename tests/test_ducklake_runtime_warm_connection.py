@@ -115,7 +115,16 @@ class TestIsDeadConnectionError:
 
     @pytest.mark.parametrize(
         "msg",
-        ["could not serialize access due to concurrent update", "schema gate rejected field", "permission denied"],
+        [
+            "could not serialize access due to concurrent update",
+            "schema gate rejected field",
+            "permission denied",
+            # Capacity / auth failures MUST NOT be treated as the expected transient (Decision 55):
+            # the bare "connection" substring would have wrongly matched these (code-review finding).
+            "FATAL: too many connections for role 'ducklake_ops'",
+            "FATAL: remaining connection slots are reserved for superusers",
+            "FATAL: password authentication failed for user 'ducklake_ops'",
+        ],
     )
     def test_non_dead_errors_do_not_match(self, msg: str) -> None:
         assert rt.is_dead_connection_error(Exception(msg)) is False
