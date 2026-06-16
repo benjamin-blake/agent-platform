@@ -299,7 +299,7 @@ foundation_already_shipped:
   - id: F.7
     name: DQ enforcement Phases 0-3
     related_intents: [dq-enforcement]
-    notes: config/agent/data_quality/*.yaml + data_quality_runner.py; presubmit auto-invoke when stale (locator corrected 2026-06-09, audit F-025 -- the DQ config relocated under config/agent/)
+    notes: config/agent/data_quality/*.yaml + data_quality_runner.py; presubmit auto-invoke when stale (locator corrected 2026-06-09, audit F-025 -- the DQ config relocated under config/agent/). FORWARD POINTER -- this presubmit-auto-invoke placement is TRANSITIONAL and is being retired; live-reader DQ checks move to a scheduled monitor per T1.6 (CD.12 alarm-not-gate). F.7 records what shipped, not the target state.
   - id: F.8
     name: ops_decisions graduation Phase 0+1
     related_intents: [ops-decisions-graduation]
@@ -1180,7 +1180,7 @@ candidate_decisions:
       - Verifiers and the graduation registry are platform machinery; recs touching scripts/verifiers/ or the registry are automatable: false (Decision 44).
       - Per-rec verification graduates into validation only after the differential admission gate passes; the registry records the guard target so orphan detection (T3.7) is deterministic.
       - Hard-gate-by-default applies to the behavioural tier only after T3.6 (hermeticity); mechanical checks (command_exit_zero) are hermetic by construction and hard-gate immediately.
-      - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda -- it does not re-introduce the separate-scheduled-DQ-routine that Decision 62 retired (mutation is too slow for presubmit and is advisory, not a merge gate).
+      - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda. Decision 62 retired the Session E DQ-freshness routine (cron agent -> EC2 -> commit dq-latest.json -> auto-merge); meta-validation here is GH-Actions-scheduled, advisory, and not a merge gate, so it is not that routine. (Separately, 62's no-separate-routine conclusion for live-reader DQ is being revisited under T1.6 because its cheap-live-DQ-on-the-gate premise is invalidated -- CD.21 / Decision 73; that revisit is orthogonal to meta-validation.)
       - CD.29 changes the platform verification DEFAULT from advisory (the current run_verification behaviour) to required/hard-gate. This is a deliberate semantic change, enforced only after T3.6; no prior numbered Decision is superseded because the advisory behaviour was an executor implementation default, not a ratified decision.
       - Precedence: when the executor's per-rec checks (executor-side) and the CI validation gate including diff-coverage (CI-side) both apply, CI is authoritative per the AGENTS.md merge protocol (remote CI is the authoritative pre-merge gate).
 
@@ -3036,22 +3036,109 @@ tier_items:
     note: Strategic plan required before implementation. Decompose into phase-per-plan plus import-site sweep plan(s). CD.18 ratification required before this tier item moves to in_progress.
   - id: T1.6
     tier: T1
-    name: DQ runner reshape — alarm-not-gate; reads Annotated metadata
-    intent: Reads Pydantic Annotated metadata via introspection (no YAML). Runs on schedule, files recs on drift. Stops being presubmit gate (already not strictly a gate per Decision 73; this formalises). Retires config/agent/data_quality/*.yaml (path corrected 2026-06-09, audit F-015 -- the DQ config relocated under config/agent/; this item's retirement target moved with it).
-    depends_on: [T0.12, T1.5]
+    name: "DQ runner reshape -- alarm-not-gate (live-reader checks -> scheduled canary; hermetic structural checks stay on the gate) + reads Annotated metadata"
+    intent: |
+      Reshape the DQ runner from a de-facto merge-gate that queries the live DuckLake reader into a
+      SCHEDULED MONITOR that files recs on drift, per CD.12 (candidate, state: pending -- "runner = alarm
+      not gate, files recs on anomalies; NOT a pre-commit gate"). This REALISES the direction CD.12 STAGES
+      (a candidate decision, not yet ratified). It USES Decision 73's hourly full-tier cron (the "L8 drift
+      canary") as the scheduling SUBSTRATE -- NOT as a DQ-specific carve-out precedent: 73 runs the WHOLE
+      tier on cron and an L8 failure files a critical ci-rca rec that hard-blocks the queue (gating-
+      adjacent), so the non-gating DQ MONITOR is the NEW construct CD.12 stages, distinct from L8.
+        The current state -- the uniqueness checks ulid_history_unique + current_merge_key_unique run as
+      live-reader GATE queries on the blocking presubmit / main-validate path -- is the transitional
+      deviation: Decision 81 cl.8 records these are STRUCTURAL (current-version uniqueness "via the current
+      MERGE key on rec_id") and names DQ as their enforcer; CD.12 makes that DQ enforcement an
+      alarm-not-gate monitor. Target = structural MERGE invariants on the write path + a non-gating DQ
+      monitor, not a blocking live-reader gate query.
+
+      Near-term phase (decoupled from the introspection rewrite below; AUTHORABLE ahead of the T1.5-gated
+      deferred phase -- it needs only T0.12 + the landed PLAN-dq-gate-infra-resilience [2026-06-15:
+      transient reader 502/503/504 -> UNAVAILABLE -> DEGRADED -> non-gating SKIP] + the write-side
+      enforcement that already exists):
+        1. PLACEMENT. Live-reader-dependent DQ checks leave the BLOCKING gate (PR validate +
+           main-validate); they run only on the scheduled monitor, filing recs (source='dq_drift');
+           alarm-not-gate per CD.12 / CD.29. Frame-correction (Decision 75), NOT enforcement relaxation
+           (Decision 82) -- the violation-detection guarantee is preserved by moves 2-4.
+        2. RELY ON STRUCTURAL WRITE-PATH ENFORCEMENT (no new gate work). The two uniqueness checks are
+           structural to the writer's MERGE, not gate-time queries: history ULID uniqueness via
+           MERGE-on-ULID idempotency (Decision 81 cl.3); current-version uniqueness "structural via the
+           current MERGE key on rec_id" (Decision 81 cl.8). The log-rec handler additionally rejects a
+           duplicate pre-commit with typed 4xx ('Duplicate id -> 409', T0.7a) and file_ops allocates ids
+           in-transaction (T2.28). NOTE: T0.7a's handler check itself does a reader round-trip, so this
+           RELOCATES the round-trip off the blocking gate (onto the write path / monitor) -- it does not
+           eliminate it. Only cheap, hermetic, structural CONTRACT checks (row-level shape booleans, no
+           live reader) remain GATING. (Decision 81 cl.5 -- writer owns the SCHEMA-enforcement chokepoint
+           -- is the related schema guarantee, distinct from these uniqueness invariants.)
+        3. FAIL-FAST. Per-verifier timeout + circuit-breaker so the merge path cannot hang ~17-20 min on a
+           slow / unavailable reader (serves Decision 73's enforced fast-tier budget; bounded retry per
+           Decision 81 cl.3 / T1.10). The breaker lives in the verifier / harness layer, NEVER in a reader
+           Lambda: the recs DQ path reads via the DuckLake reader (src/common/ducklake_runtime.py /
+           src/lambdas/ducklake_reader/), which IS manifest-packaged -> editing it escalates to V3 per
+           Decision 79; a CI-latency fix must not touch it (PLAN-dq-gate-infra-resilience precedent).
+           (src/common/iceberg_reader.py is NOT manifest-packaged -- do not cite it as the V3 trigger.)
+        4. CANARY-MUST-ALARM. Persistent DQ unavailability files a rec and alarms; it never silently passes
+           (Decision 60 'never silently weaken the gate'; Decision 74 canary-must-not-silent-no-op). Closes
+           the 'alerting on PERSISTENT DQ unavailability' follow-up that PLAN-dq-gate-infra-resilience
+           explicitly deferred, and mitigates Decision 62's one surviving concern (the silent 'cron agent
+           not running' failure mode).
+        This phase INTRODUCES the dq_check verb family (Decision 84 I-3) -- the read path the monitor uses
+        -- which closes T2.28's open tail (the DQ harness is the last raw query_ops / reader.query() caller).
+
+      Deferred phase (this is what the T1.5 gate is for): the runner reads Pydantic Annotated metadata via
+      introspection (no YAML) and retires config/agent/data_quality/*.yaml (path corrected 2026-06-09,
+      audit F-015). This intersects ops_decisions graduation, hence T1.5.
+
+      Decision-62 posture (honest -- this REVISITS, it does not reinterpret): Decision 62 ("No Separate DQ
+      Scheduled Routine") rejected a separate scheduled DQ routine ON THE PREMISE that live DQ was cheap on
+      the credentialed presubmit tier ("it already has SSO credentials and runs before every merge"). That
+      premise is INVALIDATED -- CD.21 retired SSO/EC2; Decision 73 measured ~10-min round-trips and the
+      reader-retry storm adds ~17-20 min. So 62's no-separate-routine CONCLUSION for live-reader DQ is being
+      DELIBERATELY REVISITED here, not argued away. The narrow Session-E auto-merge artifacts (cron -> EC2
+      -> commit dq-latest.json -> auto-merge) stay retired; move 4 addresses 62's silent-cron concern. The
+      canonical close-out for revisiting a ratified decision is a portal Decision amendment to 62 (NOT done
+      in this roadmap-only edit; flagged for the human in PLAN-dq-gate-to-monitor-roadmap).
+    depends_on: [T0.12, T1.5]    # T1.5 RETAINED on the edge: it gates the deferred Annotated/YAML-retirement phase, hence T1.6 COMPLETION, which in turn gates the CD.12 / CD.19 gates: referrers and the T4.2 depends_on referrer. Per-phase deps are NOT graph-enforced (decomposition_hints has no runtime consumer), so the constraint stays in depends_on rather than being relocated to prose. The near-term gate->monitor atomic plan is AUTHORABLE ahead of T1.5 (preflight may show T1.6 "blocked"; that does not prevent authoring that atomic plan) but T1.6 must NOT be marked complete until the deferred phase lands. Restoring this edge also keeps the G.6-retirement comment at the cross_tier_gates tail true (the Phase-4/5 ordering does live in T1.6's depends_on).
+    decomposition_hints:
+      split_by: phase
+      atomic_plans:
+        - "Gate->monitor placement + reliance on structural write-path enforcement + per-verifier fail-fast / circuit-breaker + persistent-unavailability alarm (AUTHORABLE ahead of T1.5; needs only T0.12 + PLAN-dq-gate-infra-resilience [landed] + the existing write-side enforcement T0.7a / T2.28 / Decision 81 cl.3+cl.8; does NOT itself need ops_decisions graduation -- but T1.6 stays not-complete until the deferred phase lands)"
+        - "Introduce the dq_check verb family, closing T2.28's open tail (the DQ harness's raw query_ops retires; Decision 84 I-3; V3 if src/lambdas/ducklake_reader changes, Decision 79)"
+        - "Runner reads Annotated metadata via introspection; config/agent/data_quality/*.yaml retired (this is the phase the T1.5 gate is for -- it intersects ops_decisions graduation)"
+      rationale: |
+        The gate->monitor move is urgent (the structural fix for the ~30-min CI wall-clock + the DQ-reader
+        merge-gate flapping) and does NOT itself need the Annotated-metadata rewrite or ops_decisions
+        graduation -- so its atomic plan can be authored ahead of T1.5. T1.5 is RETAINED in depends_on
+        because it gates the deferred phase and thus T1.6 COMPLETION (which gates CD.12 / CD.19 / T4.2);
+        relocating it into decomposition_hints would silently delete the constraint (no runtime consumer
+        reads atomic_plans). Freeze override (AGENTS.md / CD.17): authored as atomic IMPLEMENTATION plans
+        (T2.19 pattern), strategic:false.
     files_in_scope:
       - scripts/data_quality_runner.py
-      - config/agent/data_quality/    # eventually deleted (path corrected per audit F-015)
+      - scripts/verifiers/data_quality.py
+      - scripts/validate.py    # remove live-reader DQ from the blocking gate; keep hermetic structural checks; per-verifier timeout
+      - config/agent/data_quality/    # retired in the deferred phase (path corrected per audit F-015)
     exit_criteria:
-      - "Runner reads RecPayload/DecisionPayload/etc Annotated metadata; YAML no longer loaded"
-      - "Drift findings filed via log-rec Lambda with source='dq_drift'"
-      - "validate.py presubmit no longer auto-invokes runner (it is purely scheduled now)"
-      - "Old config/agent/data_quality/ directory retired and grep returns no remaining references"
+      - "Live-reader-dependent DQ checks (ulid_history_unique, current_merge_key_unique, and any check requiring a reader round-trip) do NOT run on the blocking PR-validate or main-validate gate; they run only on the scheduled monitor and file recs with source='dq_drift'"
+      - "The uniqueness invariants are guaranteed structurally on the write path (Decision 81 cl.3 MERGE-on-ULID; cl.8 current MERGE key) + the log-rec handler 4xx ('Duplicate id -> 409', T0.7a); the blocking gate no longer issues a live-reader query to check them"
+      - "Only hermetic structural contract checks gate the merge path; the DQ step adds no live-reader round-trip to the blocking gate"
+      - "Per-verifier timeout + circuit-breaker bound the DQ verifier wall-clock; a slow / unavailable reader cannot push the merge path past the Decision 73 fast-tier budget"
+      - "Persistent DQ unavailability files a rec and alarms (never a silent pass); closes the deferred 'alerting on PERSISTENT DQ unavailability' follow-up from PLAN-dq-gate-infra-resilience"
+      - "The dq_check verb family is introduced by this phase (the doer), closing T2.28's open tail; raw query_ops / reader.query() over scripts/ no longer includes the DQ harness (Decision 84 I-3)"
+      - "[Deferred phase] Runner reads Annotated metadata; YAML no longer loaded; config/agent/data_quality/ retired and grep returns no remaining references (requires T1.5)"
+      - "validate.py presubmit no longer auto-invokes the live-reader runner (it is scheduled); the Decision-62 ensure_fresh_dq_results auto-invoke is replaced by the scheduled monitor"
     related_intents: [dq-enforcement]
-    related_candidate_decisions: [CD.12]
+    related_candidate_decisions: [CD.12, CD.29]
+    related_decisions: [60, 62, 73, 74, 75, 79, 81, 82, 84]
     effort: L
-    strategic: true
+    strategic: false    # freeze override (AGENTS.md / CD.17): atomic IMPLEMENTATION plans per decomposition_hints (T2.19 pattern)
     status: not_started
+    note: |
+      PLAN-dq-gate-infra-resilience (merged 2026-06-15) landed step one of move 1 (transient ->
+      non-gating SKIP) but deliberately did NOT touch wall-clock (the reader retry storm persists) and
+      deferred persistent-unavailability alerting; this item is the durable completion. See the
+      "Decision-62 posture" paragraph in intent for why this REVISITS (not reinterprets) Decision 62, and
+      PLAN-dq-gate-to-monitor-roadmap for the multi-perspective review that hardened these claims.
   - id: T1.7
     tier: T1
     name: Two-tier Lambda tests wired into validate.py
@@ -3095,7 +3182,10 @@ tier_items:
       ducklake_writer/reader/maintenance set from T2.17/T2.18 is already live and joins this SLO
       surface). Define SLOs (p50/p99 latency, error rate, throttle rate) per Lambda; deploy
       CloudWatch alarms; alarm-fire triggers a rec via log-rec with source='lambda_slo_breach'.
-      Without this, a Lambda 500 means agent recs vanish silently. [Deps amended 2026-06-09,
+      Without this, a Lambda 500 means agent recs vanish silently. The reader SLO-breach alarm here
+      complements T1.6 move 4 (the DQ canary's persistent-DEGRADED alarm): the SLO alarm fires on the
+      reader Lambda's own error/latency surface, the canary alarm on persistent DQ unavailability seen
+      from the harness; together they ensure a reader outage is never silent. [Deps amended 2026-06-09,
       audit F-017: T1.4 dropped (reserved -- maintenance observability is owned by T2.18's own
       alarm criteria).]
     depends_on: [T0.7a, T0.7b, T0.7c, T1.1, T1.3]
@@ -4446,6 +4536,8 @@ tier_items:
       (Decision 84 I-3 staging); the write_ops rec-NNN create-guard (require file_ops for
       canonical recs) deploys AFTER main's clients migrate (additive-then-subtractive
       protocol); DQ ci-rca recs 2150/2151/2153 diagnosis tracked in-session.
+      OWNER for the dq_check verb family / DQ-harness query_ops retirement: T1.6's gate->monitor
+      reshape (the DQ canary reads via dq_check). This open tail closes when T1.6's near-term phase lands.
 
   - id: T2.29
     tier: T2
@@ -4785,7 +4877,12 @@ tier_items:
       container). This item produces the audit, the fixes that make the suite hermetic, and a CI assertion that
       new tests stay hermetic. It precedes the hard-gate consolidation (CD.29 / T0.12.5): hard-gating the
       behavioural tier on a non-hermetic suite reproduces the flakiness that made the legacy `verification` field
-      advisory.
+      advisory. DQ application (coordinate with T1.6): the live-reader-dependent DQ checks
+      (ulid_history_unique, current_merge_key_unique, any reader-round-trip check) are non-hermetic by
+      construction (network + live-state dependence); the contract-vs-state split -- hermetic structural
+      contract checks stay GATING, live-reader state checks move to the scheduled canary -- is this
+      hermeticity principle applied to DQ, and the durable fix for the DQ merge-gate flapping / wall-clock
+      that PLAN-dq-gate-infra-resilience only partially addressed.
     depends_on: [T2.1]
     files_in_scope:
       - tests/
@@ -4796,6 +4893,7 @@ tier_items:
       - "Full pytest suite passes under randomised test order (pytest-randomly or equivalent) and with network blocked in the test environment"
       - "validate.py asserts the network-block + random-order invariant so new non-hermetic tests fail CI"
       - "Hermeticity recorded as a satisfied precondition for the CD.29 hard-gate consolidation and KG.13 caching"
+      - "Live-reader-dependent DQ checks classified non-hermetic and dispositioned to the scheduled canary (not the blocking gate), per T1.6; only hermetic structural contract checks remain on the gating DQ path"
     related_candidate_decisions: [CD.29]
     effort: M
     strategic: false
@@ -4816,8 +4914,12 @@ tier_items:
            tautology and is flagged. Surviving mutants file a rec with source='mutation_survivor' (Decision 61 --
            via the source field; no new findings table). An equivalent-mutant allowlist (governed file) suppresses
            known-unkillable mutants so the scheduled run files recs only on NEW survivors (no resurrection-loop
-           noise). Distinct from the separate-scheduled-DQ-routine Decision 62 retired: mutation is too slow for
-           presubmit and is advisory, not a merge gate.
+           noise). Distinct from the Session E DQ-freshness routine Decision 62 retired (cron agent ->
+           EC2 -> commit dq-latest.json -> auto-merge): mutation here is GitHub-Actions-scheduled,
+           advisory, and not a merge gate, so it is not that routine. (Separately, Decision 62's
+           no-separate-routine conclusion for LIVE-READER DQ is being revisited under T1.6 -- its
+           cheap-DQ-on-the-credentialed-gate premise no longer holds; that revisit does not bear on
+           mutation testing.)
 
         2. Deterministic dead/redundant-test detection (NEVER an LLM scan -- expensive and non-deterministic for a
            deterministic job). Layered, cheapest-first: (a) AST assertion-free lint (a test with no assert /
@@ -4851,7 +4953,7 @@ tier_items:
       - "Registry orphan detection flags graduated checks whose guard target no longer exists; coverage-uniqueness flags zero-unique-coverage tests; both file recs"
       - "Retirement path is mark-then-drop: flagged checks are marked deprecated in the registry, never auto-deleted; a follow-on plan performs deletion (CD.12 discipline)"
       - "Diff-line-coverage ratchet enforced in validate.py: changed lines require coverage + global coverage non-regression; the per-changed-file 100% floor in test_coverage_checker.py is retargeted to diff-line-coverage + ratchet (CD.30)"
-      - "Workflow touches no Lambda-packaged file (Decision 67 / CD.16 not triggered); distinguished from the Decision 62 retired separate-DQ-routine in a code comment"
+      - "Workflow touches no Lambda-packaged file (Decision 67 / CD.16 not triggered); distinguished in a code comment from the Session E DQ-freshness routine Decision 62 retired (GH-Actions-scheduled + advisory + not a merge gate, so not that routine; the separate live-reader-DQ revisit of 62 is owned by T1.6)"
     related_candidate_decisions: [CD.29, CD.30]
     effort: M
     strategic: false
@@ -5622,6 +5724,13 @@ known_gaps:
       selects by input closure, which only the registry records). Cross-references Decision 73's existing Known
       Gap note that `pytest --picked` may upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor
       concurrency rises.
+
+      Near-term wall-clock wins are DISTINCT from this deferred TIA/caching gap and are available now (no
+      executor-scale / hermeticity precondition): the big structural win is T1.6 (live-reader DQ leaves the
+      blocking gate); the lighter levers are dependency slimming (torch CPU-only wheel, lazy pysr import) +
+      parallel execution (pytest-xdist) + validate_requirements hygiene. Per Decision 80 the build-orchestrator
+      / TIA revisit trigger is a recurring measured `_FAST_TIER_BUDGET_SECONDS` breach (the ~30-min run is one);
+      the near-term levers are filed as recs, not roadmap items (tactical, not direction).
   - id: KG.14
     gap: Multi-product enforcement substrate is unbuilt (project_id mechanism, egress gate, COALESCE gate, day-job interlock, rollback/freeze).
     notes: |

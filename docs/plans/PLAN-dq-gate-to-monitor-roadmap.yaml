@@ -1,0 +1,149 @@
+schema_version: 1
+slug: "dq-gate-to-monitor-roadmap"
+intent: >-
+  Capture, in the platform roadmap, the session-concluded architectural refinement that resolves the
+  ~30-min CI wall-clock + DQ-reader merge-gate flapping: data-quality LIVE-READER checks move OFF the
+  blocking merge gate and become a scheduled MONITOR/canary (alarm-not-gate); stateful invariants are
+  enforced at write time (writer 4xx); the merge path keeps only hermetic structural contract checks and
+  is bounded by a per-verifier timeout/circuit-breaker; persistent DQ unavailability alarms. The
+  deliverable IS the roadmap edits (forward intent -> tier_items per Decision 86), reviewed from multiple
+  angles so the direction is durable and future agents do not revert it. REPORT-ONLY: the report is the
+  diff to docs/ROADMAP-PLATFORM.yaml; no code/data/decision-record change.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-dq-gate-to-monitor-roadmap.yaml
+phase: >-
+  Platform reliability / CI architecture. Direction-capture follow-on to PLAN-dq-gate-infra-resilience
+  (merged 2026-06-15, #163), which fixed CORRECTNESS (transient reader 502/503/504 -> non-gating SKIP) but
+  explicitly left LATENCY + persistent-unavailability alerting + placement to a follow-up. No new
+  tier_item; existing items refined in place (user steer 2026-06-16).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T1.6 (centerpiece): re-scope the existing "DQ runner reshape -- alarm-not-gate" item to carry the
+      4-move near-term sequence (PLACEMENT live-reader checks -> scheduled monitor; RELY ON STRUCTURAL
+      write-path uniqueness, Decision 81 cl.3+cl.8, + handler 4xx T0.7a/T2.28; FAIL-FAST per-verifier
+      timeout + circuit-breaker in the verifier layer, never in the manifest-packaged DuckLake reader;
+      CANARY-MUST-ALARM persistent unavailability files a rec). decomposition_hints split the
+      authorable-ahead gate->monitor phase from the T1.5-gated deferred Annotated/YAML-retirement phase;
+      depends_on KEPT [T0.12, T1.5] (T1.5 gates the deferred phase / T1.6 completion); strategic:true ->
+      false (CD.17 freeze-override, T2.19 pattern); INTRODUCE the dq_check verb (Decision 84 I-3).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T3.7 (two sites) + CD.29 discipline_point: correct the Decision-62 citation -- scope it to the
+      Session E DQ-freshness routine and note that the live-reader-DQ revisit of 62 (premise invalidated)
+      is owned by T1.6, orthogonal to meta-validation. Anti-revert durability.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T3.6: name live-reader DQ checks as a non-hermetic target; record the contract-vs-state split as the
+      hermeticity principle applied to DQ; cross-ref T1.6 + a matching exit criterion.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T2.28: cross-ref that T1.6's gate->monitor reshape OWNS the dq_check verb family / DQ-harness query_ops
+      retirement (closes T2.28's open tail).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      KG.13: record near-term wall-clock wins (torch CPU-only wheel, lazy pysr import, pytest-xdist,
+      validate_requirements) as available-now and DISTINCT from the deferred TIA/caching; Decision 80
+      _FAST_TIER_BUDGET_SECONDS breach is the revisit trigger; near-term levers filed as recs, not roadmap items.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T1.9: one-line cross-ref that the reader SLO-breach alarm complements T1.6 move 4 (the canary's
+      persistent-DEGRADED alarm) so a reader outage is never silent.
+  - file: docs/plans/PLAN-dq-gate-to-monitor-roadmap.yaml
+    action: Create
+    purpose: This REPORT-ONLY plan record.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "docs/ROADMAP-PLATFORM.yaml passes the RoadmapDocument Pydantic schema (scripts/platform_roadmap.py)."
+  - "T1.6 carries the 4-move near-term sequence + decomposition_hints separating the authorable-ahead gate->monitor phase from the T1.5-gated deferred phase; depends_on is [T0.12, T1.5] (T1.5 RETAINED so the constraint stays graph-enforced); strategic:false with a freeze-override note."
+  - "T1.6's referrers are correctly gated: T4.2 (depends_on) + CD.12 + CD.19 (gates:) all require T1.6 COMPLETE, and T1.6 completion requires the T1.5-gated deferred phase via the retained depends_on edge (NOT via non-enforced decomposition_hints). The G.6-retirement comment at the cross_tier_gates tail stays true."
+  - "T3.7 (both sites) and CD.29's discipline_point scope Decision 62 to the Session E DQ-freshness routine (GH-Actions-scheduled meta-validation is not that routine) and note the live-reader-DQ revisit of 62 is owned by T1.6 -- without claiming 62 'did not eliminate scheduled DQ' (the corrected, non-overreaching framing)."
+  - "No new tier_item is created; every roadmap change is an in-place refinement of an existing item (user steer)."
+  - "No DECISIONS.md edit; no logs/ ops-data edit; no code change. Roadmap + this plan only."
+  - "The multi-perspective report critique (2 zero-context perspectives) converged AFTER revision: the initial BLOCK findings (depends_on relaxation, Decision-62 overreach, Decision-73 L8 + Decision-81 cl.5 mis-cites, iceberg_reader packaging) are all resolved; no unresolved HIGH remains."
+verification_plan:
+  - step: 1
+    phase: post-edit
+    action: Validate the edited roadmap against its Pydantic schema.
+    command: bin/venv-python -m scripts.platform_roadmap docs/ROADMAP-PLATFORM.yaml
+    expected: "Prints 'PASS: ... validates against RoadmapDocument schema.'"
+    fix_if: "A schema error -- fix the offending tier_item field (unknown field, bad gate grammar, dangling depends_on) and re-run."
+  - step: 2
+    phase: post-edit
+    action: Confirm no dangling/contradictory dependency from the T1.5 drop.
+    command: grep -nE "depends_on:.*T1\\.(5|6)\\b" docs/ROADMAP-PLATFORM.yaml
+    expected: "T1.6 depends_on [T0.12, T1.5] (T1.5 retained); referrers T4.2 (depends_on) + CD.12/CD.19 (gates:) all depend ON T1.6 complete, correctly gated via the retained edge; the lone other [T1.5] dependent is untouched."
+    fix_if: "If T1.6's depends_on ever drops T1.5 again, the deferred-phase ordering is lost (decomposition_hints is not graph-enforced) and the G.6-retirement comment becomes false -- restore the edge."
+  - step: 3
+    phase: post-edit
+    action: Run the fast presubmit tier over the changed docs (lint/format/prompt + plan + roadmap schema).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Passes; Plan document schema validation + Platform roadmap schema both green; no emoji/em-dash violations."
+    fix_if: "Address the named failing check (plan schema field, prompt-compliance) and re-run."
+constraints:
+  - Refine existing tier_items in place; do NOT create new tier_items (user steer 2026-06-16).
+  - The session-concluded direction takes precedence over a stale existing item; encode it durably so a future revert visibly contradicts the roadmap.
+  - Do NOT amend DECISIONS.md and do NOT write ops data (no file_rec/file_decision here); roadmap CITATIONS only.
+  - No emojis; ASCII hyphens ("--") not em dashes.
+  - Do NOT prescribe editing src/common/iceberg_reader.py (Lambda-packaged; the fail-fast/circuit-breaker lives in the verifier layer per Decision 79 / the dq-gate-infra-resilience precedent).
+  - Drop "WAP" terminology (no prior art in DECISIONS.md); the anchor is the dq_check verb family (Decision 84 I-3).
+context:
+  - >-
+    DECISION ALIGNMENT (verified via fresh-context decision-scout against verbatim DECISIONS.md, 2026-06-16):
+    the refinement REALISES CD.12's STAGED (candidate, state: pending) direction; no decision is contradicted
+    once the Decision-62 posture is framed honestly (below).
+  - >-
+    MULTI-PERSPECTIVE REVIEW (2 zero-context critics, 2026-06-16) initially returned BLOCK on BOTH axes; every
+    HIGH/MED finding was addressed in this revision: (graph) the depends_on relaxation was reverted -- T1.5
+    RETAINED on the edge because decomposition_hints has no runtime consumer and relocating the dep there would
+    silently delete the constraint + falsify the G.6-retirement comment; F.7 forward-pointer added; (architecture)
+    the Decision-62 narrowing was itself an overreach and is reframed as a deliberate premise-invalidated REVISIT;
+    the Decision-73 'L8 = DQ-monitor precedent' claim dropped (L8 is the full-tier cron substrate); Decision 81
+    cl.5 misattribution corrected to cl.3+cl.8 (structural MERGE); the iceberg_reader.py 'Lambda-packaged' claim
+    corrected (it is NOT packaged -- the DuckLake reader is).
+  - "Citeable alignment -- CD.12 (candidate, pending): 'runner = alarm not gate, files recs; NOT a pre-commit gate'; stateful invariants enforced in the handler pre-commit -> typed 4xx. The current live-reader-uniqueness-on-the-gate state is the deviation this realises. NB CD.12 is staged, not ratified."
+  - "Scheduling substrate (NOT a DQ-monitor precedent) -- Decision 73: the hourly full-tier cron ('L8 drift canary') runs the WHOLE tier (an L8 failure files a critical ci-rca rec -> hard-blocks the queue, i.e. gating-adjacent). It is the cron substrate the DQ monitor can use, not a precedent for a DQ-specific recs-filing carve-out. Part-3 fail-fast serves 73's enforced fast-tier budget; the Problem statement ('the merge model conflates pre-merge gating with comprehensive validation') is the thesis."
+  - "Citeable alignment -- Decision 81: the two uniqueness checks are STRUCTURAL -- cl.3 (MERGE-on-ULID idempotency) + cl.8 (current-version uniqueness 'structural via the current MERGE key on rec_id'; cl.8 also names DQ as enforcer). cl.5 (writer owns the SCHEMA-enforcement chokepoint) is a RELATED but DISTINCT schema guarantee, not the uniqueness basis. T0.7a's handler 4xx itself does a reader round-trip, so write-time enforcement RELOCATES the round-trip off the blocking gate, it does not eliminate it."
+  - "Citeable alignment -- Decision 84 I-3: the dq_check verb family is forward-referenced (query_ops retained for the DQ harness until it exists); this work INTRODUCES it (closing T2.28's open tail -- T1.6 is the doer, not a waiter)."
+  - "Citeable alignment -- Decision 60 (never silently weaken the gate; SSO/creds SKIP precedent), Decision 74 (canary-must-alarm-not-silent-no-op -> move 4), Decision 75 (frame-lock), Decision 82 (frame-correction != relaxation)."
+  - >-
+    DECISION-62 POSTURE + FORK FOR THE HUMAN: 62 ('No Separate DQ Scheduled Routine') rejected a separate
+    scheduled DQ routine ON THE PREMISE that live DQ was cheap on the credentialed presubmit tier. That premise
+    is invalidated (CD.21 retired SSO/EC2; Decision 73 measured ~10-min round-trips; reader-retry storm adds
+    ~17-20 min). The roadmap now frames T1.6 as a DELIBERATE REVISIT of 62's conclusion (not a reinterpretation),
+    keeps the Session-E auto-merge artifacts retired, and mitigates 62's silent-cron concern via move 4. FORK:
+    (a) roadmap-only honest revisit [applied -- this edit]; or (b) ALSO file a portal Decision amendment to 62 so
+    the canonical record reflects the premise change (the cleaner governance close-out for revisiting a ratified
+    decision; a governed write, NOT done here -- awaiting the human's call).
+  - >-
+    Relationship to PLAN-dq-gate-infra-resilience (#163): that plan changed the VERDICT (transient ->
+    non-gating SKIP) but NOT the wall-clock and explicitly deferred persistent-unavailability alerting. This
+    refinement is the latency + placement half: additive, reuses the UNAVAILABLE/DEGRADED vocabulary and the
+    'do not touch the reader Lambda' constraint. Review confirmed it COMPLEMENTS, does not revert, #163.
+  - >-
+    Write-side enforcement already exists to lean on: T0.7a (log-rec handler pre-commit invariants, typed 4xx,
+    'Duplicate id -> 409'), T2.28 (writer-owned rec keyspace, file_ops in-transaction, Decision 84), Decision
+    81 cl.3+cl.8 (structural MERGE uniqueness). Part 2 cites these; it does not build a new write path.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/peaceful-davinci-c37j40)."
+  - "Decision alignment verified via fresh-context decision-scout against verbatim DECISIONS.md (no amendment needed; one citation narrowing)."
+  - "Existing target items located and read (T1.6, T3.6, T3.7, T2.28, T1.9, KG.13, CD.12, CD.29, T0.7a, T2.29)."
+  - "User steer captured: refine in place; do not revert prior plans (esp. PLAN-dq-gate-infra-resilience)."
+execution_steps:
+  - "Apply the in-place roadmap refinements listed in scope (DONE 2026-06-16)."
+  - "Validate roadmap schema + dependency graph (DONE: VP steps 1-2 PASS)."
+  - "Run the multi-perspective report critique gate (>=2 zero-context subagents: architect/coherence + dependency-graph/alignment-risk); iterate to convergence; record the outcome here and in chat."
+  - "Present the reviewed diff for sign-off; on approval commit + push to claude/peaceful-davinci-c37j40. No PR/merge unless explicitly requested."
+work_areas: []
+rollback: >-
+  Revert the single commit (docs/ROADMAP-PLATFORM.yaml + this plan file). No code, no data, no infra, no
+  decision-record change. The prior T1.6 (bundled, T1.5-gated, strategic:true) and the prior Decision-62
+  citations are restored verbatim.
