@@ -56,6 +56,13 @@ scope:
     purpose: >-
       T1.9: one-line cross-ref that the reader SLO-breach alarm complements T1.6 move 4 (the canary's
       persistent-DEGRADED alarm) so a reader outage is never silent.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Decision 62 amendment (explicit human direction 2026-06-16, fork option (b)): append a "premise revisit
+      -- live-reader DQ" note recording that 62's no-separate-routine PREMISE (cheap live DQ on the credentialed
+      presubmit tier) is invalidated, so the conclusion is deliberately revisited for live-reader DQ (owned by
+      T1.6). Session E mechanism stays retired. Reconciled to ops_decisions via --backfill-decisions-md post-merge.
   - file: docs/plans/PLAN-dq-gate-to-monitor-roadmap.yaml
     action: Create
     purpose: This REPORT-ONLY plan record.
@@ -67,7 +74,7 @@ acceptance_criteria:
   - "T1.6's referrers are correctly gated: T4.2 (depends_on) + CD.12 + CD.19 (gates:) all require T1.6 COMPLETE, and T1.6 completion requires the T1.5-gated deferred phase via the retained depends_on edge (NOT via non-enforced decomposition_hints). The G.6-retirement comment at the cross_tier_gates tail stays true."
   - "T3.7 (both sites) and CD.29's discipline_point scope Decision 62 to the Session E DQ-freshness routine (GH-Actions-scheduled meta-validation is not that routine) and note the live-reader-DQ revisit of 62 is owned by T1.6 -- without claiming 62 'did not eliminate scheduled DQ' (the corrected, non-overreaching framing)."
   - "No new tier_item is created; every roadmap change is an in-place refinement of an existing item (user steer)."
-  - "No DECISIONS.md edit; no logs/ ops-data edit; no code change. Roadmap + this plan only."
+  - "DECISIONS.md Decision 62 amended (inline 'premise revisit -- live-reader DQ' note) per explicit human direction (2026-06-16, fork b); ops_decisions reconciled via --backfill-decisions-md post-merge. No OTHER decision edited; no recs/ops-data write; no code change."
   - "The multi-perspective report critique (2 zero-context perspectives) converged AFTER revision: the initial BLOCK findings (depends_on relaxation, Decision-62 overreach, Decision-73 L8 + Decision-81 cl.5 mis-cites, iceberg_reader packaging) are all resolved; no unresolved HIGH remains."
 verification_plan:
   - step: 1
@@ -91,7 +98,7 @@ verification_plan:
 constraints:
   - Refine existing tier_items in place; do NOT create new tier_items (user steer 2026-06-16).
   - The session-concluded direction takes precedence over a stale existing item; encode it durably so a future revert visibly contradicts the roadmap.
-  - Do NOT amend DECISIONS.md and do NOT write ops data (no file_rec/file_decision here); roadmap CITATIONS only.
+  - Decision 62 IS amended in DECISIONS.md per explicit human direction (2026-06-16, fork option (b)) -- an inline "premise revisit -- live-reader DQ" note; propagated to ops_decisions via the portal --backfill-decisions-md post-merge. No OTHER decision is edited; no recs/ops-data writes (no file_rec/update_rec).
   - No emojis; ASCII hyphens ("--") not em dashes.
   - Do NOT prescribe editing src/common/iceberg_reader.py (Lambda-packaged; the fail-fast/circuit-breaker lives in the verifier layer per Decision 79 / the dq-gate-infra-resilience precedent).
   - Drop "WAP" terminology (no prior art in DECISIONS.md); the anchor is the dq_check verb family (Decision 84 I-3).
@@ -122,7 +129,8 @@ context:
     keeps the Session-E auto-merge artifacts retired, and mitigates 62's silent-cron concern via move 4. FORK:
     (a) roadmap-only honest revisit [applied -- this edit]; or (b) ALSO file a portal Decision amendment to 62 so
     the canonical record reflects the premise change (the cleaner governance close-out for revisiting a ratified
-    decision; a governed write, NOT done here -- awaiting the human's call).
+    decision; a governed write). RESOLVED 2026-06-16: the human chose (b) -- Decision 62 amended inline in
+    DECISIONS.md (this PR) and reconciled to ops_decisions via --backfill-decisions-md post-merge.
   - >-
     Relationship to PLAN-dq-gate-infra-resilience (#163): that plan changed the VERDICT (transient ->
     non-gating SKIP) but NOT the wall-clock and explicitly deferred persistent-unavailability alerting. This
@@ -141,9 +149,12 @@ execution_steps:
   - "Apply the in-place roadmap refinements listed in scope (DONE 2026-06-16)."
   - "Validate roadmap schema + dependency graph (DONE: VP steps 1-2 PASS)."
   - "Run the multi-perspective report critique gate (>=2 zero-context subagents: architect/coherence + dependency-graph/alignment-risk); iterate to convergence; record the outcome here and in chat."
-  - "Present the reviewed diff for sign-off; on approval commit + push to claude/peaceful-davinci-c37j40. No PR/merge unless explicitly requested."
+  - "Reviewed diff converged + presented; human chose (2026-06-16) to ALSO amend Decision 62 (fork b) and to open-PR-and-squash-merge."
+  - "Amend Decision 62 in DECISIONS.md (premise-revisit note) + update this plan's scope/constraints/acceptance; validate --pre; commit + push to claude/peaceful-davinci-c37j40 (DONE 2026-06-16)."
+  - "Open PR (GitHub MCP, Decision 76 web flow); subscribe to PR activity; on green fast --pre tier, squash-merge to main."
+  - "Post-merge: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md to reconcile ops_decisions with the amended Decision 62; verify dec-062 reflects the amendment."
 work_areas: []
 rollback: >-
-  Revert the single commit (docs/ROADMAP-PLATFORM.yaml + this plan file). No code, no data, no infra, no
-  decision-record change. The prior T1.6 (bundled, T1.5-gated, strategic:true) and the prior Decision-62
-  citations are restored verbatim.
+  Revert the branch commits (docs/ROADMAP-PLATFORM.yaml + docs/DECISIONS.md + this plan file). No code, no
+  infra. The Decision 62 amendment is additive prose; reverting it + re-running --backfill-decisions-md
+  restores dec-062 to its prior text. The prior T1.6 (bundled, T1.5-gated, strategic:true) is restored verbatim.
