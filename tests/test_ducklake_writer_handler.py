@@ -42,6 +42,15 @@ class FakeCon:
         self.closed = True
 
 
+@pytest.fixture(autouse=True)
+def _reset_warm_connection():
+    """The writer uses a per-container warm-connection global on the single-statement path (D2);
+    reset it around every test so a cached connection never leaks between tests."""
+    rt.reset_warm_connection()
+    yield
+    rt.reset_warm_connection()
+
+
 def _result(**kw):
     base = dict(
         ulid="01ULID",
@@ -107,7 +116,9 @@ def test_handler_attach_check(monkeypatch):
     assert r["statusCode"] == 200
     assert body["version"] == "1.5.3"
     assert body["source"] == "layer"
-    assert con.closed is True
+    # D2 warm reuse: the single-statement path keeps the connection open for the next invocation.
+    assert con.closed is False
+    assert body["connect_reused"] is False  # first (cold) acquisition in this container
 
 
 def test_handler_create_tables(monkeypatch):
@@ -253,6 +264,9 @@ def test_handler_churn(monkeypatch):
     assert "p95_connect_ms" in bd
     assert "p95_cpu_ms" in bd
     assert "wall_cpu_ratio" in bd
+    # rec-2096: cold AND warm connect latency are recorded so a cold-connect regression is visible.
+    assert "cold_connect_ms" in bd
+    assert "warm_connect_ms" in bd
 
 
 def test_handler_churn_single_normal(monkeypatch):
@@ -708,6 +722,46 @@ def test_handler_update_ops_referential_returns_409(monkeypatch):
 # ---------------------------------------------------------------------------
 # connect_probe: runs WITHOUT a pre-opened connection
 # ---------------------------------------------------------------------------
+
+
+def test_handler_reopens_on_dead_connection_and_retries(monkeypatch):
+    """A dead-session error on the single-statement write path reopens ONCE and retries (D2).
+
+    Production write actions are replay-safe under retry (file_ops via the client ULID; update/write_ops
+    MERGE-idempotent), and a connection death aborts the catalog txn, so the retry commits exactly once.
+    """
+    opens: list[int] = []
+    monkeypatch.setattr(h, "_open_writer_connection", lambda: opens.append(1) or FakeCon())
+    calls = {"n": 0}
+
+    def flaky_write_scd2(con, rec, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception("could not connect to server: connection refused")  # dead session
+        return _result()
+
+    monkeypatch.setattr(rt, "write_scd2", flaky_write_scd2)
+    r = h.handler({"action": "write_ops", "table": "ops_recommendations", "record": {"id": "rec-1"}})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body["ok"] is True
+    assert len(opens) == 2  # cold open + one reopen
+
+
+def test_handler_reset_warm_connection(monkeypatch):
+    """reset_warm_connection is connectionless: it drops the warm cache without opening a connection (D2 VP)."""
+
+    def _should_not_open():
+        raise AssertionError("reset_warm_connection must not open a connection")
+
+    monkeypatch.setattr(h, "_open_writer_connection", _should_not_open)
+    reset_called = {"n": 0}
+    monkeypatch.setattr(rt, "reset_warm_connection", lambda: reset_called.__setitem__("n", reset_called["n"] + 1))
+    r = h.handler({"action": "reset_warm_connection"})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body == {"ok": True, "reset": True}
+    assert reset_called["n"] == 1
 
 
 def test_handler_connect_probe_runs_without_connection(monkeypatch):

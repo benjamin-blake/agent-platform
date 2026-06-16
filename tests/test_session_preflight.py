@@ -51,9 +51,20 @@ def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
     }
     class_name = request.cls.__name__ if request.cls else ""
 
+    # warm_sync is the single warm-up reader touch main() makes (neon-egress-reduction D4); stub it
+    # so main() integration tests never hit the network. reader_ok=True + empty rows => main derives
+    # empty signals (0 open recs etc.), matching the prior empty-reader-stub behaviour.
+    warm_sync_stub = {
+        "drained": {},
+        "pulled": {},
+        "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+        "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+    }
+
     with ExitStack() as stack:
         stack.enter_context(patch("session_preflight._make_reader", return_value=reader_stub))
         stack.enter_context(patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}))
+        stack.enter_context(patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub))
         stack.enter_context(patch("session_preflight._sync_ops_pull", return_value={}))
         if class_name != "TestCheckMainFreshness":
             stack.enter_context(patch("session_preflight.check_main_freshness", return_value=freshness_stub))
@@ -433,7 +444,7 @@ class TestJsonOutputSchema:
             assert key in data, f"Missing key: {key}"
 
     def test_recommendation_sync_field_in_output(self, tmp_path: Path) -> None:
-        """recommendation_sync field appears in output and is derived from sync_ops.sync()['pulled']."""
+        """recommendation_sync field appears in output and is derived from sync_ops.warm_sync()['pulled']."""
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
@@ -454,9 +465,14 @@ class TestJsonOutputSchema:
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
-                "scripts.sync_ops.sync",
-                return_value={"drained": {}, "pulled": {"ops_recommendations": 5}},
-            ) as mock_sync,
+                "scripts.sync_ops.warm_sync",
+                return_value={
+                    "drained": {},
+                    "pulled": {"ops_recommendations": 5},
+                    "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                    "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+                },
+            ) as mock_warm_sync,
             patch(
                 "session_preflight.read_context_files",
                 return_value={
@@ -477,7 +493,7 @@ class TestJsonOutputSchema:
         ):
             _preflight.main()
 
-        mock_sync.assert_called_once()
+        mock_warm_sync.assert_called_once()
         data = json.loads(preflight_report.read_text(encoding="utf-8"))
         assert data["recommendation_sync"] == {"ops_recommendations": 5}
 
@@ -1416,7 +1432,7 @@ class TestCredentialsOrderingInMain:
     """Verify that the credential check runs before ops sync in main()."""
 
     def test_credentials_startup_precedes_sync(self, tmp_path: Path) -> None:
-        """_handle_credentials_startup is called before scripts.sync_ops.sync in main()."""
+        """_handle_credentials_startup is called before scripts.sync_ops.warm_sync in main()."""
         call_order: list[str] = []
 
         def _track_creds(status: str) -> str:
@@ -1425,7 +1441,12 @@ class TestCredentialsOrderingInMain:
 
         def _track_sync(profile: str = "agent_platform") -> dict:
             call_order.append("sync")
-            return {"drained": {}, "pulled": {}}
+            return {
+                "drained": {},
+                "pulled": {},
+                "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+            }
 
         preflight_report = tmp_path / ".preflight-report.json"
 
@@ -1442,7 +1463,7 @@ class TestCredentialsOrderingInMain:
             patch("session_preflight.check_terraform_pending", return_value=False),
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight._handle_credentials_startup", side_effect=_track_creds),
-            patch("scripts.sync_ops.sync", side_effect=_track_sync),
+            patch("scripts.sync_ops.warm_sync", side_effect=_track_sync),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight.read_priority_queue", return_value=[]),
@@ -2016,22 +2037,27 @@ class TestSyncCollapse:
         return patches
 
     def test_sync_called_exactly_once(self, tmp_path: Path) -> None:
-        """scripts.sync_ops.sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
+        """scripts.sync_ops.warm_sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
         sync_call_count: list[int] = []
 
         def tracking_sync(profile: str = "agent_platform") -> dict:
             sync_call_count.append(1)
-            return {"drained": {}, "pulled": {"ops_recommendations": 10}}
+            return {
+                "drained": {},
+                "pulled": {"ops_recommendations": 10},
+                "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+            }
 
         from contextlib import ExitStack  # noqa: PLC0415
 
         with ExitStack() as stack:
             for p in self._full_main_ctx(tmp_path):
                 stack.enter_context(p)
-            stack.enter_context(patch("scripts.sync_ops.sync", side_effect=tracking_sync))
+            stack.enter_context(patch("scripts.sync_ops.warm_sync", side_effect=tracking_sync))
             _preflight.main()
 
-        assert len(sync_call_count) == 1, f"sync called {len(sync_call_count)} times; expected exactly 1"
+        assert len(sync_call_count) == 1, f"warm_sync called {len(sync_call_count)} times; expected exactly 1"
         report_path = tmp_path / ".preflight-report.json"
         data = json.loads(report_path.read_text(encoding="utf-8"))
         assert data["recommendation_sync"] == {"ops_recommendations": 10}
@@ -2100,7 +2126,13 @@ class TestUrlPriming:
 
 
 class TestVerbDedup:
-    """open_recs and decisions_max_updated are each queried at most once per main() run."""
+    """Phase B issues ZERO reader verb calls -- every signal is served from the warm-sync rows (D4).
+
+    Before neon-egress-reduction D4, main() de-duplicated the Phase-B reader fan-out down to one call
+    per verb. D4 supersedes that: the warm-up sync (warm_sync) pulls the tables ONCE and Phase B
+    derives every signal from those in-memory rows, so the per-verb count is now ZERO. This is the
+    main()-level encoding of acceptance criterion 1 (zero additional Phase-B reader verb calls).
+    """
 
     @staticmethod
     def _make_counting_reader(verb_calls: dict[str, int]) -> MagicMock:
@@ -2117,8 +2149,42 @@ class TestVerbDedup:
     def _run_main_with_counting_reader(self, tmp_path: Path, verb_calls: dict[str, int]) -> None:
         counting_reader = self._make_counting_reader(verb_calls)
         preflight_report = tmp_path / ".preflight-report.json"
+        # warm_sync returns NON-empty rows for all three tables so the derivations have real input;
+        # the counting reader must STILL see zero verb calls in Phase B (everything served from rows).
+        warm_sync_rows = {
+            "drained": {},
+            "pulled": {"ops_recommendations": 2, "ops_decisions": 1, "ops_priority_queue": 0},
+            "rows": {
+                "ops_recommendations": [
+                    {
+                        "id": "rec-001",
+                        "status": "open",
+                        "source": "manual",
+                        "automatable": True,
+                        "title": "t1",
+                        "context": "c1",
+                        "created_timestamp": "2026-06-10T00:00:00+00:00",
+                    },
+                    {
+                        "id": "rec-002",
+                        "status": "closed",
+                        "source": "ci_rca",
+                        "automatable": False,
+                        "title": "t2",
+                        "context": "c2",
+                        "created_timestamp": "2026-06-11T00:00:00+00:00",
+                    },
+                ],
+                "ops_decisions": [
+                    {"id": "dec-001", "last_updated_timestamp": "2026-06-12T00:00:00+00:00"},
+                ],
+                "ops_priority_queue": [],
+            },
+            "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+        }
         with (
             patch("session_preflight._make_reader", return_value=counting_reader),
+            patch("scripts.sync_ops.warm_sync", return_value=warm_sync_rows),
             patch("session_preflight.check_venv", return_value=True),
             patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
             patch("session_preflight.check_terraform_pending", return_value=False),
@@ -2134,19 +2200,25 @@ class TestVerbDedup:
         ):
             _preflight.main()
 
-    def test_open_recs_called_once(self, tmp_path: Path) -> None:
-        """open_recs verb is queried exactly once even though read_context_files also needs the count."""
+    def test_open_recs_not_called_in_phase_b(self, tmp_path: Path) -> None:
+        """open_recs verb is NOT queried in Phase B -- the open count is derived from the warm-sync rows (D4)."""
         verb_calls: dict[str, int] = {}
         self._run_main_with_counting_reader(tmp_path, verb_calls)
         count = verb_calls.get("open_recs", 0)
-        assert count == 1, f"open_recs called {count} times; expected exactly 1 (dedup via open_recs_count param)"
+        assert count == 0, f"open_recs called {count} times; expected 0 (served from the warm-sync rows, D4)"
 
-    def test_decisions_max_updated_called_once(self, tmp_path: Path) -> None:
-        """decisions_max_updated verb is queried once even though both roadmap calls need the timestamp."""
+    def test_decisions_max_updated_not_called_in_phase_b(self, tmp_path: Path) -> None:
+        """decisions_max_updated verb is NOT queried in Phase B -- the timestamp is derived from rows (D4)."""
         verb_calls: dict[str, int] = {}
         self._run_main_with_counting_reader(tmp_path, verb_calls)
         count = verb_calls.get("decisions_max_updated", 0)
-        assert count == 1, f"decisions_max_updated called {count} times; expected exactly 1 (dedup via latest_decision_ts)"
+        assert count == 0, f"decisions_max_updated called {count} times; expected 0 (derived from rows, D4)"
+
+    def test_no_reader_verb_calls_in_phase_b(self, tmp_path: Path) -> None:
+        """The whole Phase-B fan-out issues ZERO reader verb calls (acceptance criterion 1)."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        assert verb_calls == {}, f"Phase B issued reader verb calls {verb_calls}; expected none (served from rows, D4)"
 
 
 class TestErrorPropagation:

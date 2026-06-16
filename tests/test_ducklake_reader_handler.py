@@ -23,8 +23,19 @@ class FakeCon:
         self.executed.append((sql, params))
         return self
 
+    def fetchall(self):  # liveness-probe support (D2 warm-connection cache)
+        return []
+
     def close(self):
         self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def _reset_warm_connection():
+    """The reader uses a per-container warm-connection global (D2); reset it around every test."""
+    rt.reset_warm_connection()
+    yield
+    rt.reset_warm_connection()
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +87,9 @@ def test_handler_attach_check(monkeypatch):
     body = json.loads(r["body"])
     assert body["version"] == "1.5.3"
     assert body["source"] == "layer"
-    assert con.closed is True
+    # D2 warm reuse: the connection is kept open for the next invocation, NOT closed per-request.
+    assert con.closed is False
+    assert body["connect_reused"] is False  # first (cold) acquisition in this container
 
 
 def test_handler_read_current(monkeypatch):
@@ -247,6 +260,55 @@ def test_handler_read_ops_current_end_to_end(monkeypatch):
 # ---------------------------------------------------------------------------
 # connect_probe: runs WITHOUT a pre-opened connection
 # ---------------------------------------------------------------------------
+
+
+def test_handler_reopens_on_dead_connection_and_retries(monkeypatch):
+    """A dead-session error (Neon scale-to-zero) reopens the warm connection ONCE and retries (D2).
+
+    Reads are idempotent, so the reopen never leaks a 5xx for this expected transient.
+    """
+    opens: list[int] = []
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: opens.append(1) or FakeCon())
+    calls = {"n": 0}
+
+    def flaky_read_current(con, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception("server closed the connection unexpectedly")  # dead session
+        return [{"rec_id": "rec-1"}]
+
+    monkeypatch.setattr(rt, "read_current", flaky_read_current)
+    r = h.handler({"action": "read_current", "limit": 5})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body["row_count"] == 1
+    assert len(opens) == 2  # cold open + one reopen
+
+
+def test_handler_non_dead_error_does_not_reopen(monkeypatch):
+    """A non-connection error is NOT a dead-session signal: it propagates (no reopen), maps to 500."""
+    opens: list[int] = []
+    monkeypatch.setattr(h, "_open_reader_connection", lambda: opens.append(1) or FakeCon())
+    monkeypatch.setattr(rt, "read_current", lambda con, **kw: (_ for _ in ()).throw(rt.DuckLakeRuntimeError("bad query")))
+    r = h.handler({"action": "read_current"})
+    assert r["statusCode"] == 500
+    assert len(opens) == 1  # no reopen for a non-dead error
+
+
+def test_handler_reset_warm_connection(monkeypatch):
+    """reset_warm_connection is connectionless: it drops the warm cache without opening a connection (D2 VP)."""
+
+    def _should_not_open():
+        raise AssertionError("reset_warm_connection must not open a connection")
+
+    monkeypatch.setattr(h, "_open_reader_connection", _should_not_open)
+    reset_called = {"n": 0}
+    monkeypatch.setattr(rt, "reset_warm_connection", lambda: reset_called.__setitem__("n", reset_called["n"] + 1))
+    r = h.handler({"action": "reset_warm_connection"})
+    body = json.loads(r["body"])
+    assert r["statusCode"] == 200
+    assert body == {"ok": True, "reset": True}
+    assert reset_called["n"] == 1
 
 
 def test_handler_connect_probe_runs_without_connection(monkeypatch):

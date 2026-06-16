@@ -244,9 +244,12 @@ class TestUpdateRec:
         assert call_rec["status"] == "closed"
         assert call_rec["execution_result"] == "success"
         assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
-        # write-through: local JSONL appended
+        # write-through: the incremental upsert keeps ONE deduplicated row per id (D4), reflecting
+        # the update (was: append, which left the stale original behind until the next full sync).
         lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) >= 2  # original + appended update
+        assert len(lines) == 1
+        cached = json.loads(lines[0])
+        assert cached["id"] == "rec-042" and cached["status"] == "closed"
 
     def test_update_rec_invalid_status(self) -> None:
         """update_rec() raises ValueError for invalid status values (before any read)."""
@@ -302,7 +305,10 @@ class TestFileDecision:
         assert call_rec["decision_id"] == 56
         assert call_rec["id"] == "dec-056"
         assert call_rec["created_timestamp"] and call_rec["last_updated_timestamp"]
-        mock_sync.assert_called_once_with("ops_decisions")
+        # D4: the cache refresh is an incremental upsert, not a full-table _sync_table pull.
+        mock_sync.assert_not_called()
+        cached = [json.loads(line) for line in decisions_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert any(d["id"] == "dec-056" for d in cached)
 
     def test_file_decision_requires_decision_id(self, tmp_path: Path) -> None:
         """file_decision() raises ValueError when no DECISIONS.md-assigned integer is supplied."""
@@ -369,7 +375,10 @@ class TestUpdateDecision:
         assert call_table == "ops_decisions"
         assert call_rec["status"] == "closed"
         assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
-        mock_sync.assert_called_once_with("ops_decisions")
+        # D4: the cache refresh is an incremental upsert, not a full-table _sync_table pull.
+        mock_sync.assert_not_called()
+        cached = [json.loads(line) for line in decisions_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert any(d["id"] == "dec-042" and d["status"] == "closed" for d in cached)
 
     def test_update_decision_absent_loud_fails(self) -> None:
         """update_decision() raises RuntimeError when the decision is absent from the projection."""
@@ -1056,37 +1065,46 @@ class TestPipelineConsolidation:
 
         mock_fetch.assert_called_once_with("rec-042", profile=None)
 
-    def test_update_rec_post_sync(self, tmp_path: Path) -> None:
-        """update_rec() triggers _sync_table after writing."""
+    def test_update_rec_refreshes_cache_incrementally(self, tmp_path: Path) -> None:
+        """update_rec() refreshes the cache via an incremental upsert -- no full-table reader pull (D4)."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
         existing = dict(_VALID_FIELDS, id="rec-042", status="open")
 
         with (
             patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=existing),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True, "ulid": "ulid-test-0001"}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.sync_ops._pull_single_table") as mock_pull,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import update_rec
 
             update_rec("rec-042", {"status": "closed"})
 
-        mock_sync.assert_called_once_with("ops_recommendations")
+        # Neon-egress-reduction D4: the per-write full-table resync is gone.
+        mock_sync.assert_not_called()
+        mock_pull.assert_not_called()
+        rows = [json.loads(line) for line in recs_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert any(r["id"] == "rec-042" and r["status"] == "closed" for r in rows)
 
-    def test_file_rec_post_sync(self, tmp_path: Path) -> None:
-        """file_rec() triggers _sync_table after writing."""
+    def test_file_rec_refreshes_cache_incrementally(self, tmp_path: Path) -> None:
+        """file_rec() refreshes the cache via an incremental upsert -- no full-table reader pull (D4)."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700", "ulid": "ulid-test-0001"}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.sync_ops._pull_single_table") as mock_pull,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import file_rec
 
             file_rec(dict(_VALID_FIELDS))
 
-        mock_sync.assert_called_once_with("ops_recommendations")
+        mock_sync.assert_not_called()
+        mock_pull.assert_not_called()
+        rows = [json.loads(line) for line in recs_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert any(r["id"] == "rec-700" for r in rows)
 
     def test_sync_returns_pull_only_report(self) -> None:
         """sync() returns {'pulled': ...} only -- no drain/compact/view-refresh keys (Decision 84 I-4)."""
@@ -1142,20 +1160,29 @@ class TestMigrationParams:
         assert mock_dl_write.call_args.kwargs["action"] == "write_ops"
         assert "idempotency_ulid" not in mock_dl_write.call_args.kwargs
 
-    def test_file_rec_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
-        """_skip_sync=True defers the per-row _sync_table flush."""
+    def test_file_rec_skip_sync_uses_append_not_upsert(self, tmp_path: Path) -> None:
+        """_skip_sync=True appends (bulk path; final sync reconciles); the default path upserts (D4)."""
         with (
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_data_portal._append_to_local_jsonl") as mock_append,
+            patch("scripts.sync_ops.upsert_cache_row") as mock_upsert,
         ):
             from scripts.ops_data_portal import file_rec
 
+            # Bulk path: append only, no per-row upsert and never the full-table _sync_table.
             file_rec(dict(_VALID_FIELDS), _skip_sync=True)
+            mock_append.assert_called_once()
+            mock_upsert.assert_not_called()
             mock_sync.assert_not_called()
 
+            # Default path: incremental upsert, no append and no full-table _sync_table (D4).
+            mock_append.reset_mock()
             file_rec(dict(_VALID_FIELDS))
-            mock_sync.assert_called_once()
+            mock_upsert.assert_called_once()
+            mock_append.assert_not_called()
+            mock_sync.assert_not_called()
 
     def test_file_rec_migration_mode_bypasses_content_validators(self, tmp_path: Path) -> None:
         """_migration_mode lets a historical row that fails content rules import; the schema still applies."""

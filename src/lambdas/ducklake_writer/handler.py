@@ -38,6 +38,18 @@ def _open_writer_connection() -> Any:
     return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
 
 
+def _warm_writer_connection(force_reopen: bool = False) -> tuple[Any, dict[str, Any]]:
+    """Acquire the per-container warm write connection for the SINGLE-STATEMENT request path (D2).
+
+    Reuses one ATTACHed connection across sequential warm invocations -- no per-request re-ATTACH and
+    so no repeated ducklake_file_column_stats COPY / Neon metadata egress. The actual open routes
+    through _open_writer_connection (the single open seam), invoked only when (re)opening; the
+    warm-reuse path skips it (and its fetch_dsn) entirely. The 8-thread churn harness does NOT use
+    this -- it opens an independent connection per thread (connectionless dispatch path).
+    """
+    return rt.get_warm_connection(opener=_open_writer_connection, force_reopen=force_reopen)
+
+
 # ---------------------------------------------------------------------------
 # Actions -- each returns a JSON-serialisable dict (the handler wraps status + body)
 # ---------------------------------------------------------------------------
@@ -84,6 +96,8 @@ def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "source": "layer" if EXTENSION_DIRECTORY else "network",
         "connect_ms": round(connect_ms, 2),
         "commit_ms": round(commit_ms, 2),
+        # Warm-reuse observability (D2): True when this invocation reused the cached connection.
+        "connect_reused": bool(event.get("_connect_reused", False)),
     }
 
 
@@ -211,6 +225,16 @@ def action_create_ops_tables(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "force_recreate": force,
         "counter_seed": counter_seed,
     }
+
+
+def action_reset_warm_connection(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Test-only: drop the per-container warm connection so the NEXT invocation reconnects cold (D2 VP).
+
+    Connectionless. Lets the warm-reuse smoke gate exercise the cold-reconnect path deterministically;
+    it does not touch the catalog or relax any boundary.
+    """
+    rt.reset_warm_connection()
+    return {"ok": True, "reset": True}
 
 
 def _require_ops_table(table: Any) -> None:
@@ -372,6 +396,10 @@ def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
     p95 = _p95([r["latency_ms"] for r in results])
     within = collision_rate <= rt.OCC_COLLISION_RATE_BUDGET and p95 <= rt.COMMIT_LATENCY_BUDGET_MS
 
+    # rec-2096: also measure COLD vs WARM connect latency so a cold-connect regression is visible
+    # against the warm baseline (the per-thread churn connects above are all COLD).
+    cold_connect_ms, warm_connect_ms = _measure_cold_warm_connect(dsn, creds)
+
     breakdown = {
         "p95_connect_ms": round(_p95([r["connect_ms"] for r in results]), 2),
         "p95_commit_ms": round(_p95([r["commit_ms"] for r in results]), 2),
@@ -383,6 +411,8 @@ def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
             2,
         ),
         "writers": writers,
+        "cold_connect_ms": cold_connect_ms,
+        "warm_connect_ms": warm_connect_ms,
     }
 
     # Emit per-stage breakdown to CloudWatch for Phase-1 RCA observability (EC9 extension).
@@ -392,6 +422,9 @@ def action_churn(event: dict[str, Any], con: Any) -> dict[str, Any]:
     sink("ChurnP95CpuMs", breakdown["p95_cpu_ms"])
     sink("ChurnWallCpuRatio", breakdown["wall_cpu_ratio"])
     sink("ChurnTotalOccRetries", float(breakdown["total_occ_retries"]))
+    # rec-2096: cold + warm connect latency.
+    sink("ChurnColdConnectMs", breakdown["cold_connect_ms"])
+    sink("ChurnWarmConnectMs", breakdown["warm_connect_ms"])
 
     return {
         "ok": True,
@@ -501,6 +534,27 @@ def _frozen_creds() -> tuple[str, str, str | None, str]:
     return (fc.access_key, fc.secret_key, fc.token, session.region_name or "eu-west-2")
 
 
+def _measure_cold_warm_connect(dsn: dict[str, Any], creds: Any) -> tuple[float, float]:
+    """rec-2096: measure COLD (first ATTACH) AND WARM (reuse) connect latency on this container.
+
+    A cold-connect regression is invisible without a warm baseline to read it against (rec-2096). This
+    opens once (cold) then reuses (warm) via the warm-connection cache, returning (cold_ms, warm_ms).
+    Self-contained: it resets the warm cache around the measurement so it never leaks a connection into
+    the request path's warm slot (the churn harness keeps its own per-thread connections).
+    """
+    rt.reset_warm_connection()
+    try:
+        _, m_cold = rt.get_warm_connection(
+            dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+        )
+        _, m_warm = rt.get_warm_connection(
+            dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY, _creds=creds
+        )
+        return round(m_cold["connect_ms"], 2), round(m_warm["connect_ms"], 2)
+    finally:
+        rt.reset_warm_connection()
+
+
 def _p95(values: list[float]) -> float:
     """Nearest-rank p95 of *values*; 0.0 when empty."""
     if not values:
@@ -594,11 +648,13 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "churn": action_churn,
     "churn_single": action_churn_single,
     "connect_probe": action_connect_probe,
+    "reset_warm_connection": action_reset_warm_connection,
 }
 
 # Actions that manage their own connections (churn opens many; attach measures connect time itself;
-# connect_probe runs BEFORE the connection open to diagnose a hanging connect).
-_CONNECTIONLESS_ACTIONS = {"churn", "churn_single", "connect_probe"}
+# connect_probe runs BEFORE the connection open to diagnose a hanging connect; reset_warm_connection
+# drops the warm connection without opening a new one).
+_CONNECTIONLESS_ACTIONS = {"churn", "churn_single", "connect_probe", "reset_warm_connection"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -628,13 +684,25 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     try:
         if action in _CONNECTIONLESS_ACTIONS:
             return _response(200, fn(payload, None))
-        t0 = time.perf_counter()
-        con = _open_writer_connection()
-        payload["_connect_ms"] = (time.perf_counter() - t0) * 1000.0
+        # Warm-reuse acquisition (D2) for the single-statement path: the connection is kept open for
+        # the next invocation (NOT closed in a finally). The SELECT-1 liveness probe reopens a closed
+        # connection at acquisition; a session that dies mid-statement (Neon scale-to-zero) surfaces as
+        # a connection error -- reopen ONCE and retry. The production write actions are replay-safe
+        # under retry (file_ops via the client-replayed idempotency ULID; update_ops/write_ops are
+        # MERGE-idempotent on the merge key), and a connection death aborts the catalog txn so the
+        # first attempt left nothing committed. Any non-connection error still propagates (Decision 55).
+        con, conn_meta = _warm_writer_connection()
+        payload["_connect_ms"] = conn_meta["connect_ms"]
+        payload["_connect_reused"] = conn_meta["reused"]
         try:
             return _response(200, fn(payload, con))
-        finally:
-            con.close()
+        except Exception as exc:  # noqa: BLE001 -- narrowed immediately to the dead-connection case
+            if not rt.is_dead_connection_error(exc):
+                raise
+            con, conn_meta = _warm_writer_connection(force_reopen=True)
+            payload["_connect_ms"] = conn_meta["connect_ms"]
+            payload["_connect_reused"] = conn_meta["reused"]
+            return _response(200, fn(payload, con))
     except rt.SchemaGateError as exc:
         return _response(422, {"ok": False, "error_type": "schema_gate", "error": str(exc)})
     except rt.ReferentialError as exc:

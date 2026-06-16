@@ -339,13 +339,149 @@ def parse_last_session() -> str:
     return matches[-1] if matches else ""
 
 
-def _count_recommendations_reader() -> tuple[int, int, int, list[dict]] | str:
-    """Return open recommendation counts from the DuckLake reader.
+# ---------------------------------------------------------------------------
+# Cache-serving derivations (neon-egress-reduction D4).
+#
+# The Phase-A warm-up sync (sync_ops.warm_sync) pulls ops_recommendations / ops_decisions /
+# ops_priority_queue ONCE and returns the rows in-memory. Each Phase-B signal is then DERIVED from
+# those rows here -- a client-side re-expression of the corresponding ducklake_reader named verb --
+# so Phase B issues ZERO additional reader calls (was ~6-9). The derivations are kept equivalent to
+# the canonical verb SQL (src.common.ducklake_scd2_schema.NAMED_READS) by the VP-step-1 equivalence
+# test, which runs each verb's SQL over a fixture in-process and asserts it equals the derivation.
+#
+# Boundary note (Decision 84 I-3): this reads LOCAL rows only; it never issues caller SQL across the
+# reader boundary. The rows themselves came from the warm-up sync's named-verb / current_state pulls.
+# ---------------------------------------------------------------------------
 
-    Returns the tally tuple on success, or the string "reader_unreachable" on any
-    reader failure (Decision 55 / Decision 81 cl.7: loud degraded signal, never a
-    false zero; no Athena fallback on the ducklake backend).
+# Sentinel default distinguishing "no cache rows supplied -> use the reader (back-compat / tests)"
+# from "cache rows supplied but None -> reader pull failed -> degrade" (a real None is meaningful).
+_READER_SENTINEL: object = object()
+
+
+def _row_ts(row: dict, field: str = "created_timestamp") -> datetime | None:
+    """Parse a row timestamp field (ISO string or datetime) into a UTC-aware datetime, or None."""
+    val = row.get(field)
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if hasattr(val, "isoformat"):  # date / other temporal
+        try:
+            return datetime.fromisoformat(val.isoformat()).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return None
+    return _parse_ts_utc(str(val))
+
+
+def _derive_open_recs(rows: list[dict]) -> list[dict]:
+    """Client-side `open_recs` verb: open rows projected to the tally columns, ordered by id."""
+    open_rows = [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "context": r.get("context", ""),
+            "created_timestamp": r.get("created_timestamp"),
+            "automatable": r.get("automatable"),
+        }
+        for r in rows
+        if r.get("status") == "open"
+    ]
+    return sorted(open_rows, key=lambda r: r.get("id") or "")
+
+
+def _derive_ci_rca_open(rows: list[dict]) -> list[dict]:
+    """Client-side `ci_rca_open` verb: open/in-progress ci_rca recs, newest first, capped at 5."""
+    matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") in ("open", "in_progress")]
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "priority": r.get("priority", ""),
+            "created_timestamp": r.get("created_timestamp"),
+        }
+        for r in matched[:5]
+    ]
+
+
+def _derive_ci_rca_since(rows: list[dict], since_ts: str) -> list[dict]:
+    """Client-side `ci_rca_since` verb: ci_rca rec ids created strictly after *since_ts*."""
+    cutoff = _parse_ts_utc(since_ts)
+    if cutoff is None:
+        return []
+    out: list[dict] = []
+    for r in rows:
+        if r.get("source") != "ci_rca":
+            continue
+        ts = _row_ts(r)
+        if ts is not None and ts > cutoff:
+            out.append({"id": r.get("id", "")})
+    return out
+
+
+def _derive_forward_fix_recursion(rows: list[dict], since_ts: str) -> list[dict]:
+    """Client-side `forward_fix_recursion` verb: files with >=3 ci_rca recs since *since_ts*."""
+    cutoff = _parse_ts_utc(since_ts)
+    if cutoff is None:
+        return []
+    counts: dict[str, int] = {}
+    for r in rows:
+        if r.get("source") != "ci_rca":
+            continue
+        ts = _row_ts(r)
+        if ts is None or ts <= cutoff:
+            continue
+        counts[r.get("file") or ""] = counts.get(r.get("file") or "", 0) + 1
+    return [{"file": f, "cnt": c} for f, c in counts.items() if c >= 3]
+
+
+def _derive_budget_bypass_recent(rows: list[dict], *, now: datetime | None = None) -> list[dict]:
+    """Client-side `budget_bypass_recent` verb: budget_bypass recs in the last 7 days, newest first, <=10."""
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=7)
+    matched = []
+    for r in rows:
+        if r.get("source") != "budget_bypass":
+            continue
+        ts = _row_ts(r)
+        if ts is not None and ts > cutoff:
+            matched.append(r)
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {"id": r.get("id", ""), "context": r.get("context", ""), "created_timestamp": r.get("created_timestamp")}
+        for r in matched[:10]
+    ]
+
+
+def _derive_decisions_max_updated(rows: list[dict]) -> list[dict]:
+    """Client-side `decisions_max_updated` verb: [{ts: max(last_updated_timestamp)}] (mirrors the verb row)."""
+    stamps = [_row_ts(r, "last_updated_timestamp") for r in rows]
+    stamps = [s for s in stamps if s is not None]
+    if not stamps:
+        return [{"ts": None}]
+    newest = max(stamps)
+    # Echo the original string form when present (the verb returns the stored value, not a re-format).
+    for r in rows:
+        if _row_ts(r, "last_updated_timestamp") == newest:
+            return [{"ts": r.get("last_updated_timestamp")}]
+    return [{"ts": newest.isoformat()}]
+
+
+def _count_recommendations_reader(cache_rows: object = _READER_SENTINEL) -> tuple[int, int, int, list[dict]] | str:
+    """Return open recommendation counts -- from the warm-pulled cache rows, else the DuckLake reader.
+
+    cache_rows (neon-egress-reduction D4): when supplied, the count is DERIVED from the warm-up sync's
+    already-pulled rows (zero reader call). A supplied None means the warm-up recs pull FAILED ->
+    "reader_unreachable" (Decision 55: loud degraded signal, never a false zero). When omitted
+    (sentinel) the function falls back to its own reader call -- the back-compat path for standalone
+    callers and tests.
+
+    Returns the tally tuple on success, or the string "reader_unreachable" on reader failure.
     """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return "reader_unreachable"
+        return _tally_rec_counts(_derive_open_recs(cache_rows), source="cache")  # type: ignore[arg-type]
+
     try:
         rows = _make_reader().named("open_recs")
         return _tally_rec_counts(rows, source="reader")
@@ -544,12 +680,19 @@ def _read_priority_queue_cache(max_items: int) -> list[dict]:
     return _shape_priority_queue_rows(rows, max_items)
 
 
-def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[dict]:
+def read_priority_queue(max_items: int = 5, creds_status: str = "ok", cache_rows: object = _READER_SENTINEL) -> list[dict]:
     """Read the priority queue via the priority_queue_current read verb (DuckLake reader).
 
     Decision 70: the verb's correlated subquery returns ALL entries of the latest
     curator run -- the generic latest-per-key current projection would silently
     change these semantics.
+
+    cache_rows (neon-egress-reduction D4): when supplied, the queue is served from the warm-up
+    sync's already-pulled priority_queue_current rows (zero reader call) -- the local cache IS that
+    verb's output, so no re-derivation is needed, only shaping. A supplied None means the warm-up
+    pull FAILED: degrade to the local read-cache with a staleness warning (the warm-up sync already
+    surfaced the reader failure loudly; preflight completes in degraded mode, Decision 60). When
+    omitted (sentinel) the function uses the reader directly -- the back-compat path below.
 
     When *creds_status* is not "ok" credentials are unavailable: fall back to the
     local read-cache with a staleness warning (empty-with-warning when absent; never
@@ -561,6 +704,13 @@ def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[di
     Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
     Returns [] if the queue is empty.
     """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return _read_priority_queue_cache(max_items)
+        shaped = _shape_priority_queue_rows(cache_rows, max_items)  # type: ignore[arg-type]
+        shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
+        return shaped
+
     if creds_status != "ok":
         return _read_priority_queue_cache(max_items)
 
@@ -595,12 +745,17 @@ def print_priority_queue(items: list[dict]) -> None:
     print()
 
 
-def _fetch_ci_rca_recs() -> list[dict]:
-    """Return up to 5 open CI-RCA recs from the DuckLake reader.
+def _fetch_ci_rca_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return up to 5 open CI-RCA recs -- from the warm-pulled cache rows, else the DuckLake reader.
 
-    Returns [] with a loud warning on reader failure (Decision 55 / Decision 81 cl.7:
-    no Athena fallback; loud degraded signal).
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via _derive_ci_rca_open
+    (zero reader call); a supplied None means the warm-up pull failed -> [] (degraded). Omitted
+    (sentinel) -> reader path (back-compat / tests). Returns [] with a loud warning on reader failure
+    (Decision 55 / Decision 81 cl.7: no Athena fallback; loud degraded signal).
     """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_open(cache_rows)  # type: ignore[arg-type]
+
     _reader_exc: Exception | None = None
     try:
         return _make_reader().named("ci_rca_open")
@@ -620,11 +775,15 @@ def _check_non_automatable_softcap(non_auto_count: int) -> bool:
     return non_auto_count > _NON_AUTOMATABLE_SOFTCAP
 
 
-def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
-    """Return ci_rca recs created after *ts* from the DuckLake reader.
+def _fetch_ci_rca_recs_since(ts: str, cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return ci_rca recs created after *ts* -- from the warm-pulled cache rows, else the DuckLake reader.
 
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via _derive_ci_rca_since
+    (zero reader call); a supplied None -> []. Omitted (sentinel) -> reader path (back-compat).
     Returns [] on any failure (Decision 81 cl.7: no Athena fallback).
     """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_since(cache_rows, ts)  # type: ignore[arg-type]
     try:
         return _make_reader().named("ci_rca_since", since_ts=ts)
     except Exception:  # noqa: BLE001
@@ -632,11 +791,15 @@ def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
     return []
 
 
-def _check_ci_rca_liveness(creds_status: str) -> dict | None:
+def _check_ci_rca_liveness(creds_status: str, cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when main CI has been red with no ci-rca rec for >30 min.
 
     Calls `gh run list` to determine the latest push-to-main ci.yml result.
     Returns None when credentials are unavailable, gh call fails, or conditions are not met.
+
+    cache_rows (neon-egress-reduction D4) is threaded to _fetch_ci_rca_recs_since so the "any ci_rca
+    rec since the red run?" check is served from the warm-pulled rows (zero reader call). The gh CLI
+    call is unaffected (it is the CI-status source, not a warehouse read).
     """
     if creds_status != "ok":
         return None
@@ -689,51 +852,62 @@ def _check_ci_rca_liveness(creds_status: str) -> dict | None:
     if elapsed_minutes <= 30:
         return None
 
-    if _fetch_ci_rca_recs_since(created_at):
+    if _fetch_ci_rca_recs_since(created_at, cache_rows=cache_rows):
         return None
 
     return {"run_url": run.get("url", ""), "elapsed_minutes": round(elapsed_minutes, 1)}
 
 
-def _check_forward_fix_recursion() -> dict | None:
+def _check_forward_fix_recursion(cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when >=3 ci-rca recs targeting the same file appear in the last 24h.
 
-    Returns None when no recursion is detected or the warehouse is unreachable.
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_forward_fix_recursion (zero reader call); a supplied None -> degrade to None. Omitted
+    (sentinel) -> reader path. Returns None when no recursion is detected or the warehouse is
+    unreachable.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
 
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_forward_fix_recursion(cache_rows, cutoff)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader().named("forward_fix_recursion", since_ts=cutoff)
+        except Exception:  # noqa: BLE001
+            return None
+
+    if not rows:
+        return None
+    first = rows[0]
     try:
-        rows = _make_reader().named("forward_fix_recursion", since_ts=cutoff)
-        if rows is not None:
-            if not rows:
-                return None
-            first = rows[0]
-            try:
-                count = int(first.get("cnt", 3))
-            except (ValueError, TypeError):
-                count = 3
-            return {"file": first.get("file", ""), "count": count, "threshold": 3}
-    except Exception:  # noqa: BLE001
-        pass
-
-    return None
+        count = int(first.get("cnt", 3))
+    except (ValueError, TypeError):
+        count = 3
+    return {"file": first.get("file", ""), "count": count, "threshold": 3}
 
 
-def _check_budget_bypass_alert() -> dict | None:
+def _check_budget_bypass_alert(cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when >= 3 budget_bypass recs were filed in the last 7 days.
 
-    Returns None when count < 3 or the warehouse is unreachable.
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_budget_bypass_recent (zero reader call); a supplied None -> degrade to None. Omitted
+    (sentinel) -> reader path. Returns None when count < 3 or the warehouse is unreachable.
     """
-    try:
-        rows = _make_reader().named("budget_bypass_recent")
-        if rows is not None:
-            if len(rows) < 3:
-                return None
-            return {"count": len(rows), "entries": rows}
-    except Exception:  # noqa: BLE001
-        pass
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_budget_bypass_recent(cache_rows)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader().named("budget_bypass_recent")
+        except Exception:  # noqa: BLE001
+            return None
 
-    return None
+    if rows is None or len(rows) < 3:
+        return None
+    return {"count": len(rows), "entries": rows}
 
 
 def _parse_ts_utc(ts: str) -> datetime | None:
@@ -1267,12 +1441,22 @@ def print_telemetry_health(health: dict) -> None:
     print()
 
 
-def _get_latest_decision_ts() -> str | None:
-    """Return the max decision last_updated_timestamp via the decisions_max_updated verb, or None."""
-    try:
-        rows = _make_reader(table="ops_decisions").named("decisions_max_updated")
-    except Exception:  # noqa: BLE001
-        return None
+def _get_latest_decision_ts(cache_rows: object = _READER_SENTINEL) -> str | None:
+    """Return the max decision last_updated_timestamp -- from the warm-pulled rows, else the verb.
+
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_decisions_max_updated (zero reader call); a supplied None -> None. Omitted (sentinel) ->
+    decisions_max_updated verb (back-compat / tests).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_decisions_max_updated(cache_rows)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader(table="ops_decisions").named("decisions_max_updated")
+        except Exception:  # noqa: BLE001
+            return None
     if not rows:
         return None
     ts = rows[0].get("ts") or ""
@@ -1324,11 +1508,17 @@ def main() -> int:
     # then hits the Lambda URL directly rather than re-resolving SSM on each call.
     _prime_reader_url(creds_status)
 
-    # Single sync: drain outbox then pull fresh warehouse data. This also serves as the
-    # serial warm-up call that absorbs Neon cold-resume before the Phase B fan-out
-    # (Decision 82: warm before fanning out to keep Neon p95 bounded).
+    # Single warm-up sync: drain outbox then pull every migrated ops table ONCE, holding the rows
+    # in-memory. This is the one serial reader touch that absorbs the Neon cold-resume before the
+    # Phase B work; every Phase-B signal is then DERIVED from these rows -- ZERO additional reader
+    # calls (neon-egress-reduction D4: catalog egress was self-inflicted by a ~9-10-call fan-out).
+    # (The cold-resume warm-up is NOT attributable to Decision 82 -- that Decision concerns the
+    # DIRECT-vs-pooled endpoint basis and the EC8 churn-gate N=8->4 frame, audit F-033; the warm
+    # connection reuse / egress-budget rationale is the neon-egress-reduction Decision.)
     outbox: dict = {}
     recommendation_sync: dict = {}
+    warm_rows: dict[str, list[dict] | None] = {}
+    warm_reader_ok: dict[str, bool] = {}
     try:
         from scripts.sync_ops import outbox_summary  # noqa: PLC0415
 
@@ -1341,12 +1531,14 @@ def main() -> int:
 
     if creds_status == "ok":
         try:
-            from scripts.sync_ops import sync as sync_ops_sync  # noqa: PLC0415
+            from scripts.sync_ops import warm_sync  # noqa: PLC0415
 
-            result = sync_ops_sync()
-            recommendation_sync = result.get("pulled", {})
-            drained = sum(result.get("drained", {}).values())
-            pulled = sum(result.get("pulled", {}).values())
+            warm = warm_sync()
+            recommendation_sync = warm.get("pulled", {})  # type: ignore[assignment]
+            warm_rows = warm.get("rows", {})  # type: ignore[assignment]
+            warm_reader_ok = warm.get("reader_ok", {})  # type: ignore[assignment]
+            drained = sum((warm.get("drained") or {}).values())  # type: ignore[union-attr]
+            pulled = sum((warm.get("pulled") or {}).values())  # type: ignore[union-attr]
             if drained or pulled:
                 print(
                     f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from the warehouse",
@@ -1357,19 +1549,27 @@ def main() -> int:
 
     last_session = parse_last_session()
 
-    # Phase B: fan out independent reads and subprocess calls after the serial warm-up.
-    # Cap at <=4 concurrent workers to avoid Neon connect p95 inflation (Decision 82).
-    # Retrieve every future via .result() so exceptions and SystemExit (read_priority_queue
-    # hard-exits on verb failure with creds ok) re-raise in the main thread (Decision 55/81).
+    # Resolve the per-table warm-pull outcome. cache_rows semantics (D4): a list => serve from it;
+    # None => that table's reader pull FAILED (degrade loudly); never the reader sentinel here, so
+    # NO Phase-B signal re-touches the reader. creds-down also yields None (degraded read-cache).
+    recs_cache = warm_rows.get("ops_recommendations") if warm_reader_ok.get("ops_recommendations") else None
+    pq_cache = warm_rows.get("ops_priority_queue") if warm_reader_ok.get("ops_priority_queue") else None
+    dec_cache = warm_rows.get("ops_decisions") if warm_reader_ok.get("ops_decisions") else None
+
+    # Phase B: the Neon reader fan-out is gone (D4) -- signals are derived from the warm-up rows
+    # above. The executor now fans out only the independent SUBPROCESS calls (git log, gh run list)
+    # plus the cheap local derivations. Cap at <=4 concurrent workers to avoid Neon connect p95
+    # inflation (Decision 82). Retrieve every future via .result() so exceptions and SystemExit
+    # re-raise in the main thread (Decision 55/81).
     with ThreadPoolExecutor(max_workers=4) as phase_b:
-        fut_rec_count = phase_b.submit(_count_recommendations_reader)
-        fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs)
-        fut_pq = phase_b.submit(read_priority_queue, creds_status=creds_status)
+        fut_rec_count = phase_b.submit(_count_recommendations_reader, recs_cache)
+        fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs, recs_cache)
+        fut_pq = phase_b.submit(read_priority_queue, 5, creds_status, pq_cache)
         fut_commits = phase_b.submit(_get_recent_main_commits)
-        fut_decision_ts = phase_b.submit(_get_latest_decision_ts)
-        fut_ci_liveness = phase_b.submit(_check_ci_rca_liveness, creds_status)
-        fut_forward_fix = phase_b.submit(_check_forward_fix_recursion)
-        fut_budget = phase_b.submit(_check_budget_bypass_alert)
+        fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
+        fut_ci_liveness = phase_b.submit(_check_ci_rca_liveness, creds_status, recs_cache)
+        fut_forward_fix = phase_b.submit(_check_forward_fix_recursion, recs_cache)
+        fut_budget = phase_b.submit(_check_budget_bypass_alert, recs_cache)
 
         _rec_result = fut_rec_count.result()
         ci_rca_recs = fut_ci_rca.result()

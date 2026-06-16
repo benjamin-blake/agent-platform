@@ -510,6 +510,93 @@ def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> N
     print(f"READER OK rows={read_body['row_count']} write_denied=true")
 
 
+def _warm_reuse_probe(role: str, *, profile: str | None, region: str, attempts: int = 6) -> dict:
+    """Invoke `role`'s attach_check repeatedly until warm reuse is observed; then force a cold reconnect.
+
+    Returns a structured result (neon-egress-reduction D2 / rec-2096): cold + warm connect latency, the
+    observed reuse flag, and whether a post-reset invocation reconnects ok. Lambda routing across
+    containers is non-deterministic, so reuse is polled (a low-concurrency sequential burst lands on
+    the warm container within a few tries); the cold-reconnect check is deterministic (reset drops the
+    warm slot on the container that serves the next invocation).
+    """
+    url = _function_url(role)
+    # Drop any pre-existing warm connection so the first sample is a genuine cold ATTACH.
+    _sigv4_invoke(url, {"action": "reset_warm_connection"}, profile=profile, region=region)
+    cold = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+
+    warm: dict | None = None
+    for _ in range(attempts):
+        body = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+        if body.get("connect_reused"):
+            warm = body
+            break
+
+    # Forced cold/dead-connection variant: drop the warm slot, then a fresh invocation must reconnect.
+    _sigv4_invoke(url, {"action": "reset_warm_connection"}, profile=profile, region=region)
+    recold = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+
+    return {
+        "role": role,
+        "cold_connect_ms": cold.get("connect_ms"),
+        "warm_connect_ms": (warm or {}).get("connect_ms"),
+        "warm_reuse_observed": warm is not None,
+        "reconnect_ok": bool(recold.get("ok")),
+    }
+
+
+def _assert_warm_reuse(result: dict) -> None:
+    """Loud-fail the warm-reuse gate unless reuse was observed (near-zero warm connect) and reconnect works."""
+    warm_ms = result.get("warm_connect_ms")
+    if not result.get("warm_reuse_observed") or warm_ms is None or warm_ms >= 5:
+        raise SmokeTestFailure(
+            f"WARM_REUSE FAIL ({result['role']}): warm reuse not observed / connect not near-zero: {result}"
+        )
+    if not result.get("reconnect_ok"):
+        raise SmokeTestFailure(f"WARM_REUSE FAIL ({result['role']}): forced cold variant did not reconnect: {result}")
+
+
+def lambda_warm_reuse(*, profile: str | None = None, region: str = "eu-west-2", json_output: bool = False) -> None:
+    """D2 VP8: reader warm-connection reuse (2nd connect reused, near-zero) + forced cold reconnect."""
+    result = _warm_reuse_probe("reader", profile=profile, region=region)
+    _assert_warm_reuse(result)
+    if json_output:
+        print(json.dumps(result))
+    else:
+        print(
+            f"LAMBDA_WARM_REUSE OK reader cold_ms={result['cold_connect_ms']} "
+            f"warm_ms={result['warm_connect_ms']} reconnect_ok={result['reconnect_ok']}"
+        )
+
+
+def lambda_warm_reuse_writer(*, profile: str | None = None, region: str = "eu-west-2", json_output: bool = False) -> None:
+    """D2 VP9: writer warm reuse + a write still commits under reuse + cold/warm latency (rec-2096)."""
+    result = _warm_reuse_probe("writer", profile=profile, region=region)
+    _assert_warm_reuse(result)
+
+    # A single-statement write must still commit on the (warm) single-statement path with OCC intact.
+    writer_url = _function_url("writer")
+    write_body = _ok_json(
+        _sigv4_invoke(
+            writer_url,
+            {"action": "write", "record": {"rec_id": "rec-warm-reuse-probe", "payload": "w"}},
+            profile=profile,
+            region=region,
+        )
+    )
+    if not write_body.get("ok"):
+        raise SmokeTestFailure(f"WARM_REUSE_WRITER FAIL: write under reuse did not commit: {write_body}")
+    result["write_ok"] = True
+    result["write_occ_retries"] = write_body.get("occ_retries")
+
+    if json_output:
+        print(json.dumps(result))
+    else:
+        print(
+            f"LAMBDA_WARM_REUSE_WRITER OK writer cold_ms={result['cold_connect_ms']} "
+            f"warm_ms={result['warm_connect_ms']} write_ok=true occ_retries={result.get('write_occ_retries')}"
+        )
+
+
 def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """T2.18 VP9: write many small files to smoke tables, invoke merge, assert file count drops.
 
@@ -883,6 +970,8 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_churn": lambda_churn,
     "lambda_churn_incontainer": lambda_churn_incontainer,
     "lambda_reader": lambda_reader,
+    "lambda_warm_reuse": lambda_warm_reuse,
+    "lambda_warm_reuse_writer": lambda_warm_reuse_writer,
     "lambda_maintenance_merge": lambda_maintenance_merge,
     "lambda_maintenance_gc": lambda_maintenance_gc,
     "lambda_maintenance_breaker": lambda_maintenance_breaker,
@@ -935,6 +1024,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     group.add_argument("--lambda-reader", action="store_true", help="[post-deploy] closed reader path (EC1/boundary)")
     group.add_argument(
+        "--lambda-warm-reuse",
+        action="store_true",
+        dest="lambda_warm_reuse",
+        help="[post-deploy] D2 VP8: reader warm-connection reuse (2nd connect near-zero) + forced cold reconnect",
+    )
+    group.add_argument(
+        "--lambda-warm-reuse-writer",
+        action="store_true",
+        dest="lambda_warm_reuse_writer",
+        help="[post-deploy] D2 VP9: writer warm reuse + write-under-reuse commits + cold/warm latency (rec-2096)",
+    )
+    group.add_argument(
         "--lambda-maintenance-merge",
         action="store_true",
         help="[post-deploy] T2.18 daily merge gate: write small files, invoke merge, assert file count (VP9)",
@@ -974,6 +1075,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
+    parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="emit machine-readable JSON (warm-reuse gates)"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -996,6 +1100,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             catalog_restore_drill(profile=args.profile, region=args.region)
         elif args.connect_probe:
             connect_probe(profile=args.profile, region=args.region)
+        elif args.lambda_warm_reuse:
+            lambda_warm_reuse(profile=args.profile, region=args.region, json_output=args.json_output)
+        elif args.lambda_warm_reuse_writer:
+            lambda_warm_reuse_writer(profile=args.profile, region=args.region, json_output=args.json_output)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)

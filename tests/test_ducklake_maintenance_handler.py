@@ -809,3 +809,61 @@ def test_handler_merge_ops_listed_in_actions():
     """merge_ops must appear in the actions list returned on unknown action."""
     body = _response_body(h.handler({"action": "bad"}))
     assert "merge_ops" in body["actions"]
+
+
+# ---------------------------------------------------------------------------
+# catalog_stats (D3a / neon-egress measurement obligation)
+# ---------------------------------------------------------------------------
+
+
+def test_action_catalog_stats_success():
+    """catalog_stats dispatches to maint.catalog_stats with the event meta_schema; emits the size metric."""
+    stats = {
+        "ok": True,
+        "meta_schema": "ducklake_ops",
+        "catalog_metadata_bytes": 7_100_000,
+        "snapshot_rows_est": 50,
+        "data_file_rows_est": 800,
+        "file_column_stats_rows_est": 12000,
+        "metadata_table_count": 3,
+        "metadata_tables": [],
+        "per_ops_table": [{"table": "ops_recommendations_current", "data_file_count": 400}],
+        "per_ops_table_note": "",
+    }
+    with (
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h.maint, "catalog_stats", return_value=stats) as mock_stats,
+        patch.object(h, "_emit_maintenance_metric") as mock_emit,
+    ):
+        result = h.action_catalog_stats({"meta_schema": "ducklake_ops"}, None)
+
+    assert result["catalog_metadata_bytes"] == 7_100_000
+    assert mock_stats.call_args.kwargs["meta_schema"] == "ducklake_ops"
+    metric_names = [c.args[0] for c in mock_emit.call_args_list]
+    assert "CatalogMetadataBytes" in metric_names
+    assert "CatalogFileColumnStatsRows" in metric_names
+
+
+def test_action_catalog_stats_requires_meta_schema():
+    """No-arg invoke is refused -- catalog_stats needs an explicit meta_schema (no production default)."""
+    with pytest.raises(DuckLakeRuntimeError, match="meta_schema"):
+        h.action_catalog_stats({}, None)
+
+
+def test_action_catalog_stats_is_connectionless_and_attach_free():
+    """The handler must NOT pre-open the smoke connection for catalog_stats (metadata-only, ATTACH-free)."""
+    with (
+        patch.object(h, "_open_connection") as open_mock,
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h.maint, "catalog_stats", return_value={"ok": True, "catalog_metadata_bytes": 0}),
+        patch.object(h, "_emit_maintenance_metric"),
+    ):
+        r = h.handler({"action": "catalog_stats", "meta_schema": "ducklake_ops"})
+    assert r["statusCode"] == 200
+    open_mock.assert_not_called()
+
+
+def test_handler_catalog_stats_listed_in_actions():
+    """catalog_stats must appear in the actions list returned on an unknown action."""
+    body = _response_body(h.handler({"action": "bad"}))
+    assert "catalog_stats" in body["actions"]

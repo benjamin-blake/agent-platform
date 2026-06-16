@@ -16,6 +16,7 @@ from src.common.ducklake_maintenance import (
     SNAPSHOT_FLOOR,
     SNAPSHOT_RETAIN_DAYS,
     DuckLakeMaintenanceError,
+    catalog_stats,
     check_gc_breaker,
     cleanup_old_files,
     delete_orphaned_files,
@@ -534,3 +535,96 @@ def test_env_sourced_byte_budget_controls_breaker():
     con = _con_with_files({"t1": files}, cleanup_paths=["s3://b/big.parquet"], orphan_paths=[])
     with pytest.raises(DuckLakeMaintenanceError, match="GiB"):
         check_gc_breaker(con, ["t1"], file_fraction=1.0, byte_budget=512 * 1024, _now=_NOW)  # 512 KiB budget
+
+
+# ---------------------------------------------------------------------------
+# catalog_stats (D3a / neon-egress measurement obligation) -- pure Postgres-metadata read.
+# ---------------------------------------------------------------------------
+
+_DSN = {"username": "u", "password": "p", "host": "h", "dbname": "neondb", "sslmode": "require"}
+
+
+class _FakeCursor:
+    """psycopg2-cursor double: serves fetchall() results in order; optional per-query raiser."""
+
+    def __init__(self, results: list[list[Any]], raise_on: str | None = None):
+        self._results = list(results)
+        self._raise_on = raise_on
+        self.queries: list[tuple[str, Any]] = []
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.queries.append((sql, params))
+        if self._raise_on and self._raise_on in sql:
+            raise RuntimeError("column does not exist")
+
+    def fetchall(self) -> list[Any]:
+        return self._results.pop(0)
+
+
+class _FakeConn:
+    def __init__(self, cursor: _FakeCursor):
+        self._cursor = cursor
+        self.closed = False
+
+    def cursor(self) -> _FakeCursor:
+        return self._cursor
+
+    def close(self) -> None:
+        self.closed = True
+
+
+_META_ROWS = [
+    ("ducklake_file_column_stats", 5_000_000, 12000),
+    ("ducklake_data_file", 2_000_000, 800),
+    ("ducklake_snapshot", 100_000, 50),
+]
+_OPS_ROWS = [("ops_decisions_current", 30), ("ops_recommendations_current", 400)]
+
+
+class TestCatalogStats:
+    def test_reports_catalog_metadata_footprint(self) -> None:
+        cursor = _FakeCursor([_META_ROWS, _OPS_ROWS])
+        conn = _FakeConn(cursor)
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: conn)
+
+        assert result["ok"] is True
+        assert result["meta_schema"] == "ducklake_ops"
+        assert result["catalog_metadata_bytes"] == 7_100_000  # exact sum of pg_total_relation_size
+        assert result["file_column_stats_rows_est"] == 12000  # the ducklake #859 egress driver
+        assert result["data_file_rows_est"] == 800
+        assert result["snapshot_rows_est"] == 50
+        assert result["metadata_table_count"] == 3
+        assert result["per_ops_table"] == [
+            {"table": "ops_decisions_current", "data_file_count": 30},
+            {"table": "ops_recommendations_current", "data_file_count": 400},
+        ]
+        assert conn.closed is True
+
+    def test_per_ops_breakdown_degrades_without_crashing(self) -> None:
+        """If the per-ops join fails (catalog column drift), totals are still reported with a note."""
+        cursor = _FakeCursor([_META_ROWS], raise_on="ducklake_data_file df")
+        conn = _FakeConn(cursor)
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: conn)
+
+        assert result["ok"] is True
+        assert result["catalog_metadata_bytes"] == 7_100_000  # core measurement still returned
+        assert result["per_ops_table"] == []
+        assert "unavailable" in result["per_ops_table_note"]
+        assert conn.closed is True
+
+    def test_invalid_meta_schema_loud_fails(self) -> None:
+        with pytest.raises(DuckLakeMaintenanceError, match="invalid meta_schema"):
+            catalog_stats(meta_schema="ducklake_ops; DROP", dsn=_DSN, _connect=lambda conninfo: _FakeConn(_FakeCursor([])))
+
+    def test_missing_metadata_tables_yields_null_estimates(self) -> None:
+        cursor = _FakeCursor([[], []])  # no ducklake_* tables found
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: _FakeConn(cursor))
+        assert result["catalog_metadata_bytes"] == 0
+        assert result["file_column_stats_rows_est"] is None
+        assert result["snapshot_rows_est"] is None
