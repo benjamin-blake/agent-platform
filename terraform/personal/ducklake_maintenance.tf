@@ -306,7 +306,7 @@ resource "aws_cloudwatch_event_rule" "ducklake_maintenance_merge_ops" {
 
   tags = {
     Name    = "DuckLake Maintenance Prod Merge Ops Schedule"
-    Purpose = "T2.18 Phase-4 every-6h production ops non-destructive merge (neon-egress D3a)"
+    Purpose = "T2.18 Phase-4 every-6h production ops non-destructive merge - neon-egress D3a"
   }
 }
 

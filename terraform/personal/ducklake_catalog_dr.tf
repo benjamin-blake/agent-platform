@@ -250,7 +250,7 @@ resource "aws_cloudwatch_event_rule" "ducklake_catalog_dr" {
 
   tags = {
     Name    = "DuckLake Catalog DR Schedule"
-    Purpose = "T2.18 FP-B weekly catalog DR (neon-egress D1)"
+    Purpose = "T2.18 FP-B weekly catalog DR - neon-egress D1"
   }
 }
 
@@ -269,26 +269,29 @@ resource "aws_lambda_permission" "ducklake_catalog_dr" {
 }
 
 # ---------------------------------------------------------------------------
-# Freshness alarm: ~8-day lookback via evaluation_periods math.
+# Freshness alarm: 7-day lookback via DAILY periods (period=86400, evaluation_periods=7).
 #
-# CloudWatch's period ceiling is 86400s (24h), so the lookback is built from hourly periods:
-#   period=3600, evaluation_periods=192, datapoints_to_alarm=192
-# meaning "in all 192 of the last 192 hourly periods (~8 days), CatalogDumpSuccess < 1".
-# CO-REQUIRED with the weekly schedule (neon-egress D1): the prior >25h window (25/25) would sit in
-# perpetual ALARM ~6 days out of every 7 under a weekly dump and page SNS daily. An ~8-day window
-# clears within a day of each successful weekly dump while still catching a genuinely missed week.
+# AWS hard-caps EvaluationPeriods*Period at 604800s (1 week) for alarms with period>=3600, so the
+# prior ~8-day hourly window (192*3600=691200) was rejected at apply with ValidationError. 7 days is
+# the maximum achievable window; built from DAILY periods it is also correct for a weekly dump:
+#   period=86400, evaluation_periods=7, datapoints_to_alarm=7   (7*86400 = 604800, exactly the ceiling)
+# meaning "in all 7 of the last 7 daily periods, CatalogDumpSuccess < 1".
+# Why 7 daily periods does not false-alarm under a weekly (Sunday) dump: the success lands in one
+# daily bucket every 7 buckets, so any 7 consecutive daily buckets contain exactly one success --
+# never 7-of-7 breaching in normal operation (max empty run = 6 days, Mon-Sat). The alarm fires only
+# when a scheduled weekly dump is genuinely missed (>=7 consecutive empty daily periods).
 # treat_missing_data=breaching: missing datapoints (no invocation) are counted as failing.
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "ducklake_catalog_dr_freshness" {
   alarm_name          = "ducklake-catalog-dr-freshness"
-  alarm_description   = "DuckLake catalog DR missed: no CatalogDumpSuccess in ~8 days. T2.18 FP-B CD.34 (neon-egress D1 weekly cadence)."
+  alarm_description   = "DuckLake catalog DR missed: no CatalogDumpSuccess in 7 days. T2.18 FP-B CD.34 (neon-egress D1 weekly cadence)."
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 192
-  datapoints_to_alarm = 192
+  evaluation_periods  = 7
+  datapoints_to_alarm = 7
   metric_name         = "CatalogDumpSuccess"
   namespace           = "DuckLakeCatalogDR"
-  period              = 3600
+  period              = 86400
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "breaching"

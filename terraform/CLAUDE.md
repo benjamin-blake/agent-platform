@@ -151,8 +151,8 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
 - **DuckLake write-grants round (rec-2251, 2026-06-17, `github_ci_apply` inline policy, out-of-band admin apply):**
   Added apply-phase WRITE grants for the ducklake EventBridge/CloudWatch-alarm/Lambda-permission resource family
   to unblock #166 (neon-egress-reduction) reconciliation: the in-flight changes MODIFY existing resources (catalog-dr
-  rule daily->weekly, freshness alarm 25/25->192/192) and CREATE a new rule (maintenance-merge-ops), all of which
-  need WRITE actions at apply time that READ-only grants cannot supply. Three new Sids added (enumerated
+  rule daily->weekly, freshness alarm re-cadenced to a 7-day daily window per rec-2252, maintenance-merge-ops rule
+  daily->6h), all of which need WRITE actions at apply time that READ-only grants cannot supply. Three new Sids added (enumerated
   least-privilege scoped to ducklake ARNs -- no service wildcards, no Resource: "*"):
   `EventBridgeWrite` (events:PutRule/DeleteRule/PutTargets/RemoveTargets/TagResource/UntagResource/EnableRule/DisableRule
   on the five ducklake rule ARNs); `CloudWatchAlarmsWrite` (cloudwatch:PutMetricAlarm/DeleteAlarms/TagResource/UntagResource

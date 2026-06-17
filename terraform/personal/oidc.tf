@@ -751,7 +751,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # apply-phase MODIFY needs PutMetricAlarm on the three ducklake alarms
-        # (freshness alarm threshold change 25/25->192/192 in #166).
+        # (freshness alarm re-cadenced to a 7-day daily window, period 86400, by #166 + rec-2252).
         Sid    = "CloudWatchAlarmsWrite"
         Effect = "Allow"
         Action = [
