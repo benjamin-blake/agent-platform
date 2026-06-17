@@ -148,6 +148,18 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
   on any DuckLake resource. The next plan after this admin apply may surface one or two additional refresh reads;
   add them scoped and re-apply -- this is the expected iterative-discovery pattern.
 
+- **DuckLake write-grants round (rec-2251, 2026-06-17, `github_ci_apply` inline policy, out-of-band admin apply):**
+  Added apply-phase WRITE grants for the ducklake EventBridge/CloudWatch-alarm/Lambda-permission resource family
+  to unblock #166 (neon-egress-reduction) reconciliation: the in-flight changes MODIFY existing resources (catalog-dr
+  rule daily->weekly, freshness alarm re-cadenced to a 7-day daily window per rec-2252, maintenance-merge-ops rule
+  daily->6h), all of which need WRITE actions at apply time that READ-only grants cannot supply. Three new Sids added (enumerated
+  least-privilege scoped to ducklake ARNs -- no service wildcards, no Resource: "*"):
+  `EventBridgeWrite` (events:PutRule/DeleteRule/PutTargets/RemoveTargets/TagResource/UntagResource/EnableRule/DisableRule
+  on the five ducklake rule ARNs); `CloudWatchAlarmsWrite` (cloudwatch:PutMetricAlarm/DeleteAlarms/TagResource/UntagResource
+  on the three ducklake alarm ARNs); `LambdaPermissionWrite` (lambda:AddPermission/RemovePermission on the four ducklake
+  function ARNs). Closes the iterative-discovery anti-pattern by granting the coherent write set for the resource
+  family in one round; step-3 terraform plan was the authoritative enumeration. Applied via admin out-of-band.
+
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
 - `primary` (engine v2, default) — **do not use** for Iceberg DML or VACUUM. v2 doesn't support full Iceberg semantics.

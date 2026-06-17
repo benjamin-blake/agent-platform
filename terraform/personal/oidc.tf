@@ -654,6 +654,22 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # apply-phase MODIFY needs AddPermission on the four ducklake functions (EventBridge grants the
+        # rule trigger invocation right on the function resource policy at apply time).
+        Sid    = "LambdaPermissionWrite"
+        Effect = "Allow"
+        Action = [
+          "lambda:AddPermission",
+          "lambda:RemovePermission"
+        ]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+        ]
+      },
+      {
         # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
         # All FIVE ducklake rules in state are covered (catalog-dr, maintenance-merge, maintenance-gc,
         # maintenance-hot-merge, maintenance-merge-ops) to avoid iterative-discovery rounds.
@@ -668,6 +684,29 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # Literal ARNs (not resource references): merge-ops is not yet in state, so a resource
         # reference would force its creation; and a refresh-read grant should not depend on the
         # lifecycle of the resource it reads. Mirrors the IAMPlatformRolesRead literal-ARN convention.
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+        ]
+      },
+      {
+        # apply-phase MODIFY/CREATE needs PutRule/PutTargets on ducklake EventBridge rules
+        # (catalog-dr cadence daily->weekly, maintenance-merge-ops new rule in #166).
+        Sid    = "EventBridgeWrite"
+        Effect = "Allow"
+        Action = [
+          "events:PutRule",
+          "events:DeleteRule",
+          "events:PutTargets",
+          "events:RemoveTargets",
+          "events:TagResource",
+          "events:UntagResource",
+          "events:EnableRule",
+          "events:DisableRule"
+        ]
         Resource = [
           "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
           "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
@@ -709,6 +748,23 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "cloudwatch:ListTagsForResource"
         ]
         Resource = ["*"]
+      },
+      {
+        # apply-phase MODIFY needs PutMetricAlarm on the three ducklake alarms
+        # (freshness alarm re-cadenced to a 7-day daily window, period 86400, by #166 + rec-2252).
+        Sid    = "CloudWatchAlarmsWrite"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource"
+        ]
+        Resource = [
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-catalog-dr-freshness",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-maintenance-circuit-breaker",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-writer-errors",
+        ]
       },
       {
         # T1.13 feature-flag SSM parameters auto-apply under terraform/personal (feature_flags.tf:
