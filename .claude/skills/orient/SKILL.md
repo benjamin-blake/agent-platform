@@ -7,7 +7,7 @@ description: Read-only orientation session. Surfaces in-progress/eligible work, 
 
 You are using this skill to augment the `/orient` workflow. This skill is **strictly read-only**: it produces a chat reply only. No files, roadmap edits, recommendation writes, or decision writes.
 
-Decisions cited: 42 (Three-Tier Workflow Architecture), 59 (prefer deterministic signals), 72 (RCA-as-Plan-Source), 76 (.claude/ canonical), 84 (closed boundary), 86 (no new prose-architecture docs), 88 (egress budget).
+Decisions cited: 90 (Four-Tier Workflow Architecture), 59 (prefer deterministic signals), 72 (RCA-as-Plan-Source), 76 (.claude/ canonical), 84 (closed boundary), 86 (no new prose-architecture docs), 88 (egress budget).
 
 ## Read-Only Contract
 
