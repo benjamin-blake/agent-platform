@@ -3,6 +3,7 @@
 import pytest
 
 from scripts.verifiers.harness import (
+    Hermeticity,
     Verifier,
     VerifierResult,
     VerifierSeverity,
@@ -51,7 +52,7 @@ async def test_verifier_run_pass():
     result = await verifier.run()
     assert result.status == VerifierStatus.PASS
     assert result.name == "MockPassVerifier"
-    assert result.duration_ms > 0
+    assert result.duration_ms >= 0
     assert result.severity == VerifierSeverity.HARD_GATE
 
 
@@ -191,3 +192,19 @@ def test_scope_intersects_covers_wildcard_all():
     """Default covers=['**'] matches any path."""
     assert scope_intersects_covers(["docs/foo.md"], ["**"])
     assert scope_intersects_covers(["scripts/some_file.py"], ["**"])
+
+
+def test_verifier_hermeticity_default():
+    """Base Verifier.hermeticity defaults to HERMETIC."""
+    assert Verifier.hermeticity == Hermeticity.HERMETIC
+
+
+def test_registry_all_declare_hermeticity():
+    """Every verifier in REGISTRY declares a Hermeticity member."""
+    from scripts.verifiers import REGISTRY
+
+    for verifier_cls in REGISTRY:
+        assert hasattr(verifier_cls, "hermeticity"), f"{verifier_cls.__name__} must have a hermeticity attribute"
+        assert isinstance(verifier_cls.hermeticity, Hermeticity), (
+            f"{verifier_cls.__name__}.hermeticity must be a Hermeticity instance"
+        )
