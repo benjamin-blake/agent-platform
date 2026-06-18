@@ -1,0 +1,243 @@
+schema_version: 1
+slug: "ci-rca-likely-resolved-detection"
+intent: >-
+  Restore the session-preflight CI-RCA "likely-resolved" detection so resolved-but-open ci_rca
+  recommendations are surfaced as soft verify-and-close prompts instead of spurious HARD BLOCKs,
+  keeping the /plan queue trustworthy and unblocked (North Star: a self-improving system whose
+  control plane does not stall on stale bookkeeping).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-likely-resolved-detection.yaml
+phase: >-
+  Platform reliability tooling -- session-preflight CI-RCA surfacing contract (Decision 72 / Decision 73).
+  Ad-hoc corrective fix prompted by the rec-2268/2274/2275 incident; names no roadmap tier_item
+  (soft-warn exception category: ci_rca / ad_hoc_rec), so the Tier Item Freshness Gate is skipped.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Component 1 -- add the dropped `file` field back to the `_derive_ci_rca_open()` cache
+      projection so `correlate_ci_rca_with_main()` can run its existing file-correlation.
+      Component 2 -- add `_derive_ci_rca_closed()` and extend `correlate_ci_rca_with_main()`
+      with a window-independent closed-sibling cluster signal, fed from the already-pulled
+      recs cache by the orchestration.
+  - file: src/common/ducklake_scd2_schema.py
+    action: Modify
+    purpose: >-
+      Add `file` to the reader-side `ci_rca_open` NamedRead SELECT so the reader (degraded-fallback)
+      path returns the same projection as the cache derive, eliminating the Decision 84 I-3 divergence.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Add the end-to-end derive->correlate regression test (the rec-2268 shape that current unit
+      tests miss because their fixtures feed `file` directly) plus closed-sibling cluster
+      positive/negative tests.
+  - file: tests/test_session_preflight_cache_serving.py
+    action: Modify
+    purpose: >-
+      Strengthen `test_ci_rca_open_equivalence_with_limit` to assert `file` is present in both the
+      derive and the reader-verb projections, and add a RUN_LIVE_DUCKLAKE-gated live smoke proving
+      the deployed reader's `ci_rca_open` verb returns `file`.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `_derive_ci_rca_open()` returns a `file` key carrying each rec's source file (non-empty when
+    the underlying row has one).
+  - >-
+    End-to-end regression: an open ci_rca rec whose `file` was modified by a newer origin/main
+    commit, projected through `_derive_ci_rca_open()` then `correlate_ci_rca_with_main()`, is
+    classified `likely_resolved` (the rec-2268/2274/2275 incident shape).
+  - >-
+    Closed-sibling cluster: an open ci_rca rec with a CLOSED ci_rca sibling on the same `file`,
+    similar title, and sibling closed at/after the open rec's creation is classified
+    `likely_resolved` even with NO correlating commit; a same-file/dissimilar-title case and a
+    stale-sibling (closed before the open rec was created) case are NOT flagged (false-positive guard).
+  - >-
+    The reader-side `ci_rca_open` named verb SELECT includes `file`; running the verb against a
+    local DuckDB fixture returns the `file` column and the derive==verb equivalence holds for it.
+  - >-
+    Post-deploy: the deployed `agent-platform-ducklake-reader` `ci_rca_open` verb returns `file`
+    (live roundtrip), and all four redeployed ducklake functions report State=Active and
+    LastUpdateStatus=Successful.
+  - >-
+    Full `bin/venv-python -m scripts.validate` passes (lint, format, schema, 100% coverage of new
+    code, tests).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Projection carries `file` and the end-to-end derive->correlate regression classifies the
+      rec-2268 shape as likely_resolved.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py::TestCiRcaCorrelation -q"
+    expected: "All TestCiRcaCorrelation cases pass, including the new end-to-end projection regression."
+    fix_if: >-
+      A failure here means `_derive_ci_rca_open` still drops `file` or the correlation does not
+      consume it -- inspect the projected dict keys and the `rec_file` branch.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Closed-sibling cluster detection: positive (same file + similar title + sibling closed after)
+      and negatives (dissimilar title; stale sibling) classify correctly.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py -k cluster -q"
+    expected: "Cluster positive case -> likely_resolved; both negative cases -> unresolved."
+    fix_if: >-
+      Over-broad matching flags the negatives -> tighten the title-similarity threshold or the
+      sibling-closed-after time guard. Under-matching misses the positive -> loosen token overlap.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Reader-verb projection equivalence: the `ci_rca_open` SQL verb run against a local DuckDB
+      fixture returns `file`, matching the derive.
+    command: "bin/venv-python -m pytest tests/test_session_preflight_cache_serving.py::TestVerbEquivalence -q"
+    expected: "Equivalence test passes and now asserts `file` is present in both derive and verb rows."
+    fix_if: >-
+      `file` missing from verb rows means the NamedRead SELECT was not updated -- add `file` to the
+      `ci_rca_open` SQL column list in src/common/ducklake_scd2_schema.py.
+  - step: 4
+    phase: pre-deploy
+    action: "Full presubmit (identical to CI): lint, format, schema, coverage, tests."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "All checks pass; coverage checker reports 100% of new code covered."
+    fix_if: >-
+      Coverage gap -> add the missing test for the new branch. Schema failure on the plan ->
+      re-validate the YAML. Do not weaken a check to pass.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Build and deploy the four DuckLake artifacts (writer, reader, maintenance, catalog-dr) whose
+      bundles include the modified src/common/ducklake_scd2_schema.py (Decision 79 per-Lambda gating).
+    command: "bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform"
+    expected: "4 zips + 3 layers uploaded, 4 functions updated, no errors reported."
+    fix_if: >-
+      Build/upload error -> resolve locally and rebuild. Deploy AccessDenied -> confirm the
+      agent_platform assume-role chain (aws sts get-caller-identity --profile agent_platform).
+  - step: 6
+    phase: post-deploy
+    action: "Confirm all four redeployed ducklake functions are healthy."
+    command: >-
+      for fn in agent-platform-ducklake-reader agent-platform-ducklake-writer
+      agent-platform-ducklake-maintenance agent-platform-ducklake-catalog-dr; do printf '%s ' "$fn";
+      aws lambda get-function-configuration --function-name "$fn" --profile agent_platform
+      --query '[State,LastUpdateStatus]' --output text; done
+    expected: "Each function prints: Active Successful."
+    fix_if: >-
+      A function shows Failed/InProgress -> re-poll; if it stays Failed, inspect the function's
+      CloudWatch logs and the deployed bundle. STOP and RCA (Decision 55); do not hot-patch.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Live reader smoke: prove the DEPLOYED `ci_rca_open` verb returns `file` via a self-cleaning
+      throwaway ci_rca rec (file -> read back via make_reader -> assert file present+correct -> close).
+    command: "RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_session_preflight_cache_serving.py -k live_file -q"
+    expected: "The live test files a throwaway rec, finds it in ci_rca_open with `file` populated, and closes it; test passes."
+    fix_if: >-
+      `file` absent from the deployed verb output means the reader bundle predates the SELECT change
+      -> re-run step 5 and confirm the reader function's LastModified advanced.
+  - step: 8
+    phase: post-deploy
+    action: "End-to-end preflight runs clean against live data with the new correlation code path."
+    command: "bin/venv-python -m scripts.session_preflight"
+    expected: >-
+      Preflight completes; the CI RCA Recs section renders without error (currently 0 open ci_rca
+      recs, so it shows none) and the summary line prints a ci_rca_likely_resolved count.
+    fix_if: "A traceback in the correlation/derive path -> fix the offending call; re-run."
+constraints:
+  - "Plan type IMPLEMENTATION only -- STRATEGIC is suspended under the executor freeze (AGENTS.md)."
+  - "RCA over patch: on unrecoverable V3 (deploy/smoke) failure, STOP and file an RCA, do not loop a workaround (Decision 55)."
+  - >-
+    The reader-verb change transits the closed DuckLake boundary as an additive column on an existing
+    NamedRead -- no caller SQL crosses the boundary (Decision 84 I-3, Decision 81 CD.33).
+  - >-
+    Lambda deploy is code-only (lambda update-function-code via build_lambda --deploy); no Terraform
+    or IAM change. `file` is an existing column on ops_recommendations, so no new read grant is needed.
+  - >-
+    Closed-sibling detection is computed ONLY from the already-pulled recs cache; never re-query the
+    reader for it (Decision 88 invariant ii). It is a cache-path enhancement; the reader-fallback path
+    relies on the now-fixed file-correlation, not on cluster detection (no `ci_rca_closed` verb is added).
+  - >-
+    The cluster signal yields a SOFT PROMPT (verify-and-close) only, never auto-close; a false positive
+    is advisory and the operator gates closure via update_rec (Decision 70). Bound false positives with
+    same-file AND title-token overlap AND sibling-closed-after-creation guards.
+  - "Respect tests/CLAUDE.md: 100% coverage of new code; no `python -c` one-liners and no `pytest -k` selectors in any recommendation acceptance command."
+  - "ruff format, line length 127, type hints required, no emojis, ASCII hyphens only (AGENTS.md code style)."
+context:
+  - >-
+    Origin incident (this session): rec-2268/2274/2275 were resolved by merged commit e779dd30 (#184,
+    which added encoding='utf-8' to scripts/ci_rca_tier_map.py:170) but left open because they were
+    duplicate ci_rca filings not named in that commit's `Resolves:` trailer (only siblings
+    rec-2260/2261/2267 were, and rec-autoclose closed just those). All four open ci_rca recs were
+    manually closed this session; this plan prevents the silent recurrence.
+  - >-
+    Root cause: `correlate_ci_rca_with_main()` flags likely-resolved on file-match OR rec-id-in-subject,
+    but its feed `_derive_ci_rca_open()` projects only {id,title,priority,created_timestamp}, dropping
+    `file`. File-correlation is therefore silently disabled; only subject-id matching survives, which
+    missed e779dd30 (its subject names #184 and the sibling rec ids, not 2268/2274/2275). The correlation's
+    own unit tests pass because their fixtures inject `file` directly -- richer than the real data flow.
+  - >-
+    Decision scout verdict: FLAGS_FOUND -- one NOTE (Decision 84 I-3: fixing only the cache derive would
+    diverge it from the reader verb). RESOLVED by bringing the reader verb into scope (this plan), so no
+    divergence and no deferral/follow-up rec. CITE: Decision 72 (ci-rca surfacing), 73 (HARD-BLOCK
+    behaviour), 84 (read boundary), 88 (cache-egress invariant), 79 (per-Lambda deploy gating), 70
+    (lifecycle closure). RELATED: 55 (RCA-first), 81 (verb surface extensible), 48 (V2/V3 tiering).
+  - >-
+    Lambda assessment: src/common/ducklake_scd2_schema.py is bundled into four ACTIVE artifacts
+    (ducklake_reader, ducklake_writer, ducklake_maintenance, ducklake_catalog_dr). build_lambda
+    --ducklake-only --deploy redeploys all four atomically. The verb change is behaviorally relevant
+    only to the reader; writer/maintenance/catalog-dr get a bundle refresh and a health smoke (step 6).
+    Model-ID validation is N/A -- these are data-plane Lambdas with no LLM model IDs.
+  - "Main divergence: branch is 0 commits behind/ahead of origin/main at planning time; no scope file overlaps a newer main change."
+  - >-
+    Cluster-detection precision rule (implementation guidance): classify open rec R likely-resolved-by-sibling
+    when a CLOSED ci_rca rec S satisfies _file_paths_correlate(R.file, S.file) AND title-token Jaccard
+    (lowercased alphanumeric tokens, common CI stopwords excluded) >= 0.5 AND S.last_updated_timestamp >=
+    R.created_timestamp. The time guard prevents an old closed failure on the same file from masking a new one.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (git branch --show-current)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md consulted via the decision-scout gate (CITE: 72, 73, 84, 88, 79, 70)"
+  - "All four files in scope located and readable"
+  - "Acceptance criteria understood and verifiable"
+  - "agent_platform AWS assume-role profile reachable for post-deploy steps (aws sts get-caller-identity --profile agent_platform)"
+execution_steps:
+  - >-
+    scripts/session_preflight.py `_derive_ci_rca_open()`: add "file": r.get("file", "") to the projected
+    dict (retain id, title, priority, created_timestamp). This alone restores file-correlation on the
+    production cache path.
+  - >-
+    scripts/session_preflight.py: add `_derive_ci_rca_closed(rows)` mirroring `_derive_ci_rca_open` but for
+    status == "closed" ci_rca recs, projecting {id, file, title, last_updated_timestamp}.
+  - >-
+    scripts/session_preflight.py `correlate_ci_rca_with_main()`: add optional param
+    `closed_ci_rca_recs: list[dict] | None = None`. After the existing commit-correlation loop, if a rec is
+    still uncorrelated and closed_ci_rca_recs is provided, apply the cluster rule (same-file + title-token
+    Jaccard >= 0.5 + sibling last_updated >= rec created) -> likely_resolved. Preserve the return shape
+    {likely_resolved, unresolved}; optionally annotate the rec dict with a resolved-reason for the soft prompt.
+  - >-
+    scripts/session_preflight.py orchestration (~line 1591): derive closed_ci_rca_recs from the warm-pulled
+    recs cache (cache path only; pass None on the reader-fallback path) and thread it into
+    correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=...).
+  - >-
+    src/common/ducklake_scd2_schema.py: in the `ci_rca_open` NamedRead, add `file` to the SELECT
+    ("SELECT id, title, priority, created_timestamp, file FROM {tbl} ...") preserving WHERE/ORDER/LIMIT.
+  - >-
+    tests/test_session_preflight.py: add to TestCiRcaCorrelation (a) an end-to-end test running
+    _derive_ci_rca_open -> correlate_ci_rca_with_main for the rec-2268 shape asserting likely_resolved;
+    (b) a closed-sibling positive test; (c) two negative tests (dissimilar title; stale sibling). Add a
+    closed-sibling fixture helper.
+  - >-
+    tests/test_session_preflight_cache_serving.py: strengthen TestVerbEquivalence::test_ci_rca_open_equivalence_with_limit
+    to assert `file` present in both derive and verb rows; add a RUN_LIVE_DUCKLAKE-gated live test
+    (name containing "live_file") that files a throwaway ci_rca rec via the portal, reads ci_rca_open via
+    make_reader(profile="agent_platform"), asserts the rec's `file` is returned, then closes the rec (self-cleaning, Decision 70).
+  - "Execute Verification Plan pre-deploy steps (1-4); loop until green."
+  - >-
+    Execute Verification Plan post-deploy steps (5-8); loop until green. On unrecoverable deploy/smoke
+    failure, STOP and run RCA (Decision 55) -- do not patch inline or retry a workaround loop.
+  - "Report: files changed, the two heuristic components, and pre/post-deploy verification results."
+work_areas: []
+rollback: >-
+  Pre-deploy changes are revert-by-commit. Post-deploy: the `file` column addition to ci_rca_open is
+  additive and backward-compatible (older preflight code ignores the extra key; no consumer breaks), so
+  rollback is redeploying the prior ducklake bundle via `build_lambda --ducklake-only --deploy` from the
+  previous commit. No data migration is involved.
