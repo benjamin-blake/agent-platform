@@ -589,7 +589,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # data.aws_secretsmanager_secret_version.neon_api_key data source in neon_ducklake_catalog.tf).
         # Read-only -- the key's lifecycle is human-owned, not Terraform-managed.
         # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
-        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern.
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
         Sid      = "SecretsManagerNeonAPIKeyRead"
         Effect   = "Allow"
         Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
@@ -601,7 +603,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # Mirrors the SecretsManagerNeonAPIKeyRead precedent. Read-only -- the secret lifecycle
         # is human-owned, not Terraform-managed.
         # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
-        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern.
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
         Sid      = "SecretsManagerTfvarsRead"
         Effect   = "Allow"
         Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
@@ -772,6 +776,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # and NOT all parameters).
         # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
         # ssm:Get*/Describe* closes the iterative-discovery anti-pattern (resource-scoped to /agent-platform/*).
+        # Intentional read-surface expansion: the wildcard subsumes GetParameterHistory and
+        # GetParametersByPath in addition to GetParameter(s) -- both read-only and confined to the
+        # /agent-platform/* scope (no write, no cross-path enumeration). This is the closure by design.
         Sid      = "SSMParameterRead"
         Effect   = "Allow"
         Action   = ["ssm:Get*", "ssm:Describe*"]

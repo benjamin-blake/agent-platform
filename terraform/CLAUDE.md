@@ -139,7 +139,7 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
 
 - **DuckLake IAM read-wildcard closure (PLAN-terraform-sandbox-convergence-closure, 2026-06-18, `github_ci_apply` inline policy, out-of-band admin apply):**
   The iterative-discovery anti-pattern for `github_ci_apply` refresh-READ grants (rec-2223 round, rec-2251 round) is
-  permanently closed. Six READ-only Sids now use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
+  permanently closed. Eight READ-only Sids now use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
   same resource ARNs as before: `CloudWatchLogsRead`, `LambdaRead`, `EventBridgeRead`, `SNSRead`, `CloudWatchAlarmsRead`,
   `SecretsManagerNeonAPIKeyRead`, `SecretsManagerTfvarsRead`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
   `CloudWatchAlarmsWrite`, `LambdaPermissionWrite`, `SSMFeatureFlagsManage`, `ConvergenceRecordWrite`,

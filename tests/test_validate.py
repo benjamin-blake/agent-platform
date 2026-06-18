@@ -553,6 +553,36 @@ class TestRunTerraformChecks:
         assert len(failed) == 1
         assert "Terraform init" in failed[0]
 
+    def test_creds_free_init_exhausts_retries_on_persistent_transient(self) -> None:
+        """A transient 5xx on all 3 attempts exhausts the retry budget and appends to failed."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "Error: 502 Bad Gateway from registry.terraform.io"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 3  # all attempts consumed
+        assert len(failed) == 1
+        assert "Terraform init" in failed[0]
+
     def test_transient_init_signatures_exact_set(self) -> None:
         """_TRANSIENT_INIT_SIGNATURES contains the expected tokens (parity with workflow retry loop)."""
         expected = frozenset(("502", "Bad Gateway", "could not query provider registry", "failed after "))

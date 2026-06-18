@@ -2552,7 +2552,7 @@ def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) ->
         print(combined, end="")
         failed.append(label)
         return False
-    return False  # unreachable: loop body always returns on the final attempt
+    return False  # pragma: no cover -- unreachable: loop body always returns on the final attempt
 
 
 def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
