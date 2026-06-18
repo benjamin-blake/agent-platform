@@ -72,3 +72,4 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 - [docs/ROADMAP-PLATFORM.yaml](docs/ROADMAP-PLATFORM.yaml) - tier items, candidate decisions, North Star, cost projection
 - [docs/ROADMAP-PRODUCT.yaml](docs/ROADMAP-PRODUCT.yaml) - product phases and milestones
 - [SECURITY.md](SECURITY.md) - vulnerability reporting
+- [EVALUATION-PROMPTS.yaml](EVALUATION-PROMPTS.yaml) - evaluator guided-tour index: 12 architecture/governance questions with answer-loci into canonical sources
