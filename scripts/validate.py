@@ -2257,6 +2257,30 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_ci_rca_taxonomy(failed: list[str]) -> None:
+    """Fail if any .github/workflows/*.yml workflow name is absent from workflow_to_tier map.
+
+    Pure file-glob + YAML parse (sub-100ms); --pre eligible (Decision 60).
+    """
+    print("\n=== CI-RCA taxonomy coverage (workflow_to_tier map) ===")
+    from scripts.ci_rca_taxonomy import enumerate_workflow_names, load_taxonomy  # noqa: PLC0415
+
+    try:
+        taxonomy = load_taxonomy()
+    except (FileNotFoundError, ValueError) as exc:
+        failed.append(f"CI-RCA taxonomy coverage: {exc}")
+        return
+
+    tier_map: dict[str, str] = taxonomy.get("workflow_to_tier") or {}
+    actual_names = enumerate_workflow_names()
+    missing = [n for n in actual_names if n not in tier_map]
+    if missing:
+        for n in missing:
+            failed.append(f"CI-RCA taxonomy: workflow {n!r} absent from workflow_to_tier in config/ci_rca_taxonomy.yaml")
+        return
+    print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
+
+
 _UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
 
 
@@ -2509,6 +2533,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_hermeticity_flags(failed)
     validate_intent_doc_freeze(failed)
     validate_contract_drift(failed)
+    validate_ci_rca_taxonomy(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
@@ -2979,6 +3004,8 @@ def main() -> None:
         # Contract drift gate in --pre: pure Python over docs/contracts/*.yaml (sub-second), CD.25.
         # Diff-aware Pass 2 runs only over changed files -- keeps the fast-tier budget safe.
         validate_contract_drift(failed)
+        # CI-RCA taxonomy coverage in --pre: pure file-glob + YAML parse (sub-100ms), Decision 60.
+        validate_ci_rca_taxonomy(failed)
 
         elapsed = time.monotonic() - _t0
 
