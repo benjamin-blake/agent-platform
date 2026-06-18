@@ -79,9 +79,10 @@ acceptance_criteria:
     The deterministic guard is unchanged: tests/test_terraform_apply_guard.py all pass and the guard
     still returns exit 2 on an IAM update (B1 -- no guard weakening, Decision 77).
   - >-
-    terraform-apply-sandbox.yml: a guard exit-2 (BLOCKED) does NOT overwrite the convergence record
-    red (record stays green after the merge-push guard-block); only a genuine terraform-apply failure
-    writes red (anti-masking preserved).
+    terraform-apply-sandbox.yml anti-masking, BOTH directions verified: a guard exit-2 (BLOCKED) does
+    NOT overwrite the convergence record red (record stays green after the merge-push guard-block,
+    VP8), AND a genuine apply failure / guard exit-1 STILL writes red (proven by the record-write
+    decision self-test against a throwaway key, VP11). Only a real, non-skipped failure latches red.
   - >-
     terraform init is retried on transient registry 5xx in BOTH the apply-sandbox workflow and
     scripts/validate.py (the validate.py retry unit test passes; non-transient errors still fail fast).
@@ -115,10 +116,10 @@ verification_plan:
     fix_if: "Retry does not detect the 5xx signature, retries a non-transient error, or over/under-counts attempts -- adjust the signature match and attempt cap."
   - step: 4
     phase: pre-deploy
-    action: Confirm the workflow parses and the (c) wiring is present (guard captures rc; record-write skips on blocked).
-    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); s=d['jobs']['apply-sandbox']['steps']; g=[x for x in s if (x.get('id')=='guard')][0]; rw=[x for x in s if (x.get('id')=='record_write')][0]; assert 'blocked' in g['run'] and 'blocked' in rw['run'], 'guard/record_write must reference the blocked output'; print('workflow parses; guard-block wiring present')\""
-    expected: "Prints the confirmation; exit 0 (YAML valid; guard step exports blocked, record_write checks it)."
-    fix_if: "KeyError/AssertionError -> the guard step does not set a blocked output or record_write does not branch on it; wire both."
+    action: "Assert the (c) three-way branch SHAPE in the workflow: guard sets blocked only on rc==2; the fail-closed (rc==1) and apply-failure paths still write red; record_write skips on blocked OR refused."
+    command: "bin/venv-python -c \"import yaml; s=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps']; g=[x for x in s if x.get('id')=='guard'][0]['run']; rw=[x for x in s if x.get('id')=='record_write'][0]['run']; assert 'blocked=true' in g and '-eq 2' in g, 'guard must set blocked=true gated on rc==2'; assert 'exit 1' in g, 'guard must keep the fail-closed rc==1 exit path'; assert 'blocked' in rw and 'refused' in rw.lower(), 'record_write must skip on blocked OR refused'; assert 'green' in rw and 'red' in rw, 'record_write must still write green on success / red on a non-skipped failure'; print('three-way branch shape present')\""
+    expected: "Prints 'three-way branch shape present'; exit 0. The guard sets blocked=true ONLY under the rc==2 condition, retains the rc==1 fail-closed exit, and record_write skips on blocked/refused yet still writes red on a genuine non-skipped failure."
+    fix_if: "AssertionError -> the wiring is incomplete: e.g. blocked is set unconditionally (would let exit-1 errors skip the red write, breaking anti-masking), the fail-closed exit is missing, or record_write no longer writes red on failure. Build the full three-way branch."
   - step: 5
     phase: pre-deploy
     action: Run the full credential-free terraform gate (the --terraform-only CI surface) end to end.
@@ -151,15 +152,38 @@ verification_plan:
     fix_if: "AccessDenied present -> a read action is still missing (add to the wildcard Sid); IAM update still pending -> the admin apply did not land; re-apply."
   - step: 10
     phase: post-deploy
-    action: "Confirm the five ci_rca recs closed via the Resolves: trailer."
-    command: "bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; bin/venv-python -c \"import json; s={r['id']:r['status'] for r in (json.loads(l) for l in open('logs/.recommendations-log.jsonl'))}; bad=[x for x in ['rec-2236','rec-2237','rec-2238','rec-2239','rec-2254'] if s.get(x)!='closed']; print('OPEN:',bad) if bad else print('all closed')\""
-    expected: "Prints 'all closed'."
-    fix_if: "Any rec still open -> close via `bin/venv-python -m scripts.ops_data_portal --update-rec <id> --status closed --resolution \"...\"` (the trailer/rec-autoclose should have done this on merge)."
+    action: "Confirm the five ci_rca recs closed AND that rec-2237 / rec-2254 (closed at a locus other than their stated target file) carry an auditable resolution string."
+    command: "bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl')]; st={r['id']:r.get('status') for r in rows}; res={r['id']:(r.get('resolution') or '') for r in rows}; bad=[x for x in ['rec-2236','rec-2237','rec-2238','rec-2239','rec-2254'] if st.get(x)!='closed']; un=[x for x in ('rec-2237','rec-2254') if not res.get(x,'').strip()]; print('OPEN:',bad) if bad else (print('UNAUDITED:',un) if un else print('all closed + locus-audited'))\""
+    expected: "Prints 'all closed + locus-audited' (all five closed; rec-2237 and rec-2254 have a non-empty resolution recording the locus divergence)."
+    fix_if: "OPEN -> a rec did not autoclose; close via the portal. UNAUDITED -> set the resolution: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2237 --status closed --resolution 'Fixed at the true locus (terraform-validate init retry in validate.py + apply-sandbox workflow), not main.tf'` and similarly rec-2254 ('Resolved via B1 human-gated admin apply, guard left fail-closed per Decision 77 -- not a guard allowance')."
+  - step: 11
+    phase: pre-deploy
+    action: "Behavioural fail-closed proof (the anti-masking safety property), runnable pre-merge: replay the REAL record-write decision (extracted from the edited workflow) against a THROWAWAY key (never sandbox.json) and assert apply-failure -> red, apply-success -> green, blocked -> the red write is suppressed."
+    command: |-
+      set -euo pipefail
+      bin/venv-python -c "import yaml; rw=[x for x in yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps'] if x.get('id')=='record_write'][0]['run']; open('/tmp/rw.sh','w').write(rw)"
+      K="convergence/personal/_selftest_$$.json"
+      export AWS_PROFILE=agent_platform CONVERGENCE_BUCKET=agent-platform-data-lake CONVERGENCE_KEY="$K" SHA=selftest RUN_ID=0 SERVER_URL=https://example REPO=x/y
+      trap 'aws s3api delete-object --bucket agent-platform-data-lake --key "$K" >/dev/null 2>&1 || true' EXIT
+      REFUSED=false BLOCKED=false APPLY_OUTCOME=failure bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "red"'
+      REFUSED=false BLOCKED=false APPLY_OUTCOME=success bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "green"'
+      REFUSED=false BLOCKED=true APPLY_OUTCOME=failure bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "green"'
+      echo "fail-closed proof OK: failure->red, success->green, blocked-suppresses-red"
+    expected: "Prints the proof line. A non-blocked apply failure writes red; success writes green; with BLOCKED=true the prior green is NOT overwritten (the red write is suppressed) -- so anti-masking is preserved in the fail-closed direction while a guard-block no longer latches red."
+    fix_if: "The blocked run flips the record to red -> the skip branch does not cover BLOCKED (anti-masking false-skip). The failure run does NOT write red -> the red path was lost. Re-wire record_write so it skips ONLY on refused/blocked and writes red on every other non-success outcome. (Uses a throwaway _selftest key; the real sandbox.json is never touched.)"
 constraints:
   - >-
     Scope strictly to the 5 listed files. scripts/terraform_apply_guard.py is in the allowed scope but
-    stays UNCHANGED (B1 chosen over a guard allowance): its 0/2/1 exit-code contract is already
-    sufficient; weakening the guard to auto-apply IAM would contradict Decision 77.
+    stays UNCHANGED (B1 chosen over a guard allowance): its 0/2/1 exit-code contract is the correct
+    boundary and needs no edit. The capability to ACT on exit 2 distinctly from exit 1 is NEW shell
+    wiring this plan ADDS to the workflow (capture the guard rc; set a `blocked` output ONLY on rc==2;
+    branch record_write on it). The workflow today cannot tell exit 2 from exit 1 -- both merely fail
+    the step -- so the implementer must build the full three-way branch and NOT assume the exit-code
+    contract alone delivers the (c) behaviour. Weakening the guard to auto-apply IAM would contradict
+    Decision 77.
   - >-
     Do NOT edit docs/DECISIONS.md. CD.35 ratifies via the log-decision path when Wave 1 ships
     (roadmap agent_instructions). Do NOT narrow the guard's blocking set -- guard-narrowing is
@@ -168,6 +192,12 @@ constraints:
     Only the AWS-service refresh-READ surface becomes per-service wildcards; all WRITE actions stay
     enumerated + ARN-scoped, and the IAM role-read Sids stay enumerated (the 9-role set is bounded and
     IAM is the most sensitive surface -- least-privilege preserved on the mutation surface).
+  - >-
+    Transient-5xx signature parity (anti-drift, AGENTS.md): the init-retry signature set is implemented
+    twice (bash in the workflow, Python in validate.py) because they run in different contexts and no
+    cross-language constant is practical. The two lists MUST be identical token-for-token; each carries
+    a comment naming validate.py as the canonical list, and the validate.py retry test asserts the exact
+    set so any drift in the Python side fails CI. Keep them in sync in the same edit.
   - >-
     No rescue agents or workaround loops (Decision 55): the closure IS the permanent root-cause fix
     that replaces the round-by-round workaround; on an unrecoverable V3 failure STOP and RCA, do not
@@ -245,37 +275,48 @@ execution_steps:
   - >-
     .github/workflows/terraform-apply-sandbox.yml (d): replace the single `terraform init ...` command
     in the "Terraform init (S3 backend, sandbox)" step with a bash retry loop (3 attempts, sleep 2/4/8s)
-    that re-runs init only when the captured output matches a transient registry-5xx signature
+    that re-runs init only when the captured output matches the transient registry-5xx signature
     (502 | "Bad Gateway" | "could not query provider registry" | "failed after .* attempts"); a
-    non-transient init failure exits immediately.
+    non-transient init failure exits immediately. Add a comment pointing to scripts/validate.py as the
+    CANONICAL signature list (parity constraint).
   - >-
     scripts/validate.py: in run_terraform_creds_free(), replace the bare init invoke_step with a bounded
     retry helper (3 attempts, exponential backoff) that runs `terraform -chdir=<root> init -backend=false
     -input=false -no-color`, captures stdout+stderr, and retries ONLY on the transient-5xx signature;
     non-transient failures append to `failed` immediately (fail fast). validate + fmt steps unchanged.
-    Keep lines <=127.
+    Define the signature set as a module-level constant (the CANONICAL list referenced by the workflow
+    comment). Keep lines <=127.
   - >-
     tests/test_validate.py: extend the terraform creds-free tests -- (a) init returns a 5xx-signature
     failure twice then succeeds: assert 3 init run calls and `failed` stays empty; (b) init returns a
     non-transient error: assert 1 init attempt and the step is appended to `failed`; (c) the existing
-    both-roots / skip tests still pass. Mock validate.run to return per-attempt returncode/stderr;
-    ensure 100% coverage of the new retry branch.
+    both-roots / skip tests still pass; (d) assert the canonical transient-5xx signature constant equals
+    the exact expected token set (parity anchor -- fails CI if the Python side drifts). Mock validate.run
+    to return per-attempt returncode/stderr; ensure 100% coverage of the new retry branch.
   - >-
     terraform/CLAUDE.md: replace the "Out-of-band IAM grants" round-by-round bullets (rec-2223 /
     rec-2251 rounds) with a single note: github_ci_apply's AWS-service refresh-READ surface is now a
     per-service read-wildcard closure (the iterative-discovery cycle is closed); WRITE actions remain
     enumerated + ARN-scoped; the closure landed via a one-time human-gated agent_platform_admin apply.
     Retain the PlatformDev / PlatformAdmin codification bullets.
-  - "Execute the pre-deploy Verification Plan (steps 1-5); loop until green."
+  - "Execute ALL pre-deploy Verification Plan steps (the validate/guard/retry checks, the branch-shape assertion, and the fail-closed self-test); loop until green BEFORE opening the PR."
   - >-
     Open a PR and squash-merge to main with a `Resolves: rec-2236, rec-2237, rec-2238, rec-2239,
     rec-2254` trailer (rec-autoclose closes them). Expect the merge-push apply-sandbox run to guard-block
     on the pending IAM diff but NOT latch red (VP step 8 proof of (c)).
   - >-
+    Record auditable closure loci for the two recs closed away from their stated target file:
+    `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2237 --status closed --resolution
+    "Fixed at the true locus -- transient-5xx retry on terraform init in scripts/validate.py
+    (run_terraform_creds_free) + the apply-sandbox workflow -- not main.tf, which only holds the pin."`
+    and rec-2254 --resolution "Resolved by B1: one-time human-gated agent_platform_admin apply of the
+    IAM read-closure; the guard stays fail-closed per Decision 77 (no guard allowance)." (Skip if the
+    trailer already populated equivalent resolutions; VP10 verifies they are non-empty.)
+  - >-
     Human-gated closure apply (B1): run the VP step-6 plan, present it (expect ONLY the github_ci_apply
     policy update, NO trust/destroy diff), confirm guard_rc=2, then apply via agent_platform_admin.
-  - "Execute the post-deploy Verification Plan (steps 6-10); on an unrecoverable V3 failure STOP and RCA (Decision 55) -- do not loop or hand-patch."
-  - "Report: files changed, pre/post-deploy verification results, the closure-apply outcome, the live simulate result, and the convergence-record status."
+  - "Execute ALL post-deploy Verification Plan steps (closure apply, live simulate, record-stays-green, CD-plan convergence, rec closure); on an unrecoverable V3 failure STOP and RCA (Decision 55) -- do not loop or hand-patch."
+  - "Report: files changed, pre/post-deploy verification results, the closure-apply outcome, the live simulate result, the fail-closed self-test result, and the convergence-record status."
 work_areas: []
 rollback: >-
   Config-only revert: restore the enumerated github_ci_apply read Sids in oidc.tf and re-apply via
