@@ -262,13 +262,11 @@ class TestLiveRoadmapInheritance:
         for item in doc.tier_items:
             if item.decomposition_hints is None:
                 continue
-            for entry in (item.decomposition_hints.get("atomic_plans") or []):
+            for entry in item.decomposition_hints.get("atomic_plans") or []:
                 head = entry.strip().split()[0] if entry.strip() else ""
                 if head == "PLAN-implement-skill-decomposition-hints":
                     matched_parent_id = item.id
                     break
             if matched_parent_id is not None:
                 break
-        assert matched_parent_id == "T-1.12", (
-            f"Expected parent id 'T-1.12', matched '{matched_parent_id}'"
-        )
+        assert matched_parent_id == "T-1.12", f"Expected parent id 'T-1.12', matched '{matched_parent_id}'"
