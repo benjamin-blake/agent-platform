@@ -116,18 +116,21 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Under-sweep guard, scoped to the 8 edited files ONLY -- historical docs/plans/PLAN-*.md carry 31 frozen
-      branch-protection "Decision 72" refs that must NOT be rewritten, and the frozen audit snapshot is likewise
-      out of scope. Confirm no un-swept branch-protection "Decision 72" remains; the trailing "Decision 89"
-      filter excludes the legitimately-split conflation lines (which carry both "Decision 72 (RCA)" and
-      "Decision 89 (branch protection)").
-    command: '! rg -n "Decision 72" docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml docs/INTENT-ci-cd-architecture.md docs/INTENT-terraform-cicd-agent-native.md docs/INTENT-ci-rca-methodology.md .claude/skills/implement/SKILL.md .claude/skills/orient/SKILL.md AGENTS.md | rg -i "branch protection|main-protection|permanently unavailable" | rg -vq "Decision 89" && echo OK'
+      Under-sweep guard, scoped to the 8 edited files ONLY (the frozen docs/plans/PLAN-*.md and audit-reports
+      branch-protection "Decision 72" refs are out of scope and must NOT be rewritten). Two parts: (i) a keyword
+      filter catches branch-protection "Decision 72" lines that name branch protection, with a trailing
+      "Decision 89" exclusion so the correctly-split conflation lines do not false-positive; (ii) three explicit
+      content-anchor checks catch the branch-protection refs whose line carries NO keyword (DECISIONS.md L146
+      "consequences of Decision 72 are", L153 D83 Related "Decision 72 (premise reversed here", L441 D77
+      "compensating gate (Decision 72" where the keyword is on the next line).
+    command: '! rg -n "Decision 72" docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml docs/INTENT-ci-cd-architecture.md docs/INTENT-terraform-cicd-agent-native.md docs/INTENT-ci-rca-methodology.md .claude/skills/implement/SKILL.md .claude/skills/orient/SKILL.md AGENTS.md | rg -i "branch protection|main-protection|permanently unavailable" | rg -vq "Decision 89" && ! rg -nq "consequences of Decision 72 are" docs/DECISIONS.md && ! rg -nq "Decision 72 \(premise reversed" docs/DECISIONS.md && ! rg -nq "compensating gate \(Decision 72" docs/DECISIONS.md && echo OK'
     expected: >-
-      Prints OK -- within the 8 scope files, no line pairs "Decision 72" with branch-protection language unless
-      it also carries "Decision 89" (the correctly-split conflation lines).
+      Prints OK -- across the 8 scope files no un-swept branch-protection "Decision 72" remains (keyword-bearing
+      or not), and the split conflation lines (which carry "Decision 89") are correctly excluded.
     fix_if: >-
-      A branch-protection "Decision 72" lacking a same-line "Decision 89" remains -- repoint it to Decision 89,
-      or for the two conflation lines complete the split so the branch-protection half reads "Decision 89".
+      A branch-protection "Decision 72" remains -- repoint it to Decision 89 (for the two conflation lines,
+      complete the split so the branch-protection half reads "Decision 89"). The three content anchors target the
+      non-keyword refs at DECISIONS.md L146 / L153 / L441.
   - step: 5
     phase: pre-deploy
     action: Confirm the two conflated "both" tokens were split, not left intact.
@@ -163,6 +166,14 @@ constraints:
     Instruction / governance-doc change only. DECISIONS.md is the source of truth; ops_decisions re-derives
     via the documented `--backfill-decisions-md` ETL (Decision 84 I-2). Do NOT modify scripts/ops_data_portal.py
     -- renumbering is data, not code.
+  - >-
+    LAMBDA-DEPLOY DEFERRED (CD.16 / Decision 79): docs/ROADMAP-PLATFORM.yaml is a packaged asset of the ACTIVE
+    data-pipeline Lambda (src/lambdas/data-pipeline/manifest.yaml `assets:`); compute_affected_artifacts()
+    reports {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]}. The edit is an asset-only governance-string change --
+    a single Decision-72 -> 89 reference in a tier_item discipline_points narrative -- with no data-pipeline
+    runtime-behavior impact (no Lambda code path parses Decision-number cross-references from the roadmap). No
+    build/deploy/smoke-test is triggered by this docs-only change; the packaged copy refreshes on the next
+    data-pipeline deploy. If a consumer is later found to depend on this string, file a rec.
   - >-
     The "Decision 72" sweep is by SURROUNDING CONTENT, not fixed line numbers -- inserting Decision 90 shifts
     every line below it. Re-grep at execution and classify each occurrence as RCA (retain 72) or
@@ -233,10 +244,14 @@ context:
     D73/D76/D77 branch-protection refs; NOTE: D77/D73 conflated "both" tokens need manual splits). Both folded
     into the disambiguation map above. No BLOCK.
   - >-
-    Plan-critique verdict REVISE -> addressed: VP step 4 (under-sweep guard) rescoped to the 8 edited files
-    (historical docs/plans/PLAN-*.md hold 31 frozen branch-protection "Decision 72" refs that must NOT be
-    rewritten) with a "Decision 89" exclusion so the correctly-split conflation lines do not false-positive; the
-    "Decision 72b" informal label and the MANIFEST related_decisions drift were folded in.
+    Plan-critique (round 1) REVISE -> addressed: VP step 4 rescoped to the 8 edited files (the frozen
+    docs/plans/PLAN-*.md branch-protection refs must NOT be rewritten) with a "Decision 89" exclusion so split
+    conflation lines do not false-positive; "Decision 72b" label + the MANIFEST related_decisions drift folded in.
+  - >-
+    Plan-critique (round 2) REVISE -> addressed: (a) the data-pipeline Lambda-asset coupling of
+    docs/ROADMAP-PLATFORM.yaml is now an explicit logged deferral (see constraints); (b) VP step 4 gained three
+    content-anchor checks for the branch-protection refs whose line carries no keyword (DECISIONS.md L146
+    merge-gate consequences, L153 D83 "premise reversed here", L441 D77 "compensating gate" -- keyword on next line).
   - >-
     Known, out-of-scope: after the sweep, docs/intent-migration/MANIFEST.yaml's ci-cd-architecture entry
     (related_decisions: [60, 72, 73, 77, 83]) is mildly stale -- the branch-protection relation is now 89. This
