@@ -774,14 +774,18 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # in ducklake_lambdas.tf, admin-applied) which CD only refreshes -- read-only, since writes to the
         # human-gated ducklake stack go via agent_platform_admin. Scoped to /agent-platform/* (NOT ssm:*
         # and NOT all parameters).
-        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
-        # ssm:Get*/Describe* closes the iterative-discovery anti-pattern (resource-scoped to /agent-platform/*).
-        # Intentional read-surface expansion: the wildcard subsumes GetParameterHistory and
-        # GetParametersByPath in addition to GetParameter(s) -- both read-only and confined to the
-        # /agent-platform/* scope (no write, no cross-path enumeration). This is the closure by design.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure + rec-2276):
+        # ssm:Get*/Describe*/List* closes the iterative-discovery anti-pattern (resource-scoped to /agent-platform/*).
+        # ssm:List* added by PLAN-ci-apply-ssm-list-closure (rec-2276): ssm:ListTagsForResource is a
+        # List*-class action the AWS provider calls on every aws_ssm_parameter refresh; the original
+        # closure set Get*/Describe* and missed it, surfaced by the first apply-sandbox run under the
+        # github_ci_apply CI identity (run 27790838857, main 242178f9).
+        # Intentional read-surface expansion: the wildcard subsumes GetParameterHistory,
+        # GetParametersByPath, and ListTagsForResource in addition to GetParameter(s) -- all read-only
+        # and confined to the /agent-platform/* scope (no write, no cross-path enumeration).
         Sid      = "SSMParameterRead"
         Effect   = "Allow"
-        Action   = ["ssm:Get*", "ssm:Describe*"]
+        Action   = ["ssm:Get*", "ssm:Describe*", "ssm:List*"]
         Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
       },
       {

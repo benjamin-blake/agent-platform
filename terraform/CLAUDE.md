@@ -137,15 +137,21 @@ Follow-up (remaining): remove the now-redundant `AgentPlatformRuntime` inline po
 (its grants are fully covered by the codified `DailyOps`). A formal Decision recording the static-key credential
 model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supersession) is filed via the ops portal.
 
-- **DuckLake IAM read-wildcard closure (PLAN-terraform-sandbox-convergence-closure, 2026-06-18, `github_ci_apply` inline policy, out-of-band admin apply):**
+- **DuckLake IAM read-wildcard closure (PLAN-terraform-sandbox-convergence-closure, 2026-06-18; SSM List* completion PLAN-ci-apply-ssm-list-closure rec-2276, 2026-06-18, `github_ci_apply` inline policy, out-of-band admin apply):**
   The iterative-discovery anti-pattern for `github_ci_apply` refresh-READ grants (rec-2223 round, rec-2251 round) is
-  permanently closed. Eight READ-only Sids now use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
+  permanently closed. Eight READ-only Sids use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
   same resource ARNs as before: `CloudWatchLogsRead`, `LambdaRead`, `EventBridgeRead`, `SNSRead`, `CloudWatchAlarmsRead`,
   `SecretsManagerNeonAPIKeyRead`, `SecretsManagerTfvarsRead`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
   `CloudWatchAlarmsWrite`, `LambdaPermissionWrite`, `SSMFeatureFlagsManage`, `ConvergenceRecordWrite`,
   `IAMRoleReconcile`, `OIDCProviderReconcile`) remain enumerated and ARN-scoped (no wildcards). IAM read Sids
-  (`IAMPlatformRolesRead`) remain enumerated per Decision 35. Future refresh-read gaps for these services are
-  covered structurally; no further iterative-discovery rounds are expected.
+  (`IAMPlatformRolesRead`) remain enumerated per Decision 35.
+  `SSMParameterRead` grants `ssm:Get*/Describe*/List*` scoped to `parameter/agent-platform/*` (the original
+  closure shipped `Get*/Describe*`; `ssm:ListTagsForResource` is a `List*`-class action the AWS provider calls
+  on every `aws_ssm_parameter` refresh, surfaced by rec-2276 as a missed gap on the first apply-sandbox run
+  under the `github_ci_apply` CI identity -- the SSM List* completion round landed with rec-2276).
+  All eight READ Sids now use per-service wildcards covering all refresh-read actions (`Describe*/List*` or
+  `Get*/List*` for seven Sids; `Get*/Describe*/List*` for `SSMParameterRead`); no further iterative-discovery
+  rounds are expected.
 
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
