@@ -222,8 +222,13 @@ context:
     files, different Decision Record, different failure category -- terraform-apply vs verifier-hermeticity),
     so the deferral is logged here as required.
   - >-
-    Main divergence: branch was 0 commits behind origin/main at planning time (preflight main_freshness
-    status=ok, 0 behind / 0 ahead); no Scope-file overlap risk.
+    Main divergence: at plan approval the branch was rebased onto origin/main (main had advanced ~9 commits
+    since planning; scripts/validate.py and tests/test_validate.py were among the changed files). Post-rebase
+    the run_python_checks insertion anchor is intact -- validate_hermeticity_flags(failed) sits at
+    scripts/validate.py:2509 with validate_intent_doc_freeze(failed) immediately after, and the new
+    _terraform_init_with_retry helper landed in the terraform region (not inside run_python_checks), so there
+    is no conflict at the insertion point. The implementer should still re-confirm the anchor at /implement
+    time and rebase again if main has moved further.
   - >-
     Complexity: 12 scope files exceeds the >5-file STRATEGIC heuristic, but the executor freeze
     (AGENTS.md) suspends STRATEGIC classification -- authored as a single IMPLEMENTATION plan per that override.
@@ -254,7 +259,8 @@ execution_steps:
   - >-
     scripts/validate.py: add module-level constants for the forbidden dotted-name set and forbidden import
     set (perf_counter allowlisted); implement validate_verifier_hermeticity(failed) as a pure ast.parse +
-    ast.walk scan per file in scripts/verifiers/*.py -- read each concrete verifier class's declared
+    ast.walk scan over (ROOT / "scripts" / "verifiers").glob("*.py") -- resolve the scan dir from the
+    module-level ROOT so a test can repoint it via patch("validate.ROOT", tmp_path) -- read each concrete verifier class's declared
     hermeticity (default HERMETIC if absent); for files whose concrete verifiers are not all
     NON_HERMETIC_BY_CONSTRUCTION (including machinery files with no concrete verifier), append a failure for
     any forbidden primitive found (with file:line:name). Skip files with SyntaxError. Wire the call into
@@ -271,11 +277,12 @@ execution_steps:
     tests/test_verifiers/test_athena_views.py: add assertions for tier == VerifierTier.V3 and the
     NON_HERMETIC_BY_CONSTRUCTION disposition.
   - >-
-    tests/test_validate.py: add TestVerifierHermeticity using tmp_path-written synthetic verifier files to
-    drive validate_verifier_hermeticity over a controlled directory (parametrise the scan root) -- cases:
-    real tree clean (no failures); HERMETIC-declared + time.time -> failure; HERMETIC-declared + `import
-    boto3` -> failure; NON_HERMETIC-declared + time.time -> no failure; SyntaxError file -> skipped. Ensure
-    100% coverage of the new validate function (tests/CLAUDE.md coverage policy).
+    tests/test_validate.py: add TestVerifierHermeticity. For the synthetic cases, write verifier files into a
+    tmp_path/"scripts"/"verifiers" tree and drive the gate via patch("validate.ROOT", tmp_path) -- the
+    established in-tree idiom (matches TestValidateComplexity / TestValidateCcLimits); for the real-tree-clean
+    case use the unpatched real ROOT. Cases: real tree clean (no failures); HERMETIC-declared + time.time ->
+    failure; HERMETIC-declared + `import boto3` -> failure; NON_HERMETIC-declared + time.time -> no failure;
+    SyntaxError file -> skipped. Ensure 100% coverage of the new validate function (tests/CLAUDE.md coverage policy).
   - >-
     Execute the Verification Plan -- run each step; loop until all pass. On an unrecoverable failure, stop
     and RCA per Decision 55 (no workaround loop, no rescue agent).
