@@ -2482,15 +2482,33 @@ tier_items:
       - terraform/personal/lambda_tooling_iam.tf    # new; consumes PlatformDev/PlatformAdmin from T0.3 Pattern B (CD.26). NOT the retired work-root file of the same name
       - terraform/personal/lambda_tooling_outputs.tf    # new
     exit_criteria:
-      - "terraform apply succeeds against the personal account with module shape for log-rec, log-decision, query, update-rec, list-tools (Lambdas can be stubs in T0.6 -- full handlers in T0.7+ and T1; maintenance is served by ducklake_maintenance per T2.18, no duplicate)"
-      - "Each Lambda has a Function URL with AWS_IAM auth (same closed-boundary posture as ducklake_lambdas.tf)"
-      - "PlatformDev IAM role policy (DailyOps) allows lambda:InvokeFunctionUrl on the verb Lambdas"
-      - "PlatformAdmin IAM role policy (AdminOps) additionally allows admin-scoped paths (import_mode=true on log-rec/log-decision per CD.10). Lambda handlers check the assumed-role ARN against the PlatformAdmin role ARN for admin-only branches"
+      - "ducklake_writer and ducklake_reader deployed in personal account with Function URL + AWS_IAM auth (terraform/personal/ducklake_lambdas.tf); supersedes planned six separate verb Lambdas per Decision 91 + Decision 81 cl.2"
+      - "DuckLakeInvokeRuntime IAM policy allows PlatformDev (DailyOps) and PlatformAdmin (AdminOps) lambda:InvokeFunctionUrl on verb surface (terraform/personal/platform_roles.tf:142-152); two-principal allow-list from CD.10 is RETAINED"
+      - "Decision 91 ratifies OQ.15 option (a): verb surface realized in ducklake_writer (file_ops/write_ops/update_ops) and ducklake_reader (NAMED_READS registry, src/common/ducklake_scd2_schema.py); CD.10 six-Lambda enumeration superseded per Decision 81 cl.2 + Decision 84 I-3"
+      - "Six stub Lambda dirs deleted; terraform/lambda_tooling_platform.tf and terraform/lambda_tooling_outputs.tf deleted (never applied per CD.21); terraform/lambda_tooling_iam.tf retained per T1.15 + agent_auth.tf coupling"
     related_candidate_decisions: [CD.10, CD.33]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
-    status: not_started
+    status: complete
+    completed_at: "2026-06-18"
+    note: >-
+      Realized-via-supersession (OQ.15->(a), Decision 91, 2026-06-18): the verb surface provisioned by
+      T0.6 (log-rec, log-decision, query, update-rec, list-tools Function-URL+AWS_IAM Lambdas in the personal
+      account) is already live as the ducklake_writer + ducklake_reader closed boundary
+      (terraform/personal/ducklake_lambdas.tf:307-315; PlatformDev/PlatformAdmin invoke via
+      DuckLakeInvokeRuntime -- terraform/personal/platform_roles.tf:142-152 + AdminOps). CD.10's six-Lambda
+      enumeration is superseded by Decision 81 cl.2 + Decision 84 I-3; the two-principal allow-list
+      (PlatformDev/PlatformAdmin) is RETAINED in DuckLakeInvokeRuntime. bootstrap_completion_exempt: true
+      (scope (a) -- gating CD.10 still state:pending; Decision 91 records the supersession). The six
+      src/lambdas/<verb>/ stub directories (status:stub mocks per Decision 81) are deleted;
+      terraform/lambda_tooling_platform.tf and lambda_tooling_outputs.tf (work-root, never applied per
+      CD.21) are deleted. terraform/lambda_tooling_iam.tf retained per T1.15 + agent_auth.tf coupling.
+      Original exit_criteria (pre-supersession, pre-Decision 91): (1) terraform apply succeeds with
+      module shape for log-rec, log-decision, query, update-rec, list-tools; (2) Function URL with
+      AWS_IAM auth per verb Lambda; (3) PlatformDev DailyOps allows InvokeFunctionUrl on verb Lambdas;
+      (4) PlatformAdmin AdminOps allows admin-scoped paths with import_mode=true on log-rec/log-decision
+      per CD.10.
   - id: T0.7a
     tier: T0
     name: log-rec Lambda (handler)
@@ -2504,21 +2522,26 @@ tier_items:
       Per round-2 architect MED-7, the payload contract MUST include an optional import_mode field;
       when true the caller-supplied id and timestamps are preserved (used by T2.2 import). Default
       normal operation rejects import_mode payloads without an admin-scoped principal.
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the log_rec write verb is realized as
+      file_ops/write_ops in src/lambdas/ducklake_writer/handler.py (via scripts/ops_data_portal.py
+      file_rec routing). The log_rec stub Lambda is retired. exit_criteria updated to the
+      named-verb surface.]
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
-      - src/lambdas/log_rec/handler.py    # new
-      - src/lambdas/log_rec/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008 -- no Docker in this architecture)
+      - src/lambdas/ducklake_writer/handler.py    # file_ops + write_ops verbs implement the log_rec payload path
+      - scripts/ops_data_portal.py    # file_rec() portal surface routes to ducklake_writer.write_ops/file_ops
     exit_criteria:
-      - "POST {function-url} with valid RecPayload → 200 + {rec_id}"
-      - "Invalid payload → 400 with typed error code (per discipline point in CD.12)"
-      - "Duplicate id → 409 (stateful invariant)"
-      - "import_mode=true with admin principal → preserves caller-supplied id; without admin principal → 403"
-      - "Unit tests cover happy, edge, poison, import-mode payloads"
+      - "file_rec(payload) via ops_data_portal routes to ducklake_writer file_ops; rec_id allocated atomically by the writer in-transaction (Decision 84 I-2)"
+      - "Invalid RecPayload schema rejected at the ducklake_writer schema gate with typed 4xx"
+      - "Duplicate rec_id rejected by the OCC-keyed MERGE gate (stateful invariant, Decision 81 cl.3)"
+      - "import_mode=true with admin principal (PlatformAdmin) preserves caller-supplied id; without admin principal returns 403"
+      - "Unit tests cover happy, edge, poison, and import-mode payloads through the file_ops verb"
     related_candidate_decisions: [CD.10, CD.12]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_rec write verb realized as ducklake_writer.file_ops/write_ops; log_rec stub Lambda retired (Decision 91). Likely silent-completion: scripts/ops_data_portal.py file_rec routing to ducklake_writer.write_ops/file_ops is live (T2.19 recs cutover; preflight calls it each session). Formal per-item closeout requires a dedicated plan confirming import_mode admin gate and unit-test coverage against the named-verb surface.]"
   - id: T0.7b
     tier: T0
     name: log-decision Lambda (handler)
@@ -2531,20 +2554,26 @@ tier_items:
       until its T2.26 DuckLake migration -- if T2.26 lands first, the write transport is the closed
       ducklake_writer boundary; coordinate ordering at plan time. Do not build a second write path
       to a backend mid-retirement.]
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the log_decision write verb is realized as
+      write_ops (file_decision action) in src/lambdas/ducklake_writer/handler.py (via
+      scripts/ops_data_portal.py file_decision routing). T2.26 migrated ops_decisions to DuckLake
+      before T0.7b, so the write transport is already the closed ducklake_writer boundary. The
+      log_decision stub Lambda is retired.]
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
-      - src/lambdas/log_decision/handler.py    # new
-      - src/lambdas/log_decision/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
+      - src/lambdas/ducklake_writer/handler.py    # write_ops (file_decision) implements the log_decision payload path
+      - scripts/ops_data_portal.py    # file_decision() portal surface routes to ducklake_writer.write_ops
     exit_criteria:
-      - "POST {function-url} with valid DecisionPayload → 200 + {decision_id}"
-      - "Decision id format dec-NNN allocated atomically in normal mode"
-      - "import_mode=true with admin principal → preserves caller-supplied decision_id"
-      - "Unit tests cover happy, edge, poison, import-mode payloads"
+      - "file_decision(payload) via ops_data_portal routes to ducklake_writer write_ops; decision_id dec-NNN allocated atomically by the writer in-transaction"
+      - "import_mode=true with admin principal preserves caller-supplied decision_id"
+      - "Unit tests cover happy, edge, poison, and import-mode payloads through the write_ops verb"
+      - "Backfill path (--backfill-decisions-md) continues to route writes through the same ducklake_writer surface"
     related_candidate_decisions: [CD.10]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_decision write verb realized as ducklake_writer.write_ops (file_decision); log_decision stub Lambda retired (Decision 91); ops_decisions already on DuckLake (T2.26 landed before T0.7b). Likely silent-completion: ops_data_portal.py file_decision routing is live and backfill-decisions-md uses it each session. Formal per-item closeout requires a dedicated plan confirming import_mode gate and unit-test coverage against write_ops.]"
   - id: T0.7c
     tier: T0
     name: query Lambda (minimum verb set)
@@ -2554,27 +2583,31 @@ tier_items:
       state via ducklake_reader (DuckLake-side dedup; closed boundary, no Athena path for recs);
       decision/queue verbs serve from the DuckLake named_read registry since 2026-06-11 (Decision 84 / T2.28; T0.7c must reuse, not double-build). "SCD2 dedup
       inside the Lambda" applies only to the still-Iceberg tables.]
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the minimum verb set is realized as the
+      NAMED_READS registry in src/common/ducklake_scd2_schema.py, served through
+      src/lambdas/ducklake_reader/handler.py.named_read. The query stub Lambda is retired.
+      exit_criteria updated to the named-verb reader surface.]
     depends_on: [T0.6, T0.12, T0.13, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     minimum_verbs:
-      - get_rec_by_id
-      - list_open_recs
-      - get_decision_by_id
-      - list_recent_decisions
-      - list_priority_queue
+      - open_recs
+      - rec_by_id
+      - decision_by_id
+      - decisions_max_updated
+      - priority_queue_current
     files_in_scope:
-      - src/lambdas/query/handler.py    # new
-      - src/lambdas/query/verbs.py    # new — verb registry
-      - src/lambdas/query/manifest.yaml    # new -- CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
+      - src/lambdas/ducklake_reader/handler.py    # named_read action dispatches minimum verbs from the NAMED_READS registry
+      - src/common/ducklake_scd2_schema.py    # NAMED_READS registry -- open_recs, rec_by_id, decision_by_id, decisions_max_updated, priority_queue_current
     exit_criteria:
-      - "Each minimum verb returns typed Pydantic response model"
-      - "No verb accepts raw SQL or column names"
-      - "Pagination implemented for list_* verbs"
-      - "Unit tests cover happy/empty/edge cases per verb"
+      - "Each minimum verb (open_recs, rec_by_id, decision_by_id, decisions_max_updated, priority_queue_current) returns typed response via ducklake_reader.named_read"
+      - "No verb accepts raw SQL or column names (closed named-verb boundary, Decision 84 I-3)"
+      - "Pagination implemented for list-family verbs via NAMED_READS row-limit parameter"
+      - "Unit tests cover happy/empty/edge cases per verb through ducklake_reader.named_read dispatch"
     related_candidate_decisions: [CD.10, CD.15]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: minimum verb set realized as NAMED_READS registry in src/common/ducklake_scd2_schema.py served via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: session_preflight.py calls .named('open_recs') each session; all minimum verbs are live in the NAMED_READS registry. Formal per-item closeout requires a dedicated plan confirming unit-test coverage per verb against ducklake_reader.named_read.]"
   - id: T0.8
     tier: T0
     name: Agent SDK shim (boto3 + sigv4 wrapper)
@@ -2931,49 +2964,76 @@ tier_items:
       swept, T2.2/T2.3) with a later DuckDB-on-Iceberg swap, and required reservedConcurrency=1 or
       DynamoDB locking (superseded by CD.33's OCC-retry resolution of OQ.10). Originals preserved
       here for the record.]
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the update_rec write verb is realized as
+      update_ops in src/lambdas/ducklake_writer/handler.py (via scripts/ops_data_portal.py update_rec
+      routing). The update_rec stub Lambda is retired.]
     depends_on: [T0.7a, T0.7c, T0.8, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
-      - src/lambdas/update_rec/handler.py
-      - src/lambdas/update_rec/manifest.yaml    # CD.24 per-Lambda manifest (zip packaging; Dockerfile entries removed 2026-06-09 per audit F-008)
+      - src/lambdas/ducklake_writer/handler.py    # update_ops verb implements the update_rec read-validate-append shape
+      - scripts/ops_data_portal.py    # update_rec() portal surface routes to ducklake_writer.update_ops
     exit_criteria:
-      - "Update with invalid status transition → 422 typed error"
-      - "Concurrent updates safe via the CD.33 writer-side OCC retry + ULID-keyed idempotent append (no reservedConcurrency=1, no DynamoDB locking -- superseded per OQ.10 resolution)"
-      - "Audit trail: each update appends a new SCD2 row; old version visible via query Lambda with version param"
-      - "Recs read path transits ducklake_reader (closed boundary); no Athena/_current access for ops_recommendations"
+      - "update_rec(payload) via ops_data_portal routes to ducklake_writer update_ops; invalid status transition returns 422 typed error"
+      - "Concurrent updates safe via the CD.33 writer-side OCC retry + ULID-keyed idempotent append (no reservedConcurrency=1, no DynamoDB locking)"
+      - "Audit trail: each update appends a new SCD2 row; old version visible via ducklake_reader named_read with version param"
+      - "Recs read path transits ducklake_reader.named_read (closed boundary); no Athena/_current access for ops_recommendations"
     related_candidate_decisions: [CD.10, CD.12, CD.33]
     effort: M
     strategic: false
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: update_rec write verb realized as ducklake_writer.update_ops; update_rec stub Lambda retired (Decision 91). Likely silent-completion: ops_data_portal.py update_rec routing to ducklake_writer.update_ops is live and exercised by each recommendation status update. Formal per-item closeout requires a dedicated plan confirming status-DAG enforcement and unit-test coverage against update_ops.]"
   - id: T1.2
     tier: T1
     name: query Lambda full verb expansion
-    intent: Add verbs beyond the T0.7c minimum. Filtered queries, joins (e.g. rec + its execution_plan), aggregations, telemetry verbs.
+    intent: |
+      Add verbs beyond the T0.7c minimum to the NAMED_READS registry
+      (src/common/ducklake_scd2_schema.py). Filtered queries, joins (e.g. rec + its
+      execution_plan), aggregations, telemetry verbs. Served through ducklake_reader.named_read;
+      no SQL exposed to callers (Decision 84 I-3 named-verb closed boundary).
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the expanded verb set is realized by
+      extending NAMED_READS in src/common/ducklake_scd2_schema.py; ducklake_reader.named_read
+      dispatches them. The query stub Lambda is retired.]
     depends_on: [T0.7c, T0.8]
     files_in_scope:
-      - src/lambdas/query/verbs.py
-      - src/lambdas/query/handler.py
+      - src/lambdas/ducklake_reader/handler.py    # named_read dispatches full expanded verb set from NAMED_READS
+      - src/common/ducklake_scd2_schema.py    # NAMED_READS registry - add ci_rca_open, ci_rca_since, recs_by_title_prefix, forward_fix_recursion, budget_bypass_recent, count_by_status and telemetry verbs
     exit_criteria:
-      - "Verb taxonomy doubled (target: ~12-15 verbs total)"
-      - "Verbs for telemetry tables added"
-      - "Verb-discovery via list-tools endpoint returns full set"
+      - "NAMED_READS registry contains ~12-15 named verbs covering recs, decisions, queue, and telemetry dimensions"
+      - "No verb in the registry accepts raw SQL or column names (named-verb boundary enforced)"
+      - "ci_rca_open, recs_by_title_prefix, count_by_status, and telemetry verbs present in NAMED_READS"
+      - "ducklake_reader.named_read dispatches each new verb and returns typed response"
     related_candidate_decisions: [CD.10, CD.15]
     effort: M
     strategic: false
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: full verb expansion realized as NAMED_READS registry entries in src/common/ducklake_scd2_schema.py dispatched via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS already contains ci_rca_open, ci_rca_since, recs_by_title_prefix, forward_fix_recursion, budget_bypass_recent, count_by_status (10+ named reads total per T2.28 cutover). Formal per-item closeout requires a dedicated plan confirming verb-taxonomy target and telemetry-verb coverage.]"
   - id: T1.3
     tier: T1
     name: list-tools + describe Lambda
-    intent: Discovery surface. list-tools returns the names of all agent-facing tool Lambdas (the verb surface is deliberately extensible per CD.33 -- "six" was the illustrative CD.10 enumeration); describe-tool returns the Pydantic schema for a given Lambda's request and response models.
+    intent: |
+      Discovery surface. list-tools returns the names of all agent-facing named verbs (the verb
+      surface is deliberately extensible per CD.33 -- "six" was the illustrative CD.10 enumeration
+      superseded by Decision 81 cl.2 and Decision 91); describe-tool returns the schema for a
+      given verb's request and response models. Under OQ.15->(a) the discovery surface is a
+      capability of the named-verb portal (ops_data_portal.py + NAMED_READS registry) and the
+      ducklake_reader, not a separate list_tools Lambda.
+      [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: list-tools capability is realized as the
+      NAMED_READS registry in src/common/ducklake_scd2_schema.py (read verbs) and the verb
+      registry in src/lambdas/ducklake_writer/handler.py (write verbs). The list_tools stub Lambda
+      is retired.]
     depends_on: [T0.7a, T0.7b, T0.7c, T1.1, T1.12]    # T1.12 (Class B Lambda verb contracts) added by T-1.12 per CD.25 ritual
     files_in_scope:
-      - src/lambdas/list_tools/handler.py
+      - src/common/ducklake_scd2_schema.py    # NAMED_READS registry is the read-verb discovery surface
+      - src/lambdas/ducklake_reader/handler.py    # named_read dispatch; introspection surface for read verbs
+      - src/lambdas/ducklake_writer/handler.py    # VERB_REGISTRY dispatch map; introspection surface for write verbs
     exit_criteria:
-      - "agent_sdk.list_tools() returns one descriptor per deployed agent-facing tool Lambda (count derived from the deployed set, not hard-coded)"
-      - "agent_sdk.describe('log_rec') returns JSON schema (Pydantic model_json_schema output)"
+      - "All named read verbs are discoverable from NAMED_READS keys in src/common/ducklake_scd2_schema.py (count derived from registry, not hard-coded)"
+      - "All named write verbs are discoverable from the VERB_REGISTRY in src/lambdas/ducklake_writer/handler.py"
+      - "A describe capability returns the verb's parameter schema (Pydantic model_json_schema or equivalent) for any named verb"
     related_candidate_decisions: [CD.10]
     effort: S
     strategic: false
     status: not_started
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: list-tools discovery realized as NAMED_READS registry (read verbs) + VERB_REGISTRY (write verbs); list_tools stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS and VERB_REGISTRY are live and programmatically enumerable. Formal per-item closeout requires a dedicated plan confirming describe capability and agent_sdk binding.]"
   - id: T1.4
     tier: T1
     name: RESERVED — superseded by T2.18 (DuckLake maintenance) + ops_compaction-until-T2.26
@@ -3577,7 +3637,7 @@ tier_items:
       complete as of 2026-05-31.]
     depends_on: [T2.1]
     files_in_scope:
-      - src/common/iceberg_reader.py    # realized location (originally proposed src/lambdas/query/iceberg_reader.py; the reader is shared, not Lambda-internal)
+      - src/common/iceberg_reader.py    # realized location (shared reader, not Lambda-internal; original stub reference retired per Decision 91)
       - docs/contracts/read-engine.yaml
     exit_criteria:
       - "Local read paths (sync_ops, ops_data_portal, session_preflight) route through DuckDBIcebergReader with Athena escape-hatch for still-Iceberg tables"
@@ -3625,7 +3685,7 @@ tier_items:
     depends_on: [T2.5, T0.7c, T1.1, T1.2]    # T0.7c/T1.1/T1.2 added 2026-06-09 (audit F-012): the absorbed criteria exercise the query/update-rec Lambdas
     files_in_scope:
       - terraform/iceberg_tables.tf    # personal-account variant omits _current view definitions
-      - src/lambdas/query/handler.py    # in-Lambda SCD2 dedup confirmed in place
+      - src/lambdas/ducklake_reader/handler.py    # SCD2 dedup via DuckLake named_read registry; query stub retired per Decision 91
     exit_criteria:
       - "No _current views in personal AWS account"
       - "All read paths go through query Lambda; Athena/DuckDB usage is implementation detail"
@@ -5626,6 +5686,17 @@ open_questions:
       CD.10 two-principal separation and per-verb SLOs (T1.9), at the cost of a hop. Resolve at
       T0.6 plan time; the choice shapes T0.7a/c and T1.1-T1.3. Either resolution preserves the
       closed boundary and the CD.10 PlatformDev/PlatformAdmin allow-list semantics.
+
+      Resolved (a): Decision 91 (2026-06-18) ratifies option (a) as the shipped architecture per
+      Decision 81 cl.2 (extensible verb surface) and Decision 84 I-3 (named-verb closed boundary).
+      This is a ratification of shipped reality, not a fresh design pick: scripts/ops_data_portal.py
+      already routes file_rec->write_ops/file_ops, update_rec->update_ops, file_decision->write_ops
+      on ducklake_writer; reads use the NAMED_READS registry (src/common/ducklake_scd2_schema.py)
+      via ducklake_reader.named_read. Function-URL+AWS_IAM per terraform/personal/ducklake_lambdas.tf;
+      PlatformDev/PlatformAdmin invoke via DuckLakeInvokeRuntime (platform_roles.tf:142-152 +
+      AdminOps). CD.10's two-principal allow-list is RETAINED; the six-Lambda enumeration is
+      superseded per Decision 81 cl.2 + Decision 84. T0.6 is closed as realized-via-supersession
+      by the generalized named-verb DuckLake boundary.
 
 known_gaps:
   # Items deliberately not in the roadmap that the user / future sessions should be aware of.
