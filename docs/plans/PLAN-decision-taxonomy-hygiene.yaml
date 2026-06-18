@@ -1,0 +1,275 @@
+schema_version: 1
+slug: "decision-taxonomy-hygiene"
+intent: >-
+  Make the canonical decision log coherent for future planning/orientation agents by recording the
+  workflow architecture's evolution to four tiers (new Decision 90 superseding Decision 42, adding
+  /orient) and resolving the duplicate "Decision 72" header -- so agents act on correct canonical
+  state, supporting the platform's self-governance integrity.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-decision-taxonomy-hygiene.yaml
+phase: >-
+  Governance / instruction-architecture hygiene. Bundles the two follow-ups flagged by the /orient
+  plan critique (PR #182/#183). Not a roadmap tier_item -- user-explicit ad-hoc governance work per
+  the planning skill user_explicit_out_of_scope soft-warn exception category. Product phase: N/A.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Follow-up 1: add "## Decision 90: Four-Tier Workflow Architecture" superseding Decision 42 and
+      annotate 42's status "Superseded by Decision 90" (42's body kept intact). Follow-up 2: rename the
+      misplaced "## Decision 72: GitHub Branch Protection Not Available" header to "## Decision 89" and
+      apply the per-occurrence "Decision 72" sweep per the Context disambiguation map (branch-protection
+      refs -> 89; RCA refs stay 72; two conflated "both" tokens split).
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Replace the line-90 mislabel "Decision 42 three-tier workflow (orient -> plan -> implement)" with
+      the four-tier framing citing Decision 90 (end-goal four tiers; current orient -> plan -> implement,
+      executor frozen per Decision 67).
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Update the line-10 citation "42 (Three-Tier Workflow Architecture)" -> "90 (Four-Tier Workflow
+      Architecture)". The line-66 RCA "Decision 72" surfacing ref stays 72 (in scope for verification only).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Repoint the branch-protection "Decision 72" reference (squash-merge clause-4 policy, ~line 285) to
+      Decision 89.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Repoint the branch-protection "Decision 72/CD.20" reference (main-protection ruleset, ~line 1564) to
+      Decision 89. The RCA "Decision 72 (RCA-as-Plan-Source)" ref (~line 3326) stays 72.
+  - file: docs/INTENT-ci-cd-architecture.md
+    action: Modify
+    purpose: >-
+      Repoint branch-protection "Decision 72" refs (amending ref ~line 15; the "both"-numbered ref ~line
+      463, split) to Decision 89. RCA refs (~lines 9/199/254) stay 72. Reference-sweep only (Decision 86).
+  - file: docs/INTENT-terraform-cicd-agent-native.md
+    action: Modify
+    purpose: >-
+      Repoint the branch-protection "Decision 72 / CD.20" reference (~line 7) to Decision 89. Reference-sweep
+      only (Decision 86).
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Update the meta-note (~line 504) that documents the duplicate-72 defect "tracked separately" to record
+      it RESOLVED (RCA = Decision 72, branch-protection = Decision 89). RCA refs (~lines 21/22) stay 72.
+      Reference-sweep only (Decision 86).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A new "## Decision 90: Four-Tier Workflow Architecture" exists in DECISIONS.md, explicitly superseding
+    Decision 42, documenting the end-goal pipeline (/orient -> /plan -> /implement -> /develop-executor) and
+    the current operational state (/orient -> /plan -> /implement; executor + STRATEGIC frozen per Decision
+    67 / CD.17). Decision 42's status is annotated "Superseded by Decision 90" with its body preserved.
+  - >-
+    AGENTS.md and .claude/skills/orient/SKILL.md no longer assert the "three-tier (orient -> plan ->
+    implement)" mislabel; they reference the four-tier architecture (Decision 90) with the end-goal vs
+    current-state distinction.
+  - >-
+    DECISIONS.md has exactly one "## Decision 72" header (RCA-as-Plan-Source) and exactly one "## Decision
+    89" header (GitHub Branch Protection Not Available); the branch-protection decision's Date (2026-05-09)
+    and body are preserved under the new number.
+  - >-
+    Every branch-protection-context "Decision 72" reference across the live surfaces (DECISIONS.md internal
+    incl. Decision 83; the implement skill; ROADMAP-PLATFORM; the 3 INTENT docs) now reads "Decision 89";
+    every RCA-context "Decision 72" reference remains "Decision 72"; the two conflated "both" references are
+    split into "72 (RCA)" + "89 (branch protection)".
+  - >-
+    ops_decisions re-derives cleanly from the corrected DECISIONS.md via `ops_data_portal
+    --backfill-decisions-md` (exits 0, no per-dec failure) including dec-072, dec-089, and dec-090.
+  - >-
+    The frozen snapshot docs/audit-reports/wave-1-outputs/B.yaml is unchanged (historical; deferral noted).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the duplicate header is gone: exactly one each of the Decision 72, 89, and 90 headers.
+    command: '[ "$(rg -n "^## Decision 72:" docs/DECISIONS.md | wc -l)" -eq 1 ] && [ "$(rg -n "^## Decision 89:" docs/DECISIONS.md | wc -l)" -eq 1 ] && [ "$(rg -n "^## Decision 90:" docs/DECISIONS.md | wc -l)" -eq 1 ] && echo OK'
+    expected: >-
+      Prints OK -- one Decision 72 header (RCA), one Decision 89 (branch-protection), one Decision 90 (four-tier).
+    fix_if: >-
+      A count != 1 means the duplicate remains, or the renumber / new-decision did not land; fix the headers.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the supersession is recorded on both sides.
+    command: 'rg -nq "Superseded by Decision 90" docs/DECISIONS.md && rg -niq "supersedes Decision 42" docs/DECISIONS.md && echo OK'
+    expected: >-
+      Prints OK -- Decision 42 carries the "Superseded by Decision 90" annotation and Decision 90 states it
+      supersedes Decision 42.
+    fix_if: >-
+      Missing -- add the supersession annotation on 42 and the supersedes clause in Decision 90.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the four-tier pipeline is recorded in Decision 90 and AGENTS.md, and the old mislabel is gone.
+    command: 'rg -nq "/orient -> /plan -> /implement -> /develop-executor" docs/DECISIONS.md AGENTS.md && ! rg -nq "Decision 42 three-tier workflow" AGENTS.md && echo OK'
+    expected: >-
+      Prints OK -- the four-tier pipeline appears in Decision 90 and AGENTS.md; the "Decision 42 three-tier
+      workflow" mislabel no longer appears in AGENTS.md.
+    fix_if: >-
+      The four-tier line is missing or the mislabel remains -- fix AGENTS.md line 90 and the Decision 90 body.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Under-sweep guard (the scout's key concern): no branch-protection-context "Decision 72" reference is
+      left behind on any live surface.
+    command: '! rg -n "Decision 72" docs/ .claude/ AGENTS.md --glob "!docs/audit-reports/**" | rg -iq "branch protection|main-protection|permanently unavailable" && echo OK'
+    expected: >-
+      Prints OK -- no line outside the frozen audit snapshot pairs "Decision 72" with branch-protection
+      language (those are now Decision 89).
+    fix_if: >-
+      A branch-protection "Decision 72" remains (it would silently mispoint to RCA) -- repoint it to Decision 89.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the two conflated "both" tokens were split, not left intact.
+    command: '! rg -nq "Decision 72 \(both\)" docs/DECISIONS.md && ! rg -nq "Decision 72 \(RCA-as-Plan-Source / branch protection" docs/DECISIONS.md && echo OK'
+    expected: >-
+      Prints OK -- neither the "Decision 72 (both)" token nor the "Decision 72 (RCA-as-Plan-Source / branch
+      protection ...)" conflation remains.
+    fix_if: >-
+      A conflated token remains -- split it into "Decision 72 (RCA-as-Plan-Source)" + "Decision 89 (branch
+      protection unavailable; premise reversed by Decision 83)".
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the live-skill citation updates landed.
+    command: 'rg -nq "Four-Tier Workflow Architecture|Decision 90" .claude/skills/orient/SKILL.md && rg -nq "Decision 89" .claude/skills/implement/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- the orient skill cites the four-tier architecture / Decision 90, and the implement skill's
+      branch-protection reference now reads Decision 89.
+    fix_if: >-
+      Missing -- update the orient line-10 citation and the implement branch-protection reference.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Post-merge, re-derive ops_decisions from the corrected DECISIONS.md via the documented decisions ETL.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      Exits 0 with all decisions synced including dec-072 (RCA), dec-089 (branch-protection), and dec-090
+      (four-tier); no per-dec failure logged.
+    fix_if: >-
+      Non-zero exit or a dec-NNN failure means a decision entry is malformed (header/format) in DECISIONS.md;
+      fix the markdown and re-run. If the writer profile is unavailable, the operator runs the backfill.
+constraints:
+  - >-
+    Instruction / governance-doc change only. DECISIONS.md is the source of truth; ops_decisions re-derives
+    via the documented `--backfill-decisions-md` ETL (Decision 84 I-2). Do NOT modify scripts/ops_data_portal.py
+    -- renumbering is data, not code.
+  - >-
+    The "Decision 72" sweep is by SURROUNDING CONTENT, not fixed line numbers -- inserting Decision 90 shifts
+    every line below it. Re-grep at execution and classify each occurrence as RCA (retain 72) or
+    branch-protection (-> 89) per the Context disambiguation map. The two conflated "both" tokens require
+    manual SPLITS, not find-replace.
+  - >-
+    RCA-as-Plan-Source stays Decision 72; only the misplaced branch-protection decision is renumbered (-> 89).
+    Do NOT renumber RCA -- it is wired into live ci-rca tooling and governance.
+  - >-
+    Supersession keeps Decision 42's number: do NOT renumber or rewrite Decision 42's body; only annotate its
+    status "Superseded by Decision 90". Inbound "Decision 42" citations (in Decisions 43/44) stay as-is.
+  - >-
+    INTENT-doc edits are REFERENCE-SWEEPS ONLY (Decision 86): do not resurrect deleted content or contradict
+    each doc's docs/intent-migration/MANIFEST.yaml disposition. Create no new docs/ prose file -- the four-tier
+    rationale lives in the Decision 90 record.
+  - >-
+    Leave the frozen point-in-time snapshot docs/audit-reports/wave-1-outputs/B.yaml unchanged (historical
+    record; deferral noted).
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Out-of-scope content is not fixed inline (AGENTS.md scope rule); file a recommendation if warranted.
+context:
+  - >-
+    Bundles the two follow-ups flagged by the /orient plan critique (PR #182 plan, #183 implementation).
+  - >-
+    ci-rca DEFERRAL (logged per the planning skill Related-Work Check): 5 open ci-rca recs at planning time --
+    rec-2267 / rec-2268 / rec-2274 / rec-2275 (all the same scripts/ci_rca_tier_map.py:170 subprocess
+    encoding='utf-8' lint miss; a forward_fix_recursion_alert fired at count 6 / threshold 3) and rec-2276
+    (terraform github-ci-apply IAM ssm:ListTagsForResource). This plan is instruction/governance-doc work
+    sharing no file, Decision Record, or failure category with any of them; the HARD BLOCK and the forward-fix
+    recursion are deferred with this rationale and flagged for a dedicated session.
+  - >-
+    Decision 42 (Three-Tier Workflow Architecture) -> superseded by new Decision 90 (Four-Tier). End-goal:
+    /orient -> /plan -> /implement -> /develop-executor (where /implement decomposes STRATEGIC plans into atomic
+    recs the executor consumes). Current state: /orient -> /plan -> /implement (executor + STRATEGIC frozen per
+    Decision 67 / CD.17; /implement makes code changes directly).
+  - >-
+    Decision 72 collision: two "## Decision 72" headers -- RCA-as-Plan-Source (canonical; correctly sequenced
+    73 -> 72 -> 71; cited across live ci-rca governance) and GitHub Branch Protection Not Available (dated
+    2026-05-09; misplaced between Decisions 61 and 68; amended by Decision 83). RCA keeps 72; branch-protection
+    -> 89 (89/90 confirmed free; era slots 69/70/71 taken, 69 is the archived Ops-Pipeline decision).
+  - >-
+    DECISIONS.md "Decision 72" disambiguation map (content-classified; line numbers indicative only, re-grep at
+    execution). -> 89 (branch-protection): the renumbered decision header + its body self-refs + amendment note;
+    Decision 83 (title/body/Related); Decision 77 refs; Decision 76 refs; Decision 73's branch-protection ref.
+    Stays 72 (RCA): the RCA body; Decision 74/75 refs; Decision 73's RCA ref. CONFLATED (manual split):
+    Decision 77's "Decision 72 (RCA-as-Plan-Source / branch protection unavailable)" and Decision 73's
+    "Decision 72 (both)" -> split into "72 (RCA)" + "89 (branch protection)".
+  - >-
+    Non-DECISIONS.md references. -> 89: .claude/skills/implement/SKILL.md (branch-protection clause 4),
+    docs/ROADMAP-PLATFORM.yaml ~1564 (Decision 72/CD.20 main-protection), docs/INTENT-ci-cd-architecture.md
+    (amending ref + the "both"-numbered ref, split), docs/INTENT-terraform-cicd-agent-native.md (Decision
+    72/CD.20). Stays 72: orient/SKILL.md ~66 (RCA surfacing), ROADMAP-PLATFORM.yaml ~3326 (RCA),
+    INTENT-ci-cd-architecture.md (BUILT/diagnoses RCA refs), INTENT-ci-rca-methodology.md ~21/22 (RCA).
+    INTENT-ci-rca-methodology.md ~504 is the meta-note documenting the duplicate "tracked separately" -- UPDATE
+    it to record the resolution (RCA = 72, branch-protection = 89).
+  - >-
+    validate.py does NOT enforce decision-number uniqueness -- the duplicate is invisible to CI; this is hygiene
+    for future-agent clarity (per the user's framing). Decision 84 I-2: dec-NNN follows the human-assigned
+    DECISIONS.md numbering; ops_decisions re-derives via --backfill-decisions-md. Decision 70: closure via
+    amendment, not deletion (precedent for renumber-in-place + re-backfill; no ops_decisions row deletion).
+  - >-
+    Decision-scout verdict FLAGS_FOUND (WARN: Decision 73 references both 72s and the sweep must enumerate
+    D73/D76/D77 branch-protection refs; NOTE: D77/D73 conflated "both" tokens need manual splits). Both folded
+    into the disambiguation map above. No BLOCK.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md read (esp. Decisions 42, 72-RCA, 72-branch-protection, 73, 76, 77, 83, 84)
+  - All 8 files in scope located and readable
+  - The Decision 72 disambiguation map (Context) understood; the sweep is content-based, not line-number-based
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    DECISIONS.md follow-up 1: insert "## Decision 90: Four-Tier Workflow Architecture (Decided)" -- supersedes
+    Decision 42; record the end-goal pipeline (/orient -> /plan -> /implement -> /develop-executor) and the
+    current operational state (/orient -> /plan -> /implement; executor + STRATEGIC frozen per Decision 67 /
+    CD.17); Related: Decision 42 (superseded here), Decision 76 (.claude canonical), Decision 67 (freeze). Then
+    annotate Decision 42's status line "Superseded by Decision 90" (keep 42's body intact).
+  - >-
+    DECISIONS.md follow-up 2: rename the misplaced "## Decision 72: GitHub Branch Protection Not Available"
+    header to "## Decision 89" (preserve Date 2026-05-09 + body). Then apply the per-occurrence "Decision 72"
+    sweep per the Context map: branch-protection refs -> 89 (incl. the renumbered decision's self-refs/amendment
+    note, Decision 83 title/body/Related, Decision 77, Decision 76, Decision 73's branch-protection ref); RCA
+    refs stay 72; manually SPLIT the two conflated "both" tokens.
+  - >-
+    AGENTS.md: replace the line-90 mislabel ("Decision 42 three-tier workflow (orient -> plan -> implement)")
+    with the four-tier framing citing Decision 90 (end-goal four tiers; current orient -> plan -> implement,
+    executor frozen per Decision 67).
+  - >-
+    .claude/skills/orient/SKILL.md: update the line-10 citation "42 (Three-Tier Workflow Architecture)" ->
+    "90 (Four-Tier Workflow Architecture)"; leave the line-66 RCA "Decision 72" surfacing ref unchanged.
+  - >-
+    .claude/skills/implement/SKILL.md: repoint the branch-protection "Decision 72" reference (squash clause 4)
+    -> Decision 89.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: repoint the branch-protection "Decision 72/CD.20" ref (main-protection ruleset,
+    ~line 1564) -> "Decision 89/CD.20"; leave the RCA ref (~line 3326) at 72.
+  - >-
+    INTENT docs (ci-cd-architecture, terraform-cicd-agent-native, ci-rca-methodology): sweep branch-protection
+    "Decision 72" refs -> 89 (incl. the conflated "both"-numbered ref in ci-cd-architecture, split); update the
+    ci-rca-methodology meta-note (~504) to record the duplicate RESOLVED; leave RCA refs at 72. Reference-sweeps
+    only (Decision 86); no content resurrection.
+  - >-
+    Execute the Verification Plan pre-deploy steps (1-6, markdown greps); loop until all pass.
+  - >-
+    Post-merge: run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (VP step 7); confirm
+    exit 0 with dec-072 / dec-089 / dec-090 synced.
+  - 'Report: the new Decision 90, the 72 -> 89 renumber + sweep tally, and the backfill result.'
+work_areas: []
+rollback: >-
+  Instruction / governance-doc change only; revert the multi-file commit and re-run
+  `--backfill-decisions-md` against the reverted DECISIONS.md (ops_decisions re-derives deterministically).
+  No infra or data destruction (Decision 70: amendment, not deletion).
