@@ -233,7 +233,7 @@ verification_plan:
   - step: 9
     phase: post-deploy
     action: End-to-end generator run against a real pre-fetched failed-run log (no gh), producing a real bundle whose SHA roundtrips.
-    command: AWS_PROFILE=agent_platform bin/venv-python -m scripts.ci_rca_evidence --log-file tests/_fixtures_inline_or_mcp_fetched.log --workflow-name CI --workflow-run-id 0 --print-bundle
+    command: printf 'Run full validation\nvalidate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC, exceeds 500 (Decision 43)\n' > /tmp/ci_rca_probe.log && AWS_PROFILE=agent_platform bin/venv-python -m scripts.ci_rca_evidence --log-file /tmp/ci_rca_probe.log --workflow-name CI --workflow-run-id 0 --print-bundle
     expected: Emits >=1 bundle JSON; the recomputed canonical SHA equals the stored sha256; failed_check + failure_category derive from the log; tier_membership comes from the live validate.py AST walk. (If the resolved bucket is reachable the bundle uploads; otherwise it lands in logs/.ci-rca-evidence-pending/ with upload_status=upload_failed -- both are acceptable here, step 8 proves the live upload.)
     fix_if: gh ImportError/lookup -- the script must NOT call gh; it reads the log from --log-file; SHA mismatch -- canonical-JSON drift (see step 5 fix_if).
   - step: 10
@@ -273,8 +273,11 @@ constraints:
     (PLAN-ci-rca-prompt-rewrite) and is OUT of scope. Do NOT modify .claude/agents/scheduled/ci-rca.md;
     the workflow only surfaces the bundle into the prompt string.
   - >-
-    The upload bucket resolves via the configured s3_agent_logs_bucket (S3_LOG_BUCKET env override) --
-    agent-platform-data-lake in the personal account. Do NOT hardcode the non-existent
+    The upload bucket resolves via the configured aws.s3_agent_logs_bucket (read through
+    src.common.config, or reuse ops_writer._bucket()), honouring an S3_LOG_BUCKET env override --
+    agent-platform-data-lake in the personal account. Do NOT resolve it through
+    scripts/s3_log_store.py: that module reads ONLY the S3_LOG_BUCKET env var, not the config key,
+    so relying on it would silently miss the data-lake default. Do NOT hardcode the non-existent
     agent-platform-agent-logs literal. No terraform is in scope or required (bucket + IAM grant
     pre-exist); no .tf files are modified (Decision 77).
   - >-
@@ -382,8 +385,9 @@ execution_steps:
     --workflow-name, --workflow-run-id, --repo, --validate-path default scripts/validate.py,
     --print-bundle); read the log (and jobs) from files (NO gh); for each failed check, assemble the
     bundle dict (INTENT 3.3) from ci_rca_taxonomy + ci_rca_tier_map; canonical-JSON SHA-256 over all
-    fields except sha256, then insert; resolve the bucket via s3_agent_logs_bucket (S3_LOG_BUCKET
-    override); upload to ci-rca-evidence/<sha>.json, on failure write logs/.ci-rca-evidence-pending/
+    fields except sha256, then insert; resolve the bucket via src.common.config aws.s3_agent_logs_bucket
+    (or reuse ops_writer._bucket()) with an S3_LOG_BUCKET env override -- NOT via s3_log_store.py, which
+    reads only S3_LOG_BUCKET; upload to ci-rca-evidence/<sha>.json, on failure write logs/.ci-rca-evidence-pending/
     <sha>.json + upload_status=upload_failed (loud log); handle all 3.4 failure modes; emit bundle(s)
     + sha(s) + s3_uri(s). Keep < 500 SLOC -- rebalance into the other two modules if needed.
   - >-
