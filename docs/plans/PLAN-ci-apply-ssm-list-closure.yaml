@@ -1,0 +1,265 @@
+schema_version: 1
+slug: "ci-apply-ssm-list-closure"
+intent: >-
+  Close the one refresh-read gap the DuckLake IAM read-wildcard closure missed: the github_ci_apply
+  CI role lacks ssm:ListTagsForResource (its SSMParameterRead Sid has ssm:Get*/Describe* but NOT
+  ssm:List*), which fails the sandbox CD `terraform plan` under the real CI identity and has latched
+  the convergence record red (apply-sandbox run 27790838857 at main 242178f9). Add ssm:List* to
+  SSMParameterRead, land it via the one-time human-gated agent_platform_admin apply (B1), and clear
+  the red latch by proving convergence UNDER THE github_ci_apply CI IDENTITY -- a real apply-sandbox
+  workflow_dispatch run, NOT a local re-plan under agent_platform_admin (which masked this exact gap
+  in the original closure's VP9). Restores the sandbox CD pipeline to green and resolves rec-2276.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-apply-ssm-list-closure.yaml
+phase: >-
+  Platform tier T2.20 (sandbox Terraform CD convergence substrate, CD.35 Wave 1); ci_rca follow-up to
+  PLAN-terraform-sandbox-convergence-closure, resolving rec-2276. Product Phase 1 complete; Platform
+  runs in parallel. Not a product-phase item.
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      In the SSMParameterRead Sid (around line 782-786), add "ssm:List*" to the Action list so it
+      becomes ["ssm:Get*", "ssm:Describe*", "ssm:List*"], keeping Resource scoped to
+      parameter/agent-platform/*. This covers ssm:ListTagsForResource (a List*-class action the AWS
+      provider issues on every aws_ssm_parameter refresh) for the ducklake function-URL parameters
+      (/agent-platform/ducklake/reader_url, writer_url) and completes the per-service read-wildcard
+      closure for SSM. WRITE Sids and the IAM-read Sids stay enumerated + ARN-scoped (unchanged).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Correct the "DuckLake IAM read-wildcard closure" note: it already CLAIMS SSMParameterRead uses
+      Get*/List* wildcards, but the code only had Get*/Describe* -- the doc oversold the closure.
+      Affirm SSMParameterRead now grants Get*/Describe*/List*, and soften the "no further
+      iterative-discovery rounds are expected" line to record this SSM List* completion round (rec-2276).
+bundled_recommendations:
+  - rec-2276
+infrastructure_dependencies:
+  - >-
+    EXECUTOR ENVIRONMENT: this plan MUST run where the agent_platform_admin (PlatformAdmin) profile AND
+    GitHub MCP actions-trigger access are present. The fix is an IAM change the Decision-77 guard
+    fail-closes, so it lands only via a human-gated agent_platform_admin apply, and the red latch
+    clears only via a GitHub workflow_dispatch. An agent in the default CC-web container (PlatformDev
+    only) CANNOT execute this plan -- PlatformDev cannot read or apply IAM. First check:
+    `aws sts get-caller-identity --profile agent_platform_admin`; if it fails, STOP.
+  - >-
+    oidc.tf modifies the github_ci_apply IAM inline policy. IAM is in the Decision-77 guard's
+    fail-closed set, so it CANNOT auto-apply: the change lands via a ONE-TIME human-gated
+    agent_platform_admin apply (B1). No Lambda code deploy
+    (compute_affected_artifacts({oidc.tf, CLAUDE.md}) == {}).
+  - >-
+    Apply ORDERING (critical): merge the fix to main FIRST, then run the agent_platform_admin apply
+    from a FRESH main checkout, then dispatch-ack. Applying from the feature branch before the merge
+    lands risks the post-merge CI plan wanting to REVOKE ssm:List* (live role ahead of main config).
+    Keep main config == live role at every step.
+  - >-
+    Trust-lockout invariant (platform_roles.tf banner): the admin apply MUST show NO assume_role_policy
+    diff on PlatformDev / PlatformAdmin / any CI or ducklake role. Only the github_ci_apply INLINE
+    POLICY action list changes. Any trust diff => STOP (agent_static assume-role lockout risk).
+  - >-
+    Convergence record s3://agent-platform-data-lake/convergence/personal/sandbox.json is RED at
+    commit 242178f9cfa1482ae54edba6b2acf8a7ede7e7e4 (latched by run 27790838857). It clears ONLY via a
+    workflow_dispatch acknowledge_red_commit run whose input names the red commit SHA or rec-2276; a
+    plain push stays REFUSED. The merge-push apply-sandbox run (step 4) will be REFUSED (expected; it
+    dedupes to rec-2276 and files no new rec, per terraform/CLAUDE.md convergence-anchor).
+acceptance_criteria:
+  - >-
+    terraform/personal/oidc.tf SSMParameterRead grants ssm:List* scoped to parameter/agent-platform/*
+    (rec-2276 acceptance: `grep -E 'ssm:(List\*|ListTagsForResource)' terraform/personal/oidc.tf |
+    grep -v feature-flags` is non-empty), and a LIVE simulate-principal-policy against the
+    github_ci_apply role returns "allowed" for ssm:ListTagsForResource on
+    /agent-platform/ducklake/{reader,writer}_url.
+  - >-
+    The deterministic guard is UNCHANGED and still returns exit 2 on the github_ci_apply IAM update
+    (no weakening, Decision 77); tests/test_terraform_apply_guard.py all pass and
+    scripts/terraform_apply_guard.py is not modified.
+  - >-
+    A workflow_dispatch apply-sandbox run UNDER THE github_ci_apply CI IDENTITY completes GREEN (plan
+    with zero AccessDenied, guard PASS on a no-IAM-diff plan, apply success) and the convergence record
+    is green at main HEAD. THIS run is the authoritative convergence proof -- a local re-plan under
+    agent_platform_admin is NOT acceptable as proof (it masks CI-role grant gaps; that is how the
+    original closure missed ssm:List*).
+  - The red convergence latch at 242178f9 is cleared (record status == green).
+  - "rec-2276 is closed via the Resolves: trailer (rec-autoclose)."
+  - >-
+    terraform/CLAUDE.md's closure note matches the code (SSMParameterRead = Get*/Describe*/List*); no
+    docs/DECISIONS.md edit; no Lambda build/deploy.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the oidc.tf SSM edit is valid HCL, formatted, and satisfies the rec-2276 acceptance grep.
+    command: |-
+      terraform -chdir=terraform/personal init -backend=false -input=false -no-color >/dev/null \
+        && terraform -chdir=terraform/personal validate -no-color \
+        && terraform -chdir=terraform/personal fmt -check -no-color \
+        && grep -E 'ssm:(List\*|ListTagsForResource)' terraform/personal/oidc.tf | grep -v feature-flags
+    expected: >-
+      validate success; fmt -check exits 0 (no diff); the grep prints the SSMParameterRead List* line
+      (rec-2276 acceptance met). Overall exit 0.
+    fix_if: >-
+      HCL/format error -> run terraform fmt and fix the Action array. Grep empty -> ssm:List* was not
+      added to a non-feature-flags Sid; add it to SSMParameterRead.
+  - step: 2
+    phase: pre-deploy
+    action: Regression-guard the deterministic guard (must stay byte-for-byte behavioural -- no weakening, Decision 77).
+    command: "bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q"
+    expected: "All guard tests pass -- an aws_iam_role_policy update still blocks (exit 2), clean update passes, neon rules intact."
+    fix_if: "A guard test fails -> scripts/terraform_apply_guard.py was inadvertently modified; revert it (it must NOT change)."
+  - step: 3
+    phase: post-deploy
+    action: "[human-gated, agent_platform_admin] From a fresh main checkout, plan terraform/personal and confirm the guard flags ONLY the github_ci_apply IAM update (exit 2), NO trust/destroy diff, then apply."
+    command: |-
+      terraform -chdir=terraform/personal init -input=false -backend-config=backend-sandbox.hcl >/dev/null \
+        && terraform -chdir=terraform/personal plan -input=false -var-file=terraform.personal.tfvars -out=/tmp/ssm.plan \
+        && terraform -chdir=terraform/personal show -json /tmp/ssm.plan > /tmp/ssm.plan.json \
+        && bin/venv-python scripts/terraform_apply_guard.py /tmp/ssm.plan.json; echo "guard_rc=$?"
+    expected: >-
+      Plan shows an update to aws_iam_role_policy.github_ci_apply ONLY (plus any pre-existing
+      guard-PASS resource), NO assume_role_policy diff, NO destroy/replace; guard_rc=2 (IAM update
+      correctly blocked). After presenting the plan and getting acceptance, `terraform -chdir=
+      terraform/personal apply /tmp/ssm.plan` (agent_platform_admin) succeeds: 0 added / 1 changed / 0
+      destroyed.
+    fix_if: >-
+      Any assume_role_policy (trust) diff or destroy/replace -> STOP (lockout/blast-radius risk), do
+      NOT apply, RCA. guard_rc != 2 -> the guard was weakened (must be 2).
+  - step: 4
+    phase: post-deploy
+    action: "Authoritative convergence proof: after the dispatch-ack run, confirm the record is GREEN at main HEAD (cleared the red latch under the CI identity)."
+    command: |-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform \
+        | bin/venv-python -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['commit_sha']); sys.exit(0 if r['status']=='green' else 1)"
+    expected: >-
+      Prints 'green <main-head-sha>'; exit 0. The workflow_dispatch acknowledge_red_commit run plan-ran
+      under the github_ci_apply CI identity with zero AccessDenied, guard-PASSed (no IAM diff -- already
+      applied in step 3), applied no-op, and wrote green. Red latch cleared.
+    fix_if: >-
+      Still red, or green at the OLD commit -> the dispatch-ack run failed or did not run. Inspect the
+      run logs: a NEW AccessDenied on a different action = another refresh-read gap (add that grant
+      scoped, re-apply step 3, re-dispatch); a guard exit-2 = an unexpected IAM diff (config != live;
+      re-check the apply landed). Do NOT hand-write green to the record (Decision 55 anti-masking;
+      apply-identity-only write).
+  - step: 5
+    phase: post-deploy
+    action: Live closure proof -- simulate the applied github_ci_apply role for ssm:ListTagsForResource on the ducklake parameter ARNs.
+    command: |-
+      ACC=$(aws sts get-caller-identity --query Account --output text --profile agent_platform_admin); \
+      aws iam simulate-principal-policy \
+        --policy-source-arn "arn:aws:iam::$ACC:role/agent-platform-github-ci-apply" \
+        --action-names ssm:ListTagsForResource ssm:GetParameter \
+        --resource-arns "arn:aws:ssm:eu-west-2:$ACC:parameter/agent-platform/ducklake/reader_url" \
+                        "arn:aws:ssm:eu-west-2:$ACC:parameter/agent-platform/ducklake/writer_url" \
+        --profile agent_platform_admin \
+        --query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" --output text
+    expected: "Empty output -> ssm:ListTagsForResource and ssm:GetParameter are allowed by the live policy on both ducklake parameter ARNs."
+    fix_if: "Any action name printed (implicit/explicitDeny) -> the ssm:List* Sid did not apply or is mis-scoped; fix the Action/Resource and re-apply via agent_platform_admin."
+constraints:
+  - >-
+    The deterministic guard stays UNCHANGED and fail-closed on IAM/trust/destroy (Decision 77).
+    scripts/terraform_apply_guard.py must NOT be edited; the IAM update is meant to block auto-apply
+    (guard_rc=2) and land via the human-gated admin apply. Weakening the guard to auto-apply IAM is
+    out of scope and contradicts Decision 77.
+  - >-
+    The convergence proof MUST be a real apply-sandbox workflow_dispatch run under the github_ci_apply
+    CI identity (VP4). Do NOT accept a local `terraform plan`/apply under agent_platform_admin as the
+    convergence proof -- the admin profile holds ssm:ListTagsForResource and MASKS CI-role grant gaps.
+    This masking is the root cause of how the original closure (VP9 re-planned as admin) shipped this
+    gap; do not repeat it.
+  - >-
+    Add only the SSM READ action ssm:List* to SSMParameterRead, scoped to parameter/agent-platform/*.
+    Do not add any write action and do not broaden the Resource. WRITE Sids and IAM-read Sids stay
+    enumerated + ARN-scoped.
+  - >-
+    The executor MUST hold the agent_platform_admin profile and GitHub MCP actions-trigger access.
+    If `aws sts get-caller-identity --profile agent_platform_admin` fails, STOP -- the IAM apply and
+    the red-clear cannot be performed from a PlatformDev-only environment.
+  - >-
+    Do NOT manually overwrite the convergence record to green. The only sanctioned green write is a
+    successful apply from the dispatch-ack run (CD.35 apply-identity-only write). Faking green
+    re-hides a real non-convergence (Decision 55 anti-masking).
+  - >-
+    Red clears ONLY via workflow_dispatch acknowledge_red_commit (= rec-2276 OR the red commit
+    242178f9cfa1482ae54edba6b2acf8a7ede7e7e4). A plain push stays REFUSED (terraform/CLAUDE.md
+    convergence anchor). Do not edit docs/DECISIONS.md; no Lambda build/deploy.
+  - >-
+    Python 3.12, type hints, ruff line length 127, no emojis, plain ASCII hyphens. Use bin/venv-python.
+context:
+  - >-
+    Incident + RCA (rec-2276, source=ci_rca, Critical): apply-sandbox run 27790838857 (Terraform plan,
+    against main 242178f9) failed under the github_ci_apply CI identity with AccessDeniedException on
+    ssm:ListTagsForResource for arn:aws:ssm:eu-west-2:&lt;account-id&gt;:parameter/agent-platform/ducklake/
+    reader_url (and writer_url), latching the convergence record red. Root cause: oidc.tf
+    SSMParameterRead grants ssm:Get*/Describe* but not ssm:List*; the AWS provider calls
+    ssm:ListTagsForResource (a List*-class action) on every aws_ssm_parameter refresh. The
+    SSMFeatureFlagsManage Sid grants ssm:ListTagsForResource but is scoped to
+    /agent-platform/feature-flags/*, which excludes the ducklake params (ducklake_lambdas.tf:349,361).
+  - >-
+    This is the SSM round the PLAN-terraform-sandbox-convergence-closure read-wildcard closure missed:
+    it set SSMParameterRead to Get*/Describe* instead of the documented per-service Get*/List* pattern.
+    terraform/CLAUDE.md's closure note already CLAIMS Get*/List* for SSMParameterRead, so the doc
+    oversold the closure -- fixing the code to add ssm:List* makes the code match the doc.
+  - >-
+    Verification-gap lesson (why the closure shipped the gap): the closure's VP9 ("converged, No
+    changes") re-planned under agent_platform_admin (the terraform/personal provider default profile
+    var.aws_profile), which holds ssm:ListTagsForResource and MASKED the CI-role gap; VP7's simulate
+    action-list did not include ssm:ListTagsForResource. The first run under the real github_ci_apply
+    CI identity surfaced it. This plan's VP4 therefore requires a real CI-identity apply-sandbox run as
+    the authoritative convergence proof.
+  - >-
+    Decisions cited: Decision 77 (sandbox auto-apply guard, fail-closed on any IAM/trust/destroy --
+    unchanged); CD.35 / T2.20 (the convergence anchor; a red record clears ONLY via the dispatch-ack
+    acknowledge-and-retry run AFTER the ci_rca rec is reviewed -- THIS plan is the review of rec-2276);
+    Decision 55 (anti-masking / loud failure -- the red latch is the honest state; do not fake green);
+    Decision 72 (RCA-as-plan-source for ci_rca recs; rec-2276 is the RCA anchor and the Resolves target).
+  - >-
+    Decision-scout / decision-alignment: this plan is a direct completion of an already-ratified
+    closure pattern (per-service read wildcards) and keeps the guard fail-closed, so it does not
+    contradict any active decision. The single risk surface (guard weakening) is explicitly forbidden
+    in constraints. No new standing prose-architecture doc is created (Decision 86); the only doc edit
+    corrects an existing directory CLAUDE.md note to match code.
+pre_implementation_checklist:
+  - Branch confirmed not on main.
+  - "agent_platform_admin reachable: `aws sts get-caller-identity --profile agent_platform_admin` succeeds (if it fails, STOP -- wrong environment)."
+  - terraform/personal/oidc.tf SSMParameterRead Sid located (around line 782-786).
+  - "Convergence record confirmed red at 242178f9: `aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform`."
+  - rec-2276 read and understood (the RCA anchor and Resolves target).
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf: in the SSMParameterRead Sid (line ~784), change
+    Action = ["ssm:Get*", "ssm:Describe*"] to ["ssm:Get*", "ssm:Describe*", "ssm:List*"]; leave
+    Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"] and the
+    SSMDescribeParameters and SSMFeatureFlagsManage Sids unchanged. Run `terraform -chdir=terraform/
+    personal fmt`.
+  - >-
+    terraform/CLAUDE.md: in the "DuckLake IAM read-wildcard closure" bullet, affirm SSMParameterRead
+    now grants ssm:Get*/Describe*/List* (ssm:ListTagsForResource covered for /agent-platform/* incl.
+    the ducklake function-URL params), and replace "no further iterative-discovery rounds are expected"
+    with a note that the SSM List* completion round landed (rec-2276) -- the read-wildcard set is now
+    Get*/List* or Describe*/List* across all eight READ Sids as the note already claims.
+  - "Execute pre-deploy Verification Plan steps 1-2; loop until green BEFORE opening the PR."
+  - >-
+    Open a PR and squash-merge to main with a `Resolves: rec-2276` trailer (rec-autoclose closes it).
+    Expect the merge-push apply-sandbox run to be REFUSED at the convergence precondition (record is
+    red) -- this is expected, no apply runs, and it dedupes to rec-2276 (no new rec filed).
+  - >-
+    Human-gated closure apply (B1, VP3): from a fresh main checkout, run the step-3 plan+guard, present
+    the plan (expect ONLY the github_ci_apply policy update, NO trust/destroy, guard_rc=2), get
+    acceptance, then `terraform -chdir=terraform/personal apply /tmp/ssm.plan` via agent_platform_admin.
+  - >-
+    Clear the red latch + prove convergence under the CI identity: trigger a workflow_dispatch on
+    .github/workflows/terraform-apply-sandbox.yml (ref=main) with
+    acknowledge_red_commit=rec-2276 (or 242178f9cfa1482ae54edba6b2acf8a7ede7e7e4) via the GitHub MCP
+    actions-trigger. Watch the run: precondition red -> ACK -> proceed; plan succeeds under the CI
+    identity (zero AccessDenied); guard PASS (no IAM diff, already applied); subagent review PROCEED;
+    apply success -> record GREEN. If a DIFFERENT AccessDenied surfaces, add that grant scoped, re-apply
+    (B1), and re-dispatch -- bounded; ssm:List* is the only known gap from run 27790838857.
+  - "Execute post-deploy Verification Plan steps 4-5 (record green at HEAD; live simulate ALLOWED). On an unrecoverable V3 failure STOP and RCA (Decision 55) -- do not hand-patch or fake the record."
+  - "Report: oidc.tf diff, pre/post-deploy VP results, the admin-apply outcome (added/changed/destroyed), the dispatch-ack run conclusion + final convergence record (status + commit), and confirmation rec-2276 is closed."
+work_areas: []
+rollback: >-
+  Config-only revert: restore SSMParameterRead to ["ssm:Get*", "ssm:Describe*"] in oidc.tf and
+  re-apply via agent_platform_admin; revert the terraform/CLAUDE.md note. The convergence record
+  tracks apply OUTCOMES, not config, so a revert does not corrupt it; if a genuine red latch persists,
+  clear it via `workflow_dispatch acknowledge_red_commit=<commit-or-rec-id>` after the revert applies
+  clean. No data migration, no Lambda redeploy. (Reverting re-opens the rec-2276 failure mode, so only
+  roll back if the grant itself proves harmful -- unlikely for a scoped read action.)
