@@ -23,7 +23,7 @@ from scripts.telemetry_schemas import (
     TelemetryTranscripts,
 )
 
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class SchemaIntegrityVerifier(Verifier):
         "scripts/ops_data_portal.py",
         "config/agent/data_quality/**",
     ]
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # network -- awswrangler catalog
 
     @property
     def tier(self) -> VerifierTier:

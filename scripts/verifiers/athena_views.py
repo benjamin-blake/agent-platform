@@ -10,13 +10,19 @@ import logging
 
 from scripts.aws_profile import resolve_aws_profile
 
-from .harness import Verifier, VerifierResult, VerifierStatus
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierStatus, VerifierTier
 
 logger = logging.getLogger(__name__)
 
 
 class AthenaViewsVerifier(Verifier):
     """Checks Athena connectivity and basic view health."""
+
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # network
+
+    @property
+    def tier(self) -> VerifierTier:
+        return VerifierTier.V3
 
     async def verify(self) -> VerifierResult:
         try:

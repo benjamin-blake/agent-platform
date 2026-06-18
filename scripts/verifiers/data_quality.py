@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scripts.aws_profile import resolve_aws_profile
 
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 _DQ_DIR = _ROOT / "config" / "agent" / "data_quality"
@@ -24,6 +24,7 @@ class DataQualityVerifier(Verifier):
         "scripts/ops_data_portal.py",
         "src/data/**",
     ]
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # network + live-state DQ run
 
     @property
     def tier(self) -> VerifierTier:

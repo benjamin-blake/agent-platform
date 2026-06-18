@@ -56,6 +56,23 @@ class VerifierTier(Enum):
         return self.value
 
 
+class Hermeticity(Enum):
+    """Clock/network/randomness disposition of a verifier.
+
+    HERMETIC - result depends only on inputs (code structure, config, filesystem contents).
+        No absolute clock reads, live network calls, or randomness. Safe to cache and replay.
+    NON_HERMETIC_BY_CONSTRUCTION - result depends on wall-clock time, live filesystem state,
+        network I/O, or randomness. Correct by design; the explicit declaration silences the
+        validate_verifier_hermeticity AST gate in validate.py.
+    """
+
+    HERMETIC = "HERMETIC"
+    NON_HERMETIC_BY_CONSTRUCTION = "NON_HERMETIC_BY_CONSTRUCTION"
+
+    def __str__(self) -> str:
+        return self.value
+
+
 @dataclass
 class VerifierResult:
     """The result of a single verification check."""
@@ -89,6 +106,7 @@ class Verifier(ABC):
     """Abstract base class for all verifiers."""
 
     covers: list[str] = ["**"]
+    hermeticity: Hermeticity = Hermeticity.HERMETIC
 
     @property
     def name(self) -> str:
