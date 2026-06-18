@@ -172,6 +172,39 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch jobs JSON
+        id: jobs_json
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          gh run view "$RUN_ID" --repo "${{ github.repository }}" --json jobs \
+            > /tmp/ci-rca-jobs.json 2>/dev/null || echo '{}' > /tmp/ci-rca-jobs.json
+
+      - name: Generate evidence bundle
+        id: evidence
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
+        continue-on-error: true
+        env:
+          S3_LOG_BUCKET: agent-platform-data-lake
+        run: |
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          WORKFLOW_NAME="${{ github.event.workflow_run.name || 'unknown' }}"
+          .venv/bin/python -m scripts.ci_rca_evidence \
+            --log-file /tmp/ci-rca-failed.log \
+            --jobs-file /tmp/ci-rca-jobs.json \
+            --workflow-name "$WORKFLOW_NAME" \
+            --workflow-run-id "$RUN_ID" \
+            > /tmp/ci-rca-evidence-out.txt 2>/tmp/ci-rca-evidence-err.txt || true
+          BUNDLE_SHA=$(grep '^BUNDLE_SHA=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          BUNDLE_S3_URI=$(grep '^BUNDLE_S3_URI=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          BUNDLE_PATH=$(grep '^BUNDLE_PATH=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          echo "bundle_sha=${BUNDLE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "bundle_s3_uri=${BUNDLE_S3_URI}" >> "$GITHUB_OUTPUT"
+          echo "bundle_path=${BUNDLE_PATH}" >> "$GITHUB_OUTPUT"
+
       - name: Run ci-rca agent
         id: rca_agent
         if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
@@ -180,10 +213,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          BUNDLE_SHA="${{ steps.evidence.outputs.bundle_sha }}"
+          BUNDLE_S3_URI="${{ steps.evidence.outputs.bundle_s3_uri }}"
+          BUNDLE_PATH="${{ steps.evidence.outputs.bundle_path }}"
+          EVIDENCE_CONTEXT=""
+          if [ -n "$BUNDLE_SHA" ]; then
+            EVIDENCE_CONTEXT=" Evidence bundle SHA: ${BUNDLE_SHA}. S3 URI: ${BUNDLE_S3_URI}. Local path: ${BUNDLE_PATH}."
+          fi
           # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
           # trailing positional prompt, leaving claude with no input ("Input must be provided
           # either through stdin or as a prompt argument when using --print").
-          PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log."
+          PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log.${EVIDENCE_CONTEXT}"
           printf '%s' "$PROMPT" | claude -p \
             --output-format json \
             --max-turns 30 \
