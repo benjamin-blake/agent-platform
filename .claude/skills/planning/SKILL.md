@@ -39,10 +39,8 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`token_anomalies` non-empty** -- Surface as planning context: "Context file token warning: [file list] exceed the 50K token threshold."
 - **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: "Data quality checks failing ([N] failures across [tables]). Run `bin/venv-python -m scripts.data_quality_runner` for details." Non-blocking but relevant if the plan touches data pipelines or table schemas.
 - **`data_quality.last_run` is null** -- Note: "Data quality checks have never been run. After fixing the pipeline, run `bin/venv-python -m scripts.data_quality_runner` to establish a baseline." Non-blocking.
-- **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK**. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Surface the list at the top of the planning context. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.)
-- **`ci_rca_likely_resolved_recs` non-empty** -- **SOFT PROMPT** (not a block). These recs appear to have been fixed by a recent main commit but were not closed automatically. Surface as: "LIKELY RESOLVED -- verify and close before /plan: `bin/venv-python -m scripts.ops_data_portal --update-rec <id> --status closed --resolution 'Fixed by ...'`". Do NOT hard-block on these; close them and proceed.
-- **`ci_rca_liveness_alert` non-null** -- **HARD ALERT**. Main CI has been red with no corresponding ci-rca rec for >30 minutes. Triage before continuing.
-- **`forward_fix_recursion_alert` non-null** -- **HARD ALERT**. Three or more ci-rca recs targeting the same file were filed in the last 24 hours. Triage before continuing.
+- **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK** at commitment time. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.) Full triage surfacing and the SOFT PROMPT / HARD ALERT classification is `/orient`'s responsibility -- run `/orient` for the full ci-rca visibility layer.
+- **`ci_rca_likely_resolved_recs`, `ci_rca_liveness_alert`, `forward_fix_recursion_alert`** -- Full triage (SOFT PROMPT, HARD ALERT, forward-fix recursion) is surfaced by `/orient`. If still unresolved when `/plan` runs, apply the close or triage guidance from the orient skill.
 - **`budget_bypass_alert` non-null** -- **Informational**. Surface the count and recent bypass reasons as planning context: "Fast-tier budget bypassed N times in 7 days." Repeated `--ignore-budget` use indicates fast-tier drift and likely warrants a planning session to revisit the budget or identify which check is slow.
 
 ### What Telemetry Health Represents
@@ -64,24 +62,11 @@ If pipeline health is critical (no sessions in 7 days), the plan should prioriti
 
 ## Platform Roadmap Eligibility (Workflow Step 2)
 
-Read `preflight.platform_roadmap` from the already-loaded preflight JSON (Step 1 produced it). Surface the following to the planning agent context before any clarification or scoping work begins:
+Broad orientation -- surfacing `next_eligible`, `strategic_pending`, the eligibility summary, the soft-warn exception category list, and ci-rca triage -- is the responsibility of `/orient`. Run `/orient` before `/plan` to choose what to work on; `/plan` assumes a specific item (or ci-rca rec) has already been selected. The orient skill (`.claude/skills/orient/SKILL.md`) holds the full eligibility display and triage rules.
 
-- `next_eligible[]` -- tier_items whose depends_on are all complete and that are eligible to start now. These are the canonical candidates for this planning session.
-- `strategic_pending[]` -- tier_items flagged `strategic: true` that are blocked only by the executor freeze (AGENTS.md Temporary Operational Constraints). Surface as context only; do not scope STRATEGIC plans during the freeze.
+Retained here: the per-item **Tier Item Freshness Gate** (below), which fires at commitment time once intent resolves to a specific tier_item id. `/orient` references that gate; it does not re-author it.
 
-Print a summary line to the human (non-blocking):
-> "Platform roadmap: N eligible items (T-X.Y, ...). N strategic items pending freeze lift."
-
-If `next_eligible` is empty and `strategic_pending` is also empty, note that no roadmap work is currently eligible and proceed with the human's stated intent.
-
-**Soft-warn exception categories:** when the human's stated intent names work that does not resolve to any `tier_items[].id`, do NOT reject the session -- issue a soft warning and proceed. Documented exception categories that bypass tier_item alignment:
-- `ci_rca` -- CI failure investigation driven by a ci-rca rec (see preflight `ci_rca_recs`)
-- `hotfix` -- production incident or critical bug fix with immediate blast-radius concern
-- `security_advisory` -- security vulnerability requiring immediate remediation
-- `ad_hoc_rec` -- standalone recommendation from `logs/.recommendations-log.jsonl` not yet promoted to a tier_item
-- `user_explicit_out_of_scope` -- human explicitly states the work is outside current tier scope
-
-Reject only when the intent *claims* tier_item alignment (e.g., "implementing T-1.6") but the referenced id does not exist or the item's depends_on are not satisfied.
+**Soft-warn exception categories** (used by the Tier Item Freshness Gate firing condition): `ci_rca`, `hotfix`, `security_advisory`, `ad_hoc_rec`, `user_explicit_out_of_scope`. When the human's stated intent matches one of these and names no tier_item, the Freshness Gate is skipped. Do NOT reject the session -- issue a soft warning and proceed. Reject only when the intent *claims* tier_item alignment but the referenced id does not exist or its depends_on are not satisfied.
 
 ## Clarification (Workflow Step 3)
 Decompose the human's input into structured components:

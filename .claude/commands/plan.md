@@ -38,14 +38,9 @@ Save the printed UUID for the `session_postflight --close-session` call in Step 
 Use the preflight JSON `context` field (`roadmap_phase`, `open_decisions_count`, `recent_sessions`). Read `docs/PROJECT_CONTEXT.md` fully.
 If the request references a recommendation ID, search `logs/.recommendations-log.jsonl`, read briefing files if they exist, and load dependencies.
 
-Also surface `preflight.platform_roadmap.next_eligible` and `preflight.platform_roadmap.strategic_pending` to the human so the eligibility surface is visible without manually grepping the YAML. Apply the **Platform Roadmap Eligibility** rules from your `planning` skill to print the summary line and handle soft-warn exception categories.
+**Orientation:** Run `/orient` before `/plan` to choose what to work on. `/plan` assumes a specific item (or ci-rca rec) has already been selected. If no item has been chosen yet, recommend `/orient` now before proceeding to Step 3.
 
-**CI RCA Recs (soft/hard distinction):** The preflight report now differentiates two ci_rca fields:
-- `ci_rca_unresolved_recs` -- **HARD BLOCK** (no related-work exemption). Do not scope unrelated work.
-- `ci_rca_likely_resolved_recs` -- **SOFT PROMPT** (not a block). Surface as "LIKELY RESOLVED -- verify and close before proceeding" and assist the user to close them. Once closed, proceed normally.
-- `recent_main_commits` -- Planning context only; surface the last 5 main commits so the human can see what landed recently.
-
-Apply the soft/hard distinction from your `planning` skill's Preflight Constraints section.
+**CI-RCA block-respect:** if `ci_rca_unresolved_recs` is non-empty, `/plan` cannot scope unrelated work -- HARD BLOCK. See the Related-Work Check in your `planning` skill for the three conditions that permit planning despite open ci-rca recs. Full triage is surfaced by `/orient`.
 
 ## Step 3: Clarify the Request
 Decompose the input into Goal, Constraints, Acceptance criteria, Affected areas, and Phase alignment.

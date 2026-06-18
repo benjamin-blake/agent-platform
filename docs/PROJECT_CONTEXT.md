@@ -145,6 +145,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Model registry (resolver, escalation) | [scripts/model_registry.py](../scripts/model_registry.py) |
 | Gemini CLI context file | [GEMINI.md](../GEMINI.md) |
 | Instruction architecture contract | [docs/contracts/instruction-architecture.md](../docs/contracts/instruction-architecture.md) |
+| Interactive orientation workflow | [.claude/commands/orient.md](../.claude/commands/orient.md) (canonical). Read-only; run before `/plan` to choose what to work on. |
 | Interactive planning workflow | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
 | Interactive implementation workflow | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
 | Interactive workflow skills (methodology) | [.claude/skills/](../.claude/skills/) (canonical) |
