@@ -160,6 +160,51 @@ For each identified tier_item, load its `exit_criteria[]` from `docs/ROADMAP-PLA
 - **Strict subset pass (>=1 but not all)** -> stage `status: in_progress` + `progress_note: "<one-line description of what shipped this session>"`. If the item already has a `progress_note`, append a dated bullet (e.g., `"- 2026-05-20: shipped criteria 1, 3"`) rather than overwriting.
 - **Zero criteria pass** -> no YAML change.
 
+### Decomposition-hint exemption inheritance (T-1.12 subset g)
+
+A STRATEGIC parent tier_item that was split into atomic IMPLEMENTATION plans under the freeze
+override (AGENTS.md Temporary Operational Constraints / CD.17; the T2.19 pattern) carries a
+`decomposition_hints` block naming its children:
+```yaml
+decomposition_hints:
+  split_by: <subsystem|per_lambda|phase|...>
+  atomic_plans:
+    - "PLAN-<child-slug> -- <description> (subset <x>)"
+  rationale: |
+    ...
+```
+When the bookkeeping walk files a status outcome for the current plan, resolve the plan's
+effective `bootstrap_completion_exempt` by INHERITANCE from its parent -- do NOT read it from
+the child's own (often absent) flag:
+
+1. **Find the parent.** Scan `docs/ROADMAP-PLATFORM.yaml` `tier_items[]` for an item whose
+   `decomposition_hints.atomic_plans[]` names the current plan. Match on the `PLAN-{slug}` token
+   at the head of each entry (`entry.strip().split()[0] == "PLAN-{slug}"`). Some parents enumerate
+   their children as prose descriptions rather than `PLAN-{slug}` tokens (e.g. T1.12's
+   "Ratify lambda-*.yaml" entries, T1.6's phase descriptions); when no head-token match exists,
+   map the current plan to its parent via the plan's Phase field / the decomposition rationale.
+2. **Inherit the flag.** The child's effective exemption is the PARENT's live
+   `bootstrap_completion_exempt` value. The per-item flag is the single source of truth -- the
+   document-level "Bootstrap clause (COMPLETION exemption)" prose enumeration is documentation
+   only. A child of an exempt parent (`true`) MAY stage `status: complete` on its slice even while
+   the parent's gating CD is still `state: pending`; a child of a non-exempt parent (`false`)
+   follows the normal flow and stays gated on CD ratification. Canonical examples: T-1.12 is
+   `bootstrap_completion_exempt: true`, so its subset children inherit `true` (they may complete
+   ahead of CD.25); T1.12 is `false`, so its per-Lambda children inherit `false` and ratify
+   post-CD.16 under the normal flow.
+3. **Read-only resolution.** Inheritance never writes the parent's `decomposition_hints` or the
+   child's flag during bookkeeping -- it is read-only resolution at filing time. Record the
+   inheritance in the bookkeeping output (e.g. "PLAN-<child-slug> inherits
+   bootstrap_completion_exempt=true from parent T-1.12"). This is not a license to author STRATEGIC
+   children: the freeze stays in force and atomic children remain IMPLEMENTATION plans.
+
+**Self-application invariant (T-1.12 subset g):** `PLAN-implement-skill-decomposition-hints` is
+itself an atomic child named in T-1.12's `decomposition_hints.atomic_plans`. The first `/implement`
+run using this rule SHOULD therefore resolve this plan's exemption as inherited `true` from parent
+T-1.12 and, subset (g) being T-1.12's last open exit criterion, stage `T-1.12 -> status: complete`
+in the same bookkeeping pass. If the rule works, T-1.12 self-flips; if it does not, T-1.12 stays
+`in_progress` and the discrepancy is observable (mirrors the T-1.10 self-application invariant below).
+
 ### Replacement closure check (cutover / supersession items)
 Runs during the same bookkeeping walk for any checked tier_item whose name or intent implies a
 replacement: cutover, migration, backend swap, retirement, supersession, "replaces X". A
