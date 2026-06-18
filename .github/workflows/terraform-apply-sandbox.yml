@@ -184,7 +184,34 @@ jobs:
       - name: Terraform init (S3 backend, sandbox)
         if: success()
         working-directory: ${{ env.WORKDIR }}
-        run: terraform init -input=false -backend-config=backend-sandbox.hcl
+        run: |
+          # Bounded retry for transient registry.terraform.io 5xx (rec-2237).
+          # Transient signatures (parity with _TRANSIENT_INIT_SIGNATURES in scripts/validate.py):
+          #   "502", "Bad Gateway", "could not query provider registry", "failed after "
+          set +e
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"
+              break
+            fi
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+              if [ "$attempt" -lt 3 ]; then
+                delay=$(( 2 ** attempt ))
+                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+                echo "$out" >&2
+                sleep "$delay"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+            echo "$out" >&2
+            set -e
+            exit "$rc"
+          done
+          set -e
 
       - name: Terraform plan
         id: plan
@@ -196,11 +223,29 @@ jobs:
 
       - name: Deterministic apply guard (fail-closed)
         id: guard
-        # No continue-on-error: ANY non-zero exit (2 tripped OR 1 internal error) fails this step
-        # and, via the success() gate below, blocks apply. This step is the load-bearing control.
+        # Three-way exit code branch (PLAN-terraform-sandbox-convergence-closure / rec-2238):
+        #   exit 0 -- guard PASS, apply may proceed
+        #   exit 2 -- guard BLOCKED (IAM/trust/destroy diff); sets blocked=true output and exits 2
+        #             so record_write skips the S3 write (same semantics as precondition refusal)
+        #   exit 1 -- internal guard error; apply blocked, record_write writes red (fail-closed,
+        #             Decision 77 / Decision 55 anti-masking)
+        # B1: scripts/terraform_apply_guard.py is NOT modified -- exit-2 wiring is shell-layer only.
         if: success()
         working-directory: ${{ env.WORKDIR }}
-        run: python ../../scripts/terraform_apply_guard.py plan.json
+        run: |
+          set +e
+          python ../../scripts/terraform_apply_guard.py plan.json
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "Guard BLOCKED (exit 2): IAM/trust/destroy diff detected; apply suppressed." >&2
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            exit 2
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "Guard internal error (exit ${rc}); failing closed." >&2
+            exit 1
+          fi
 
       - name: Subagent plan review
         # Second gate: only runs if the guard passed. A non-PROCEED verdict fails the step and
@@ -241,12 +286,15 @@ jobs:
         id: record_write
         # CD.35 5.5 integrity anchor: apply-identity-only write, ALWAYS-run so a failed apply writes
         # red (never leaves a stale green that would defeat the precondition). The step itself is
-        # `if: always()`; it SKIPS the S3 write when the precondition refused, so a refused run never
-        # overwrites/corrupts the record (its ETag must be identical before and after a refused
-        # attempt). green iff the apply step succeeded; red on any non-success (plan/guard/review/apply).
+        # `if: always()`; it SKIPS the S3 write when the precondition refused OR the guard blocked,
+        # so neither a refused nor a blocked run overwrites/corrupts the record. green iff apply
+        # succeeded; red on any non-success (plan/guard internal error/review/apply). Guard BLOCK
+        # (exit 2) is treated as precondition refusal -- NOT a failure -- so the record is not
+        # latched red (rec-2239, Decision 55 anti-masking).
         if: always()
         env:
           REFUSED: ${{ steps.precond.outputs.refused }}
+          BLOCKED: ${{ steps.guard.outputs.blocked }}
           SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}
@@ -255,6 +303,10 @@ jobs:
         run: |
           if [ "$REFUSED" = "true" ]; then
             echo "Precondition refused on a red record; NOT overwriting the convergence record (anchor integrity)."
+            exit 0
+          fi
+          if [ "$BLOCKED" = "true" ]; then
+            echo "Guard blocked (IAM/trust/destroy diff): NOT overwriting convergence record (anti-masking, rec-2239)."
             exit 0
           fi
           if [ "$APPLY_OUTCOME" = "success" ]; then

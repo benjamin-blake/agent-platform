@@ -2517,10 +2517,42 @@ def run_python_checks(failed: list[str]) -> None:
         print("mypy: type errors found (informational - not blocking). Fix progressively.")
 
 
+# Transient registry.terraform.io 5xx signatures; used by _terraform_init_with_retry and
+# by the bounded retry loop in .github/workflows/terraform-apply-sandbox.yml (parity required).
+_TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not query provider registry", "failed after ")
+
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
 # terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
 _TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github")
+
+
+def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> bool:
+    """Run a terraform init command with bounded retry on transient registry 5xx.
+
+    Returns True if init succeeded (never appends to failed), False if permanently failed
+    (label is appended to failed). Matches invoke_step output format for the step header.
+    Transient signatures: _TRANSIENT_INIT_SIGNATURES (parity with the workflow retry loop).
+    """
+    print(f"\n=== {label} ===")
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        result = run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        if result.returncode == 0:
+            print(result.stdout, end="")
+            return True
+        combined = result.stdout + result.stderr
+        is_transient = any(sig in combined for sig in _TRANSIENT_INIT_SIGNATURES)
+        if is_transient and attempt < max_attempts:
+            delay = 2**attempt
+            print(f"transient registry error (attempt {attempt}/{max_attempts}); retrying in {delay}s...")
+            print(combined, end="")
+            time.sleep(delay)
+            continue
+        print(combined, end="")
+        failed.append(label)
+        return False
+    return False  # unreachable: loop body always returns on the final attempt
 
 
 def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
@@ -2538,9 +2570,12 @@ def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAF
         return
     for root in roots:
         chdir = f"-chdir={root}"
-        invoke_step(
-            f"Terraform init [{root}]", ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"], failed
-        )
+        if not _terraform_init_with_retry(
+            f"Terraform init [{root}]",
+            ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"],
+            failed,
+        ):
+            continue
         invoke_step(f"Terraform validate [{root}]", ["terraform", chdir, "validate", "-no-color"], failed)
         invoke_step(f"Terraform fmt check [{root}]", ["terraform", chdir, "fmt", "-check", "-no-color"], failed)
 

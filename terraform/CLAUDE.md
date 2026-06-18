@@ -137,28 +137,15 @@ Follow-up (remaining): remove the now-redundant `AgentPlatformRuntime` inline po
 (its grants are fully covered by the codified `DailyOps`). A formal Decision recording the static-key credential
 model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supersession) is filed via the ops portal.
 
-- **DuckLake refresh-reads round (rec-2223, 2026-06-15, `github_ci_apply` inline policy, out-of-band admin apply):**
-  Added refresh-time READ-only grants for the full DuckLake resource family to unblock the sandbox CD pipeline
-  (`terraform plan` was exiting 1 with ~17 AccessDenied errors on all DuckLake resources). Follows the documented
-  iterative-discovery pattern. Grants added: `DataLakeBucketManage.Resource` extended with `aws_s3_bucket.ducklake_catalog_dr`;
-  `IAMPlatformRolesRead.Resource` extended with all four ducklake IAM role ARNs; new Sids `CloudWatchLogsRead`
-  (`logs:DescribeLogGroups` at `*`), `LambdaRead` (GetLayerVersion + GetFunction family on three layers + four functions),
-  `EventBridgeRead` (`events:DescribeRule/ListTagsForResource/ListTargetsByRule` on all five ducklake rules),
-  `SNSRead` (`sns:GetTopicAttributes/ListTagsForResource` on `aws_sns_topic.alerts`). All READ-ONLY; no create/update/delete
-  on any DuckLake resource. The next plan after this admin apply may surface one or two additional refresh reads;
-  add them scoped and re-apply -- this is the expected iterative-discovery pattern.
-
-- **DuckLake write-grants round (rec-2251, 2026-06-17, `github_ci_apply` inline policy, out-of-band admin apply):**
-  Added apply-phase WRITE grants for the ducklake EventBridge/CloudWatch-alarm/Lambda-permission resource family
-  to unblock #166 (neon-egress-reduction) reconciliation: the in-flight changes MODIFY existing resources (catalog-dr
-  rule daily->weekly, freshness alarm re-cadenced to a 7-day daily window per rec-2252, maintenance-merge-ops rule
-  daily->6h), all of which need WRITE actions at apply time that READ-only grants cannot supply. Three new Sids added (enumerated
-  least-privilege scoped to ducklake ARNs -- no service wildcards, no Resource: "*"):
-  `EventBridgeWrite` (events:PutRule/DeleteRule/PutTargets/RemoveTargets/TagResource/UntagResource/EnableRule/DisableRule
-  on the five ducklake rule ARNs); `CloudWatchAlarmsWrite` (cloudwatch:PutMetricAlarm/DeleteAlarms/TagResource/UntagResource
-  on the three ducklake alarm ARNs); `LambdaPermissionWrite` (lambda:AddPermission/RemovePermission on the four ducklake
-  function ARNs). Closes the iterative-discovery anti-pattern by granting the coherent write set for the resource
-  family in one round; step-3 terraform plan was the authoritative enumeration. Applied via admin out-of-band.
+- **DuckLake IAM read-wildcard closure (PLAN-terraform-sandbox-convergence-closure, 2026-06-18, `github_ci_apply` inline policy, out-of-band admin apply):**
+  The iterative-discovery anti-pattern for `github_ci_apply` refresh-READ grants (rec-2223 round, rec-2251 round) is
+  permanently closed. Six READ-only Sids now use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
+  same resource ARNs as before: `CloudWatchLogsRead`, `LambdaRead`, `EventBridgeRead`, `SNSRead`, `CloudWatchAlarmsRead`,
+  `SecretsManagerNeonAPIKeyRead`, `SecretsManagerTfvarsRead`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
+  `CloudWatchAlarmsWrite`, `LambdaPermissionWrite`, `SSMFeatureFlagsManage`, `ConvergenceRecordWrite`,
+  `IAMRoleReconcile`, `OIDCProviderReconcile`) remain enumerated and ARN-scoped (no wildcards). IAM read Sids
+  (`IAMPlatformRolesRead`) remain enumerated per Decision 35. Future refresh-read gaps for these services are
+  covered structurally; no further iterative-discovery rounds are expected.
 
 ## Athena workgroup rules
 - `agent-platform-production` (engine v3) — OPTIMIZE, MERGE writes, all production queries (personal module).
