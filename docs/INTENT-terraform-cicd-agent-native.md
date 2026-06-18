@@ -4,7 +4,7 @@ Status: PROPOSED -- candidate decision **CD.NN** (ratify as a numbered Decision 
 when Wave 1 ships, matching CD.31->Decision 78 / CD.33->Decision 81).
 Scope: single-account sandbox PLATFORM environment (`terraform/personal/` + `terraform/github/`).
 Extends (does NOT overturn): Decision 77 (auto-apply guard), Decision 35 (apply human-gated), Decision 76
-(async wake), Decision 72 / CD.20 (`main-protection` ruleset).
+(async wake), Decision 89 / CD.20 (`main-protection` ruleset).
 **Design-of-record for the architecture below.** The tier_items' canonical home is `docs/ROADMAP-PLATFORM.yaml`
 (transcribed from Section 8 post-review); this doc is design rationale, NOT the source-of-record for the
 tier_items themselves.
