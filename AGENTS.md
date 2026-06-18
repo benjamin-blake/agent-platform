@@ -86,7 +86,10 @@ skills, slash commands -- are optimised for agent loading efficiency, not human 
   docs/intent-migration/MANIFEST.yaml and retire as extraction waves complete.
 
 ## Skills and slash commands
-- `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.md`. Invokes the `planning` skill.
+
+Decision 42 three-tier workflow (orient -> plan -> implement):
+- `/orient` — read-only orientation: surfaces eligible work, CI-RCA triage, ranked what-to-work-on, and up to 5 disjoint `/plan` prompts with an overlap matrix and keystone-first sequencing. Run before `/plan` to choose what to work on. Produces a chat reply only; writes nothing. Invokes the `orient` skill.
+- `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.yaml`. Assumes a specific item has been chosen (run `/orient` first). Invokes the `planning` skill.
 - `/implement` — executes an IMPLEMENTATION plan or scopes a STRATEGIC plan into recommendations. Invokes the `implement` and `code-review` skills.
 - `/develop-executor` — supervisor for executor (Lambda) development.
 
