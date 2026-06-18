@@ -1,0 +1,291 @@
+schema_version: 1
+slug: "verifier-hermeticity"
+intent: >-
+  Land the open verifier-hermeticity half of platform T3.6: audit every harness under
+  scripts/verifiers/ for clock/network/order non-determinism, encode each one's disposition
+  (HERMETIC or NON_HERMETIC_BY_CONSTRUCTION) as a machine-readable declaration, and add a
+  validate.py AST gate so a NEW non-hermetic verifier fails CI. Hermeticity is the precondition
+  for cacheable validation, the executor's hermetic hard-gate (CD.27/CD.29), and honest fresh
+  container claims -- all load-bearing for the self-improving system's autonomous verification.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-verifier-hermeticity.yaml
+phase: >-
+  Platform T3.6 (Test-suite hermeticity audit) -- verifier-hermeticity sub-item. The pytest-suite
+  half shipped 2026-06-02 (pytest-randomly + pytest-socket + validate_hermeticity_flags); this lands
+  the remaining verifier-harness obligation. T3.6 stays in_progress (its DQ live-reader->canary
+  criterion is T1.6 coordination, out of scope here).
+scope:
+  - file: scripts/verifiers/harness.py
+    action: Modify
+    purpose: >-
+      Add a Hermeticity enum (HERMETIC, NON_HERMETIC_BY_CONSTRUCTION) and a class attribute
+      `hermeticity: Hermeticity = Hermeticity.HERMETIC` on the base Verifier (silence defaults to
+      hermetic, so an undeclared network/clock verifier is caught). Export Hermeticity via __all__.
+  - file: scripts/verifiers/__init__.py
+    action: Modify
+    purpose: Re-export Hermeticity from the package so tests and validate.py can import it cleanly.
+  - file: scripts/verifiers/outbox_health.py
+    action: Modify
+    purpose: >-
+      Declare hermeticity = NON_HERMETIC_BY_CONSTRUCTION (clock + live filesystem staleness). Make the
+      staleness clock injectable (constructor now_fn defaulting to time.time) so the LOGIC is
+      deterministic given (filesystem-state, now); production still reads the wall clock by default.
+  - file: scripts/verifiers/athena_views.py
+    action: Modify
+    purpose: >-
+      Declare hermeticity = NON_HERMETIC_BY_CONSTRUCTION (network). Correct the latent tier bug: a
+      network verifier currently inherits the V1 default; add a tier property returning V3.
+  - file: scripts/verifiers/data_quality.py
+    action: Modify
+    purpose: Declare hermeticity = NON_HERMETIC_BY_CONSTRUCTION (network + live-state DQ run).
+  - file: scripts/verifiers/schema_integrity.py
+    action: Modify
+    purpose: Declare hermeticity = NON_HERMETIC_BY_CONSTRUCTION (network -- awswrangler catalog).
+  - file: scripts/verifiers/causal_chain.py
+    action: Modify
+    purpose: >-
+      Declare hermeticity = NON_HERMETIC_BY_CONSTRUCTION (clock + uuid4 randomness + network). Stays
+      deregistered from REGISTRY; the disposition records the quarantine rationale.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add validate_verifier_hermeticity(failed): a pure-AST scan (no imports) of scripts/verifiers/*.py
+      that fails CI when a verifier declared (or defaulting to) HERMETIC uses a verdict-affecting
+      non-hermetic primitive (absolute clock, randomness, or network import); NON_HERMETIC_BY_CONSTRUCTION
+      verifiers are exempt. Wire it into run_python_checks (full presubmit tier) next to
+      validate_hermeticity_flags. Forbidden-primitive sets are module-level constants.
+  - file: tests/test_verifiers/test_outbox_health.py
+    action: Modify
+    purpose: >-
+      Replace the mtime=0 trick with an injected clock; add deterministic 2h (ADVISORY) and 24h
+      (HARD_GATE) boundary tests; assert the NON_HERMETIC_BY_CONSTRUCTION disposition.
+  - file: tests/test_verifiers/test_harness.py
+    action: Modify
+    purpose: >-
+      Harden the monotonic-timer flake (duration_ms >= 0, not > 0); add tests that the base Verifier
+      defaults to Hermeticity.HERMETIC and that every REGISTRY verifier declares a Hermeticity member.
+  - file: tests/test_verifiers/test_athena_views.py
+    action: Modify
+    purpose: Assert AthenaViewsVerifier().tier == V3 and its NON_HERMETIC_BY_CONSTRUCTION disposition.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add TestVerifierHermeticity covering the new gate: real verifier tree is clean; a synthetic
+      HERMETIC-declared file using time.time fails; one importing boto3 fails; a NON_HERMETIC-declared
+      file using time.time is exempt; a syntax-error file is skipped (fail-open per file, matching the
+      _count_imports idiom).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The base Verifier exposes hermeticity defaulting to Hermeticity.HERMETIC, and every verifier in
+    scripts/verifiers/REGISTRY declares an explicit Hermeticity disposition.
+  - >-
+    scripts/validate.py defines validate_verifier_hermeticity which AST-scans scripts/verifiers/*.py
+    and appends a failure when a HERMETIC-declared (or defaulting) verifier uses an absolute-clock,
+    randomness, or network primitive; a NON_HERMETIC_BY_CONSTRUCTION verifier is exempt.
+  - >-
+    validate_verifier_hermeticity is invoked in run_python_checks (full presubmit tier) and passes
+    against the current dispositioned verifier set.
+  - >-
+    OutboxHealthVerifier's staleness verdict is deterministic under an injected clock; test_outbox_health
+    exercises the 2h and 24h boundaries without relying on mtime=0.
+  - AthenaViewsVerifier declares tier V3 (corrected from the inherited V1 default), asserted by a test.
+  - >-
+    tests/test_verifiers/ passes under two distinct pytest-randomly seeds with sockets disabled (the
+    shipped invariant), proving no order- or network-dependence.
+  - >-
+    The companion TestVerifierHermeticity proves both the pass path (real tree clean) and the fail path
+    (a synthetic HERMETIC-declared verifier using time.time or importing boto3 is rejected).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the companion test for the new gate -- proves it passes against the live verifier tree AND
+      rejects a synthetic HERMETIC-declared violator (clock + network), and exempts a declared
+      NON_HERMETIC verifier.
+    command: bin/venv-python -m pytest tests/test_validate.py::TestVerifierHermeticity -v
+    expected: >-
+      All cases pass: real-tree-clean PASS; synthetic HERMETIC+time.time -> failure recorded;
+      synthetic HERMETIC importing boto3 -> failure recorded; synthetic NON_HERMETIC+time.time ->
+      exempt (no failure); syntax-error file -> skipped, no crash.
+    fix_if: >-
+      The scan misses a planted primitive (false negative) or flags a NON_HERMETIC-declared verifier
+      (false positive), or raises instead of recording a failure string.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm every registered verifier declares a disposition and the base default is HERMETIC.
+    command: bin/venv-python -m pytest tests/test_verifiers/test_harness.py -v
+    expected: >-
+      Passes including the new tests asserting Verifier.hermeticity defaults to Hermeticity.HERMETIC and
+      every REGISTRY verifier's hermeticity is a Hermeticity member; duration_ms assertion is >= 0.
+    fix_if: A verifier lacks the attribute, the base default changed, or the monotonic-timer flake recurs.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm OutboxHealth staleness is deterministic under an injected clock at the 2h/24h boundaries.
+    command: bin/venv-python -m pytest tests/test_verifiers/test_outbox_health.py -v
+    expected: >-
+      Boundary tests pass with an injected now_fn (no mtime=0 reliance): age > 24h -> FAIL HARD_GATE,
+      2h < age <= 24h -> FAIL ADVISORY, age <= 2h -> PASS.
+    fix_if: A boundary misclassifies, or the clock is not actually injected (verdict still varies with real time).
+  - step: 4
+    phase: pre-deploy
+    action: Confirm AthenaViews declares tier V3.
+    command: bin/venv-python -m pytest tests/test_verifiers/test_athena_views.py -v
+    expected: Passes including the new assertion AthenaViewsVerifier().tier == VerifierTier.V3.
+    fix_if: The verifier still inherits the V1 default.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove the verifier test suite is hermetic under the shipped invariant -- run twice under two
+      pytest-randomly seeds with sockets disabled; both green means order- and network-independent.
+    command: bin/venv-python -m pytest tests/test_verifiers/ --randomly-seed=1 -q && bin/venv-python -m pytest tests/test_verifiers/ --randomly-seed=98765 -q
+    expected: Both runs pass; no pytest-socket SocketBlockedError; no order-dependent failures.
+    fix_if: A test makes a real socket call (blocked by --disable-socket) or fails only under certain orderings.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the gate is wired into the full presubmit tier (run_python_checks) next to validate_hermeticity_flags.
+    command: bin/venv-python -m scripts.validate --pre >/dev/null 2>&1; grep -nE "validate_verifier_hermeticity\(failed\)" scripts/validate.py
+    expected: >-
+      grep prints the call inside run_python_checks (the behavioural correctness is proven by step 1;
+      this confirms the wiring is present so the gate actually runs in CI). The --pre run is a smoke
+      check that the edited module imports and parses.
+    fix_if: The call is absent from run_python_checks (gate defined but never invoked) or scripts/validate.py fails to import.
+constraints:
+  - >-
+    Scope STRICTLY to scripts/verifiers/*, tests/test_verifiers/*, the verifier-hermeticity assertion
+    block in scripts/validate.py, and the companion test in tests/test_validate.py. Modify no other file.
+  - >-
+    OUT OF SCOPE: the pytest-suite hermeticity work (shipped 2026-06-02); the CD.29 hard-gate
+    consolidation (T0.12.5); the DQ live-reader->scheduled-canary migration (T1.6); any non-verifier
+    test change beyond the validate.py companion test.
+  - >-
+    The AST scan must be pure-parse (ast.parse + ast.walk) and must NOT import the verifier modules --
+    avoids import side effects and keeps the gate fail-closed and fast.
+  - >-
+    Forbidden-primitive set is verdict-affecting non-determinism only: absolute clock
+    (time.time/time.time_ns/time.monotonic/time.monotonic_ns, datetime.now/utcnow/today, date.today),
+    randomness (random.*, uuid.uuid1/3/4/5, secrets.*, os.urandom), and network imports
+    (boto3, awswrangler, requests, httpx, urllib.request, urllib3, socket, http.client). time.perf_counter
+    is ALLOWLISTED (elapsed-time instrumentation, verdict-independent). Filesystem-order is audited-clean
+    (verifier results are order-independent aggregates) and is NOT gated, to avoid false positives.
+  - >-
+    The new gate lives in the full presubmit tier (run_python_checks), mirroring validate_hermeticity_flags
+    (Decision 60 / Decision 73 two-tier model). Do not add it to the --pre fast tier.
+  - >-
+    The per-verifier `tier` attribute (athena_views -> V3) is the verifier's own runtime tier, a different
+    axis from this plan's Verification Tier (V2 under Decision 48). Keep the two distinct in code and comments.
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable failure, stop and RCA.
+  - >-
+    Recs that arise touching scripts/verifiers/ or scripts/validate.py are platform machinery and must be
+    filed automatable:false (Decision 44). Out-of-scope bugs become recommendations, never inline fixes.
+  - bin/venv-python for all Python; ruff line length 127; type hints required; no emojis; ASCII hyphens only.
+context:
+  - >-
+    Implements the open verifier-hermeticity sub-item of platform T3.6 (ROADMAP-PLATFORM.yaml progress_note:
+    pytest-suite half shipped 2026-06-02; verifier portion remains open per plan constraint).
+  - >-
+    CD.29 (cite): hermeticity is the precondition before hard-gating the behavioural verification tier;
+    this gate operationalizes the "env-stripped, no network, deterministic" definition and feeds the
+    hermetic-hard-gate-vs-canary split. The hard-gate consolidation itself is T0.12.5 (out of scope).
+  - >-
+    Decision 86 (cite): the audit-with-disposition is delivered as machine-readable per-verifier
+    declarations plus this plan's enumeration (below), NOT a standing docs/ prose artefact. The
+    "Audit report" wording in the T3.6 exit criterion is satisfied by these two surfaces jointly.
+  - >-
+    Decision 44 (cite): scripts/verifiers/* and scripts/validate.py are platform/boundary machinery;
+    resulting recs are automatable:false and route via /plan -> /implement.
+  - >-
+    Decision 48 (NOTE from decision-scout): "tier" is overloaded. This plan's Verification Tier is V2
+    (pure-Python verifier metadata + a static AST scan + mock-based tests; no live integration). The
+    athena_views tier->V3 change is the verifier's runtime tier attribute, not the plan tier.
+  - >-
+    CD.27 (related): the executor's hermetic verify is the downstream consumer of these dispositions
+    (motivating, out of scope). T1.6 (related): DataQualityVerifier's NON_HERMETIC_BY_CONSTRUCTION
+    disposition is consistent with the contract-vs-state split; the live-reader->canary relocation is T1.6.
+  - >-
+    Audit enumeration (disposition table): harness.py base machinery = HERMETIC (perf_counter is elapsed
+    instrumentation, verdict-independent); outbox_health = NON_HERMETIC_BY_CONSTRUCTION (clock + live fs),
+    fixed to clock-injectable for deterministic tests; athena_views = NON_HERMETIC_BY_CONSTRUCTION (network),
+    tier corrected V1->V3; data_quality = NON_HERMETIC_BY_CONSTRUCTION (network + live-state);
+    schema_integrity = NON_HERMETIC_BY_CONSTRUCTION (network); causal_chain = NON_HERMETIC_BY_CONSTRUCTION
+    (clock + uuid4 + network), remains deregistered. Verifier tests already run hermetic under the shipped
+    pyproject addopts (--disable-socket, --randomly-seed=last, --allow-hosts=127.0.0.1,::1).
+  - >-
+    Closure obligation: EXEMPT -- additive plan (no bundled recs, no Delete row, no X->Y surface
+    migration). No rec-closure or stale-reference VP step required.
+  - >-
+    CI-RCA deferral (Related-Work check): 5 open ci_rca_unresolved recs (rec-2236, rec-2237, rec-2238,
+    rec-2239, rec-2254) all concern Terraform sandbox-apply / OIDC and are being resolved by another agent
+    per explicit human direction. This plan satisfies none of the three Related-Work conditions (different
+    files, different Decision Record, different failure category -- terraform-apply vs verifier-hermeticity),
+    so the deferral is logged here as required.
+  - >-
+    Main divergence: branch was 0 commits behind origin/main at planning time (preflight main_freshness
+    status=ok, 0 behind / 0 ahead); no Scope-file overlap risk.
+  - >-
+    Complexity: 12 scope files exceeds the >5-file STRATEGIC heuristic, but the executor freeze
+    (AGENTS.md) suspends STRATEGIC classification -- authored as a single IMPLEMENTATION plan per that override.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/inspiring-lamport-5xdb20)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS to cite confirmed via decision-scout (CD.29, Decision 86, Decision 44)
+  - All 12 files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirmed the AST scan is pure-parse (no verifier-module import) and the forbidden-primitive set
+    excludes perf_counter
+execution_steps:
+  - >-
+    scripts/verifiers/harness.py: add `class Hermeticity(Enum)` with HERMETIC and
+    NON_HERMETIC_BY_CONSTRUCTION; add `hermeticity: Hermeticity = Hermeticity.HERMETIC` to the base
+    Verifier; add Hermeticity to __all__. scripts/verifiers/__init__.py: re-export Hermeticity.
+  - >-
+    Declare hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION on OutboxHealthVerifier,
+    AthenaViewsVerifier, DataQualityVerifier, SchemaIntegrityVerifier, and CausalChainVerifier, each with
+    a one-line rationale comment (the non-hermetic primitive it depends on).
+  - >-
+    scripts/verifiers/outbox_health.py: add an injectable clock (e.g. __init__(self, now_fn: Callable[[],
+    float] = time.time); use self._now_fn() in place of time.time()). REGISTRY instantiation (verifier_cls())
+    keeps the default, so production behaviour is unchanged.
+  - >-
+      scripts/verifiers/athena_views.py: add a tier property returning VerifierTier.V3.
+  - >-
+    scripts/validate.py: add module-level constants for the forbidden dotted-name set and forbidden import
+    set (perf_counter allowlisted); implement validate_verifier_hermeticity(failed) as a pure ast.parse +
+    ast.walk scan per file in scripts/verifiers/*.py -- read each concrete verifier class's declared
+    hermeticity (default HERMETIC if absent); for files whose concrete verifiers are not all
+    NON_HERMETIC_BY_CONSTRUCTION (including machinery files with no concrete verifier), append a failure for
+    any forbidden primitive found (with file:line:name). Skip files with SyntaxError. Wire the call into
+    run_python_checks immediately after validate_hermeticity_flags(failed).
+  - >-
+    tests/test_verifiers/test_outbox_health.py: rewrite the staleness tests to construct
+    OutboxHealthVerifier with an injected now_fn and mocked file mtimes, asserting the 2h ADVISORY and 24h
+    HARD_GATE boundaries deterministically; assert the disposition is NON_HERMETIC_BY_CONSTRUCTION.
+  - >-
+    tests/test_verifiers/test_harness.py: change duration_ms assertion to >= 0; add a test that
+    Verifier.hermeticity defaults to Hermeticity.HERMETIC and a test iterating REGISTRY asserting each
+    declares a Hermeticity member.
+  - >-
+    tests/test_verifiers/test_athena_views.py: add assertions for tier == VerifierTier.V3 and the
+    NON_HERMETIC_BY_CONSTRUCTION disposition.
+  - >-
+    tests/test_validate.py: add TestVerifierHermeticity using tmp_path-written synthetic verifier files to
+    drive validate_verifier_hermeticity over a controlled directory (parametrise the scan root) -- cases:
+    real tree clean (no failures); HERMETIC-declared + time.time -> failure; HERMETIC-declared + `import
+    boto3` -> failure; NON_HERMETIC-declared + time.time -> no failure; SyntaxError file -> skipped. Ensure
+    100% coverage of the new validate function (tests/CLAUDE.md coverage policy).
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass. On an unrecoverable failure, stop
+    and RCA per Decision 55 (no workaround loop, no rescue agent).
+  - >-
+    Run `bin/venv-python -m scripts.validate` (full presubmit) once green locally to reduce CI round-trips;
+    CI remains the authoritative gate.
+  - "Report: dispositions applied, the gate's pass/fail behaviour, and verification results."
+work_areas: []
+rollback: >-
+  All changes are additive and infra-free. Removing the validate_verifier_hermeticity(failed) call from
+  run_python_checks disables the gate; the Hermeticity enum and per-verifier attributes are inert class
+  constants; the outbox_health now_fn defaults to time.time so production behaviour is unchanged. Revert
+  the branch commits to fully undo.
