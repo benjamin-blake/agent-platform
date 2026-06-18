@@ -1,0 +1,165 @@
+schema_version: 1
+slug: "verb-surface-supersession"
+intent: >-
+  Reconcile the platform roadmap with the shipped reality so the agent-first ops control plane carries
+  no drift: resolve OQ.15 to option (a), close T0.6 as realized-via-supersession by the generalized
+  named-verb DuckLake boundary, re-ground the downstream verb tier items, retire the dead per-verb
+  Lambda stub mocks and their superseded work-root Terraform, and record the resolution as Decision 91.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-verb-surface-supersession.yaml
+phase: >-
+  Platform tier T0 bootstrap (docs/ROADMAP-PLATFORM.yaml): closes T0.6 and resolves OQ.15; re-grounds
+  T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3. Governance/infra reconciliation -- no product-roadmap phase.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Resolve OQ.15 to option (a); set T0.6 status complete + completed_at + note; re-ground
+      T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 intent/files_in_scope/exit_criteria to the named-verb
+      writer/reader surface (status unchanged); fix stale src/lambdas/query/handler.py refs in T2.5/T2.7.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 91 (Warehouse ID dec-091) recording OQ.15->(a) as ratifying the shipped architecture,
+      T0.6 supersession, CD.10 six-Lambda enumeration superseded (two-principal allow-list retained).
+  - file: src/lambdas/log_rec/
+    action: Delete
+    purpose: "Dead status:stub mock (__init__.py + handler.py + manifest.yaml) -- superseded by ducklake_writer write_ops/file_ops."
+  - file: src/lambdas/log_decision/
+    action: Delete
+    purpose: "Dead status:stub mock -- superseded by ducklake_writer write_ops (file_decision)."
+  - file: src/lambdas/query/
+    action: Delete
+    purpose: "Dead status:stub mock -- superseded by ducklake_reader named_read registry + src/common/iceberg_reader.py."
+  - file: src/lambdas/update_rec/
+    action: Delete
+    purpose: "Dead status:stub mock -- superseded by ducklake_writer update_ops."
+  - file: src/lambdas/list_tools/
+    action: Delete
+    purpose: "Dead status:stub mock -- discovery re-shapes to a named-verb/portal capability under option (a)."
+  - file: src/lambdas/maintenance/
+    action: Delete
+    purpose: "Dead status:stub mock -- maintenance owned by ducklake_maintenance (T2.18) + ops_compaction; T1.4 reserved."
+  - file: tests/test_lambda_stubs.py
+    action: Delete
+    purpose: "Imports all six stub handlers; must be deleted in lockstep with the stub dirs or pytest collection breaks."
+  - file: terraform/lambda_tooling_platform.tf
+    action: Delete
+    purpose: >-
+      Six dead work-root Lambda function defs + Function URLs + log groups; carries the dangling
+      src/lambdas/<verb>/ archive_file source_dirs. Never applied (work-root retired, CD.21).
+  - file: terraform/lambda_tooling_outputs.tf
+    action: Delete
+    purpose: "Dead work-root outputs referencing those functions and the platform_dev/admin role ARNs; no external consumer."
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "No terraform apply: the work-root (terraform/) was retired 2026-05-28 (CD.21) and is never applied; terraform/personal/ (the only applied root) is untouched. terraform validate must pass on both roots after the deletions (credential-free init -backend=false + validate + fmt)."
+  - "terraform/lambda_tooling_iam.tf is RETAINED: terraform/agent_auth.tf references the platform_dev/platform_admin roles it defines (circular coupling), and T1.15 owns it for the bedrock-grant sweep (files_in_scope line). Deleting it would break the work-root and collide with T1.15."
+  - "No Lambda build/deploy: all six deleted artifacts are status:stub (Decision 79 -- stubs need no deploy). build_lambda.py and validate_lambda_manifest_coverage do not hard-enumerate the stub slugs; deletion leaves no orphaned gate."
+  - "terraform/ec2_runner.tf (the CD.21 named architectural-evolution artefact) is untouched."
+acceptance_criteria:
+  - "OQ.15 carries a resolution note selecting option (a), framed as ratifying the shipped Decision 84 I-3 named-verb boundary per Decision 81 cl.2 (not a fresh design pick)."
+  - "T0.6 is status: complete with completed_at: 2026-06-18 and a note citing the supersession evidence; it is the ONLY tier_item newly flipped to complete by this plan."
+  - "T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 intent/files_in_scope/exit_criteria reference the named-verb writer/reader surface, not src/lambdas/<verb>/ paths; their status remains not_started."
+  - "No src/lambdas/{log_rec,log_decision,query,update_rec,list_tools,maintenance}/ path is referenced anywhere in docs/ROADMAP-PLATFORM.yaml (T2.5/T2.7 stale query refs fixed)."
+  - "Decision 91 exists in docs/DECISIONS.md (header + Warehouse ID dec-091) and is synced into ops_decisions via the portal backfill."
+  - "The six src/lambdas stub directories and tests/test_lambda_stubs.py are deleted."
+  - "terraform/lambda_tooling_platform.tf and terraform/lambda_tooling_outputs.tf are deleted; terraform/lambda_tooling_iam.tf still exists."
+  - "scripts.validate full presubmit passes (roadmap schema, decisions parse, manifest coverage, terraform validate both roots); pytest is green."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Stale-reference sweep across production code, Terraform, and tests for the deleted stub slugs."
+    command: "! rg -n 'lambdas/(log_rec|log_decision|query|update_rec|list_tools|maintenance)\\b' src/ scripts/ terraform/ tests/"
+    expected: "rg finds zero matches (exit 1, negated to 0): no surviving import or source_dir reference to a deleted stub outside docs/ prose."
+    fix_if: "A src/, scripts/, terraform/, or tests/ file still references a deleted stub -> re-ground or remove that reference before the delete is considered complete (likely the work-root platform.tf source_dirs if its deletion was missed)."
+  - step: 2
+    phase: pre-deploy
+    action: "Confirm no src/lambdas/<verb>/ stub path survives in the roadmap (downstream re-grounding complete)."
+    command: "! rg -n 'src/lambdas/(log_rec|log_decision|query|update_rec|list_tools|maintenance)/' docs/ROADMAP-PLATFORM.yaml"
+    expected: "Zero matches: T0.7a/b/c, T1.1, T1.2, T1.3 files_in_scope/exit_criteria and the T2.5/T2.7 refs no longer point at deleted stub paths."
+    fix_if: "A roadmap item still references a deleted stub path -> finish re-grounding it to the named-verb writer/reader surface."
+  - step: 3
+    phase: pre-deploy
+    action: "Confirm the six stub directories and the stub test are deleted."
+    command: "for d in log_rec log_decision query update_rec list_tools maintenance; do test ! -e \"src/lambdas/$d\" || { echo \"$d remains\"; exit 1; }; done && test ! -e tests/test_lambda_stubs.py"
+    expected: "All six directories and tests/test_lambda_stubs.py are absent; exit 0."
+    fix_if: "A directory or the test file remains -> delete it."
+  - step: 4
+    phase: pre-deploy
+    action: "Confirm work-root function defs + outputs deleted and iam.tf retained."
+    command: "test ! -e terraform/lambda_tooling_platform.tf && test ! -e terraform/lambda_tooling_outputs.tf && test -e terraform/lambda_tooling_iam.tf"
+    expected: "platform.tf and outputs.tf absent; lambda_tooling_iam.tf present; exit 0."
+    fix_if: "iam.tf was deleted (breaks agent_auth.tf + collides with T1.15) -> restore it; or a function/outputs file remains -> delete it."
+  - step: 5
+    phase: pre-deploy
+    action: "Both Terraform roots validate after the deletions (no dangling references)."
+    command: "bin/venv-python -m scripts.validate --terraform-only"
+    expected: "init -backend=false + validate + fmt -check pass for terraform/ and terraform/personal/ (and terraform/github/); exit 0. Proves agent_auth.tf still resolves platform_dev/platform_admin from the retained iam.tf."
+    fix_if: "Work-root validate fails with an undefined-reference error (e.g. agent_auth.tf -> aws_iam_role.platform_dev) -> a still-referenced symbol was removed; restore iam.tf. fmt drift -> terraform fmt."
+  - step: 6
+    phase: pre-deploy
+    action: "Exactly one tier_item is newly flipped to complete (T0.6); downstream items did not silently flip (scout NOTE #2)."
+    command: "git fetch origin main --quiet && test $(( $(grep -c 'status: complete' docs/ROADMAP-PLATFORM.yaml) - $(git show origin/main:docs/ROADMAP-PLATFORM.yaml | grep -c 'status: complete') )) -eq 1"
+    expected: "The count of 'status: complete' increased by exactly 1 versus origin/main (only T0.6)."
+    fix_if: "Difference != 1 -> either T0.6 was not closed (0) or a downstream item was flipped to complete (>1); revert the unintended status change."
+  - step: 7
+    phase: pre-deploy
+    action: "Decision 91 lands in DECISIONS.md and syncs to ops_decisions (warehouse write, read-back)."
+    command: "rg -q '^## Decision 91:' docs/DECISIONS.md && rg -q 'dec-091' docs/DECISIONS.md && bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m scripts.ops_data_portal --sync && rg -q '\"decision_id\": 91' logs/.decisions-index.jsonl"
+    expected: "Decision 91 header + Warehouse ID dec-091 present; backfill upserts it to ops_decisions; sync rebuilds the read cache from the reader and Decision 91 appears in it (proves the warehouse round-trip, not just the file edit)."
+    fix_if: "Backfill raises (warehouse unreachable) -> verify the static-key chain (aws sts get-caller-identity --profile agent_platform) and re-run; Decision 91 absent from the synced cache -> fix the DECISIONS.md format the backfill parser expects (mirror an adjacent decision's header/Warehouse-ID lines)."
+  - step: 8
+    phase: pre-deploy
+    action: "Test suite green -- deletions did not break pytest collection or any surviving import."
+    command: "bin/venv-python -m pytest tests/ -q"
+    expected: "All tests pass; no ImportError/collection error referencing src.lambdas.{log_rec,log_decision,query,update_rec,list_tools,maintenance} (test_lambda_stubs.py removed)."
+    fix_if: "An ImportError for a deleted stub module -> a surviving test still imports it; remove or re-point that import."
+  - step: 9
+    phase: pre-deploy
+    action: "Authoritative full presubmit identical to CI (roadmap schema, decisions parse, manifest coverage, terraform validate, ops-write guard, prompts)."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0. validate_platform_roadmap accepts the T0.6/OQ.15/downstream edits; decisions parse; validate_lambda_manifest_coverage reports no orphan from the deleted stubs; both terraform roots valid; no direct ops-log-write violation."
+    fix_if: "A check fails -> address per its message (roadmap schema error in a re-grounded item; manifest-coverage orphan; terraform validate). Do NOT add a workaround; fix the root cause (Decision 55)."
+constraints:
+  - "Single Portal Invariant: Decision 91 reaches ops_decisions ONLY via `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md`. Never edit logs/.decisions-index.jsonl or logs/.recommendations-log.jsonl directly (validate.py fails CI)."
+  - "No terraform apply and no Lambda deploy. The work-root is retired (CD.21) and never applied; terraform/personal/ is untouched; all deleted artifacts are status:stub (Decision 79). terraform validate is the only Terraform gate."
+  - "Do NOT touch terraform/lambda_tooling_iam.tf, terraform/agent_auth.tf, terraform/variables.tf, or terraform/main.tf. iam.tf is retained (agent_auth.tf circular ref + T1.15 ownership); the broader work-account-module retirement is out of scope."
+  - "Do NOT flip T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 to status complete (scout NOTE #2). Re-shape their text only; flag likely silent-completion in each note for a separate per-item closeout. T0.6 is the only completion."
+  - "Decision 86 routing: rationale goes in Decision 91; forward intent stays in the tier_items. Do NOT create any new docs/INTENT-*.md or standing prose-architecture doc (intent-doc-freeze guard)."
+  - "No emojis; ASCII hyphens only; no em dashes (Terraform/Windows-safe). No rescue agents or workaround loops (Decision 55)."
+  - "Never edit or commit on main (enforced by .claude/hooks/never_on_main.py)."
+context:
+  - "Supersession is verified, not assumed: Decision 81 cl.2 (DECISIONS.md:244) superseded CD.10's six-Lambda enumeration and left the verb surface 'deliberately extensible'; its Related note (line 312) calls the six 'status:stub mocks'. OQ.15's resolution_tier is literally T0.6."
+  - "Option (a) is the shipped reality: scripts/ops_data_portal.py routes file_rec->write_ops/file_ops, update_rec->update_ops, file_decision->write_ops on ducklake_writer; reads use the NAMED_READS registry (src/common/ducklake_scd2_schema.py) via ducklake_reader.named_read (src/common/ducklake_runtime.py); session_preflight itself calls .named('open_recs')."
+  - "Exit criteria already satisfied against the writer/reader: Function-URL+AWS_IAM (terraform/personal/ducklake_lambdas.tf:307-315); PlatformDev/PlatformAdmin invoke via DuckLakeInvokeRuntime (terraform/personal/platform_roles.tf:142-152) + AdminOps."
+  - "T0.6 has bootstrap_completion_exempt: true, which permits its completion despite the still-pending CD.10 gate. Decision 91 records CD.10's enumeration as superseded (Decision 81 cl.2 + Decision 84) while CD.10's PlatformDev/PlatformAdmin two-principal allow-list is RETAINED (realized in DuckLakeInvokeRuntime)."
+  - "Decision-scout verdict: FLAGS_FOUND, no BLOCK. Two NOTE flags, both accepted and handled in-plan: (1) frame OQ.15->(a) in Decision 91 as ratifying the shipped architecture, not a fresh pick; (2) do not let CD.10's pending gate be silently satisfied -- record its supersession in Decision 91 and keep downstream status conservative."
+  - "Decision 91 Warehouse ID is dec-091 (decision-number-keyed convention used by Decisions 86/87/88, synced via --backfill-decisions-md)."
+  - "ci-rca HARD BLOCK deferral (logged per the Related-Work Check): at planning time ci_rca_unresolved_recs were open. This plan satisfies none of the three Related-Work conditions (different files, decisions, and failure categories). Deferral rationale: rec-2276 (github_ci_apply IAM ssm:ListTagsForResource) is being resolved out-of-band by another session per docs/plans/PLAN-ci-apply-ssm-list-closure.yaml (human-confirmed); rec-2268/2274/2275 are the same subprocess-encoding lint already fixed on main in #184 (verified at ci_rca_tier_map.py:170) but not auto-closed (the #184 Resolves: trailer named the older duplicates rec-2260/2261/2267); rec-2228 is a Low self-cleaning rec. This plan is roadmap/governance reconciliation + dead-stub retirement and touches no ci-rca surface."
+  - "Closure Obligation (surface-retiring plan): the stale-reference sweeps (VP steps 1-2) confirm the retired stub mocks and work-root function defs are unreachable after deletion. This plan resolves no open rec, so bundled_recommendations is empty."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (git branch --show-current)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md relevant entries read: Decision 81 (cl.2), Decision 84 (I-2/I-3), Decision 86; CD.10 / CD.33; OQ.15"
+  - "All scope files located: six src/lambdas stub dirs (each __init__.py + handler.py + manifest.yaml), tests/test_lambda_stubs.py, terraform/lambda_tooling_platform.tf, terraform/lambda_tooling_outputs.tf all present"
+  - "terraform/lambda_tooling_iam.tf confirmed RETAINED (T1.15 ownership + agent_auth.tf circular ref)"
+  - "Acceptance criteria understood and verifiable"
+execution_steps:
+  - "docs/ROADMAP-PLATFORM.yaml: append a resolution note to OQ.15 selecting option (a), framed as ratifying the shipped Decision 84 I-3 named-verb boundary per Decision 81 cl.2; cite the live ops_data_portal routing as evidence."
+  - "docs/ROADMAP-PLATFORM.yaml: set T0.6 status: complete, completed_at: \"2026-06-18\", and add a note (mirroring the T-1.9 silent-completion precedent) recording realized-via-supersession, the writer/reader evidence, CD.10 enumeration superseded but two-principal retained, and bootstrap_completion_exempt."
+  - "docs/ROADMAP-PLATFORM.yaml: re-ground T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 -- rewrite intent + files_in_scope + exit_criteria to the named-verb writer/reader surface (point at src/common/ducklake_scd2_schema.py NAMED_READS, src/lambdas/ducklake_{writer,reader}/handler.py, scripts/ops_data_portal.py; remove every src/lambdas/<verb>/ path); keep status not_started; add a re-grounding note to each citing OQ.15->(a) + Decision 91 and flagging likely silent-completion WITHOUT flipping status. Fix the stale src/lambdas/query/handler.py references in T2.5/T2.7."
+  - "docs/DECISIONS.md: add Decision 91 (header '## Decision 91: ...', Status Decided, Date 2026-06-18, Warehouse ID dec-091, Problem/Decision/Rationale/Related), recording OQ.15->(a) as ratification of the shipped architecture, T0.6 supersession-closeout, and CD.10's six-Lambda enumeration superseded (two-principal allow-list retained); reference Decision 81 cl.2, Decision 84, CD.33, OQ.15, T0.6."
+  - "Delete the six stub directories src/lambdas/{log_rec,log_decision,query,update_rec,list_tools,maintenance}/ (each __init__.py + handler.py + manifest.yaml) and tests/test_lambda_stubs.py."
+  - "Delete terraform/lambda_tooling_platform.tf and terraform/lambda_tooling_outputs.tf. Do NOT delete terraform/lambda_tooling_iam.tf."
+  - "Sync Decision 91 to the warehouse: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md (then --sync to refresh the local read cache)."
+  - "Execute the Verification Plan -- run each step in order; loop until all pass; on an unrecoverable V3/terraform failure stop and run RCA (Decision 55), do not paper over it."
+  - "Report: what was changed (roadmap items, Decision 91, deleted surfaces), and the verification results for each VP step."
+work_areas: []
+rollback: >-
+  All edits are reversible via `git revert` of the squash-merge commit (no infrastructure is applied, so
+  there is no cloud-state to roll back). The Decision 91 ops_decisions row is SCD2 append-only; if reverted,
+  supersede it with a follow-up `ops_data_portal --backfill-decisions-md` after restoring DECISIONS.md, or
+  mark it Superseded. The deleted Lambda stubs were dead status:stub mocks; restore from git history only if
+  a future plan revives option (b), which Decision 81 cl.2 makes unlikely.
