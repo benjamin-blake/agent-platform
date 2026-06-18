@@ -588,55 +588,45 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # plan + apply time to initialise the Neon provider (the
         # data.aws_secretsmanager_secret_version.neon_api_key data source in neon_ducklake_catalog.tf).
         # Read-only -- the key's lifecycle is human-owned, not Terraform-managed.
-        Sid    = "SecretsManagerNeonAPIKeyRead"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ]
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
+        Sid      = "SecretsManagerNeonAPIKeyRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
       },
       {
         # Tfvars sourcing: the apply job fetches terraform.personal.tfvars from this secret
         # (terraform-apply-sandbox.yml "Materialise tfvars" step) and passes it via -var-file.
         # Mirrors the SecretsManagerNeonAPIKeyRead precedent. Read-only -- the secret lifecycle
-        # is human-owned, not Terraform-managed. DescribeSecret is also a refresh-time read the
-        # AWS provider issues on every plan; do not prune it as "unused".
-        Sid    = "SecretsManagerTfvarsRead"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ]
+        # is human-owned, not Terraform-managed.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
+        Sid      = "SecretsManagerTfvarsRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
       },
       {
-        # logs:DescribeLogGroups has no resource-level scoping in IAM -- Resource: "*" is required.
-        # logs:ListTagsForResource is the per-log-group tag refresh-read the provider issues on every
-        # aws_cloudwatch_log_group plan (surfaced under github_ci_apply on the first real CD plan).
-        # Do not prune as unused.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # logs:Describe*/List* on * closes the iterative-discovery anti-pattern for CloudWatch Logs
+        # refresh reads. Resource: "*" required (logs:DescribeLogGroups has no resource-level scoping).
         Sid      = "CloudWatchLogsRead"
         Effect   = "Allow"
-        Action   = ["logs:DescribeLogGroups", "logs:ListTagsForResource"]
+        Action   = ["logs:Describe*", "logs:List*"]
         Resource = ["*"]
       },
       {
-        # Refresh-time reads the provider issues on aws_lambda_layer_version + aws_lambda_function resources
-        # on every plan. GetLayerVersion covers the three ducklake layers; GetFunction et al. cover the four
-        # ducklake aws_lambda_function resources. Do not prune as unused -- apply does not exercise these
-        # but plan (and therefore CD) does. Mirrors the glue:GetTags / dynamodb:Describe* convention above.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # lambda:Get*/List* on the ducklake layer + function ARNs covers the full refresh-read set
+        # incl. GetFunctionConcurrency / GetRuntimeManagementConfig (previously missing). Do not prune.
         Sid    = "LambdaRead"
         Effect = "Allow"
-        Action = [
-          "lambda:GetLayerVersion",
-          "lambda:GetFunction",
-          "lambda:GetFunctionConfiguration",
-          "lambda:GetFunctionUrlConfig",
-          "lambda:GetPolicy",
-          "lambda:GetFunctionCodeSigningConfig",
-          "lambda:ListVersionsByFunction",
-          "lambda:ListTags"
-        ]
+        Action = ["lambda:Get*", "lambda:List*"]
         # Literal ARNs (not resource references): a refresh-read grant should not create a
         # Terraform dependency edge onto the resource it reads. Mirrors the IAMPlatformRolesRead
         # literal-ARN convention.
@@ -673,14 +663,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
         # All FIVE ducklake rules in state are covered (catalog-dr, maintenance-merge, maintenance-gc,
         # maintenance-hot-merge, maintenance-merge-ops) to avoid iterative-discovery rounds.
-        # Do not prune as unused.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # events:Describe*/List* closes the iterative-discovery anti-pattern.
         Sid    = "EventBridgeRead"
         Effect = "Allow"
-        Action = [
-          "events:DescribeRule",
-          "events:ListTagsForResource",
-          "events:ListTargetsByRule"
-        ]
+        Action = ["events:Describe*", "events:List*"]
         # Literal ARNs (not resource references): merge-ops is not yet in state, so a resource
         # reference would force its creation; and a refresh-read grant should not depend on the
         # lifecycle of the resource it reads. Mirrors the IAMPlatformRolesRead literal-ARN convention.
@@ -717,13 +704,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # Refresh-time reads the provider issues on aws_sns_topic every plan.
-        # Do not prune as unused.
-        Sid    = "SNSRead"
-        Effect = "Allow"
-        Action = [
-          "sns:GetTopicAttributes",
-          "sns:ListTagsForResource"
-        ]
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # sns:Get*/List* closes the iterative-discovery anti-pattern.
+        Sid      = "SNSRead"
+        Effect   = "Allow"
+        Action   = ["sns:Get*", "sns:List*"]
         Resource = [aws_sns_topic.alerts.arn]
       },
       {
@@ -740,13 +725,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # cloudwatch:DescribeAlarms has no resource-level scoping in IAM (account-wide API) -- Resource:
         # "*" is required; ListTagsForResource is the per-alarm tag refresh-read. Both are refresh-time
         # reads the provider issues on every aws_cloudwatch_metric_alarm plan (ducklake catalog-dr-
-        # freshness, maintenance-circuit-breaker, writer-errors). Do not prune as unused.
-        Sid    = "CloudWatchAlarmsRead"
-        Effect = "Allow"
-        Action = [
-          "cloudwatch:DescribeAlarms",
-          "cloudwatch:ListTagsForResource"
-        ]
+        # freshness, maintenance-circuit-breaker, writer-errors).
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # cloudwatch:Describe*/List* closes the iterative-discovery anti-pattern.
+        Sid      = "CloudWatchAlarmsRead"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:Describe*", "cloudwatch:List*"]
         Resource = ["*"]
       },
       {
@@ -789,14 +773,15 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # Covers the ducklake function-URL params (/agent-platform/ducklake/{writer,reader}_url, managed
         # in ducklake_lambdas.tf, admin-applied) which CD only refreshes -- read-only, since writes to the
         # human-gated ducklake stack go via agent_platform_admin. Scoped to /agent-platform/* (NOT ssm:*
-        # and NOT all parameters). Surfaced by the post-feature-flags-grant dispatch-ack round.
-        Sid    = "SSMParameterRead"
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameter",
-          "ssm:GetParameters",
-          "ssm:ListTagsForResource"
-        ]
+        # and NOT all parameters).
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # ssm:Get*/Describe* closes the iterative-discovery anti-pattern (resource-scoped to /agent-platform/*).
+        # Intentional read-surface expansion: the wildcard subsumes GetParameterHistory and
+        # GetParametersByPath in addition to GetParameter(s) -- both read-only and confined to the
+        # /agent-platform/* scope (no write, no cross-path enumeration). This is the closure by design.
+        Sid      = "SSMParameterRead"
+        Effect   = "Allow"
+        Action   = ["ssm:Get*", "ssm:Describe*"]
         Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
       },
       {
