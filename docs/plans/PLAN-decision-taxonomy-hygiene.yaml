@@ -116,14 +116,18 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Under-sweep guard (the scout's key concern): no branch-protection-context "Decision 72" reference is
-      left behind on any live surface.
-    command: '! rg -n "Decision 72" docs/ .claude/ AGENTS.md --glob "!docs/audit-reports/**" | rg -iq "branch protection|main-protection|permanently unavailable" && echo OK'
+      Under-sweep guard, scoped to the 8 edited files ONLY -- historical docs/plans/PLAN-*.md carry 31 frozen
+      branch-protection "Decision 72" refs that must NOT be rewritten, and the frozen audit snapshot is likewise
+      out of scope. Confirm no un-swept branch-protection "Decision 72" remains; the trailing "Decision 89"
+      filter excludes the legitimately-split conflation lines (which carry both "Decision 72 (RCA)" and
+      "Decision 89 (branch protection)").
+    command: '! rg -n "Decision 72" docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml docs/INTENT-ci-cd-architecture.md docs/INTENT-terraform-cicd-agent-native.md docs/INTENT-ci-rca-methodology.md .claude/skills/implement/SKILL.md .claude/skills/orient/SKILL.md AGENTS.md | rg -i "branch protection|main-protection|permanently unavailable" | rg -vq "Decision 89" && echo OK'
     expected: >-
-      Prints OK -- no line outside the frozen audit snapshot pairs "Decision 72" with branch-protection
-      language (those are now Decision 89).
+      Prints OK -- within the 8 scope files, no line pairs "Decision 72" with branch-protection language unless
+      it also carries "Decision 89" (the correctly-split conflation lines).
     fix_if: >-
-      A branch-protection "Decision 72" remains (it would silently mispoint to RCA) -- repoint it to Decision 89.
+      A branch-protection "Decision 72" lacking a same-line "Decision 89" remains -- repoint it to Decision 89,
+      or for the two conflation lines complete the split so the branch-protection half reads "Decision 89".
   - step: 5
     phase: pre-deploy
     action: Confirm the two conflated "both" tokens were split, not left intact.
@@ -201,12 +205,16 @@ context:
     2026-05-09; misplaced between Decisions 61 and 68; amended by Decision 83). RCA keeps 72; branch-protection
     -> 89 (89/90 confirmed free; era slots 69/70/71 taken, 69 is the archived Ops-Pipeline decision).
   - >-
-    DECISIONS.md "Decision 72" disambiguation map (content-classified; line numbers indicative only, re-grep at
-    execution). -> 89 (branch-protection): the renumbered decision header + its body self-refs + amendment note;
-    Decision 83 (title/body/Related); Decision 77 refs; Decision 76 refs; Decision 73's branch-protection ref.
-    Stays 72 (RCA): the RCA body; Decision 74/75 refs; Decision 73's RCA ref. CONFLATED (manual split):
-    Decision 77's "Decision 72 (RCA-as-Plan-Source / branch protection unavailable)" and Decision 73's
-    "Decision 72 (both)" -> split into "72 (RCA)" + "89 (branch protection)".
+    DECISIONS.md "Decision 72" disambiguation map (content-classified; 20 occurrences total, verified complete
+    by the decision-scout and the plan-critique; line numbers indicative only, re-grep at execution). -> 89
+    (branch-protection): the renumbered decision header + its body self-refs + amendment note; Decision 83
+    (title/body/Related); Decision 77's branch-protection ref; Decision 76's two refs; Decision 73's TWO
+    branch-protection refs -- one of which (Decision 73 Problem) also carries the informal label "Decision 72b",
+    so repoint "Decision 72b" -> "Decision 89" as well. Stays 72 (RCA): the RCA body; Decision 74/75 refs;
+    Decision 73's RCA ref. CONFLATED (manual split): Decision 77's "Decision 72 (RCA-as-Plan-Source / branch
+    protection unavailable)" and Decision 73's Related "Decision 72 (both)" -> split into "Decision 72
+    (RCA-as-Plan-Source)" + "Decision 89 (branch protection)" (each split line MUST carry "Decision 89" so the
+    VP step-4 guard passes).
   - >-
     Non-DECISIONS.md references. -> 89: .claude/skills/implement/SKILL.md (branch-protection clause 4),
     docs/ROADMAP-PLATFORM.yaml ~1564 (Decision 72/CD.20 main-protection), docs/INTENT-ci-cd-architecture.md
@@ -224,6 +232,16 @@ context:
     Decision-scout verdict FLAGS_FOUND (WARN: Decision 73 references both 72s and the sweep must enumerate
     D73/D76/D77 branch-protection refs; NOTE: D77/D73 conflated "both" tokens need manual splits). Both folded
     into the disambiguation map above. No BLOCK.
+  - >-
+    Plan-critique verdict REVISE -> addressed: VP step 4 (under-sweep guard) rescoped to the 8 edited files
+    (historical docs/plans/PLAN-*.md hold 31 frozen branch-protection "Decision 72" refs that must NOT be
+    rewritten) with a "Decision 89" exclusion so the correctly-split conflation lines do not false-positive; the
+    "Decision 72b" informal label and the MANIFEST related_decisions drift were folded in.
+  - >-
+    Known, out-of-scope: after the sweep, docs/intent-migration/MANIFEST.yaml's ci-cd-architecture entry
+    (related_decisions: [60, 72, 73, 77, 83]) is mildly stale -- the branch-protection relation is now 89. This
+    is advisory metadata (not a disposition), legitimately out of scope; noted here so it is not mistaken for a
+    missed sweep. A follow-up rec can refresh it if desired.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -240,10 +258,11 @@ execution_steps:
     annotate Decision 42's status line "Superseded by Decision 90" (keep 42's body intact).
   - >-
     DECISIONS.md follow-up 2: rename the misplaced "## Decision 72: GitHub Branch Protection Not Available"
-    header to "## Decision 89" (preserve Date 2026-05-09 + body). Then apply the per-occurrence "Decision 72"
-    sweep per the Context map: branch-protection refs -> 89 (incl. the renumbered decision's self-refs/amendment
-    note, Decision 83 title/body/Related, Decision 77, Decision 76, Decision 73's branch-protection ref); RCA
-    refs stay 72; manually SPLIT the two conflated "both" tokens.
+    header to "## Decision 89" (preserve Date 2026-05-09 + body). Then apply the per-occurrence sweep per the
+    Context map: branch-protection refs -> 89 (incl. the renumbered decision's self-refs/amendment note,
+    Decision 83 title/body/Related, Decision 77, Decision 76, Decision 73's TWO branch-protection refs AND the
+    informal "Decision 72b" label in Decision 73's Problem); RCA refs stay 72; manually SPLIT the two conflated
+    "both" tokens so each split line reads "Decision 72 (RCA-as-Plan-Source)" + "Decision 89 (branch protection)".
   - >-
     AGENTS.md: replace the line-90 mislabel ("Decision 42 three-tier workflow (orient -> plan -> implement)")
     with the four-tier framing citing Decision 90 (end-goal four tiers; current orient -> plan -> implement,
