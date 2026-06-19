@@ -390,6 +390,7 @@ class TestPhaseBAbsenceOfReaderCalls:
 class TestLiveDuckLakeCiRcaOpenFile:
     """RUN_LIVE_DUCKLAKE=1 gated: prove the DEPLOYED reader's ci_rca_open verb returns `file`."""
 
+    @pytest.mark.enable_socket()
     def test_live_file_ci_rca_open_returns_file(self) -> None:
         """File a throwaway ci_rca rec with a known `file` value, read it back via the deployed
         ci_rca_open verb, assert `file` is populated and correct, then close the rec (self-cleaning,
@@ -412,7 +413,7 @@ class TestLiveDuckLakeCiRcaOpenFile:
                 "acceptance": "`file` key present in ci_rca_open row for this rec",
                 "effort": "XS",
                 "status": "open",
-                "priority": "low",
+                "priority": "Low",
                 "source": "ci_rca",
                 "file": marker_file,
                 "automatable": False,
