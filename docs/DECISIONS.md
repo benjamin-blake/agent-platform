@@ -2,6 +2,67 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 91: Ratify OQ.15 option (a) -- agent verb surface extends ducklake_writer/reader; T0.6 closed via supersession; CD.10 six-Lambda enumeration superseded (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-18
+**Warehouse ID:** dec-091 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+OQ.15 (opened 2026-06-09, audit F-008) asked whether the agent-facing verb surface should (a) extend
+the ducklake_writer/ducklake_reader verb sets directly, or (b) use thin verb Lambdas fronting them.
+The question was left open pending T0.6 plan time, but T0.6's original Terraform skeleton was never
+built in the personal account -- instead the ducklake_writer/reader closed boundary shipped (T2.17/T2.19)
+and T2.28 landed the NAMED_READS registry, realizing the functional scope of T0.6 via a different
+mechanism. Six src/lambdas/<verb>/ stub mocks (log_rec, log_decision, query, update_rec, list_tools,
+maintenance) and their work-root Terraform (lambda_tooling_platform.tf, lambda_tooling_outputs.tf,
+never applied per CD.21) accumulated as dead artefacts. CD.10's six-Lambda enumeration remained
+state:pending while the shipped architecture made it illustrative in practice (Decision 81 cl.2).
+The roadmap carried stale files_in_scope / exit_criteria pointing at deleted stubs in six tier items
+(T0.7a/b/c, T1.1/T1.2/T1.3) and stale query/ path comments in T2.5 and T2.7.
+
+**Decision:**
+1. Ratify OQ.15 option (a): the agent-facing verbs extend the ducklake_writer/ducklake_reader verb
+   sets directly. This ratifies the shipped architecture per Decision 81 cl.2 (extensible verb surface,
+   NOT a fresh design pick) and Decision 84 I-3 (named-verb closed boundary). The shipped routing is:
+   scripts/ops_data_portal.py routes file_rec->write_ops/file_ops, update_rec->update_ops, and
+   file_decision->write_ops on ducklake_writer; reads use the NAMED_READS registry
+   (src/common/ducklake_scd2_schema.py) via ducklake_reader.named_read. Function-URL+AWS_IAM is
+   live in terraform/personal/ducklake_lambdas.tf; PlatformDev/PlatformAdmin invoke via
+   DuckLakeInvokeRuntime (platform_roles.tf:142-152 + AdminOps).
+2. Close T0.6 (Lambda-tooling-platform Terraform skeleton) as realized-via-supersession. The verb
+   surface T0.6 planned to provision is already live as the ducklake_writer + ducklake_reader closed
+   boundary. T0.6's bootstrap_completion_exempt: true permits completion with CD.10 still state:pending.
+3. Supersede CD.10's six-Lambda enumeration (log-rec, log-decision, query, update-rec, list-tools,
+   maintenance as separate Lambdas). The enumeration was illustrative per Decision 81 cl.2; this
+   decision records its supersession. CD.10's PlatformDev/PlatformAdmin two-principal allow-list is
+   RETAINED -- realized in DuckLakeInvokeRuntime. CD.10 itself remains state:pending; only the
+   six-Lambda enumeration clause is superseded.
+4. Re-ground tier items T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 files_in_scope and exit_criteria to
+   the named-verb writer/reader surface. Status remains not_started; likely silent-completion of each
+   item is flagged in their notes for dedicated per-item closeout plans.
+5. Delete the six src/lambdas/<verb>/ stub directories, tests/test_lambda_stubs.py,
+   terraform/lambda_tooling_platform.tf, and terraform/lambda_tooling_outputs.tf. Retain
+   terraform/lambda_tooling_iam.tf (agent_auth.tf circular reference + T1.15 ownership).
+
+**Rationale:**
+The Decision 81 cl.2 extensible-verb-surface and Decision 84 I-3 named-verb boundary together made option
+(a) the natural landing point: fewer Lambdas, verb logic co-located with the schema gate, and the NAMED_READS
+registry already provides the query-surface discovery needed for T0.7c/T1.2/T1.3. Option (b)'s per-verb SLO
+benefit (T1.9) does not outweigh the added hop and the deployment blast radius of six separate Lambdas.
+Recording the resolution now cleans the roadmap of stale artefacts and stops agents from planning against
+deleted stub paths, while the conservative not_started status for T0.7x/T1.x preserves the formal closeout
+gate for each item's unit-test coverage and import_mode edge cases.
+
+**Related:** Decision 81 cl.2 (extensible verb surface superseding CD.10 six-Lambda enumeration),
+Decision 84 I-3 (named-verb read boundary + I-2 writer-owned keyspace), Decision 79 (per-Lambda deploy
+gating -- stubs are status:stub, no deploy step required), CD.10 (six-Lambda enumeration superseded here;
+two-principal allow-list retained; state:pending unchanged), CD.33 (closed read/write boundary ratified),
+OQ.15 (resolved to option (a) here), T0.6 (closed via supersession), T0.7a/b/c/T1.1/T1.2/T1.3
+(re-grounded; still not_started), ROADMAP-PLATFORM.yaml.
+
+---
+
 ## Decision 90: Four-Tier Workflow Architecture (Decided)
 
 **Status:** Decided
