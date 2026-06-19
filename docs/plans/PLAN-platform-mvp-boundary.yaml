@@ -1,0 +1,234 @@
+schema_version: 1
+slug: "platform-mvp-boundary"
+intent: >-
+  Draw an explicit platform-MVP boundary into the platform roadmap so post-MVP hardening work stops
+  competing with MVP-critical work in the eligibility surfaces -- without forcing a positive up-front
+  definition of "MVP". Introduce a `deferred_post_mvp` lifecycle status (the living cousin of `reserved`)
+  and park four confidently-post-MVP platform items behind it, so the autonomous loop's critical-path work
+  surfaces first. Defer-by-exception: items leave scope only by conscious deferral, never by enumerating
+  the MVP set. Ratifies Decision 93.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-platform-mvp-boundary.yaml
+phase: >-
+  Platform governance / roadmap-sequencing. Not itself a tier_item -- a schema + governance change that
+  ratifies Decision 93 (platform-MVP boundary) and re-sequences existing tier_items. User-explicit ad-hoc
+  governance work (planning skill user_explicit category). Product phase: N/A -- the product roadmap is
+  explicitly OUT of scope per the user's "complete the full platform first" directive.
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add "deferred_post_mvp" to the TierItem.status Literal (~line 132). Exclude it from tier-completion
+      math alongside the existing != "reserved" exclusion (tier_complete ~323, active_tier ~366,
+      resolve_depends_on tier-shortcut ~333) via a shared inactive-for-tier set, so a tier of
+      [complete, deferred_post_mvp] counts complete and active_tier does not wedge. Add a
+      deferred_post_mvp_items() accessor and a "deferred_post_mvp" key to to_preflight_dict()/compute_state
+      (FULL state only -- NOT _slim_roadmap_state, which stays lean). Add a model_validator invariant: no
+      not_started/in_progress tier_item may depends_on a deferred_post_mvp item (direct id deps only; tier
+      shortcuts are unaffected because deferred items are already excluded from tier-completion).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Set status: deferred_post_mvp on T2.8 (backup/DR posture), T2.9 (secrets rotation), T2.11a (Codespaces
+      devcontainer), and T2.11b (public-portal artefacts -- co-parked: it depends_on T2.11a and is the same
+      public-surface category; its only downstream, T2.12/T2.13, are already complete). Re-point T2.14
+      (broker-credential routing) depends_on [T2.1, T2.9] -> [T2.1]: T2.14 provisions its own Secrets Manager
+      surface, so routing never required rotation automation -- the edge correction the user approved, and
+      required for the new invariant to pass with T2.9 parked. Update agent_instructions to document the
+      deferred_post_mvp status and the defer-by-exception convention.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Ratify "## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status". Records: the
+      boundary = "the autonomous loop closes end-to-end with no human in the critical path of one iteration
+      (rec -> implement -> validate -> merge -> deploy -> observe -> next rec)"; the defer-by-exception rule
+      (new platform work is MVP-critical by default; items leave scope only by conscious deferral); the
+      deferred_post_mvp status semantics (excluded from next_eligible + tier-completion; surfaced in its own
+      bucket; no live platform item may depend on a deferred one); and the explicit scoping note that the
+      restriction is PLATFORM-INTERNAL (cross-roadmap product deps on deferred platform items are permitted
+      and revisited when product work begins, per the platform-first directive). Cite Decisions 73, 80, 86, 90.
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add cases: (a) a deferred_post_mvp item is absent from eligible_items()/next_eligible; (b) a tier with
+      [complete, deferred_post_mvp] counts complete and active_tier advances past it; (c) loading a roadmap
+      where a not_started item depends_on a deferred_post_mvp item raises ValueError; (d) a deferred item
+      appears in the deferred_post_mvp bucket of the full compute_state but not in _slim_roadmap_state; (e)
+      against the real roadmap, the four parked ids (T2.8/T2.9/T2.11a/T2.11b) are absent from next_eligible.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `deferred_post_mvp` is a valid TierItem status; T2.8, T2.9, T2.11a, T2.11b carry it; none of the four
+    appear in next_eligible (compute_state_dict over the real ROADMAP-PLATFORM.yaml).
+  - >-
+    A tier containing only `complete` + `deferred_post_mvp` items is treated as complete -- active_tier()
+    does not wedge on a parked item (regression-proven by a unit test).
+  - >-
+    Loading a platform roadmap in which a not_started/in_progress item depends_on a deferred_post_mvp item
+    raises a validation error (the no-silent-block invariant), proven by a unit test.
+  - >-
+    T2.14's depends_on no longer includes T2.9, and a full `scripts.validate` run is green -- the integrated
+    proof that no live platform item depends on a parked one and that the product roadmap is unbroken.
+  - >-
+    "## Decision 93" exists in DECISIONS.md defining the boundary, defer-by-exception, the deferred_post_mvp
+    semantics, and the platform-internal scoping; ROADMAP-PLATFORM.yaml agent_instructions documents the
+    status and the defer-by-exception convention.
+  - >-
+    ROADMAP-PRODUCT.yaml and product_roadmap.py are UNTOUCHED; validate_product_roadmap still passes
+    (deferred_post_mvp is not a cross-roadmap-restricted status, so E.env.3 -> PLATFORM:T2.9 stays valid and
+    dormant).
+  - >-
+    ops_decisions re-derives cleanly via `ops_data_portal --backfill-decisions-md` including dec-093.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit tests for the new status behaviour (eligibility exclusion, tier-completion exclusion, the no-live-dep invariant, the bucket, and the four real parked ids).
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -q
+    expected: >-
+      All tests pass, including the five new deferred_post_mvp cases (a)-(e).
+    fix_if: >-
+      A failure points at the specific behaviour: eligibility/tier-completion handling in
+      platform_roadmap.py, the model_validator invariant, or the parked-status edits in the roadmap YAML.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Full presubmit -- the integrated consistency proof. Loads ROADMAP-PLATFORM.yaml (runs the new
+      invariant; fails if any live item, e.g. an un-fixed T2.14, still depends on parked T2.9) AND
+      ROADMAP-PRODUCT.yaml with platform context (confirms product is still green and untouched).
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exits 0. Platform roadmap schema validation PASS (invariant satisfied -- T2.14 re-pointed off T2.9);
+      Product roadmap schema validation PASS (E.env.3 -> PLATFORM:T2.9 still resolves; deferred is not
+      cross-roadmap-restricted).
+    fix_if: >-
+      "PLATFORM tier_item 'T2.x' depends on deferred_post_mvp" means a live dependent of a parked item was
+      missed -- re-point or co-park it. A product failure means deferred_post_mvp was wrongly added to
+      product_roadmap.py platform_restricted_ids (it must NOT be) -- revert that.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm Decision 93 is recorded and the defer-by-exception convention is documented in the roadmap.
+    command: 'rg -nq "^## Decision 93:" docs/DECISIONS.md && rg -nq "defer-by-exception" docs/ROADMAP-PLATFORM.yaml && rg -nq "deferred_post_mvp" docs/ROADMAP-PLATFORM.yaml && echo OK'
+    expected: >-
+      Prints OK -- Decision 93 header present; agent_instructions documents both the defer-by-exception rule
+      and the deferred_post_mvp status.
+    fix_if: >-
+      Missing -- author the Decision 93 body and/or extend ROADMAP-PLATFORM.yaml agent_instructions.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the product roadmap was left untouched (positive proof the platform-first scoping held).
+    command: 'rg -nq "PLATFORM:T2.9" docs/ROADMAP-PRODUCT.yaml && git diff --quiet -- docs/ROADMAP-PRODUCT.yaml scripts/product_roadmap.py && echo OK'
+    expected: >-
+      Prints OK -- E.env.3 still references PLATFORM:T2.9 (no product surgery), and neither product file has
+      uncommitted edits relative to HEAD at verification time.
+    fix_if: >-
+      If PLATFORM:T2.9 is gone or a product file changed, the plan over-reached into product scope -- revert
+      the product edits; the restriction is platform-internal only.
+  - step: 5
+    phase: post-deploy
+    action: Re-derive ops_decisions from the corrected DECISIONS.md via the documented decisions ETL.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      Exits 0 with dec-093 synced; no per-dec failure logged.
+    fix_if: >-
+      Non-zero exit or a dec-093 failure means the Decision 93 markdown is malformed (header/format) -- fix
+      and re-run. If the writer profile is unavailable, the operator runs the backfill.
+constraints:
+  - >-
+    The deferred_post_mvp dependency restriction is PLATFORM-INTERNAL only (the new platform_roadmap.py
+    model_validator invariant). Do NOT add it to product_roadmap.py's platform_restricted_ids and do NOT
+    edit docs/ROADMAP-PRODUCT.yaml -- product is explicitly out of scope per the user's "complete the full
+    platform first" directive. The cross-roadmap E.env.3 -> PLATFORM:T2.9 edge is left intact and dormant by
+    design (revisited when product work begins).
+  - >-
+    LAMBDA-DEPLOY: docs/ROADMAP-PLATFORM.yaml is a packaged ASSET of the active data-pipeline Lambda
+    (lambda_manifest --list-patterns), but this is an asset-only governance change (status flips + one
+    depends_on edit + agent_instructions prose) with no data-pipeline runtime consumer that parses tier_item
+    status or deps -- no build/deploy/smoke is triggered (Decision 79 / CD.16 per-Lambda gating).
+    scripts/platform_roadmap.py is NOT Lambda-packaged (absent from --list-patterns). V2, no V3 steps. If a
+    consumer is later found to parse these fields at runtime, file a rec.
+  - >-
+    T2.11b co-parking is REQUIRED, not optional: it depends_on T2.11a, so leaving it not_started while T2.11a
+    is parked trips the new invariant. Co-parking is coherent (same public-surface-polish category; downstream
+    T2.12/T2.13 already complete, so nothing live is stranded).
+  - >-
+    T2.14 is NOT parked -- only its depends_on edge is corrected (drop T2.9, keep T2.1). Do not change
+    T2.14's status or any other field. T5.2 is NOT parked (dropped from the cut: near-due cost-saver, grace
+    elapses ~2026-06-28, user_action_required, currently eligible -- parking would hide a billing-stopper).
+  - >-
+    Decision 86: create NO new prose doc. The boundary semantics live in Decision 93 + ROADMAP-PLATFORM.yaml
+    agent_instructions ONLY. A docs/MVP-*.md (or any standing prose-architecture doc) trips the validate.py
+    intent-doc-freeze guard.
+  - >-
+    No new check may be added to ci.yml without adding it to validate.py first (Decision 80); the invariant
+    lives in the platform_roadmap.py model_validator and is picked up by validate_platform_roadmap via load().
+  - Out-of-scope items are not fixed inline (AGENTS.md scope rule); file a rec if warranted. No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    The boundary problem is structural, not a gap in judgement: the platform's telos is removing the human
+    from the loop, so "removes the bottleneck" qualifies almost everything -- there is no natural MVP edge
+    under that framing. Decision 93 resolves it with a critical-path definition (the autonomous loop closes
+    end-to-end) + defer-by-exception (park what you are sure about; never enumerate MVP).
+  - >-
+    Mechanism chosen after checking the status enum (not_started/in_progress/complete/reserved -- no holding
+    state): a milestone gate node cannot sit dormant without enumerating the MVP set or overloading
+    strategic/reserved, and would not fix the active_tier wedge. deferred_post_mvp -- the living cousin of
+    reserved -- is excluded from tier-completion (fixing active_tier for free), needs no MVP definition, and
+    is reactivated per-item. The user chose the explicit name over a bare "deferred".
+  - >-
+    Dependency tracing changed the cut from the originally-named pair (T2.9 + T2.11a). T2.11a drags in T2.11b
+    (co-park). T2.9 was not a leaf: PLATFORM T2.14 (broker routing) AND PRODUCT E.env.3 both declared deps on
+    it -- the platform edge (T2.14) is corrected; the product edge is left dormant per the platform-first
+    directive. T5.2 (teardown) was dropped: a near-due cost-saver, not parkable hardening. T2.8 is a clean leaf.
+  - >-
+    decision-scout verdict NO_FLAGS. Cite Decisions 73 (sandbox-only / forward-fix posture -- the boundary is
+    consistent with it, not a re-derivation), 86 (intent routes to roadmap + Decision; no new doc), 90
+    (orient/plan must surface the new bucket), 80 (validate.py single source of truth for the invariant
+    placement); 75 (frame-lock anti-pattern) supports the defer-by-exception framing. The earlier CD.14
+    citation was wrong (superseded by 86). No Decision freezes the roadmap status vocabulary -- the extension
+    is T-1.5-owned schema evolution.
+  - >-
+    The new invariant earned its keep at design time: it surfaced the T2.14 and E.env.3 cascades before CI
+    rather than after. That is the intended behaviour -- parking must fail loud at validation, never silently
+    strand a dependent.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/youthful-galileo-wb7q3u)
+  - docs/PROJECT_CONTEXT.md read
+  - The four parked ids (T2.8/T2.9/T2.11a/T2.11b) and the T2.14 depends_on edge confirmed against current ROADMAP-PLATFORM.yaml
+  - Decision 93 confirmed as the next free number (decision-scout; 90/91/92 are latest)
+  - "Understood: product roadmap is OUT of scope -- no edits to ROADMAP-PRODUCT.yaml or product_roadmap.py"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/platform_roadmap.py: add "deferred_post_mvp" to the TierItem.status Literal; introduce a shared
+    inactive-for-tier set {"reserved", "deferred_post_mvp"} and use it at tier_complete / active_tier /
+    resolve_depends_on (replacing the bare != "reserved" comparisons); add deferred_post_mvp_items() and the
+    "deferred_post_mvp" bucket in to_preflight_dict()/compute_state (full state only, never _slim_roadmap_state);
+    add the model_validator invariant (no not_started/in_progress item depends_on a deferred_post_mvp item).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: flip status -> deferred_post_mvp on T2.8, T2.9, T2.11a, T2.11b; re-point T2.14
+    depends_on [T2.1, T2.9] -> [T2.1]; extend agent_instructions to document the deferred_post_mvp status and
+    the defer-by-exception convention (new platform work is MVP-critical by default; park only by conscious
+    deferral; deferred items are excluded from eligibility + tier-completion and no live item may depend on one).
+  - >-
+    docs/DECISIONS.md: author "## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status
+    (Decided)" -- boundary definition (autonomous-loop critical path), defer-by-exception rule,
+    deferred_post_mvp semantics, the PLATFORM-INTERNAL scoping note (product cross-roadmap deps on deferred
+    items permitted, revisited when product work begins), the four parked items + the T2.14 edge correction
+    rationale, T5.2's exclusion rationale; Related: Decisions 73, 80, 86, 90.
+  - >-
+    tests/test_platform_roadmap.py: add the five cases (eligibility exclusion; tier-completion exclusion +
+    active_tier advance; no-live-dep invariant raises; full-vs-slim bucket; the four real parked ids absent
+    from next_eligible).
+  - >-
+    Run the Verification Plan pre-deploy steps (pytest, full validate, the doc/product greps); loop until all green.
+  - >-
+    Post-merge: run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (VP step 5); confirm dec-093 synced.
+  - 'Report: the new status, the four parked items, the T2.14 edge fix, T5.2 left in-scope, and that the product roadmap was left untouched by design.'
+work_areas: []
+rollback: >-
+  Pure code + governance-doc change; revert the commit and re-run `--backfill-decisions-md` against the
+  reverted DECISIONS.md (ops_decisions re-derives deterministically). The four items return to not_started
+  (re-eligible); T2.14's edge returns to [T2.1, T2.9]. No infra, data, or Lambda deploy to unwind (Decision
+  70: amendment, not deletion).
