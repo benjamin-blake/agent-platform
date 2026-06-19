@@ -44,8 +44,10 @@ scope:
       boundary = "the autonomous loop closes end-to-end with no human in the critical path of one iteration
       (rec -> implement -> validate -> merge -> deploy -> observe -> next rec)"; the defer-by-exception rule
       (new platform work is MVP-critical by default; items leave scope only by conscious deferral); the
-      deferred_post_mvp status semantics (excluded from next_eligible + tier-completion; surfaced in its own
-      bucket; no live platform item may depend on a deferred one); and the explicit scoping note that the
+      deferred_post_mvp status semantics (excluded from next_eligible + tier-completion; recorded in its own
+      bucket in the FULL compute_state -- queryable on demand, intentionally NOT shown in the lean
+      preflight/orient digest, so parked items are excluded from the eligibility surface rather than displayed
+      there; no live platform item may depend on a deferred one); and the explicit scoping note that the
       restriction is PLATFORM-INTERNAL (cross-roadmap product deps on deferred platform items are permitted
       and revisited when product work begins, per the platform-first directive). Cite Decisions 73, 80, 86, 90.
   - file: tests/test_platform_roadmap.py
@@ -108,13 +110,15 @@ verification_plan:
       product_roadmap.py platform_restricted_ids (it must NOT be) -- revert that.
   - step: 3
     phase: pre-deploy
-    action: Confirm Decision 93 is recorded and the defer-by-exception convention is documented in the roadmap.
-    command: 'rg -nq "^## Decision 93:" docs/DECISIONS.md && rg -nq "defer-by-exception" docs/ROADMAP-PLATFORM.yaml && rg -nq "deferred_post_mvp" docs/ROADMAP-PLATFORM.yaml && echo OK'
+    action: Confirm Decision 93 is recorded and the agent_instructions PROSE (not just the status data lines) documents the convention.
+    command: 'rg -nq "^## Decision 93:" docs/DECISIONS.md && rg -nq "defer-by-exception" docs/ROADMAP-PLATFORM.yaml && rg -nq "parked post-MVP" docs/ROADMAP-PLATFORM.yaml && echo OK'
     expected: >-
-      Prints OK -- Decision 93 header present; agent_instructions documents both the defer-by-exception rule
-      and the deferred_post_mvp status.
+      Prints OK -- Decision 93 header present; agent_instructions carries the prose-only anchor phrases
+      "defer-by-exception" and "parked post-MVP". Neither appears in the `status: deferred_post_mvp` data
+      lines, so a pass proves the prose was actually written -- this is what makes AC5 load-bearing.
     fix_if: >-
-      Missing -- author the Decision 93 body and/or extend ROADMAP-PLATFORM.yaml agent_instructions.
+      Missing -- author the Decision 93 body and/or extend ROADMAP-PLATFORM.yaml agent_instructions to
+      include both literal anchor phrases verbatim.
   - step: 4
     phase: pre-deploy
     action: Confirm the product roadmap was left untouched (positive proof the platform-first scoping held).
@@ -163,6 +167,11 @@ constraints:
   - >-
     No new check may be added to ci.yml without adding it to validate.py first (Decision 80); the invariant
     lives in the platform_roadmap.py model_validator and is picked up by validate_platform_roadmap via load().
+  - >-
+    Do NOT touch _dep_satisfied (platform_roadmap.py:342): it intentionally returns status == "complete", so a
+    live item depending on a deferred_post_mvp item computes as blocked. The new invariant forbids exactly that
+    configuration at load time, so _dep_satisfied is never asked about a deferred direct-dep from live work.
+    "Fixing" _dep_satisfied to treat deferred as satisfied would silently defeat the no-silent-block guard.
   - Out-of-scope items are not fixed inline (AGENTS.md scope rule); file a rec if warranted. No rescue agents or workaround loops (Decision 55).
 context:
   - >-
@@ -184,14 +193,26 @@ context:
   - >-
     decision-scout verdict NO_FLAGS. Cite Decisions 73 (sandbox-only / forward-fix posture -- the boundary is
     consistent with it, not a re-derivation), 86 (intent routes to roadmap + Decision; no new doc), 90
-    (orient/plan must surface the new bucket), 80 (validate.py single source of truth for the invariant
-    placement); 75 (frame-lock anti-pattern) supports the defer-by-exception framing. The earlier CD.14
+    (governs the orient/plan eligibility surfaces -- parked items are correctly EXCLUDED from next_eligible,
+    the competing surface, not displayed in a new bucket there), 80 (validate.py single source of truth for
+    the invariant placement); 75 (frame-lock anti-pattern) supports the defer-by-exception framing. The earlier CD.14
     citation was wrong (superseded by 86). No Decision freezes the roadmap status vocabulary -- the extension
     is T-1.5-owned schema evolution.
   - >-
     The new invariant earned its keep at design time: it surfaced the T2.14 and E.env.3 cascades before CI
     rather than after. That is the intended behaviour -- parking must fail loud at validation, never silently
     strand a dependent.
+  - >-
+    plan-critique verdict PROCEED (no blocking issues; the dependency-graph coverage, product-edge safety, the
+    inertness of gate-rule machinery to a 5th status, and Lambda N/A were each independently re-verified --
+    notably that NO bare-`T2` tier-shortcut exists anywhere, so no shortcut can leak a parked item). Two
+    non-blocking refinements folded in: (1) VP3 re-anchored on prose-only phrases ("defer-by-exception",
+    "parked post-MVP") so AC5's agent_instructions requirement is load-bearing rather than satisfiable by the
+    status data lines; (2) the Decision-90 wording softened from "surface the new bucket" to "excluded from the
+    eligibility surface" -- parked items are intentionally absent from the lean orient/preflight digest and
+    remain queryable via the full compute_state + the Decision 93 record. Adding an orient "N parked" indicator
+    is a deferred, trivial follow-up if visibility is later wanted (would touch _slim_roadmap_state +
+    orient/SKILL.md + a VP step; out of scope now per the platform-first / keep-it-lean steer).
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/youthful-galileo-wb7q3u)
   - docs/PROJECT_CONTEXT.md read
@@ -211,6 +232,9 @@ execution_steps:
     depends_on [T2.1, T2.9] -> [T2.1]; extend agent_instructions to document the deferred_post_mvp status and
     the defer-by-exception convention (new platform work is MVP-critical by default; park only by conscious
     deferral; deferred items are excluded from eligibility + tier-completion and no live item may depend on one).
+    The agent_instructions prose MUST contain the literal anchor phrases "defer-by-exception" and "parked
+    post-MVP" -- VP3 greps both, and neither occurs in the status data lines, so this is what makes AC5
+    (prose actually written) load-bearing rather than satisfiable by the status: deferred_post_mvp lines.
   - >-
     docs/DECISIONS.md: author "## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status
     (Decided)" -- boundary definition (autonomous-loop critical path), defer-by-exception rule,
