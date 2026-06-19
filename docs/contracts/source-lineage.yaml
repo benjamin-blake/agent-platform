@@ -1,0 +1,87 @@
+---
+# Class C cross-system invariant: the source / agent-type lineage key.
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.7).
+# Authored against the shipped scripts/contracts_schema.py + tests/test_contracts.py
+# (NOT the superseded INTENT 3E worked example, whose amendment_log `change:` key and
+# missing top-level `fields:` block fail the schema's extra="forbid").
+#
+# Class A table contracts $ref into contract.fields.registry_key:
+#   ops_recommendations.source  -> registry_key   (authored by T0.12.5)
+#   telemetry_*.agent_type      -> registry_key   (authored by T0.12.6)
+contract:
+  id: source-lineage
+  class: C
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-19"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-class-c-cross-system-invariants merge to main"
+  description: >-
+    Canonical cross-system lineage/provenance key. One open-set string identifying
+    which agent type produced a row. Surfaces as `source` on ops_recommendations and
+    as `agent_type` on the telemetry tables; both draw from a single canonical
+    registry. NOTE: ops_decisions does NOT carry this field -- DecisionPayload has no
+    source attribute (re-grounded from the roadmap intent's "ops_decisions via filer
+    agent" phrasing, which does not match the live schema as of 2026-06-19).
+fields:
+  registry_key:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      The canonical lineage key. Open-set string whose membership is the set of
+      `canonical_id` values in config/agent/data_quality/source_registry.yaml.
+      Referenced by ops_recommendations.source and telemetry_*.agent_type via $ref.
+    semantics: >-
+      A LINEAGE key, not a routing enum (graduated from a 4-value routing enum to an
+      open-set lineage key on 2026-05-06, Decision 66). Analytically equivalent to
+      session_id for cross-table joins (PROJECT_CONTEXT.md). New agent types register
+      in the registry BEFORE first use; values are kebab-case canonical_ids
+      (e.g. code-review, planning, ci_rca, manual). The harness injects the value;
+      agents MUST NOT self-assign.
+    populated_by: >-
+      Harness-injected from the AGENT_TYPE env var at write time via the ops portal
+      (scripts/ops_data_portal.py); human-initiated portal calls default to `manual`.
+      Not caller-overridable by agents.
+    write_time_validation: >-
+      validate_source() in scripts/executor/rec_write_guidance.py rejects any value
+      absent from the registry (case-sensitive exact match; raises ValueError). CI
+      guard: check_source_registry() in scripts/validate.py.
+    dq_intent:
+      not_null:
+        enforced: true
+        write_time: true
+    governance_notes: >-
+      No accepted_values DQ check by design (Decision 66): closed-set membership is
+      enforced at WRITE TIME against the registry, not as a post-hoc DQ test, so the
+      registry stays the single source of truth and cannot drift from a duplicated
+      enum. Per-table contracts may tighten via dq_intent_local (e.g.
+      ops_recommendations adds exclude_before: "2026-05-01" to grandfather pre-cutover
+      rows); they may not loosen the enforced not-null (Invariant 5).
+    amendment_log: []
+governance:
+  registry_path: config/agent/data_quality/source_registry.yaml
+  injection_path: "AGENT_TYPE env var -> scripts/ops_data_portal.py write path"
+  validation_path: "scripts/executor/rec_write_guidance.py::validate_source (write-time) + scripts/validate.py::check_source_registry (CI)"
+  human_initiated_value: manual
+allowed_values:
+  registry: config/agent/data_quality/source_registry.yaml
+  key: canonical_id
+  enforcement: write_time
+  note: >-
+    Open set; NOT duplicated here to avoid drift. ~28 active canonical_ids as of
+    2026-06-19 (plus legacy entries). The registry file is authoritative.
+joins_using_this_key:
+  # Forward-declared. The _joins.yaml entry lands only when BOTH referenced contracts
+  # ratify (INTENT Part 5 incremental-landing rule); ops_recommendations.yaml (T0.12.5)
+  # and the telemetry contracts (T0.12.6) are not yet authored, so _joins.yaml is NOT
+  # created by this plan.
+  - lineage_join_source_to_agent_type
+governance_notes: >-
+  Single-hop leaf invariant (no chained $ref; Class C contracts are leaf nodes,
+  Invariant 5). Graduation history: was a 4-value routing enum before 2026-05-06,
+  then graduated to an open-set lineage key (Decision 66). The graduation predates
+  this v1 contract, so it is recorded here as historical context rather than as a
+  contract amendment; future redefinitions of the field's meaning MUST set
+  semantic_break: true on an amendment_log entry.
+amendment_log: []
+previous_versions: []

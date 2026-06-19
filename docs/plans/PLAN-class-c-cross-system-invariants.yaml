@@ -1,0 +1,155 @@
+schema_version: 1
+slug: "class-c-cross-system-invariants"
+intent: >-
+  Ratify the three Class C cross-system contract invariants (source-lineage, project-id,
+  session-id) so downstream Class A table contracts can $ref canonical cross-system field
+  definitions instead of duplicating semantics -- the anti-duplication keystone of the CD.25
+  pre-codegen contract ratification ritual (platform tier_item T0.12.7).
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-class-c-cross-system-invariants.yaml
+phase: >-
+  Platform tier T0 (tier_item T0.12.7, depends_on T-1.12 complete); product Phase 1 Core
+  Infrastructure. Keystone for T0.12.5 (ops Class A) and T0.12.6 (telemetry Class A), which
+  $ref into these three contracts.
+scope:
+  - file: docs/contracts/source-lineage.yaml
+    action: Create
+    purpose: >-
+      Class C contract owning the canonical `registry_key` lineage field that
+      ops_recommendations.source and telemetry_*.agent_type $ref into. Anchored to
+      config/agent/data_quality/source_registry.yaml + write-time validate_source (Decision 66).
+  - file: docs/contracts/session-id.yaml
+    action: Create
+    purpose: >-
+      Class C contract owning the canonical UUID4 `session_id` correlation key. Baseline
+      nullability set to the loosest value so per-table telemetry contracts can tighten
+      (Invariant 5). Grounded in scripts/executor/telemetry.py::open_session.
+  - file: docs/contracts/project-id.yaml
+    action: Create
+    purpose: >-
+      Class C contract owning the canonical `project_id` partition key, ratified as an
+      explicitly forward-looking invariant (no current populator; realized at T2.17).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      (1) Add tier_item T2.33 (generate config/lambda/ducklake/field_semantics.yaml as a
+      contract projection; owns the schema-as-code-from-contract KNOWN GAP that T2.32 records),
+      per explicit human direction to capture this as a roadmap item rather than a rec.
+      (2) Flip T0.12.7 status not_started -> complete (+ completed_at + progress_note) ONLY after
+      the Step 10 multi-perspective critique converges.
+  - file: docs/plans/PLAN-class-c-cross-system-invariants.yaml
+    action: Create
+    purpose: This planning artefact.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - All three Class C contract YAMLs exist at contract_version 1, status ratified, class C, each with a top-level fields mapping holding its canonical field (registry_key / session_id / project_id).
+  - Each contract loads cleanly via scripts.contracts.load_contract (schema-valid ContractDocument; no verbs key).
+  - Each contract is a valid $ref target -- a simulated downstream Class A contract resolves its canonical field via scripts.contracts.resolve_refs with the canonical description layered in and a tightening dq_intent_local accepted.
+  - The validate.py contract-drift gate (CD.25) passes over docs/contracts/ with exactly three ritual contracts and no drift.
+  - session_id baseline nullability is the loosest value (not_null not enforced) so per-table contracts tighten without violating Invariant 5.
+  - project_id is ratified as an explicitly forward-looking invariant citing T2.17, at status ratified (not provisional_v0, per INTENT Part 7).
+  - tier_item T2.33 is present and the roadmap document still loads; T0.12.7 is flipped to complete after Step 10 convergence.
+  - Step 10 multi-perspective critique converges (the second exit criterion of T0.12.7).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Load each contract through the real loader; assert Class C, version 1, ratified, canonical field present, no verbs, and that self-resolution is a clean no-op (Class C fields are inline).
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract, resolve_refs
+      import pathlib
+      exp = {"source-lineage": "registry_key", "project-id": "project_id", "session-id": "session_id"}
+      src = pathlib.Path("docs/contracts")
+      for name, field in exp.items():
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "C" and d.contract.contract_version == 1
+          assert d.contract.status.value == "ratified" and d.verbs is None
+          assert d.fields and field in d.fields
+          assert resolve_refs(d, src)[field].ref is None
+          print("OK", name)
+      PY
+    expected: Three "OK <name>" lines and exit 0.
+    fix_if: An AssertionError or ContractValidationError -- the contract violates the Class C shape (verbs present, wrong status/version, missing canonical field) or is not schema-valid.
+  - step: 2
+    phase: pre-deploy
+    action: Prove each Class C contract is a usable $ref target by resolving a simulated downstream Class A contract against it with a tightening dq_intent_local override.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract, resolve_refs
+      import tempfile, pathlib, shutil, yaml
+      exp = {"source-lineage": "registry_key", "project-id": "project_id", "session-id": "session_id"}
+      src = pathlib.Path("docs/contracts")
+      for name, field in exp.items():
+          with tempfile.TemporaryDirectory() as td:
+              td = pathlib.Path(td); shutil.copy(src / f"{name}.yaml", td / f"{name}.yaml")
+              a = {"contract": {"id": "probe_a", "class": "A", "contract_version": 1, "status": "ratified"},
+                   "fields": {"probe": {"$ref": f"docs/contracts/{name}.yaml#/contract/fields/{field}",
+                                        "dq_intent_local": {"not_null": {"enforced": True}}}}}
+              (td / "probe_a.yaml").write_text(yaml.safe_dump(a), encoding="utf-8")
+              r = resolve_refs(load_contract(td / "probe_a.yaml"), td)["probe"]
+              assert r.ref is None and r.description and r.dq_intent == {"not_null": {"enforced": True}}
+              print("OK", name)
+      PY
+    expected: Three "OK <name>" lines and exit 0 -- the $ref collapses, the canonical description is carried, and the tightening override is applied.
+    fix_if: A ContractValidationError (dangling target/field, chained ref, loosening override) or AssertionError -- a downstream contract cannot $ref the canonical field.
+  - step: 3
+    phase: pre-deploy
+    action: Run the CD.25 contract-drift gate (and the rest of the fast tier) over the working tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; the "=== Contract drift gate (CD.25) ===" section prints "PASS:" with 3 ritual contract(s) scanned and no drift.
+    fix_if: Any "Contract drift" failure line (structural/ref/cat-1/cat-2) or a non-zero exit -- fix the offending contract field and re-run.
+  - step: 4
+    phase: pre-deploy
+    action: Validate the plan artefact against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-class-c-cross-system-invariants.yaml
+    expected: "PASS: docs/plans/PLAN-class-c-cross-system-invariants.yaml validates against PlanDocument schema."
+    fix_if: A "FAIL:" line naming the schema violation -- correct the plan field and re-run.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the roadmap still loads after the T2.33 addition (TierItem extra=forbid would reject an unknown key) and that T2.33 is present.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      d = load("docs/ROADMAP-PLATFORM.yaml")
+      ids = {i.id for i in d.tier_items}
+      assert "T2.33" in ids and "T0.12.7" in ids
+      print("ROADMAP_LOADS", len(d.tier_items), "items; T2.33 present")
+      PY
+    expected: Prints a ROADMAP_LOADS line with the item count and exits 0 (the roadmap parses; T2.33 present; no Pydantic ValidationError from the new tier_item).
+    fix_if: A Pydantic ValidationError -- the T2.33 entry uses a key outside the TierItem schema; remove it or use a valid field.
+constraints:
+  - "REPORT-ONLY: the deliverable is the three Class C contracts. No source code, Pydantic, ops.yaml, or field_semantics.yaml changes -- those reconciliations are T0.12.5 / T1.6 / T2.29 / the new T2.33."
+  - "Author strictly against the shipped scripts/contracts_schema.py + tests/test_contracts.py, NOT the INTENT 3E worked examples (their amendment_log `change:` key and missing top-level fields block fail extra=forbid)."
+  - "Do NOT create docs/contracts/_joins.yaml: a join entry may not land until BOTH referenced contracts ratify (INTENT Part 5 incremental-landing). Joins are forward-declared via joins_using_this_key only."
+  - "Class C contracts are single-hop leaf nodes -- no $ref inside them (Invariant 5)."
+  - "Roadmap edits limited to: add tier_item T2.33 (explicit human direction) + the T0.12.7 status closeout. No other roadmap items touched."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Dependency T-1.12 is complete (2026-06-18); it landed scripts/contracts_schema.py + scripts/contracts.py + the validate.py contract-drift gate + scripts/contracts_enforcement.py, which validate these deliverables. The Class C shape was verified live: load + resolve_refs + a simulated $ref all pass in this planning session."
+  - "Decision scout verdict FLAGS_FOUND. CITE: Decision 86 (forward-intent / agent-first routing endorses authoring machine-parseable contracts and adding forward intent as a tier_item) and Decision 66 (source registry / validate_source anchors source-lineage). NOTE flag (resolved): CD.10's six-Lambda enumeration is superseded (Decision 81/91) -- resolved by NOT anchoring any contract to CD.10; source-lineage anchors to the registry, session-id to telemetry, project-id is forward-looking."
+  - "Canonical field name registry_key matches the anticipating fixture tests/test_contracts.py:47 and the INTENT Class A $ref worked example."
+  - "Re-grounding (Tier Item Freshness Gate): source spans ops_recommendations.source + telemetry agent_type (both from source_registry.yaml); ops_decisions does NOT carry source (corrected from the roadmap intent's 'via filer agent'). project_id re-grounded from the retired AWS-migration INTENT onto the live T2.17 milestone."
+  - "project_id is entirely forward-looking (zero occurrences in src/, scripts/, config/ as of 2026-06-19); session_id is UUID4 from telemetry.open_session; source is real and write-time-enforced."
+  - "CD.25 is state: pending but T0.12.7 carries bootstrap_completion_exempt: true (enumerated in CD.25's exemption set), so completion is permitted with CD.25 pending."
+  - "New tier_item T2.33 owns the KNOWN GAP that T2.32 records (DuckLake schema-as-code-from-contract; T0.13 is Iceberg-only). It captures the field_semantics.yaml generated-projection work discussed at plan time, per explicit human direction to make it a roadmap item rather than a rec. Subset-aware projection: the storage gate gets the mechanical slice (no prose); the agent write-guidance verb gets the semantic slice (prose included); both generated from the one contract."
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no scope-file overlap with recent main changes."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/awesome-bohr-nrq613).
+  - docs/PROJECT_CONTEXT.md and the INTENT-pre-codegen-contract-ratification.md Class C sections read.
+  - scripts/contracts_schema.py + scripts/contracts.py + tests/test_contracts.py read; deliverables authored against them.
+  - All scope files located and readable; the three contracts already load + resolve cleanly in-session.
+  - Acceptance criteria understood and verifiable via the real loader + the CD.25 drift gate.
+execution_steps:
+  - "Author the three Class C contract YAMLs (done in this REPORT-ONLY session): docs/contracts/source-lineage.yaml, session-id.yaml, project-id.yaml."
+  - "Add tier_item T2.33 to docs/ROADMAP-PLATFORM.yaml (field_semantics.yaml generated-projection; owns the T2.32 KNOWN GAP)."
+  - "Execute the Verification Plan -- run each step; loop until all pass."
+  - "Run Step 9 plan-critique gate (fresh-context subagent) and Step 10 multi-perspective report critique (>=2 parallel subagents) on the contract deliverables; iterate to convergence."
+  - "After Step 10 converges: flip T0.12.7 status not_started -> complete (+ completed_at + progress_note) in docs/ROADMAP-PLATFORM.yaml, then merge to main."
+  - "Report: contracts authored, verification results, critique convergence, roadmap edits."
+rollback: >-
+  The deliverables are additive new files plus a roadmap edit. Rollback = delete the three
+  docs/contracts/*.yaml, revert the T2.33 addition and the T0.12.7 status flip. No runtime
+  consumer reads these contracts yet (Class A $refs land in T0.12.5/.6), so removal is
+  side-effect-free.

@@ -1,0 +1,67 @@
+---
+# Class C cross-system invariant: the telemetry session correlation id.
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.7).
+# Authored against the shipped scripts/contracts_schema.py + tests/test_contracts.py.
+#
+# Telemetry Class A contracts $ref into contract.fields.session_id (authored by T0.12.6).
+contract:
+  id: session-id
+  class: C
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-19"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-class-c-cross-system-invariants merge to main"
+  description: >-
+    Canonical cross-system session correlation identifier. Generated once per session
+    and propagated to child telemetry rows as a foreign key. The joining key across
+    the telemetry star schema (telemetry_sessions / _phases / _steps / _process_events
+    / _model_calls / _transcripts) and the (dormant) ops_session_log table.
+fields:
+  session_id:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      UUID4 string correlating all rows emitted within one session. Primary key of
+      telemetry_sessions; foreign key on the child telemetry tables. Distinct from
+      the Copilot CLI `session_id` (docs/contracts/cli-json-output.md), which is an
+      external CLI session id, NOT this telemetry session.
+    semantics: >-
+      Format: UUID4 (str(uuid.uuid4())), generator-guaranteed. Created in the parent
+      session and propagated to phases/steps/events as a foreign key. The Class C
+      baseline nullability is the LOOSEST common value so per-table contracts can
+      TIGHTEN via dq_intent_local without violating Invariant 5 (overrides must
+      tighten, never loosen). Per-table nullability: REQUIRED in telemetry_sessions
+      (PK), telemetry_phases, telemetry_steps; OPTIONAL in telemetry_process_events,
+      telemetry_model_calls, telemetry_transcripts; ABSENT in
+      telemetry_agent_invocations.
+    populated_by: >-
+      scripts/executor/telemetry.py::open_session() mints the UUID4; entered via
+      scripts/session_preflight.py --open-session or the executor; closed via
+      scripts/session_postflight.py::close_telemetry_session().
+    write_time_validation: >-
+      Structural, not central: PK-required in telemetry_sessions; foreign key in the
+      child tables. UUID format is generator-guaranteed (no separate validator).
+    dq_intent:
+      not_null:
+        enforced: false
+    governance_notes: >-
+      Loosest baseline (not_null not enforced) by design: the owning/required tables
+      (telemetry_sessions PK, telemetry_phases, telemetry_steps) and the dormant
+      ops_session_log (merge_key session_id, partition bucket(8, session_id), VARCHAR
+      not-null) tighten to enforced not-null via dq_intent_local; optional-FK tables
+      pass through; telemetry_agent_invocations omits the field entirely.
+      ops_session_log is DORMANT/unprovisioned as of 2026-06-19; its per-table
+      contract tightens when the table is provisioned.
+    amendment_log: []
+joins_using_this_key:
+  # Forward-declared. The _joins.yaml entry lands with the telemetry Class A contracts
+  # (T0.12.6), per INTENT Part 5 incremental-landing; not created by this plan.
+  - session_id_join_telemetry_sessions_to_phases
+governance_notes: >-
+  Single-hop leaf invariant (no chained $ref; Class C contracts are leaf nodes,
+  Invariant 5). Telemetry Class A contracts (T0.12.6) reference
+  contract.fields.session_id; the cross-contract join entries land in
+  docs/contracts/_joins.yaml only when both referenced contracts ratify.
+amendment_log: []
+previous_versions: []
