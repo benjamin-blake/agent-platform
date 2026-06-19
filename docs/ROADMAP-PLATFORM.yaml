@@ -1557,15 +1557,15 @@ candidate_decisions:
           data-driven). A subagent review may advise at the gate; it is never the lock -- the lock is
           deterministic policy plus the human signature on budget amendments.
     gates: [T2.20, T2.21, T2.22, T2.23, T2.24, T2.25]
-    state: pending
-    filed_via: pending_log_decision_lambda
+    state: ratified
+    filed_via: ops_decisions:dec-092
     supersedes_decisions: []
     discipline_points:
       - "Extends, does NOT overturn: Decision 77 (guard narrows to content-policy, still fail-closed), Decision 35 (the GitHub-Environment reviewer gate is the native implementation of human-gated apply), Decision 76 (post-merge wake best-effort with next-session re-check as the poll-free baseline), Decision 89/CD.20 (extends the live main-protection ruleset). Single-account (Decision 77 clause 5), not Decision 24 multi-account."
       - "Anti-masking anchor is SERVER-SIDE (apply refuses on a red record), not the PR check: main-protection has strict_required_status_checks_policy=false + admin bypass_mode=always, so a required terraform-converged check would be bypassable AND would wedge the autonomous fix-merge; it is advisory only."
       - "CI/CD pipeline files are build-tooling, not executor machinery (Decision 44 boundary untouched; Decision 79 precedent). Drift + apply failures alarm and file recs; nothing auto-remediates (Decision 55)."
       - "Each of T2.20-T2.25 is a standalone IMPLEMENTATION plan (Decision 67 STRATEGIC suspension); none authored STRATEGIC."
-      - "Does NOT edit DECISIONS.md while pending; ratified via the log-decision path (a numbered Decision when Wave 1 / T2.20 ships), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81."
+      - "Ratified at Wave 1 as Decision 92 (2026-06-19) via the DECISIONS.md-edit + --backfill-decisions-md path, superseding this candidate's pending_log_decision_lambda clause (Decision 84 + Decision 90/91 precedent)."
       - "The Environment reviewer gate is an authorization boundary, not a routine quality gate: post-T2.25 only out-of-budget / trust-policy / destroy changes route to it (in-budget IAM auto-passes under the bootstrap-defined permissions boundary + guard budget). Environment escalation through the future-state platform promotion train is NOT a substitute (it verifies behavior, not authority); subagent review at the gate is advisory, never the lock. (Amended 2026-06-10; detail points 6-9.)"
     enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (OIDC sub pinned to refs/heads/main); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
 
@@ -4343,7 +4343,11 @@ tier_items:
     related_candidate_decisions: [CD.35]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-18"
+    note: >-
+      Realized-via-shipped-implementation (PRs #142/#179/#185; ratified by Decision 92; production
+      CONVERGENCE_RED proof rec-2236 @7678d3e / rec-2238 @bfa5229f; all bundled recs closed).
   - id: T2.21
     tier: T2
     name: "Terraform CI/CD: speculative plan on PRs + apply-the-saved-plan (CD.35 Wave 2)"
@@ -4456,20 +4460,22 @@ tier_items:
     status: not_started
   - id: T2.25
     tier: T2
-    name: "Terraform CI/CD: convention synchronization + guard narrowing + ratify CD.35 (Wave X)"
+    name: "Terraform CI/CD: convention synchronization + guard narrowing + confirm CD.35 ratification (Wave X)"
     intent: |
       Consolidate the apply-model convention (today duplicated across AGENTS.md:24, terraform/CLAUDE.md:10, and
       docs/contracts/environment-taxonomy.md:35-36) into environment-taxonomy.md as the single source of truth;
       reduce AGENTS.md + terraform/CLAUDE.md to a one-line reference; light-touch the implement skill's
       human-gated-action example. Narrow the Decision-77 guard to plan-content policy now that native controls
-      own authorization (INTENT 5.9). Ratify CD.35 as a numbered Decision via the log-decision path. Standalone
-      IMPLEMENTATION plan. V3 (guard change) + governance.
+      own authorization (INTENT 5.9). Confirm CD.35 is already ratified at Wave 1 (Decision 92); amend that
+      Decision with the concrete authority-budget / ratchet classification once T2.23's bootstrap budget exists.
+      Standalone IMPLEMENTATION plan. V3 (guard change) + governance.
       [Amended 2026-06-10 per CD.35 detail points 6-9]: the narrowing is BUDGET-BASED, not merely
       content-based -- the guard classifies IAM diffs against the bootstrap-defined authority budget (T2.23):
       in-budget changes auto-pass the sandbox auto-apply; out-of-budget / trust-policy / destroy changes route
-      to the T2.22 Environment gate. The ratification Decision states the ratchet criteria: per-change-class
-      widening on measured track record, mandatory narrowing on incident, budget amendments only via the
-      bootstrap tier. (Effort raised S -> M for the budget-classification work.)
+      to the T2.22 Environment gate. The ratchet criteria (per-change-class widening on measured track record,
+      mandatory narrowing on incident, budget amendments only via the bootstrap tier) are stated in Decision 92
+      and amended with concrete classification once T2.23's budget is defined. (Effort raised S -> M for the
+      budget-classification work.)
     depends_on: [T2.20, T2.21, T2.22, T2.23]
     files_in_scope:
       - docs/contracts/environment-taxonomy.md    # SoT for the apply-model convention
@@ -4481,8 +4487,8 @@ tier_items:
       - "The apply-model statement lives in ONE source of truth (environment-taxonomy.md); the others reference it; prompt_compliance.py passes"
       - "The guard is narrowed to plan-content policy; native controls (required checks + Environment) own authorization (INTENT 5.9 division verified)"
       - "The guard classifies IAM diffs against the bootstrap-defined budget: an in-budget IAM change auto-applies; an out-of-budget change routes to the tf-gated-apply Environment (both demonstrated)"
-      - "Ratchet criteria (widen-on-track-record per change-class, narrow-on-incident, budget amendments via bootstrap tier only) are stated in the ratification Decision text"
-      - "CD.35 ratified as a numbered Decision via the log-decision path (DECISIONS.md not edited until ratification)"
+      - "Ratchet criteria (widen-on-track-record per change-class, narrow-on-incident, budget amendments via bootstrap tier only) are stated in the ratification Decision text; concrete authority-budget/ratchet classification is present in Decision 92 or a filed amendment"
+      - "CD.35 already ratified at Wave 1 (Decision 92); this wave records the authority-budget/ratchet amendment if T2.23's budget is defined"
     related_candidate_decisions: [CD.35]
     effort: M    # raised from S 2026-06-10: budget-classification work added per CD.35 points 6-9
     strategic: false

@@ -2,6 +2,82 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 92: Ratify CD.35 -- agent-native Terraform CI/CD (Wave 1 shipped) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-19
+**Warehouse ID:** dec-092 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+CD.35 (Agent-native Terraform CI/CD) specified a five-wave architecture ratified via the log-decision
+path once Wave 1 / T2.20 shipped. Wave 1 is now SHIPPED AND PRODUCTION-PROVEN: the convergence
+substrate landed in PRs #142 (#179 hardening, #185 SSM closure), real CONVERGENCE_RED latches fired
+(rec-2236 @7678d3e, rec-2238 @bfa5229f), were refused server-side, filed as source=ci_rca recs, and
+cleared via the dispatch-ack path -- behavioural proof of T2.20 exit criteria 1/2/4. The roadmap
+still showed T2.20 not_started and CD.35 state:pending with a pending_log_decision_lambda clause.
+
+**Decision:**
+Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is ratified:
+
+1. **Authorization division (INTENT 5.9):** native controls own AUTHORIZATION (required checks,
+   linear history, GitHub Environment reviewer gate); the deterministic guard narrows to plan-CONTENT
+   policy. The guard fails closed on IAM/trust/destroy changes and is never the authorization lock.
+
+2. **Server-side convergence anchor -- sole hard block (INTENT 5.5):** the apply job writes a durable
+   S3 convergence record (pipeline-writer-identity-only write-IAM; always-run, red-on-failure) and
+   reads it as a precondition that refuses to apply against a red record. An absent record = first-apply-
+   allowed (pass-on-absent). The record lives in its own S3 prefix outside tfstate/ so the PR role reads
+   it without seeing tfstate. A red record clears ONLY via the workflow_dispatch acknowledge-and-retry
+   path; a plain push never clears red (auto-allow-descendants rejected on linear-history main).
+   terraform-converged is an ADVISORY PR status ONLY (not a required check -- required would wedge the
+   autonomous fix-merge or be admin-bypassed; main-protection strict=false + bypass_mode=always, Decision 83).
+
+3. **Routine-vs-gated autonomy boundary and Environment-gates-execution security model (ratified
+   DIRECTION for Waves 2-5, INTENT 5.4 + 5.6):** routine (guard-PASS, non-IAM) changes ride the
+   record-backed pipeline; high-blast changes (IAM/trust/destroy) route to a GitHub Environment whose
+   required reviewer gates JOB EXECUTION. The privileged role OIDC trust stays pinned to refs/heads/main.
+
+4. **Rejected guard-self-grant exception + privilege-tiering (INTENT 5.8, Wave 4):** the CI/CD role's
+   own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
+   cycle. Without that separation any automated handling of the fail-closed set is self-approval.
+
+5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
+   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
+   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
+   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
+   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
+   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+
+6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
+   drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
+
+Waves 2-5 and Wave X are RATIFIED DIRECTION -- architecture decided, implementation pending their
+respective tier items (T2.21/T2.22/T2.23/T2.24/T2.25).
+
+**Supersession of CD.35's pending_log_decision_lambda clause:**
+CD.35's discipline_points contained a "does NOT edit DECISIONS.md while pending; ratified via the
+log-decision path" clause and field filed_via: pending_log_decision_lambda. This Decision 92 DELIBERATELY
+supersedes that clause -- the DECISIONS.md-edit + `ops_data_portal --backfill-decisions-md` ETL is the
+sanctioned ratification path per Decision 84 (canonical source + ETL) and the Decision 90/91 precedents
+(both ratified via the same path on 2026-06-18/19). The pending_log_decision_lambda mechanism is
+superseded as of this Decision; CD.35 is now filed_via: ops_decisions:dec-092.
+
+**Rationale:**
+Mirrors CD.31->Decision 78 and CD.33->Decision 81: architecture ratified once the implementation
+is production-proven. The DECISIONS.md-edit path (per Decision 84 + Decision 90/91 precedents) is
+cleaner than the log-decision path, which required a separate Lambda invocation -- Decision 84 retired
+the Lambda path for ops_decisions (DuckLake writer now owns it) and Decision 84 I-2 established backfill
+ETL from DECISIONS.md as the rebuild path. Ratifying CD.35 here confirms that the DECISIONS.md-edit
++ backfill ETL is the canonical ratification path for all future candidate decisions.
+
+**Related:** CD.35 (ratified here; filed_via: ops_decisions:dec-092), T2.20 (Wave 1 shipped),
+T2.21-T2.25 (direction ratified; implementation pending), Decision 77 (guard fail-closed; narrowing is
+T2.25/Wave X), Decision 83 (main-protection non-wedging; advisory-not-required advisory status),
+Decision 84 (DECISIONS.md canonical source + ETL), Decision 90/91 (edit-and-backfill precedents),
+Decision 55 (alarm + file recs; nothing auto-remediates), Decision 72 (RCA-as-plan-source).
+
+---
+
 ## Decision 91: Ratify OQ.15 option (a) -- agent verb surface extends ducklake_writer/reader; T0.6 closed via supersession; CD.10 six-Lambda enumeration superseded (Decided)
 
 **Status:** Decided

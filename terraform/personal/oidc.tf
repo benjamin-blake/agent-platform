@@ -606,6 +606,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
         # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
         # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
+        # rec-2219: runtime-read-only -- the workflow fetches this secret at apply time; no terraform data source reads it (unlike the Neon precedent).
         Sid      = "SecretsManagerTfvarsRead"
         Effect   = "Allow"
         Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]

@@ -140,8 +140,19 @@ jobs:
             exit 1
           fi
           REC_JSON=$(cat /tmp/convergence-record.json)
-          STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
-          RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))")
+          # rec-2209: guard against a non-empty but malformed record (explicit refusal, not an unguarded
+          # set -e abort). On parse failure emit a distinguishable marker, write refused=true, and exit 1
+          # WITHOUT overwriting the record -- ci-rca can then dedupe it like a CONVERGENCE_RED refusal.
+          if ! STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))" 2>/dev/null); then
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            echo "::error::CONVERGENCE_PARSE_ERROR convergence record exists but could not be parsed as JSON; failing CLOSED and NOT overwriting it. Inspect s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY} and re-file if corrupt."
+            exit 1
+          fi
+          if ! RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))" 2>/dev/null); then
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            echo "::error::CONVERGENCE_PARSE_ERROR convergence record exists but commit_sha field could not be parsed; failing CLOSED and NOT overwriting it."
+            exit 1
+          fi
           echo "Convergence record: status=${STATUS} commit=${RED_COMMIT}"
           if [ "$STATUS" != "red" ]; then
             echo "Main is converged (status=${STATUS}); proceeding."
@@ -166,10 +177,30 @@ jobs:
         # fails the step exits non-zero and blocks all downstream steps (no continue-on-error).
         if: success()
         run: |
+          set -euo pipefail
+          # --output text with --query SecretString extracts the raw-body string (no JSON envelope).
           aws secretsmanager get-secret-value \
             --secret-id agent-platform-terraform-personal-tfvars \
             --query SecretString --output text \
             > terraform/personal/terraform.personal.tfvars
+
+      - name: Mask secret-sourced tfvars values in logs
+        # rec-2214: emit ::add-mask:: for account_id and the two ExternalId trust secrets BEFORE any
+        # step writes plan.json / review.txt, so they are redacted in all subsequent log output.
+        if: success()
+        run: |
+          set -euo pipefail
+          while IFS='=' read -r key value; do
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+            case "$key" in
+              account_id|platform_dev_external_id|platform_admin_external_id)
+                if [ -n "$value" ]; then
+                  echo "::add-mask::${value}"
+                fi
+                ;;
+            esac
+          done < terraform/personal/terraform.personal.tfvars
 
       - name: Assert tfvars file is non-empty (fail-closed)
         # Fail-closed (Decision 77): a missing or empty tfvars file reds the run before plan.
@@ -321,6 +352,15 @@ jobs:
           RECORD=$(python3 -c "import json,os; print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':None}))")
           printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
           echo "Wrote convergence record: ${RECORD}"
+          # rec-2211: post-write read-back -- re-GET the object and verify the written status matches
+          # the intended STATUS; fail the step on mismatch (write-verify, not assumed durable).
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "$STATUS" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status=${READBACK_STATUS}"
 
       - name: Best-effort post-merge SHA->PR wake
         # CD.35 5.3 / Decision 76 (poll-free): the push event's workflow_run.pull_requests[] is
