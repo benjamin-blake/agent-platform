@@ -143,16 +143,15 @@ jobs:
           # rec-2209: guard against a non-empty but malformed record (explicit refusal, not an unguarded
           # set -e abort). On parse failure emit a distinguishable marker, write refused=true, and exit 1
           # WITHOUT overwriting the record -- ci-rca can then dedupe it like a CONVERGENCE_RED refusal.
-          if ! STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))" 2>/dev/null); then
+          # Both fields extracted in a single python3 call: a second json.load on the same bytes cannot
+          # fail independently, so two separate guards was dead code and a misleading second error marker.
+          if ! PARSE_OUT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('status','')); print(r.get('commit_sha',''))" 2>/dev/null); then
             echo "refused=true" >> "$GITHUB_OUTPUT"
             echo "::error::CONVERGENCE_PARSE_ERROR convergence record exists but could not be parsed as JSON; failing CLOSED and NOT overwriting it. Inspect s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY} and re-file if corrupt."
             exit 1
           fi
-          if ! RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))" 2>/dev/null); then
-            echo "refused=true" >> "$GITHUB_OUTPUT"
-            echo "::error::CONVERGENCE_PARSE_ERROR convergence record exists but commit_sha field could not be parsed; failing CLOSED and NOT overwriting it."
-            exit 1
-          fi
+          STATUS=$(printf '%s' "$PARSE_OUT" | sed -n '1p')
+          RED_COMMIT=$(printf '%s' "$PARSE_OUT" | sed -n '2p')
           echo "Convergence record: status=${STATUS} commit=${RED_COMMIT}"
           if [ "$STATUS" != "red" ]; then
             echo "Main is converged (status=${STATUS}); proceeding."
