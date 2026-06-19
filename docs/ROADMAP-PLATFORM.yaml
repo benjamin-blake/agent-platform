@@ -2855,7 +2855,23 @@ tier_items:
     effort: S
     strategic: false
     bootstrap_completion_exempt: true
-    status: not_started
+    status: complete
+    completed_at: "2026-06-19"
+    progress_note: |
+      2026-06-19 (PLAN-class-c-cross-system-invariants): authored the three Class C
+      contracts (source-lineage.yaml, project-id.yaml, session-id.yaml) at
+      contract_version 1, status ratified, against the shipped scripts/contracts_schema.py
+      + tests/test_contracts.py (NOT the superseded INTENT 3E examples, whose amendment_log
+      `change:` key and missing top-level fields block fail extra=forbid). Canonical field
+      names registry_key / project_id / session_id match the anticipating test fixture
+      (tests/test_contracts.py:47) and the Class A $ref worked example. All three baselines
+      use the loosest not_null (enforced:false) so downstream Class A contracts ($ref,
+      T0.12.5/.6) tighten per Invariant 5. Re-grounded: source spans ops_recommendations.source
+      + telemetry agent_type (ops_decisions has no source); project_id is forward-looking,
+      realized at T2.17. Step 10 multi-perspective critique converged (architect + adversarial
+      both PROCEED on round 2). CD.10 anchor dropped (enumeration superseded, Decision 81/91);
+      source anchored to the registry (Decision 66). Both exit criteria met. CD.25 remains
+      pending; completion permitted via bootstrap_completion_exempt.
 
   - id: T0.13
     tier: T0
@@ -4808,6 +4824,55 @@ tier_items:
       - "KNOWN GAP documented: DuckLake DDL-generation-from-contract follow-on (T0.13 is Iceberg-only)"
     related_candidate_decisions: [CD.33]
     related_decisions: [57, 63, 84]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.33
+    tier: T2
+    name: Generate field_semantics.yaml as a contract projection (DuckLake schema-as-code; retires hand-reconciliation)
+    intent: |
+      Make config/lambda/ducklake/field_semantics.yaml -- the DuckLake writer runtime field-map
+      consumed live by ducklake_runtime.py (schema_gate / _derive_fields / create_scd2_tables) -- a
+      GENERATED projection of the Class A contract, not a hand-maintained parallel file. Today it is
+      reconciled-to-agree by hand (T2.29 #7 fixes role:input->derived; T2.30/T2.31 fix sql_type
+      VARCHAR->integer); two hand-authored files covering the same fields from different angles is the
+      "drift by design" anti-pattern the contract ritual exists to cure (AGENTS.md Agent-First
+      collocation norm; CD.25). Replace the hand-reconciliation with codegen: the contract is the
+      single source (named in its projects_to), field_semantics.yaml is emitted and never hand-edited,
+      and a CI check fails if the committed file diverges from the generator output -- drift becomes
+      impossible rather than CI-policed between two authored files.
+      Subset-aware projection (the load-bearing design nuance from the T0.12.7 planning discussion):
+      the storage gate receives the MECHANICAL slice (type / role / nullable / partition / merge_key)
+      with NO prose; the agent write-guidance surface (get_rec_write_guidance / the CD.10 describe
+      verb) receives the SEMANTIC slice INCLUDING description/semantics prose -- prose is a first-class
+      projected slice, not stripped, because agents need it for judgment fields (Precision Context
+      Injection). role: input|derived is derived from the presence of a contract `derivation` block.
+      Requires two small schema extensions to ContractGovernance: a merge_key field and a
+      sql_type<-iceberg_type mapping.
+      OWNS the KNOWN GAP that T2.32 records (DuckLake schema-as-code generation from contract; T0.13 is
+      Iceberg-only) and follows T0.13's generator pattern. SUPERSEDES only the field_semantics
+      hand-edit portions of T2.29 #7 / T2.30 / T2.31 (those become generator output); the
+      portal-derivation-correctness and enum-to-int portions of those items are unaffected. Authored as
+      a single IMPLEMENTATION plan per the AGENTS.md freeze override. V3 only if a ducklake
+      writer/reader artifact changes (per Decision 79); otherwise V2.
+    depends_on: [T0.12.5]
+    files_in_scope:
+      - scripts/schema_to_field_semantics.py    # new -- generator: Class A contract -> field_semantics.yaml
+      - config/lambda/ducklake/field_semantics.yaml    # becomes generated output
+      - scripts/contracts_schema.py    # extend ContractGovernance: merge_key + sql_type mapping
+      - scripts/validate.py    # CI drift check: committed field_semantics.yaml matches generator output
+      - tests/test_schema_to_field_semantics.py    # new
+    exit_criteria:
+      - "config/lambda/ducklake/field_semantics.yaml is emitted from docs/contracts/ops_recommendations.yaml by scripts/schema_to_field_semantics.py; the committed file byte-matches the generator output (no hand edits)"
+      - "A CI check in scripts/validate.py fails when the committed field_semantics.yaml diverges from the generator output (drift impossible, not reconciled by hand)"
+      - "ContractGovernance extended with merge_key + a sql_type<-iceberg_type mapping; role:input|derived derived from the presence of a contract derivation block"
+      - "Subset-aware projection codified: the storage-gate slice carries NO prose; the agent write-guidance slice carries description/semantics prose; both generated from the one contract"
+      - "The field_semantics hand-reconciliation portions of T2.29 #7 / T2.30 / T2.31 are superseded (the generator emits correct role + sql_type); those items' other deliverables are unaffected and re-pointed to read the generated file"
+      - "The T2.32-recorded KNOWN GAP (DuckLake schema-as-code-from-contract) is closed"
+      - "If a ducklake writer/reader artifact changes: per-Lambda build + deploy + smoke-test (V3 per Decision 79)"
+    related_candidate_decisions: [CD.25, CD.33]
+    related_decisions: [66, 84, 86]
     effort: M
     strategic: false
     status: not_started
