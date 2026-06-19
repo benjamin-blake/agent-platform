@@ -48,14 +48,14 @@ acceptance_criteria:
   - Each contract loads cleanly via scripts.contracts.load_contract (schema-valid ContractDocument; no verbs key).
   - Each contract is a valid $ref target -- a simulated downstream Class A contract resolves its canonical field via scripts.contracts.resolve_refs with the canonical description layered in and a tightening dq_intent_local accepted.
   - The validate.py contract-drift gate (CD.25) passes over docs/contracts/ with exactly three ritual contracts and no drift.
-  - session_id baseline nullability is the loosest value (not_null not enforced) so per-table contracts tighten without violating Invariant 5.
+  - All three Class C baselines use the loosest nullability (not_null not enforced) so per-table contracts tighten without violating Invariant 5; source-lineage and session-id document the per-table tightening explicitly.
   - project_id is ratified as an explicitly forward-looking invariant citing T2.17, at status ratified (not provisional_v0, per INTENT Part 7).
   - tier_item T2.33 is present and the roadmap document still loads; T0.12.7 is flipped to complete after Step 10 convergence.
   - Step 10 multi-perspective critique converges (the second exit criterion of T0.12.7).
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: Load each contract through the real loader; assert Class C, version 1, ratified, canonical field present, no verbs, and that self-resolution is a clean no-op (Class C fields are inline).
+    action: Load each contract through the real loader; assert Class C, version 1, ratified, canonical field present, no verbs, self-resolution is a clean no-op (Class C fields are inline), and the not_null baseline is the loosest (not enforced) so per-table contracts can tighten (Invariant 5).
     command: |
       bin/venv-python - <<'PY'
       from scripts.contracts import load_contract, resolve_refs
@@ -68,6 +68,8 @@ verification_plan:
           assert d.contract.status.value == "ratified" and d.verbs is None
           assert d.fields and field in d.fields
           assert resolve_refs(d, src)[field].ref is None
+          nn = (d.fields[field].dq_intent or {}).get("not_null") or {}
+          assert nn.get("enforced") is not True, (name, "Class C baseline must be loosest (not_null not enforced)")
           print("OK", name)
       PY
     expected: Three "OK <name>" lines and exit 0.

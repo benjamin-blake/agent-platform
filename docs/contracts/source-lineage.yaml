@@ -34,33 +34,37 @@ fields:
     semantics: >-
       A LINEAGE key, not a routing enum (graduated from a 4-value routing enum to an
       open-set lineage key on 2026-05-06, Decision 66). Analytically equivalent to
-      session_id for cross-table joins (PROJECT_CONTEXT.md). New agent types register
-      in the registry BEFORE first use; values are kebab-case canonical_ids
-      (e.g. code-review, planning, ci_rca, manual). The harness injects the value;
-      agents MUST NOT self-assign.
+      session_id for cross-table joins. New agent types register in the registry
+      BEFORE first use; values are kebab-case canonical_ids (e.g. code-review,
+      planning, ci_rca, manual). `nullable: true` is the Iceberg column-level value
+      (Invariant 2 pattern: nullable column + write-time validators for new writes);
+      not-null ENFORCEMENT is left to the consuming tables (loosest baseline below).
     populated_by: >-
-      Harness-injected from the AGENT_TYPE env var at write time via the ops portal
-      (scripts/ops_data_portal.py); human-initiated portal calls default to `manual`.
-      Not caller-overridable by agents.
+      Caller-supplied on the write payload. By convention the harness sets `source` to
+      the running agent's type; human-initiated portal calls default to `manual`. The
+      portal VALIDATES the value against the registry (validate_source) but does not
+      itself inject it -- there is no AGENT_TYPE env read in the write path today.
     write_time_validation: >-
       validate_source() in scripts/executor/rec_write_guidance.py rejects any value
       absent from the registry (case-sensitive exact match; raises ValueError). CI
       guard: check_source_registry() in scripts/validate.py.
     dq_intent:
       not_null:
-        enforced: true
-        write_time: true
+        enforced: false
     governance_notes: >-
-      No accepted_values DQ check by design (Decision 66): closed-set membership is
-      enforced at WRITE TIME against the registry, not as a post-hoc DQ test, so the
-      registry stays the single source of truth and cannot drift from a duplicated
-      enum. Per-table contracts may tighten via dq_intent_local (e.g.
-      ops_recommendations adds exclude_before: "2026-05-01" to grandfather pre-cutover
-      rows); they may not loosen the enforced not-null (Invariant 5).
+      Loosest baseline (not_null not enforced) by design: not-null ENFORCEMENT carries
+      per-table grandfathering, so it is a per-table concern, not a canonical one.
+      ops_recommendations tightens via dq_intent_local to not_null enforced:true +
+      write_time:true + exclude_before:"2026-05-01"; a future optional-source table may
+      keep it unenforced. What IS canonical and cross-system is registry MEMBERSHIP:
+      validate_source rejects any unregistered value at write time. No accepted_values
+      DQ check by design (Decision 66) -- write-time enforcement keeps the registry the
+      single source of truth, not a duplicated enum. Overrides may tighten, never
+      loosen (Invariant 5).
     amendment_log: []
 governance:
   registry_path: config/agent/data_quality/source_registry.yaml
-  injection_path: "AGENT_TYPE env var -> scripts/ops_data_portal.py write path"
+  injection_path: "Caller-supplied `source` field; harness sets it per agent type by convention (human default 'manual'). Validated, not injected, by the portal."
   validation_path: "scripts/executor/rec_write_guidance.py::validate_source (write-time) + scripts/validate.py::check_source_registry (CI)"
   human_initiated_value: manual
 allowed_values:
@@ -68,20 +72,22 @@ allowed_values:
   key: canonical_id
   enforcement: write_time
   note: >-
-    Open set; NOT duplicated here to avoid drift. ~28 active canonical_ids as of
-    2026-06-19 (plus legacy entries). The registry file is authoritative.
+    Open set; NOT duplicated here to avoid drift. The registry file is authoritative
+    (canonical_id entries, validated at write time); counts are intentionally not
+    pinned here.
 joins_using_this_key:
   # Forward-declared. The _joins.yaml entry lands only when BOTH referenced contracts
   # ratify (INTENT Part 5 incremental-landing rule); ops_recommendations.yaml (T0.12.5)
   # and the telemetry contracts (T0.12.6) are not yet authored, so _joins.yaml is NOT
-  # created by this plan.
+  # created by this plan and this join id is not yet validated anywhere.
   - lineage_join_source_to_agent_type
 governance_notes: >-
   Single-hop leaf invariant (no chained $ref; Class C contracts are leaf nodes,
-  Invariant 5). Graduation history: was a 4-value routing enum before 2026-05-06,
-  then graduated to an open-set lineage key (Decision 66). The graduation predates
-  this v1 contract, so it is recorded here as historical context rather than as a
-  contract amendment; future redefinitions of the field's meaning MUST set
-  semantic_break: true on an amendment_log entry.
+  Invariant 5). The 2026-05-06 graduation (4-value routing enum -> open-set lineage
+  key) predates this v1 contract; it is DELIBERATELY recorded as historical context
+  here, with its Decision 66 citation for machine-auditability, rather than as an
+  amendment_log entry -- amendment_log tracks amendments TO this v1 contract, and the
+  v1 contract is born post-graduation. Any FUTURE redefinition of the field's meaning
+  MUST set semantic_break: true on an amendment_log entry.
 amendment_log: []
 previous_versions: []
