@@ -399,8 +399,23 @@ def _derive_ci_rca_open(rows: list[dict]) -> list[dict]:
             "title": r.get("title", ""),
             "priority": r.get("priority", ""),
             "created_timestamp": r.get("created_timestamp"),
+            "file": r.get("file", ""),
         }
         for r in matched[:5]
+    ]
+
+
+def _derive_ci_rca_closed(rows: list[dict]) -> list[dict]:
+    """Client-side derive: closed ci_rca recs projected to the sibling-cluster fields."""
+    matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") == "closed"]
+    return [
+        {
+            "id": r.get("id", ""),
+            "file": r.get("file", ""),
+            "title": r.get("title", ""),
+            "last_updated_timestamp": r.get("last_updated_timestamp"),
+        }
+        for r in matched
     ]
 
 
@@ -981,6 +996,23 @@ def _get_recent_main_commits(n: int = 5) -> list[dict]:
     return commits
 
 
+_CI_TITLE_STOPWORDS: frozenset[str] = frozenset({"ci", "failure", "failed", "error", "lint", "test", "fix", "rca"})
+
+
+def _title_jaccard(title_a: str, title_b: str) -> float:
+    """Lowercased alphanumeric-token Jaccard between two titles, with common CI stopwords removed."""
+
+    def _tokens(s: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", s.lower()) if t not in _CI_TITLE_STOPWORDS}
+
+    set_a = _tokens(title_a)
+    set_b = _tokens(title_b)
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / len(union)
+
+
 def _file_paths_correlate(rec_file: str, changed: str) -> bool:
     """Return True when rec_file and changed refer to the same repository file.
 
@@ -997,7 +1029,11 @@ def _file_paths_correlate(rec_file: str, changed: str) -> bool:
     return parts_rec[-n:] == parts_changed[-n:]
 
 
-def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[str, list[dict]]:
+def correlate_ci_rca_with_main(
+    recs: list[dict],
+    commits: list[dict],
+    closed_ci_rca_recs: list[dict] | None = None,
+) -> dict[str, list[dict]]:
     """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
 
     A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
@@ -1005,12 +1041,21 @@ def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[st
       - modified the rec's ``file`` field (path-suffix / basename match), or
       - mentions the rec's ``id`` in its subject line.
 
-    Recs whose file/id cannot be correlated with any newer main commit retain
-    the HARD BLOCK designation (UNRESOLVED).
+    When ``closed_ci_rca_recs`` is provided (cache path only), a rec that is
+    still uncorrelated after the commit loop is also classified LIKELY-RESOLVED
+    when a closed ci_rca sibling on the same file has a sufficiently similar
+    title and was closed at/after this rec's creation (window-independent
+    closed-sibling cluster signal). The matched sibling id is recorded on the
+    rec as ``_resolved_reason`` for the operator's verify-and-close prompt.
+
+    Recs whose file/id cannot be correlated by either signal retain the HARD
+    BLOCK designation (UNRESOLVED).
 
     Args:
-        recs:    Open ci_rca recs from _fetch_ci_rca_recs().
-        commits: Recent main commits from _get_recent_main_commits().
+        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
+        commits:           Recent main commits from _get_recent_main_commits().
+        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path),
+                           or None to skip cluster detection.
 
     Returns:
         Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
@@ -1048,6 +1093,29 @@ def correlate_ci_rca_with_main(recs: list[dict], commits: list[dict]) -> dict[st
                         correlated = True
                         break
             if correlated:
+                break
+
+        # Closed-sibling cluster: window-independent signal (Decision 88 invariant ii --
+        # served from the already-pulled cache, never a fresh reader call).
+        if not correlated and closed_ci_rca_recs and rec_file:
+            for sibling in closed_ci_rca_recs:
+                sib_file = (sibling.get("file") or "").strip()
+                if not sib_file:
+                    continue
+                if not _file_paths_correlate(rec_file, sib_file):
+                    continue
+                if _title_jaccard(rec.get("title") or "", sibling.get("title") or "") < 0.5:
+                    continue
+                sib_closed_dt = _row_ts(sibling, "last_updated_timestamp")
+                # Require a dateable closure. No timestamp means we cannot
+                # confirm the sibling was closed after this rec was created;
+                # skip it to avoid false positives from undated historical closes.
+                if sib_closed_dt is None:
+                    continue
+                if rec_created_dt is not None and sib_closed_dt < rec_created_dt:
+                    continue
+                rec = {**rec, "_resolved_reason": f"likely resolved by sibling {sibling.get('id', '')}"}
+                correlated = True
                 break
 
         if correlated:
@@ -1588,7 +1656,8 @@ def main() -> int:
         recs_read_status = "ok"
         open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = _rec_result  # type: ignore[misc]
 
-    correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits)
+    closed_ci_rca_recs = _derive_ci_rca_closed(recs_cache) if recs_cache is not None else None
+    correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=closed_ci_rca_recs)
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)

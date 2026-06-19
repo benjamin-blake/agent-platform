@@ -309,7 +309,7 @@ NAMED_READS: dict[str, NamedRead] = {
             verb="ci_rca_open",
             table="ops_recommendations",
             sql=(
-                "SELECT id, title, priority, created_timestamp FROM {tbl} "
+                "SELECT id, title, priority, created_timestamp, file FROM {tbl} "
                 "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
                 "ORDER BY created_timestamp DESC LIMIT 5"
             ),

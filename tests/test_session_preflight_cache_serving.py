@@ -17,6 +17,7 @@ Two properties (VP step 1):
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -254,6 +255,11 @@ class TestVerbEquivalence:
         derived = _preflight._derive_ci_rca_open(rows)
         assert len(verb_rows) == 5  # LIMIT 5 fires (6 open/in_progress ci_rca recs in the fixture)
         assert [r["id"] for r in derived] == [r["id"] for r in verb_rows]
+        # Both projections must carry the `file` field (Decision 84 I-3 divergence guard).
+        for row in derived:
+            assert "file" in row, f"derive row {row['id']} missing 'file' key"
+        for row in verb_rows:
+            assert "file" in row, f"verb row {row['id']} missing 'file' key"
 
     def test_ci_rca_since_equivalence(self) -> None:
         now = datetime.now(timezone.utc)
@@ -379,6 +385,57 @@ class TestPhaseBAbsenceOfReaderCalls:
             _preflight.main()
 
         assert verb_calls == {}, f"Phase B issued reader calls {verb_calls}; expected none (served from warm-sync rows)"
+
+
+class TestLiveDuckLakeCiRcaOpenFile:
+    """RUN_LIVE_DUCKLAKE=1 gated: prove the DEPLOYED reader's ci_rca_open verb returns `file`."""
+
+    @pytest.mark.enable_socket()
+    def test_live_file_ci_rca_open_returns_file(self) -> None:
+        """File a throwaway ci_rca rec with a known `file` value, read it back via the deployed
+        ci_rca_open verb, assert `file` is populated and correct, then close the rec (self-cleaning,
+        Decision 70). Skipped unless RUN_LIVE_DUCKLAKE=1."""
+        if not os.environ.get("RUN_LIVE_DUCKLAKE"):
+            pytest.skip("set RUN_LIVE_DUCKLAKE=1 to run live DuckLake roundtrip")
+
+        import scripts.ops_data_portal as p
+        from src.common.iceberg_reader import make_reader
+
+        marker_file = "scripts/ci_rca_tier_map.py"
+        rec_id = p.file_rec(
+            {
+                "title": "test_live_file_ci_rca_open_returns_file (ci-rca-likely-resolved-detection VP7)",
+                "context": (
+                    "Live smoke test verifying the deployed ci_rca_open verb returns the `file` column. "
+                    "This rec will be immediately closed (self-cleaning, Decision 70). "
+                    "Filed by TestLiveDuckLakeCiRcaOpenFile."
+                ),
+                "acceptance": "`file` key present in ci_rca_open row for this rec",
+                "effort": "XS",
+                "status": "open",
+                "priority": "Low",
+                "source": "ci_rca",
+                "file": marker_file,
+                "automatable": False,
+            }
+        )
+        assert rec_id.startswith("rec-"), f"Expected rec-NNN, got {rec_id!r}"
+
+        try:
+            reader = make_reader(profile="agent_platform")
+            rows = reader.named("ci_rca_open")
+            matched = [r for r in rows if r.get("id") == rec_id]
+            assert matched, f"{rec_id} not found in ci_rca_open rows: {[r.get('id') for r in rows]}"
+            assert "file" in matched[0], f"ci_rca_open verb did not return `file` for {rec_id}: {matched[0]}"
+            assert matched[0]["file"] == marker_file, f"Expected file={marker_file!r}, got {matched[0]['file']!r} for {rec_id}"
+        finally:
+            p.update_rec(
+                rec_id,
+                {
+                    "status": "closed",
+                    "resolution": "test_live_file_ci_rca_open_returns_file self-cleaning close (VP7)",
+                },
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover
