@@ -1738,6 +1738,60 @@ class TestFetchCiRcaRecs:
             assert _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z") == []
 
 
+class TestDeriveCiRcaClosed:
+    """Unit tests for _derive_ci_rca_closed() -- closed-sibling cluster projection."""
+
+    def _make_row(
+        self,
+        rec_id: str,
+        source: str = "ci_rca",
+        status: str = "closed",
+        file: str = "scripts/foo.py",
+        title: str = "CI failure",
+        last_updated: str = "2026-06-11T10:00:00Z",
+    ) -> dict:
+        return {
+            "id": rec_id,
+            "source": source,
+            "status": status,
+            "file": file,
+            "title": title,
+            "last_updated_timestamp": last_updated,
+        }
+
+    def test_only_closed_ci_rca_rows_returned(self) -> None:
+        rows = [
+            self._make_row("rec-901", status="closed"),
+            self._make_row("rec-902", status="open"),
+            self._make_row("rec-903", status="in_progress"),
+            self._make_row("rec-904", source="manual", status="closed"),
+        ]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert [r["id"] for r in result] == ["rec-901"]
+
+    def test_projects_expected_fields(self) -> None:
+        rows = [self._make_row("rec-910", file="scripts/bar.py", title="mypy error", last_updated="2026-06-15T12:00:00Z")]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert len(result) == 1
+        assert set(result[0].keys()) == {"id", "file", "title", "last_updated_timestamp"}
+        assert result[0]["id"] == "rec-910"
+        assert result[0]["file"] == "scripts/bar.py"
+        assert result[0]["title"] == "mypy error"
+        assert result[0]["last_updated_timestamp"] == "2026-06-15T12:00:00Z"
+
+    def test_empty_rows_returns_empty(self) -> None:
+        assert _preflight._derive_ci_rca_closed([]) == []
+
+    def test_multiple_closed_ci_rca_all_returned(self) -> None:
+        rows = [
+            self._make_row("rec-920"),
+            self._make_row("rec-921"),
+            self._make_row("rec-922", status="superseded"),
+        ]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert [r["id"] for r in result] == ["rec-920", "rec-921"]
+
+
 class TestGetLatestDecisionTs:
     """_get_latest_decision_ts() reads via the decisions_max_updated verb."""
 
@@ -1851,6 +1905,20 @@ class TestCiRcaCorrelation:
     def _make_commit(self, sha: str, date: str, subject: str, files: list[str] | None = None) -> dict:
         return {"sha": sha, "date": date, "subject": subject, "files": files or []}
 
+    def _make_closed_sibling(
+        self,
+        sib_id: str,
+        file: str = "scripts/foo.py",
+        title: str = "CI failure",
+        closed: str = "2026-06-11T10:00:00Z",
+    ) -> dict:
+        return {
+            "id": sib_id,
+            "file": file,
+            "title": title,
+            "last_updated_timestamp": closed,
+        }
+
     # --- LIKELY-RESOLVED cases ---
 
     def test_correlated_by_file_classified_likely_resolved(self) -> None:
@@ -1945,6 +2013,86 @@ class TestCiRcaCorrelation:
         result = _preflight.correlate_ci_rca_with_main([rec_corr, rec_not], [commit])
         assert result["likely_resolved"] == [rec_corr]
         assert result["unresolved"] == [rec_not]
+
+    # --- end-to-end derive->correlate regression (rec-2268 incident shape) ---
+
+    def test_end_to_end_derive_to_correlate_classifies_rec_2268_shape(self) -> None:
+        """rec-2268 shape: the open ci_rca rec's file was modified by a newer main commit, but
+        _derive_ci_rca_open() previously dropped the `file` field so correlate_ci_rca_with_main()
+        could not match it and the rec was incorrectly left as HARD BLOCK."""
+        raw_row = {
+            "id": "rec-2268",
+            "title": "mypy failure in ci_rca_tier_map",
+            "priority": "critical",
+            "created_timestamp": "2026-06-17T08:00:00Z",
+            "source": "ci_rca",
+            "status": "open",
+            "file": "scripts/ci_rca_tier_map.py",
+        }
+        derived = _preflight._derive_ci_rca_open([raw_row])
+        assert len(derived) == 1
+        assert derived[0]["file"] == "scripts/ci_rca_tier_map.py", "file must survive _derive_ci_rca_open projection"
+
+        commit = self._make_commit(
+            "e779dd30",
+            "2026-06-18T09:00:00+00:00",
+            "fix: add encoding utf-8 to ci_rca_tier_map (#184)",
+            files=["scripts/ci_rca_tier_map.py"],
+        )
+        result = _preflight.correlate_ci_rca_with_main(derived, [commit])
+        assert result["likely_resolved"] == derived, "rec-2268 shape must classify as likely_resolved end-to-end"
+        assert result["unresolved"] == []
+
+    # --- closed-sibling cluster tests ---
+
+    def test_closed_sibling_cluster_positive_same_file_similar_title_sibling_after(self) -> None:
+        """Positive: open rec with a closed sibling on the same file, similar title, sibling closed after rec created."""
+        rec = self._make_rec("rec-2274", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = self._make_closed_sibling(
+            "rec-2260", file="scripts/foo.py", title="mypy failure in foo module", closed="2026-06-18T09:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert len(result["likely_resolved"]) == 1
+        assert result["likely_resolved"][0]["id"] == "rec-2274"
+        assert "rec-2260" in result["likely_resolved"][0].get("_resolved_reason", "")
+        assert result["unresolved"] == []
+
+    def test_closed_sibling_cluster_negative_dissimilar_title(self) -> None:
+        """Negative: same file but Jaccard < 0.5 (unrelated title) -- must NOT flag as likely_resolved."""
+        rec = self._make_rec("rec-2275", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy type annotation failure"
+        sibling = self._make_closed_sibling(
+            "rec-2261", file="scripts/foo.py", title="ruff import order violation", closed="2026-06-18T09:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_negative_stale_sibling(self) -> None:
+        """Negative: same file + similar title but sibling was closed BEFORE the open rec was created -- stale guard."""
+        rec = self._make_rec("rec-2276", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = self._make_closed_sibling(
+            "rec-2262", file="scripts/foo.py", title="mypy failure in foo module", closed="2026-06-16T07:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_negative_null_timestamp(self) -> None:
+        """Negative: same file + similar title but sibling has no last_updated_timestamp -- must NOT flag."""
+        rec = self._make_rec("rec-2277", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = {
+            "id": "rec-2263",
+            "file": "scripts/foo.py",
+            "title": "mypy failure in foo module",
+            "last_updated_timestamp": None,
+        }
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
 
 
 class TestPrintCiRcaRecsWithCorrelation:
