@@ -164,6 +164,21 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/ducklake/*",
         ]
       },
+      {
+        # Inference-credential read for CD.28 T0.4: the PlatformDev runtime (smoke-test CLI,
+        # future T4.2 LiteLLM transport) fetches the DeepSeek and Anthropic API keys via
+        # get_secret_value. Scoped to exactly the two inference-credential secret ARNs defined
+        # in inference_credentials.tf -- no wildcard (least-privilege per the IAM grant pattern
+        # established by DuckLakeEndpointDiscovery and DuckLakeInvokeRuntime above).
+        # MANUAL admin-apply required (IAM change, Decision 77 guard fail-closes). # pragma: allowlist secret
+        Sid    = "InferenceCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          aws_secretsmanager_secret.deepseek_api_key.arn,
+          aws_secretsmanager_secret.anthropic_api_key.arn,
+        ]
+      },
     ]
   })
 }
