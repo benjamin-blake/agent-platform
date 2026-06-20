@@ -1,0 +1,319 @@
+schema_version: 1
+slug: closure-loop
+intent: >-
+  Build the missing closure edge in the recommendation lifecycle so recs resolved by merged
+  code are reliably closed, preventing stale ci_rca recs from indefinitely HARD-BLOCKING /plan
+  sessions. Keeps the self-improving loop unblocked: failures become fixes become closed recs
+  without manual archaeology.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-closure-loop.yaml
+phase: >-
+  Platform tier T-1 (active). CI-RCA lifecycle hardening, user-directed process improvement
+  (ad_hoc) adjacent to T1.13 (CI-RCA methodology contract) and T-1.12 (contract ritual
+  enforcement). Not itself a tier_item.
+scope:
+  - file: scripts/rec_trailer.py
+    action: Create
+    purpose: >-
+      Pure, unit-testable parser parse_resolves_trailer(message) -> list[str] that extracts
+      rec ids from `Resolves: rec-NNNN[, rec-MMMM]` commit trailers (case-insensitive,
+      comma/space separated, deduped, rec-<digits> shape validated). No I/O.
+  - file: tests/test_rec_trailer.py
+    action: Create
+    purpose: Unit tests for the trailer parser (single/multiple/none/malformed/case/dedup).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Layer 1 detection backstop. Add a recent-main-commits context helper (last 5 origin/main
+      commits) and correlate_ci_rca_with_main(recs): an open ci_rca rec whose `file` was
+      modified by a more-recent main commit (or whose id is named in a recent commit) is
+      classified LIKELY-RESOLVED and surfaced as a soft "verify+close" prompt; non-correlated
+      open recs retain the HARD BLOCK. Reuse the _check_ci_rca_liveness gh pattern as an
+      OPTIONAL CI-status corroborator that degrades to None where gh is unavailable. Split the
+      surface and the JSON report accordingly without regressing adjacent block logic.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Tests for correlation/downgrade (correlated->soft, non-correlated->HARD BLOCK retained)
+      and the recent-main-commits surfacing.
+  - file: .github/workflows/rec-autoclose.yml
+    action: Create
+    purpose: >-
+      Layer 2 durable fix. Push-to-main workflow: read the HEAD commit message, parse_resolves_trailer,
+      assume the OIDC role, and close each named rec via `ops_data_portal --update-rec ID
+      --status closed` (resolution cites the merge commit/PR). The workflow MUST export
+      DUCKLAKE_WRITER_URL explicitly (the branch role lacks ssm:GetParameter for the writer-url
+      param; relying on SSM resolution will fail on the runner). Idempotency is implemented IN
+      THE WORKFLOW, not assumed from the portal: update_rec re-appends an SCD2 row on an
+      already-closed rec and RAISES on a nonexistent id (ops_data_portal.py:596-600), so the
+      workflow must check current status before calling update_rec and tolerate the
+      absent-id error. No-op when no trailer is present.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Grant the post-merge workflow's OIDC role permission to reach the ops portal writer
+      Function URL so the auto-close workflow can transit the portal. FIRST confirm whether a
+      grant is even needed: the branch role github_ci_branch already holds DuckLakeInvokeCI
+      (lambda:InvokeFunctionUrl / GetFunctionUrlConfig on aws_lambda_function.ducklake_writer,
+      oidc.tf:144-153) with trust scoped to refs/heads/main. If the workflow assumes
+      github_ci_branch, this grant is a NO-OP (and this scope row + VP6 collapse) -- do not
+      manufacture an empty IAM change. If a new dedicated role is used instead, author its trust
+      policy too. Any real grant is an IAM change -> human-gated apply (guard fail-closes on IAM,
+      Decision 77).
+  - file: AGENTS.md
+    action: Modify
+    purpose: "Document the `Resolves: rec-NNNN` trailer convention in the Merge protocol section."
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Layer 3. In the commit/merge flow, emit the `Resolves:` trailer into the squash-merge
+      body from the plan's bundled_recommendations, and add a post-merge closeout fallback step
+      (verify the autoclose workflow closed the recs; if not, call update_rec directly).
+  - file: .claude/commands/implement.md
+    action: Modify
+    purpose: Mirror the trailer emission + post-merge closeout in the command's commit/merge steps.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Layer 3. Update the ci_rca HARD BLOCK preflight constraint to the new soft(LIKELY-RESOLVED)
+      / hard(unresolved) distinction, and add a CONDITIONAL Closure Obligation to the plan
+      template guidance: rec-resolving plans declare bundled_recommendations and include closure;
+      surface-retiring plans (Delete scope row or explicit X->Y migration) include a
+      stale-reference sweep VP step. Do not tax purely-additive plans.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: Reflect the soft/hard ci_rca surfacing in the Step 2 / Step 8 Related-Work text.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      Layer 3. Add an evaluation criterion that flags any rec-resolving or surface-retiring
+      plan that omits its closure obligation (rec-closure declaration and/or conditional
+      stale-reference sweep VP step).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    .github/workflows/rec-autoclose.yml is a new push-to-main GitHub Actions workflow (Actions
+    runner, no Lambda packaging). It exists on main only after this plan merges, so the
+    end-to-end auto-close round-trip is a post-deploy VP step.
+  - >-
+    terraform/personal/oidc.tf OIDC grant: the existing branch role github_ci_branch already
+    invokes ducklake_writer (DuckLakeInvokeCI, oidc.tf:144-153, trust = refs/heads/main), so a
+    push-to-main workflow assuming that role needs NO new grant -- in which case the scope row
+    and VP6 are no-ops, not an IAM change. Author a grant ONLY if a new dedicated role is used;
+    a real grant is an IAM change that the apply guard fail-closes (Decision 77), requiring a
+    human-gated apply that must precede the post-deploy round-trip. The runner must also have
+    DUCKLAKE_WRITER_URL exported so portal writer-url resolution succeeds (branch role lacks
+    ssm:GetParameter for the writer-url param).
+  - >-
+    Ops portal writer Function URL (defined in terraform/personal/ducklake_lambdas.tf) is the
+    closure write target, reached via assume-role per the Decision 84 single-portal invariant.
+acceptance_criteria:
+  - >-
+    An open ci_rca rec whose source `file` was modified by a more-recent main commit (or whose
+    id is named in a recent main commit) is surfaced by preflight as "LIKELY RESOLVED --
+    verify+close", while a non-correlated open ci_rca rec retains the HARD BLOCK.
+  - Preflight surfaces the last 5 main commits as planning context and exits 0.
+  - >-
+    A `Resolves: rec-NNNN[, rec-MMMM]` trailer in a squash-merge commit on main triggers the
+    rec-autoclose workflow, which closes each named rec via the ops portal (status=closed,
+    resolution citing the PR) and is idempotent for already-closed/nonexistent recs -- the
+    idempotency realized in workflow logic (status check + tolerate absent-id error), since the
+    portal does not no-op natively.
+  - >-
+    The implement skill emits the `Resolves:` trailer into the squash-merge body from
+    bundled_recommendations and includes a post-merge closeout fallback.
+  - >-
+    plan-critique flags a plan that resolves recs or retires a surface but omits its closure
+    obligation (rec-closure declaration and/or stale-reference sweep VP step).
+  - >-
+    The planning skill plan template and ci_rca preflight-constraint text document the closure
+    obligation and the soft/hard ci_rca distinction; AGENTS.md documents the trailer convention.
+  - >-
+    Closure is performed exclusively via update_rec(status=closed) through the portal; no rec
+    delete path is introduced.
+  - The auto-close round-trip is demonstrated end-to-end post-deploy with a throwaway test rec.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit-test the Resolves trailer parser.
+    command: bin/venv-python -m pytest tests/test_rec_trailer.py -q
+    expected: >-
+      All pass. Parser extracts ["rec-2187", "rec-2179"] from a body containing
+      "Resolves: rec-2187, rec-2179", returns [] when no trailer is present, dedupes repeats,
+      ignores malformed tokens, and is case-insensitive on the keyword.
+    fix_if: Parser misses multi-id trailers, admits malformed ids, or is case-sensitive.
+  - step: 2
+    phase: pre-deploy
+    action: Unit-test the preflight correlation/downgrade and recent-commits surfacing.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -k "ci_rca or correlat or closure or downgrade or recent_commits" -q
+    expected: >-
+      An open ci_rca rec whose `file` was touched by a more-recent main commit is classified
+      LIKELY-RESOLVED (soft verify+close); a non-correlated open ci_rca rec is classified
+      UNRESOLVED and retains the HARD BLOCK; the recent-commits helper returns the last 5 main commits.
+    fix_if: A non-correlated rec is downgraded (false soft), a correlated rec stays HARD BLOCK, or recent-commits is empty/raises.
+  - step: 3
+    phase: pre-deploy
+    action: Run preflight and confirm the new context renders without error.
+    command: bin/venv-python -m scripts.session_preflight 2>&1 | grep -E "Recent main commits"
+    expected: The "Recent main commits" context block renders and preflight exits 0.
+    fix_if: Section missing or preflight raises.
+  - step: 4
+    phase: pre-deploy
+    action: Validate the new workflow YAML shape.
+    command: bin/venv-python -c "import yaml,sys; d=yaml.safe_load(open('.github/workflows/rec-autoclose.yml')); assert 'id-token' in str(d.get('permissions', d)).lower() or any('id-token' in str(v).lower() for v in d.values()); print('ok')"
+    expected: Prints ok; YAML is valid, triggers on push to main, and declares id-token:write OIDC permissions.
+    fix_if: YAML invalid, missing push-to-main trigger, or missing OIDC id-token permission.
+  - step: 5
+    phase: pre-deploy
+    action: Run the full validate suite (prompt-compliance for skill/command edits, plan schema, lint).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0; skill invariants and prompt_compliance pass; no warehouse-write-source false positives from the new portal call sites.
+    fix_if: Any check fails.
+  - step: 6
+    phase: pre-deploy
+    action: Validate the terraform grant and present the plan to the human for the gated apply.
+    command: terraform -chdir=terraform/personal init -backend=false >/dev/null && terraform -chdir=terraform/personal validate
+    expected: >-
+      Configuration validates. A subsequent `terraform -chdir=terraform/personal plan` shows
+      EITHER no diff (the workflow assumes github_ci_branch, which already invokes ducklake_writer
+      -- the grant was unnecessary and the oidc.tf scope row is dropped) OR ONLY the additive grant
+      for a new dedicated role (no destroys, no unexpected trust changes). Present the plan output
+      to the human; a real apply is human-gated because the guard fail-closes on IAM.
+    fix_if: validate errors, or plan shows unexpected destroys / IAM / trust diffs beyond the intended grant.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      After the human applies the OIDC grant and this plan merges to main, prove the auto-close
+      round-trip: file a throwaway test- rec via the portal, merge a PR whose squash body
+      contains "Resolves: <test-rec-id>", then sync and confirm the rec closed automatically.
+    command: bin/venv-python -m scripts.ops_data_portal --profile agent_platform --sync && grep "<test-rec-id>" logs/.recommendations-log.jsonl
+    expected: >-
+      The rec-autoclose workflow run on the merge concludes success and the throwaway rec is
+      status=closed with a resolution citing the PR; re-running the workflow is a no-op.
+    fix_if: Workflow run fails (OIDC/portal auth) or the rec stays open -> inspect the Action logs and fix the grant or portal invocation.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the no-trailer no-op path: this plan's own merge commit carries no `Resolves:`
+      trailer, so the workflow must parse to zero closures and exit without a portal write.
+      Assert that locally against the merge commit, and corroborate via the GitHub MCP that the
+      workflow run actually fired and concluded success.
+    command: |-
+      git log -1 --format=%B origin/main | bin/venv-python -c "import sys; from scripts.rec_trailer import parse_resolves_trailer; ids=parse_resolves_trailer(sys.stdin.read()); print('ids=', ids); assert ids == []"
+    expected: >-
+      Prints `ids= []` and exits 0 (no closures from a no-trailer merge). Corroborate via the
+      GitHub MCP (actions_list / pull_request_read): a rec-autoclose workflow run exists for the
+      merge commit and concluded success (a no-trailer run that no-ops is also success).
+    fix_if: Parser returns non-empty for a no-trailer commit, or the MCP check shows no run was created (trigger misconfigured) or the run errored.
+constraints:
+  - >-
+    Closure transits the ops portal update_rec only (Decision 84 single-portal invariant,
+    named-verb reads, closed boundary). Never delete a rec; closure is lifecycle state
+    (Decision 70).
+  - >-
+    Layer 1 is a detection backstop, not workaround-suppression: the HARD BLOCK downgrade is
+    evidence-gated on real commit/CI correlation, never discretionary muting (Decision 55). The
+    durable fix is the Layer 2 closure edge.
+  - >-
+    Commit-correlation (local git) is the load-bearing Layer 1 signal; the CI-status corroborator
+    via gh is optional and MUST degrade gracefully where gh is unavailable (Claude Code web).
+  - >-
+    Do not regress adjacent preflight block logic (non-automatable surfacing, ci_rca liveness,
+    forward-fix recursion, budget-bypass alerts) (Decision 42 / Decision 73).
+  - >-
+    The terraform/personal IAM grant fails-closed under the apply guard (Decision 77); it
+    requires a human-gated apply and does NOT auto-apply on push-to-main.
+  - >-
+    Squash-merge via the GitHub MCP is preserved (Decision 76); the `Resolves:` trailer must
+    survive into the squash commit body the workflow parses.
+  - New planning/critique checks are CONDITIONAL (fire only on rec-resolving or surface-retiring plans).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Origin incident: ci_rca recs rec-2187/2188/2189/2179 stayed open after PR #130 (commit
+    5f2162c) fixed the code, HARD-BLOCKING the 2026-06-12 planning session; closed manually that
+    day. Root cause: no closure edge in the rec lifecycle. This plan builds that edge.
+  - >-
+    Decisions to cite. Decision 72 (RCA-as-Plan-Source: the ci_rca rec lifecycle whose terminal
+    state this adds). Decision 73 (two-tier diff-aware CI + forward-fix L5 HARD BLOCK -- Layer 1
+    refines clause 4, it does not retreat from it). Decision 76 (web squash-merge via GitHub MCP
+    -- the trailer carrier). Decision 84 (DuckLake single backend / single-portal / named-verb
+    reads / closed boundary -- governs the auto-close write). Decision 48 (V3 tier classification).
+    Decision 55 (no-workaround -- Layer 1 framing). Decision 70 (lifecycle-not-deletion -- closure
+    via update_rec).
+  - >-
+    gh CLI is unavailable on Claude Code web, so the CI-status corroborator returns None there
+    (mirrors today's _check_ci_rca_liveness behavior at session_preflight.py:610); commit
+    correlation carries Layer 1 in that environment.
+  - >-
+    terraform/personal auto-applies on push-to-main behind the deterministic guard, but the guard
+    fail-closes on IAM/trust changes (Decision 77) -> the OIDC grant needs human apply.
+  - >-
+    User-directed process hardening; adjacent to T1.13 (CI-RCA methodology contract) and T-1.12
+    (contract ritual enforcement). Not promoted to a tier_item in this plan.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (72, 73, 76, 84, 48, 55, 70 in particular)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirm where the ops portal writer Function URL and OIDC CI roles are defined
+    (terraform/personal/ducklake_lambdas.tf, oidc.tf) before authoring the grant
+  - >-
+    Determine which OIDC role the autoclose workflow assumes and whether github_ci_branch's
+    existing DuckLakeInvokeCI grant already covers writer invocation (so the oidc.tf change is a
+    no-op) -- decided before writing the workflow or the terraform
+execution_steps:
+  - >-
+    Create scripts/rec_trailer.py with parse_resolves_trailer(message: str) -> list[str]: a pure
+    function, no I/O, that extracts deduped rec-<digits> ids from `Resolves:` trailers,
+    case-insensitive on the keyword, comma/space separated, ignoring malformed tokens.
+  - Create tests/test_rec_trailer.py covering single/multiple/none/malformed/case/dedup inputs.
+  - >-
+    Modify scripts/session_preflight.py: add a recent-main-commits helper (last 5 origin/main
+    commits) surfaced as context and added to the JSON report; add correlate_ci_rca_with_main(recs)
+    using local git log since each rec.created_timestamp matched against rec['file'] and rec id;
+    split print_ci_rca_recs into LIKELY-RESOLVED (soft verify+close) vs UNRESOLVED (HARD BLOCK);
+    wire _check_ci_rca_liveness as an optional CI-status corroborator that degrades to None when gh
+    is unavailable; preserve adjacent block logic.
+  - >-
+    Modify tests/test_session_preflight.py: add tests for correlated->soft, non-correlated->HARD
+    BLOCK retained, and recent-commits surfacing.
+  - >-
+    Create .github/workflows/rec-autoclose.yml: on push to main; checkout; set up the venv; OIDC
+    assume the CI role; export DUCKLAKE_WRITER_URL so portal writer-url resolution succeeds on the
+    runner; read the HEAD commit message; call scripts.rec_trailer.parse_resolves_trailer then, for
+    each id, check the rec's current status and call ops_data_portal --update-rec ID --status closed
+    --resolution citing the commit/PR ONLY if still open; tolerate the RuntimeError update_rec
+    raises on an absent id; no-op when no trailer is present (idempotency lives here, not in the portal).
+  - >-
+    Decide the workflow's OIDC role FIRST. If it assumes github_ci_branch (already grants
+    DuckLakeInvokeCI on ducklake_writer, oidc.tf:144-153), NO terraform change is needed -- drop the
+    terraform/personal/oidc.tf scope row and VP6. Only if a new dedicated role is used, modify
+    terraform/personal/oidc.tf to add the role + trust policy + writer-invoke grant, run terraform
+    validate + plan, present to the human, and apply human-gated (guard fail-closes on IAM).
+  - "Modify AGENTS.md Merge protocol: document the `Resolves: rec-NNNN` trailer convention."
+  - >-
+    Modify .claude/skills/implement/SKILL.md and .claude/commands/implement.md: emit the
+    `Resolves:` trailer into the squash-merge body from bundled_recommendations and add a
+    post-merge closeout fallback step.
+  - >-
+    Modify .claude/skills/planning/SKILL.md and .claude/commands/plan.md: update the ci_rca HARD
+    BLOCK constraint to the soft/hard distinction and add the conditional Closure Obligation to the
+    plan template guidance and Related-Work text.
+  - >-
+    Modify .claude/skills/plan-critique/SKILL.md: add the closure-obligation evaluation criterion
+    (conditional on rec-resolving / surface-retiring plans).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure
+    stop and RCA (Decision 55). Run pre-deploy steps before the merge; run post-deploy steps after
+    the human-gated terraform apply and the merge.
+  - "Report: what changed across the three layers, pre- and post-deploy VP results, and the human-gated terraform apply status."
+work_areas: []
+rollback: >-
+  Revert the rec-autoclose workflow and the OIDC grant (terraform destroy of the added grant only),
+  and revert the preflight, skill, command, and AGENTS.md edits. Recs closed by the workflow during
+  the window remain closed (intentional, durable lifecycle state); there is no data migration to
+  undo.

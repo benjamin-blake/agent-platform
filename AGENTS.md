@@ -52,7 +52,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
   Active artifacts (`status: active` in `src/lambdas/<slug>/manifest.yaml`) must include per-Lambda
   build + deploy + smoke-test steps (V3 tier). Stub artifacts (`status: stub`) need no deploy step.
   `config/agent/` is NOT Lambda-packaged. Decision 67's STRATEGIC-plan clause is RETAINED (see above).
-- **T2.12 security gate (CD.20) -- controls-as-code shipped, apply pending:** GHAS secret scanning + push protection, branch-protection ruleset, CodeQL, Dependabot, and Actions permissions are authored in `terraform/github/` + `.github/`. Human-gated local apply required to activate -- see `terraform/github/README.md`.
+- **T2.12 security gate (CD.20) -- apply landed; branch protection + Dependabot live (Decision 83):** `terraform/github/` human-gated local apply landed 2026-06-08. Confirmed live via GitHub API: `main-protection` ruleset (active, admin bypass actor, non-wedging: strict=false, required = pr-validate + terraform-validate, terraform-converged advisory) and Dependabot (5 active branches). GHAS secret-scanning, push protection, CodeQL, and Actions permissions: apply landed per `repo.tf` / committed `.github/`; live-probe verification outstanding (web PAT lacks `security_events`); one-time UI confirmation recommended.
 
 ## Memory policy — CLAUDE.md is canonical persistence
 Do **not** write to the auto-memory system (`~/.claude/projects/.../memory/`) in this project. The user's persistence model is git-tracked CLAUDE.md files (root + per-directory) plus structured logs (`docs/SESSION_LOG.md`, `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`).
@@ -79,30 +79,44 @@ skills, slash commands -- are optimised for agent loading efficiency, not human 
   post-rejection error. Call `get_rec_write_guidance()` before `file_rec()`. Anti-pattern:
   storing semantics only in ops.yaml without surfacing them at agent write time produces
   structurally-valid but semantically-thin content from agents without prior context.
+- No new standing prose-architecture docs (Decision 86): forward intent to tier_items,
+  rationale to Decisions, field semantics to contracts. Creating docs/INTENT-*.md or any
+  equivalent standing prose-architecture doc under docs/ is forbidden. The validate.py
+  intent-doc-freeze guard enforces this on-disk. Existing INTENT docs are grandfathered via
+  docs/intent-migration/MANIFEST.yaml and retire as extraction waves complete.
 
 ## Skills and slash commands
-- `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.md`. Invokes the `planning` skill.
+
+Decision 90 four-tier workflow (end-goal: /orient -> /plan -> /implement -> /develop-executor; current: /orient -> /plan -> /implement, executor frozen per Decision 67):
+- `/orient` — read-only orientation: surfaces eligible work, CI-RCA triage, ranked what-to-work-on, and up to 5 disjoint `/plan` prompts with an overlap matrix and keystone-first sequencing. Run before `/plan` to choose what to work on. Produces a chat reply only; writes nothing. Invokes the `orient` skill.
+- `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.yaml`. Assumes a specific item has been chosen (run `/orient` first). Invokes the `planning` skill.
 - `/implement` — executes an IMPLEMENTATION plan or scopes a STRATEGIC plan into recommendations. Invokes the `implement` and `code-review` skills.
 - `/develop-executor` — supervisor for executor (Lambda) development.
 
 When a slash command instructs you to "apply" or "invoke" a skill, use the `Skill` tool — do **not** manually `Read` `SKILL.md` files. The Skill tool loads them on demand.
 
 ## Operational data governance — Single Portal Invariant
-All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. IDs are allocated atomically via DynamoDB; the local JSONL files are read-only caches.
+All recommendation and decision writes go through `python -m scripts.ops_data_portal`. Never `Edit` or `Write` to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly -- `validate.py` will fail CI. Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`, Decision 84 I-2) -- never client-side; decision numbering authority is `DECISIONS.md` (callers supply `decision_id`). The local JSONL files are read-only caches.
 
-Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. `update_rec` requires Athena connectivity via the `agent_platform` (PlatformDev) assume-role profile. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model.
+Agent surface is three functions: `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Portal calls require the `agent_platform` (PlatformDev) assume-role profile to reach the reader/writer Function URLs. If unreachable, confirm the chain with `aws sts get-caller-identity --profile agent_platform` (the session-start hook `.claude/hooks/session_start_aws.sh` reports this each session); locally, refresh the `agent_static` key if it has been rotated. There is no SSO login in the static-key model. A write that cannot complete FAILS LOUDLY at the call site -- there is no offline outbox (Decision 84 I-4); re-file after restoring connectivity.
 
 ## Warehouse-as-source-of-truth invariant
-This is an append-only lakehouse. Athena (over Iceberg) is the single source of truth for all operational data. Local files have exactly two valid roles:
+This is an append-only lakehouse. The warehouse is the single source of truth for all operational data; local files are never upstream of it.
 
-1. **Outbox** (`logs/.ops-outbox/`) — write-ahead buffer for offline writes. Drained once into S3 staging, then deleted. Never replayable. Each entry is a *new write that has not yet propagated*, never a *replay of an existing warehouse row*.
-2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM Athena via `sync_ops pull`. Downstream of the warehouse, never upstream.
+**Source-of-truth by table (Decision 84 consolidation, 2026-06-11):**
+- **`ops_recommendations`, `ops_decisions`, `ops_priority_queue` = DuckLake-on-Neon, SOLE backend.** Reads transit the closed `ducklake_reader` boundary via NAMED VERBS (Decision 84 I-3; no caller SQL); writes transit `ducklake_writer` (`file_ops` allocates rec ids in-transaction). There is NO Athena path and NO rollback flag (`OPS_STORAGE_BACKEND` retired -- the frozen Iceberg copy stopped being coherent the day writes moved). `ops_decisions` rebuilds from `DECISIONS.md` via `ops_data_portal --backfill-decisions-md`.
+- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (`docs/INTENT-ducklake-consolidation.md`).
 
-**Hard rule: a read cache is never a write source.** Reading any file in `logs/` and calling `OpsWriter.write()` (or otherwise putting data into S3 staging) is the CRUD anti-pattern in lakehouse clothing. Iceberg DELETE only removes a snapshot; if the same row is restaged from a stale local file on any clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe (because `_prepare_record` refreshes `last_updated_timestamp = now`). The result is an infinite resurrection loop where deletes never stick.
+Local files have exactly two valid roles:
+
+1. **Legacy staging outbox** (`logs/.ops-outbox/`) — survives ONLY for the not-yet-migrated OpsWriter paths (telemetry, session_log, execution_plans) and retires with them. Migrated-table dirs and `*_pending` dirs are never drained (Decision 84 I-4); the recs/decisions pending outboxes are deleted.
+2. **Read cache** (`logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`) — derivative projection rebuilt FROM the warehouse via `sync_ops pull` (all migrated tables from the DuckLake reader). Downstream of the warehouse, never upstream.
+
+**Hard rule: a read cache is never a write source.** Reading any file in `logs/` and calling `OpsWriter.write()` (or otherwise putting data into S3 staging) is the CRUD anti-pattern in lakehouse clothing. The Iceberg-DELETE-resurrection caveat below is scoped to the still-Iceberg tables: Iceberg DELETE only removes a snapshot; if the same row is restaged from a stale local file on any clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe (because `_prepare_record` refreshes `last_updated_timestamp = now`). The result is an infinite resurrection loop where deletes never stick. (`ops_recommendations` on DuckLake is not Iceberg-snapshot-based, but the same "never re-stage from a read cache" rule applies -- recs writes go only through the writer.)
 
 The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and (b) ETL from a non-warehouse source of truth (e.g., `DECISIONS.md` -> `ops_decisions`). Anything else that ends in `OpsWriter.write()` must be reviewed for replay-from-cache violations.
 
-If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls from Athena and overwrites local). Never fix drift by re-staging from the local file.
+If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls every migrated table from the DuckLake reader and overwrites local). Never fix drift by re-staging from the local file.
 
 ## Merge protocol
 - **Authoritative pre-merge gate**: remote CI (`validate.py` on GitHub-hosted runners with OIDC, CD.21) is the authoritative gate. A branch is not merge-ready until CI passes.
@@ -113,6 +127,7 @@ If a clone or runner shows stale data, an operator may rebuild that environment'
 - Manual confirmation: if `validate.py` appears to skip tests, run `pytest` directly to confirm.
 - **On CI failure**: the ci-rca agent (`.github/workflows/ci-rca.yml`) automatically files a recommendation with `source="ci_rca"` and `priority="critical"`. The next `/plan` session will surface it under "CI RCA Recs (open)". Do NOT manually patch the failure until the rec has been reviewed in a `/plan` session -- inline fixes without architectural review reproduce the workaround anti-pattern (Decision 55, Decision 72).
 - **Web merge flow (Decision 76)**: on Claude Code on the web the `gh` CLI is unavailable -- all GitHub PR/merge operations use the GitHub MCP tools (`mcp__github__*`). Open the PR via `create_pull_request`, wait for the fast PR `--pre` tier event-driven via `subscribe_pr_activity` (end the turn; the webhook wakes the session -- never `sleep`/`/loop`), then squash-merge via `merge_pull_request(merge_method="squash")`. The full tier runs post-merge on main with ci-rca on failure.
+- **`Resolves:` trailer convention**: when a plan resolves one or more open recommendations (ci_rca or otherwise), include a `Resolves: rec-NNNN[, rec-MMMM]` trailer line in the squash-merge commit body. This triggers the `rec-autoclose` workflow (`.github/workflows/rec-autoclose.yml`) to close each named rec via the ops portal automatically. The trailer is case-insensitive on the keyword, comma- or space-separated, and is parsed by `scripts/rec_trailer.py`. Plans that bundle recommendations declare them in `bundled_recommendations` and the `/implement` skill emits the trailer into the merge body. Manual close fallback: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."` (Decision 70 -- closure via lifecycle state, not deletion).
 
 ## Instruction architecture
 The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude Code is the 4th consumer. Layers:
@@ -131,7 +146,14 @@ Legacy fallbacks at `.github/prompts/` and `.github/agents/` are deep-frozen —
 
 ### Re-enable Lambda scheduled agents
 
-Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, rec-curator) were disabled in May 2026 during migration to Claude Code scheduled agents. To re-enable:
+Lambda-based scheduled agents (doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, rec-curator) were disabled in May 2026 during migration to Claude Code scheduled agents.
+
+> **CAVEAT (Decision 84):** rec-curator's priority-queue producer flow still writes via the
+> OpsWriter/Iceberg staging path (`scripts/s3_log_store.py`), while ALL queue readers now serve
+> DuckLake -- re-enabling before the T2.26 producer repoint sends curator output to a store
+> nothing reads. Repoint the producer first.
+
+To re-enable:
 
 1. **Quick (AWS CLI only, no Terraform apply):**
    ```bash

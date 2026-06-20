@@ -1,10 +1,15 @@
-"""Tests for file_decision, update_decision, drain_pending_decisions in ops_data_portal."""
+"""Tests for file_decision / update_decision and the decision reader fetch in ops_data_portal.
+
+Decision 84: decision numbering authority is DECISIONS.md (caller supplies decision_id);
+writes transit _ducklake_write (write_ops / update_ops); the offline decisions outbox and
+the DynamoDB allocator are retired.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,44 +23,43 @@ _VALID_FIELDS = {
 
 
 class TestFileDecision:
-    """Tests for file_decision() (D7)."""
+    """Tests for file_decision() -- caller-keyed write_ops upsert."""
 
-    def test_allocator_path_returns_dec_id(self, tmp_path: Path) -> None:
-        """file_decision() allocates via DynamoDB and returns dec-NNN string."""
+    def test_decision_id_field_returns_dec_id(self, tmp_path: Path) -> None:
+        """file_decision() forms dec-NNN from fields['decision_id'] and writes via write_ops."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value=73),
-            patch("scripts.ops_data_portal.OpsWriter") as mock_ow,
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
-            result = file_decision(dict(_VALID_FIELDS))
+            result = file_decision({**_VALID_FIELDS, "decision_id": 73})
 
         assert result == "dec-073"
-        mock_ow.return_value.write.assert_called_once()
-        table, record = mock_ow.return_value.write.call_args[0]
+        mock_write.assert_called_once()
+        table, record = mock_write.call_args[0]
         assert table == "ops_decisions"
+        assert mock_write.call_args.kwargs["action"] == "write_ops"
         assert record["id"] == "dec-073"
         assert record["decision_id"] == 73
 
     def test_dual_write_in_record(self, tmp_path: Path) -> None:
-        """file_decision() sets both id and decision_id on the staged record."""
+        """file_decision() sets both id and decision_id on the written record."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id", return_value=10),
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
-            result = file_decision(dict(_VALID_FIELDS))
+            result = file_decision({**_VALID_FIELDS, "decision_id": 10})
 
         assert result == "dec-010"
         lines = decisions_jsonl.read_text(encoding="utf-8").strip().splitlines()
@@ -64,13 +68,12 @@ class TestFileDecision:
         assert entry["id"] == "dec-010"
         assert entry["decision_id"] == 10
 
-    def test_migration_int_id_bypass_allocator(self, tmp_path: Path) -> None:
-        """_migration_int_id bypasses DynamoDB allocator and preserves the integer."""
+    def test_migration_int_id_supplies_number(self, tmp_path: Path) -> None:
+        """_migration_int_id supplies the integer on the backfill path and preserves it."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._next_id") as mock_next_id,
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
@@ -79,58 +82,45 @@ class TestFileDecision:
 
             result = file_decision(dict(_VALID_FIELDS), _migration_int_id=42)
 
-        mock_next_id.assert_not_called()
         assert result == "dec-042"
         lines = decisions_jsonl.read_text(encoding="utf-8").strip().splitlines()
         entry = json.loads(lines[0])
         assert entry["id"] == "dec-042"
         assert entry["decision_id"] == 42
 
-    def test_offline_queues_to_outbox(self, tmp_path: Path) -> None:
-        """file_decision() queues to outbox when DynamoDB is unreachable."""
-        pending_dir = tmp_path / "pending"
-
-        with (
-            patch("scripts.ops_data_portal._next_id", side_effect=RuntimeError("DynamoDB down")),
-            patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", pending_dir),
-        ):
+    def test_missing_decision_id_raises(self) -> None:
+        """Without decision_id or _migration_int_id, file_decision raises ValueError (Decision 84 I-2)."""
+        with patch("scripts.ops_data_portal._ducklake_write") as mock_write:
             from scripts.ops_data_portal import file_decision
 
-            result = file_decision(dict(_VALID_FIELDS))
+            with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
+                file_decision(dict(_VALID_FIELDS))
 
-        assert result.startswith("pending-")
-        files = list(pending_dir.glob("*.json"))
-        assert len(files) == 1
-        queued = json.loads(files[0].read_text(encoding="utf-8"))
-        assert "id" not in queued
-        assert queued["title"] == _VALID_FIELDS["title"]
+        mock_write.assert_not_called()
 
-    def test_outbox_preserves_migration_int_id(self, tmp_path: Path) -> None:
-        """When the write sequence fails, _migration_int_id is preserved in the queued JSON.
-
-        _migration_int_id bypasses _next_id, so the outbox path is triggered by
-        an OpsWriter failure rather than a DynamoDB allocator failure.
-        """
-        pending_dir = tmp_path / "pending"
+    def test_writer_failure_raises_loudly_no_outbox(self, tmp_path: Path) -> None:
+        """A writer failure propagates -- there is no decisions outbox and no 'pending-' return."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal.OpsWriter") as mock_ow,
-            patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", pending_dir),
+            patch(
+                "scripts.ops_data_portal._ducklake_write",
+                side_effect=RuntimeError("ducklake_writer write_ops ops_decisions failed (HTTP 500)"),
+            ),
+            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
         ):
-            mock_ow.return_value.write.side_effect = RuntimeError("OpsWriter down")
             from scripts.ops_data_portal import file_decision
 
-            file_decision(dict(_VALID_FIELDS), _migration_int_id=99)
+            with pytest.raises(RuntimeError, match="ducklake_writer"):
+                file_decision({**_VALID_FIELDS, "decision_id": 99})
 
-        files = list(pending_dir.glob("*.json"))
-        assert len(files) == 1
-        queued = json.loads(files[0].read_text(encoding="utf-8"))
-        assert queued["_migration_int_id"] == 99
+        assert not decisions_jsonl.exists()  # nothing written through on failure
 
 
 class TestUpdateDecision:
-    """Tests for update_decision() (D7, D4 gate removed after backfill)."""
+    """Tests for update_decision() -- reader fetch + update_ops write."""
 
     def test_returns_true_on_success(self, tmp_path: Path) -> None:
         """update_decision returns True when the write sequence succeeds."""
@@ -145,8 +135,8 @@ class TestUpdateDecision:
         }
 
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_athena", return_value=existing),
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=existing),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
             patch("scripts.ops_data_portal._sync_table"),
         ):
@@ -155,6 +145,7 @@ class TestUpdateDecision:
             result = update_decision("dec-001", {"status": "Superseded"})
 
         assert result is True
+        assert mock_write.call_args.kwargs["action"] == "update_ops"
 
     def test_str_arg_accepted(self, tmp_path: Path) -> None:
         """update_decision accepts a str decision_id (not int)."""
@@ -169,8 +160,8 @@ class TestUpdateDecision:
         }
 
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_athena", return_value=existing),
-            patch("scripts.ops_data_portal.OpsWriter"),
+            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=existing),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
             patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
             patch("scripts.ops_data_portal._sync_table"),
         ):
@@ -181,73 +172,18 @@ class TestUpdateDecision:
         assert result is True
 
 
-class TestDrainPendingDecisions:
-    """Tests for drain_pending_decisions() (D7)."""
+class TestRetiredDecisionsOutbox:
+    """Decision 84 I-4: drain_pending_decisions and the decisions outbox are gone."""
 
-    def test_no_outbox_returns_empty(self, tmp_path: Path) -> None:
-        """drain_pending_decisions returns zeros when outbox dir is absent."""
-        missing = tmp_path / "nonexistent"
-        with patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", missing):
-            from scripts.ops_data_portal import drain_pending_decisions
+    def test_drain_pending_decisions_absent(self) -> None:
+        import scripts.ops_data_portal as portal
 
-            result = drain_pending_decisions()
-        assert result == {"drained": 0, "skipped": 0}
-
-    def test_drain_standard_pending_file(self, tmp_path: Path) -> None:
-        """drain_pending_decisions successfully drains a queued file."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
-        pending_fields = dict(_VALID_FIELDS)
-        (pending_dir / "abc123.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-
-        with (
-            patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", return_value=5),
-            patch("scripts.ops_data_portal.OpsWriter"),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
-        ):
-            from scripts.ops_data_portal import drain_pending_decisions
-
-            result = drain_pending_decisions()
-
-        assert result["drained"] == 1
-        assert result["skipped"] == 0
-        assert not list(pending_dir.glob("*.json"))
-
-    def test_drain_preserves_migration_int_id(self, tmp_path: Path) -> None:
-        """drain_pending_decisions honours _migration_int_id from the queued JSON."""
-        pending_dir = tmp_path / "pending"
-        pending_dir.mkdir()
-        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
-        pending_fields = {**_VALID_FIELDS, "_migration_int_id": 37}
-        (pending_dir / "mig.json").write_text(json.dumps(pending_fields), encoding="utf-8")
-
-        def fake_next_id(*args, **kwargs):  # type: ignore[no-untyped-def]
-            raise AssertionError("_next_id must not be called when _migration_int_id is set")
-
-        with (
-            patch("scripts.ops_data_portal._DECISIONS_PENDING_OUTBOX", pending_dir),
-            patch("scripts.ops_data_portal._next_id", side_effect=fake_next_id),
-            patch("scripts.ops_data_portal.OpsWriter") as mock_ow,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
-        ):
-            from scripts.ops_data_portal import drain_pending_decisions
-
-            result = drain_pending_decisions()
-            table, record = mock_ow.return_value.write.call_args[0]
-
-        assert result["drained"] == 1
-        assert record["id"] == "dec-037"
-        assert record["decision_id"] == 37
+        assert not hasattr(portal, "drain_pending_decisions")
+        assert not hasattr(portal, "_DECISIONS_PENDING_OUTBOX")
 
 
-class TestFetchDecisionFromAthena:
-    """Tests for _fetch_decision_from_athena reader path (Decision 69 / CD.8)."""
+class TestFetchDecisionFromReader:
+    """Tests for the decision_by_id named verb fetch (Decision 84 I-3)."""
 
     _DEC_ROW = {
         "id": "dec-007",
@@ -260,10 +196,11 @@ class TestFetchDecisionFromAthena:
     }
 
     def test_reader_path_returns_decision(self) -> None:
-        """DuckDBIcebergReader success -> returns sanitised decision record without Athena."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = [dict(self._DEC_ROW)]
+        """named('decision_by_id') success -> returns sanitised decision record."""
+        reader = MagicMock()
+        reader.named.return_value = [dict(self._DEC_ROW)]
 
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
             from scripts.ops_data_portal import _fetch_decision_from_athena
 
             result = _fetch_decision_from_athena("dec-007")
@@ -271,39 +208,33 @@ class TestFetchDecisionFromAthena:
         assert result is not None
         assert result["id"] == "dec-007"
         assert result["status"] == "Decided"
-        MockReader.return_value.current_state.assert_called_once()
+        reader.named.assert_called_once_with("decision_by_id", id="dec-007")
 
-    def test_reader_fallback_raises_when_athena_also_unreachable(self) -> None:
-        """Reader raises -> falls back to Athena; RuntimeError if Athena also unreachable (Decision 69)."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader broken")
+    def test_reader_failure_loud_fails_no_athena_fallback(self) -> None:
+        """Reader failure propagates -- the Athena fallback retired with the estate (Decision 84 I-1)."""
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("ducklake_reader 'named_read' failed (HTTP 500)")
 
-            with patch("scripts.ops_data_portal.resolve_aws_profile", return_value="agent_platform"):
-                with patch("boto3.Session") as mock_session:
-                    mock_session.return_value.client.return_value.start_query_execution.side_effect = RuntimeError(
-                        "Athena unreachable"
-                    )
-                    from scripts.ops_data_portal import _fetch_decision_from_athena
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            from scripts.ops_data_portal import _fetch_decision_from_athena
 
-                    with pytest.raises(RuntimeError, match="warehouse unreachable"):
-                        _fetch_decision_from_athena("dec-007")
+            with pytest.raises(RuntimeError, match="ducklake_reader"):
+                _fetch_decision_from_athena("dec-007")
 
     def test_reader_returns_none_when_decision_not_found(self) -> None:
-        """Reader returns empty list -> function returns None without calling Athena."""
-        with patch("src.common.iceberg_reader.DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = []
+        """Reader returns empty list -> function returns None."""
+        reader = MagicMock()
+        reader.named.return_value = []
 
-            with patch("scripts.ops_data_portal.resolve_aws_profile") as mock_profile:
-                from scripts.ops_data_portal import _fetch_decision_from_athena
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            from scripts.ops_data_portal import _fetch_decision_from_athena
 
-                result = _fetch_decision_from_athena("dec-999")
-
-            mock_profile.assert_not_called()
+            result = _fetch_decision_from_athena("dec-999")
 
         assert result is None
 
     def test_invalid_decision_id_raises_value_error(self) -> None:
-        """Malformed decision_id raises ValueError before any reader or Athena call."""
+        """Malformed decision_id raises ValueError before any reader call."""
         from scripts.ops_data_portal import _fetch_decision_from_athena
 
         with pytest.raises(ValueError, match="invalid decision_id"):

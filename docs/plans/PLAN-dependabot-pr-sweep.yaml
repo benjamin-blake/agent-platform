@@ -1,0 +1,314 @@
+schema_version: 1
+slug: "dependabot-pr-sweep"
+intent: >-
+  Bring the five open Dependabot pip PRs (#95 ruff, #96 pytest-socket, #97 psycopg2-binary,
+  #98 aiohttp, #99 pytest-randomly) up to date with current main and squash-merge all five.
+  All five were opened 2026-06-08 and are now behind main; four of them (#96-#99) show a RED
+  terraform-validate (a required check) inherited from their stale 2026-06-08 base, while
+  pr-validate (the other required check), CodeQL, and analyze are GREEN on all five. CI on
+  current main HEAD is GREEN, so the terraform-validate red is a stale-base artefact, not a
+  consequence of the dependency bumps. The fix is to update each PR branch onto current main
+  (re-running CI clears the stale terraform-validate red), then squash-merge. Clearing all five
+  also frees Dependabot's open-PR slots (open-pull-requests-limit: 5 is currently reached),
+  unblocking its next weekly run. Executed entirely via GitHub MCP -- no local edits to the
+  dependency files and no push to any dependabot/* branch.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dependabot-pr-sweep.yaml
+phase: >-
+  Platform maintenance / dependency hygiene -- not a roadmap tier item and not a product-phase
+  deliverable. Product Phase 1 complete; this is operational upkeep that unblocks Dependabot
+  (open-pull-requests-limit: 5 reached) and clears a latched required-check red on stale PRs.
+scope:
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      Changes land ON MAIN via the Dependabot PR merges (NOT hand-edited by the executor):
+      psycopg2-binary >=2.9.0 -> >=2.9.12 (#97), aiohttp >=3.8.0 -> >=3.14.1 (#98),
+      pytest-randomly >=3.15 -> >=4.1.0 (#99), pytest-socket >=0.7 -> >=0.8.0 (#96),
+      ruff ==0.15.15 -> ==0.15.17 (#95). Four are floor (>=) bumps; ruff is the only == pin
+      (the only one whose installed version actually changes).
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: >-
+      Mirror subset that MUST stay in sync with requirements.txt on the shared packages. Updated
+      on main via the same merges for ruff ==0.15.17 (#95), pytest-randomly >=4.1.0 (#99), and
+      pytest-socket >=0.8.0 (#96). psycopg2-binary and aiohttp are absent from this file, so
+      #97/#98 correctly do not touch it. Verify the ruff pin is identical across both files
+      after the sweep.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    EXECUTOR ENVIRONMENT: requires GitHub MCP tools scoped to benjamin-blake/agent-platform --
+    update_pull_request_branch, merge_pull_request, subscribe_pr_activity, pull_request_read,
+    actions_list (list_workflow_runs) -- plus a local git clone for the post-merge content
+    verification (git fetch / git show). NO AWS profile is needed (no terraform apply, no Lambda
+    build/deploy). First check: mcp__github__get_me succeeds and the repo is in scope.
+  - >-
+    Branch protection (main-protection ruleset, Decision 83) enforces the two required checks
+    pr-validate + terraform-validate before merge (terraform-converged is advisory). The executor
+    relies on GitHub server-side enforcement; do NOT use the admin-bypass actor to force a merge
+    past a red required check.
+acceptance_criteria:
+  - >-
+    All five Dependabot PRs (#95, #96, #97, #98, #99) are squash-merged into main: each reads
+    state=closed, merged=true, with a merge_commit_sha. None of the five remain open.
+  - >-
+    main HEAD requirements.txt contains psycopg2-binary>=2.9.12, aiohttp>=3.14.1,
+    pytest-randomly>=4.1.0, pytest-socket>=0.8.0, and ruff==0.15.17; requirements-fast.txt
+    contains pytest-randomly>=4.1.0, pytest-socket>=0.8.0, and ruff==0.15.17. The ruff pin is
+    byte-identical in both files (sync invariant intact).
+  - >-
+    CI on the post-merge main HEAD is GREEN (the post-merge full tier, Decision 73, completes
+    with conclusion=success).
+  - >-
+    No required check was inline-patched and no requirements file was hand-edited on a dependabot
+    branch. If a genuine failure (red required check on a branch already up to date with current
+    main) had surfaced, it would have been routed to ci-rca and the sweep halted -- none is
+    expected.
+  - >-
+    Dependabot's pip open-PR slots are freed: the open Dependabot PR count from this batch is 0,
+    unblocking the next weekly Dependabot run (open-pull-requests-limit: 5 was reached).
+  - >-
+    No Lambda build/deploy was performed, no docs/DECISIONS.md edit was made, and no
+    recommendation was filed (absent a genuine CI failure).
+verification_plan:
+  - step: 1
+    phase: pre-merge
+    action: >-
+      Confirm CI on current main HEAD is GREEN (the foundational assumption: updating stale
+      branches onto main only helps if main itself is green) and that the five target PRs are
+      still open.
+    command: |-
+      mcp__github__actions_list method=list_workflow_runs owner=benjamin-blake repo=agent-platform
+        resource_id=ci.yml per_page=1 (workflow_runs_filter: branch=main event=push)
+      mcp__github__list_pull_requests owner=benjamin-blake repo=agent-platform state=open perPage=50
+    expected: >-
+      Latest main ci.yml run is status=completed, conclusion=success. The open-PR list still
+      contains #95-#99 authored by dependabot[bot] (heads dependabot/pip/...).
+    fix_if: >-
+      Latest main run RED -> main itself is broken; do NOT start the sweep (updating branches onto
+      a red main will not clear terraform-validate). Route the main failure to ci-rca and halt.
+      In-progress -> wait for it to finish (event-driven). A target PR already closed/merged ->
+      drop it from the batch. A target PR already rebased by Dependabot -> proceed to its merge
+      step directly.
+  - step: 2
+    phase: per-pr
+    action: >-
+      CANARY (#97 psycopg2, lowest-risk). After update_pull_request_branch on #97, confirm BOTH
+      required checks go green on the now-current base -- this validates the stale-base hypothesis
+      before committing to the rest.
+    command: |-
+      mcp__github__pull_request_read method=get_check_runs owner=benjamin-blake
+        repo=agent-platform pullNumber=97
+    expected: >-
+      pr-validate conclusion=success AND terraform-validate conclusion=success (terraform-converged
+      is advisory -- ignore it). The previously-red terraform-validate is now green because the
+      branch was rebased onto green main.
+    fix_if: >-
+      terraform-validate STILL failure after the branch is up to date with current (green) main ->
+      this is a GENUINE failure, not a stale-base artefact; STOP the entire sweep, route to ci-rca
+      (Decisions 72/55), do NOT inline-patch or merge. pr-validate failure -> the dependency bump
+      broke lint/tests; STOP, route to ci-rca, do NOT hand-edit requirements on the dependabot
+      branch.
+  - step: 3
+    phase: per-pr
+    action: >-
+      For each remaining PR (#98, then #99, then #96, then #95), after its branch is updated onto
+      current main, confirm both required checks are green before merging.
+    command: |-
+      mcp__github__pull_request_read method=get_check_runs owner=benjamin-blake
+        repo=agent-platform pullNumber=PR   # PR in {98, 99, 96, 95}, run per PR after its update
+    expected: >-
+      pr-validate conclusion=success AND terraform-validate conclusion=success for each PR. For
+      #99 (pytest-randomly major 3->4) and #95 (ruff == pin change) specifically confirm pr-validate
+      (which runs ruff + mypy + pytest --picked) is green on the updated branch.
+    fix_if: >-
+      Any required check red on an up-to-date branch -> STOP and route to ci-rca (do not inline-fix).
+      update_pull_request_branch returns a conflict (possible for the adjacent-line trio #95/#96/#99)
+      -> fall back to commenting `@dependabot recreate` on that PR and re-wait; do NOT hand-resolve
+      in the dependabot branch.
+  - step: 4
+    phase: post-merge
+    action: Confirm all five PRs are merged (closed + merged=true).
+    command: |-
+      mcp__github__pull_request_read method=get owner=benjamin-blake repo=agent-platform
+        pullNumber=PR   # run for PR in {95, 96, 97, 98, 99}
+    expected: "Each PR: state=closed, merged=true, merge_commit_sha present."
+    fix_if: >-
+      A PR not merged but green -> retry merge_pull_request(merge_method=squash). Not merged due to
+      a mergeability conflict -> update_pull_request_branch again (or @dependabot recreate), re-wait
+      for green, then merge.
+  - step: 5
+    phase: post-merge
+    action: >-
+      Confirm main HEAD carries all five bumps and the ruff pin is in sync across both dependency
+      files.
+    command: |-
+      git fetch origin main --quiet \
+        && git show origin/main:requirements.txt \
+           | grep -E 'psycopg2-binary>=2\.9\.12|aiohttp>=3\.14\.1|pytest-randomly>=4\.1\.0|pytest-socket>=0\.8\.0|ruff==0\.15\.17' \
+        && git show origin/main:requirements-fast.txt \
+           | grep -E 'pytest-randomly>=4\.1\.0|pytest-socket>=0\.8\.0|ruff==0\.15\.17'
+    expected: >-
+      Five matching lines from requirements.txt and three from requirements-fast.txt; ruff==0.15.17
+      appears in both files; overall exit 0.
+    fix_if: >-
+      A line missing -> that PR's merge did not land (or landed a different version); re-check the
+      PR. ruff pin differs between the two files -> a sync break (should not occur since #95 updates
+      both); investigate before declaring done.
+  - step: 6
+    phase: post-merge
+    action: >-
+      Confirm the post-merge main full-tier CI is green and that Dependabot's slots are freed (no
+      target PR remains open).
+    command: |-
+      mcp__github__actions_list method=list_workflow_runs owner=benjamin-blake repo=agent-platform
+        resource_id=ci.yml per_page=1 (workflow_runs_filter: branch=main event=push)
+      mcp__github__list_pull_requests owner=benjamin-blake repo=agent-platform state=open perPage=50
+    expected: >-
+      The newest main ci.yml run (head_sha == current origin/main HEAD) completes
+      conclusion=success. The open-PR list contains none of #95-#99 (Dependabot pip slot freed for
+      the next weekly run).
+    fix_if: >-
+      Main CI red post-merge -> the full tier (full pytest / DQ / verifiers) caught something the
+      fast tier did not; route to ci-rca (Decision 72), do NOT inline-patch. In-progress -> wait
+      event-driven for the post-merge full-tier run (Decision 73). A target PR still open -> finish
+      its update->green->merge cycle.
+constraints:
+  - >-
+    Execute ENTIRELY via GitHub MCP. Do NOT locally edit requirements.txt or requirements-fast.txt,
+    and do NOT git push to any dependabot/* branch. The only writes are server-side
+    update_pull_request_branch (GitHub "Update branch") and merge_pull_request (squash). This keeps
+    the agent off both main and the dependabot branches (Decision 76; honours the never-push-to-a-
+    different-branch rule).
+  - >-
+    CI waits are EVENT-DRIVEN only: after each update_pull_request_branch / merge, call
+    subscribe_pr_activity and END THE TURN; the webhook wakes the session. NEVER use sleep, /loop,
+    or repeated status polling (Decision 76).
+  - >-
+    The required checks are pr-validate + terraform-validate (Decision 83). terraform-converged is
+    ADVISORY -- do not block a merge on it.
+  - >-
+    CI-failure discipline: updating a STALE branch onto current (green) main is a rebase, not a
+    patch -- that is the intended fix for the stale terraform-validate red and is allowed. But if a
+    required check is RED on a branch that IS up to date with current main, that is a GENUINE
+    failure -> STOP, do NOT inline-patch, route to ci-rca (Decisions 72/55). Do not hand-edit a
+    dependabot branch's requirements file to make CI pass.
+  - >-
+    Process ONE PR at a time. Re-update the three adjacent-line PRs (#95 ruff / #96 pytest-socket /
+    #99 pytest-randomly all edit lines 39-41 of requirements.txt plus requirements-fast.txt)
+    immediately before merging each, so git's 3-way merge resolves the adjacency cleanly. If
+    update_pull_request_branch reports a conflict, fall back to `@dependabot recreate`; never
+    hand-resolve in the dependabot branch.
+  - >-
+    No Lambda build/deploy: compute_affected_artifacts({requirements.txt, requirements-fast.txt})
+    is empty -- DuckLake runtime deps (duckdb, psycopg2-binary, python-ulid) are pinned in
+    independently-versioned Lambda layers, not sourced from requirements.txt, and no active Lambda
+    manifest lists any of the five bumped packages in pip_packages (Decision 79).
+  - >-
+    Do NOT edit docs/DECISIONS.md. File no recommendation unless a genuine CI failure surfaces
+    (then ci-rca files it automatically). No Resolves: trailer is needed (no bundled recommendations).
+  - >-
+    Scope is the FIVE currently-open Dependabot PRs (#95-#99). If Dependabot opens new grouped PRs
+    once it drops below the open-PR limit, they are OUT OF SCOPE for this plan.
+context:
+  - >-
+    The five PRs and their footprint (verified 2026-06-20): #95 ruff ==0.15.15 -> ==0.15.17
+    (requirements.txt + requirements-fast.txt); #96 pytest-socket >=0.7 -> >=0.8.0 (both files);
+    #97 psycopg2-binary >=2.9.0 -> >=2.9.12 (requirements.txt only); #98 aiohttp >=3.8.0 ->
+    >=3.14.1 (requirements.txt only); #99 pytest-randomly >=3.15 -> >=4.1.0, a MAJOR 3->4 floor
+    bump (both files). None has a textual conflict with current main -- each edits a still-unchanged
+    line, so all are cleanly rebaseable (behind, not dirty).
+  - >-
+    Current CI state: pr-validate, CodeQL, and analyze are GREEN on all five. terraform-validate is
+    RED on #96/#97/#98/#99 (base 282e4093, 2026-06-08) and GREEN on #95 (re-ran 2026-06-15, base
+    929fc8c3). At planning time CI on main HEAD 4181d094 was conclusion=success, which INCLUDES the
+    terraform-validate job -- hence the red on the four is a stale-base artefact that an update onto
+    main clears. This is why VP1 (main green) is the foundational gate and VP2 (canary) proves the
+    flip on the lowest-risk PR before the rest. NOTE: that SHA is a point-in-time observation; main
+    advances (e.g. PR #196 / Decision 93 landed after it). The executor MUST re-confirm VP1 against
+    the THEN-CURRENT main HEAD -- and ensure that HEAD's push-CI has actually gone green -- before
+    starting; do not key off the literal 4181d094 in this prose.
+  - >-
+    The >= safety insight: four bumps are FLOOR (>=) bumps. CI installs without a lockfile, so pip
+    already resolves the latest compatible version -- raising a >= floor changes NO installed version
+    and cannot introduce a regression that was not already present (and pr-validate is already green).
+    ruff is the only == pin, so it is the only bump whose installed version actually changes
+    (0.15.15 -> 0.15.17, a patch); PR #95's pr-validate is already green on 0.15.17, so ruff
+    format/check pass at the new pin.
+  - >-
+    Sync invariant: requirements-fast.txt mirrors a subset of requirements.txt and must match on the
+    shared packages (its header documents that Dependabot updates both in one PR). Verified: #95,
+    #96, #99 update BOTH files; #97, #98 touch only requirements.txt (psycopg2/aiohttp are not in the
+    fast file). After the sweep the ruff pin must be identical in both (VP5).
+  - >-
+    Dependabot config (.github/dependabot.yml): pip ecosystem, directory "/", weekly,
+    open-pull-requests-limit: 5 (currently reached -- the reason there are exactly five and no more).
+    Clearing all five unblocks the next weekly run.
+  - >-
+    Decisions cited (decision-scout verdict: NO_FLAGS): Decision 76 (web-merge flow -- MCP ops,
+    event-driven CI wait via subscribe_pr_activity, squash-merge); Decision 83 (main-protection
+    ruleset; required checks = pr-validate + terraform-validate, terraform-converged advisory,
+    strict=false); Decision 73 (two-tier diff-aware CI -- fast tier on PRs, full tier post-merge on
+    main -- and forward-fix); Decisions 72/55 (genuine CI failure -> ci-rca rec -> /plan, never an
+    inline/autonomous workaround -- the escape hatch); Decision 79 (per-Lambda manifests confirm no
+    repackaging; V2 tier holds); Decision 85 (this artefact is PLAN-{slug}.yaml under the
+    PlanDocument schema). Decision 67: this plan is IMPLEMENTATION type (STRATEGIC plans remain
+    suspended).
+pre_implementation_checklist:
+  - Branch confirmed NOT main (git branch --show-current).
+  - "GitHub MCP reachable and repo in scope: mcp__github__get_me succeeds; benjamin-blake/agent-platform accessible."
+  - >-
+    The five target PRs still open with expected heads: #95 dependabot/pip/minor-and-patch-6541cb3808,
+    #96 dependabot/pip/pytest-socket-gte-0.8.0, #97 dependabot/pip/psycopg2-binary-gte-2.9.12,
+    #98 dependabot/pip/aiohttp-gte-3.14.1, #99 dependabot/pip/pytest-randomly-gte-4.1.0.
+  - Current main CI is green (VP1) -- the foundational assumption; if red, do not start.
+  - subscribe_pr_activity available for event-driven CI waits (no sleep/poll).
+execution_steps:
+  - >-
+    Pre-flight: confirm on a non-main branch and that GitHub MCP is reachable; run VP1 (main CI
+    green + the five PRs still open with the expected heads). If main is red, STOP and route the
+    main failure to ci-rca. If a target PR is already merged/closed, drop it from the batch.
+  - >-
+    CANARY -- #97 (psycopg2): mcp__github__update_pull_request_branch(owner=benjamin-blake,
+    repo=agent-platform, pullNumber=97). Then subscribe_pr_activity(97) and END THE TURN. On the
+    webhook wake, run VP2 (get_check_runs for 97). If pr-validate AND terraform-validate are both
+    green, the stale-base hypothesis is confirmed -> mcp__github__merge_pull_request(pullNumber=97,
+    merge_method="squash"). If terraform-validate is still red on the now-current base, STOP the
+    whole sweep and route to ci-rca (do not inline-patch).
+  - >-
+    #98 (aiohttp): update_pull_request_branch(98); subscribe_pr_activity(98) and END THE TURN; on
+    wake run VP3 for 98; if green, squash-merge.
+  - >-
+    #99 (pytest-randomly, MAJOR 3->4): update_pull_request_branch(99) onto current main;
+    subscribe_pr_activity(99) and END THE TURN; on wake run VP3 for 99 (confirm pr-validate's pytest
+    is green under the major bump); if green, squash-merge.
+  - >-
+    #96 (pytest-socket): update_pull_request_branch(96) onto the new main (now includes #99);
+    subscribe_pr_activity(96) and END THE TURN; on wake run VP3 for 96; if green, squash-merge. If
+    the update reports a conflict, fall back to `@dependabot recreate` on #96 and re-wait.
+  - >-
+    #95 (ruff ==0.15.17): update_pull_request_branch(95) onto the new main; subscribe_pr_activity(95)
+    and END THE TURN; on wake run VP3 for 95 (confirm ruff format/check green on the final tree); if
+    green, squash-merge. (#95 was already green pre-update; re-running on current main keeps the
+    "bring up to date" guarantee and lints the final state.)
+  - >-
+    Post-merge verification: run VP4 (all five closed + merged=true), VP5 (main has all five bumps,
+    ruff pin in sync across both files), and VP6 (post-merge full-tier main CI green + no target PR
+    open). The VP6 main run is the post-merge full tier (Decision 73) -- wait for it event-driven;
+    if it goes red, route to ci-rca, do not inline-patch.
+  - >-
+    Report: per-PR merge_commit_sha and merge order, the final requirements.txt / requirements-fast.txt
+    state (the five bumped lines + ruff sync), the post-merge main CI conclusion, and confirmation
+    that Dependabot's open-PR slots are freed. No recs to close (no bundled recommendations); no
+    Resolves: trailer.
+work_areas: []
+rollback: >-
+  Per-PR config-only revert via a normal revert PR: open a PR that restores the prior constraint
+  line(s) and squash-merge it through the same required-check gate. Because four bumps are >= floor
+  raises (no installed-version change) and ruff is a single-line == patch bump, the inverse is a
+  clean one-line-per-package revert -- no data migration and no Lambda redeploy. Rollback is
+  unlikely to be needed since pr-validate (and, for terraform-validate, the rebased base) is green
+  on every PR before merge; reserve it for the case where the post-merge full tier surfaces a real
+  regression, in which case prefer routing to ci-rca over a blind revert.

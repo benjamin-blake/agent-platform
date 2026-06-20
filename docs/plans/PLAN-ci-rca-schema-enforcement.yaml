@@ -1,0 +1,375 @@
+schema_version: 1
+slug: "ci-rca-schema-enforcement"
+intent: >-
+  Land Phase 1 (core slice) of the T1.13 CI-RCA methodology contract: a CI_RCA_STRICT_MODE
+  feature flag (default warn), the structured context_v2_json schema with write-time guidance,
+  and warn-mode portal validation for source=ci_rca recs -- retargeted from the INTENT's
+  pre-Decision-84 Iceberg/Athena surface to the live DuckLake closed reader/writer boundary.
+  Deepens RCA quality so the self-improving control plane (T3.4) consumes well-formed
+  root-cause signals instead of rescue-mode diagnoses.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-schema-enforcement.yaml
+phase: >-
+  PLATFORM tier_item T1.13 (CI-RCA methodology contract), Phase 1 core slice per
+  docs/INTENT-ci-rca-methodology.md Section 6. First of six depth follow-on plans.
+scope:
+  - file: config/feature_flags.yaml
+    action: Create
+    purpose: >-
+      Canonical declarative source for CI_RCA_STRICT_MODE (default warn; accepted values warn|strict).
+      Read by the portal at process start. Greenfield -- no feature-flag file exists today.
+  - file: terraform/personal/feature_flags.tf
+    action: Create
+    purpose: >-
+      Provision CI_RCA_STRICT_MODE as an SSM String param mirrored from config/feature_flags.yaml
+      (try()-wrapped file()+yamldecode per AGENTS.md optional-artifact rule) for future server-side
+      strict enforcement. Under terraform/personal/ so push-to-main auto-applies behind
+      terraform_apply_guard.py (Decision 77); a top-level terraform/ file would NOT auto-apply.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add get_ci_rca_strict_mode() (module-level cached yaml.safe_load, mirrors line 288; no hot-reload),
+      the CiRcaContext Pydantic model (INTENT Section 1), and the warn-mode validation branch in
+      file_rec() accepting a context_v2_json argument.
+  - file: scripts/executor/rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      SIGNATURE CHANGE: get_rec_write_guidance today takes (ops_yaml_path, registry_path) and auto-populates
+      from ops.yaml columns -- add an optional source parameter so get_rec_write_guidance('ci_rca') returns
+      the CiRcaContext field semantics as authoritative write-time guidance (Decision 66). A one-line comment
+      justifies the dedicated code path (nested object, not a flat ops.yaml column entry -- intentional
+      divergence from the Wave-2 auto-population pattern).
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      Add context_v2_json {role: input, sql_type: VARCHAR, nullable: true} to BOTH the history and
+      current column blocks of ops_recommendations (the DuckLake schema contract baked into the Lambdas).
+  - file: src/common/ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Add reconcile_table_columns(con, *, table): a pure helper that introspects the physical columns of
+      the history+current tables (DuckDB PRAGMA table_info / information_schema over the attached catalog),
+      then ALTER TABLE ADD COLUMN for any spec column that is absent. Idempotency comes from the
+      introspection guard, NOT a SQL IF NOT EXISTS clause -- there is no ADD COLUMN precedent here and the
+      existing line 335-336 ALTERs are SET PARTITIONED BY, a different statement. Never DROP. Runs inside
+      the maintenance Lambda against the production catalog (see handler action below).
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Add an action_reconcile_columns operational action mirroring action_restore_drill / action_catalog_reinit:
+      opens its OWN connection to the PRODUCTION catalog via EXPLICIT event params (data_path + meta_schema
+      = ducklake_ops; refuse no-arg invokes so it can never hit the smoke catalog, per the catalog_reinit
+      precedent), calls reconcile_table_columns(con, table="ops_recommendations"), and returns the resulting
+      per-table column presence. This is the correct Lambda-mediated surface for production catalog DDL --
+      CC-web has NO Neon 5432 egress, so the migration MUST run server-side (the round-1 smoke-client
+      _open_attached approach was wrong: that path is pinned to the smoke catalog and is unreachable from CC-web).
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Add a --migrate-ops-recs-columns flag that SigV4-invokes the maintenance Function URL
+      (_sigv4_invoke(_function_url("maintenance"), {"action": "reconcile_columns", "data_path": <prod>,
+      "meta_schema": "ducklake_ops", "table": "ops_recommendations"})) -- the same Lambda-mediated pattern
+      the production T2.19 gates use -- and asserts the response reports context_v2_json present on BOTH the
+      history and current tables. The client is the invocation wrapper; the DDL runs server-side.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add warn-mode unit tests (valid passes; deficient why_chain warns-not-raises; legacy free-text
+      warns-not-raises; flag default; guidance returns schema), a reconcile_table_columns re-run-safety
+      test (second call against a temp table is a no-op), and one env-gated live roundtrip test.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Stale-pointer annotation only (Decision 86): mark the Iceberg-ALTER / Athena-_current /
+      Athena-telemetry wording in Sections 1/3/7 as superseded by the DuckLake closed boundary
+      (Decision 84/81), and record that this plan landed the Phase-1 core slice with named deferrals.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Update the T1.13 progress_note (Phase-1 core slice landing + deferred checks) and correct the stale
+      files_in_scope path terraform/feature_flags.tf -> terraform/personal/feature_flags.tf (Decision 77).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/feature_flags.tf -- sandbox PLATFORM environment; push-to-main auto-applies
+    behind scripts/terraform_apply_guard.py (fail-closed). A plain SSM String param adds no
+    destroy/IAM/trust change, so the deterministic guard PASSES; remote terraform-validate (required
+    check, Decision 83) is authoritative for HCL syntax/plan.
+  - >-
+    DuckLake ops_recommendations catalog migration -- non-destructive ALTER TABLE ADD COLUMN on
+    ops_recommendations_history and _current, idempotent via column introspection (not a SQL IF NOT EXISTS
+    clause). Runs SERVER-SIDE in the ducklake_maintenance Lambda against the production ducklake_ops catalog
+    (explicit data_path + meta_schema event params), invoked once post-deploy by SigV4 to the maintenance
+    Function URL -- CC-web has no Neon 5432 egress, so a direct client connection cannot reach production.
+    Decision 84/81 closed boundary; NOT Iceberg, NOT Athena. Data-preserving (905 live rows survive); NEVER DROP.
+  - >-
+    Per-Lambda deploy gating (Decision 79 / CD.16): FIVE active artifacts are affected by the full scope
+    (compute_affected_artifacts, verified post-rebase). FOUR are provisioned DuckLake functions --
+    ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr -- and get real build + deploy
+    + smoke-test via build_lambda --deploy --ducklake-only. ONE -- data-pipeline -- is affected SOLELY because
+    it lists docs/ROADMAP-PLATFORM.yaml as a manifest asset; it is NOT provisioned in the personal account
+    (UpdateFunctionCode -> ResourceNotFoundException), so its function-code deploy + smoke are VACUOUS and
+    DEFERRED per the T1.15 / rec-2164 precedent (rebuilt + staged only). No deploy command is run for it here.
+    Mechanism: src/common/ducklake_runtime.py pulls in the four DuckLake functions; the maintenance handler.py
+    edit pulls in ONLY ducklake_maintenance (data-pipeline + ops-compaction excludes: the DuckLake runtime files
+    for the 262 MB ceiling); ops-compaction is NOT affected (it does not list the ROADMAP asset).
+acceptance_criteria:
+  - CI_RCA_STRICT_MODE exists in config/feature_flags.yaml defaulting to warn; get_ci_rca_strict_mode() returns 'warn' and rejects values outside {warn, strict}.
+  - get_rec_write_guidance('ci_rca') returns the structured context schema surfacing proximate_cause, why_chain, detection_gap, recurrence_class, corrective_action, preventive_action (Decision 66).
+  - file_rec(source=ci_rca, context_v2_json=<valid>) in warn mode validates the object, persists it to the new context_v2_json column, and writes a >=80-char human summary into the legacy context column; the reader roundtrips both.
+  - file_rec(source=ci_rca, context_v2_json=<deficient why_chain>) in warn mode logs a structured deficiency warning and does NOT raise; the rec is still filed.
+  - file_rec(source=ci_rca) with only legacy free-text context (no context_v2_json) passes with a deprecation warning; no rejection.
+  - context_v2_json column is present and nullable on ops_recommendations_history and _current; the legacy context column is preserved and still readable.
+  - The four provisioned DuckLake Lambda artifacts (writer, reader, maintenance, catalog_dr) rebuilt, deployed, and smoke-tested green (ops-read-your-write roundtrips at production scope); the one affected-but-unprovisioned artifact (data-pipeline, pulled in via the ROADMAP asset) is rebuilt + staged with VACUOUS deploy per rec-2164.
+  - docs/INTENT-ci-rca-methodology.md carries the DuckLake stale-pointer annotation + Phase-1 deferral note; docs/ROADMAP-PLATFORM.yaml T1.13 progress_note updated.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-schema-enforcement.yaml
+    expected: Exit 0; prints validation success.
+    fix_if: Non-zero exit or schema error -- fix the named field; unknown-key error means a stray top-level key.
+  - step: 2
+    phase: pre-deploy
+    action: Flag reader returns the default in warn.
+    command: bin/venv-python -c "from scripts.ops_data_portal import get_ci_rca_strict_mode as f; print(f())"
+    expected: Prints warn.
+    fix_if: ImportError -- reader not added; prints other value -- default wrong or YAML key mismatch.
+  - step: 3
+    phase: pre-deploy
+    action: Write-time guidance surfaces the structured schema fields.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import get_rec_write_guidance as g; s=str(g('ci_rca')); assert all(k in s for k in ['proximate_cause','why_chain','detection_gap','recurrence_class','corrective_action','preventive_action']), s; print('ok')"
+    expected: Prints ok.
+    fix_if: AssertionError -- ci_rca guidance missing fields; KeyError/ValueError -- source not registered.
+  - step: 4
+    phase: pre-deploy
+    action: Warn-mode validation unit tests exercise the real file_rec code path (mocked writer).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaSchemaEnforcement -q
+    expected: All selected tests pass -- valid context_v2_json validates; deficient why_chain warns and does NOT raise; legacy free-text passes with deprecation warning; flag default warn.
+    fix_if: A warn-mode test raises -- validation is hard-rejecting in warn (must only warn); failures mean field bounds or terminus check wrong.
+  - step: 5
+    phase: pre-deploy
+    action: Column added to both history and current blocks of the DuckLake schema contract.
+    command: bin/venv-python -c "s=open('config/lambda/ducklake/field_semantics.yaml').read(); n=s.count('context_v2_json'); assert n>=2, n; print('ok',n)"
+    expected: Prints ok and a count >= 2 (history + current).
+    fix_if: Count < 2 -- column missing from one of the two column blocks.
+  - step: 6
+    phase: pre-deploy
+    action: Terraform flag param is defined under terraform/personal/ (remote terraform-validate is authoritative for HCL).
+    command: bin/venv-python -c "t=open('terraform/personal/feature_flags.tf').read().lower(); assert 'ci_rca_strict_mode' in t and 'ssm' in t, 'flag SSM param missing'; print('ok')"
+    expected: Prints ok.
+    fix_if: AssertionError -- the SSM param for the flag is not defined, or the file landed at the wrong (non-personal) path.
+  - step: 7
+    phase: post-deploy
+    action: Build + stage all affected artifacts, then deploy the four provisioned DuckLake functions (data-pipeline is stage-only / vacuous per rec-2164).
+    command: bin/venv-python -m scripts.build_lambda --profile agent_platform && bin/venv-python -m scripts.build_lambda --deploy --ducklake-only --profile agent_platform
+    expected: all affected artifacts built + uploaded to S3; writer, reader, maintenance, catalog-dr function code updated; exit 0. data-pipeline has no provisioned function, so its code-deploy is intentionally not attempted.
+    fix_if: build/upload error -- check S3 bucket + creds; a DuckLake function-deploy error -- check function names; a ResourceNotFoundException for data-pipeline is the EXPECTED vacuous outcome (rec-2164), not a failure.
+  - step: 8
+    phase: post-deploy
+    action: Run the non-destructive column migration SERVER-SIDE (maintenance Lambda action against production ducklake_ops) and assert the new column is present on BOTH the history and current tables.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --migrate-ops-recs-columns --profile agent_platform
+    expected: the maintenance action's reconcile_table_columns adds context_v2_json where absent (idempotent no-op if present) and the response reports it present on ops_recommendations_history AND ops_recommendations_current; exit 0; the 905 existing rows are untouched.
+    fix_if: column absent on either table after the run -- introspection or ALTER path wrong; the action resolved meta_schema to the smoke catalog -- it must require explicit production params (data_path + meta_schema=ducklake_ops); any DROP/recreate observed -- abort (must be non-destructive, Decision 84/81).
+  - step: 9
+    phase: post-deploy
+    action: Prove the redeployed writer/reader operate at production scope with no schema regression on the existing columns.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform
+    expected: write_ops via writer then read via reader succeeds at production scope; exit 0. (This proves no schema regression / existing-column roundtrip; the new-column persistence proof is step 10.)
+    fix_if: 409/absent-update loud-fail or a schema-gate rejection -- the writer/reader redeploy (step 7) did not take; re-run step 7.
+  - step: 10
+    phase: post-deploy
+    action: End-to-end roundtrip of a real context_v2_json value through the production closed boundary (self-cleaning, Decision 70).
+    command: RUN_LIVE_DUCKLAKE=1 bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaSchemaEnforcement::test_context_v2_roundtrip_live -q
+    expected: Test passes -- files a test ci_rca rec with a valid context_v2_json, reads it back via the reader asserting context_v2_json persisted AND the legacy context summary present, then closes the rec via update_rec.
+    fix_if: context_v2_json is None on read -- writer projection or the step-8 migration did not land; rec not closeable -- update_rec lifecycle path broken.
+  - step: 11
+    phase: post-deploy
+    action: Full presubmit (local mirror of CI) is green before push.
+    command: bin/venv-python -m scripts.validate
+    expected: All checks pass (lint, format, tests, prompts); exit 0.
+    fix_if: Any check fails -- fix before push; remote CI (Decision 83 required checks) is authoritative.
+constraints:
+  - >-
+    WARN MODE ONLY: this plan introduces no hard rejections. file_rec(source=ci_rca) MUST NOT raise on
+    structural deficiency while CI_RCA_STRICT_MODE=warn. The strict branch may exist but stays inert
+    (flag default warn). Decision 55 loud-fail applies to write transport, not to warn-mode schema-depth warnings.
+  - >-
+    DEPLOY ORDERING (deploy-window edge): a context_v2_json-bearing write would be schema-gate-rejected
+    (writer 422 -> ValueError at ops_data_portal.py:209-210) by the CURRENTLY-deployed writer until step 7
+    redeploys it and step 8 adds the live column. The WARN-MODE no-raise guarantee therefore holds only
+    AFTER the post-deploy steps land. The window is benign: no production caller emits context_v2_json
+    until the Phase-3 agent prompt rewrite (PLAN-ci-rca-prompt-rewrite); the only context_v2_json write
+    before then is the step-10 live roundtrip, which runs post-deploy by construction.
+  - >-
+    DEFERRED out of scope (named follow-on atomic plans -- do NOT implement here): citation-existence
+    lookup (INTENT Section 4 check 5), evidence-bundle SHA-256 S3 verification (check 7), cross-check
+    enforcement of earliest_viable_gate/actual_gate (checks 3-4, require the Phase-2 evidence script),
+    Section 7 observability emission (ops_ci_rca_telemetry). prior_art_citation and evidence_bundle_ref
+    are validated for SHAPE only in this slice.
+  - >-
+    context_v2_json is ADDITIVE: a nullable sibling column. The legacy context column is preserved (it
+    receives a one-paragraph human summary) so existing free-text readers (/plan preflight, audit
+    dashboards) keep working. Do NOT overload or drop context (INTENT Section 1).
+  - >-
+    DuckLake is the sole backend (Decision 84): the column lands via field_semantics.yaml + the writer
+    schema gate + a guarded idempotent ALTER ADD COLUMN -- NOT Iceberg ALTER TABLE, NOT Athena views.
+    Reads transit ducklake_reader named verbs; no caller SQL (Decision 81 cl.7).
+  - >-
+    terraform/personal/ only (Decision 77): the flag tf must land under terraform/personal/ so
+    push-to-main auto-applies behind terraform_apply_guard.py. No IAM/destroy/trust changes.
+  - >-
+    Per-Lambda deploy gating (Decision 79 / CD.16): FIVE active artifacts are affected -- the four provisioned
+    DuckLake functions get real build + deploy + smoke-test (--ducklake-only); data-pipeline (affected only via
+    the docs/ROADMAP-PLATFORM.yaml asset) is unprovisioned (rec-2164) and gets a VACUOUS/deferred deploy (rebuilt
+    + staged only, no deploy command). ops-compaction is NOT affected.
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable V3 failure, stop and RCA.
+  - IMPLEMENTATION type only (CD.17 / Decision 67 STRATEGIC-plan freeze).
+context:
+  - >-
+    T1.13 is in_progress. The methodology contract (docs/INTENT-ci-rca-methodology.md) is ratified.
+    PLAN-ci-rca-workflow-correctness landed 2026-06-01 (workflow trigger/filing plumbing -- explicitly
+    NOT a depth plan). This is the FIRST of six depth follow-on plans (Phase 1). Successors:
+    PLAN-ci-rca-evidence-script (P2), PLAN-ci-rca-prompt-rewrite (P3), PLAN-ci-rca-evidence-dispute,
+    PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre (P5).
+  - >-
+    DuckLake retarget: INTENT Sections 1/3/7 describe an Iceberg ALTER TABLE, Athena _current views, and
+    an Athena ops_ci_rca_telemetry table. These are STALE post-Decision 84 (DuckLake-on-Neon sole backend,
+    2026-06-11). This plan implements against the CURRENT DuckLake closed reader/writer boundary; the INTENT
+    doc gets a stale-pointer annotation only (Decision 86: annotation, not new rationale).
+  - >-
+    Decision-scout flags (FLAGS_FOUND) handled: Decision 77 [WARN] -- tf lands under terraform/personal/
+    (adopted, the top-level path would not auto-apply). Decision 66 [NOTE] -- the rec_write_guidance.py
+    code path is justified because the ci_rca schema is a nested object, not a flat ops.yaml column entry
+    (one-line code comment records the divergence from the Wave-2 auto-population pattern).
+  - >-
+    Decisions cited: Decision 84 (DuckLake sole backend), Decision 81 (DuckLake runtime / schema gate /
+    closed boundary / Type-1 current), Decision 72 line-635 instance (RCA-as-Plan-Source; a duplicate
+    Decision 72 sits near line 895 -- this plan means the line-635 instance), Decision 66 (Precision
+    Context Injection), Decision 60 (two-tier validation vocabulary pre/presubmit/CI), Decision 79 + CD.16
+    (per-Lambda deploy gating), Decision 48 (V3 verification tier), Decision 67 / CD.17 (IMPLEMENTATION-type
+    compliance), Decision 55 (loud-fail / no rescue loops), Decision 86 (intent-doc-freeze -> annotation
+    only), Decision 70 (lifecycle close for the live test rec).
+  - >-
+    ci-rca HARD-BLOCK deferral (Related-Work check): rec-2213 (ci_rca, Critical -- "Sandbox apply workflow
+    missing TF_VAR_alerts_email wiring") is OPEN. This plan does NOT satisfy same-file / same-Decision /
+    same-failure-category -- rec-2213 is a terraform-sandbox-apply wiring failure; this plan is portal schema
+    enforcement. DEFERRAL RATIONALE: per explicit human direction (2026-06-15 planning session), rec-2213 is
+    owned by another in-flight agent and is excluded from this scope.
+  - >-
+    Affected active Lambda artifacts (compute_affected_artifacts over the full scope, verified post-rebase):
+    FIVE -- ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr (provisioned; real
+    deploy) + data-pipeline (unprovisioned per rec-2164; vacuous deploy). Mechanism: ducklake_runtime.py pulls
+    in the four DuckLake functions; the maintenance handler.py edit pulls in ONLY ducklake_maintenance;
+    data-pipeline is affected SOLELY because it lists docs/ROADMAP-PLATFORM.yaml as a manifest asset.
+    ops-compaction is NOT affected (data-pipeline + ops-compaction excludes: the DuckLake runtime files for the
+    262 MB ceiling, and ops-compaction does not list the ROADMAP asset).
+  - >-
+    The flag reader mirrors the portal's existing module-level cached yaml.safe_load (scripts/ops_data_portal.py:288):
+    read once at process start, no hot-reload, default warn when key/file absent.
+  - >-
+    T1.5 (ops_decisions graduation) is not_started, so the log_rec agent_sdk verb does not exist; schema
+    enforcement targets file_rec() (the current portal handler). The INTENT soft-coupling note (migrate to
+    log_rec if T1.5 lands first) is moot for now.
+  - >-
+    Branch was rebased onto origin/main during planning after PR #150 (679fc32, production ops_* merge cadence)
+    landed mid-session -- it added an 11-line T2.18 block to docs/ROADMAP-PLATFORM.yaml. The /implement agent
+    MUST git fetch + rebase before the ROADMAP T1.13 edit so it does not clobber that block.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/confident-hopper-lq0gck)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md adjudicated via the decision-scout gate (84/81/72/66/60/79/48/77/86/70/55 cited)
+  - docs/INTENT-ci-rca-methodology.md read in full (the methodology contract)
+  - All nine files in scope located and readable
+  - compute_affected_artifacts run; five affected active artifacts confirmed (four provisioned DuckLake + data-pipeline vacuous per rec-2164; ops-compaction NOT affected)
+  - AWS profile agent_platform reachable (aws sts get-caller-identity) for portal writes and Lambda deploy
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create config/feature_flags.yaml with CI_RCA_STRICT_MODE: warn plus a short comment naming the
+    accepted values (warn|strict). This is the canonical flag source.
+  - >-
+    Add get_ci_rca_strict_mode() to scripts/ops_data_portal.py: module-level cached yaml.safe_load of
+    config/feature_flags.yaml (mirror the _capabilities_cache pattern at line 288); read once at process
+    start (no hot-reload); default 'warn' when the key or file is absent; reject values outside {warn, strict}.
+  - >-
+    Add the CiRcaContext Pydantic model to scripts/ops_data_portal.py per INTENT Section 1: schema_version
+    (int, ==1); proximate_cause (100-600); why_chain (list 3-7, per-entry 40-250, final entry must satisfy
+    BOTH the systemic-keyword set {gate,tier,policy,contract,gap,missing,absent,placement,scope,invariant,enforcement}
+    AND a file:line citation matching [\w./-]+\.(py|yaml|tf|md|sh):\d+); why_chain_terminus_override (optional);
+    detection_gap{earliest_viable_gate, actual_gate_that_caught_it in {pre,presubmit,CI}; gap_explanation 120-600
+    with a file:line token}; recurrence_class in {novel,instance_of_known_pattern,regression}; prior_art_citation
+    (SHAPE-validated only -- existence/relevance lookup DEFERRED); corrective_action (100-600); preventive_action
+    (100-800); evidence_bundle_ref{sha256 pattern, s3_uri pattern, upload_status} (SHAPE-validated only -- S3
+    existence DEFERRED).
+  - >-
+    Extend scripts/executor/rec_write_guidance.py: ADD an optional source parameter to get_rec_write_guidance
+    (today the signature is (ops_yaml_path, registry_path), auto-populated from ops.yaml) so
+    get_rec_write_guidance('ci_rca') returns the CiRcaContext field semantics as authoritative write-time
+    guidance (Decision 66). A one-line comment justifies the dedicated code path (nested object, not a flat
+    ops.yaml column entry -- intentional divergence from the Wave-2 auto-population pattern).
+  - >-
+    Add the warn-mode validation branch to file_rec() for source=ci_rca: accept a new context_v2_json argument.
+    If provided, run CiRcaContext.model_validate + the why_chain two-layer terminus check + per-field bounds.
+    On any structural deficiency: when get_ci_rca_strict_mode()=='warn', log a structured deficiency warning
+    (logger.warning naming the failing checks) and DO NOT raise; when 'strict', raise (branch present but inert
+    this slice). When context_v2_json is absent (legacy free-text), log a one-line deprecation warning and pass.
+    Persist context_v2_json (when present) into the merged record so the writer projection stores it, and write
+    a one-paragraph (>=80-char) human summary into the legacy context column to satisfy _validate_context_length.
+  - >-
+    Add context_v2_json {role: input, sql_type: VARCHAR, nullable: true} to BOTH the history and current column
+    blocks of ops_recommendations in config/lambda/ducklake/field_semantics.yaml. Do NOT touch
+    src/common/ducklake_scd2_schema.py if avoidable (keeps the change config-driven).
+  - >-
+    Add reconcile_table_columns(con, *, table) to src/common/ducklake_runtime.py: a pure helper that
+    introspects the physical columns of the history+current tables (DuckDB PRAGMA table_info /
+    information_schema over the attached catalog) and runs ALTER TABLE <t> ADD COLUMN <name> <sql_type> for
+    each spec column that is absent. Idempotency comes from the introspection guard, NOT a SQL IF NOT EXISTS
+    clause (no ADD COLUMN precedent here; the line 335-336 ALTERs are SET PARTITIONED BY). Never DROP.
+  - >-
+    Add action_reconcile_columns to src/lambdas/ducklake_maintenance/handler.py, mirroring action_restore_drill
+    / action_catalog_reinit: require EXPLICIT data_path + meta_schema event params (refuse no-arg invokes so it
+    can never hit the smoke catalog), open a production ducklake_ops connection, call
+    reconcile_table_columns(con, table="ops_recommendations"), and return the per-table column presence. This
+    is the production-reachable, Lambda-mediated migration surface (CC-web has no Neon 5432 egress, so the DDL
+    must run server-side).
+  - >-
+    Add a --migrate-ops-recs-columns flag to scripts/ducklake_neon_smoke_test.py that SigV4-invokes
+    _function_url("maintenance") with {"action": "reconcile_columns", "data_path": <prod>, "meta_schema":
+    "ducklake_ops", "table": "ops_recommendations"} (same pattern as the existing maintenance-action flags),
+    then asserts the response reports context_v2_json present on BOTH history and current. One-time migration
+    trigger + verification.
+  - >-
+    Create terraform/personal/feature_flags.tf: provision CI_RCA_STRICT_MODE as an SSM String parameter whose
+    value is sourced from config/feature_flags.yaml via try()-wrapped file()+yamldecode (AGENTS.md optional-artifact
+    rule) so the YAML stays canonical. No IAM/destroy/trust changes (the fail-closed apply guard must PASS).
+  - >-
+    Add tests in tests/test_ops_data_portal.py under a TestCiRcaSchemaEnforcement class (stable class-path
+    selector, avoiding brittle -k per tests/CLAUDE.md): valid context_v2_json; deficient why_chain (warns, does
+    not raise); legacy free-text (deprecation warning, passes); flag default; guidance schema; a
+    reconcile_table_columns re-run-safety test (second call against a temp/in-memory DuckDB table is a no-op,
+    asserting introspection-based idempotency); plus one env-gated test_context_v2_roundtrip_live (skipped unless
+    RUN_LIVE_DUCKLAKE=1) that files -> reads via reader -> asserts persisted -> closes via update_rec.
+  - >-
+    Annotate docs/INTENT-ci-rca-methodology.md (stale-pointer only, Decision 86): mark Sections 1/3/7
+    Iceberg-ALTER / Athena-_current / Athena-telemetry wording as superseded by the DuckLake closed boundary
+    (Decision 84/81), and record that this plan landed the Phase-1 core slice (flag + schema + guidance +
+    warn-mode validation + context_v2_json column) and DEFERRED citation-existence lookup, evidence SHA-256
+    verification, cross-check enforcement, and Section 7 observability emission to named follow-on plans.
+  - >-
+    Update docs/ROADMAP-PLATFORM.yaml T1.13: append to progress_note (Phase-1 core slice landing + deferred
+    checks) AND correct the stale files_in_scope entry terraform/feature_flags.tf to
+    terraform/personal/feature_flags.tf (it auto-applies only under terraform/personal/ per Decision 77).
+  - >-
+    Execute the Verification Plan: run each step; loop until pass; build+deploy the four active DuckLake
+    artifacts; run the migration; roundtrip via ducklake_neon_smoke_test --ops-read-your-write and the live
+    pytest. On unrecoverable V3 failure, stop and RCA (Decision 55) -- do not rescue-loop.
+  - "Report: what landed, deploy results, smoke/roundtrip output, and the explicit deferred-checks list."
+work_areas: []
+rollback: >-
+  The flag stays/returns to warn (default), so no strict rejections fire. Revert config/feature_flags.yaml
+  and the scripts changes via git. context_v2_json is nullable/additive -- leave it in place (harmless);
+  never DROP (data-preserving). If a Lambda deploy regresses, redeploy the previous artifact zips
+  (build_lambda --ducklake-only at the prior commit). Removing terraform/personal/feature_flags.tf reverts
+  the SSM param (no dependents in this slice).

@@ -1,0 +1,301 @@
+schema_version: 1
+slug: "orient-workflow"
+intent: >-
+  Extract roadmap orientation, prioritization, ci-rca triage, and parallel-work
+  partitioning out of /plan into a new read-only /orient workflow, completing the
+  Decision 42 three-tier control plane so the sole operator can supervise many
+  simultaneous sessions and /plan can specialize in per-item plan formalization.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-orient-workflow.yaml
+phase: >-
+  Agent-workflow / instruction-architecture tooling (Layer 3 command + Layer 4
+  skill). Extends Decision 42 (Three-Tier Workflow Architecture); relocates the
+  orientation surface created by the complete items T-1.2 and T-1.3 and consumes
+  T-1.4 preflight platform_roadmap state. Not bound to a single platform
+  tier_item -- user-explicit ad-hoc tooling per the planning skill
+  user_explicit_out_of_scope soft-warn exception category. Product phase: N/A.
+scope:
+  - file: .claude/skills/orient/SKILL.md
+    action: Create
+    purpose: >-
+      New /orient methodology skill (Layer 4). Holds the read-only contract, the
+      deliverable shape (status digest of in_progress/eligible work, ci-rca
+      triage, ranked what-to-work-on, and up to N disjoint /plan prompts with an
+      overlap matrix plus keystone-first sequencing), the partition / overlap /
+      sequencing method, the status-trusted-never-inferred dispatch rule, and the
+      read-from-preflight-cache constraint. References the planning skill Tier
+      Item Freshness Gate for its broad sweep rather than duplicating it.
+  - file: .claude/commands/orient.md
+    action: Create
+    purpose: >-
+      New /orient slash command (Layer 3). Thin orchestration: run preflight, load
+      the platform roadmap YAML plus recent main commits plus ci-rca state from
+      the preflight cache, invoke the orient skill, emit the chat-only deliverable.
+      Writes nothing. Mirrors the house style of plan.md / implement.md.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Relocate the broad next_eligible/strategic browsing and the ci-rca
+      HARD-BLOCK / SOFT-PROMPT / HARD-ALERT triage narrative to /orient (leave a
+      one-line pointer). KEEP the Tier Item Freshness Gate as the single
+      authoritative definition, the Related-Work Check (block-respect), the
+      decision-scout gate, and the critique gates. Note that /orient references
+      the freshness section.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Slim Step 2 orientation surface to a pointer (run /orient first to choose
+      what to work on; /plan assumes a chosen item). Retain the thin ci-rca
+      block-respect and the per-item Tier Item Freshness Gate reference.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Register /orient in the Skills and slash commands section; frame
+      plan/orient/implement as the Decision 42 three-tier split.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Add /orient to the workflow file-router table (the interactive-workflow
+      rows near lines 148-154).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    .claude/commands/orient.md and .claude/skills/orient/SKILL.md exist; /orient
+    is a read-only workflow whose only deliverable is a chat reply (no file,
+    roadmap, or recommendation writes) and whose inputs are the preflight cache
+    plus the roadmap YAML (status read as-authored, never inferred from commits).
+  - >-
+    The /orient deliverable spec includes all four elements: in_progress/eligible
+    status digest, ci-rca triage, ranked what-to-work-on, and up to N
+    non-overlapping /plan prompts with an overlap matrix and keystone-first
+    sequencing.
+  - >-
+    /plan no longer performs broad orientation/prioritization or ci-rca triage
+    (those sections are relocated in plan.md and planning SKILL.md), while
+    RETAINING the per-item Tier Item Freshness Gate, the ci-rca block-respect
+    (Related-Work Check), the decision-scout gate, and the critique gates.
+  - >-
+    The Tier Item Freshness checks remain defined once in planning SKILL.md;
+    orient/SKILL.md references that section and does not re-author an
+    authoritative copy.
+  - >-
+    /orient is registered in AGENTS.md Skills and slash commands and in the
+    docs/PROJECT_CONTEXT.md workflow file-router table.
+  - >-
+    bin/venv-python -m scripts.validate --pre passes (lint/format/prompt checks
+    green; no compliance breakage from the slimming).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the orient skill encodes its core contract: read-only, deliverable
+      overlap-matrix, and keystone sequencing.
+    command: 'rg -niq "read-only" .claude/skills/orient/SKILL.md && rg -niq "overlap" .claude/skills/orient/SKILL.md && rg -niq "keystone" .claude/skills/orient/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- the skill states it is read-only and specifies the overlap
+      matrix and keystone-first sequencing of the /plan prompts.
+    fix_if: >-
+      A term is missing, meaning the skill omits a load-bearing behavior; add the
+      missing read-only statement, overlap matrix, or keystone-sequencing rule.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the status-trusted-never-inferred dispatch rule (the T2.20 lesson)
+      is encoded.
+    command: 'rg -niq "never infer|not infer|trust" .claude/skills/orient/SKILL.md && rg -niq "label|status" .claude/skills/orient/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- the skill instructs that roadmap status is read as-authored and
+      activity-vs-label is surfaced as dispatch context only, never a correctness
+      verdict.
+    fix_if: >-
+      Missing; add the activity-vs-label rule so /orient never flips or infers a
+      status from commit activity.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the read-from-preflight-cache rule (Decision 88 egress budget) is
+      encoded.
+    command: 'rg -niq "cache|preflight" .claude/skills/orient/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- /orient reads preflight cached signals and does not trigger a
+      fresh warehouse reader fan-out.
+    fix_if: >-
+      Missing; add the cache-read constraint citing Decision 88 / Decision 84.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the freshness checks are referenced once, not duplicated -- orient
+      points at the planning skill.
+    command: 'rg -niq "Tier Item Freshness" .claude/skills/orient/SKILL.md && rg -niq "planning" .claude/skills/orient/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- orient/SKILL.md names the Tier Item Freshness Gate and defers
+      to the planning skill as its definition.
+    fix_if: >-
+      Orient re-authors the four checks; replace the copy with a reference to
+      planning SKILL.md so there is one source.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm /plan is slimmed but its commitment-time guards are retained.
+    command: 'rg -nq "/orient" .claude/commands/plan.md && rg -niq "Freshness Gate" .claude/skills/planning/SKILL.md && rg -niq "Related-Work Check" .claude/skills/planning/SKILL.md && rg -niq "decision.scout" .claude/skills/planning/SKILL.md && rg -niq "Critique Gate" .claude/skills/planning/SKILL.md && echo OK'
+    expected: >-
+      Prints OK -- /plan points at /orient and still carries the Freshness Gate,
+      Related-Work Check, decision-scout gate, and critique gate.
+    fix_if: >-
+      The /orient pointer is missing (add it) or a retained guard is missing (the
+      slimming over-removed; restore it).
+  - step: 6
+    phase: pre-deploy
+    action: Confirm /orient is registered in both registries.
+    command: 'rg -nq "/orient" AGENTS.md && rg -niq "orient" docs/PROJECT_CONTEXT.md && echo OK'
+    expected: >-
+      Prints OK -- /orient appears in AGENTS.md Skills and slash commands and in
+      the PROJECT_CONTEXT.md workflow table.
+    fix_if: >-
+      Missing; add the /orient entry to AGENTS.md and the PROJECT_CONTEXT.md
+      workflow file-router table.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm no legacy mirror was created (Decision 76; .claude is canonical, no
+      sync obligation).
+    command: 'test ! -e .agents/skills/orient && test ! -e .github/prompts/orient.prompt.md && echo OK'
+    expected: >-
+      Prints OK -- no .agents/ or .github/prompts/ mirror for /orient.
+    fix_if: >-
+      A mirror exists; delete it. Decision 76 supersedes the Decision 58 mirror
+      obligation.
+  - step: 8
+    phase: pre-deploy
+    action: Run the advisory presubmit to confirm no lint/format/prompt breakage.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; lint, format, and prompt-compliance checks pass.
+    fix_if: >-
+      Failure; fix the reported markdown/lint issue and re-run. Do not add a new
+      check to ci.yml without adding it to validate.py first.
+constraints:
+  - >-
+    Instruction-layer only. Do NOT edit .agents/** or .github/prompts/** (legacy
+    and demoted per Decision 76 and T0.14 Phase 3; deep-frozen per AGENTS.md). No
+    .agents/ or .github/prompts/ mirror for /orient.
+  - >-
+    /orient is strictly read-only: no roadmap edits, no recommendation or decision
+    writes (Single Portal Invariant untouched), no commits as part of the workflow
+    run. Its only output is the chat deliverable.
+  - >-
+    /orient reads platform roadmap status AS AUTHORED and must never infer status
+    from commit activity (the T2.20 lesson: a merged-but-unverified item is
+    correctly not_started). Activity-vs-label is surfaced as neutral dispatch
+    context, never a correctness verdict. Status flips remain the verification-
+    earned closing step owned by /plan and implement.
+  - >-
+    /orient reads preflight cached signals and must not trigger a fresh warehouse
+    reader fan-out (Decision 88 egress budget; Decision 84 closed boundary
+    respected via preflight).
+  - >-
+    The Tier Item Freshness Gate stays defined once in the planning skill; /orient
+    references it. Do not duplicate the four checks (drift by design).
+  - >-
+    /plan retains its commitment-time guards: the per-item Tier Item Freshness
+    Gate, the ci-rca block-respect (Related-Work Check), the decision-scout gate,
+    and the critique gates. Slimming removes only the BROAD orientation,
+    prioritization, and triage surface.
+  - >-
+    Platform-roadmap-only for v1; product-roadmap orientation is deferred.
+  - >-
+    Out-of-scope content is not fixed inline (e.g. the stale .md plan-path
+    reference in PROJECT_CONTEXT.md); file a recommendation if warranted, per the
+    AGENTS.md scope rule.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Three open ci-rca recs at planning time, deferral logged (planning skill
+    Related-Work Check): rec-2259 (Critical, github_ci_apply IAM admin apply,
+    sandbox CD), rec-2235 (Critical, github_ci_apply CloudWatch+SNS refresh-reads),
+    rec-2228 (Low, T1.13 VP10 live test). This plan is instruction-layer .claude/
+    workflow tooling and shares no file, Decision Record, or failure category with
+    any of them; the HARD BLOCK is deferred with this rationale.
+  - >-
+    Decision 42 (Three-Tier Workflow Architecture) is the backbone -- each agent
+    has one job, tuned independently. /orient is the orientation tier between
+    preflight and /plan; this plan extends, does not overturn, Decision 42.
+  - >-
+    Decision 76 -- .claude/ is the canonical interactive-workflow layer; the orient
+    command and skill live there; Decision 58 cross-harness mirror obligation is
+    superseded, so no .agents/ mirror.
+  - >-
+    Decision 73 -- the ci-rca HARD BLOCK lives in preflight and /plan must respect
+    it; /plan retains the block-respect at commitment time while the broad triage
+    relocates to /orient.
+  - >-
+    Decision 72 (RCA-as-Plan-Source) -- the open-ci-rca surfacing obligation is
+    RELOCATED to /orient, not dropped; /plan keeps the thin block-respect.
+  - >-
+    Decision 86 -- /orient adds NO standing prose doc (chat-only output;
+    orient/SKILL.md is a Layer-4 methodology file, not docs/ prose), so the
+    intent-doc-freeze guard is unaffected.
+  - >-
+    Decision 59 (prefer deterministic) -- /orient consumes the deterministic
+    preflight signals and adds only the judgment overlay (partition and sequence);
+    it never recomputes status.
+  - >-
+    Tier-item lineage -- relocates the orientation surface created by T-1.2 and
+    T-1.3 (both complete) and consumes T-1.4 preflight platform_roadmap state; not
+    bound to a new tier_item (user-explicit ad-hoc tooling). A retro tier_item or a
+    Decision 42 amendment to record the third tier is a follow-up, not in scope.
+  - >-
+    prompt_compliance.py only globs legacy .github/prompts and checks a fixed
+    invariant-name set (preflight_run, branch_creation, critique_gate,
+    retro_lite_per_step, checkpoint_per_step); the slimming removes none of those
+    and /orient needs no entry, so the file stays out of scope and the plan
+    remains V1.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md read (esp. Decisions 42, 76, 73, 72, 86, 59, 88)
+  - All six files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirm the /plan slimming preserves the retained guards (Freshness Gate,
+    Related-Work Check, decision-scout gate, critique gates)
+execution_steps:
+  - >-
+    Create .claude/skills/orient/SKILL.md -- the /orient methodology: read-only
+    contract; inputs (preflight cache plus roadmap YAML plus git log); the
+    status-trusted-never-inferred rule; the deliverable shape (status digest,
+    ci-rca triage, ranked what-to-work-on, up to N disjoint /plan prompts with an
+    overlap matrix and keystone sequencing); the partition / overlap / sequencing
+    method; and a REFERENCE to the planning skill Tier Item Freshness Gate for the
+    broad sweep (no duplication). Cite Decisions 42/59/76/86/88.
+  - >-
+    Create .claude/commands/orient.md -- the thin Layer-3 command orchestrating the
+    workflow (run preflight; load roadmap, recent commits, and ci-rca from the
+    preflight cache; invoke the orient skill; emit the chat deliverable; write
+    nothing). Mirror the house style of plan.md / implement.md.
+  - >-
+    Modify .claude/skills/planning/SKILL.md -- relocate the broad next_eligible /
+    strategic browsing and the ci-rca triage narrative to /orient (leave a one-line
+    pointer); KEEP the Tier Item Freshness Gate as the single authoritative
+    definition, the Related-Work Check, the decision-scout gate, and the critique
+    gates; note that /orient references the freshness section.
+  - >-
+    Modify .claude/commands/plan.md -- slim Step 2 orientation surface to a pointer
+    (run /orient first to choose what to work on; /plan assumes a chosen item);
+    retain the thin ci-rca block-respect and the per-item freshness gate reference.
+  - >-
+    Modify AGENTS.md -- add /orient to Skills and slash commands; frame
+    plan/orient/implement as the Decision 42 three-tier split.
+  - >-
+    Modify docs/PROJECT_CONTEXT.md -- add /orient to the workflow file-router
+    table.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass. V1, so all
+    steps are pre-deploy.
+  - 'Report: what changed across the six files and the verification results.'
+work_areas: []
+rollback: >-
+  Instruction-layer only; revert the six-file commit. /orient is additive (new
+  command plus skill) and the /plan slimming is a content relocation -- reverting
+  restores the prior /plan surface with no data or infrastructure impact.

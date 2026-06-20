@@ -15,7 +15,7 @@ from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.telemetry import emit_process_event
 from scripts.ops_writer import DATABASE, OpsWriter
 
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class CausalChainVerifier(Verifier):
         "scripts/executor/postflight.py",
         "logs/.telemetry-active-session.json",
     ]
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # clock + uuid4 + network; deregistered
 
     @property
     def tier(self) -> VerifierTier:

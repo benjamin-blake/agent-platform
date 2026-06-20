@@ -1,0 +1,120 @@
+schema_version: 1
+slug: "contracts-schema-and-loader"
+intent: >-
+  Land the canonical Pydantic schema + $ref resolver for the pre-codegen contract ritual
+  (scripts/contracts.py), the enforcement mechanism that makes load-bearing field/verb/invariant
+  semantics a single machine-checkable source of truth instead of four drifting copies -- a
+  direct step toward the self-improving North Star by making contract drift catchable rather
+  than silent.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-contracts-schema-and-loader.yaml
+phase: >-
+  Platform tier T-1.12 subset (d) -- first of four named follow-on IMPLEMENTATION plans
+  (atomic_plans: PLAN-contracts-schema-and-loader). Lands CD.25 enforcement clause (b). Does
+  NOT advance T-1.12 to complete; subsets (e) CI drift gate, (f) preflight re-ratification hook,
+  and (g) implement/SKILL.md decomposition_hints inheritance remain open follow-ons.
+scope:
+  - file: scripts/contracts_schema.py
+    action: Create
+    purpose: >-
+      Pydantic v2 models + canonical enums for the ritual contract schema (Class A/B/C). Defines
+      ContractStatus, ChangeClass, ContractClass enums; AmendmentLogEntry, FieldSpec,
+      ContractGovernance, ContractMeta, ContractDocument models; all ConfigDict(extra="forbid").
+      Split out from contracts.py to stay under the 500-SLOC gate (Decision 43).
+  - file: scripts/contracts.py
+    action: Create
+    purpose: >-
+      Public loader API + single-hop $ref resolver. load_contract(path) / load_all_contracts(dir)
+      parse+validate YAML and raise ContractValidationError on malformed input; resolve_refs()
+      enforces Invariant 5/6 ($ref uniqueness, no chained Class-C refs, additive-only overrides,
+      dangling-target detection); validate_status_transition(old, new) encodes Invariant 6.
+  - file: tests/test_contracts_schema.py
+    action: Create
+    purpose: >-
+      Unit tests for the schema module -- valid Class A/B/C contracts accepted; malformed inputs
+      (bad status, bad change_class, unknown field, missing contract_version, wrong class shape)
+      rejected. 100% per-file coverage. Hermetic (tmp_path fixtures; no committed fixture files,
+      no network -- compatible with pytest-socket / pytest-randomly per T3.6).
+  - file: tests/test_contracts.py
+    action: Create
+    purpose: >-
+      Unit tests for the loader/resolver -- load_contract raises on malformed YAML; resolve_refs
+      detects duplicate inline+$ref, chained Class-C refs, dangling targets, loosening overrides;
+      validate_status_transition accepts legal transitions and rejects illegal ones. 100%
+      per-file coverage; hermetic tmp_path fixtures.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "scripts/contracts_schema.py and scripts/contracts.py both exist and import without side effects (no exceptions at import time per the import-safety invariant)."
+  - "contracts_schema.py defines ContractStatus (exactly: draft, ratified, provisional_v0, deprecated, superseded), ChangeClass (exactly the closed 8-value vocabulary: field_add, not_null_tighten, type_widen, join_add, prose_improvement, governance_note_add, accepted_values_narrow, accepted_values_extend), and ContractClass (A, B, C); every Pydantic model sets ConfigDict(extra=\"forbid\")."
+  - "load_contract(path) parses and schema-validates a contract YAML and raises a typed ContractValidationError on malformed input (unknown field, missing contract_version, status/change_class outside the enum, wrong class shape, non-mapping YAML)."
+  - "resolve_refs() resolves docs/contracts/{name}.yaml#/contract/fields/{field} single-hop references and raises ContractValidationError on: (a) a field carrying both $ref and an inline definition, (b) a $ref whose target is another $ref (chain depth > 1 / non-leaf Class-C rule), (c) a $ref target file or pointer that does not exist, (d) a dq_intent_local/governance_notes_local override that loosens rather than tightens the referenced field."
+  - "validate_status_transition(old, new) returns/raises per Invariant 6: ratified->deprecated allowed; deprecated->* forbidden BY DEFAULT (the ceremonial deprecated->ratified revival path at contract_version N+1 per INTENT line 560 is intentionally NOT implemented here -- the helper must encode default-forbidden, not permanent terminality); unknown status values rejected."
+  - "Both new source modules are each < 500 non-blank SLOC (Decision 43) -- validate_sloc_limits passes with no waiver."
+  - "tests/test_contracts_schema.py and tests/test_contracts.py pass at 100% per-file coverage for their corresponding source modules; full `bin/venv-python -m scripts.validate` exits 0."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Valid Class A/B/C contracts load through real Pydantic validation and a $ref resolves
+      end-to-end against a real on-disk (tmp_path) target contract.
+    command: "bin/venv-python -m pytest tests/test_contracts_schema.py::TestValidContracts tests/test_contracts.py::TestRefResolver -q"
+    expected: "All tests pass; a Class A contract with a $ref field resolves to the Class C target's field definition with the local override layered on top."
+    fix_if: "Resolver returns the unresolved $ref dict, drops the local override, or the model rejects a well-formed contract -- inspect the FieldSpec/ContractDocument shape against INTENT Parts 3C-3E."
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Malformed contracts are rejected (the subset-d exit criterion) -- one assertion per
+      rejection category.
+    command: "bin/venv-python -m pytest tests/test_contracts.py::TestRejectsMalformed tests/test_contracts_schema.py::TestRejectsMalformed -q"
+    expected: "Each malformed input (unknown field, missing contract_version, bad status, bad change_class, duplicate inline+$ref, chained Class-C ref, dangling $ref target, loosening override) raises ContractValidationError."
+    fix_if: "A malformed input is silently accepted -- the corresponding validator/resolver branch is missing or extra=\"forbid\" is absent on a model."
+  - step: 3
+    phase: pre-deploy
+    action: "Status state machine (Invariant 6) accepts legal transitions and rejects illegal ones."
+    command: "bin/venv-python -m pytest tests/test_contracts.py::TestStatusTransitions -q"
+    expected: "ratified->deprecated passes; deprecated->ratified (the default-forbidden path) and unknown-status inputs raise ContractValidationError. Assert the DEFAULT posture rejects -- do not encode deprecated as permanently un-revivable."
+    fix_if: "deprecated is treated as a normal mutable state, an unknown status is accepted, or the test encodes permanent terminality instead of default-forbidden -- correct the transition table in validate_status_transition."
+  - step: 4
+    phase: pre-deploy
+    action: "Full presubmit -- lint, format, SLOC gate, per-file coverage, import safety."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0; validate_sloc_limits reports both new modules under 500 SLOC; coverage checker reports 100% for both source modules."
+    fix_if: "SLOC gate trips (rebalance models between the two modules); coverage < 100% (add the missing test branch); ruff E501 at 127 (extract intermediate variables per the house gotcha)."
+constraints:
+  - "Python 3.12+, type hints required; ruff format at line length 127; no emojis; ASCII hyphens only (no em dashes)."
+  - "Pydantic v2 only (2.13.4 available), matching src/schemas/rec.py house style: ConfigDict(extra=\"forbid\"), field_validator, Annotated where useful."
+  - "Import safety: never raise at module import; defer all validation to explicit load_contract/resolve_refs calls (a contract directory that does not yet exist must not break import or pytest collection)."
+  - "Each source file < 500 non-blank SLOC (Decision 43, validate_sloc_limits). The contracts.py / contracts_schema.py split exists to honour this -- rebalance across the two if either approaches the cap rather than filing a waiver."
+  - "Hermetic tests (T3.6): write fixture YAMLs via tmp_path inside each test; no committed fixture files, no shared module-level state, no sockets (pytest-socket / pytest-randomly compatible)."
+  - "Scope discipline: do NOT touch scripts/validate.py, scripts/session_preflight.py, .claude/skills/implement/SKILL.md, or author any real docs/contracts/*.yaml contract -- those are subsets (e)/(f)/(g) and later Class-A authoring plans."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "T-1.12 is in_progress; subsets (a)(b)(c) landed via PLAN-cd25-platform-gap-sequencing. This plan lands subset (d) only and does NOT mark T-1.12 complete."
+  - "Authoritative design source: docs/INTENT-pre-codegen-contract-ratification.md -- Part 3C (Class A schema), 3D (Class B), 3E (Class C), Part 4 Invariants 1-6 (contract_version structural field, change_class 8-value vocabulary, $ref uniqueness, deprecated terminal state). The INTENT doc is a grandfathered read-only source, not authored here."
+  - "CD.25 state: pending, bootstrap_allowance: true. Enforcement clause (b) names this exact deliverable (scripts/contracts.py Pydantic schema + $ref resolver). Clause (c)'s six rejection categories are the CI drift gate = subset (e), out of scope. The loader supplies the mechanisms (b)-side categories rely on (malformed-YAML rejection, duplicate inline+$ref detection, dangling/chained $ref detection) plus the ChangeClass/ContractStatus enums and validate_status_transition() that subset (e)'s git-diff gate will call."
+  - "Decision 86 (no new standing prose-architecture docs): this plan creates .py + test modules, not a docs/ prose doc -- the intent-doc-freeze guard does not fire. Cite to confirm compliance."
+  - "Decision 84 precedent: ConfigDict(extra=\"forbid\") closed-schema discipline (the writer's un-bypassable schema chokepoint) is the model for rejecting unknown contract fields."
+  - "Decision 48: V2 tier is correct -- pure-Python scripts/ module, pytest unit tests, no Lambda/handler/Terraform/cross-service surface in scope. Unit tests ARE the end-to-end verification here because there is no external system; the tests exercise real YAML parsing + real Pydantic validation + real resolver logic (no mocks)."
+  - "No ritual-format contract YAML exists on disk yet: docs/contracts/read-engine.yaml uses the PRE-ritual free-form schema (top-level version:, not contract.contract_version:) and is NOT a Class A/B/C contract. load_all_contracts must therefore only validate files that declare a top-level `contract:` mapping with a `class:` field, and skip the rest. The first real Class A contract (ops_recommendations.yaml) is a later deliverable -- this plan is exercised entirely against tmp_path fixtures."
+  - "Subset-(e) handoff note (plan-critique advisory): the two-file split means the canonical ContractStatus / ChangeClass / ContractClass enums and the Pydantic models live in scripts/contracts_schema.py, while the loader/resolver public API (load_contract, load_all_contracts, resolve_refs, validate_status_transition, ContractValidationError) lives in scripts/contracts.py. INTENT Part 8 and ROADMAP T-1.12 name only the single file scripts/contracts.py; the split is additive and SLOC-driven (Decision 43). The subset-(e) CI drift gate must import enums/models from scripts/contracts_schema, not scripts/contracts."
+  - "Branch claude/platform-roadmap-priorities-wxvy8f is 0 commits behind / 0 ahead of origin/main at planning time; no Main Divergence Assessment overlap. Preflight ran in degraded warehouse-read mode (DuckLake cold-resume 502, non-fatal per Decision 60); no ci_rca recs open, no hard blocks."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/platform-roadmap-priorities-wxvy8f)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "CD.25 + T-1.12 read in docs/ROADMAP-PLATFORM.yaml; INTENT-pre-codegen-contract-ratification.md Parts 3C-3E + Part 4 read."
+  - "src/schemas/rec.py read for Pydantic v2 house style."
+  - "All files in scope are new (Create); paths confirmed absent."
+  - "Acceptance criteria understood and verifiable via the Verification Plan commands."
+execution_steps:
+  - "Create scripts/contracts_schema.py: define ContractClass(A/B/C), ContractStatus(draft/ratified/provisional_v0/deprecated/superseded), ChangeClass(8-value closed vocab) as str enums; AmendmentLogEntry (date, semantic_break: bool, change_class: ChangeClass, summary/migration_story), FieldSpec (type, iceberg_type, nullable, description, semantics, dq_intent, ref via alias '$ref', dq_intent_local, governance_notes_local, joins, amendment_log), ContractGovernance, ContractMeta (id, class_: ContractClass via alias 'class', contract_version: int, status: ContractStatus, ratified_at, description, projects_to, amendment_policy), and ContractDocument (contract: ContractMeta, fields/verbs/governance per class, previous_versions). All models ConfigDict(extra=\"forbid\"); add field_validator for class-conditional shape (Class A requires fields; Class B requires verbs; Class C is concept-shaped)."
+  - "Create scripts/contracts.py: ContractValidationError(Exception); load_contract(path) -> ContractDocument (yaml.safe_load, raise ContractValidationError wrapping yaml/Pydantic errors); load_all_contracts(dir) skipping files without a top-level contract.class mapping; resolve_refs(doc, contracts_dir) implementing single-hop resolution + Invariant 5/6 checks (duplicate inline+$ref, chain-depth>1 / non-leaf Class-C, dangling target, loosening-override detection); validate_status_transition(old, new) encoding Invariant 6. No work at import time."
+  - "Create tests/test_contracts_schema.py and tests/test_contracts.py with the test classes named in the Verification Plan (TestValidContracts, TestRejectsMalformed, TestRefResolver, TestStatusTransitions); use tmp_path to materialise fixture YAMLs; cover every branch to 100% per file."
+  - "Execute the Verification Plan -- run each step in order; loop until all pass. Rebalance models across the two modules if validate_sloc_limits trips."
+  - "Report: modules + tests created, each VP step's result, coverage and SLOC figures, and confirmation that T-1.12 remains in_progress (subset d only)."
+work_areas: []
+rollback: >-
+  All four files are new (no modifications to existing code). Rollback = delete the two source
+  modules and two test files; nothing else references them until subset (e) wires the loader into
+  validate.py. No data, infra, or deployed-artefact state is touched.

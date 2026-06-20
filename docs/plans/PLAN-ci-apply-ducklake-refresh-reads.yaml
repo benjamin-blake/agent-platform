@@ -1,0 +1,274 @@
+schema_version: 1
+slug: "ci-apply-ducklake-refresh-reads"
+intent: >-
+  Unblock the sandbox Terraform CD pipeline (the substrate that keeps platform infrastructure
+  converged and self-improving) by granting the github_ci_apply OIDC role the refresh-time reads
+  it needs for the DuckLake resource family, then clearing the red convergence latch that is
+  refusing all push-to-main applies.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-apply-ducklake-refresh-reads.yaml
+phase: >-
+  Platform T2.20 (Terraform CI/CD: convergence substrate + apply-RCA, CD.35 Wave 1). Product Phase 1
+  complete -- no product-phase impact.
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add refresh-time READ-only grants to the github_ci_apply inline policy for the DuckLake
+      resource family (S3 DR bucket config, the four ducklake IAM roles, CloudWatch log groups,
+      Lambda layers + functions, EventBridge rules, the alerts SNS topic). This is the rec-2223 fix.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Append a short entry to the existing "Out-of-band IAM grants" section recording this DuckLake
+      refresh-reads round, consistent with the documented iterative-discovery convention. Editing an
+      existing Layer-1 file; no new standing prose doc (Decision 86).
+bundled_recommendations:
+  - "rec-2222"
+  - "rec-2223"
+infrastructure_dependencies:
+  - >-
+    Modified resource: aws_iam_role_policy.github_ci_apply (terraform/personal/oidc.tf). Purely
+    additive read-only statements; no create/update/delete on any ducklake resource.
+  - >-
+    Refresh-read targets (ALL already in Terraform state, admin-bootstrapped -- the failure is at
+    plan refresh time, not create time): aws_s3_bucket.ducklake_catalog_dr;
+    aws_iam_role.ducklake_{catalog_dr,writer,reader,maintenance};
+    aws_lambda_layer_version.ducklake_{pgclient,deps,extensions};
+    aws_lambda_function.ducklake_{catalog_dr,writer,reader,maintenance};
+    aws_cloudwatch_log_group.ducklake_{catalog_dr,writer,reader,maintenance};
+    aws_cloudwatch_event_rule.ducklake_{catalog_dr,maintenance_merge,maintenance_gc,maintenance_hot_merge,maintenance_merge_ops};
+    aws_sns_topic.alerts.
+  - >-
+    Apply timing (Decision 35 / 77): the IAM change is applied OUT-OF-BAND under the
+    agent_platform_admin (PlatformAdmin) profile via the interactive plan -> present -> human-accept
+    -> apply loop, BEFORE the dispatch-ack run. The deterministic guard fail-closes any IAM change,
+    so the CD pipeline cannot self-apply this. No Lambda build/deploy (oidc.tf is not Lambda-packaged;
+    the ducklake Lambdas are not modified).
+  - >-
+    Convergence record object: s3://agent-platform-data-lake/convergence/personal/sandbox.json
+    (currently status=red commit=1e7484e391265273f77ce136bb21ca2faacd0dc6; goes green only via a
+    successful workflow_dispatch ack-and-retry apply).
+acceptance_criteria:
+  - >-
+    terraform/personal/oidc.tf github_ci_apply inline policy grants the refresh-time reads for the
+    ducklake family: s3 bucket-config reads scoped to ducklake_catalog_dr; iam:GetRole on the four
+    ducklake roles; logs:DescribeLogGroups; lambda:GetLayerVersion plus the function refresh-read set;
+    events:DescribeRule on ALL FIVE rules (incl. maintenance-merge-ops); sns:GetTopicAttributes on the
+    alerts topic. [rec-2223]
+  - >-
+    The live agent-platform-github-ci-apply inline policy (aws iam get-role-policy) contains the new
+    grants, and aws iam simulate-principal-policy returns "allowed" for the representative actions.
+  - >-
+    The durable convergence record reports status=green at the post-fix HEAD commit, written by a
+    workflow_dispatch acknowledge-and-retry apply that ran AS github_ci_apply and planned without
+    AccessDenied. [rec-2222]
+  - >-
+    rec-2222 and rec-2223 are closed in the ops portal with resolutions citing the admin-apply and the
+    green convergence record.
+  - "terraform validate passes; the admin plan shows 0 to add, 1 to change, 0 to destroy (only the github_ci_apply policy)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Validate HCL + JSON policy correctness of the edited module (catches a malformed jsonencode or bad statement).
+    command: |-
+      terraform -chdir=terraform/personal init -backend=false -input=false >/dev/null && terraform -chdir=terraform/personal validate
+    expected: "Prints 'Success! The configuration is valid.'"
+    fix_if: "validate errors on oidc.tf -> a statement/jsonencode is malformed; fix the HCL before proceeding."
+  - step: 2
+    phase: pre-deploy
+    action: rec-2223 acceptance -- confirm all five required grant markers are present in oidc.tf.
+    command: |-
+      cd /home/user/agent-platform && grep -q 'ducklake_catalog_dr.arn' terraform/personal/oidc.tf && grep -q 'lambda:GetLayerVersion' terraform/personal/oidc.tf && grep -q 'logs:DescribeLogGroups' terraform/personal/oidc.tf && grep -qi 'sns:GetTopicAttributes' terraform/personal/oidc.tf && grep -q 'events:DescribeRule' terraform/personal/oidc.tf && echo ACCEPT_OK
+    expected: "Prints ACCEPT_OK (all five rec-2223 grants present)."
+    fix_if: "any grep fails -> the corresponding Sid/action was not added; add it."
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the over-the-rec additions are present (the 5th EventBridge rule the rec missed, and the four ducklake roles).
+    command: |-
+      cd /home/user/agent-platform && grep -q 'ducklake.maintenance.merge.ops' terraform/personal/oidc.tf && grep -q 'agent-platform-ducklake-maintenance' terraform/personal/oidc.tf && grep -q 'agent-platform-ducklake-writer' terraform/personal/oidc.tf && grep -q 'agent-platform-ducklake-reader' terraform/personal/oidc.tf && echo SUPERSET_OK
+    expected: "Prints SUPERSET_OK (merge-ops rule + all four ducklake role ARNs referenced)."
+    fix_if: "a grep fails -> add the missing rule/role ARN to the events / IAMPlatformRolesRead statements."
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the admin assume-role chain works (prerequisite for the out-of-band IAM apply).
+    command: |-
+      aws sts get-caller-identity --profile agent_platform_admin --query Arn --output text
+    expected: "Prints an ARN containing 'assumed-role/PlatformAdmin'."
+    fix_if: "AccessDenied or profile-not-found -> the admin container/profile is not wired; the IAM apply cannot proceed, escalate to the human."
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Admin terraform plan (human-gated, Decision 35/77). Materialise tfvars from the secret, init the
+      sandbox backend, and plan under agent_platform_admin; PRESENT the plan to the human and confirm
+      the ONLY change is the github_ci_apply inline policy.
+    command: |-
+      cd /home/user/agent-platform/terraform/personal && aws secretsmanager get-secret-value --secret-id agent-platform-terraform-personal-tfvars --profile agent_platform_admin --query SecretString --output text > terraform.personal.tfvars && AWS_PROFILE=agent_platform_admin TF_VAR_aws_profile= terraform init -backend-config=backend-sandbox.hcl -input=false >/dev/null && AWS_PROFILE=agent_platform_admin TF_VAR_aws_profile= terraform plan -input=false -var-file=terraform.personal.tfvars -no-color | tail -40
+    expected: "Plan: 0 to add, 1 to change, 0 to destroy -- the single in-place change is aws_iam_role_policy.github_ci_apply."
+    fix_if: "any add/destroy, or a diff on a resource other than github_ci_apply -> stop; investigate drift and present to the human before any apply (never auto-apply an unexpected diff)."
+  - step: 6
+    phase: post-deploy
+    action: After the human accepts the plan and the apply runs, confirm the LIVE inline policy carries the new grants (not just the .tf text).
+    command: |-
+      aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument' --output json | grep -E 'GetLayerVersion|DescribeLogGroups|GetTopicAttributes|DescribeRule|ducklake-catalog-dr'
+    expected: "Matching lines printed -- the live policy contains the new actions/ARNs."
+    fix_if: "no matches -> the apply did not land the policy; re-run the admin apply."
+  - step: 7
+    phase: post-deploy
+    action: Simulate the apply role against the representative refresh-read actions to confirm they evaluate as allowed.
+    command: |-
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) && aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply --action-names events:DescribeRule sns:GetTopicAttributes lambda:GetLayerVersion logs:DescribeLogGroups s3:GetBucketVersioning iam:GetRole --profile agent_platform_admin --query 'EvaluationResults[].EvalDecision' --output text
+    expected: "Every decision is 'allowed' (no 'implicitDeny')."
+    fix_if: "any implicitDeny -> the action is missing or the ARN scope is wrong; fix the Sid and re-apply, then re-run."
+  - step: 8
+    phase: post-deploy
+    action: >-
+      rec-2222 acceptance -- the end-to-end proof. AFTER triggering the workflow_dispatch ack-and-retry
+      (execution step), confirm the convergence record went green at the post-fix HEAD.
+    command: |-
+      aws s3api get-object --bucket agent-platform-data-lake --key convergence/personal/sandbox.json /tmp/conv.json --profile agent_platform >/dev/null && jq -e '.status == "green"' /tmp/conv.json && jq -r '"commit=" + .commit_sha + " run=" + .run_url' /tmp/conv.json
+    expected: "jq -e exits 0 (status==green); commit_sha is the post-fix HEAD and run_url points at the dispatch-ack run."
+    fix_if: "status still red -> the dispatch-ack apply failed; read its run log for the next AccessDenied refresh read (iterative-discovery), add the scoped grant, re-admin-apply, and re-dispatch."
+  - step: 9
+    phase: post-deploy
+    action: Closure obligation -- confirm both recs are closed after the green record (closed manually post-green, NOT via a merge-time Resolves trailer).
+    command: |-
+      cd /home/user/agent-platform && bin/venv-python -m scripts.sync_ops pull >/dev/null && grep -E '"id": "rec-222[23]"' logs/.recommendations-log.jsonl | grep -c '"status": "closed"'
+    expected: "Prints 2 (both rec-2222 and rec-2223 closed)."
+    fix_if: "< 2 -> close the open one via bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution '...'."
+constraints:
+  - "Only modify files in scope: terraform/personal/oidc.tf and terraform/CLAUDE.md."
+  - >-
+    The oidc.tf change is an IAM change: it is human-gated (present the terraform plan and obtain
+    acceptance before apply, Decision 35/77) and applied OUT-OF-BAND under agent_platform_admin. The
+    CD guard fail-closes IAM, so this must NOT be left for the pipeline to self-apply.
+  - >-
+    READ-ONLY grants only. Do NOT add create/update/delete actions on the ducklake resources -- they
+    are already in state; the failure is purely refresh-read. Adding management actions is out of scope.
+  - >-
+    Do NOT add a `Resolves: rec-2222, rec-2223` trailer to the oidc.tf merge -- closure must track the
+    actual green convergence record (post dispatch-ack), not the code merge. Close both recs manually
+    via the ops portal after VP step 8 passes.
+  - >-
+    Clear red ONLY via the sanctioned dispatch-ack (workflow_dispatch on terraform-apply-sandbox.yml
+    with acknowledge_red_commit). Never bypass the convergence gate by any other path. No rescue agents
+    or workaround loops (Decision 55).
+  - >-
+    Never paste account_id, ExternalIds, or the tfvars body into chat, a PR, or any committed file
+    (pre-commit never-commit hook); terraform.personal.tfvars stays gitignored.
+  - >-
+    All GitHub operations (PR, squash-merge, workflow_dispatch) go through the GitHub MCP tools; wait
+    for CI event-driven via subscribe_pr_activity -- never sleep/loop (Decision 76).
+context:
+  - >-
+    The two recs are ONE causal chain. rec-2223 (github_ci_apply lacks refresh-time reads for the
+    ducklake family) is the ROOT CAUSE: terraform plan exits 1 with ~17 AccessDenied refresh errors.
+    rec-2222 (durable convergence record red at commit 1e7484e) is the DOWNSTREAM LATCH: that failed
+    apply wrote status=red, the sole hard block that now refuses every push-to-main touching
+    terraform/personal/**. Fix order is forced: grant reads -> admin-apply (guard blocks CD self-apply)
+    -> dispatch-ack to clear red.
+  - >-
+    1e7484e = PR #144 "feat(terraform-cicd-convergence): T2.20 convergence substrate (CD.35 Wave 1)" --
+    the commit that introduced the convergence gate itself. Its first record-writing apply went red on
+    the pre-existing ducklake perms gap (catalog-dr bucket, writer/reader lambdas+layers, sns, catalog-dr
+    rule were all in state by Jun 11; #150 later added the maintenance resources, widening the gap).
+  - >-
+    The rec UNDER-ENUMERATED twice. (1) It listed only four EventBridge rules; the fifth,
+    agent-platform-ducklake-maintenance-merge-ops, is also in state and would trigger a second
+    AccessDenied round if omitted. (2) Under lambda it flagged only GetLayerVersion, but the four
+    ducklake aws_lambda_function resources are TF-managed and the github_ci_apply policy itself grants
+    NO lambda actions (the lambda:InvokeFunction/InvokeFunctionUrl/GetFunctionUrlConfig grants in
+    oidc.tf are on the SIBLING github_ci_branch / github_ci_pr roles' DuckLakeInvokeCI Sids, not the
+    apply role's policy at lines 350-606) -- so the function refresh reads (GetFunction et al.) plus
+    GetLayerVersion must be added as a new LambdaRead Sid. This plan covers the full set to avoid
+    repeated admin-apply rounds.
+  - >-
+    All ducklake resources are already in Terraform state (admin-bootstrapped). Refresh only reads
+    resources already in state, so the failure is purely at refresh-read time -> read-only grants are
+    both sufficient and correct (the rec's own acceptance grep is read-only).
+  - >-
+    Decisions cited (decision-scout CITE list): Decision 77 (sandbox auto-apply behind the fail-closed
+    guard; one-time manual admin apply for bootstrap/IAM), Decision 35 (genuine IAM mutation is
+    human-gated, not CI), Decision 72 + Decision 55 (ci_rca recs are consumed via /plan -> /implement;
+    this session IS that review; RCA-first, no masking workaround), Decision 83 (main-protection
+    required checks = pr-validate + terraform-validate; terraform-converged advisory only).
+  - >-
+    CD.34/CD.35/T2.20 are roadmap candidate-decisions in docs/ROADMAP-PLATFORM.yaml (not numbered
+    DECISIONS.md entries); they govern the convergence-record format and the ducklake resource inventory.
+  - >-
+    Lambda assessment: oidc.tf is NOT Lambda-packaged and config/agent/ is not packaged; the ducklake
+    Lambdas are not modified (read perms only). No per-Lambda build/deploy/smoke-test step applies
+    (Decision 79).
+  - >-
+    Iterative-discovery caveat (terraform/CLAUDE.md "Out-of-band IAM grants"): the first real plan after
+    the admin apply may still surface one or two more refresh reads the AWS provider issues; add them
+    scoped and re-apply -- this is the documented, expected pattern, not a failure of the plan.
+  - "The human has confirmed the agent_platform_admin container will be available to the /implement agent."
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md reviewed via the decision-scout gate (CITE 77, 35, 72, 55, 83; NOTE flags 76 + 86 honoured)"
+  - Files in scope located and readable (terraform/personal/oidc.tf, terraform/CLAUDE.md)
+  - agent_platform_admin assume-role chain verified (VP step 4)
+  - rec-2222 and rec-2223 full context read; both acceptance commands understood
+  - Exact ducklake resource ARNs/names confirmed from the source .tf files
+execution_steps:
+  - >-
+    Edit terraform/personal/oidc.tf, github_ci_apply inline policy (resource aws_iam_role_policy.github_ci_apply).
+    (a) Extend the DataLakeBucketManage Sid Resource list to add aws_s3_bucket.ducklake_catalog_dr.arn
+    (the Sid already grants the bucket-config read actions). (b) Extend the IAMPlatformRolesRead Sid
+    Resource list to add the four role ARNs arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-{catalog-dr,writer,reader,maintenance}
+    (the Sid already grants the iam read-quartet incl. iam:GetRole). (c) Add new Sid CloudWatchLogsRead:
+    Action [logs:DescribeLogGroups] at Resource "*" (the API has no resource scoping -- mirror the
+    AthenaWorkgroup Resource "*" convention). (d) Add new Sid LambdaRead: Actions [lambda:GetLayerVersion,
+    lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:GetPolicy, lambda:GetFunctionCodeSigningConfig,
+    lambda:ListVersionsByFunction, lambda:ListTags], Resource = the three layer ARNs
+    (arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-{pgclient,deps,extensions} and the
+    :* versioned form) plus the four function ARNs
+    (arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-{catalog-dr,writer,reader,maintenance}).
+    (e) Add new Sid EventBridgeRead: Actions [events:DescribeRule, events:ListTagsForResource,
+    events:ListTargetsByRule], Resource = the FIVE rule ARNs
+    arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-{catalog-dr,maintenance-merge,maintenance-gc,maintenance-hot-merge,maintenance-merge-ops}.
+    (f) Add new Sid SNSRead: Actions [sns:GetTopicAttributes, sns:ListTagsForResource], Resource = the
+    alerts topic ARN (reference aws_sns_topic.alerts.arn). Mirror the existing in-file comment convention
+    ("refresh-time reads the provider issues on every plan; do not prune as unused").
+  - >-
+    Append a short entry to terraform/CLAUDE.md "Out-of-band IAM grants" section noting this DuckLake
+    refresh-reads round on github_ci_apply (date, the resource family, and that it follows the documented
+    iterative-discovery pattern). Do NOT create any new doc (Decision 86).
+  - "Run pre-deploy VP steps 1-3 (terraform validate; rec-2223 acceptance grep; superset grep). Loop until all pass."
+  - >-
+    Land oidc.tf + terraform/CLAUDE.md on main via a GitHub MCP squash-merge PR. Do NOT include a
+    Resolves: trailer (closure tracks the green record, not the merge). Wait for pr-validate +
+    terraform-validate event-driven via subscribe_pr_activity (end the turn; no sleep/loop). Squash-merge
+    on green.
+  - >-
+    Verify the admin chain (VP step 4). Materialise tfvars from the agent-platform-terraform-personal-tfvars
+    secret, terraform init the sandbox backend, and run terraform plan under agent_platform_admin (VP step 5).
+    PRESENT the plan to the human; confirm it is exactly the single in-place github_ci_apply policy change
+    (0 add / 1 change / 0 destroy). On human acceptance (Decision 35/77 human gate), run terraform apply.
+  - >-
+    Post-apply, run VP steps 6-7 (live get-role-policy contains the grants; simulate-principal-policy
+    returns allowed). If the provider surfaces one or two additional refresh reads on the next plan, add
+    them scoped and re-apply (terraform/CLAUDE.md iterative-discovery pattern).
+  - >-
+    Satisfy rec-2222 required-action #1: review the failed apply run at commit 1e7484e (the ci-rca rec
+    context names the run) and confirm the only breakage was the AccessDenied perms gap now fixed on HEAD.
+    Then trigger the dispatch-ack: mcp__github__actions_run_trigger on
+    .github/workflows/terraform-apply-sandbox.yml, ref=main, input
+    acknowledge_red_commit=1e7484e391265273f77ce136bb21ca2faacd0dc6. Wait event-driven for the run.
+  - "Confirm the convergence record is green (VP step 8)."
+  - >-
+    Close rec-2223 then rec-2222 via the ops portal
+    (bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "...")
+    with resolutions citing the admin-apply of the read grants and the green convergence record. Verify
+    closure (VP step 9).
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Report: what was implemented (the oidc.tf grants), the admin-apply plan summary, the dispatch-ack run URL, the green record, and both rec closures."
+work_areas: []
+rollback: >-
+  The change is purely additive, read-only IAM grants. To roll back, revert the added/extended
+  statements in terraform/personal/oidc.tf and re-apply under agent_platform_admin. The convergence
+  record, once green, needs no rollback. Because the IAM change is human-gated and the CD guard
+  fail-closes IAM, an unexpected diff is caught before apply -- there is no partial-apply state to unwind.

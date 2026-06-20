@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# complexity-waiver: decision-43 -- smoke-test driver: 3 Lambda gates (writer, reader, maintenance)
-# plus live attach, churn, and restore-drill paths legitimately exceed 500 SLOC.
-"""DuckLake Neon catalog smoke test (T2.16b / CD.34, pending).
+# complexity-waiver: decision-43 -- smoke-test driver: 5 Lambda gates (writer, reader, maintenance,
+# catalog-dr, hot-merge) plus live attach, churn, and restore-drill paths legitimately exceed 500 SLOC.
+"""DuckLake Neon catalog smoke test (T2.16b / T2.18 FP-B / CD.34).
 
-Three live gates, run post-deploy from a network-permitted context (egress to the Neon endpoint AND,
+Live gates, run post-deploy from a network-permitted context (egress to the Neon endpoint AND,
 for a fresh extension install, to extensions.duckdb.org):
 
   --attach        ATTACH the Neon catalog over TLS (sslmode=require, SNI) on the pinned DuckDB and run
@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
+from src.common import catalog_dr as _catalog_dr
 from src.common import ducklake_runtime, ducklake_spike
 from src.common.ducklake_runtime import (
     CHURN_WRITERS,
@@ -46,13 +47,16 @@ DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 # re-introduces drift and can bind the shared catalog to the wrong path on direct pre-checks.
 SMOKE_DATA_PATH = ducklake_runtime.SMOKE_DATA_PATH
 CATALOG_ALIAS = "ops_catalog"
-META_SCHEMA = "ducklake_ops"
+# Smoke runs in its OWN meta-schema (ducklake_smoke), isolated from the production ducklake_ops catalog
+# so it can never pin a DATA_PATH on production again (rec-2099 root-cause fix).
+META_SCHEMA = ducklake_runtime.SMOKE_META_SCHEMA
 
 # Function-URL endpoints for the in-Lambda invoke gates (post-deploy). Resolved from env first, then
 # terraform output. The URLs are AWS_IAM-protected (SigV4 required; unsigned -> 403).
 WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 READER_URL_ENV = "DUCKLAKE_READER_URL"
 MAINTENANCE_URL_ENV = "DUCKLAKE_MAINTENANCE_URL"
+CATALOG_DR_URL_ENV = "DUCKLAKE_CATALOG_DR_URL"
 
 # CD.33 OCC budget: re-exported from ducklake_runtime (single source -- rec-2091). Decision 55:
 # these are stop signals, never knobs to loosen so the gate passes.
@@ -79,10 +83,11 @@ def _open_attached(
 
     One ATTACH implementation (ducklake_runtime.open_connection) backs both the dev/smoke path (here,
     dev-mode network INSTALL: extension_directory=None) and the Lambda path (baked layer). The churn
-    gate shares a single credential resolution across workers via _creds.
+    gate shares a single credential resolution across workers via _creds. Smoke uses the isolated
+    ducklake_smoke meta-schema (rec-2099).
     """
     return ducklake_runtime.open_connection(
-        dsn=dsn, data_path=data_path, extension_directory=None, profile=profile, _creds=_creds
+        dsn=dsn, data_path=data_path, meta_schema=META_SCHEMA, extension_directory=None, profile=profile, _creds=_creds
     )
 
 
@@ -207,9 +212,8 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _dsn_uri(dsn: dict[str, str]) -> str:
-    """Assemble a libpq URI for pg_dump/psql from DSN parts (sslmode defaults to require)."""
-    sslmode = dsn.get("sslmode") or "require"
-    return f"postgresql://{dsn['username']}:{dsn['password']}@{dsn['host']}/{dsn['dbname']}?sslmode={sslmode}"
+    """Assemble a libpq URI for pg_dump/psql from DSN parts. Delegates to catalog_dr.dsn_uri (single impl)."""
+    return _catalog_dr.dsn_uri(dsn)
 
 
 def _consistent_pg_dump(dsn: dict[str, str], *, engine_tag: str, dump_path: str) -> str:
@@ -280,8 +284,13 @@ def restore_drill(
 
 
 def _function_url(role: str) -> str:
-    """Resolve the writer/reader/maintenance Function URL from env, then terraform output. Loud-fail if absent."""
-    _env_map = {"writer": WRITER_URL_ENV, "reader": READER_URL_ENV, "maintenance": MAINTENANCE_URL_ENV}
+    """Resolve the writer/reader/maintenance/catalog_dr Function URL from env, then terraform output. Loud-fail if absent."""
+    _env_map = {
+        "writer": WRITER_URL_ENV,
+        "reader": READER_URL_ENV,
+        "maintenance": MAINTENANCE_URL_ENV,
+        "catalog_dr": CATALOG_DR_URL_ENV,
+    }
     env_name = _env_map.get(role, f"DUCKLAKE_{role.upper()}_URL")
     url = os.environ.get(env_name)
     if url:
@@ -501,6 +510,93 @@ def lambda_reader(*, profile: str | None = None, region: str = "eu-west-2") -> N
     print(f"READER OK rows={read_body['row_count']} write_denied=true")
 
 
+def _warm_reuse_probe(role: str, *, profile: str | None, region: str, attempts: int = 6) -> dict:
+    """Invoke `role`'s attach_check repeatedly until warm reuse is observed; then force a cold reconnect.
+
+    Returns a structured result (neon-egress-reduction D2 / rec-2096): cold + warm connect latency, the
+    observed reuse flag, and whether a post-reset invocation reconnects ok. Lambda routing across
+    containers is non-deterministic, so reuse is polled (a low-concurrency sequential burst lands on
+    the warm container within a few tries); the cold-reconnect check is deterministic (reset drops the
+    warm slot on the container that serves the next invocation).
+    """
+    url = _function_url(role)
+    # Drop any pre-existing warm connection so the first sample is a genuine cold ATTACH.
+    _sigv4_invoke(url, {"action": "reset_warm_connection"}, profile=profile, region=region)
+    cold = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+
+    warm: dict | None = None
+    for _ in range(attempts):
+        body = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+        if body.get("connect_reused"):
+            warm = body
+            break
+
+    # Forced cold/dead-connection variant: drop the warm slot, then a fresh invocation must reconnect.
+    _sigv4_invoke(url, {"action": "reset_warm_connection"}, profile=profile, region=region)
+    recold = _ok_json(_sigv4_invoke(url, {"action": "attach_check"}, profile=profile, region=region))
+
+    return {
+        "role": role,
+        "cold_connect_ms": cold.get("connect_ms"),
+        "warm_connect_ms": (warm or {}).get("connect_ms"),
+        "warm_reuse_observed": warm is not None,
+        "reconnect_ok": bool(recold.get("ok")),
+    }
+
+
+def _assert_warm_reuse(result: dict) -> None:
+    """Loud-fail the warm-reuse gate unless reuse was observed (near-zero warm connect) and reconnect works."""
+    warm_ms = result.get("warm_connect_ms")
+    if not result.get("warm_reuse_observed") or warm_ms is None or warm_ms >= 5:
+        raise SmokeTestFailure(
+            f"WARM_REUSE FAIL ({result['role']}): warm reuse not observed / connect not near-zero: {result}"
+        )
+    if not result.get("reconnect_ok"):
+        raise SmokeTestFailure(f"WARM_REUSE FAIL ({result['role']}): forced cold variant did not reconnect: {result}")
+
+
+def lambda_warm_reuse(*, profile: str | None = None, region: str = "eu-west-2", json_output: bool = False) -> None:
+    """D2 VP8: reader warm-connection reuse (2nd connect reused, near-zero) + forced cold reconnect."""
+    result = _warm_reuse_probe("reader", profile=profile, region=region)
+    _assert_warm_reuse(result)
+    if json_output:
+        print(json.dumps(result))
+    else:
+        print(
+            f"LAMBDA_WARM_REUSE OK reader cold_ms={result['cold_connect_ms']} "
+            f"warm_ms={result['warm_connect_ms']} reconnect_ok={result['reconnect_ok']}"
+        )
+
+
+def lambda_warm_reuse_writer(*, profile: str | None = None, region: str = "eu-west-2", json_output: bool = False) -> None:
+    """D2 VP9: writer warm reuse + a write still commits under reuse + cold/warm latency (rec-2096)."""
+    result = _warm_reuse_probe("writer", profile=profile, region=region)
+    _assert_warm_reuse(result)
+
+    # A single-statement write must still commit on the (warm) single-statement path with OCC intact.
+    writer_url = _function_url("writer")
+    write_body = _ok_json(
+        _sigv4_invoke(
+            writer_url,
+            {"action": "write", "record": {"rec_id": "rec-warm-reuse-probe", "payload": "w"}},
+            profile=profile,
+            region=region,
+        )
+    )
+    if not write_body.get("ok"):
+        raise SmokeTestFailure(f"WARM_REUSE_WRITER FAIL: write under reuse did not commit: {write_body}")
+    result["write_ok"] = True
+    result["write_occ_retries"] = write_body.get("occ_retries")
+
+    if json_output:
+        print(json.dumps(result))
+    else:
+        print(
+            f"LAMBDA_WARM_REUSE_WRITER OK writer cold_ms={result['cold_connect_ms']} "
+            f"warm_ms={result['warm_connect_ms']} write_ok=true occ_retries={result.get('write_occ_retries')}"
+        )
+
+
 def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """T2.18 VP9: write many small files to smoke tables, invoke merge, assert file count drops.
 
@@ -589,6 +685,281 @@ def lambda_maintenance_breaker(*, profile: str | None = None, region: str = "eu-
     print(f"MAINTENANCE_BREAKER OK status=500 breaker_tripped=true error_type={body.get('error_type', 'n/a')}")
 
 
+def lambda_catalog_dr(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 FP-B VP11: invoke the DR Lambda; assert dump object + engine-version tag + CatalogDumpSuccess metric.
+
+    Invokes the ducklake_catalog_dr Lambda via its Function URL (AWS_IAM). Asserts:
+    - Response ok=True (200)
+    - s3_key present and contains expected engine-version tags (pg16 + duckdb 1.5.3)
+    - bucket returned matches the configured DR bucket
+    - dump_bytes > 0 (a real dump was produced)
+
+    The CatalogDumpSuccess CloudWatch metric emission is asserted via the response body
+    (the Lambda only returns ok=True after a successful metric emit). CloudWatch alarm state
+    transition is timing-dependent and is NOT the load-bearing assertion here.
+    """
+    import boto3  # noqa: PLC0415
+
+    from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
+
+    dr_url = _function_url("catalog_dr")
+    resp = _sigv4_invoke(dr_url, {}, profile=profile, region=region)
+    body = _ok_json(resp)
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: Lambda returned ok=False: {body}")
+
+    s3_key = body.get("s3_key", "")
+    bucket = body.get("bucket", "")
+    dump_bytes = body.get("dump_bytes", 0)
+
+    if "pg16" not in s3_key and "pg-16" not in s3_key and _catalog_dr.PINNED_PG_VERSION not in s3_key:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: s3_key missing PG16 engine tag: {s3_key!r}")
+    if ducklake_runtime.PINNED_DUCKDB_VERSION not in s3_key:
+        raise SmokeTestFailure(
+            f"CATALOG_DR FAIL: s3_key missing duckdb {ducklake_runtime.PINNED_DUCKDB_VERSION} tag: {s3_key!r}"
+        )
+    if not bucket:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: no bucket in response: {body}")
+    if dump_bytes <= 0:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: dump_bytes={dump_bytes} (expected > 0)")
+
+    # Confirm the object actually landed in S3 (belt-and-suspenders; the response already says ok).
+    session = boto3.Session(profile_name=resolve_aws_profile(profile), region_name=region)
+    s3 = session.client("s3")
+    try:
+        obj_meta = s3.head_object(Bucket=bucket, Key=s3_key)
+        metadata = obj_meta.get("Metadata", {})
+        if metadata.get("pg_version") != _catalog_dr.PINNED_PG_VERSION:
+            raise SmokeTestFailure(
+                f"CATALOG_DR FAIL: S3 object metadata pg_version={metadata.get('pg_version')!r} "
+                f"(expected {_catalog_dr.PINNED_PG_VERSION!r})"
+            )
+        if metadata.get("duckdb_version") != ducklake_runtime.PINNED_DUCKDB_VERSION:
+            raise SmokeTestFailure(
+                f"CATALOG_DR FAIL: S3 object metadata duckdb_version={metadata.get('duckdb_version')!r} "
+                f"(expected {ducklake_runtime.PINNED_DUCKDB_VERSION!r})"
+            )
+    except s3.exceptions.ClientError as exc:
+        raise SmokeTestFailure(f"CATALOG_DR FAIL: S3 head_object failed: {exc}") from exc
+
+    print(
+        f"CATALOG_DR OK ok=true bucket={bucket} s3_key={s3_key} "
+        f"dump_bytes={dump_bytes} pg_version={_catalog_dr.PINNED_PG_VERSION} "
+        f"duckdb_version={ducklake_runtime.PINNED_DUCKDB_VERSION}"
+    )
+
+
+def lambda_maintenance_hot_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.18 FP-B VP12: invoke hot_merge; assert files merged, nothing deleted (merge-only gate).
+
+    Invokes action=hot_merge on the live maintenance Lambda. Asserts:
+    - Response ok=True (200)
+    - action == "hot_merge"
+    - files_after <= files_before (merge can only reduce or hold file count)
+    - No cleanup_old_files / delete_orphaned_files / expire_snapshots issued (merge-only invariant).
+
+    The merge-only invariant is proven by the response body -- if the handler issued any
+    destructive call, the Lambda would have returned ok=False or a 5xx (DuckLakeMaintenanceError).
+    We additionally assert the action field is "hot_merge" and not "gc".
+    """
+    maint_url = _function_url("maintenance")
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "hot_merge"}, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MAINTENANCE_HOT_MERGE FAIL: {body}")
+    if body.get("action") != "hot_merge":
+        raise SmokeTestFailure(f"MAINTENANCE_HOT_MERGE FAIL: unexpected action in response: {body}")
+    files_before = body.get("files_before", 0)
+    files_after = body.get("files_after", 0)
+    if files_after > files_before:
+        raise SmokeTestFailure(
+            f"MAINTENANCE_HOT_MERGE FAIL: files grew after hot_merge files_before={files_before} files_after={files_after}"
+        )
+    print(
+        f"MAINTENANCE_HOT_MERGE OK files_before={files_before} files_after={files_after} "
+        f"elapsed_ms={body.get('elapsed_ms', 'n/a')}"
+    )
+
+
+def ops_read_your_write(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP11: write via the writer (write_ops) -> read via the reader (read_ops_current).
+
+    Proves the closed boundary end-to-end on the real ops schema: a write_ops lands and read_ops_current
+    returns it; an update_ops is reflected; an update_ops on an ABSENT key loud-fails 409 (referential,
+    CD.33 cl.8). Uses a `test-` probe id so the production counter is untouched.
+    """
+    writer_url = _function_url("writer")
+    reader_url = _function_url("reader")
+    table = "ops_recommendations"
+    probe_id = f"test-ryw-{uuid4().hex[:12]}"
+    base = {
+        "id": probe_id,
+        "status": "open",
+        "title": "ops read-your-write probe",
+        "source": "manual",
+        "effort": "XS",
+        "priority": "Low",
+        "risk": "low",
+        # DQ-required NOT-NULL columns: populated so the probe row is data-quality-clean while it
+        # persists (the writer has no delete verb -- postmortem-DELETE deferred). Without these the
+        # probe trips the ops_recommendations not_null DQ checks and reds the verifier harness.
+        "automatable": False,
+        "file": "scripts/ducklake_neon_smoke_test.py",
+        "context": (
+            "Read-your-write smoke probe written by ducklake_neon_smoke_test --ops-read-your-write "
+            "to prove the closed DuckLake writer/reader boundary end-to-end on the real ops schema."
+        ),
+        "acceptance": "grep -q ops_read_your_write scripts/ducklake_neon_smoke_test.py",
+    }
+    _ok_json(
+        _sigv4_invoke(writer_url, {"action": "write_ops", "table": table, "record": base}, profile=profile, region=region)
+    )
+    read1 = _ok_json(
+        _sigv4_invoke(
+            reader_url, {"action": "read_ops_current", "table": table, "key": probe_id}, profile=profile, region=region
+        )
+    )
+    if read1.get("row_count") != 1 or read1["rows"][0].get("status") != "open":
+        raise SmokeTestFailure(f"OPS_RYW FAIL: write_ops not read back: {read1}")
+
+    updated = {**base, "status": "closed"}
+    _ok_json(
+        _sigv4_invoke(writer_url, {"action": "update_ops", "table": table, "record": updated}, profile=profile, region=region)
+    )
+    read2 = _ok_json(
+        _sigv4_invoke(
+            reader_url, {"action": "read_ops_current", "table": table, "key": probe_id}, profile=profile, region=region
+        )
+    )
+    if read2["rows"][0].get("status") != "closed":
+        raise SmokeTestFailure(f"OPS_RYW FAIL: update_ops not reflected: {read2}")
+
+    absent = {**base, "id": f"test-absent-{uuid4().hex[:8]}", "status": "closed"}
+    resp = _sigv4_invoke(
+        writer_url, {"action": "update_ops", "table": table, "record": absent}, profile=profile, region=region
+    )
+    if resp.status_code != 409:
+        raise SmokeTestFailure(
+            f"OPS_RYW FAIL: update_ops on absent rec returned {resp.status_code} (expected 409 referential)"
+        )
+    print(f"OPS_RYW OK write+read+update reflected; absent-update referential=409 probe_id={probe_id}")
+
+
+def ops_churn_regate(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP12: re-run the Decision-82 EC8 churn/OCC gate at production scope (post-cutover catalog).
+
+    Delegates to the EC8 fan-out (CHURN_WRITERS=4, per-invocation wall p95<=2000ms, collision<=0.20 --
+    the single-source budgets in ducklake_runtime). Production scope = the post-cutover production data
+    path; the contention measured is catalog-commit-level (table-independent). Loud-fail on breach
+    (Decision 55 -- never relax the budget to commit_ms).
+    """
+    lambda_churn(profile=profile, region=region)
+    print("OPS_CHURN_REGATE OK (EC8 fan-out within CD.33 budget at production scope)")
+
+
+def catalog_restore_drill(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 VP11: invoke the maintenance `restore_drill` action (pg_dump -> pg_restore + read-your-write).
+
+    Lambda-mediated over 443 (there is NO Neon 5432 egress from CC-web): the maintenance Lambda runs the
+    custom-format pg_dump -> pg_restore into a scratch meta-schema and verifies read-your-write INSIDE
+    AWS, version-matched to the pinned engine. Loud-fail on a non-ok response (Decision 55).
+    """
+    maint_url = _function_url("maintenance")
+    body = _ok_json(_sigv4_invoke(maint_url, {"action": "restore_drill"}, profile=profile, region=region))
+    if not body.get("restored"):
+        raise SmokeTestFailure(f"CATALOG_RESTORE_DRILL FAIL: maintenance restore_drill did not restore: {body}")
+    print(
+        f"CATALOG_RESTORE_DRILL OK maintenance restore_drill read-your-write verified "
+        f"probe={body.get('probe_id')} pg={body.get('pg_version')}"
+    )
+
+
+def migrate_ops_recs_columns(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T1.13 VP step 8: invoke maintenance reconcile_columns SERVER-SIDE and assert context_v2_json is present.
+
+    Uses the Lambda-mediated pattern (same as ops-read-your-write) because CC-web has no Neon 5432
+    egress -- the DDL runs server-side inside the maintenance Lambda against the production catalog.
+    Asserts the response reports context_v2_json present on BOTH history and current tables.
+    Idempotent: a second run reports added_history=[] / added_current=[] (no-op).
+    """
+    import os  # noqa: PLC0415
+
+    maint_url = _function_url("maintenance")
+    data_path_env = os.environ.get("DUCKLAKE_DATA_PATH")
+    try:
+        tf_result = subprocess.run(
+            ["terraform", "-chdir=terraform/personal", "output", "-raw", "ducklake_writer_data_path"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        tf_data_path = tf_result.stdout.strip() if tf_result.returncode == 0 else None
+    except FileNotFoundError:
+        tf_data_path = None
+
+    data_path = data_path_env or tf_data_path or "s3://agent-platform-data-lake/ducklake/"
+    payload = {
+        "action": "reconcile_columns",
+        "data_path": data_path,
+        "meta_schema": "ducklake_ops",
+        "table": "ops_recommendations",
+    }
+    body = _ok_json(_sigv4_invoke(maint_url, payload, profile=profile, region=region))
+    if not body.get("ok"):
+        raise SmokeTestFailure(f"MIGRATE_OPS_RECS_COLUMNS FAIL: maintenance reconcile_columns returned ok=False: {body}")
+    added_h = body.get("added_history", [])
+    added_c = body.get("added_current", [])
+    pre_existing = body.get("columns_pre_existing", {})
+    # After reconcile, context_v2_json must be present on both tables.
+    # If the column was just added, it's in added_*. If it was already there, added_* is empty
+    # but columns_pre_existing shows True (no-op run). Check both: newly added OR already present.
+    history_ok = "context_v2_json" in added_h or pre_existing.get("history") is True
+    current_ok = "context_v2_json" in added_c or pre_existing.get("current") is True
+    if not history_ok or not current_ok:
+        raise SmokeTestFailure(
+            f"MIGRATE_OPS_RECS_COLUMNS FAIL: context_v2_json not confirmed on "
+            f"history={history_ok} current={current_ok}. Response: {body}"
+        )
+    print(
+        f"MIGRATE_OPS_RECS_COLUMNS OK context_v2_json present on history+current "
+        f"added_history={added_h} added_current={added_c}"
+    )
+
+
+# NOTE: the seed_ops_recommendations payload emitter (emit_recs_seed_payload) and its
+# --emit-recs-seed-payload flag were REMOVED at the 2026-06-09 recs sign-off alongside the maintenance
+# seed action (closed boundary, Decision 81 cl.7). Re-seeding is now a break-glass operation: git-revert
+# the removal commit (restores BOTH the maintenance action and this emitter), redeploy, re-seed, then
+# re-remove. See docs/runbooks/ducklake-catalog-operations.md Section 6.
+
+
+def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T2.19 RCA: SigV4-invoke the reader AND writer connect_probe actions; print the phased results.
+
+    This is a diagnostic driver, NOT a pass/fail gate -- it reports the failing phase even on a
+    diagnosed failure (ok=False). Both the reader and writer are probed so the failing phase is
+    captured from the load-bearing read path (reader) AND the write path (writer).
+    """
+    reader_resp = _sigv4_invoke(_function_url("reader"), {"action": "connect_probe"}, profile=profile, region=region)
+    writer_resp = _sigv4_invoke(_function_url("writer"), {"action": "connect_probe"}, profile=profile, region=region)
+    reader_body = _ok_json(reader_resp)
+    writer_body = _ok_json(writer_resp)
+    print(
+        f"CONNECT_PROBE reader=phase_reached:{reader_body.get('phase_reached')} "
+        f"failed_phase:{reader_body.get('failed_phase')} ok:{reader_body.get('ok')} "
+        f"dns_ms:{reader_body.get('dns_ms')} tcp_ms:{reader_body.get('tcp_ms')} "
+        f"auth_ms:{reader_body.get('auth_ms')} attach_ms:{reader_body.get('attach_ms')} "
+        f"error:{reader_body.get('error')!r}"
+    )
+    print(
+        f"CONNECT_PROBE writer=phase_reached:{writer_body.get('phase_reached')} "
+        f"failed_phase:{writer_body.get('failed_phase')} ok:{writer_body.get('ok')} "
+        f"dns_ms:{writer_body.get('dns_ms')} tcp_ms:{writer_body.get('tcp_ms')} "
+        f"auth_ms:{writer_body.get('auth_ms')} attach_ms:{writer_body.get('attach_ms')} "
+        f"error:{writer_body.get('error')!r}"
+    )
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -599,9 +970,14 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_churn": lambda_churn,
     "lambda_churn_incontainer": lambda_churn_incontainer,
     "lambda_reader": lambda_reader,
+    "lambda_warm_reuse": lambda_warm_reuse,
+    "lambda_warm_reuse_writer": lambda_warm_reuse_writer,
     "lambda_maintenance_merge": lambda_maintenance_merge,
     "lambda_maintenance_gc": lambda_maintenance_gc,
     "lambda_maintenance_breaker": lambda_maintenance_breaker,
+    "lambda_catalog_dr": lambda_catalog_dr,
+    "lambda_maintenance_hot_merge": lambda_maintenance_hot_merge,
+    "connect_probe": connect_probe,
 }
 
 
@@ -614,6 +990,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     group.add_argument("--attach", action="store_true", help="ATTACH + SELECT 1 over TLS")
     group.add_argument("--churn-gate", action="store_true", help="connection-churn / OCC gate (loud-fail)")
     group.add_argument("--restore-drill", action="store_true", help="pg_dump -> scratch Neon -> read-your-write")
+    group.add_argument(
+        "--ops-read-your-write",
+        action="store_true",
+        dest="ops_read_your_write",
+        help="[post-deploy] T2.19 VP11: write_ops via writer -> read via reader; absent update loud-fails 409",
+    )
+    group.add_argument(
+        "--ops-churn-regate",
+        action="store_true",
+        dest="ops_churn_regate",
+        help="[post-deploy] T2.19 VP12: Decision-82 EC8 churn/OCC re-gate at production scope (loud-fail)",
+    )
+    group.add_argument(
+        "--catalog-restore-drill",
+        action="store_true",
+        dest="catalog_restore_drill",
+        help="[post-deploy] T2.19 VP11: invoke maintenance restore_drill (pg_dump->pg_restore + read-your-write)",
+    )
     group.add_argument("--lambda-attach", action="store_true", help="[post-deploy] in-Lambda ATTACH proof (EC1)")
     group.add_argument(
         "--lambda-ingress", action="store_true", help="[post-deploy] AWS_IAM ingress unsigned=403/signed=200 (EC4)"
@@ -630,6 +1024,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     group.add_argument("--lambda-reader", action="store_true", help="[post-deploy] closed reader path (EC1/boundary)")
     group.add_argument(
+        "--lambda-warm-reuse",
+        action="store_true",
+        dest="lambda_warm_reuse",
+        help="[post-deploy] D2 VP8: reader warm-connection reuse (2nd connect near-zero) + forced cold reconnect",
+    )
+    group.add_argument(
+        "--lambda-warm-reuse-writer",
+        action="store_true",
+        dest="lambda_warm_reuse_writer",
+        help="[post-deploy] D2 VP9: writer warm reuse + write-under-reuse commits + cold/warm latency (rec-2096)",
+    )
+    group.add_argument(
         "--lambda-maintenance-merge",
         action="store_true",
         help="[post-deploy] T2.18 daily merge gate: write small files, invoke merge, assert file count (VP9)",
@@ -644,8 +1050,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="[post-deploy] T2.18 breaker probe: forced-threshold trip, assert 5xx + breaker_tripped=True (VP11)",
     )
+    group.add_argument(
+        "--lambda-catalog-dr",
+        action="store_true",
+        help="[post-deploy] T2.18 FP-B DR gate: invoke DR Lambda, assert dump object + engine-version tag + metric (VP11)",
+    )
+    group.add_argument(
+        "--lambda-maintenance-hot-merge",
+        action="store_true",
+        help="[post-deploy] T2.18 FP-B hot_merge gate: invoke hot_merge, assert files merged, nothing deleted (VP12)",
+    )
+    group.add_argument(
+        "--connect-probe",
+        action="store_true",
+        dest="connect_probe",
+        help="[post-deploy] T2.19 RCA: SigV4-invoke reader+writer connect_probe; print per-phase timings",
+    )
+    group.add_argument(
+        "--migrate-ops-recs-columns",
+        action="store_true",
+        dest="migrate_ops_recs_columns",
+        help="[post-deploy] T1.13 VP8: reconcile_columns SERVER-SIDE via maintenance Lambda; "
+        "assert context_v2_json present on history+current (idempotent)",
+    )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
+    parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="emit machine-readable JSON (warm-reuse gates)"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -658,6 +1090,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.restore_drill:
             restore_drill(profile=args.profile)
             print("RESTORE_OK read-your-write verified")
+        elif args.ops_read_your_write:
+            ops_read_your_write(profile=args.profile, region=args.region)
+        elif args.migrate_ops_recs_columns:
+            migrate_ops_recs_columns(profile=args.profile, region=args.region)
+        elif args.ops_churn_regate:
+            ops_churn_regate(profile=args.profile, region=args.region)
+        elif args.catalog_restore_drill:
+            catalog_restore_drill(profile=args.profile, region=args.region)
+        elif args.connect_probe:
+            connect_probe(profile=args.profile, region=args.region)
+        elif args.lambda_warm_reuse:
+            lambda_warm_reuse(profile=args.profile, region=args.region, json_output=args.json_output)
+        elif args.lambda_warm_reuse_writer:
+            lambda_warm_reuse_writer(profile=args.profile, region=args.region, json_output=args.json_output)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)

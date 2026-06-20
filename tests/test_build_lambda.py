@@ -8,6 +8,7 @@ import pytest
 
 import scripts.build_lambda as bl
 from scripts.build_lambda import (
+    _DUCKLAKE_CATALOG_DR_FUNCTION,
     _DUCKLAKE_MAINTENANCE_FUNCTION,
     _DUCKLAKE_READER_FUNCTION,
     _DUCKLAKE_WRITER_FUNCTION,
@@ -248,9 +249,9 @@ class TestLambdaScriptsAndSdkConfig:
         """tool_runtime.py is listed in _LAMBDA_SCRIPTS."""
         assert "tool_runtime.py" in _LAMBDA_SCRIPTS
 
-    def test_bedrock_client_in_lambda_scripts(self):
-        """bedrock_client.py is listed in _LAMBDA_SCRIPTS."""
-        assert "bedrock_client.py" in _LAMBDA_SCRIPTS
+    def test_bedrock_client_absent_from_lambda_scripts(self):
+        """bedrock_client.py left the bundle with the CD.28 retirement."""
+        assert "bedrock_client.py" not in _LAMBDA_SCRIPTS
 
 
 class TestBuildAppPackageSdkInstall:
@@ -411,6 +412,7 @@ class TestPinnedConstants:
         assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_WRITER_FUNCTION] == "lambda-packages/ducklake-writer.zip"
         assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_READER_FUNCTION] == "lambda-packages/ducklake-reader.zip"
         assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_MAINTENANCE_FUNCTION] == "lambda-packages/ducklake-maintenance.zip"
+        assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_CATALOG_DR_FUNCTION] == "lambda-packages/ducklake-catalog-dr.zip"
 
 
 class TestBuildDucklakeFunctionPackage:
@@ -552,20 +554,26 @@ class TestTryS3Extension:
 
 
 class TestUpdateLambdaFunctionsDucklakeOnly:
-    def test_only_ducklake_updates_three_functions(self):
+    def test_only_ducklake_updates_four_functions(self):
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 types.SimpleNamespace(returncode=0),
                 types.SimpleNamespace(returncode=0),
                 types.SimpleNamespace(returncode=0),
+                types.SimpleNamespace(returncode=0),
             ]
             update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True)
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 4
         targeted = []
         for c in mock_run.call_args_list:
             cmd = c[0][0]
             targeted.append(cmd[cmd.index("--function-name") + 1])
-        assert set(targeted) == {_DUCKLAKE_WRITER_FUNCTION, _DUCKLAKE_READER_FUNCTION, _DUCKLAKE_MAINTENANCE_FUNCTION}
+        assert set(targeted) == {
+            _DUCKLAKE_WRITER_FUNCTION,
+            _DUCKLAKE_READER_FUNCTION,
+            _DUCKLAKE_MAINTENANCE_FUNCTION,
+            _DUCKLAKE_CATALOG_DR_FUNCTION,
+        }
 
 
 class TestResolveDucklakeProfile:
@@ -582,13 +590,19 @@ class TestResolveDucklakeProfile:
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
             patch(
                 "scripts.build_lambda.build_ducklake_function_package",
-                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip"), _FakePath(name="m.zip")],
+                side_effect=[
+                    _FakePath(name="w.zip"),
+                    _FakePath(name="r.zip"),
+                    _FakePath(name="m.zip"),
+                    _FakePath(name="dr.zip"),
+                ],
             ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
             patch(
                 "scripts.build_lambda.build_ducklake_extensions_layer",
                 side_effect=lambda td, **kw: captured.update(kw) or _FakePath(name="ext.zip"),
             ),
+            patch("scripts.build_lambda.build_pgclient_layer", return_value=_FakePath(name="pgclient.zip")),
             patch("scripts.build_lambda.assert_within_size_limit"),
         ):
             bl._run_ducklake_build(_args(skip_upload=True, profile="company-aws-profile"))
@@ -601,15 +615,21 @@ class TestRunBuilds:
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
             patch(
                 "scripts.build_lambda.build_ducklake_function_package",
-                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip"), _FakePath(name="m.zip")],
+                side_effect=[
+                    _FakePath(name="w.zip"),
+                    _FakePath(name="r.zip"),
+                    _FakePath(name="m.zip"),
+                    _FakePath(name="dr.zip"),
+                ],
             ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
+            patch("scripts.build_lambda.build_pgclient_layer", return_value=_FakePath(name="pgclient.zip")),
             patch("scripts.build_lambda.assert_within_size_limit") as mock_assert,
             patch("scripts.build_lambda.upload_to_s3") as mock_upload,
         ):
             bl._run_ducklake_build(_args(skip_upload=True))
-        assert mock_assert.call_count == 5
+        assert mock_assert.call_count == 7  # 4 function zips + 3 layers
         assert mock_upload.call_count == 0
 
     def test_run_ducklake_build_upload_and_deploy(self):
@@ -617,17 +637,23 @@ class TestRunBuilds:
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
             patch(
                 "scripts.build_lambda.build_ducklake_function_package",
-                side_effect=[_FakePath(name="w.zip"), _FakePath(name="r.zip"), _FakePath(name="m.zip")],
+                side_effect=[
+                    _FakePath(name="w.zip"),
+                    _FakePath(name="r.zip"),
+                    _FakePath(name="m.zip"),
+                    _FakePath(name="dr.zip"),
+                ],
             ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath(name="deps.zip")),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath(name="ext.zip")),
+            patch("scripts.build_lambda.build_pgclient_layer", return_value=_FakePath(name="pgclient.zip")),
             patch("scripts.build_lambda.assert_within_size_limit"),
             patch("scripts.build_lambda.validate_bucket_exists", return_value=True),
             patch("scripts.build_lambda.upload_to_s3") as mock_upload,
             patch("scripts.build_lambda.update_lambda_functions") as mock_update,
         ):
             bl._run_ducklake_build(_args(skip_upload=False, deploy=True))
-        assert mock_upload.call_count == 5
+        assert mock_upload.call_count == 7  # 4 function zips + 3 layers
         mock_update.assert_called_once()
         assert mock_update.call_args.kwargs.get("only_ducklake") is True
 
@@ -636,10 +662,11 @@ class TestRunBuilds:
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
             patch(
                 "scripts.build_lambda.build_ducklake_function_package",
-                side_effect=[_FakePath(), _FakePath(), _FakePath()],
+                side_effect=[_FakePath(), _FakePath(), _FakePath(), _FakePath()],
             ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath()),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath()),
+            patch("scripts.build_lambda.build_pgclient_layer", return_value=_FakePath()),
             patch("scripts.build_lambda.assert_within_size_limit"),
             patch("scripts.build_lambda.validate_bucket_exists", return_value=False),
         ):

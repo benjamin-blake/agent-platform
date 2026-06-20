@@ -20,7 +20,7 @@ cat logs/.retro-lite-log.jsonl 2>/dev/null || echo "[]"
 ```
 
 ```bash
-cat docs/ROADMAP-PRODUCT.md
+cat docs/ROADMAP-PRODUCT.yaml
 ```
 
 ```bash
@@ -32,7 +32,7 @@ Extract:
 - All entries from the last 30 days where `"status": "closed"` (for pattern
   context)
 - Recent friction entries from `.retro-lite-log.jsonl`
-- Current and next roadmap phase from `docs/ROADMAP-PRODUCT.md`
+- Current and next roadmap phase from `docs/ROADMAP-PRODUCT.yaml`
 - Current platform tier items and status from `docs/ROADMAP-PLATFORM.yaml`
 
 If no open recommendations exist, write `[]` to the findings file and stop.

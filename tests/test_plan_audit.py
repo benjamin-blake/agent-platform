@@ -15,6 +15,7 @@ _spec.loader.exec_module(_plan_audit)  # type: ignore[union-attr]
 sys.modules["plan_audit"] = _plan_audit  # register so patch() can find it
 
 find_plan_file = _plan_audit.find_plan_file
+parse_scope = _plan_audit.parse_scope
 parse_scope_table = _plan_audit.parse_scope_table
 get_changed_files = _plan_audit.get_changed_files
 file_existed_on_main = _plan_audit.file_existed_on_main
@@ -497,3 +498,50 @@ class TestRunScopeDriftAudit:
         out = capsys.readouterr().out
         assert "=== Plan Audit Report ===" in out
         assert "No drift detected" in out
+
+
+class TestParseScope:
+    """Tests for the format-dispatching parse_scope (T1.11 / CD.22)."""
+
+    def test_yaml_plan_scope_parsed(self, tmp_path: Path) -> None:
+        plan = tmp_path / "PLAN-test.yaml"
+        plan.write_text(
+            "slug: test\n"
+            "scope:\n"
+            "  - file: src/config.py\n"
+            "    action: Modify\n"
+            "    purpose: Update config\n"
+            "  - file: tests/test_config.py\n"
+            "    action: Create\n"
+            "    purpose: Add tests\n",
+            encoding="utf-8",
+        )
+        assert parse_scope(plan) == {
+            "src/config.py": "Modify",
+            "tests/test_config.py": "Create",
+        }
+
+    def test_yaml_plan_non_dict_returns_empty(self, tmp_path: Path) -> None:
+        plan = tmp_path / "PLAN-test.yaml"
+        plan.write_text("- just\n- a\n- list\n", encoding="utf-8")
+        assert parse_scope(plan) == {}
+
+    def test_yaml_plan_skips_malformed_entries(self, tmp_path: Path) -> None:
+        plan = tmp_path / "PLAN-test.yaml"
+        plan.write_text(
+            "scope:\n  - file: src/a.py\n    action: Modify\n  - not-a-dict\n  - purpose: missing keys\n",
+            encoding="utf-8",
+        )
+        assert parse_scope(plan) == {"src/a.py": "Modify"}
+
+    def test_md_plan_falls_back_with_deprecation_warning(self, tmp_path: Path, caplog) -> None:
+        plan = tmp_path / "PLAN-test.md"
+        plan.write_text(
+            "# Plan\n\n## Scope\n| File | Action | Purpose |\n|------|--------|---------|\n"
+            "| `src/config.py` | Modify | Update config |\n",
+            encoding="utf-8",
+        )
+        with caplog.at_level("WARNING", logger="plan_audit"):
+            result = parse_scope(plan)
+        assert result == {"src/config.py": "Modify"}
+        assert any("deprecated" in r.message for r in caplog.records)

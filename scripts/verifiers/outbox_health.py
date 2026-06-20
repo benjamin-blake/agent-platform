@@ -7,9 +7,10 @@ Fails if the outbox is not empty, indicating a sync failure or pending drain.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
 
 class OutboxHealthVerifier(Verifier):
@@ -26,6 +27,10 @@ class OutboxHealthVerifier(Verifier):
         "logs/.ops-outbox/**",
         "scripts/sync_ops.py",
     ]
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # clock + live filesystem staleness
+
+    def __init__(self, now_fn: Callable[[], float] = time.time) -> None:
+        self._now_fn = now_fn
 
     @property
     def tier(self) -> VerifierTier:
@@ -54,8 +59,8 @@ class OutboxHealthVerifier(Verifier):
                 message="Outbox is empty.",
             )
 
-        # Check staleness
-        now = time.time()
+        # Check staleness using injectable clock for deterministic tests
+        now = self._now_fn()
         stale_hard = []
         stale_advisory = []
         fresh = 0

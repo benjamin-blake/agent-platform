@@ -1,0 +1,253 @@
+# GROUND-TRUTH-VERIFIER A1 -- D3 status-truthfulness audit
+# Scope: tiers T-1 and T0 (20 items) + 2 inverse/silent-completion checks.
+# Repo root: /home/user/agent-platform  HEAD branch: claude/sharp-meitner-szbvsa  Date: 2026-06-09
+#
+# ENVIRONMENT CAVEAT (applies to all rows): this clone is a single squashed snapshot commit
+# ("cbad0db plan(lambda-config-manifest-gating): approved plan (#62)"). `git log --all -- <path>`
+# returns only that one commit for every file, and `git cat-file -t fd314c0` fails. Therefore
+# git-history corroboration (deletion provenance, PR/commit citations like fd314c0/#352) is
+# UNAVAILABLE. All verdicts rest on file existence + content + targeted pytest. "Never committed"
+# vs "deleted" cannot be distinguished from history here; I report absence at HEAD.
+
+claims:
+  - id: A1-001
+    affected_ids: [T-1.0]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "grep -rn 'docs/ROADMAP\\.md' (exclusions as written: .git/briefings/SESSION_LOG_ARCHIVE.md/plans) does NOT return zero hits -- ~30 hits remain in logs/.token-budget-log.jsonl (append-only log dated 2026-03, pre-rename) and 6 self-referential hits in docs/ROADMAP-PLATFORM.yaml itself (T-1.0's own name/intent/exit_criteria lines)"
+      - "docs/PROJECT_CONTEXT.md:17 still says bare `ROADMAP.md` (3x) -- the pattern 'docs/ROADMAP\\.md' does NOT catch it, so a real stale narrative reference survives uncaught (prompt's note confirmed)"
+      - "Live consumers ARE correctly rerouted: src/data/handlers/scheduled_agent_handler.py:296-351 reads ROADMAP-PRODUCT.md + ROADMAP-PLATFORM.yaml; .claude/skills/plan-critique/SKILL.md:6-7,27 reads both new paths; .github/prompts/strategic_review.prompt.md absent (ec6 met)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Intent (reroute live consumers) substantively achieved and the highest-risk consumers are clean. But exit criterion 1 as written is NOT literally satisfied: the grep returns hits (token-budget log + YAML self-refs), and PROJECT_CONTEXT.md:17's bare `ROADMAP.md` is an uncaught live narrative reference. Cosmetic/log residue, not a functional break -- hence low."
+
+  - id: A1-002
+    affected_ids: [T-1.2]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".claude/skills/planning/SKILL.md:76-81 documents all five soft-warn exception categories verbatim: ci_rca, hotfix, security_advisory, ad_hoc_rec, user_explicit_out_of_scope (ec4 met)"
+      - ".claude/skills/planning/SKILL.md:76 'do NOT reject the session -- issue a soft warning and proceed' (ec2 warn-not-reject met); reads ROADMAP-PLATFORM.yaml via preflight next_eligible/strategic_pending (lines 290,296)"
+      - "tests/test_platform_roadmap.py: 60 passed (next_eligible/strategic_pending computation substantiated)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All four exit criteria substantiated in the skill file."
+
+  - id: A1-003
+    affected_ids: [T-1.3]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".claude/commands/plan.md:41 surfaces preflight.platform_roadmap.next_eligible and .strategic_pending to the human (ec1 met verbatim)"
+      - "scripts/session_preflight.py:1493 emits slim 'platform_roadmap' key; :1529-1530 carries next_eligible + strategic_pending"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Single exit criterion met."
+
+  - id: A1-004
+    affected_ids: [T-1.4]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/session_preflight.py:39 ROADMAP_PLATFORM_PATH constant; :1461 platform_roadmap.compute_state_dict(); :1493 writes platform_roadmap key into report"
+      - "scripts/platform_roadmap.py present; computes next_eligible/in_progress/blocked/strategic_pending; tests/test_platform_roadmap_state.py + test_session_preflight_platform_roadmap.py exist; 60 passed in test_platform_roadmap.py"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Preflight platform_roadmap state computation confirmed; depends-on-graph + shortcut resolution covered by passing tests."
+
+  - id: A1-005
+    affected_ids: [T-1.5]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/platform_roadmap.py exists with RoadmapDocument/TierItem/CandidateDecision Pydantic models; scripts/validate.py:1644 validate_platform_roadmap() wired at :2236 (structural drift: dup ids, dangling depends_on, cycles, gate-rule grammar)"
+      - "tests/test_platform_roadmap.py: 60 passed (malformed YAML, dangling depends_on, dup ids, cycle detection, gate-helper grammar all exercised)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All five exit criteria substantiated by code + passing tests."
+
+  - id: A1-006
+    affected_ids: [T-1.6]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/validate.py:1719 validate_lambda_manifest_coverage, :1784 validate_lambda_deploy_gating wired at :2238-2240; LAMBDA_FILE_PATTERNS derives from manifests via lambda_manifest.derive_lambda_file_patterns (progress_note claim)"
+      - ".claude/skills/planning/SKILL.md Step 4 manifest-derived rule present; tests/test_lambda_manifest.py: 58 passed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Bootstrap hand-curated registry superseded by manifest-derived form per T-1.8 (as the criterion 5 forecast); deploy-gating check binds in validate.py."
+
+  - id: A1-007
+    affected_ids: [T-1.7]
+    verdict_or_classification: confirmed
+    evidence:
+      - "config/lambda/ and config/agent/ subtrees exist (config/agent/data_quality/ops.yaml referenced by validate.py:1607); build_lambda.py manifest-driven (no blanket config/ copytree)"
+      - "Criterion 4 (LAMBDA_FILE_PATTERNS from config/lambda globs) satisfied via manifest union per progress_note 2026-06-03; tests/test_lambda_manifest.py 58 passed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "config split + build_lambda narrowing + manifest-derived registry all present."
+
+  - id: A1-008
+    affected_ids: [T-1.8]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/build_lambda.py contains NO shutil.copytree on ROOT/src or ROOT/config (grep 'copytree' returns only docstring/comment refs at lines 15,205 describing the RETIRED behaviour); ec1 met"
+      - "All 12 src/lambdas/*/manifest.yaml exist (data-pipeline, ops-compaction, log_rec, log_decision, query, update_rec, list_tools, maintenance, ducklake_*); scripts/lambda_manifest.py present"
+      - "scripts/validate.py:1749 validate_lambda_bundle_completeness (py_compile staging) wired at :2239; tests/test_lambda_manifest.py: 58 passed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Manifest mechanism fully realized. progress_note pre-empts the zero-diff/assets[] reinterpretation of the 'files dropped' criterion -- accepted; the stronger zero-diff equivalence test + assets[] declarations cover runtime-read files invisible to py_compile."
+
+  - id: A1-009
+    affected_ids: [T1.8]
+    verdict_or_classification: confirmed
+    evidence:
+      - "T1.8 (line 2725, status: reserved) rename_history.to: T2.7; reason cites round-1 architect HIGH-1 cycle fix moving 'Retire Athena _current views' off T1.8"
+      - "CD.15 (line 489) gates: [T0.7c, T1.2, T2.5, T2.7] -- EXACTLY matches the rename_history claim that the gate 'now reads [T0.7c, T1.2, T2.5, T2.7]'"
+      - "No depends_on edge anywhere references T1.8 (grep of all depends_on lines: zero); the only 'T1.8' mention outside its own block is the rename_history reason prose. Nothing depends on it."
+    proposed_severity: low
+    proposed_confidence: high
+    note: "NOTE ON SCOPE: the prompt's 'T-1.8 (reserved...)' maps to the RESERVED item T1.8 (no hyphen, line 2725); the item at line ~1695 labelled T-1.8 is a DISTINCT complete manifest item (row A1-008). Both checked. rename_history/CD.15 consistency confirmed; reserved item correctly inert."
+
+  - id: A1-010
+    affected_ids: [T-1.10]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".claude/skills/implement/SKILL.md:133-168 'Tier_item bookkeeping (post-verification, pre-merge)': fires after verification-pass (ec1); walks exit_criteria[] with subprocess-exec + conservative prose fallthrough (:146, ec2); stages during code-review, commits on PROCEED / discards on REVISE (:157-161, ec3); all-criteria->complete+completed_at, subset->in_progress+progress_note, idempotent-on-resume (:151,158, ec4)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All four exit criteria satisfied by the SKILL.md section. (Self-aware caveat at :166-168 that the rule should self-flip T-1.10; status IS complete and the section exists, so criteria are met as written.)"
+
+  - id: A1-011
+    affected_ids: [T-1.11]
+    verdict_or_classification: confirmed
+    evidence:
+      - "docs/INTENT-pre-codegen-contract-ratification.md EXISTS (the named REPORT-ONLY deliverable); establishes the ritual + Class A/B/C + docs/contracts/{name}.yaml home"
+      - "ec1's commit citation (PR #352, commit fd314c0) is UNVERIFIABLE in this single-commit clone (git cat-file -t fd314c0 -> not found) -- file-existence stands in for it"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Deliverable present; the PROCEED/critique-convergence criteria (ec2/ec3) are process attestations not independently checkable from the repo, but the INTENT artifact existing substantiates the substantive claim. Commit-hash citation unverifiable due to squashed history (env caveat)."
+
+  - id: A1-012
+    affected_ids: [T-1.12]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "DONE (subset a+b): CD.25 present (ROADMAP-PLATFORM.yaml:719); scripts/platform_roadmap.py:136-138 TierItem has bootstrap_completion_exempt/decision_required_before/decomposition_hints; :152-153 CandidateDecision has widened decision_required_before + bootstrap_allowance; :119,146 both extra='forbid'. tests/test_platform_roadmap.py: 60 passed."
+      - "UNMET (subset d): scripts/contracts.py MISSING (ec4 'scripts/contracts.py Pydantic loader rejects malformed contract YAMLs' cannot pass)"
+      - "UNMET (subset e): no contracts CI drift gate in scripts/validate.py -- only roadmap drift + environment-taxonomy.md checks; contract refs are .md gotcha strings (ec5 unmet)"
+      - "UNMET (subset f): scripts/session_preflight.py has NO v0-provisional/contract/re-ratification hook (grep zero; ec6 unmet)"
+      - "UNMET (subset g): .claude/skills/implement/SKILL.md has NO decomposition_hints/bootstrap_completion_exempt inheritance (grep zero; ec7 unmet)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "status is in_progress and the progress_note explicitly scopes subsets (d)(e)(f)(g) as named follow-on plans -- the status is HONEST, not overclaimed. 4 of 7 exit criteria are unmet but the item does not claim complete, so no truthfulness violation. Flagged partially_confirmed only because the exit_criteria list (which reads as completion gates) is not yet satisfiable; severity low because status correctly reflects this. NOTE: decomposition_hints.atomic_plans labels subsets (a)-(f) but intent text labels (a)-(g); off-by-one between the two enumerations -- cosmetic."
+
+  - id: A1-013
+    affected_ids: [T0.1]
+    verdict_or_classification: confirmed
+    evidence:
+      - "bin/venv-python EXISTS (wrapper picking .venv/bin vs Scripts); scripts/session_preflight.py:67 documents bin/python (Linux) vs Scripts/python.exe (Windows) resolution; .claude/settings.json + statusline.py + CLAUDE.md(->AGENTS.md) in scope"
+      - "tests/test_session_preflight.py present; OS-aware resolution is the live mechanism (T0.11/T0.14 build on it)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Linux-container venv resolution operational; wrapper exists and is the documented invocation across the repo (AGENTS.md mandates bin/venv-python)."
+
+  - id: A1-014
+    affected_ids: [T0.2]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "files_in_scope env/setup.sh and env/persistent-volumes.yaml are BOTH MISSING at HEAD"
+      - "Realized instead via bin/setup-cloud-env.sh (EXISTS) per the item's own note ('Realized via bin/setup-cloud-env.sh static-key env setup, PRs #4/#6')"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Intent (CC-on-web env bootstrap) acknowledged-realized via a DIFFERENT mechanism; note documents it. Exit criteria as WRITTEN reference env-level outcomes (Python 3.12+terraform+aws+gh on PATH; <60s pip from warm cache; S3_LOG_BUCKET/AWS_PROFILE pre-set) that are environment-state claims not checkable from repo files, and the two named files do not exist. Per the audit's re-interpretation rule this is partially_confirmed at best; re-interpretation IS acknowledged in-note, hence medium not high."
+
+  - id: A1-015
+    affected_ids: [T0.3]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "scripts/verify_platform_account.py -- the SOLE file_in_scope and the subject of EVERY exit criterion ('verifier check X passes' x ~14) -- is ABSENT at HEAD and has no git history in this clone (cannot confirm deleted vs never-committed; env caveat)"
+      - "Realized via terraform/personal/platform_roles.tf (EXISTS, Pattern B IAM) per the note; progress_note claims 'verifier reports t03_status:complete with 14/14 checks pass' but that verifier no longer exists to re-run"
+      - "Exit criterion 5 (ops_decisions entry via log-decision Lambda) explicitly deferred to T0.7b (not_started) -- so by its own text one criterion is unmet; note + user_action_required:true flag this"
+    proposed_severity: high
+    proposed_confidence: high
+    note: "complete with materially unsubstantiable exit criteria: all 14 verifier checks are asserted to pass against a script that is not in the tree, so the strongest evidence class (adjudicated verifier output) cannot be reproduced. The IAM substrate (platform_roles.tf) exists and downstream account-dependent work references it, but the AS-WRITTEN exit criteria (verifier checks + ops_decisions entry) are not currently satisfiable. T0.3 is a dependency of much T0/T1/T2 account work, so a hidden gap here is higher-severity than cosmetic. Recommend re-deriving or restoring the verifier, or rewriting T0.3 exit_criteria to match the terraform-realized reality."
+
+  - id: A1-016
+    affected_ids: [T0.5]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - ".claude/hooks/session_start.py (the named file_in_scope) is MISSING; realized via .claude/hooks/session_start_aws.sh (EXISTS) per note ('static-key chain verification; device-code SSO not built; SSO abandoned per CD.26')"
+      - "ec1-3 describe a device-code SSO flow (chat-surfaced URL+code, cached SSO token reuse) that was deliberately NOT built (CD.26 static-key model; AGENTS.md:93 'There is no SSO login in the static-key model')"
+      - "ec4 'CLAUDE.md hook section enumerates session_start.py alongside never_on_main.py and scheduled_agent_log_only.py' -- not satisfied as written: AGENTS.md references session_start_aws.sh (the .sh), not a session_start.py"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "Auth-bootstrap intent met by static-key chain verification at session start; the SSO-specific exit criteria are obsoleted by CD.26 and the note acknowledges the substitution. Re-interpreted-but-acknowledged -> medium. ec4's literal 'session_start.py' enumeration is stale (file is .sh)."
+
+  - id: A1-017
+    affected_ids: [T0.9]
+    verdict_or_classification: confirmed
+    evidence:
+      - "AGENTS.md EXISTS; CLAUDE.md is exactly '@AGENTS.md\\n' pointer; scripts/validate.py:2022-2040 enforces CLAUDE.md==@AGENTS.md pointer (parity check live)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Realized as CLAUDE.md->@AGENTS.md pointer (inverse of the ec1 phrasing 'AGENTS.md matches CLAUDE.md content') with a CI parity guard -- the parity invariant holds either direction. Confirmed."
+
+  - id: A1-018
+    affected_ids: [T0.10]
+    verdict_or_classification: confirmed
+    evidence:
+      - ".pre-commit-config.yaml EXISTS with no-commit-to-branch (args: --branch main) -> blocks commits to main in any clone (ec2); bundles detect-secrets + block-sensitive-identifiers (ec3 secrets-scan decision realized)"
+      - "requirements-dev.txt:1 'pre-commit>=4.5,<5' (dependency added)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "ruff is NOT bundled, but the criterion says 'Optionally bundle ruff' and only requires the bundled-checks decision be recorded -- detect-secrets is bundled, so met. ec1's 'wired into T0.5 session-start hook' is the weakest link given T0.5 was realized as a .sh, but pre-commit install is standard; treating as confirmed."
+
+  - id: A1-019
+    affected_ids: [T0.11]
+    verdict_or_classification: confirmed
+    evidence:
+      - "scripts/session_preflight.py:67 resolves bin/python (Linux primary, CD.2) vs Scripts/python.exe (Windows, CD.3); MAIN_REPO_VENV constant no longer the resolution path (grep shows venv resolution defers to bin layout)"
+      - "Preflight runs in Linux container (this audit invoked bin/venv-python successfully); tests/test_session_preflight.py present"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Linux-generalisation of preflight confirmed; venv path defers to bin/venv-python layout."
+
+  - id: A1-020
+    affected_ids: [T0.12]
+    verdict_or_classification: confirmed
+    evidence:
+      - "src/schemas/annotations.py defines DqNotNull/DqUnique/DqAcceptedValues/DqRelationship/DqRecency/DqRowCount/DqDeleted (7 markers, ec2); src/schemas/rec.py + decision.py + __init__.py exist (canonical RecPayload/DecisionPayload)"
+      - "scripts/validate.py:1595 validate_pydantic_yaml_drift() + :1534 _check_drift_for_table compare Annotated DqXxx vs config/agent/data_quality/ops.yaml; :1559-1587 MigratingMarker @migrating(target=) allow-list with is_expired() (ec4 transitional-divergence rule met); wired at :2242"
+      - "tests/test_annotations.py: 11 passed"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All six exit criteria substantiated: Annotated[T,DqXxx], ~7 markers + DqDeleted documented, drift detector with @migrating tolerance, DqDeleted short-circuit. Strongest-confirmed item in scope."
+
+  - id: A1-021
+    affected_ids: [T0.14]
+    verdict_or_classification: partially_confirmed
+    evidence:
+      - "ec1 NOT met as written: grep -rn '.venv/Scripts' (excluding .git only, per criterion) returns 510 hits; even excluding .venv libs + docs/plans, 17 LIVE files still reference it (.github/copilot-instructions.md, .github/prompts/*, scripts/session_preflight.py, setup.py, tests/*, AGENTS.md, .agents/skills+workflows, docs/INTENT-*/DECISIONS.md/CHANGELOG.md)"
+      - "ec2: 5 live scripts still contain python.exe (scripts/copilot_wrapper.py, executor/formatters.py, executor/step_runner.py, llm_utils.py, session_preflight.py) -- matches progress_note's 'count these as compliant CD.2/CD.3 fallback annotations'"
+      - "ec3 MET: AGENTS.md:16 section reframed to '## Shell invocations' (no Windows-prescriptive heading)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "status is in_progress with progress_note explicitly deferring Phase 3 (.agents/, src/data/handlers/CLAUDE.md, setup.py) and reinterpreting ec2 as annotated fallbacks. Status is HONEST -- residual debt exists and the item does not claim complete. partially_confirmed reflects that ec1 is materially unmet (17 live residuals incl. .agents/ + setup.py + .github/prompts), consistent with the in_progress label. Low severity because status is accurate."
+
+  # ---------------- INVERSE / SILENT-COMPLETION CHECKS ----------------
+
+  - id: A1-022
+    affected_ids: [T-1.9]
+    verdict_or_classification: silent_completion_candidate
+    evidence:
+      - "docs/INTENT-session-log-architecture.md EXISTS and is substantive (660 lines). ec1 'audits both write surfaces' -> Sections 3.1 (docs/SESSION_LOG.md) + 3.2 (ops_session_log table) + Section 4 read-surface inventory + Section 5/7 schema-accuracy. ec2 'proposes CD(s) on authoritative surface + markdown retirement' -> Section 12 CD.NN.a (retire ops_session_log) + CD.NN.b (retire docs/SESSION_LOG.md post-T1.5). ec3 'proposes follow-on IMPLEMENTATION plans for T0.7b Lambda migration' -> Section 13 full follow-on stub table + named agent-platform-log-turn Lambda."
+      - "docs/plans/PLAN-session-log-audit.md EXISTS (the plan artefact the INTENT header names)"
+      - "T2.15 (ROADMAP-PLATFORM.yaml:3320,3340) ALREADY CITES this INTENT as existing ('docs/INTENT-session-log-architecture.md, proposed ... CD.NN.a') and gates its own DQ-coverage swap on that INTENT's ratification -- a downstream item treats T-1.9's deliverable as done while T-1.9 reads not_started"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "STALE STATUS / silent completion: all three exit_criteria are fully satisfied by the committed INTENT (+ its PLAN artefact), yet status: not_started. T-1.9 is REPORT-ONLY, so the deliverable IS the completion. Downstream T2.15 already depends on it existing. Recommend flipping T-1.9 to complete (or in_progress pending the named CD ratifications, which the INTENT header notes 'awaits CD ratification'). Medium because it is a status-truthfulness inversion with a live downstream consumer, not merely cosmetic."
+
+  - id: A1-023
+    affected_ids: [T-1.13, T-1.14, T-1.15, T-1.16, T-1.17, T-1.18, T-1.19]
+    verdict_or_classification: confirmed
+    evidence:
+      - "docs/contracts/ directory contains exactly ONE .yaml: read-engine.yaml. None of the seven target contract YAMLs exist: instruction-architecture.yaml, inference-provider.yaml, log-storage.yaml, build-lambda.yaml, cli-json-output.yaml, copilot-cli.yaml, delegate-cli.yaml are ALL ABSENT (their .md source forms still present)"
+      - "scripts/contracts.py (the loader these depend on via T-1.12 subset d) is also MISSING, consistent with the whole T-1.13..T-1.19 wave being not_started"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "not_started status is ACCURATE for all seven -- no silent completion. Each target *.yaml is absent and the gating loader (T-1.12d contracts.py) does not exist, so none could be silently complete. read-engine.yaml is unrelated to this wave (not a T-1.13..T-1.19 target). No finding."

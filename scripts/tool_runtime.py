@@ -1,8 +1,9 @@
-"""Bedrock-compatible tool runtime for agentic LLM inference.
+"""Tool runtime for agentic LLM inference.
 
-Provides file system and shell tools that match the Bedrock Converse API
-``toolSpec`` format.  Used by ``bedrock_client.converse_with_tools()`` to
-execute tool calls returned by the model.
+Provides file system and shell tools expressed in the Converse-style
+``toolSpec`` schema format. The original consumer (the Bedrock transport)
+was retired per CD.28; the schema shape is provider-neutral and is retained
+for the T4.2 LiteLLM tool loop.
 
 Each tool method returns a human-readable string result.  The ``execute()``
 dispatcher routes tool names to methods and is the single integration point
@@ -24,7 +25,7 @@ _DEFAULT_BASH_TIMEOUT = 60
 
 
 class ToolRuntime:
-    """File system and shell tools for agentic Bedrock inference.
+    """File system and shell tools for agentic LLM inference.
 
     Args:
         working_dir: Root directory for all file operations and shell commands.
@@ -124,7 +125,7 @@ class ToolRuntime:
     # ------------------------------------------------------------------
 
     def tool_schemas(self) -> list[dict[str, Any]]:
-        """Return Bedrock-compatible ``toolSpec`` definitions for all tools."""
+        """Return Converse-style ``toolSpec`` definitions for all tools."""
         return [
             {
                 "toolSpec": {

@@ -11,6 +11,8 @@ from scripts.data_quality_runner import (
     RunResult,
     _compile_column_test,
     _execute_check,
+    _execute_check_ducklake,
+    _is_reader_unavailable,
     _print_results,
     _save_latest_result,
     load_checks,
@@ -282,7 +284,10 @@ def test_main_no_matching_filters():
     with patch("scripts.data_quality_runner._DQ_DIR") as mock_dq_dir:
         mock_dq_dir.glob.return_value = [Path("test.yaml")]
         with patch("scripts.data_quality_runner.load_checks", return_value=([], {"database": "db"})):
-            with patch("sys.argv", ["runner.py", "--table", "non_existent"]):
+            with (
+                patch("sys.argv", ["runner.py", "--table", "non_existent"]),
+                patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+            ):
                 assert main() == 0
 
 
@@ -353,6 +358,64 @@ def test_run_checks_profile_hard_default(monkeypatch):
     mock_session.assert_called_once_with(profile_name="agent_platform")
 
 
+def test_apply_backend_routing_rewrites_all_migrated_tables():
+    """All _DUCKLAKE_OPS_TABLES checks route to the reader; non-migrated tables stay on Athena."""
+    import scripts.data_quality_runner as dq
+
+    recs = Check(
+        "ops_recommendations",
+        "file",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE file IS NULL",
+        "recs file not null",
+        "error",
+    )
+    decisions = Check(
+        "ops_decisions",
+        "status",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_decisions_current WHERE status IS NULL",
+        "dec status",
+        "error",
+    )
+    deferred = Check(
+        "ops_session_log",
+        "session_id",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_session_log_current WHERE session_id IS NULL",
+        "session log id",
+        "error",
+    )
+    dq.apply_backend_routing([recs, decisions, deferred], "agent_platform")
+    assert recs.backend == "ducklake"
+    assert "{tbl}" in recs.sql
+    assert "ops_recommendations_current" not in recs.sql
+    # ops_decisions is migrated too (Decision 84 I-1) -- routed to the reader.
+    assert decisions.backend == "ducklake"
+    assert "{tbl}" in decisions.sql
+    # ops_session_log stays on Athena until its T2.26 disposition.
+    assert deferred.backend == "athena"
+    assert "ops_session_log_current" in deferred.sql
+
+
+def test_apply_backend_routing_ignores_env_flag(monkeypatch):
+    """The OPS_STORAGE_BACKEND env flag is retired: routing applies regardless of its value."""
+    import scripts.data_quality_runner as dq
+
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")
+    recs = Check(
+        "ops_recommendations",
+        "file",
+        "not_null",
+        "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE file IS NULL",
+        "recs file not null",
+        "error",
+    )
+    out = dq.apply_backend_routing([recs], "agent_platform")
+    assert recs.backend == "ducklake"
+    assert recs in out
+
+
 def test_print_results_json(capsys):
     c = Check("t", "c", "type", "sql", "desc")
     results = [CheckResult(c, "PASS")]
@@ -378,7 +441,11 @@ def test_main_full(mock_run, mock_load, mock_dq_dir):
     mock_dq_dir.glob.return_value = [Path("test.yaml")]
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     mock_run.return_value = RunResult(verdict="PASS")
-    with patch("sys.argv", ["runner.py"]):
+    # Stub routing: it reads _DQ_DIR/"ops.yaml" which is a MagicMock here; routing has dedicated tests.
+    with (
+        patch("sys.argv", ["runner.py"]),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+    ):
         assert main() == 0
 
 
@@ -399,7 +466,10 @@ def test_main_severity_error(mock_load, mock_dq_dir, _mock_tombstones):
         Check("t", "c", "type", "sql", "desc", "warn"),
     ]
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
-    with patch("sys.argv", ["runner.py", "--severity", "error", "--dry-run"]):
+    with (
+        patch("sys.argv", ["runner.py", "--severity", "error", "--dry-run"]),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+    ):
         with patch("builtins.print") as mock_print:
             main()
             # Only error check printed (2 lines: desc and sql)
@@ -415,7 +485,10 @@ def test_main_severity_warn(mock_load, mock_dq_dir):
         Check("t", "c", "type", "sql", "desc", "warn"),
     ]
     mock_load.return_value = (checks, {"database": "db", "athena_workgroup": "wg"})
-    with patch("sys.argv", ["runner.py", "--severity", "warn", "--dry-run"]):
+    with (
+        patch("sys.argv", ["runner.py", "--severity", "warn", "--dry-run"]),
+        patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+    ):
         with patch("builtins.print") as mock_print:
             main()
             assert mock_print.call_count == 2
@@ -428,7 +501,10 @@ def test_main_json(mock_load, mock_dq_dir):
     mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
     with patch("scripts.data_quality_runner.run_checks") as mock_run:
         mock_run.return_value = RunResult(verdict="PASS")
-        with patch("sys.argv", ["runner.py", "--json"]):
+        with (
+            patch("sys.argv", ["runner.py", "--json"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
             with patch("builtins.print") as mock_print:
                 main()
                 # Check that print was called with JSON (one of the calls should be the JSON string)
@@ -748,3 +824,333 @@ def test_print_results_json_includes_unenforced_fail(capsys):
     assert "unenforced_fail" in data
     assert data["unenforced_fail"] == 1
     assert data["failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# T2.19: dual-backend dispatch (DuckLake path)
+# ---------------------------------------------------------------------------
+
+
+def test_ops_backend_unconditionally_ducklake(monkeypatch):
+    import scripts.data_quality_runner as dq
+
+    # Decision 84 I-1: DuckLake is the sole ops backend; the env rollback flag is retired.
+    monkeypatch.delenv("OPS_STORAGE_BACKEND", raising=False)
+    assert dq._ops_backend() == "ducklake"
+    monkeypatch.setenv("OPS_STORAGE_BACKEND", "iceberg")  # ignored: no env read remains
+    assert dq._ops_backend() == "ducklake"
+
+
+def test_ducklake_ops_tables_set():
+    import scripts.data_quality_runner as dq
+
+    assert dq._DUCKLAKE_OPS_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+
+
+def test_to_ducklake_sql_rewrites_table_and_regexp():
+    import scripts.data_quality_runner as dq
+
+    sql = "SELECT COUNT(*) AS violation FROM agent_platform.ops_recommendations_current WHERE id IS NULL"
+    out = dq.to_ducklake_sql(sql, "ops_recommendations", "agent_platform")
+    assert "{tbl}" in out and "agent_platform.ops_recommendations" not in out
+    out2 = dq.to_ducklake_sql("SELECT 1 WHERE regexp_like(id, '^x')", "ops_decisions", "agent_platform")
+    assert "regexp_matches(" in out2 and "regexp_like(" not in out2
+
+
+def test_build_clause8_checks_generates_uniqueness():
+    import yaml
+
+    import scripts.data_quality_runner as dq
+
+    spec = yaml.safe_load(open("config/agent/data_quality/ops.yaml", encoding="utf-8"))
+    checks = dq.build_clause8_checks(spec, "agent_platform")
+    types_ = {c.test_type for c in checks}
+    assert "ulid_history_unique" in types_ and "current_merge_key_unique" in types_
+    assert all(c.backend == "ducklake" for c in checks)
+
+
+def test_build_clause8_checks_table_filter():
+    import yaml
+
+    import scripts.data_quality_runner as dq
+
+    spec = yaml.safe_load(open("config/agent/data_quality/ops.yaml", encoding="utf-8"))
+    # Recs-first slice: only ops_recommendations is clause-8-checked (decisions deferred to Iceberg).
+    checks = dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_recommendations")
+    assert {c.table for c in checks} == {"ops_recommendations"}
+    # A deferred table filter yields no clause-8 checks (it is not on DuckLake this slice).
+    assert dq.build_clause8_checks(spec, "agent_platform", table_filter="ops_decisions") == []
+
+
+def test_verdict_for_pass_fail_unenforced_hardgate():
+    import scripts.data_quality_runner as dq
+
+    c_pass = dq.Check("t", "x", "not_null", "sql", "d")
+    assert dq._verdict_for(c_pass, 0, 0.1).verdict == "PASS"
+    assert dq._verdict_for(c_pass, 3, 0.1).verdict == "FAIL"
+    c_unenf = dq.Check("t", "x", "not_null", "sql", "d", enforced=False)
+    assert dq._verdict_for(c_unenf, 1, 0.1).verdict == "UNENFORCED_FAIL"
+    c_tomb = dq.Check("t", "id", "tombstone_resurrection", "sql", "d")
+    assert dq._verdict_for(c_tomb, 1, 0.1).verdict == "HARD_GATE"
+
+
+def test_execute_check_ducklake_success():
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def _invoke(self, payload):
+            return {"rows": [{"violation": 0}]}
+
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT COUNT(*) v FROM {tbl}", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, _Reader()).verdict == "PASS"
+
+
+def test_execute_check_ducklake_relationships_skipped():
+    import scripts.data_quality_runner as dq
+
+    check = dq.Check("ops_priority_queue", "rec_id", "relationships", "sql", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, object()).verdict == "SKIP"
+
+
+def test_execute_check_ducklake_reader_none_is_error():
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def _invoke(self, payload):
+            return None  # unexpected None from _invoke -- body.get() raises AttributeError -> ERROR
+
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+    assert dq._execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+
+def test_run_checks_routes_ducklake(monkeypatch):
+    import scripts.data_quality_runner as dq
+
+    class _Reader:
+        def _invoke(self, payload):
+            return {"rows": [{"violation": 0}]}
+
+    monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+    check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+    result = dq.run_checks([check], "wg", "db", dry_run=False)
+    assert result.verdict == "PASS"
+
+
+def test_tombstone_check_rewrites_to_ducklake_no_athena():
+    """A tombstone check on an ops table rewrites to {tbl} (DuckLake), not the Athena view (High #2)."""
+    import scripts.data_quality_runner as dq
+
+    checks = dq.build_tombstone_checks([{"table": "ops_recommendations", "id": "rec-9"}], database="agent_platform")
+    assert checks and checks[0].test_type == "tombstone_resurrection"
+    rewritten = dq.to_ducklake_sql(checks[0].sql, "ops_recommendations", "agent_platform")
+    assert "{tbl}" in rewritten
+    assert "agent_platform.ops_recommendations" not in rewritten  # no Athena escape hatch
+    assert checks[0].table in dq._OPS_TABLES  # so main() flips it to backend=ducklake
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: _is_reader_unavailable classification
+# ---------------------------------------------------------------------------
+
+
+class TestIsReaderUnavailable:
+    """_is_reader_unavailable must classify transient infra outages vs structured handler errors."""
+
+    def test_requests_connection_error_is_unavailable(self):
+        import requests
+
+        assert _is_reader_unavailable(requests.ConnectionError("connection refused")) is True
+
+    def test_requests_timeout_is_unavailable(self):
+        import requests
+
+        assert _is_reader_unavailable(requests.Timeout("timed out")) is True
+
+    def test_runtime_error_502_no_error_type_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("ducklake reader failed (HTTP 502)")) is True
+
+    def test_runtime_error_503_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 503)")) is True
+
+    def test_runtime_error_504_is_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 504)")) is True
+
+    def test_runtime_error_502_with_error_type_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 502) error_type=runtime")) is False
+
+    def test_runtime_error_500_with_error_type_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 500) error_type=version_mismatch")) is False
+
+    def test_runtime_error_500_no_error_type_is_not_unavailable(self):
+        """HTTP 500 is NOT in the transient set {502,503,504} -- must gate as ERROR."""
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 500)")) is False
+
+    def test_runtime_error_4xx_is_not_unavailable(self):
+        assert _is_reader_unavailable(RuntimeError("failed (HTTP 403)")) is False
+
+    def test_generic_exception_is_not_unavailable(self):
+        assert _is_reader_unavailable(Exception("some error")) is False
+
+    def test_value_error_is_not_unavailable(self):
+        assert _is_reader_unavailable(ValueError("bad value")) is False
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: _execute_check_ducklake exception classification
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteCheckDucklakeUnavailable:
+    """_execute_check_ducklake must classify transient _invoke raises as UNAVAILABLE."""
+
+    def test_connection_error_returns_unavailable(self):
+        import requests
+
+        class _Reader:
+            def _invoke(self, payload):
+                raise requests.ConnectionError("connection refused")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_runtime_error_502_returns_unavailable(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 502)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_runtime_error_503_returns_unavailable(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("failed (HTTP 503)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "UNAVAILABLE"
+
+    def test_structured_500_with_error_type_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 500) error_type=runtime")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+    def test_runtime_error_4xx_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("ducklake reader failed (HTTP 403)")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+    def test_semantic_error_returns_error(self):
+        class _Reader:
+            def _invoke(self, payload):
+                raise ValueError("bad SQL syntax")
+
+        check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: run_checks aggregate
+# ---------------------------------------------------------------------------
+
+
+class TestRunChecksDegradedAggregate:
+    """run_checks must aggregate DEGRADED when the only non-PASS results are UNAVAILABLE."""
+
+    def test_only_unavailable_aggregates_to_degraded(self, monkeypatch):
+        import scripts.data_quality_runner as dq
+
+        class _Reader:
+            def _invoke(self, payload):
+                raise RuntimeError("failed (HTTP 503)")
+
+        monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+        check = dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+        result = dq.run_checks([check], "wg", "db", dry_run=False)
+        assert result.verdict == "DEGRADED"
+        assert result.unavailable == 1
+
+    def test_mixed_unavailable_and_violation_aggregates_to_fail(self, monkeypatch):
+        import scripts.data_quality_runner as dq
+
+        call_count = {"n": 0}
+
+        class _Reader:
+            def _invoke(self, payload):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    raise RuntimeError("failed (HTTP 503)")
+                return {"rows": [{"violation": 5}]}
+
+        monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", lambda profile=None: _Reader())
+        checks = [
+            dq.Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake"),
+            dq.Check("ops_recommendations", "file", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake"),
+        ]
+        result = dq.run_checks(checks, "wg", "db", dry_run=False)
+        assert result.verdict == "FAIL"
+
+    def test_unavailable_property_counts_correctly(self):
+        c = Check("t", "c", "type", "sql", "d")
+        rr = RunResult(
+            results=[
+                CheckResult(c, "UNAVAILABLE"),
+                CheckResult(c, "UNAVAILABLE"),
+                CheckResult(c, "PASS"),
+            ],
+            verdict="DEGRADED",
+        )
+        assert rr.unavailable == 2
+
+
+# ---------------------------------------------------------------------------
+# UNAVAILABLE/DEGRADED: main() exit code
+# ---------------------------------------------------------------------------
+
+
+class TestMainExitCodeDegraded:
+    """main() must exit 0 on DEGRADED and 1 on real FAIL."""
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_0_on_degraded(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="DEGRADED")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 0
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_1_on_fail(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="FAIL")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 1
+
+    @patch("scripts.data_quality_runner._DQ_DIR")
+    @patch("scripts.data_quality_runner.load_checks")
+    @patch("scripts.data_quality_runner.run_checks")
+    def test_main_exits_1_on_hard_gate(self, mock_run, mock_load, mock_dq_dir):
+        mock_dq_dir.glob.return_value = [Path("test.yaml")]
+        mock_load.return_value = ([Check("t", "c", "type", "sql", "desc")], {"database": "db", "athena_workgroup": "wg"})
+        mock_run.return_value = RunResult(verdict="HARD_GATE")
+        with (
+            patch("sys.argv", ["runner.py"]),
+            patch("scripts.data_quality_runner.apply_backend_routing", side_effect=lambda c, d, **k: c),
+        ):
+            assert main() == 1

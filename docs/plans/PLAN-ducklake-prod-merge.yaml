@@ -1,0 +1,203 @@
+schema_version: 1
+slug: "ducklake-prod-merge"
+intent: >-
+  Keep the self-improving platform's governance store (recs/decisions on DuckLake-on-Neon) cheap to
+  read and inside the free-tier catalog budget by compacting the live production ops_* tables the
+  scheduled maintenance currently skips -- paying down the per-read catalog-metadata egress now driving
+  Neon network transfer to 3.78/5GB.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-prod-merge.yaml
+phase: >-
+  Platform T2.18 (DuckLake maintenance pipeline, in_progress) -- delivers the deferred production-merge
+  tail as the Decision 84 consolidation Phase-4 maintenance repoint (merge-only slice). The destructive
+  GC half (expire/cleanup/orphan) stays gated behind rec-2113 / T2.26 and is OUT OF SCOPE.
+scope:
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Add a connectionless action_merge_ops (mirrors catalog_reinit/restore_drill): read data_path +
+      meta_schema from the event, open a PRODUCTION connection, discover live ops_* SCD2 tables via
+      information_schema (the approach MAINTENANCE_SCOPE_NOTE prescribes), run the EXISTING non-destructive
+      maint.merge_adjacent_files per table, emit before/after file counts + metrics. Register in _ACTIONS
+      and _CONNECTIONLESS_ACTIONS. No destructive primitive is reachable from this path.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: >-
+      Add aws_cloudwatch_event_rule + target + aws_lambda_permission for a daily prod-merge schedule
+      (~04:30 UTC, staggered off the 04:00 smoke merge so the reserved_concurrent_executions=1 singleton
+      does not throttle), input {action:"merge_ops", data_path:<prod>, meta_schema:"ducklake_ops"}. Reuse
+      the EXISTING maintenance IAM role (already grants S3 RW on the prod prefix) -- no new IAM.
+  - file: src/lambdas/data-pipeline/manifest.yaml
+    action: Modify
+    purpose: >-
+      Extend excludes with src/common/ducklake_maintenance.py, src/common/catalog_dr.py,
+      src/lambdas/ducklake_maintenance, src/lambdas/ducklake_catalog_dr -- closing the latent leak where
+      `includes: - src/` drags DuckLake maintenance/DR code into data-pipeline.zip (the manifest already
+      excludes the reader/writer/runtime with the same stated intent).
+  - file: src/lambdas/ops-compaction/manifest.yaml
+    action: Modify
+    purpose: Same excludes extension as data-pipeline (close the identical DuckLake-code leak in ops-compaction.zip).
+  - file: tests/test_ducklake_maintenance_handler.py
+    action: Modify
+    purpose: >-
+      Cover action_merge_ops at 100% of new lines: ops_* discovery query, per-table merge_adjacent_files
+      dispatch, metrics emission, connectionless dispatch (skips _open_connection), loud-fail on
+      missing/non-s3 data_path, and an assertion that NO destructive primitive (expire/cleanup/orphan) is
+      reachable from the prod-merge path.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T2.18 progress_note bookkeeping only: record that the production non-destructive merge cadence landed
+      (Decision 84 Phase-4 maintenance repoint, merge-only slice) and that the destructive GC for the
+      production tables remains carried by T2.26 / rec-2113. No exit_criteria or status change.
+  - file: docs/SESSION_LOG.md
+    action: Modify
+    purpose: Record the egress RCA, the prod-merge cadence + manifest-leak fix, the live files_before/after result, and the gated destructive-GC follow-up.
+  - file: docs/plans/PLAN-ducklake-prod-merge.yaml
+    action: Create
+    purpose: This plan.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops (NEW, terraform/personal/ducklake_maintenance.tf):
+    daily cron(0 4,30...) ~04:30 UTC, state ENABLED. Apply posture: Decision 77 sandbox -- create-only,
+    non-IAM, non-destroy, so scripts/terraform_apply_guard.py returns exit 0. Present `terraform plan` to
+    the human before apply (terraform/CLAUDE.md interactive posture).
+  - >-
+    aws_cloudwatch_event_target.ducklake_maintenance_merge_ops (NEW): input
+    {action:"merge_ops", data_path: local.ducklake_prod_data_path, meta_schema:"ducklake_ops"}.
+  - >-
+    aws_lambda_permission.ducklake_maintenance_merge_ops (NEW): events.amazonaws.com -> InvokeFunction.
+    NOT in IAM_SENSITIVE_TYPES, so it does NOT trip the guard. No new aws_iam_role/policy is created
+    (the existing maintenance role already has prod S3 + DSN-read), so there is no IAM-precedence reorder;
+    terraform apply still precedes the Lambda code deploy by convention.
+acceptance_criteria:
+  - The maintenance Lambda exposes a merge_ops action that, invoked against the production catalog (ducklake_ops @ s3://agent-platform-data-lake/ducklake/), runs non-destructive merge over ALL discovered ops_* SCD2 tables (at minimum the ops_recommendations + ops_decisions _history/_current pairs, both live on DuckLake) and returns per-table files_before/files_after with files_after <= files_before for every table.
+  - The FIRST live merge_ops invocation reduces the current-snapshot live-file count for at least one production table (the post-merge ducklake_list_files count is strictly less than the pre-merge count), proving the per-read catalog metadata footprint is compacted. (An idempotent re-run may legitimately show files_after == files_before once compacted -- equality is not a failure on re-run.)
+  - An EventBridge rule schedules merge_ops daily in state ENABLED, staggered off the 04:00 smoke merge, targeting the maintenance Lambda with the production data_path + meta_schema.
+  - merge_ops is non-destructive only -- it dispatches merge_adjacent_files and never expire_snapshots/cleanup_old_files/delete_orphaned_files (verified by test and by static grep of the handler).
+  - The data-pipeline and ops-compaction bundles no longer contain ducklake_maintenance.py or catalog_dr.py, and compute_affected_artifacts(['src/lambdas/ducklake_maintenance/handler.py']) returns ['ducklake_maintenance'] only.
+  - Reader read-your-write still holds after a prod merge (open_recs returns the expected recs; no corruption) and the existing smoke maintenance gate still passes (smoke env untouched).
+  - terraform plan shows only the create of the new EventBridge rule/target/permission (no IAM, no destroy); terraform_apply_guard returns exit 0.
+  - Full `scripts.validate` passes and the new handler code has 100% test coverage.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: merge_ops handler unit tests pass (incl. discovery, per-table merge, metrics, connectionless dispatch, loud-fail).
+    command: bin/venv-python -m pytest tests/test_ducklake_maintenance_handler.py
+    expected: All pass, including the new merge_ops tests.
+    fix_if: A test fails -- fix the handler or test until green; do not weaken assertions.
+  - step: 2
+    phase: pre-deploy
+    action: Prove the prod-merge path is non-destructive (no destructive primitive named in the handler).
+    command: grep -nE "expire_snapshots|cleanup_old_files|delete_orphaned_files" src/lambdas/ducklake_maintenance/handler.py || echo "NONE"
+    expected: Prints NONE (destructive primitives live only in src/common/ducklake_maintenance.py, never invoked by the handler).
+    fix_if: Any match -- remove the destructive call from the handler; the gated GC is out of scope (rec-2113/T2.26).
+  - step: 3
+    phase: pre-deploy
+    action: Manifest excludes are effective -- DuckLake maintenance/DR code no longer bundled into data-pipeline/ops-compaction.
+    command: bin/venv-python -m scripts.lambda_manifest --list-bundle data-pipeline | grep -cE "ducklake_maintenance|catalog_dr"; bin/venv-python -m scripts.lambda_manifest --list-bundle ops-compaction | grep -cE "ducklake_maintenance|catalog_dr"
+    expected: Both print 0.
+    fix_if: Non-zero -- add the missing path(s) to the manifest excludes list.
+  - step: 4
+    phase: pre-deploy
+    action: Future maintenance changes are isolated to the ducklake_maintenance artifact.
+    command: bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as c; print(sorted(c(['src/lambdas/ducklake_maintenance/handler.py'])))"
+    expected: "['ducklake_maintenance']"
+    fix_if: data-pipeline/ops-compaction still listed -- the excludes did not catch the handler dir; fix the manifests.
+  - step: 5
+    phase: pre-deploy
+    action: Full presubmit (CI-equivalent -- lint, format, coverage, plan-schema, imports).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0.
+    fix_if: Any failure -- address it (new handler code must be 100% covered).
+  - step: 6
+    phase: pre-deploy
+    action: Build the affected artifacts (ducklake_maintenance + data-pipeline + ops-compaction) under the size limit.
+    command: bin/venv-python -m scripts.build_lambda
+    expected: All zips build under the 262MB ceiling; data-pipeline/ops-compaction zips are smaller than before (leaked files dropped).
+    fix_if: Build/size failure -- fix packaging (manifest includes/excludes).
+  - step: 7
+    phase: pre-deploy
+    action: Terraform plan shows ONLY the new EventBridge rule/target/permission; present it to the human, then run the guard.
+    command: terraform -chdir=terraform/personal plan -out=/tmp/tfplan.bin && terraform -chdir=terraform/personal show -json /tmp/tfplan.bin > /tmp/tfplan.json && bin/venv-python -m scripts.terraform_apply_guard /tmp/tfplan.json
+    expected: Plan adds 3 resources (rule/target/permission), no IAM, no destroy/replace; guard prints OK and exits 0.
+    fix_if: Plan shows IAM/destroy/replace -- re-scope; the change must reuse the existing role and be create-only.
+  - step: 8
+    phase: post-deploy
+    action: Apply terraform (after human acceptance of the step-7 plan), then deploy the three affected Lambda function codes.
+    command: terraform -chdir=terraform/personal apply /tmp/tfplan.bin && bin/venv-python -m scripts.build_lambda --ducklake-only --deploy && bin/venv-python -m scripts.build_lambda --deploy
+    expected: Rule created; ducklake_maintenance + data-pipeline + ops-compaction function codes updated from S3.
+    fix_if: Apply/deploy error -- re-run; check S3 bucket/key parity and guard exit code.
+  - step: 9
+    phase: post-deploy
+    action: Live merge_ops compacts the production current snapshot (the headline egress proof).
+    command: aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format raw-in-base64-out --payload '{"action":"merge_ops","data_path":"s3://agent-platform-data-lake/ducklake/","meta_schema":"ducklake_ops"}' --profile agent_platform --region eu-west-2 /tmp/merge-ops.json && cat /tmp/merge-ops.json
+    expected: statusCode 200, ok=true; per-table stats for ALL discovered ops_* pairs (ops_recommendations + ops_decisions at minimum) with files_after <= files_before, and at least one table showing a reduction on this first invocation (on an already-compacted re-run, files_after == files_before is acceptable).
+    fix_if: 5xx, or fewer tables than expected, or no reduction on the first run -- read the error and RCA (Decision 55); do not relax the action.
+  - step: 10
+    phase: post-deploy
+    action: Read-your-write intact after the merge (no corruption of the live recs read path).
+    command: bin/venv-python -m scripts.ops_data_portal sync && bin/venv-python -c "import json;print(sum(1 for _ in open('logs/.recommendations-log.jsonl')))"
+    expected: Sync succeeds and the recs count is at or above the baseline captured immediately before VP step 9 (recs are append-only SCD2 -- the merge must not drop rows; compare to the live pre-merge count, do NOT hard-code a number).
+    fix_if: Sync fails or count drops below the pre-merge baseline -- RCA the catalog state immediately; the merge must never drop rows.
+  - step: 11
+    phase: post-deploy
+    action: Smoke maintenance regression -- the on-demand smoke gate (env still smoke) is unaffected.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-merge --profile agent_platform
+    expected: Smoke merge prints OK (the smoke env/DATA_PATH/META_SCHEMA were not changed).
+    fix_if: Smoke regresses -- confirm the prod path did not alter the smoke env or the shared connection helper.
+  - step: 12
+    phase: post-deploy
+    action: The prod-merge EventBridge rule is live and ENABLED.
+    command: aws events list-rules --name-prefix agent-platform-ducklake-maintenance --profile agent_platform --region eu-west-2 --query "Rules[?contains(Name,'merge-ops')].[Name,State]" --output text
+    expected: One rule whose State is ENABLED.
+    fix_if: Absent/DISABLED -- terraform apply did not land; re-apply.
+  - step: 13
+    phase: post-deploy
+    action: Rebuilt inert artifacts still start (slimmed data-pipeline + ops-compaction zips load without import error).
+    command: aws lambda invoke --function-name agent-platform-ops-compaction --payload '{}' --cli-binary-format raw-in-base64-out --profile agent_platform --region eu-west-2 /tmp/opscomp.json; tail -c 400 /tmp/opscomp.json
+    expected: A handled JSON response (not an Unhandled/import error) -- the function still boots after the excluded files were dropped.
+    fix_if: Import/Unhandled error -- a needed file was wrongly excluded; narrow the excludes and rebuild/redeploy.
+constraints:
+  - Non-destructive ONLY -- merge_ops calls merge_adjacent_files exclusively. expire_snapshots/cleanup_old_files/delete_orphaned_files are OUT OF SCOPE (gated by rec-2113 via T2.26); do NOT add them (Decision 55 -- the gate is a conscious deferral, not a relaxation).
+  - Do NOT change the smoke env (DUCKLAKE_DATA_PATH/META_SCHEMA stay smoke). The on-demand smoke gates use force_recreate_tables, which DROPS tables -- they must never point at production.
+  - No new IAM -- reuse the existing maintenance role. terraform plan must show no IAM/destroy (guard exit 0); present the plan before apply (terraform/CLAUDE.md).
+  - Preserve the singleton (reserved_concurrent_executions=1); stagger the prod-merge schedule off the smoke merge so EventBridge does not throttle a concurrent invocation.
+  - Do NOT edit src/common/ducklake_maintenance.py -- reuse merge_adjacent_files unchanged (keeps the merge primitive and its contract stable).
+  - Preflight reader fan-out is OUT OF SCOPE (the human is refactoring preflight separately; #145 already collapsed duplicate warehouse reads).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - "Root cause: scheduled DuckLake maintenance is scoped to ducklake_smoke (handler env + GC_TABLE_SCOPE/HOT_TABLE_SCOPE), so the live production ops_* tables (ops_recommendations/ops_decisions live 2026-06-09/06-11; ops_priority_queue dormant) are never compacted. Inlining-off + SCD2 append-only => ~7,293 small Parquet files for ~900 rows; every ops read re-reads that file/column-stat metadata from Neon, driving network transfer to 3.78/5GB on the free tier."
+  - "This is the Decision 84 Phase-4 maintenance repoint (merge-only slice), delivered early for operational egress. The destructive-GC half (snapshot expiry + file cleanup -- what reclaims Neon/S3 storage and shrinks the daily pg_dump) is gated behind rec-2113 (pg_restore restore-drill) via T2.26 and is NOT in scope."
+  - "Honest framing: non-destructive merge reduces the per-read CURRENT-snapshot metadata (the dominant recurring driver) but does NOT immediately shrink the daily pg_dump or reclaim storage -- the catalog row-count temporarily grows (old + merged files coexist) until the gated GC prunes. Net egress is a win because reads >> daily dumps. S3 object count may rise pre-GC; the acceptance metric is ducklake_list_files (current live files), not raw S3 object count."
+  - "merge_ops follows the existing connectionless operational-action pattern (catalog_reinit/restore_drill) and uses the information_schema ops_% discovery that the in-code MAINTENANCE_SCOPE_NOTE prescribes."
+  - "Blast radius: the data-pipeline/ops-compaction manifests use `includes: - src/` and already exclude the ducklake reader/writer/runtime but MISSED maintenance + catalog_dr -- a latent leak. THIS PR rebuilds data-pipeline + ops-compaction + ducklake_maintenance (the manifest files live under src/); after the excludes fix, FUTURE maintenance changes affect ducklake_maintenance only."
+  - "decision-scout verdict FLAGS_FOUND (NOTE only, no BLOCK). CITE: 84 (Phase-4 repoint + demolition gating), 81/CD.33 (maintenance architecture, singleton, clause-3 concurrency), 79 (per-Lambda V3 + manifests), 77 (sandbox apply guard), 55 (scope boundary is a conscious deferral). Confirmed: rec-2113 does NOT gate non-destructive merge (it gates demolition/non-recreatable migration); Decision 81 (clause 3 = OCC concurrency model; clause 6 = maintenance singleton + the GC older_than grace that closes the writer-vs-expire race) -- that writer-vs-expiry caveat applies only to DESTRUCTIVE expiry, so non-destructive merge is safe concurrent with the live writer (OCC + atomic commit)."
+  - "Branch was 0 commits behind origin/main at planning time (rebased onto #145 'collapse duplicate warehouse reads'); no Main Divergence risk. Preflight clean: creds ok, recs_read_status ok, no ci_rca blocks, no outbox."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/zealous-hawking-mqtxmn)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (CITE 84, 81, 79, 77, 55)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - AWS agent_platform static-key chain verified (preflight creds_status ok)
+execution_steps:
+  - "src/lambdas/ducklake_maintenance/handler.py: add action_merge_ops -- resolve data_path + meta_schema from the event (loud-fail if missing or non-s3://), open a production connection via rt.open_connection (DATA_PATH from event, META_SCHEMA from event, EXTENSION_DIRECTORY env), discover ALL live ops_* SCD2 tables via information_schema (table_name LIKE 'ops\\_%' restricted to _history/_current pairs) -- this MUST cover ops_recommendations AND ops_decisions (both live on DuckLake), not just recs; ops_table_names() in ducklake_scd2_schema is a sanctioned cross-check per MAINTENANCE_SCOPE_NOTE. Run maint.merge_adjacent_files per table, collect files_before/after via maint._count_files, emit MergeOps* metrics, return {ok, action:'merge_ops', tables, files_before, files_after, per_table:[...]}. Register 'merge_ops' in _ACTIONS and add it to _CONNECTIONLESS_ACTIONS."
+  - "tests/test_ducklake_maintenance_handler.py: add merge_ops tests -- discovery query path, per-table merge_adjacent_files dispatch over MULTIPLE discovered pairs (assert both ops_recommendations and ops_decisions are merged, not just one), metrics emission, connectionless dispatch (handler does not call _open_connection), loud-fail on missing/non-s3 data_path, and a non-destructive assertion (no expire/cleanup/orphan called). 100% of new lines."
+  - "src/lambdas/data-pipeline/manifest.yaml and src/lambdas/ops-compaction/manifest.yaml: extend excludes with src/common/ducklake_maintenance.py, src/common/catalog_dr.py, src/lambdas/ducklake_maintenance, src/lambdas/ducklake_catalog_dr."
+  - "terraform/personal/ducklake_maintenance.tf: add aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops (cron ~04:30 UTC, state ENABLED), aws_cloudwatch_event_target with input {action:'merge_ops', data_path: local.ducklake_prod_data_path, meta_schema:'ducklake_ops'}, and aws_lambda_permission. Reuse the existing role; do not add IAM."
+  - "Run pre-deploy VP (steps 1-7); fix to green. Present the terraform plan to the human."
+  - "After human acceptance: apply terraform and deploy the three affected Lambda function codes (VP step 8)."
+  - "Run post-deploy VP (steps 9-13): confirm merge_ops reduces the production current-file count, read-your-write holds, smoke + rebuilt-artifact regressions are clean, and the EventBridge rule is ENABLED."
+  - "docs/ROADMAP-PLATFORM.yaml: add a T2.18 progress_note recording the production non-destructive merge cadence (Decision 84 Phase-4 merge-only slice) and that the destructive GC stays carried by T2.26/rec-2113. docs/SESSION_LOG.md: record the disposition + the live files_before/after result."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55), do not relax the gate."
+  - "Report: what landed, the live files_before/after reduction for the production tables, and the gated destructive-GC follow-up (T2.26 / rec-2113)."
+work_areas: []
+rollback: >-
+  Disable or remove the new EventBridge rule (terraform state=DISABLED or destroy the single rule) to stop
+  the prod-merge cadence; action_merge_ops is inert when never invoked. Revert the manifest excludes and
+  rebuild/redeploy data-pipeline + ops-compaction to restore the prior bundles. No data rollback is needed:
+  merge_adjacent_files is non-destructive (it deletes no S3 objects), so a merged catalog is fully readable
+  and the old files remain until the (separately gated) GC.

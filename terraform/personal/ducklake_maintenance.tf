@@ -22,12 +22,25 @@
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the 3 function code pointers from S3)
 #
-# FP-B note: alarm_actions = [] -- no SNS topic exists in terraform/personal/ yet.
-# FP-B creates one shared personal-account SNS topic and wires it as the alarm_actions target
-# for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm (Decision 81 / plan).
+# FP-B (2026-06-07): shared SNS topic (sns_alerts.tf) created and wired as the alarm_actions
+# target for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm.
+# Also added: hot_merge EventBridge rule/target/permission + env-tunable breaker thresholds.
 
 locals {
   ducklake_maintenance_function = "agent-platform-ducklake-maintenance"
+}
+
+# Singleton concurrency cap (Decision 81 clause 6) = 1: AWS physically refuses a second concurrent
+# invocation, so the singleton is enforced by the platform, not just by schedule geometry. This was
+# briefly -1 (unreserved) at initial deploy because the account Lambda "Concurrent executions" quota
+# (L-B99A9384) sat at the unverified-account floor of 10 and PutFunctionConcurrency cannot drop the
+# unreserved pool below 10. AWS support case 178085808000233 raised L-B99A9384 to 1000 (2026-06-08),
+# so the reservation is now applied. Kept as a variable so the cap can be lifted again for a quota or
+# load test without editing the resource body.
+variable "ducklake_maintenance_reserved_concurrency" {
+  description = "Reserved concurrency for the maintenance singleton (Decision 81 cl.6). 1 = singleton; -1 = unreserved (only for a quota/load test)."
+  type        = number
+  default     = 1
 }
 
 # ---------------------------------------------------------------------------
@@ -51,7 +64,7 @@ resource "aws_cloudwatch_log_group" "ducklake_maintenance" {
 
 resource "aws_iam_role" "ducklake_maintenance" {
   name               = "agent-platform-ducklake-maintenance"
-  description        = "Maintenance singleton: S3 RW+Delete on the smoke prefix, Neon DSN read, maintenance metrics"
+  description        = "Maintenance singleton: S3 RW+Delete on the smoke + production prefixes, Neon DSN read, maintenance metrics"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
@@ -75,24 +88,26 @@ resource "aws_iam_role_policy" "ducklake_maintenance" {
         Resource = [aws_secretsmanager_secret.ducklake_neon_catalog_dsn.arn]
       },
       {
-        # T2.19 NOTE: delete_orphaned_files is catalog-wide, not table-scoped. When GC_TABLE_SCOPE
-        # expands to ops_* at T2.19, this resource ARN must expand to cover all DuckLake data prefixes
-        # (not just the smoke prefix) or delete_orphaned_files will fail with AccessDenied at S3.
-        Sid    = "S3SmokeDataReadWriteDelete"
+        # T2.19: the operational actions write to the PRODUCTION prefix -- seed_ops_recommendations and
+        # catalog_reinit at ducklake/, and restore_drill at ducklake/_restore_drill/ (a sub-prefix). The
+        # scheduled merge/gc still touch the smoke prefix. delete_orphaned_files is catalog-wide, so both
+        # data prefixes are covered here.
+        Sid    = "S3DataReadWriteDelete"
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = [
-          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*"
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_prod_data_prefix}/*",
+          "${aws_s3_bucket.data_lake.arn}/${local.ducklake_smoke_data_prefix}/*",
         ]
       },
       {
-        Sid      = "S3ListSmokePrefix"
+        Sid      = "S3ListDataPrefix"
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
         Resource = [aws_s3_bucket.data_lake.arn]
         Condition = {
           StringLike = {
-            "s3:prefix" = ["${local.ducklake_smoke_data_prefix}/*"]
+            "s3:prefix" = ["${local.ducklake_prod_data_prefix}/*", "${local.ducklake_smoke_data_prefix}/*"]
           }
         }
       },
@@ -126,10 +141,9 @@ resource "aws_lambda_function" "ducklake_maintenance" {
   timeout       = 300
   memory_size   = 1024
 
-  # NOTE: reserved_concurrent_executions=1 (singleton, Decision 81 clause 6). This is intentional
-  # and correct for the maintenance pipeline. It differs from the writer (no reserved_concurrency,
-  # Decision 81 clause 3 OCC model). See file-level comment for the full rationale.
-  reserved_concurrent_executions = 1
+  # Singleton cap (Decision 81 clause 6) = 1 via the variable default. Differs from the writer's OCC
+  # model (no reserved concurrency, clause 3). See the variable definition above for the quota history.
+  reserved_concurrent_executions = var.ducklake_maintenance_reserved_concurrency
 
   s3_bucket        = aws_s3_bucket.data_lake.id
   s3_key           = "lambda-packages/ducklake-maintenance.zip"
@@ -138,12 +152,25 @@ resource "aws_lambda_function" "ducklake_maintenance" {
   layers = [
     aws_lambda_layer_version.ducklake_deps.arn,
     aws_lambda_layer_version.ducklake_extensions.arn,
+    # T2.19: restore_drill runs pg_dump/pg_restore (/opt/bin) from the pgclient layer.
+    aws_lambda_layer_version.ducklake_pgclient.arn,
   ]
 
   environment {
     variables = {
+      # Scheduled merge/gc operate on the SMOKE catalog (relocated to its own ducklake_smoke
+      # meta-schema -- rec-2099). The operational actions target production via explicit event params.
       DUCKLAKE_DATA_PATH           = local.ducklake_smoke_data_path
+      DUCKLAKE_META_SCHEMA         = "ducklake_smoke"
       DUCKLAKE_EXTENSION_DIRECTORY = local.ducklake_extension_dir
+      # The seed/catalog actions schema_gate + write_scd2, which load the field-semantics contract
+      # bundled into the zip (manifest assets[]).
+      DUCKLAKE_FIELD_SEMANTICS_PATH = "/var/task/config/lambda/ducklake/field_semantics.yaml"
+      # FP-B env-tunable GC circuit-breaker thresholds (CD.34 co-tuning mechanism).
+      # FP-A defaults retained as the shipped values; change ONLY via a Decision superseding CD.33.
+      # Tuning to pass a gate is a Decision-55 violation.
+      GC_BREAKER_FILE_FRACTION = "0.20"
+      GC_BREAKER_BYTES         = "10737418240" # 10 GiB
     }
   }
 
@@ -227,10 +254,81 @@ resource "aws_lambda_permission" "ducklake_maintenance_gc" {
 }
 
 # ---------------------------------------------------------------------------
+# EventBridge hot_merge rule: higher-frequency merge cadence (T2.18 FP-B / CD.34).
+# Runs merge_adjacent_files ONLY over HOT_TABLE_SCOPE (no GC/deletion).
+# Cadence: every 6h -- bounds small-file COUNT between weekly GC passes.
+# T2.19 forward pointer: the real high-write-rate ops_* tables are wired at T2.19.
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "ducklake_maintenance_hot_merge" {
+  name                = "agent-platform-ducklake-maintenance-hot-merge"
+  description         = "Higher-frequency DuckLake merge-only cadence (T2.18 FP-B / CD.34). cron every 6h."
+  schedule_expression = "cron(0 */6 * * ? *)"
+  state               = "ENABLED"
+
+  tags = {
+    Name    = "DuckLake Maintenance Hot Merge Schedule"
+    Purpose = "T2.18 FP-B higher-frequency merge-only cadence"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "ducklake_maintenance_hot_merge" {
+  rule      = aws_cloudwatch_event_rule.ducklake_maintenance_hot_merge.name
+  target_id = "ducklake-maintenance-hot-merge"
+  arn       = aws_lambda_function.ducklake_maintenance.arn
+  input     = jsonencode({ action = "hot_merge" })
+}
+
+resource "aws_lambda_permission" "ducklake_maintenance_hot_merge" {
+  statement_id  = "AllowEventBridgeHotMerge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ducklake_maintenance.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ducklake_maintenance_hot_merge.arn
+}
+
+# ---------------------------------------------------------------------------
+# EventBridge prod-merge rule: every-6h non-destructive merge of ALL live ops_* SCD2 table pairs
+# in the production catalog (ducklake_ops @ s3://.../ducklake/). Staggered to :30 (off the 6-hourly
+# hot_merge at :00) to avoid throttle under reserved_concurrent_executions=1. Non-destructive:
+# merge_ops dispatches merge_adjacent_files only -- no expire/cleanup/orphan (gated by rec-2113/T2.26).
+# Cadence raised from daily (cron(30 4 * * ? *)) to every 6h by neon-egress-reduction (D3a): paying
+# down ops_* small-file growth faster shrinks the per-query ducklake_file_column_stats footprint that
+# drives every read's Neon metadata egress (ducklake #859).
+# No new IAM: reuses the existing maintenance role (already grants S3 RW on the prod prefix).
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "ducklake_maintenance_merge_ops" {
+  name                = "agent-platform-ducklake-maintenance-merge-ops"
+  description         = "Every-6h production DuckLake ops_* non-destructive merge (T2.18 Phase-4 / Decision 84; neon-egress D3a). cron every 6h at :30 UTC."
+  schedule_expression = "cron(30 */6 * * ? *)"
+  state               = "ENABLED"
+
+  tags = {
+    Name    = "DuckLake Maintenance Prod Merge Ops Schedule"
+    Purpose = "T2.18 Phase-4 every-6h production ops non-destructive merge - neon-egress D3a"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "ducklake_maintenance_merge_ops" {
+  rule      = aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops.name
+  target_id = "ducklake-maintenance-merge-ops"
+  arn       = aws_lambda_function.ducklake_maintenance.arn
+  input     = jsonencode({ action = "merge_ops", data_path = local.ducklake_prod_data_path, meta_schema = "ducklake_ops" })
+}
+
+resource "aws_lambda_permission" "ducklake_maintenance_merge_ops" {
+  statement_id  = "AllowEventBridgeMergeOps"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ducklake_maintenance.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ducklake_maintenance_merge_ops.arn
+}
+
+# ---------------------------------------------------------------------------
 # Circuit-breaker CloudWatch metric alarm.
 # Fires when MaintenanceBreakerTrip >= 1 in a 5-minute window.
-# alarm_actions = [] -- no SNS topic in terraform/personal/ yet.
-# FP-B: wire alarm_actions to the shared SNS topic created in FP-B.
+# alarm_actions wired to shared SNS topic (FP-B / Decision 39).
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "ducklake_maintenance_breaker" {
@@ -244,10 +342,8 @@ resource "aws_cloudwatch_metric_alarm" "ducklake_maintenance_breaker" {
   statistic           = "Sum"
   threshold           = 1
 
-  # FP-B: wire alarm_actions to the shared SNS topic (created in FP-B alongside the catalog-DR
-  # freshness alarm). No aws_sns_topic exists in terraform/personal/ in this slice.
-  alarm_actions = []
-  ok_actions    = []
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
 
   treat_missing_data = "notBreaching"
 

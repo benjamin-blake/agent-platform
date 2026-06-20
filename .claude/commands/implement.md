@@ -96,6 +96,8 @@ Must exit 0 before continuing. If it fails, fix the issues and re-run.
 **You MUST execute the commit flow autonomously once Step 6 passes. Do not stop to ask for permission.**
 Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in your `implement` skill. All GitHub operations use the GitHub MCP tools (`mcp__github__*`) -- the `gh` CLI is not available on the web harness. Wait for CI event-driven via `subscribe_pr_activity`; never busy-wait with a sleep timer or a recurring scheduled re-check.
 
+When creating the PR body, emit a `Resolves: rec-NNNN[, rec-MMMM]` trailer if the plan's `bundled_recommendations` list is non-empty. After the merge, execute the **post-merge closeout fallback** from the implement skill (verify `rec-autoclose` closed each rec; close directly if not).
+
 ## Step 8: Capture Friction
 Record friction (parsing errors, ambiguous areas, bugs found) as a process event emitted to `telemetry_process_events` via the executor telemetry API. If no friction, this step is a no-op.
 

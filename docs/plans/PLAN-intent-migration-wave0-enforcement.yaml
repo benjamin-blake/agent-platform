@@ -1,0 +1,143 @@
+schema_version: 1
+slug: "intent-migration-wave0-enforcement"
+intent: >-
+  Wire Decision 86 into the workflow so the INTENT-prose corpus stops growing while the
+  multi-wave extraction (per docs/intent-migration/MANIFEST.yaml) proceeds -- the "stop the
+  bleeding" enforcement step that makes the agent-first routing rule load-bearing rather than
+  advisory, serving the North Star by keeping architectural intent in machine-parseable surfaces.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-intent-migration-wave0-enforcement.yaml
+phase: >-
+  Phase Platform. Implements WAVE-0 of docs/intent-migration/MANIFEST.yaml and the enforcement
+  named in Decision 86 clause 4. Roadmap: supersedes CD.14, repoints tier_item T5.5.
+scope:
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Documentation Artefact Design section: add the Decision 86 routing rule (forward intent ->
+      tier_items, rationale -> Decisions, semantics -> contracts) and the no-new-standing-prose-doc
+      rule, so /plan sessions route content correctly instead of authoring INTENT-style prose.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Same Documentation Artefact Design section exists here; keep the two skill copies consistent
+      with the planning skill's new routing rule (avoid drift between the two consumers).
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Decision 86 clause 4 names plan.md explicitly. The command delegates the Documentation Artefact
+      Design methodology to the planning skill, so the edit here is a light pointer: in the step that
+      writes documentation artefacts, add a one-line reference to Decision 86's routing rule (forward
+      intent -> tier_items, rationale -> Decisions, semantics -> contracts; no new standing prose docs)
+      so a /plan operator sees it in the command surface, with the full rule in the skill.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Agent-First Repository section (line ~63): add the no-new-prose-INTENT rule with a pointer to
+      Decision 86, so the rule is ambient (loaded every session), not just in the planning skill.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping: mark candidate decision CD.14 state: superseded (by Decision 86); repoint
+      tier_item T5.5 from "demote + non-authoritative footer" to "extract content into tier_items/
+      Decisions/contracts, then delete, per docs/intent-migration/MANIFEST.yaml"; sweep CD.14's now-
+      stale retires_intents (line ~535) + demotes_intents (line ~536) arrays so the roadmap's
+      self-contained invariant is not left asserting a demotion this manifest replaces.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add validate_intent_doc_freeze(failed): reject any new standing prose-architecture doc that is
+      NOT in the grandfather set. Grandfather set is DERIVED from docs/intent-migration/MANIFEST.yaml
+      (a doc path is allowed iff it has a documents[] entry with disposition_state != done). Scope the
+      pattern to docs/INTENT-*.md plus the broader standing-prose heuristic, EXCLUDING docs/contracts/
+      and docs/intent-migration/ and any .yaml (so it cannot reject the manifest or new .md contracts
+      during the CD.25 .md->.yaml cutover). Fail-closed iff the manifest is readable; fail-open with a
+      loud warning iff the manifest is absent/mid-edit. SCAN MODEL: the guard MUST enumerate on-disk
+      docs (a glob/dirlist over docs/), NOT get_changed_files() git-diff -- a diff-based guard would
+      miss a committed-but-undiffed doc and would make VP steps 3-4 pass falsely (they create a
+      working-tree file without git add). Do NOT copy the get_changed_files() idiom from
+      validate_environment_taxonomy. WIRING is TWO edits in this codebase, not one registry entry: add
+      the call in BOTH the full-tier sequence (run_python_checks, ~line 2292) AND the --pre block
+      (~lines 2743-2756); confirm both. The check is an O(dirlist) scan, cheap enough for --pre.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Unit tests for validate_intent_doc_freeze: a grandfathered INTENT doc passes; a new
+      docs/INTENT-zzz.md not in the manifest fails; a new docs/contracts/zzz.md is NOT rejected;
+      manifest-absent yields fail-open + warning. Required for test_coverage_checker (new code path).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "Both .claude/skills/planning/SKILL.md and .claude/skills/implement/SKILL.md Documentation Artefact Design sections cite Decision 86 and state the no-new-standing-prose-doc routing rule."
+  - "AGENTS.md Agent-First Repository section states the no-new-prose-INTENT rule and points to Decision 86."
+  - "docs/ROADMAP-PLATFORM.yaml: CD.14 state == superseded; T5.5 intent references extract-and-retire and docs/intent-migration/MANIFEST.yaml; CD.14 retires_intents/demotes_intents no longer assert demotion of docs the manifest deletes."
+  - "scripts/validate.py rejects a newly-created docs/INTENT-<x>.md that has no non-done manifest entry, and does NOT reject docs/contracts/<x>.md; the check runs in both the --pre and full tiers."
+  - "validate_intent_doc_freeze fails-open (warning, not error) when docs/intent-migration/MANIFEST.yaml is unreadable."
+  - "The new guard has unit-test coverage and the full presubmit (bin/venv-python -m scripts.validate) passes."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Confirm the routing rule landed in both skills, the plan command, and AGENTS.md."
+    command: "bin/venv-python -c \"import pathlib; ok=all('Decision 86' in pathlib.Path(p).read_text() for p in ['.claude/skills/planning/SKILL.md','.claude/skills/implement/SKILL.md','.claude/commands/plan.md','AGENTS.md']); print('OK' if ok else 'MISSING')\""
+    expected: "Prints OK (all four files reference Decision 86)."
+    fix_if: "Prints MISSING -- one of the four files lacks the Decision 86 routing-rule edit."
+  - step: 2
+    phase: pre-deploy
+    action: "Confirm the roadmap bookkeeping: CD.14 superseded and T5.5 repointed to the manifest."
+    command: "bin/venv-python -c \"import yaml; r=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); cd14=[c for c in r['candidate_decisions'] if c['id']=='CD.14'][0]; t55=[t for t in r['tier_items'] if t['id']=='T5.5'][0]; assert cd14['state']=='superseded', cd14['state']; assert 'MANIFEST' in t55['intent'] or 'manifest' in t55['intent'], 'T5.5 not repointed'; print('OK CD.14 superseded, T5.5 repointed')\""
+    expected: "Prints 'OK CD.14 superseded, T5.5 repointed'."
+    fix_if: "AssertionError shows CD.14 state still pending, or T5.5 intent not referencing the manifest."
+  - step: 3
+    phase: pre-deploy
+    action: "Negative test: a NEW INTENT doc not in the manifest must be rejected by the guard; a grandfathered one must pass."
+    command: "printf '# rogue\\n' > docs/INTENT-zzz-guardtest.md; bin/venv-python -c \"import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('REJECTED' if any('zzz-guardtest' in x for x in f) else 'LEAKED'); print('GRANDFATHER_OK' if not any('bazel-feasibility' in x for x in f) else 'FALSE_POSITIVE')\"; rm -f docs/INTENT-zzz-guardtest.md"
+    expected: "Prints REJECTED then GRANDFATHER_OK (new doc blocked; existing grandfathered doc not flagged)."
+    fix_if: "LEAKED means the guard missed a new INTENT doc; FALSE_POSITIVE means it wrongly flagged a grandfathered doc still in the manifest."
+  - step: 4
+    phase: pre-deploy
+    action: "Exclusion test: a new docs/contracts/*.md must NOT be rejected (CD.25 cutover window safety)."
+    command: "printf '# c\\n' > docs/contracts/zzz-guardtest.md; bin/venv-python -c \"import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('EXCLUDED_OK' if not any('zzz-guardtest' in x for x in f) else 'WRONGLY_REJECTED')\"; rm -f docs/contracts/zzz-guardtest.md"
+    expected: "Prints EXCLUDED_OK (contracts dir is not in the guard's scope)."
+    fix_if: "WRONGLY_REJECTED means the guard pattern is too greedy and would block legitimate new .md contracts."
+  - step: 5
+    phase: pre-deploy
+    action: "Run the new guard's unit tests (class-path selector, not -k) and the full presubmit."
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestIntentDocFreeze -q && bin/venv-python -m scripts.validate 2>&1 | tail -3"
+    expected: "The TestIntentDocFreeze class passes and the full presubmit prints 'All checks passed.'"
+    fix_if: "A failing unit test names the unmet guard behaviour; a presubmit failure names the failing check. (If the test class is named differently, use that class path -- avoid -k per the PROJECT_CONTEXT pytest -k gotcha.)"
+constraints:
+  - "Planning sessions cannot edit skills/commands/source -- THIS is the IMPLEMENTATION plan where those edits are legitimate (Decision 86 clause 4)."
+  - "Decision 58's skill-sync obligation is superseded by Decision 76; the planning+implement SKILL edits are kept consistent as deliberate hygiene, not an obligation. Do not also edit the .agents/ mirrors unless asked."
+  - "Never add a check to .github/workflows/ci.yml without adding it to validate.py first -- validate.py is the single source of truth (the guard lands in validate.py; no separate workflow edit)."
+  - "scripts/validate.py is not an executor-boundary file; this plan is human-driven (/implement), so the boundary rule does not block it."
+  - "No emojis; ASCII hyphens; type hints on the new function; no exceptions raised at import time."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Implements WAVE-0 of docs/intent-migration/MANIFEST.yaml; Decision 86 (merged in PR #137) is the governing decision and is already live in DECISIONS.md + ops_decisions (dec-086)."
+  - "The guard's grandfather mechanism is the manifest's disposition_state field (single source of truth, auto-shrinking) -- see MANIFEST.yaml WAVE-0 action 4 GUARD-SCOPING sub-clause for the exact exclusions and fail posture (carried from the report-critique NEW-2 finding)."
+  - "Decision 86 forbids the BEHAVIOUR (standing prose-architecture docs anywhere under docs/), not just the docs/INTENT-*.md glob -- the guard's pattern should reflect that while excluding docs/contracts/ and docs/intent-migration/."
+  - "Surface-change closure: this plan changes CD.14 from pending to superseded and repoints T5.5; VP includes confirming no surface still treats CD.14 as pending / T5.5 as demote (steps 1-2)."
+  - "Decisions to cite: Decision 86 (governing), CD.14 (superseded), CD.13 + NS.4 (agent-first), Decision 67/CD.17 (STRATEGIC freeze -- this is IMPLEMENTATION), CD.25 (the .md->.yaml contract cutover the guard must not collide with)."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md and AGENTS.md read
+  - Decision 86 + docs/intent-migration/MANIFEST.yaml read (the governing artefacts)
+  - scripts/validate.py check-function pattern (validate_*(failed)) and tier wiring located
+  - tests/test_validate.py structure located for the new test class
+  - CD.14 + T5.5 located in docs/ROADMAP-PLATFORM.yaml
+execution_steps:
+  - "Edit .claude/skills/planning/SKILL.md and .claude/skills/implement/SKILL.md Documentation Artefact Design sections: add the Decision 86 routing rule + no-new-standing-prose-doc rule."
+  - "Edit AGENTS.md Agent-First Repository section: add the no-new-prose-INTENT rule + Decision 86 pointer."
+  - "Edit docs/ROADMAP-PLATFORM.yaml: CD.14 state -> superseded (note: by Decision 86); repoint T5.5 intent to extract-and-retire per docs/intent-migration/MANIFEST.yaml; sweep CD.14 retires_intents/demotes_intents arrays."
+  - "Add validate_intent_doc_freeze(failed) to scripts/validate.py per the scope purpose (on-disk dirlist scan NOT git-diff; manifest-derived allowlist; exclude docs/contracts/ + docs/intent-migration/ + .yaml; fail-open-on-missing-manifest). Wire the call into BOTH the full-tier sequence (run_python_checks, ~2292) AND the --pre block (~2743-2756) -- two edits, not one."
+  - "Add a TestIntentDocFreeze class to tests/test_validate.py covering reject-new / pass-grandfathered / exclude-contracts / fail-open-on-missing-manifest (keep the class name aligned with VP step 5)."
+  - "Execute the Verification Plan steps 1-5; loop until all pass. On an unrecoverable failure, stop and RCA (Decision 55) rather than papering over it."
+  - "Report: the files changed, the guard behaviour, and presubmit results."
+work_areas: []
+rollback: >-
+  All changes are reversible doc/code edits on a feature branch. To revert: restore the prior
+  Documentation Artefact Design sections + AGENTS.md, set CD.14 state back to pending and restore
+  T5.5's intent + CD.14 arrays in docs/ROADMAP-PLATFORM.yaml, and remove validate_intent_doc_freeze
+  + its tests from scripts/validate.py / tests/test_validate.py. Decision 86 itself remains in force
+  (reverting enforcement does not un-ratify the decision); re-file the enforcement if rolled back.

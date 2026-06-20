@@ -51,6 +51,9 @@ validate_lambda_manifests = _validate.validate_lambda_manifests
 validate_lambda_manifest_coverage = _validate.validate_lambda_manifest_coverage
 validate_lambda_bundle_completeness = _validate.validate_lambda_bundle_completeness
 validate_lambda_deploy_gating = _validate.validate_lambda_deploy_gating
+validate_intent_doc_freeze = _validate.validate_intent_doc_freeze
+validate_ci_rca_taxonomy = _validate.validate_ci_rca_taxonomy
+validate_verifier_hermeticity = _validate.validate_verifier_hermeticity
 
 
 class TestClaudeMdPointerInvariant:
@@ -487,6 +490,105 @@ class TestRunTerraformChecks:
             _validate.run_terraform_creds_free(failed)
         assert "skipped" in capsys.readouterr().out
         assert failed == []
+
+    def test_creds_free_init_retries_on_transient_5xx(self, capsys: pytest.CaptureFixture) -> None:
+        """_terraform_init_with_retry retries on transient 5xx and succeeds on the third attempt."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                if init_call_count < 3:
+                    result.returncode = 1
+                    result.stdout = "Error: could not query provider registry"
+                    result.stderr = ""
+                else:
+                    result.returncode = 0
+                    result.stdout = "Terraform has been successfully initialized!"
+                    result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 3
+        assert failed == []
+
+    def test_creds_free_init_fails_fast_on_non_transient(self) -> None:
+        """_terraform_init_with_retry does NOT retry on non-transient errors."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                result.returncode = 1
+                result.stdout = "Error: Required token could not be found"
+                result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 1
+        assert len(failed) == 1
+        assert "Terraform init" in failed[0]
+
+    def test_creds_free_init_exhausts_retries_on_persistent_transient(self) -> None:
+        """A transient 5xx on all 3 attempts exhausts the retry budget and appends to failed."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "Error: 502 Bad Gateway from registry.terraform.io"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 3  # all attempts consumed
+        assert len(failed) == 1
+        assert "Terraform init" in failed[0]
+
+    def test_transient_init_signatures_exact_set(self) -> None:
+        """_TRANSIENT_INIT_SIGNATURES contains the expected tokens (parity with workflow retry loop)."""
+        expected = frozenset(("502", "Bad Gateway", "could not query provider registry", "failed after "))
+        assert frozenset(_validate._TRANSIENT_INIT_SIGNATURES) == expected
 
 
 class TestValidateSubprocessEncoding:
@@ -1224,19 +1326,54 @@ class TestValidateWarehouseWriteSources:
         assert len(failed) > 0
         assert any("bad_alias.py" in e for e in failed)
 
-    def test_allows_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
-        """ops_data_portal.py is whitelisted as the canonical write path."""
+    def test_allows_whitelisted_portal_for_unmigrated_tables(self, tmp_path: Path, capsys) -> None:
+        """ops_data_portal.py stays whitelisted for the NOT-yet-migrated tables (session_log)."""
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         portal_file = scripts_dir / "ops_data_portal.py"
         portal_file.write_text(
-            'OpsWriter().write("ops_recommendations", merged)\n',
+            'OpsWriter().write("ops_session_log", merged)\n',
             encoding="utf-8",
         )
         with patch("validate.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert failed == []
+
+    def test_migrated_tables_opswriter_blocked_even_for_whitelisted_portal(self, tmp_path: Path, capsys) -> None:
+        """Decision 84 I-1: the migrated-tables block applies to ALL files including the whitelist.
+
+        Even whitelisted callers (ops_data_portal.py) must not route ops_recommendations,
+        ops_decisions, or ops_priority_queue through OpsWriter -- readers serve DuckLake, so an
+        Iceberg write is a silent split-brain. The guard must fire regardless of whitelist status.
+        """
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        portal_file = scripts_dir / "ops_data_portal.py"
+        for table in ("ops_recommendations", "ops_decisions", "ops_priority_queue"):
+            portal_file.write_text(
+                f'OpsWriter().write("{table}", merged)\n',
+                encoding="utf-8",
+            )
+            with patch("validate.ROOT", tmp_path):
+                failed: list[str] = []
+                validate_warehouse_write_sources(failed)
+            assert len(failed) > 0, f"migrated-table block must fire for {table}"
+            assert any("DuckLake-migrated table" in e for e in failed)
+
+    def test_s3_log_store_queue_producer_exemption(self, tmp_path: Path, capsys) -> None:
+        """The dormant queue producer keeps its tracked exemption until the T2.26 repoint."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        store_file = scripts_dir / "s3_log_store.py"
+        store_file.write_text(
+            'ops.write("ops_priority_queue", enriched)\n',
+            encoding="utf-8",
+        )
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_warehouse_write_sources(failed)
+        assert not any("DuckLake-migrated table" in e for e in failed)
 
     def test_clean_script_with_no_warehouse_writes_passes(self, tmp_path: Path, capsys) -> None:
         """Scripts that only call portal functions (file_rec) pass cleanly."""
@@ -1830,6 +1967,91 @@ class TestGraduationGuard:
             with pytest.raises(SystemExit):
                 _validate.main()
         mock_guard.assert_not_called()
+
+
+class TestGraduationGuardUnavailableCarveout:
+    """UNAVAILABLE per-check verdict warns (inconclusive) and does NOT block graduation."""
+
+    _OLD_YAML = (
+        "tables:\n  tbl:\n    columns:\n      col:\n        tests:\n          - not_null:\n              enforced: false\n"
+    )
+    _NEW_YAML = (
+        "tables:\n  tbl:\n    columns:\n      col:\n        tests:\n          - not_null:\n              enforced: true\n"
+    )
+
+    def _write_dq_latest(self, tmp_path: Path, checks: list) -> None:
+        import json
+
+        dq_dir = tmp_path / "logs" / "debug"
+        dq_dir.mkdir(parents=True, exist_ok=True)
+        (dq_dir / "dq-latest.json").write_text(
+            json.dumps({"verdict": "DEGRADED", "checks": checks}),
+            encoding="utf-8",
+        )
+
+    def _write_new_yaml(self, tmp_path: Path, content: str) -> None:
+        yaml_file = tmp_path / "config" / "agent" / "data_quality" / "test.yaml"
+        yaml_file.parent.mkdir(parents=True, exist_ok=True)
+        yaml_file.write_text(content, encoding="utf-8")
+
+    def _make_run(self, old_yaml: str = "", git_show_rc: int = 0):
+        def _run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            joined = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            if "--show-current" in joined:
+                result.stdout = "agent/test\n"
+            elif "--name-only" in joined:
+                result.stdout = "config/agent/data_quality/test.yaml\n"
+            elif "show" in joined and "HEAD:" in joined:
+                result.stdout = old_yaml
+                result.returncode = git_show_rc
+            else:
+                result.stdout = ""
+            return result
+
+        return _run
+
+    def test_unavailable_verdict_warns_does_not_block(self, tmp_path: Path, capsys) -> None:
+        """UNAVAILABLE per-check verdict warns (inconclusive) and does not append a graduation failure."""
+        self._write_dq_latest(
+            tmp_path,
+            [{"table": "tbl", "column": "col", "test": "not_null", "verdict": "UNAVAILABLE"}],
+        )
+        self._write_new_yaml(tmp_path, self._NEW_YAML)
+
+        with (
+            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("validate.ROOT", tmp_path),
+        ):
+            failed: list = []
+            _check_graduation_guard(failed)
+
+        assert failed == []
+        assert "UNAVAILABLE" in capsys.readouterr().out
+
+    def test_non_pass_non_skip_non_unavailable_still_blocks(self, tmp_path: Path) -> None:
+        """A genuine non-PASS/non-SKIP/non-UNAVAILABLE verdict (FAIL) still blocks graduation."""
+        dq_dir = tmp_path / "logs" / "debug"
+        dq_dir.mkdir(parents=True, exist_ok=True)
+        import json
+
+        checks_data = [{"table": "tbl", "column": "col", "test": "not_null", "verdict": "FAIL"}]
+        (dq_dir / "dq-latest.json").write_text(
+            json.dumps({"verdict": "FAIL", "checks": checks_data}),
+            encoding="utf-8",
+        )
+        self._write_new_yaml(tmp_path, self._NEW_YAML)
+
+        with (
+            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("validate.ROOT", tmp_path),
+        ):
+            failed: list = []
+            _check_graduation_guard(failed)
+
+        assert len(failed) == 1
+        assert "tbl.col.not_null" in failed[0]
 
 
 class TestValidateDqManifestGate:
@@ -2948,3 +3170,374 @@ class TestValidateLambdaDeployGating:
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
         assert "Lambda deploy gating" in failed
+
+
+class TestSlocLimitsInPreMode:
+    """Assert validate_sloc_limits runs in the --pre tier (rec-2106 RCA fix)."""
+
+    def test_sloc_limits_called_in_pre_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_sloc_limits must be invoked during --pre alongside validate_cc_limits."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        sloc_called = []
+
+        def capture_sloc(failed: list[str]) -> None:
+            sloc_called.append(True)
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        assert sloc_called, "validate_sloc_limits was NOT called in --pre mode"
+
+    def test_sloc_limits_called_after_cc_limits_in_pre(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_sloc_limits is called in the same --pre block as validate_cc_limits."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        call_order: list[str] = []
+
+        def capture_cc(failed: list[str]) -> None:
+            call_order.append("cc")
+
+        def capture_sloc(failed: list[str]) -> None:
+            call_order.append("sloc")
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_cc_limits", side_effect=capture_cc),
+            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit),
+        ):
+            _validate.main()
+
+        assert "cc" in call_order, "validate_cc_limits not called in --pre mode"
+        assert "sloc" in call_order, "validate_sloc_limits not called in --pre mode"
+        cc_idx = call_order.index("cc")
+        sloc_idx = call_order.index("sloc")
+        assert cc_idx < sloc_idx, "validate_sloc_limits must be called after validate_cc_limits"
+
+
+class TestGetChangedFilesDeletedPaths:
+    """Assert get_changed_files() drops deleted (non-existent) paths before returning."""
+
+    def test_drops_deleted_file(self, tmp_path: Path) -> None:
+        """A file listed by git diff but absent on disk is excluded from the result."""
+        existing = tmp_path / "scripts" / "exists.py"
+        existing.parent.mkdir()
+        existing.write_text("x = 1\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "scripts/exists.py\nscripts/deleted_gone.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert "scripts/exists.py" in files
+        assert "scripts/deleted_gone.py" not in files
+
+    def test_all_deleted_returns_empty(self, tmp_path: Path) -> None:
+        """When all listed files are deleted, the result is an empty list."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "scripts/migrate_ops_iceberg_to_ducklake.py\ntests/test_migrate_ops_iceberg_to_ducklake.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert files == []
+
+    def test_existing_files_all_returned(self, tmp_path: Path) -> None:
+        """When all listed files exist on disk, none are filtered out."""
+        for name in ("a.py", "b.py"):
+            f = tmp_path / name
+            f.write_text("x = 1\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "a.py\nb.py\n"
+            return result
+
+        with (
+            patch("validate.run", side_effect=mock_run),
+            patch("validate.ROOT", tmp_path),
+        ):
+            files = get_changed_files()
+
+        assert sorted(files) == ["a.py", "b.py"]
+
+
+class TestIntentDocFreeze:
+    """Tests for validate_intent_doc_freeze() -- Decision 86 enforcement."""
+
+    _MANIFEST_PENDING = {
+        "documents": [
+            {"id": "bazel-feasibility", "disposition_state": "pending"},
+            {"id": "ducklake-consolidation", "disposition_state": "pending"},
+        ]
+    }
+
+    def _write_manifest(self, docs_dir: Path, data: dict) -> None:
+        import yaml  # noqa: PLC0415
+
+        migration_dir = docs_dir / "intent-migration"
+        migration_dir.mkdir(parents=True, exist_ok=True)
+        (migration_dir / "MANIFEST.yaml").write_text(yaml.dump(data), encoding="utf-8")
+
+    def test_grandfathered_intent_doc_passes(self, tmp_path: Path) -> None:
+        """A docs/INTENT-*.md with a non-done manifest entry is allowed."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        self._write_manifest(docs_dir, self._MANIFEST_PENDING)
+        (docs_dir / "INTENT-bazel-feasibility.md").write_text("# content\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert failed == []
+
+    def test_new_intent_doc_not_in_manifest_is_rejected(self, tmp_path: Path) -> None:
+        """A docs/INTENT-*.md with no manifest entry is rejected."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        self._write_manifest(docs_dir, self._MANIFEST_PENDING)
+        (docs_dir / "INTENT-zzz-new.md").write_text("# rogue\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert any("INTENT-zzz-new.md" in f for f in failed)
+
+    def test_done_manifest_entry_is_rejected(self, tmp_path: Path) -> None:
+        """A doc whose manifest entry has disposition_state: done is rejected (it should have been deleted)."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        manifest = {
+            "documents": [
+                {"id": "bazel-feasibility", "disposition_state": "done"},
+            ]
+        }
+        self._write_manifest(docs_dir, manifest)
+        (docs_dir / "INTENT-bazel-feasibility.md").write_text("# content\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert any("bazel-feasibility" in f for f in failed)
+
+    def test_contracts_dir_excluded(self, tmp_path: Path) -> None:
+        """A docs/contracts/INTENT-*.md is NOT flagged (contracts dir is excluded)."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        self._write_manifest(docs_dir, self._MANIFEST_PENDING)
+        contracts_dir = docs_dir / "contracts"
+        contracts_dir.mkdir()
+        (contracts_dir / "INTENT-zzz.md").write_text("# contract\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert not any("zzz" in f for f in failed)
+
+    def test_intent_migration_dir_excluded(self, tmp_path: Path) -> None:
+        """Files under docs/intent-migration/ are NOT flagged."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        self._write_manifest(docs_dir, self._MANIFEST_PENDING)
+        (docs_dir / "intent-migration" / "INTENT-internal.md").write_text("# internal\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert not any("INTENT-internal" in f for f in failed)
+
+    def test_manifest_absent_fails_open(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """When the manifest is absent the check emits a warning and does NOT append to failed."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "INTENT-zzz.md").write_text("# rogue\n", encoding="utf-8")
+
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_intent_doc_freeze(failed)
+
+        assert failed == []
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.out or "WARNING" in captured.err
+
+
+class TestValidateCiRcaTaxonomy:
+    """Tests for validate_ci_rca_taxonomy (wired into both --pre and run_python_checks)."""
+
+    def test_complete_map_passes(self) -> None:
+        failed: list[str] = []
+        validate_ci_rca_taxonomy(failed)
+        assert not failed, f"Expected no failures, got: {failed}"
+
+    def test_missing_workflow_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: I001
+        import yaml
+
+        incomplete_taxonomy = {
+            "schema_version": 1,
+            "taxonomy_version": 1,
+            "function_to_category": {},
+            "log_pattern_to_category": [],
+            "workflow_to_tier": {"CI": "CI"},
+        }
+        tax_path = tmp_path / "taxonomy.yaml"
+        tax_path.write_text(yaml.dump(incomplete_taxonomy))
+
+        taxonomy_mod._TAXONOMY_CACHE = None
+        original_path = taxonomy_mod._TAXONOMY_PATH
+        taxonomy_mod._TAXONOMY_PATH = tax_path
+        try:
+            from scripts.ci_rca_taxonomy import enumerate_workflow_names
+
+            workflows_dir = ROOT / ".github" / "workflows"
+            actual_names = enumerate_workflow_names(workflows_dir)
+            missing = [n for n in actual_names if n != "CI"]
+            if not missing:
+                pytest.skip("All workflows happen to be in the minimal map")
+
+            failed: list[str] = []
+            validate_ci_rca_taxonomy(failed)
+            assert any("absent from workflow_to_tier" in f for f in failed), (
+                f"Expected taxonomy failure for missing workflows, got: {failed}"
+            )
+        finally:
+            taxonomy_mod._TAXONOMY_PATH = original_path
+            taxonomy_mod._TAXONOMY_CACHE = None
+
+    def test_taxonomy_file_missing_fails(self, tmp_path: Path) -> None:
+        import scripts.ci_rca_taxonomy as taxonomy_mod
+
+        taxonomy_mod._TAXONOMY_CACHE = None
+        original_path = taxonomy_mod._TAXONOMY_PATH
+        taxonomy_mod._TAXONOMY_PATH = tmp_path / "nonexistent.yaml"
+        try:
+            failed: list[str] = []
+            validate_ci_rca_taxonomy(failed)
+            assert any("CI-RCA taxonomy" in f for f in failed), f"Expected taxonomy error, got: {failed}"
+        finally:
+            taxonomy_mod._TAXONOMY_PATH = original_path
+            taxonomy_mod._TAXONOMY_CACHE = None
+
+
+class TestVerifierHermeticity:
+    """Tests for validate_verifier_hermeticity() (T3.6 AST gate)."""
+
+    def test_real_tree_is_clean(self) -> None:
+        """The live scripts/verifiers/ tree produces no hermeticity violations."""
+        failed: list[str] = []
+        validate_verifier_hermeticity(failed)
+        assert failed == [], f"Expected no failures against real verifier tree, got: {failed}"
+
+    def test_hermetic_declared_with_time_time_fails(self, tmp_path: Path) -> None:
+        """A HERMETIC-defaulting class using time.time() is rejected."""
+        verifiers_dir = tmp_path / "scripts" / "verifiers"
+        verifiers_dir.mkdir(parents=True)
+        (verifiers_dir / "clock_verifier.py").write_text(
+            "import time\n\nclass ClockVerifier:\n    async def verify(self):\n        return time.time()\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verifier_hermeticity(failed)
+        assert any("time.time" in f for f in failed), f"Expected time.time violation, got: {failed}"
+
+    def test_hermetic_declared_with_boto3_import_fails(self, tmp_path: Path) -> None:
+        """A HERMETIC-defaulting file importing boto3 is rejected."""
+        verifiers_dir = tmp_path / "scripts" / "verifiers"
+        verifiers_dir.mkdir(parents=True)
+        (verifiers_dir / "network_verifier.py").write_text(
+            "import boto3\n\nclass NetworkVerifier:\n    async def verify(self):\n        pass\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verifier_hermeticity(failed)
+        assert any("boto3" in f for f in failed), f"Expected boto3 violation, got: {failed}"
+
+    def test_non_hermetic_declared_with_time_time_is_exempt(self, tmp_path: Path) -> None:
+        """A NON_HERMETIC_BY_CONSTRUCTION verifier using time.time() is exempt."""
+        verifiers_dir = tmp_path / "scripts" / "verifiers"
+        verifiers_dir.mkdir(parents=True)
+        (verifiers_dir / "exempt_verifier.py").write_text(
+            "import time\n\n"
+            "class ExemptVerifier:\n"
+            "    hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION\n"
+            "    async def verify(self):\n"
+            "        return time.time()\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verifier_hermeticity(failed)
+        assert failed == [], f"Expected no failures for NON_HERMETIC verifier, got: {failed}"
+
+    def test_three_level_datetime_now_fails(self, tmp_path: Path) -> None:
+        """import datetime; datetime.datetime.now() is caught (3-level dotted name)."""
+        verifiers_dir = tmp_path / "scripts" / "verifiers"
+        verifiers_dir.mkdir(parents=True)
+        (verifiers_dir / "three_level_verifier.py").write_text(
+            "import datetime\n\n"
+            "class ThreeLevelVerifier:\n"
+            "    async def verify(self):\n"
+            "        return datetime.datetime.now()\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verifier_hermeticity(failed)
+        assert any("datetime.datetime.now" in f for f in failed), f"Expected datetime.datetime.now violation, got: {failed}"
+
+    def test_syntax_error_file_is_skipped(self, tmp_path: Path) -> None:
+        """A file with a SyntaxError is skipped without crashing the gate."""
+        verifiers_dir = tmp_path / "scripts" / "verifiers"
+        verifiers_dir.mkdir(parents=True)
+        (verifiers_dir / "bad_syntax.py").write_text(
+            "def broken(\n    # unclosed paren\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verifier_hermeticity(failed)
+        assert failed == [], f"SyntaxError file must be skipped, got: {failed}"

@@ -157,7 +157,8 @@ def test_open_attached_real_attach_composition(monkeypatch):
     attach_sql = [s for s in con.executed if s.startswith("ATTACH")]
     assert len(attach_sql) == 1
     assert "ducklake:postgres:" in attach_sql[0]
-    assert "META_SCHEMA 'ducklake_ops'" in attach_sql[0]
+    # Smoke attaches its OWN meta-schema (rec-2099) -- never the production ducklake_ops catalog.
+    assert "META_SCHEMA 'ducklake_smoke'" in attach_sql[0]
     assert any("INSTALL postgres" in s for s in con.executed)
 
 
@@ -848,6 +849,62 @@ def test_lambda_reader_ok(monkeypatch, capsys):
     assert "READER OK rows=3 write_denied=true" in capsys.readouterr().out
 
 
+def _warm_reuse_invoker():
+    """Fake _sigv4_invoke: 1st attach_check is cold (reused=False), subsequent are warm (reused=True)."""
+    state = {"attach_calls": 0}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "reset_warm_connection":
+            state["attach_calls"] = 0
+            return _Resp(200, {"ok": True, "reset": True})
+        if action == "attach_check":
+            state["attach_calls"] += 1
+            cold = state["attach_calls"] == 1
+            return _Resp(200, {"ok": True, "connect_ms": 80.0 if cold else 0.0, "connect_reused": not cold})
+        if action == "write":
+            return _Resp(200, {"ok": True, "occ_retries": 0})
+        return _Resp(200, {"ok": True})
+
+    return fake_invoke
+
+
+def test_lambda_warm_reuse_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    smoke.lambda_warm_reuse(json_output=True)
+    out = capsys.readouterr().out
+    result = json.loads(out)
+    assert result["role"] == "reader"
+    assert result["warm_reuse_observed"] is True
+    assert result["warm_connect_ms"] == 0.0
+    assert result["reconnect_ok"] is True
+
+
+def test_lambda_warm_reuse_writer_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    smoke.lambda_warm_reuse_writer(json_output=True)
+    result = json.loads(capsys.readouterr().out)
+    assert result["role"] == "writer"
+    assert result["warm_reuse_observed"] is True
+    assert result["write_ok"] is True
+
+
+def test_lambda_warm_reuse_fails_when_no_reuse(monkeypatch):
+    """If reuse is never observed (connect_reused stays False), the gate loud-fails."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+
+    def never_reused(url, payload, **kw):
+        if payload["action"] == "attach_check":
+            return _Resp(200, {"ok": True, "connect_ms": 80.0, "connect_reused": False})
+        return _Resp(200, {"ok": True})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", never_reused)
+    with pytest.raises(smoke.SmokeTestFailure, match="warm reuse not observed"):
+        smoke.lambda_warm_reuse()
+
+
 def test_lambda_reader_boundary_broken_fails(monkeypatch):
     monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
 
@@ -874,3 +931,82 @@ def test_main_lambda_gate_loud_fail_returns_1(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "lambda_reader", _boom)
     assert smoke.main(["--lambda-reader"]) == 1
     assert "READER FAIL" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T2.19: production gates (ops read-your-write, churn re-gate, pg_restore drill)
+# ---------------------------------------------------------------------------
+
+
+def test_ops_read_your_write_ok(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    state = {"status": "open"}
+    written = {}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "write_ops":
+            written.update(payload["record"])
+            return _Resp(200, {"ok": True})
+        if action == "update_ops":
+            if payload["record"]["id"].startswith("test-absent"):
+                return _Resp(409, {"error_type": "referential"})
+            state["status"] = payload["record"]["status"]
+            return _Resp(200, {"ok": True})
+        if action == "read_ops_current":
+            return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
+        return _Resp(200, {})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    smoke.ops_read_your_write()
+    assert "OPS_RYW OK" in capsys.readouterr().out
+    # The probe row persists (writer has no delete verb); it must carry the DQ NOT-NULL columns
+    # so it does not red the ops_recommendations data-quality checks while it lingers.
+    for col in ("automatable", "file", "context", "acceptance"):
+        assert written.get(col) is not None, f"probe missing DQ-required column {col!r}"
+
+
+def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    state = {"status": "open"}
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "read_ops_current":
+            return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
+        if action == "update_ops" and not payload["record"]["id"].startswith("test-absent"):
+            state["status"] = "closed"
+            return _Resp(200, {"ok": True})
+        if action == "update_ops":
+            return _Resp(200, {"ok": True})  # absent update wrongly succeeds -> boundary broken
+        return _Resp(200, {"ok": True})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    with pytest.raises(smoke.SmokeTestFailure, match="expected 409"):
+        smoke.ops_read_your_write()
+
+
+def test_ops_churn_regate_delegates(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "lambda_churn", lambda profile=None, region="eu-west-2": None)
+    smoke.ops_churn_regate()
+    assert "OPS_CHURN_REGATE OK" in capsys.readouterr().out
+
+
+def test_catalog_restore_drill_ok(monkeypatch, capsys):
+    # T2.19: catalog_restore_drill now INVOKES the maintenance restore_drill action over 443 (the
+    # pg_dump/pg_restore runs inside AWS -- no Neon 5432 from CC-web). Mock the URL + the invoke.
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        smoke,
+        "_sigv4_invoke",
+        lambda url, p, **kw: _Resp(200, {"ok": True, "restored": True, "probe_id": "drill-probe", "pg_version": "16"}),
+    )
+    smoke.catalog_restore_drill()
+    assert "CATALOG_RESTORE_DRILL OK" in capsys.readouterr().out
+
+
+def test_catalog_restore_drill_probe_lost_fails(monkeypatch):
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "restored": False}))
+    with pytest.raises(smoke.SmokeTestFailure, match="did not restore"):
+        smoke.catalog_restore_drill()

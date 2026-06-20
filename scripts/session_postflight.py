@@ -662,42 +662,10 @@ def run_auto(commit_message: str, steps_total: int = 0, steps_friction: int = 0)
     print("[auto] Running --log-housekeeping (best-effort)...", flush=True)
     run_log_housekeeping()
 
-    # 7b. Drain pending outbox recs (best-effort, before compaction + sync)
-    # Static-key chain (_SSO_PROFILE = agent_platform) auto-refreshes; no interactive login needed.
-    # If _check_sso returns False the chain is offline -- skip the drain and continue (degraded mode,
-    # Dec 57/60). The outbox will drain on the next session when credentials are restored.
-    _drain_ok = True
-    try:
-        from scripts.sync_ops import check_sso as _check_sso  # noqa: PLC0415
+    # 7b. (retired) The pending-outbox drain was removed with the outbox itself (Decision 84 I-4):
+    # file_rec/file_decision now fail loudly at the call site instead of queueing.
 
-        if not _check_sso(_SSO_PROFILE):
-            print(f"[auto] Credentials unavailable ({_SSO_PROFILE}); skipping drain (degraded mode).", flush=True)
-            _drain_ok = False
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARNING: SSO re-check before drain skipped: {exc}", file=sys.stderr)
-        _drain_ok = False
-
-    if _drain_ok:
-        try:
-            from scripts.ops_data_portal import drain_pending  # noqa: PLC0415
-
-            drain_result = drain_pending(profile=_SSO_PROFILE)
-            if drain_result.get("drained", 0) > 0:
-                print(f"[auto] Drained {drain_result['drained']} pending rec(s)", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: drain_pending skipped: {exc}", file=sys.stderr)
-
-    if _drain_ok:
-        try:
-            from scripts.ops_data_portal import drain_pending_decisions  # noqa: PLC0415
-
-            dec_drain = drain_pending_decisions(profile=_SSO_PROFILE)
-            if dec_drain.get("drained", 0) > 0:
-                print(f"[auto] Drained {dec_drain['drained']} pending decision(s)", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: drain_pending_decisions skipped: {exc}", file=sys.stderr)
-
-    # 8. Sync ops Iceberg tables (compact + refresh views + pull local cache)
+    # 8. Refresh the local read-cache from the DuckLake reader
     try:
         from scripts.ops_data_portal import sync as _portal_sync  # noqa: PLC0415
 

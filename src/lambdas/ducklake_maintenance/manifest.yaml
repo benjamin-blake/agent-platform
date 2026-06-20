@@ -6,14 +6,17 @@ handlers:
 includes:
   - src/__init__.py
   - src/common/ducklake_runtime.py
+  - src/common/ducklake_scd2_schema.py
   - src/common/ducklake_maintenance.py
   - src/common/ducklake_spike.py  # transitive: ducklake_runtime.open_connection imports ducklake_spike
+  - src/common/catalog_dr.py  # T2.19: restore_drill uses build_pg_dump_cmd / run_pg_restore
   - src/common/__init__.py
   - src/lambdas/ducklake_maintenance/__init__.py
   - src/lambdas/__init__.py
   - scripts/__init__.py
   - scripts/aws_profile.py
-assets: []
+assets:
+  - config/lambda/ducklake/field_semantics.yaml  # T2.19: seed/catalog actions schema_gate + write_scd2
 config: []
 pip_packages: []
 runtime_config: []
@@ -26,4 +29,8 @@ notes: >-
   concurrency model per Decision 81 clause 3). duckdb==1.5.3 + psycopg2-binary + python-ulid
   live in the ducklake-deps layer; the ducklake/httpfs/postgres extensions live in the
   ducklake-extensions layer. Function URL is AWS_IAM for the post-deploy smoke-test invoke gates.
-  Table scope: ducklake_smoke_* (T2.18 FP-A; generalises to ops_* at T2.19).
+  Scheduled table scope: ducklake_smoke_* under the ducklake_smoke meta-schema. T2.19 adds the
+  operational catalog_reinit / restore_drill actions (invoked via `aws lambda invoke`); restore_drill
+  needs the pgclient layer (pg_dump/pg_restore) attached in Terraform alongside
+  ducklake-deps/ducklake-extensions. (The TEMPORARY seed_ops_recommendations bootstrap was removed at
+  the 2026-06-09 recs sign-off.)

@@ -1,0 +1,246 @@
+schema_version: 1
+slug: "intent-migration-wave1-bazel-feasibility"
+intent: >-
+  Advance platform tier T5.5 (INTENT-doc extract-and-retire) by retiring the first WAVE-1
+  document, docs/INTENT-bazel-feasibility.md, whose verdict already graduated to Decision 80 --
+  shrinking the prose drift surface so agents read architectural intent from the canonical
+  machine-parseable surfaces (Decisions + roadmap), per Decision 86 and the agent-first North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-intent-migration-wave1-bazel-feasibility.yaml
+phase: >-
+  Platform tier T5.5 (INTENT-* document extraction and retirement); WAVE-1 of
+  docs/intent-migration/MANIFEST.yaml (feasibility_graduated -> delete_pointer).
+scope:
+  - file: docs/INTENT-bazel-feasibility.md
+    action: Delete
+    purpose: >-
+      Retire the graduated feasibility assessment. Its decision-relevant content lives in
+      Decision 80 (verdict + discriminating findings + wired revisit trigger) and roadmap KG.13;
+      the exhaustive per-claim tables remain recoverable in git history (commit ddb85a0, PR #64)
+      per the delete_pointer archetype.
+  - file: docs/intent-migration/MANIFEST.yaml
+    action: Modify
+    purpose: >-
+      Flip the bazel-feasibility documents[] entry disposition_state from pending to done
+      (line ~272). This auto-shrinks the validate.py intent-doc-freeze guard's allowed set
+      (the guard derives the allowed set from entries with disposition_state != done). Change
+      ONLY that one field; leave content_blocks / drift_findings / targets intact as the
+      disposition record.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Inbound-reference sweep: remove the `- docs/INTENT-bazel-feasibility.md` line from tier_item
+      T5.5 files_in_scope (line ~5331) so the deleted path is not a dangling reference and the
+      T5.5 final INTENT- grep stays clean.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Inbound-reference sweep: reword Decision 80's two live path references (lines ~332 and ~346)
+      to drop the `docs/INTENT-bazel-feasibility.md` path token while preserving the PR #64 /
+      commit ddb85a0 git-archaeology anchor. Reference repoint ONLY -- no change to the verdict,
+      decision points, rationale, consequences, heading, status, date, or Warehouse ID.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - docs/INTENT-bazel-feasibility.md no longer exists on disk.
+  - >-
+    The MANIFEST bazel-feasibility documents[] entry has disposition_state: done, and it is the
+    only entry flipped to done; every other documents[] entry is unchanged.
+  - >-
+    The validate.py intent-doc-freeze guard (validate_intent_doc_freeze) produces no failure
+    naming bazel-feasibility when run against the post-change tree.
+  - >-
+    Neither live canonical surface (docs/DECISIONS.md, docs/ROADMAP-PLATFORM.yaml) contains the
+    path docs/INTENT-bazel-feasibility.md after the sweep.
+  - >-
+    Repo-wide, the only remaining occurrences of the path docs/INTENT-bazel-feasibility.md are the
+    historical plan artifact docs/plans/PLAN-bazel-feasibility.md and the synthetic test fixtures
+    in tests/test_validate.py.
+  - >-
+    Decision 80 still references commit ddb85a0 and/or PR #64 (git-archaeology anchor preserved);
+    its verdict, decision points, rationale, consequences, heading, status, date, and Warehouse ID
+    are otherwise unchanged.
+  - tier_item T5.5 files_in_scope no longer lists docs/INTENT-bazel-feasibility.md.
+  - Full `bin/venv-python -m scripts.validate` exits 0 (credential-gated checks may report SKIPPED in degraded mode).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the INTENT doc is deleted from the working tree.
+    command: test ! -f docs/INTENT-bazel-feasibility.md && echo DELETED || echo PRESENT
+    expected: Prints DELETED.
+    fix_if: >-
+      Prints PRESENT -- the file still exists. Ensure `git rm docs/INTENT-bazel-feasibility.md`
+      ran (or `rm` + `git add -A`).
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the MANIFEST bazel-feasibility entry is flipped to disposition_state done.
+    command: |-
+      grep -A20 '^  - id: bazel-feasibility$' docs/intent-migration/MANIFEST.yaml | grep -m1 'disposition_state:'
+    expected: "Prints a line whose value is `disposition_state: done`."
+    fix_if: >-
+      Prints `disposition_state: pending` (or nothing) -- flip ONLY the bazel-feasibility entry's
+      disposition_state field to done; do not touch other entries.
+  - step: 3
+    phase: pre-deploy
+    action: Run the real intent-doc-freeze guard against the post-change tree; confirm no bazel false-positive.
+    command: |-
+      bin/venv-python -c "import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('PASS' if not any('bazel-feasibility' in x for x in f) else 'FAIL:'+str(f))"
+    expected: Prints PASS (the file is gone and its manifest entry is done, so the guard emits no failure for it).
+    fix_if: >-
+      Prints FAIL -- the guard flags bazel (the file is still on disk but no longer in the allowed
+      set). Ensure BOTH the file is deleted AND the manifest entry is done (the two must land together).
+  - step: 4
+    phase: pre-deploy
+    action: Inbound-reference sweep -- confirm the two LIVE canonical surfaces hold no path reference.
+    command: |-
+      grep -rn "INTENT-bazel-feasibility.md" docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml; echo "grep_exit=$?"
+    expected: No matching lines printed; trailing line reads grep_exit=1 (grep found nothing).
+    fix_if: >-
+      Any line prints (grep_exit=0) -- a live path reference remains. Reword/remove it: DECISIONS.md
+      Decision 80 lines ~332 and ~346, ROADMAP-PLATFORM.yaml T5.5 files_in_scope line ~5331.
+  - step: 5
+    phase: pre-deploy
+    action: Inbound-reference sweep -- confirm only the intended historical/synthetic residue remains repo-wide.
+    command: |-
+      grep -rl "INTENT-bazel-feasibility.md" . --include=*.md --include=*.yaml --include=*.py | sort
+    expected: >-
+      Exactly two paths -- ./docs/plans/PLAN-bazel-feasibility.md and ./tests/test_validate.py.
+      NEITHER docs/DECISIONS.md NOR docs/ROADMAP-PLATFORM.yaml appears.
+    fix_if: >-
+      docs/DECISIONS.md or docs/ROADMAP-PLATFORM.yaml appears -- a live surface still dangles
+      (re-do step 4's reword). An unexpected new path appears -- investigate it before proceeding;
+      do not blanket-edit historical plan artifacts.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm Decision 80's git-archaeology anchor survived the reword.
+    command: |-
+      grep -n "ddb85a0\|PR #64" docs/DECISIONS.md | head
+    expected: At least one line in the Decision 80 block still references commit ddb85a0 and/or PR #64.
+    fix_if: >-
+      No anchor remains -- the reword stripped the git pointer. Restore the ddb85a0 / PR #64
+      reference so the deleted prose stays recoverable.
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the synthetic-fixture guard tests still pass (unaffected by the real manifest flip).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestIntentDocFreeze -q
+    expected: All TestIntentDocFreeze tests pass (the fixtures build their own temp manifest; the real flip does not touch them).
+    fix_if: >-
+      A failure -- inspect it; the tests are synthetic and should be flip-independent. Do NOT edit
+      the tests to mask a real regression (Decision 55).
+  - step: 8
+    phase: pre-deploy
+    action: Run the authoritative presubmit (CI-equivalent gate).
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exits 0; the "Intent doc freeze (Decision 86)" section reports no failures; the DECISIONS.md
+      and roadmap schema checks pass (credential-gated DQ checks may report SKIPPED in degraded mode).
+    fix_if: >-
+      Non-zero exit -- read the failing check. Likely causes: malformed YAML after the manifest or
+      roadmap edit, or a DECISIONS.md structural check tripped by the reword. Fix the cited check;
+      do not add or remove checks to make it pass.
+constraints:
+  - >-
+    Scope is STRICTLY the four files listed. Touch no other INTENT doc -- especially NOT
+    docs/INTENT-ducklake-consolidation.md (also WAVE-1, but its Decision 84 implementation is in
+    progress) -- and no other tier_item.
+  - >-
+    Decision 80 edits are a reference sweep ONLY: drop the live docs/INTENT-bazel-feasibility.md path
+    token, preserve the PR #64 / commit ddb85a0 anchor. Do NOT alter the verdict, decision points,
+    rationale, consequences, heading, status, date, or Warehouse ID.
+  - >-
+    Do NOT create a new tier_item for the Bazel/Pants revisit trigger. It is already preserved
+    (Decision 80 point 4 states the verbatim wired trigger; roadmap KG.13 carries it forward) and the
+    doc's own sequencing defers the tier_item to T4.4-era -- creating one now would contradict it.
+  - >-
+    Leave historical plan artifacts (docs/plans/PLAN-bazel-feasibility.md,
+    docs/plans/PLAN-intent-migration-wave0-enforcement.yaml) and synthetic test fixtures
+    (tests/test_validate.py) untouched -- point-in-time records / temp-manifest fixtures, not live
+    references to the deleted path.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Do NOT edit logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl. This plan files no
+    recs and closes none; all ops writes (none here) would transit the portal (Single Portal Invariant).
+context:
+  - >-
+    Governing authority: Decision 86 (INTENT prose docs retired -- extract-and-retire). Line 77 is
+    the delete_pointer preserve-watch-signal rule; line 80 makes the inbound-reference sweep a hard
+    precondition ("Deleting a grandfathered doc requires the inbound-reference sweep ... to pass
+    first"). The guard's allowed set is auto-derived from MANIFEST disposition_state != done.
+  - >-
+    Graduation target: Decision 80 (Build-Tooling Direction -- defer Bazel/Pants now). The plan
+    cites Decision 86 and Decision 80 (decision-scout CITE list).
+  - >-
+    Archetype feasibility_graduated -> delete_pointer (MANIFEST). bazel-feasibility appears in NONE
+    of the cross-cutting findings X1/X2/X6/X7, so no frame-lock (Decision 75) or circular-pointer
+    (Decision 84/X7) redirect discipline applies -- the cleanest WAVE-1 pilot.
+  - >-
+    Content-block capture verified BOTH already captured (no new add): Block 1 (Verdict + C1-C10
+    matrix + quantified findings) -> Decision 80 (verdict + discriminating findings + scale +
+    ddb85a0/PR#64 anchor; exhaustive tables remain in git history per delete_pointer). Block 2
+    (phased recommendation + wired re-evaluation trigger) -> Decision 80 point 4 (verbatim trigger)
+    + roadmap KG.13 (carries the trigger forward; defers the tier_item to T4.4-era).
+  - >-
+    WAVE-1 gate "WAVE-0 complete" holds: Decision 86 is Decided and the validate.py intent-doc-freeze
+    guard is wired (WAVE-0 shipped 2026-06-12, per T5.5 progress_note). WAVE-1 has NO cross_wave_gate
+    (only WAVE-2/3/4 carry that key).
+  - >-
+    ci_rca deferral (HARD BLOCK exemption): 5 open ci_rca recs at planning time -- rec-2236, rec-2237,
+    rec-2238, rec-2239, rec-2254 -- concern the terraform sandbox apply-guard / DuckLake CI write-grants
+    / Neon registry-502 flake, a distinct failure domain from this docs-only INTENT retirement (no
+    same-file, same-Decision-Record, or same-failure-category overlap with the three Related-Work
+    conditions). Proceeding per explicit human direction (being resolved by another agent); deferral
+    rationale logged here per the planning-skill Related-Work Check.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS (no contradictions; CITE Decision 86 + Decision 80).
+    Branch was 0 commits behind origin/main at planning time; no Scope-file overlap with main divergence.
+  - >-
+    Forward note for the T5.5-closing agent (end of WAVE-5, NOT this wave): T5.5's final tier-wide
+    exit_criterion (docs/ROADMAP-PLATFORM.yaml ~line 5344) greps tests/ etc. for INTENT- and expects
+    only SESSION_LOG_ARCHIVE.md + MANIFEST.yaml as residue. This WAVE-1 plan deliberately leaves the
+    synthetic tests/test_validate.py fixture (which uses the bare slug bazel-feasibility) and the
+    historical docs/plans/PLAN-bazel-feasibility.md untouched -- per-doc WAVE-1 scope, not the tier-wide
+    end-state. The eventual T5.5 closure must either rename that test fixture off the bazel-feasibility
+    slug or refine the exit-grep to allowlist synthetic fixtures + historical plan artifacts. Does NOT
+    block WAVE-1.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/happy-wozniak-fa1dtw)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md Decision 80 + Decision 86 read
+  - docs/intent-migration/MANIFEST.yaml bazel-feasibility entry + feasibility_graduated archetype rule read
+  - All four scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Inbound-reference inventory confirmed (LIVE to sweep: DECISIONS.md 332/346, ROADMAP-PLATFORM.yaml
+    5331; LEAVE: docs/plans/PLAN-bazel-feasibility.md, docs/plans/PLAN-intent-migration-wave0-enforcement.yaml,
+    tests/test_validate.py)
+execution_steps:
+  - >-
+    Delete docs/INTENT-bazel-feasibility.md (`git rm docs/INTENT-bazel-feasibility.md`).
+  - >-
+    In docs/intent-migration/MANIFEST.yaml, flip the bazel-feasibility documents[] entry's
+    disposition_state from pending to done (line ~272). Change ONLY that one field; leave
+    content_blocks / drift_findings / primary_targets / related_decisions intact as the disposition record.
+  - >-
+    In docs/ROADMAP-PLATFORM.yaml, remove the `- docs/INTENT-bazel-feasibility.md` line from
+    tier_item T5.5 files_in_scope (line ~5331). Inbound-reference sweep; leave the other 17 INTENT
+    paths and the MANIFEST.yaml / scripts/validate.py entries in place.
+  - >-
+    In docs/DECISIONS.md, reword Decision 80's two live path references (lines ~332 and ~346) to drop
+    docs/INTENT-bazel-feasibility.md while keeping the PR #64 / commit ddb85a0 anchor. Suggested --
+    line ~332: "Per the evidence (a C1-C10 claims-verification matrix at commit `ddb85a0`, merged in
+    PR #64):"; line ~346 Related: replace "`docs/INTENT-bazel-feasibility.md` (supporting analysis,
+    PR #64)" with "the bazel-feasibility supporting analysis (PR #64, commit `ddb85a0`; prose retired
+    per Decision 86)". Reference repoint only -- no verdict/rationale change.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass. On any failure, fix
+    the cited file and re-run; do NOT mask a real regression by editing tests (Decision 55). This is a
+    surface-retiring plan (Delete row): steps 1, 4, 5 are the mandatory stale-reference sweep proof.
+  - >-
+    Report: the doc is deleted, the manifest entry is done, the guard passes, the live-surface sweep
+    is clean, the git anchor is preserved, the synthetic guard tests pass, and the full presubmit is green.
+work_areas: []
+rollback: >-
+  All four edits land in one branch commit, so a single `git revert` (or restoring from origin/main)
+  reverses the wave: restore docs/INTENT-bazel-feasibility.md, re-flip the MANIFEST entry to pending,
+  restore the ROADMAP-PLATFORM.yaml T5.5 files_in_scope line, and restore Decision 80's original wording.
