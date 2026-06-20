@@ -25,14 +25,34 @@ class AcceptanceFeasibility(Enum):
     UNPARSEABLE = "unparseable"
 
 
-def validate_acceptance_feasibility(acceptance: str, action: str = "") -> tuple[AcceptanceFeasibility, str]:
+def _normalize_acceptance(acceptance: object) -> str:
+    """Normalize acceptance scalar-or-list to str (T0.12.5 CD.29 shim).
+
+    list[str]: joined with ' && '. Empty list -> ''.
+    list[dict] TypedCheck: command field extracted then joined with ' && '.
+    str: returned unchanged.
+    """
+    if isinstance(acceptance, str):
+        return acceptance
+    if not isinstance(acceptance, list) or not acceptance:
+        return ""
+    if isinstance(acceptance[0], dict):
+        parts = [c.get("command", "") for c in acceptance if isinstance(c, dict)]
+    else:
+        parts = [str(p) for p in acceptance]
+    return " && ".join(p for p in parts if p and p.strip())
+
+
+def validate_acceptance_feasibility(acceptance: object, action: str = "") -> tuple[AcceptanceFeasibility, str]:
     """Extract file paths from acceptance commands and verify they exist.
 
     Checks acceptance commands for common patterns (grep, pytest, python -m)
     and validates that referenced files/modules exist before planning.
 
+    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) per T0.12.5 shim.
+
     Args:
-        acceptance: The acceptance command string to validate.
+        acceptance: The acceptance command string (or list) to validate.
         action: Optional step action type (e.g. "create"). When "create",
             Pattern 1 (grep file-path checks) skips the file-existence check
             because the file is expected to be created by this rec.
@@ -41,6 +61,7 @@ def validate_acceptance_feasibility(acceptance: str, action: str = "") -> tuple[
         (AcceptanceFeasibility, reason) - FEASIBLE with empty reason,
         INFEASIBLE with diagnostic detail, or UNPARSEABLE with explanation.
     """
+    acceptance = _normalize_acceptance(acceptance)
     if not acceptance or not acceptance.strip():
         return AcceptanceFeasibility.FEASIBLE, ""
 
@@ -93,12 +114,15 @@ def validate_acceptance_feasibility(acceptance: str, action: str = "") -> tuple[
     return AcceptanceFeasibility.FEASIBLE, ""
 
 
-def lint_acceptance_command(acceptance: str) -> tuple[bool, Optional[str]]:
+def lint_acceptance_command(acceptance: object) -> tuple[bool, Optional[str]]:
     """Validate acceptance command for banned patterns and bash syntax.
+
+    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) per T0.12.5 shim.
 
     Returns:
         (True, None) if valid, (False, error_msg) if invalid.
     """
+    acceptance = _normalize_acceptance(acceptance)
     if not acceptance or not acceptance.strip():
         return True, None
 

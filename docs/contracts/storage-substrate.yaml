@@ -1,0 +1,83 @@
+---
+# Non-ritual substrate index. NOT a Class A/B/C ritual contract (no contract: block).
+# The CD.25 drift gate skips files that lack a contract: mapping with a class: field.
+#
+# Purpose: bridges the documentation gap left by ops-data-store.md retirement (T0.12.5).
+# Records substrate type, write boundary, and read boundary for tables that do NOT yet
+# have their own Class A contracts. Tables with Class A contracts are indexed there.
+#
+# For DuckLake-boundary tables: see docs/contracts/read-engine.yaml (version 3).
+# For Iceberg-boundary tables pending T2.26 disposition: see docs/INTENT-ducklake-consolidation.md.
+#
+# Class A contracts (authoritative, not indexed here):
+#   ops_recommendations -> docs/contracts/ops_recommendations.yaml (T0.12.5)
+#   ops_decisions       -> docs/contracts/ops_decisions.yaml (T0.12.5)
+#
+version: 1
+updated_at: "2026-06-20"
+updated_by: "PLAN-ratify-ops-class-a-contracts (T0.12.5)"
+
+tables:
+  # ---------------------------------------------------------------------------
+  # Dormant DuckLake ops tables (schema-ready; not yet live-exercised)
+  # ---------------------------------------------------------------------------
+  ops_priority_queue:
+    substrate: DuckLake-on-Neon
+    status: dormant
+    reason: executor paused (CD.17); current-state is the Decision-70 latest-queue_run set
+    write_boundary: ducklake_writer Lambda (action_write_ops) -- when executor resumes
+    read_boundary: ducklake_reader Lambda (NAMED VERBS only)
+    merge_key: rec_id
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_priority_queue
+    read_engine_ref: docs/contracts/read-engine.yaml
+    graduation_blocker: CD.17 reversal + executor resume
+
+  # ---------------------------------------------------------------------------
+  # Iceberg/Athena tables pending T2.26 disposition
+  # ---------------------------------------------------------------------------
+  ops_session_log:
+    substrate: Iceberg/Athena
+    status: dormant
+    reason: not provisioned in the personal account (sync_ops 2026-05-28 migration note)
+    write_boundary: OpsWriter (scripts/ops_writer.py) -> S3 staging -> Iceberg via awswrangler
+    read_boundary: DuckDBIcebergReader (primary) / Athena fallback (CD.8/CD.15 escape hatch)
+    merge_key: session_id
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_session_log
+    migration_ref: docs/INTENT-ducklake-consolidation.md
+    disposition: T2.26 -- may retire per T-1.9; DuckLake migration or retirement TBD
+
+  ops_execution_plans:
+    substrate: Iceberg/Athena
+    status: dormant
+    reason: executor paused (CD.17); not provisioned in the personal account
+    write_boundary: OpsWriter -> S3 staging -> Iceberg via awswrangler
+    read_boundary: DuckDBIcebergReader / Athena fallback
+    merge_key: rec_id
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_execution_plans
+    migration_ref: docs/INTENT-ducklake-consolidation.md
+    disposition: T2.26 -- DuckLake migration pending executor resume
+
+  # ---------------------------------------------------------------------------
+  # Telemetry tables (7 tables -- all Iceberg/Athena, Phase 4 pending)
+  # ---------------------------------------------------------------------------
+  telemetry_tables:
+    note: >-
+      Seven telemetry tables (telemetry_ prefix) in trading_formulas_db (Glue catalog,
+      Athena engine v3, personal account). Schema definitions in scripts/telemetry_schemas.py.
+      Class A contracts planned for T0.12.6 (not yet authored). Substrate index entry is a placeholder until T0.12.6.
+    substrate: Iceberg/Athena
+    status: live
+    write_boundary: OpsWriter (scripts/ops_writer.py) -> S3 staging -> Iceberg
+    read_boundary: DuckDBIcebergReader / Athena fallback
+    schema_ref: scripts/telemetry_schemas.py
+    contract_plan: T0.12.6 (telemetry Class A contracts -- not yet authored)
+    migration_ref: docs/INTENT-ducklake-consolidation.md
+    disposition: Phase 4 consolidation -- DuckLake migration TBD after T2.26
+    tables:
+      - telemetry_trades
+      - telemetry_feature_vectors
+      - telemetry_formula_discoveries
+      - telemetry_performance_metrics
+      - telemetry_data_quality
+      - telemetry_agent_runs
+      - telemetry_model_updates

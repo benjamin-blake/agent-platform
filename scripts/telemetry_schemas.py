@@ -6,7 +6,7 @@ trade_date are auto-populated by the dataclass default_factory so they are never
 when a fresh record is created in-process.
 
 See docs/INTENT-telemetry-system.md for the authoritative schema spec.
-See docs/contracts/ops-data-store.md (Telemetry Tables section) for the boundary contract.
+See docs/contracts/storage-substrate.yaml (telemetry_tables section) for the substrate index.
 """
 
 from __future__ import annotations

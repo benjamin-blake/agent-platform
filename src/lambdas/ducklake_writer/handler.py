@@ -133,6 +133,7 @@ def action_write_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     table = event.get("table")
     record = event.get("record") or {}
     _require_ops_table(table)
+    record["_contract_version"] = record.get("_contract_version", "1")
     result = rt.write_scd2(con, record, table=table, metric_sink=rt.make_metric_sink())
     return {
         "ok": True,
@@ -155,6 +156,7 @@ def action_file_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     table = event.get("table")
     record = event.get("record") or {}
     _require_ops_table(table)
+    record["_contract_version"] = record.get("_contract_version", "1")
     identity = None
     idem = event.get("idempotency_ulid")
     if idem is not None:
@@ -186,6 +188,7 @@ def action_update_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
     table = event.get("table")
     record = event.get("record") or {}
     _require_ops_table(table)
+    record["_contract_version"] = record.get("_contract_version", "1")
     result = rt.write_scd2(con, record, table=table, require_exists=True, metric_sink=rt.make_metric_sink())
     return {
         "ok": True,

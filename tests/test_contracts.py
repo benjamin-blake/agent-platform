@@ -247,6 +247,53 @@ class TestLoadAll:
         assert loaded == {}
 
 
+class TestFieldSpecDerivation:
+    """Verify FieldSpec derivation block addition (T0.12.5 / contracts_schema.py)."""
+
+    def test_derivation_block_round_trips(self, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path / "a.yaml",
+            {
+                "contract": {"id": "x", "class": "A", "contract_version": 1, "status": "ratified"},
+                "fields": {
+                    "priority": {
+                        "type": "int",
+                        "nullable": False,
+                        "description": "Priority level.",
+                        "derivation": {
+                            "formula": "source_priority_map[source]",
+                            "inputs": ["source"],
+                            "recompute_trigger": "source change",
+                            "failure_policy": "fallback_priority",
+                        },
+                    }
+                },
+            },
+        )
+        doc = load_contract(path)
+        assert doc.fields is not None
+        assert doc.fields["priority"].derivation is not None
+        assert doc.fields["priority"].derivation["formula"] == "source_priority_map[source]"
+
+    def test_unknown_field_key_still_rejected(self, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path / "a.yaml",
+            {
+                "contract": {"id": "x", "class": "A", "contract_version": 1, "status": "ratified"},
+                "fields": {
+                    "id": {
+                        "type": "str",
+                        "nullable": False,
+                        "description": "id",
+                        "unknown_key_not_in_schema": "value",
+                    }
+                },
+            },
+        )
+        with pytest.raises(ContractValidationError):
+            load_contract(path)
+
+
 class TestStatusTransitions:
     @pytest.mark.parametrize(
         ("old", "new"),
