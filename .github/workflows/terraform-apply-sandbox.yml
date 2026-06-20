@@ -463,8 +463,10 @@ jobs:
 
       - name: Configure AWS credentials (OIDC -- plan role, PR only)
         # Best-effort: before the admin apply creates agent-platform-github-ci-plan (bootstrap
-        # window), the assume-role fails. continue-on-error lets the job proceed; the plan step
-        # will fail on missing credentials, but the job failure is advisory (not a required check).
+        # window), the assume-role fails. continue-on-error keeps the job from failing; subsequent
+        # steps gate on steps.oidc_plan.outcome == 'success' and are skipped when creds are absent,
+        # so the job ends green-with-skipped rather than hard-failing during the bootstrap window.
+        id: oidc_plan
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -487,7 +489,7 @@ jobs:
           python-version: '3.12'
 
       - name: Materialise tfvars from Secrets Manager
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         run: |
           set -euo pipefail
           aws secretsmanager get-secret-value \
@@ -497,7 +499,7 @@ jobs:
 
       - name: Mask secret-sourced tfvars values in logs
         # rec-2285: split on first '=' only so values containing '=' are not truncated.
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         run: |
           set -euo pipefail
           while IFS= read -r line; do
@@ -515,7 +517,7 @@ jobs:
           done < terraform/personal/terraform.personal.tfvars
 
       - name: Assert tfvars file is non-empty (fail-closed)
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         run: |
           test -s terraform/personal/terraform.personal.tfvars || {
             echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
@@ -523,7 +525,7 @@ jobs:
           }
 
       - name: Terraform init (S3 backend, sandbox)
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |
           # Bounded retry for transient registry.terraform.io 5xx (parity with validate.py
@@ -557,7 +559,7 @@ jobs:
         id: spec_plan
         # -lock=false: github_ci_plan has no tfstate PutObject, so it cannot take the native S3
         # lock. The merge-time apply under github_ci_apply still locks normally.
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |
           terraform plan -lock=false -input=false -var-file=terraform.personal.tfvars -out=plan.bin
@@ -568,7 +570,7 @@ jobs:
         # Captures the PREDICTED verdict from the unmodified guard. This is advisory -- the
         # authoritative verdict is the guard re-run at merge time on the saved plan. Exit codes:
         #   0 = PASS, 2 = BLOCKED (IAM/trust/destroy), 1 = internal error.
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |
           set +e
@@ -586,7 +588,7 @@ jobs:
       - name: Persist saved plan to S3
         # Keyed by PR head SHA: s3://agent-platform-data-lake/tfplan/personal/<sha>.bin.
         # The apply job resolves this key at merge time via the merge commit's PR lookup.
-        if: success()
+        if: success() && steps.oidc_plan.outcome == 'success'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         working-directory: ${{ env.WORKDIR }}
