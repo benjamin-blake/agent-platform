@@ -16,6 +16,7 @@ from scripts.platform_roadmap import (
     RoadmapDocument,
     load,
 )
+from scripts.session_preflight import _slim_roadmap_state
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -563,3 +564,78 @@ class TestCD25SchemaAmendments:
         assert "Class B" in by_id["T1.12"].name, by_id["T1.12"].name
         assert "T1.13" in by_id, "T1.13 (CI-RCA methodology contract) missing"
         assert "CI-RCA" in by_id["T1.13"].name, by_id["T1.13"].name
+
+
+# ---------------------------------------------------------------------------
+# TestDeferredPostMvp -- Decision 93 / PLAN-platform-mvp-boundary
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredPostMvp:
+    def _make_doc(self, items: list[dict]) -> RoadmapDocument:
+        return RoadmapDocument.model_validate(_doc(tier_items=items))
+
+    def test_deferred_item_absent_from_eligible(self) -> None:
+        """(a) deferred_post_mvp item is absent from eligible_items() and next_eligible."""
+        doc = self._make_doc([{**_item("T0.1"), "status": "deferred_post_mvp"}])
+        state = PlatformRoadmapState(doc)
+        eligible_ids = {i.id for i in state.eligible_items()}
+        assert "T0.1" not in eligible_ids
+        full = state.to_preflight_dict()
+        next_ids = {i["id"] for i in full["next_eligible"]}
+        assert "T0.1" not in next_ids
+
+    def test_tier_complete_with_deferred_item(self) -> None:
+        """(b) tier [complete, deferred_post_mvp] counts as complete; active_tier advances."""
+        doc = self._make_doc(
+            [
+                _item("T0.1", tier="T0", status="complete"),
+                {**_item("T0.2", tier="T0"), "status": "deferred_post_mvp"},
+                _item("T1.1", tier="T1"),
+            ]
+        )
+        state = PlatformRoadmapState(doc)
+        assert state.tier_complete("T0") is True
+        assert state.active_tier() == "T1"
+
+    def test_live_dep_on_deferred_raises(self) -> None:
+        """(c) not_started item depending on deferred_post_mvp item raises ValueError."""
+        d = _doc(
+            tier_items=[
+                {**_item("T0.1"), "status": "deferred_post_mvp"},
+                _item("T0.2", depends_on=["T0.1"]),
+            ]
+        )
+        with pytest.raises(ValueError, match="deferred_post_mvp"):
+            RoadmapDocument.model_validate(d)
+
+    def test_in_progress_dep_on_deferred_raises(self) -> None:
+        """(c-ext) in_progress item depending on deferred_post_mvp item also raises ValueError."""
+        d = _doc(
+            tier_items=[
+                {**_item("T0.1"), "status": "deferred_post_mvp"},
+                {**_item("T0.2", depends_on=["T0.1"]), "status": "in_progress"},
+            ]
+        )
+        with pytest.raises(ValueError, match="deferred_post_mvp"):
+            RoadmapDocument.model_validate(d)
+
+    def test_deferred_bucket_in_full_state_absent_from_slim(self) -> None:
+        """(d) deferred item in deferred_post_mvp bucket of full state; absent from slim."""
+        doc = self._make_doc([{**_item("T0.1"), "status": "deferred_post_mvp"}])
+        state = PlatformRoadmapState(doc)
+        full = state.to_preflight_dict()
+        assert "deferred_post_mvp" in full
+        assert any(i["id"] == "T0.1" for i in full["deferred_post_mvp"])
+        # session_preflight._slim_roadmap_state must NOT include deferred_post_mvp
+        slim = _slim_roadmap_state(full)
+        assert "deferred_post_mvp" not in slim
+
+    def test_real_roadmap_parked_ids_absent_from_next_eligible(self) -> None:
+        """(e) four parked ids (T2.8/T2.9/T2.11a/T2.11b) absent from next_eligible in real roadmap."""
+        roadmap = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
+        doc = load(roadmap)
+        state = PlatformRoadmapState(doc)
+        eligible_ids = {i.id for i in state.eligible_items()}
+        parked_ids = {"T2.8", "T2.9", "T2.11a", "T2.11b"}
+        assert parked_ids.isdisjoint(eligible_ids), f"Parked items found in eligible: {parked_ids & eligible_ids}"
