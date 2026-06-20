@@ -1,0 +1,247 @@
+schema_version: 1
+slug: "t2-11b-portal-artefacts"
+intent: >-
+  Land the dependency-free subset of platform tier item T2.11b: reposition SECURITY.md's projection
+  statement to the top and author EVALUATION-PROMPTS.yaml as curated public-portal artefacts (CD.20 / CD.23).
+  This advances NS.4 (the repo is for agents) by giving an evaluator agent a guided index into the canonical
+  source artefacts without exporting any operational data.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-t2-11b-portal-artefacts.yaml
+phase: >-
+  Platform tier T2.11b (Public-portal artefact authoring per CD.20 / CD.23), dependency-free subset;
+  product Phase 1 (Core Infrastructure, complete).
+scope:
+  - file: SECURITY.md
+    action: Modify
+    purpose: >-
+      Reposition the projection statement to the TOP per the CD.23 discipline ("this is a projection of
+      [canonical source] -- see [pointer] for canonical content"), keeping the GitHub private vulnerability
+      reporting pointer and maintainer contact intact. SECURITY.md already exists (shipped by T2.12, complete
+      2026-06-08, Decision 83) -- this is an enrichment, NOT a create; the roadmap's "# new" annotation is stale.
+  - file: EVALUATION-PROMPTS.yaml
+    action: Create
+    purpose: >-
+      New portal artefact at repo ROOT (alongside README.md / AGENTS.md / SECURITY.md). A top-level projection
+      statement plus 12 architecture / governance questions, each with answer_loci pointers that resolve to
+      public-repo file paths ONLY. Enforces the CD.20 hard invariant: no references to ops_recommendations /
+      ops_decisions / ops_session_log / telemetry tables anywhere in the file.
+  - file: README.md
+    action: Modify
+    purpose: >-
+      Minimal link touch-up: add one EVALUATION-PROMPTS.yaml entry to the Canonical Sources section describing it
+      as the evaluator guided-tour index. README is already an agent-first projection portal (rewritten
+      2026-06-05) with its disclaimer at top -- do NOT rewrite it; the "# rewrite" roadmap annotation is stale.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Tier Item Freshness Gate re-grounding (bookkeeping only, human-confirmed): update T2.11b's progress_note to
+      record SECURITY.md projection-at-top + EVALUATION-PROMPTS.yaml landed and the architecture diagram still
+      deferred/gated; fix the stale files_in_scope annotations (SECURITY.md no longer "# new"; README.md no longer
+      "# rewrite"); reconcile the CD.20 realized-note (line ~644) so it no longer reads "EVALUATION-PROMPTS.yaml
+      outstanding". Keep status: in_progress, depends_on, and exit_criteria semantics unchanged.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    SECURITY.md states its projection status within the first 5 lines (CD.23 top-of-file discipline) and retains
+    the GitHub private vulnerability reporting pointer ("Report a vulnerability").
+  - >-
+    EVALUATION-PROMPTS.yaml exists at repo root, parses as valid YAML, has its `projection:` statement as the
+    first line, and contains between 10 and 12 questions, each with a non-empty question and a non-empty
+    answer_loci list.
+  - >-
+    Every answer-locus file path in EVALUATION-PROMPTS.yaml resolves to an existing file in the public repo.
+  - >-
+    EVALUATION-PROMPTS.yaml contains ZERO references to ops_recommendations / ops_decisions / ops_session_log /
+    telemetry (the CD.20 operational-data export prohibition).
+  - "README.md Canonical Sources section links EVALUATION-PROMPTS.yaml."
+  - >-
+    AGENTS.md is present and CLAUDE.md imports it (`@AGENTS.md`), confirming the "content matches CLAUDE.md" exit
+    criterion by construction; AGENTS.md is NOT re-authored (T0.9 owns it).
+  - >-
+    T2.11b progress_note re-grounded (SECURITY.md / EVALUATION-PROMPTS.yaml recorded as landed; architecture
+    diagram noted as deferred / gated on T2.13 + T2.11a); the platform roadmap still passes RoadmapDocument schema
+    validation; item status remains in_progress.
+  - "docs/architecture-diagram.svg and .devcontainer/ are NOT created in this slice (explicitly deferred)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm SECURITY.md states its projection at the top and keeps the private-vulnerability-reporting pointer
+    command: "head -n 5 SECURITY.md | grep -qi 'projection of' && grep -qi 'report a vulnerability' SECURITY.md && echo PASS"
+    expected: "Prints PASS -- a 'projection of ...' statement appears in the first 5 lines and the PVR pointer is present"
+    fix_if: "If the projection line is not in the first 5 lines, move it to the top; if the PVR pointer was dropped, restore it"
+  - step: 2
+    phase: pre-deploy
+    action: Confirm EVALUATION-PROMPTS.yaml has a top-of-file projection statement, valid YAML, and 10-12 well-formed questions
+    command: "head -n 1 EVALUATION-PROMPTS.yaml | grep -q '^projection:' && bin/venv-python -c 'import yaml; d=yaml.safe_load(open(\"EVALUATION-PROMPTS.yaml\")); q=d[\"questions\"]; assert 10<=len(q)<=12, len(q); assert all(e.get(\"question\") and e.get(\"answer_loci\") for e in q); print(\"PASS\", len(q))'"
+    expected: "Prints PASS and a count between 10 and 12; first line is `projection:` and every question has a non-empty question + answer_loci"
+    fix_if: "If count is outside 10-12, add/remove questions; if a question lacks answer_loci or question text, fill it; if line 1 is not `projection:`, move the projection key to the top (no leading comment)"
+  - step: 3
+    phase: pre-deploy
+    action: Confirm every answer-locus path in EVALUATION-PROMPTS.yaml resolves to an existing public-repo file
+    command: "bin/venv-python -c 'import yaml,pathlib; d=yaml.safe_load(open(\"EVALUATION-PROMPTS.yaml\")); m=[p for e in d[\"questions\"] for p in e[\"answer_loci\"] if not pathlib.Path(p.split(\"#\")[0]).exists()]; assert not m, m; print(\"ALL RESOLVE\")'"
+    expected: "Prints ALL RESOLVE -- no missing paths (the assertion message would list any path that does not exist)"
+    fix_if: "Correct any path that does not resolve (typo or wrong location); never point at a file outside the public repo"
+  - step: 4
+    phase: pre-deploy
+    action: Enforce the CD.20 invariant -- EVALUATION-PROMPTS.yaml must not reference any operational-data table
+    command: "! grep -Eiq 'ops_recommendations|ops_decisions|ops_session_log|telemetry' EVALUATION-PROMPTS.yaml && echo CLEAN"
+    expected: "Prints CLEAN -- zero matches for the four prohibited operational-data tokens"
+    fix_if: "Reframe the offending question/locus to point at the governing CODE or DOC (e.g. scripts/ops_data_portal.py, CLAUDE.md, docs/PROJECT_CONTEXT.md) instead of naming a warehouse table"
+  - step: 5
+    phase: pre-deploy
+    action: Confirm README.md links the new EVALUATION-PROMPTS.yaml portal artefact
+    command: "grep -q 'EVALUATION-PROMPTS.yaml' README.md && echo LINKED"
+    expected: "Prints LINKED"
+    fix_if: "Add an EVALUATION-PROMPTS.yaml link line to the README Canonical Sources section"
+  - step: 6
+    phase: pre-deploy
+    action: Verify AGENTS.md is present and CLAUDE.md imports it (the "matches CLAUDE.md" criterion, by construction)
+    command: "test -f AGENTS.md && grep -q '@AGENTS.md' CLAUDE.md && echo MATCH"
+    expected: "Prints MATCH -- AGENTS.md exists and CLAUDE.md's content is the `@AGENTS.md` import (so the two cannot drift)"
+    fix_if: "If AGENTS.md is missing or CLAUDE.md no longer imports it, STOP -- AGENTS.md is owned by T0.9; do not re-author it here, raise the discrepancy"
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the platform roadmap still validates after the T2.11b bookkeeping edit (the exact gate validate.py full tier runs)
+    command: "bin/venv-python -c 'from scripts.platform_roadmap import load; load(\"docs/ROADMAP-PLATFORM.yaml\"); print(\"ROADMAP SCHEMA OK\")'"
+    expected: "Prints ROADMAP SCHEMA OK -- RoadmapDocument Pydantic schema validation passes"
+    fix_if: "Fix any YAML syntax or schema error the loader reports (mis-indentation, changed required field); the edit is progress_note/annotation text only -- do not alter structural fields"
+  - step: 8
+    phase: pre-deploy
+    action: Run the fast static presubmit (lint / format / prompt-compliance / markdown / product-roadmap) before pushing
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exits 0 with no failures; full `bin/venv-python -m scripts.validate` is run before push and remote CI is the authoritative gate (CLAUDE.md merge protocol)"
+    fix_if: "Address any lint/format/markdown/prompt-compliance failure it reports and re-run until clean"
+constraints:
+  - >-
+    CD.20 hard invariant: the public surface is a curated projection, never an export of operational data.
+    EVALUATION-PROMPTS.yaml answer-loci reference public-repo SOURCE artefacts ONLY; the tokens
+    ops_recommendations / ops_decisions / ops_session_log / telemetry must not appear anywhere in the file so the
+    VP grep (step 4) cleanly proves absence. Frame governance/observability questions around code/docs, not tables.
+  - >-
+    CD.23 projection discipline: each public-portal file states at the TOP "this is a projection of [canonical
+    source] -- see [pointer] for canonical content." SECURITY.md and EVALUATION-PROMPTS.yaml must comply.
+  - >-
+    Do NOT re-author AGENTS.md -- it is owned by T0.9 (harness portability). This slice only VERIFIES it is present
+    and that CLAUDE.md imports it.
+  - >-
+    OUT OF SCOPE (explicitly deferred, do not create): docs/architecture-diagram.svg (gated on what is built at
+    T2.13 and on the T2.11a devcontainer substrate, both not the subject of this slice) and the .devcontainer/
+    substrate (T2.11a, not_started). Note them as gated in the report; do not stub them.
+  - >-
+    SECURITY.md is a MODIFY (already shipped by T2.12) -- reposition/enrich the projection line; do not duplicate
+    the file or regress the PVR mechanism or maintainer contact.
+  - >-
+    The docs/ROADMAP-PLATFORM.yaml edit is bookkeeping ONLY (progress_note re-grounding + stale-annotation fix +
+    line-644 reconciliation). Keep T2.11b status: in_progress (the architecture diagram remains), depends_on, and
+    exit_criteria semantics unchanged. This is the planning-skill SOLE EXCEPTION (roadmap-data reconciliation),
+    human-confirmed at Step 6b.
+  - >-
+    Plan type IMPLEMENTATION (Decision 67 STRATEGIC clause frozen). Portal files stay markdown / YAML per the
+    Decision 85 / CD.22 narrative-md carve-out -- they are NOT migrated to a different format.
+  - No emojis; ASCII hyphens only (no em dashes); keep YAML and markdown clean.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness: ok, 0 behind / 0 ahead);
+    no Scope-file overlap with main divergence.
+  - >-
+    Decisions cited (decision-scout verdict NO_FLAGS): CD.20 (operational data not exported; public surface is a
+    curated portal) and CD.23 (projection-at-top discipline) -- primary, roadmap-resident. Decision 86
+    (EVALUATION-PROMPTS.yaml is machine-readable YAML at repo ROOT, NOT a docs/ prose-architecture doc -- compliant
+    and outside the validate.py intent-doc-freeze guard, which targets docs/). Decision 83 (provenance: the
+    terraform/github security gate + SECURITY.md shipped via T2.12, complete 2026-06-08).
+  - >-
+    NOTE flags (non-blocking, conscious declaration): Decision 67 -- this plan is IMPLEMENTATION, not STRATEGIC.
+    Decision 85 / CD.22 -- the narrative-md carve-out explicitly licenses README.md / SECURITY.md staying markdown.
+    RELATED: Decision 84 (why the CD.20 prohibition exists -- ops_recommendations / ops_decisions / ops_session_log
+    are private DuckLake/Iceberg warehouse tables, not public-repo files); Decision 76 (web MCP merge flow; this
+    slice emits NO Resolves: trailer because it resolves no recs); Decision 48 (V1 = static docs/config, grep +
+    file-existence + schema-load acceptance, no pytest integration).
+  - >-
+    Tier Item Freshness Gate on T2.11b: (1) silent-completion -- NOT complete (EVALUATION-PROMPTS.yaml and the
+    diagram are absent), so the item correctly stays in_progress; (2) stale-reference -- files_in_scope marks
+    SECURITY.md "# new" (T2.12 already shipped it) and README.md "# rewrite" (already rewritten 2026-06-05), and the
+    progress_note (line ~3756) says "SECURITY.md ... outstanding" which conflicts with the CD.20 realized-note (line
+    ~644) "SECURITY.md shipped" -- this plan re-grounds the note (human-confirmed); (3) supersession -- partial
+    overlap with T2.12 on SECURITY.md: T2.12 created the minimal pointer, T2.11b enriches it to the CD.23
+    projection-at-top discipline (boundary named, no duplicate work); (4) gating-decision -- T2.11b depends_on
+    T2.11a (not_started), so COMPLETION is gated; this slice lands only the dependency-free subset and explicitly
+    DEFERS the architecture-diagram exit criterion (depends on T2.13 build + the T2.11a devcontainer substrate).
+  - >-
+    CI-RCA deferral rationale (Related-Work check): 5 open ci-rca recs (rec-2254, rec-2239, rec-2238, rec-2237,
+    rec-2236) are all Terraform / IAM / sandbox-apply / neon-registry failures. None shares this plan's scope files,
+    Decision Records, or failure category -- all three Related-Work conditions fail. Deferred per explicit human
+    authorization ("ignore the open CI-RCA blockers, it's being resolved by another agent"). This slice touches only
+    docs/config (no terraform, no IAM, no sandbox apply), so it neither depends on nor affects those failures.
+  - >-
+    AGENTS.md verification semantics: CLAUDE.md's content is the single import directive `@AGENTS.md`, so AGENTS.md
+    and CLAUDE.md match by construction (CLAUDE.md's effective ambient content IS AGENTS.md). VP step 6 asserts both
+    AGENTS.md present and the import present -- a stronger guarantee than textual equality (they cannot drift).
+  - >-
+    EVALUATION-PROMPTS.yaml location = repo root (human-confirmed at Step 6b): sits with the other portal files
+    (README.md / AGENTS.md / SECURITY.md) and stays clear of the docs/ intent-doc-freeze guard (Decision 86).
+  - >-
+    Suggested 12-question set (all loci verified to exist at planning time; the implementer may refine wording but
+    must keep every locus resolving and the four prohibited tokens absent): Q1 North Star / thesis -> README.md,
+    docs/ROADMAP-PLATFORM.yaml, CLAUDE.md; Q2 agent-first principle -> CLAUDE.md, README.md; Q3 5-layer instruction
+    architecture -> docs/contracts/instruction-architecture.md, CLAUDE.md; Q4 ops governance + single-portal
+    invariant -> scripts/ops_data_portal.py, CLAUDE.md, docs/PROJECT_CONTEXT.md; Q5 CI / validation single gate ->
+    scripts/validate.py, .github/workflows/ci.yml; Q6 branching + merge model -> CLAUDE.md, docs/PROJECT_CONTEXT.md;
+    Q7 environment taxonomy -> docs/contracts/environment-taxonomy.md, CLAUDE.md; Q8 manifest-driven Lambda
+    packaging -> scripts/lambda_manifest.py, src/lambdas/data-pipeline/manifest.yaml, CLAUDE.md; Q9 plan -> implement
+    workflow -> .claude/commands/plan.md, .claude/commands/implement.md, .claude/skills/planning/SKILL.md; Q10
+    rec/decision data model (schema) -> docs/PROJECT_CONTEXT.md, scripts/plan_document.py; Q11 verification tiers ->
+    .claude/skills/planning/SKILL.md, .claude/commands/plan.md; Q12 autonomous executor design + freeze rationale ->
+    CLAUDE.md, scripts/execute_recommendation.py, docs/ROADMAP-PLATFORM.yaml.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/... harness branch)
+  - docs/PROJECT_CONTEXT.md read
+  - "CD.20 + CD.23 definitions read (docs/ROADMAP-PLATFORM.yaml lines ~623-717)"
+  - "Existing SECURITY.md read (projection line currently at the bottom; PVR pointer + maintainer contact present)"
+  - "README.md Canonical Sources section read (SECURITY.md linked; EVALUATION-PROMPTS.yaml not yet)"
+  - "T2.11b roadmap item read (depends_on T2.11a not_started; architecture-diagram criterion gated)"
+  - All files in scope located and readable (SECURITY.md, README.md, docs/ROADMAP-PLATFORM.yaml; EVALUATION-PROMPTS.yaml is new)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    SECURITY.md (Modify): reposition the projection statement to the TOP using the CD.23 template -- e.g. "This
+    file is a projection of the repository's security posture: vulnerability reporting is enabled in GitHub repo
+    settings and the security controls live as code in terraform/github/ (CD.20 public-repo security gate, T2.12) --
+    see terraform/github/ and CLAUDE.md for canonical content." Keep the GitHub private vulnerability reporting
+    pointer ("Security tab -> Report a vulnerability") and maintainer contact; fold or drop the now-redundant
+    bottom note. Do not regress the PVR mechanism.
+  - >-
+    EVALUATION-PROMPTS.yaml (Create at repo ROOT): make `projection:` the literal first line (a block scalar
+    projection statement naming CLAUDE.md, docs/ROADMAP-PLATFORM.yaml, docs/DECISIONS.md, docs/contracts/ as
+    canonical sources and stating it indexes public-repo source artefacts ONLY per CD.20). Then `questions:` -- a
+    list of 12 entries, each with id, question, theme, answer_loci (list of repo-relative public-repo paths), and an
+    optional note. Author from the suggested 12-question set in Context; ensure NONE of ops_recommendations /
+    ops_decisions / ops_session_log / telemetry appears anywhere in the file (frame Q4/Q10 around
+    scripts/ops_data_portal.py + CLAUDE.md governance section + docs/PROJECT_CONTEXT.md schema section).
+  - >-
+    README.md (Modify): add a single EVALUATION-PROMPTS.yaml link line to the Canonical Sources section, described
+    as the evaluator guided-tour index of architecture/governance questions with answer-loci into canonical
+    sources. Do not otherwise rewrite README.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml (Modify, bookkeeping only): re-ground T2.11b's progress_note to record SECURITY.md
+    projection-at-top enriched + EVALUATION-PROMPTS.yaml authored (date-stamp 2026-06-18) and the architecture
+    diagram still deferred/gated (T2.13 build + T2.11a substrate); fix the stale files_in_scope annotations
+    (SECURITY.md: enriched, shipped by T2.12 -- not "# new"; README.md: rewritten + link added -- not "# rewrite");
+    reconcile the CD.20 realized-note (line ~644) so it reflects EVALUATION-PROMPTS.yaml landed and only the
+    architecture diagram outstanding. Leave status: in_progress, depends_on, and exit_criteria unchanged.
+  - "Execute Verification Plan -- run each step; loop until pass. V1: no deploy step."
+  - >-
+    Run full `bin/venv-python -m scripts.validate` before pushing (mirrors CI; remote CI is the authoritative gate
+    per the CLAUDE.md merge protocol). Then follow the Decision 76 web MCP merge flow (PR -> fast --pre tier via
+    subscribe_pr_activity -> squash-merge); emit NO Resolves: trailer (no recs resolved).
+  - >-
+    'Report: files changed, the 12 question themes authored, all VP results, and the explicit deferral list
+    (docs/architecture-diagram.svg, .devcontainer/ substrate, and the 5 ci-rca recs).'
+work_areas: []
+rollback: >-
+  All four changes are reversible by reverting the commit -- SECURITY.md returns to its bottom-projection form,
+  EVALUATION-PROMPTS.yaml is deleted, README.md loses one link line, and T2.11b's progress_note returns to its
+  prior text. No data-plane, infrastructure, or schema-migration effects; the artefacts are static docs/config.
+  The architecture diagram and .devcontainer/ remain unbuilt (unchanged, deferred).

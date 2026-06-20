@@ -1,0 +1,151 @@
+# Wave-1 cross-roadmap-coherence audit (auditor E, dimension D5)
+# Target: docs/ROADMAP-PLATFORM.yaml (sibling: docs/ROADMAP-PRODUCT.yaml)
+# Mode: REPORT-ONLY. Date: 2026-06-09. Repo HEAD.
+# Edge RESOLUTION is CI-enforced and passes (scripts/product_roadmap.load -> "EDGES RESOLVE");
+# this audit is purely semantic per the D5 method.
+
+meta:
+  dimension: D5-cross-roadmap-coherence
+  edge_resolution_check: pass   # bin/venv-python -c "...product_roadmap.load(...)" -> EDGES RESOLVE
+  platform_target_inventory_size: 20   # distinct PLATFORM:<T-id> item targets (CD gates + GAP- counted separately)
+  platform_target_classification_counts:
+    complete: 4
+    in_progress: 2
+    not_started_but_eligible: 11
+    practically_blocked: 3
+    reserved: 0
+  cd_gate_references: [CD.6, CD.9, CD.12, CD.16, CD.25]   # CD.16 ratified; CD.6/CD.9/CD.12/CD.25 pending (CD.25 covered by bootstrap_allowance)
+  gap_prefix_reference: "PLATFORM:GAP-"   # appears only in agent_instructions prose (line 36), not an actual edge
+
+claims:
+  # ------------------------------------------------------------------ E-001
+  - id: E-001
+    affected_ids: [T3.5, MVP.4, L2.pc.10, L3.exec.11]
+    verdict_or_classification: practically_blocked_product_dependency
+    evidence:
+      - "docs/ROADMAP-PRODUCT.yaml:4073-4085 (MVP.4 'Live-small stage gate (real money...)' cross_roadmap_depends_on PLATFORM:T3.5)"
+      - "docs/ROADMAP-PRODUCT.yaml:1854-1866 (L2.pc.10 depends_on PLATFORM:T3.5)"
+      - "docs/ROADMAP-PRODUCT.yaml:2495-2507 (L3.exec.11 cross-roadmap depends on PLATFORM:T3.5)"
+      - "docs/ROADMAP-PLATFORM.yaml:3846-3876 (T3.5 status:not_started; depends_on [T0.7a, T0.12.5, T3.4]; decision_required_before CD.16)"
+      - "docs/ROADMAP-PLATFORM.yaml:3831-3844 (T3.4 status:not_started, effort:XL, strategic:true; depends_on [T3.3, T1.13])"
+      - "docs/ROADMAP-PLATFORM.yaml:3816-3830 (T3.3 status:not_started, strategic:true) / 3801-3815 (T3.2 not_started) / 3755-3800 (T3.1 not_started, effort:L)"
+    proposed_severity: high
+    proposed_confidence: high
+    note: >
+      Product MVP item MVP.4 (real-money live-small stage gate) depends on platform T3.5,
+      which is resolvable but practically blocked behind a fully not_started chain
+      T3.5 <- T3.4 (XL strategic) <- T3.3 (L strategic) <- T3.2 <- T3.1, whose leaves are
+      T2.1(complete) + T0.12.6(in_progress) + T3.6(in_progress). T3.5 also carries a
+      decision_required_before CD.16 gate (CD.16 IS ratified, so the gate itself is satisfied;
+      the depth is the blocker, not the CD). Two of the four blocking ancestors are strategic:true
+      and cannot be authored as STRATEGIC plans while CD.17 holds, compounding the practical block.
+
+  # ------------------------------------------------------------------ E-002
+  - id: E-002
+    affected_ids: [T1.14, L3.exec.4, L3.exec.5, L3.exec.6, E.env.8]
+    verdict_or_classification: reverse_drift
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2918-2920 (T1.14 intent claims 'PRODUCT layer items E.env.8 + L3.exec.4/5/6 depend on this')"
+      - "docs/ROADMAP-PRODUCT.yaml:3929-3935 (E.env.8 cross_roadmap_depends_on lists PLATFORM:T1.14 - correct)"
+      - "docs/ROADMAP-PRODUCT.yaml:2741-2753 (L3.exec.4 depends on PLATFORM:T2.14, NOT T1.14)"
+      - "docs/ROADMAP-PRODUCT.yaml:2790-2801 (L3.exec.5 depends on PLATFORM:T2.14, NOT T1.14)"
+      - "docs/ROADMAP-PRODUCT.yaml:2838-2851 (L3.exec.6 cross_roadmap_depends_on [T0.12, CD.25, T-1.12]; does NOT reference T1.14 or T2.14)"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: >
+      T1.14's intent overclaims its consumers: it asserts E.env.8 + L3.exec.4/5/6 depend on it,
+      but only E.env.8 actually references PLATFORM:T1.14. L3.exec.4 and L3.exec.5 reference
+      PLATFORM:T2.14 (broker secrets, a sibling absorber), and L3.exec.6 (order/fill contracts)
+      references neither. Reverse-direction intent drift; the actual edge graph is correct, only
+      the prose-listed consumer set is stale/conflated with T2.14's consumers.
+
+  # ------------------------------------------------------------------ E-003
+  - id: E-003
+    affected_ids: [document.header, document.description, KG.1]
+    verdict_or_classification: sibling_framing_drift
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:9-11 (header: 'docs/ROADMAP-PRODUCT.md is the source of truth for trading-system product sequencing. They are siblings, not parent/child.')"
+      - "docs/ROADMAP-PLATFORM.yaml:19 (document.description: 'The platform underneath docs/ROADMAP-PRODUCT.md')"
+      - "docs/ROADMAP-PLATFORM.yaml:4442-4443 (KG.1: 'canonical roadmap is docs/ROADMAP-PRODUCT.yaml (docs/ROADMAP-PRODUCT.md is superseded; retained as a recovery artefact)')"
+      - "docs/ROADMAP-PRODUCT.md:3-9 (own header: 'SUPERSEDED. ... superseded by docs/ROADMAP-PRODUCT.yaml ... retained for one transition cycle as a recovery artefact')"
+      - "docs/ROADMAP-PRODUCT.yaml:8-9,27-28 (own header + description: 'Supersedes docs/ROADMAP-PRODUCT.md')"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: >
+      Self-contradiction WITHIN the platform roadmap. The header (lines 9-11) and document.description
+      (line 19) name docs/ROADMAP-PRODUCT.md as the product source-of-truth sibling, but KG.1 (line 4442),
+      the .md's own banner, and the .yaml's own header all agree the .md is superseded by the .yaml.
+      Both files exist on disk (md 855 lines, yaml 4765 lines). The sibling-framing claim in the header
+      is stale relative to current repo state: the correct sibling is docs/ROADMAP-PRODUCT.yaml.
+
+  # ------------------------------------------------------------------ E-004
+  - id: E-004
+    affected_ids: [T2.14, L3.exec.4, L3.exec.5]
+    verdict_or_classification: coherent
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3287-3289 (T2.14 intent claims 'PRODUCT layer items L3.exec.4/5 depend on this'; depends_on [T2.1, T2.9])"
+      - "docs/ROADMAP-PRODUCT.yaml:2741-2753 (L3.exec.4 cross_roadmap_depends_on lists PLATFORM:T2.14)"
+      - "docs/ROADMAP-PRODUCT.yaml:2790-2801 (L3.exec.5 cross_roadmap_depends_on lists PLATFORM:T2.14)"
+      - "docs/ROADMAP-PLATFORM.yaml: T2.1 complete; T2.9 status:not_started (3095-3118)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: >
+      T2.14's reverse-direction consumer claim is accurate (both L3.exec.4 and L3.exec.5 reference it).
+      Forward dependency chain is short (T2.1 complete + T2.9 not_started), so T2.14 is not_started-but-
+      eligible-ish, not practically blocked. No finding; recorded for contrast with the T1.14 overclaim (E-002).
+
+  # ------------------------------------------------------------------ E-005
+  - id: E-005
+    affected_ids: [CD.25, CD.16, CD.6, CD.9, CD.12]
+    verdict_or_classification: coherent
+    evidence:
+      - "docs/ROADMAP-PRODUCT.yaml:4658-4669 (KG.cd25_lifetime_pending: CD.25 state:pending for full lifetime; bootstrap_allowance:true permits authoring under pending CD.25)"
+      - "docs/ROADMAP-PRODUCT.yaml:65 (agent_instructions: 'Deploys gate on PLATFORM CD.16 ratification, not CD.17')"
+      - "docs/ROADMAP-PRODUCT.yaml:99-101 (Class B contracts ratify post-PLATFORM-CD.16 with provisional_v0)"
+      - "docs/ROADMAP-PLATFORM.yaml:415-440 (CD.16 state:ratified) / 442-453 (CD.12 state:pending) / 719+ (CD.25 pending lifetime)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: >
+      Product-side CD references are consistent with platform CD states. CD.16 is ratified, so the
+      product's CD.16 deploy/Class-B gates are satisfiable (no stale 'CD.16 pending' claim found).
+      CD.25 is pending for the project lifetime by design; the product explicitly documents this via
+      KG.cd25_lifetime_pending with the bootstrap_allowance:true exemption, so CD.25-gated product items
+      are not 'practically blocked' - they author contracts under the bootstrap clause. CD.6/CD.9/CD.12
+      are pending but used as design-reference gates, not completion blockers with no exemption.
+
+  # ------------------------------------------------------------------ E-006
+  - id: E-006
+    affected_ids: [T1.8]
+    verdict_or_classification: coherent
+    evidence:
+      - "docs/ROADMAP-PRODUCT.yaml: zero references to PLATFORM:T1.8 (rg -c PLATFORM:T1.8 -> 0)"
+      - "docs/ROADMAP-PLATFORM.yaml: T1.8 is the sole reserved item per snapshot"
+    proposed_severity: low
+    proposed_confidence: high
+    note: >
+      Negative finding (clears the worst-case D5 hazard): the reserved platform item T1.8 is NOT
+      depended on by any product item. No 'product depends on a reserved platform target' finding exists.
+
+  # ------------------------------------------------------------------ E-007  (full inventory enumeration)
+  - id: E-007
+    affected_ids: [ALL-PLATFORM-TARGETS]
+    verdict_or_classification: coherent
+    evidence:
+      - "docs/ROADMAP-PRODUCT.yaml: rg -o 'PLATFORM:[A-Za-z0-9._-]+' | sort -u (20 distinct T-id targets + 5 CD gates + GAP- prose token)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: >
+      Compact per-target classification (status as recorded at platform HEAD; '=' separates id:classification).
+      T-id targets (20): T-1.6=complete; T-1.12=in_progress; T0.6=not_started_eligible(bootstrap_exempt);
+      T0.7a=not_started_eligible(bootstrap_exempt); T0.7b=not_started_eligible(bootstrap_exempt);
+      T0.12=complete; T0.13=not_started_eligible(bootstrap_exempt); T1.1=not_started_eligible;
+      T1.2=not_started_eligible; T1.12=not_started_eligible(provisional_v0/status not_started);
+      T1.14=not_started_eligible(CD.16 gate satisfied; deps T0.6+T0.12.5); T2.1=complete;
+      T2.4=not_started_eligible; T2.5=in_progress; T2.6=not_started_eligible; T2.9=not_started_eligible;
+      T2.14=not_started_eligible(deps T2.1 complete + T2.9); T3.2=practically_blocked(behind T3.1);
+      T3.3=practically_blocked(behind T3.2<-T3.1; strategic; consumer L4.ops.5 is post-MVP);
+      T3.5=practically_blocked(behind T3.4<-T3.3<-T3.2<-T3.1; consumer MVP.4 = HIGH, see E-001).
+      CD gates (5): CD.6=pending(design-ref); CD.9=pending(design-ref); CD.12=pending(design-ref);
+      CD.16=ratified; CD.25=pending(bootstrap_allowance:true, see E-005).
+      GAP- (1): "PLATFORM:GAP-" token appears only in agent_instructions prose (line 36), not an actual edge.
+      Counts: complete=4, in_progress=2, not_started_but_eligible=11, practically_blocked=3, reserved=0.

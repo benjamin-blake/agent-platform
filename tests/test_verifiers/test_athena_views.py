@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from scripts.verifiers.athena_views import AthenaViewsVerifier
-from scripts.verifiers.harness import VerifierStatus
+from scripts.verifiers.harness import Hermeticity, VerifierStatus, VerifierTier
 
 
 @pytest.mark.asyncio
@@ -39,7 +39,7 @@ async def test_athena_views_pass():
             verifier = AthenaViewsVerifier()
             result = await verifier.verify()
             assert result.status == VerifierStatus.PASS
-            assert "Found 42 recs" in result.message
+            assert "Found 42 decisions" in result.message
 
 
 @pytest.mark.asyncio
@@ -51,3 +51,13 @@ async def test_athena_views_query_fail():
             result = await verifier.verify()
             assert result.status == VerifierStatus.FAIL
             assert "Athena query failed" in result.message
+
+
+def test_athena_views_tier_v3():
+    """AthenaViewsVerifier must declare tier V3 (corrected from inherited V1 default)."""
+    assert AthenaViewsVerifier().tier == VerifierTier.V3
+
+
+def test_athena_views_disposition():
+    """AthenaViewsVerifier must declare NON_HERMETIC_BY_CONSTRUCTION."""
+    assert AthenaViewsVerifier.hermeticity == Hermeticity.NON_HERMETIC_BY_CONSTRUCTION

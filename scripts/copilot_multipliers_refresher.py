@@ -1,8 +1,9 @@
-"""DEPRECATED: Copilot multiplier tracking is no longer needed under Bedrock.
+"""DEPRECATED: Copilot multiplier tracking left the active cost model.
 
 Refresh GitHub Copilot model multipliers from official documentation.
-Retained for rollback only. The active cost model is per-token pricing
-via Gemini CLI (Gemini BYOK).
+Retained for rollback only; removal is owned by CD.28's
+PLAN-retire-copilot-sdk follow-on. The active cost model is per-token
+pricing (CD.28 tier model; Gemini CLI free-tier for the executor today).
 
 Exit codes:
     0: Success, metadata updated (discrepancies are logged but non-blocking)

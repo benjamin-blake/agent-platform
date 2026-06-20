@@ -39,7 +39,7 @@ Perform a comprehensive code review of this repository. Work systematically thro
 
 ## Review Process
 
-1. **Read all documentation first** — `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE-WORKFLOW.md`, README.md, `docs/ROADMAP-PRODUCT.md`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, `docs/GETTING_STARTED.md`, `docs/CHANGELOG.md`, and any module-level READMEs.
+1. **Read all documentation first** — `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE-WORKFLOW.md`, README.md, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, `docs/GETTING_STARTED.md`, `docs/CHANGELOG.md`, and any module-level READMEs.
 2. **Build the review file list** using a scoped approach — do not read the entire repository blindly:
    a. Run `git diff --name-only origin/main` to get the list of changed files.
    b. Read the plan file (via `bin/venv-python -m scripts.find_plan`) and parse its Scope table for planned files.
@@ -203,7 +203,7 @@ FINDINGS:
 
 Do not write to any file. Do not edit any file. Return the findings block to the caller and stop.
 
-**The caller MUST use `bin/venv-python -m scripts.ops_data_portal` to file each finding. Never append to `logs/.recommendations-log.jsonl` directly.** This ensures ID authority via DynamoDB and persistence via the OpsWriter.
+**The caller MUST use `bin/venv-python -m scripts.ops_data_portal` to file each finding. Never append to `logs/.recommendations-log.jsonl` directly.** This ensures writer-allocated ids and persistence via the closed DuckLake writer boundary (Decision 84).
 
 ---
 

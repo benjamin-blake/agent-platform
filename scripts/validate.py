@@ -107,14 +107,14 @@ def invoke_step(name: str, cmd: list[str], failed: list[str], cwd: Path | None =
 
 
 def get_changed_files() -> list[str]:
-    """Get files changed vs origin/main, falling back to HEAD."""
+    """Get files changed vs origin/main, falling back to HEAD. Excludes deleted paths."""
     result = run(["git", "diff", "--name-only", "origin/main"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
     if result.returncode == 0:
         files = result.stdout.strip().splitlines()
     else:
         result = run(["git", "diff", "--name-only", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         files = result.stdout.strip().splitlines()
-    return [f for f in files if f]
+    return [f for f in files if f and (ROOT / f).exists()]
 
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
@@ -395,7 +395,7 @@ def validate_outbox_staleness(failed: list[str]) -> None:
             if age_hours > 24:
                 stale_count += 1
     if stale_count > 0:
-        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync_ops drain"
+        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync_ops sync"
         print(msg)
         # Warning only, not a hard failure (SSO may be legitimately unavailable).
     else:
@@ -663,13 +663,13 @@ def _is_inside_try(content: str, pos: int) -> bool:
 def validate_decisions_local_writes(failed: list[str]) -> None:
     """Enforce that no .py file directly writes to .decisions-index.jsonl.
 
-    The local decisions cache is a read-only downstream projection of Athena.
+    The local decisions cache is a read-only downstream projection of the DuckLake reader.
     All writes must go through scripts.ops_data_portal (file_decision, update_decision)
     which handles write-through. Cache rebuild happens via sync_ops pull only.
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (write-through cache update)
-      - scripts/sync_ops.py         (cache rebuild from Athena)
+      - scripts/sync_ops.py         (cache rebuild from the DuckLake reader)
     """
     print("\n=== Decisions JSONL write-path enforcement ===")
     scripts_dir = ROOT / "scripts"
@@ -720,8 +720,8 @@ def validate_rec_write_paths(failed: list[str]) -> None:
     """Enforce that no .py file directly writes to the recommendations JSONL.
 
     All writes must go through scripts.ops_data_portal (file_rec, update_rec).
-    Direct JSONL appends bypass DynamoDB ID allocation, Pydantic validation,
-    and OpsWriter S3 staging.
+    Direct JSONL appends bypass writer-owned ID allocation (Decision 84 I-2), Pydantic validation,
+    and the closed ducklake_writer boundary.
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (the portal itself)
@@ -781,7 +781,7 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
 
     Every call to OpsWriter().write("ops_*", ...) must originate from a
     whitelisted file. The whitelist captures the four legitimate write paths:
-    1. Portal calls (file_rec/update_rec/file_decision/update_decision/drain_pending)
+    1. Portal calls (file_rec/update_rec/file_decision/update_decision)
     2. Canonical ETL from a non-warehouse source of truth (DECISIONS.md -> ops_decisions)
     3. Outbox drain (write-once transient buffer, never replayable)
     4. Fresh in-memory writes (e.g. priority queue enrichment, execution plan save)
@@ -812,16 +812,44 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']ops_'),
     ]
 
+    # Table-specific block: the DuckLake-migrated tables (recs, decisions, priority_queue) must
+    # NEVER route to OpsWriter/Iceberg after Decision 84 I-1 -- readers serve DuckLake, so an
+    # Iceberg write is a silent split-brain. Catches any site, including whitelisted files.
+    # Self-excluded: validate.py itself contains the pattern strings and would otherwise self-flag.
+    # Tracked exemption: scripts/s3_log_store.py's dormant queue producer (T2.26 repoint; the
+    # scheduled-agent Lambdas that drive it are disabled -- see the AGENTS.md re-enable runbook caveat).
+    _MIGRATED = r"ops_(?:recommendations|decisions|priority_queue)"
+    _MIGRATED_BLOCK_PATTERNS = [
+        re.compile(r'OpsWriter\(\)\.write\(\s*["\']' + _MIGRATED),
+        re.compile(r'OpsWriter\(\)\.compact\(\s*["\']' + _MIGRATED),
+        re.compile(r'\b(?:writer|ops|_writer)\.write\(\s*["\']' + _MIGRATED),
+        re.compile(r'\b(?:writer|ops|_writer)\.compact\(\s*["\']' + _MIGRATED),
+    ]
+    _MIGRATED_BLOCK_EXEMPT = {scripts_dir / "s3_log_store.py"}  # dormant queue producer, T2.26
+
     errors: list[str] = []
     for search_dir in [scripts_dir, src_dir]:
         if not search_dir.exists():
             continue
         for py_file in sorted(search_dir.glob("**/*.py")):
-            if py_file in _WHITELIST:
-                continue
             try:
                 content = py_file.read_text(encoding="utf-8")
             except OSError:
+                continue
+
+            # Table-specific migrated-tables block (applies to ALL files, including whitelist).
+            if py_file != scripts_dir / "validate.py" and py_file not in _MIGRATED_BLOCK_EXEMPT:
+                for recs_pat in _MIGRATED_BLOCK_PATTERNS:
+                    if recs_pat.search(content):
+                        rel = py_file.relative_to(ROOT)
+                        errors.append(
+                            f"{rel}: writes/compacts a DuckLake-migrated table via OpsWriter -- "
+                            "recs/decisions/priority_queue transit the closed boundary (Decision 84 I-1). "
+                            "Use the ops_data_portal surface."
+                        )
+                        break
+
+            if py_file in _WHITELIST:
                 continue
             for pattern in _PATTERNS:
                 if pattern.search(content):
@@ -1389,7 +1417,10 @@ def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant
     except Exception:  # noqa: BLE001
         import traceback  # noqa: PLC0415
 
-        print(f"WARNING: budget breach rec filing failed (outbox may handle): {traceback.format_exc()}", file=sys.stderr)
+        print(
+            f"WARNING: budget breach rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
+            file=sys.stderr,
+        )
 
 
 def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], reason: str | None) -> None:
@@ -1423,7 +1454,10 @@ def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], r
     except Exception:  # noqa: BLE001
         import traceback  # noqa: PLC0415
 
-        print(f"WARNING: budget bypass rec filing failed (outbox may handle): {traceback.format_exc()}", file=sys.stderr)
+        print(
+            f"WARNING: budget bypass rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
+            file=sys.stderr,
+        )
 
 
 def run_lint_checks(failed: list[str], files: list[str] | None = None) -> None:
@@ -1822,6 +1856,46 @@ def validate_lambda_deploy_gating(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_plan_documents(failed: list[str], plans_dir: Path | None = None) -> None:
+    """Validate every docs/plans/PLAN-*.yaml against the PlanDocument Pydantic schema (T1.11 / CD.22).
+
+    Runs in BOTH --pre and full presubmit: pure Python over a handful of YAML files,
+    well under the Decision 60 fast-tier budget, and PLAN-*.yaml is an active editing
+    surface (same placement rationale as validate_product_roadmap). Historical PLAN-*.md
+    files are out of scope -- only the YAML artefact class is schema-governed.
+
+    plans_dir overrides the scanned directory (test seam for malformed-fixture proofs).
+    """
+    print("\n=== Plan document schema validation ===")
+
+    target_dir = plans_dir if plans_dir is not None else ROOT / "docs" / "plans"
+    plan_paths = sorted(target_dir.glob("PLAN-*.yaml"))
+    if not plan_paths:
+        print("  PASS: no PLAN-*.yaml files to validate.")
+        return
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.plan_document import validate_paths  # noqa: PLC0415
+
+        failures = validate_paths(plan_paths)
+        for path, error in failures:
+            print(f"  FAIL: {path.name}: {error}")
+        if failures:
+            failed.append("Plan document schema validation")
+        else:
+            print(f"  PASS: {len(plan_paths)} plan document(s) validate against PlanDocument schema.")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import plan_document: {exc}")
+        failed.append("Plan document schema validation")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def validate_product_roadmap(failed: list[str]) -> None:
     """Validate docs/ROADMAP-PRODUCT.yaml against the ProductRoadmapDocument Pydantic schema.
 
@@ -1942,8 +2016,8 @@ def _check_graduation_guard(failed: list[str]) -> None:
             if verdict is None:
                 print(f"  WARN: {label} flipped to enforced:true but not found in dq-latest.json checks.")
                 continue
-            if verdict == "SKIP":
-                print(f"  WARN: {label} has verdict=SKIP (dry-run only, inconclusive) -- flip not blocked but unverified.")
+            if verdict in {"SKIP", "UNAVAILABLE"}:
+                print(f"  WARN: {label} has verdict={verdict} (inconclusive) -- flip not blocked but unverified.")
                 continue
             if verdict != "PASS":
                 failed.append(
@@ -2183,6 +2257,30 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_ci_rca_taxonomy(failed: list[str]) -> None:
+    """Fail if any .github/workflows/*.yml workflow name is absent from workflow_to_tier map.
+
+    Pure file-glob + YAML parse (sub-100ms); --pre eligible (Decision 60).
+    """
+    print("\n=== CI-RCA taxonomy coverage (workflow_to_tier map) ===")
+    from scripts.ci_rca_taxonomy import enumerate_workflow_names, load_taxonomy  # noqa: PLC0415
+
+    try:
+        taxonomy = load_taxonomy()
+    except (FileNotFoundError, ValueError) as exc:
+        failed.append(f"CI-RCA taxonomy coverage: {exc}")
+        return
+
+    tier_map: dict[str, str] = taxonomy.get("workflow_to_tier") or {}
+    actual_names = enumerate_workflow_names()
+    missing = [n for n in actual_names if n not in tier_map]
+    if missing:
+        for n in missing:
+            failed.append(f"CI-RCA taxonomy: workflow {n!r} absent from workflow_to_tier in config/ci_rca_taxonomy.yaml")
+        return
+    print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
+
+
 _UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
 
 
@@ -2215,6 +2313,332 @@ def validate_hermeticity_flags(failed: list[str], _cmd: list[str] | None = None)
             failed.append(f"hermeticity-flags: {flag!r} missing from pytest invocation")
 
 
+# -- verifier-hermeticity gate (T3.6) --
+
+# Absolute-clock and randomness dotted-name primitives whose use in a HERMETIC verifier fails CI.
+# time.perf_counter is ALLOWLISTED (elapsed instrumentation, verdict-independent).
+# random.* and secrets.* are gated via _FORBIDDEN_DOTTED_MODULE_PREFIXES (wildcard match).
+# 3-level variants cover `import datetime; datetime.datetime.now()` in addition to
+# the 2-level `from datetime import datetime; datetime.now()`.
+_FORBIDDEN_DOTTED_NAMES: frozenset[str] = frozenset(
+    {
+        # absolute clock -- 2-level (e.g. from datetime import datetime; datetime.now())
+        "time.time",
+        "time.time_ns",
+        "time.monotonic",
+        "time.monotonic_ns",
+        "datetime.now",
+        "datetime.utcnow",
+        "datetime.today",
+        "date.today",
+        # absolute clock -- 3-level (e.g. import datetime; datetime.datetime.now())
+        "datetime.datetime.now",
+        "datetime.datetime.utcnow",
+        "datetime.datetime.today",
+        "datetime.date.today",
+        # randomness -- 2-level
+        "uuid.uuid1",
+        "uuid.uuid3",
+        "uuid.uuid4",
+        "uuid.uuid5",
+        "os.urandom",
+    }
+)
+
+# Module-name prefixes: any attribute access on these modules is forbidden in HERMETIC verifiers.
+_FORBIDDEN_DOTTED_MODULE_PREFIXES: frozenset[str] = frozenset({"random", "secrets"})
+
+# Network-import module names; any import of these or their submodules is forbidden.
+_FORBIDDEN_NETWORK_IMPORTS: frozenset[str] = frozenset(
+    {
+        "boto3",
+        "awswrangler",
+        "requests",
+        "httpx",
+        "urllib.request",
+        "urllib3",
+        "socket",
+        "http.client",
+    }
+)
+
+
+def _dotted_name_from_attr(node: ast.Attribute) -> str | None:
+    """Extract a dotted name of up to 3 levels from an ast.Attribute node.
+
+    Handles both 2-level (`time.time`, root is Name) and 3-level
+    (`datetime.datetime.now`, root is Name -> Attribute -> Attribute) chains.
+    Returns None when the root is not a simple Name (deeper or dynamic access).
+    """
+    attr = node.attr
+    value = node.value
+    if isinstance(value, ast.Name):
+        return f"{value.id}.{attr}"
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        return f"{value.value.id}.{value.attr}.{attr}"
+    return None
+
+
+def _verifier_is_non_hermetic(class_node: ast.ClassDef) -> bool:
+    """Return True if the class body explicitly declares NON_HERMETIC_BY_CONSTRUCTION.
+
+    Handles both plain assignment (hermeticity = ...) and type-annotated assignment
+    (hermeticity: Hermeticity = ...).
+    """
+    for stmt in class_node.body:
+        # Plain assignment: hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == "hermeticity"
+            and isinstance(stmt.value, ast.Attribute)
+            and stmt.value.attr == "NON_HERMETIC_BY_CONSTRUCTION"
+        ):
+            return True
+        # Type-annotated assignment: hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION
+        if (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == "hermeticity"
+            and stmt.value is not None
+            and isinstance(stmt.value, ast.Attribute)
+            and stmt.value.attr == "NON_HERMETIC_BY_CONSTRUCTION"
+        ):
+            return True
+    return False
+
+
+def validate_verifier_hermeticity(failed: list[str]) -> None:
+    """Fail CI when a HERMETIC-declared (or default) verifier uses a non-hermetic primitive.
+
+    Pure-AST scan (no imports) of scripts/verifiers/*.py. A file is EXEMPT when all of its
+    class bodies declare hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION.  Forbidden
+    primitives: absolute clock (time.time/time_ns/monotonic/monotonic_ns, datetime.now/utcnow/today,
+    date.today), randomness (random.*, uuid.uuid1/3/4/5, secrets.*, os.urandom), and network
+    imports (boto3, awswrangler, requests, httpx, urllib.request, urllib3, socket, http.client).
+    time.perf_counter is ALLOWLISTED.  Files with SyntaxError are skipped (fail-open per file).
+    """
+    print("\n=== Verifier hermeticity (T3.6) ===")
+    scan_dir = ROOT / "scripts" / "verifiers"
+    if not scan_dir.is_dir():
+        failed.append("verifier-hermeticity: scripts/verifiers/ not found")
+        return
+
+    for py_file in sorted(scan_dir.glob("*.py")):
+        try:
+            source = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(py_file))
+        except SyntaxError:
+            continue
+
+        classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        if classes and all(_verifier_is_non_hermetic(cls) for cls in classes):
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                dotted = _dotted_name_from_attr(node)
+                if dotted is None:
+                    continue
+                root = dotted.split(".")[0]
+                if dotted in _FORBIDDEN_DOTTED_NAMES:
+                    failed.append(f"verifier-hermeticity: {py_file.name}:{node.lineno}: {dotted}")
+                elif root in _FORBIDDEN_DOTTED_MODULE_PREFIXES:
+                    failed.append(f"verifier-hermeticity: {py_file.name}:{node.lineno}: {dotted}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if any(alias.name == f or alias.name.startswith(f + ".") for f in _FORBIDDEN_NETWORK_IMPORTS):
+                        failed.append(f"verifier-hermeticity: {py_file.name}:{node.lineno}: import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if any(module == f or module.startswith(f + ".") for f in _FORBIDDEN_NETWORK_IMPORTS):
+                    failed.append(f"verifier-hermeticity: {py_file.name}:{node.lineno}: from {module} import ...")
+
+
+def validate_intent_doc_freeze(failed: list[str]) -> None:
+    """Reject any standing prose-architecture doc not in the grandfather set (Decision 86).
+
+    The grandfather set derives from docs/intent-migration/MANIFEST.yaml: a doc path is
+    allowed iff it has a documents[] entry with disposition_state != done. As each wave
+    flips an entry to disposition_state: done and deletes the file, the allowed set shrinks
+    automatically with no manual edits.
+
+    Scan model: enumerates on-disk docs via dirlist (NOT get_changed_files) so a committed
+    but undiffed doc is always caught. Scope: docs/INTENT-*.md anywhere under docs/ except
+    docs/contracts/ and docs/intent-migration/. Fail-open (warning, no failure) if the
+    manifest is absent or unreadable.
+    """
+    print("\n=== Intent doc freeze (Decision 86) ===")
+    manifest_path = ROOT / "docs" / "intent-migration" / "MANIFEST.yaml"
+    try:
+        import yaml  # noqa: PLC0415
+
+        manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        allowed: set[str] = {
+            f"docs/INTENT-{doc['id']}.md"
+            for doc in manifest_data.get("documents", [])
+            if doc.get("disposition_state", "pending") != "done"
+        }
+    except Exception as exc:
+        print(f"WARNING: intent-doc-freeze: manifest unreadable ({exc}); check skipped (fail-open).")
+        return
+
+    excluded_dirs = {"contracts", "intent-migration"}
+    docs_dir = ROOT / "docs"
+
+    for candidate in sorted(docs_dir.rglob("INTENT-*.md")):
+        parts = candidate.relative_to(docs_dir).parts
+        if parts[0] in excluded_dirs:
+            continue
+        rel = str(candidate.relative_to(ROOT)).replace("\\", "/")
+        if rel not in allowed:
+            failed.append(f"intent-doc-freeze: {rel} is not in the manifest grandfather set (Decision 86)")
+
+
+def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None) -> None:
+    """Gate on contract drift: reject ritual contract YAMLs in docs/contracts/ that violate CD.25.
+
+    Pass 1 (structural) iterates docs/contracts/*.yaml per file so unparseable YAML is caught as
+    a defect (not silently swallowed as load_all_contracts does).  Pass 2 (diff-aware) runs only
+    for contracts changed vs the git merge-base and checks amendment-log + status-transition rules.
+
+    contracts_dir: override for test isolation (defaults to ROOT/docs/contracts).
+    """
+    print("\n=== Contract drift gate (CD.25) ===")
+
+    target_dir = contracts_dir if contracts_dir is not None else ROOT / "docs" / "contracts"
+    if not target_dir.is_dir():
+        print("  No docs/contracts/ directory -- gate skipped.")
+        return
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+
+    error_count_before = len(failed)
+    yaml_paths: list[Path] = []
+    ritual_contracts: list[tuple[Path, object]] = []
+
+    try:
+        import yaml as _yaml
+
+        from scripts.contracts import ContractValidationError, load_contract, resolve_refs
+        from scripts.contracts_enforcement import (
+            _load_contract_from_text,
+            check_amendment_for_diff,
+            check_required_inline_fields,
+            check_status_transition,
+        )
+
+        yaml_paths = sorted(target_dir.glob("*.yaml"))
+
+        # Pass 1: structural validation of all present ritual contracts.
+        for p in yaml_paths:
+            # yaml.safe_load per file -- an unparseable file is a category-1 defect.
+            # load_all_contracts swallows (OSError, yaml.YAMLError) and silently skips such files;
+            # the per-file path surfaces them as gate failures.
+            try:
+                raw_text = p.read_text(encoding="utf-8")
+                data = _yaml.safe_load(raw_text)
+            except (OSError, _yaml.YAMLError) as exc:
+                failed.append(f"Contract drift (cat-1): {p.name}: {exc}")
+                continue
+
+            if not isinstance(data, dict):
+                failed.append(f"Contract drift (cat-1): {p.name}: not a YAML mapping")
+                continue
+
+            # Skip parseable non-ritual docs (e.g. read-engine.yaml, which has `version:` at top level
+            # but no `contract:` block with a `class:` field).
+            contract_block = data.get("contract")
+            if not (isinstance(contract_block, dict) and "class" in contract_block):
+                continue
+
+            # load_contract: schema validation (catches cat-1 malformed + cat-8 bad change_class enum)
+            try:
+                doc = load_contract(p)
+            except ContractValidationError as exc:
+                failed.append(f"Contract drift (structural): {p.name}: {exc}")
+                continue
+
+            # resolve_refs: catches cat-3 ($ref target absent), cat-4 (chain>1), cat-5 (dup inline+ref)
+            try:
+                resolve_refs(doc, target_dir)
+            except ContractValidationError as exc:
+                failed.append(f"Contract drift (ref): {p.name}: {exc}")
+                continue
+
+            # check_required_inline_fields: cat-2 (inline Class-A field missing required descriptive keys)
+            for err in check_required_inline_fields(doc):
+                failed.append(f"Contract drift: {p.name}: {err}")
+
+            ritual_contracts.append((p, doc))
+
+        # Pass 2: diff-aware checks (cat-6 amendment log, cat-7 status transition).
+        # Scoped to contracts changed vs the git merge-base.  Fails open if the merge-base
+        # cannot be resolved (offline / new repo) so Pass 1 still gates unconditionally.
+        base_result = run(
+            ["git", "merge-base", "origin/main", "HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=ROOT,
+        )
+        if base_result.returncode != 0:
+            print("  WARNING: merge-base unavailable; Pass 2 (diff checks) skipped -- Pass 1 still ran.")
+        else:
+            merge_base = base_result.stdout.strip()
+            diff_result = run(
+                ["git", "diff", "--name-only", f"{merge_base}..HEAD", "--", "docs/contracts/"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=ROOT,
+            )
+            changed_names = {Path(line.strip()).name for line in diff_result.stdout.splitlines() if line.strip()}
+
+            ritual_by_name = {p.name: (p, doc) for p, doc in ritual_contracts}
+            for name, (p, head_doc) in ritual_by_name.items():
+                if name not in changed_names:
+                    continue
+                rel = Path("docs") / "contracts" / name
+                show_result = run(
+                    ["git", "show", f"{merge_base}:{rel}"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=ROOT,
+                )
+                if show_result.returncode != 0:
+                    continue
+                try:
+                    base_doc = _load_contract_from_text(show_result.stdout)
+                except ContractValidationError:
+                    continue
+                for err in check_amendment_for_diff(base_doc, head_doc):
+                    failed.append(f"Contract drift: {p.name}: {err}")
+                for err in check_status_transition(base_doc, head_doc):
+                    failed.append(f"Contract drift: {p.name}: {err}")
+
+        new_failures = len(failed) - error_count_before
+        if new_failures == 0:
+            print(f"  PASS: {len(yaml_paths)} file(s) scanned, {len(ritual_contracts)} ritual contract(s) -- no drift.")
+        else:
+            print(
+                f"  FAIL: {len(yaml_paths)} file(s) scanned, {len(ritual_contracts)} ritual contract(s) -- "
+                f"{new_failures} violation(s)."
+            )
+
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2239,6 +2663,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_lambda_bundle_completeness(failed)
     validate_lambda_deploy_gating(failed)
     validate_product_roadmap(failed)
+    validate_plan_documents(failed)
     validate_pydantic_yaml_drift(failed)
     _check_graduation_guard(failed)
     validate_dq_manifest_gate(failed)
@@ -2249,6 +2674,10 @@ def run_python_checks(failed: list[str]) -> None:
     validate_complexity(failed)
     validate_scheduled_agent_logs(failed)
     validate_hermeticity_flags(failed)
+    validate_verifier_hermeticity(failed)
+    validate_intent_doc_freeze(failed)
+    validate_contract_drift(failed)
+    validate_ci_rca_taxonomy(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
@@ -2257,10 +2686,42 @@ def run_python_checks(failed: list[str]) -> None:
         print("mypy: type errors found (informational - not blocking). Fix progressively.")
 
 
+# Transient registry.terraform.io 5xx signatures; used by _terraform_init_with_retry and
+# by the bounded retry loop in .github/workflows/terraform-apply-sandbox.yml (parity required).
+_TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not query provider registry", "failed after ")
+
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
 # terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
 _TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github")
+
+
+def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> bool:
+    """Run a terraform init command with bounded retry on transient registry 5xx.
+
+    Returns True if init succeeded (never appends to failed), False if permanently failed
+    (label is appended to failed). Matches invoke_step output format for the step header.
+    Transient signatures: _TRANSIENT_INIT_SIGNATURES (parity with the workflow retry loop).
+    """
+    print(f"\n=== {label} ===")
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        result = run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        if result.returncode == 0:
+            print(result.stdout, end="")
+            return True
+        combined = result.stdout + result.stderr
+        is_transient = any(sig in combined for sig in _TRANSIENT_INIT_SIGNATURES)
+        if is_transient and attempt < max_attempts:
+            delay = 2**attempt
+            print(f"transient registry error (attempt {attempt}/{max_attempts}); retrying in {delay}s...")
+            print(combined, end="")
+            time.sleep(delay)
+            continue
+        print(combined, end="")
+        failed.append(label)
+        return False
+    return False  # pragma: no cover -- unreachable: loop body always returns on the final attempt
 
 
 def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
@@ -2278,9 +2739,12 @@ def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAF
         return
     for root in roots:
         chdir = f"-chdir={root}"
-        invoke_step(
-            f"Terraform init [{root}]", ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"], failed
-        )
+        if not _terraform_init_with_retry(
+            f"Terraform init [{root}]",
+            ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"],
+            failed,
+        ):
+            continue
         invoke_step(f"Terraform validate [{root}]", ["terraform", chdir, "validate", "-no-color"], failed)
         invoke_step(f"Terraform fmt check [{root}]", ["terraform", chdir, "fmt", "-check", "-no-color"], failed)
 
@@ -2672,8 +3136,20 @@ def main() -> None:
         validate_workflow_agent_safety(failed)
         # Product-roadmap check runs in --pre: pure Python, sub-100ms, active editing surface
         validate_product_roadmap(failed)
+        # Plan-document check runs in --pre for the same reason (T1.11 / CD.22)
+        validate_plan_documents(failed)
         # CC-gate in --pre: O(lines) AST check, per rec-859 RCA earliest_viable_gate="pre" (docs/INTENT-ci-rca-methodology.md)
         validate_cc_limits(failed)
+        # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach
+        # missed pre-merge in PR #106 because it ran in full-tier only (rec-2106 RCA).
+        validate_sloc_limits(failed)
+        # Intent-doc-freeze in --pre: O(dirlist) scan, Decision 86; prevents new INTENT docs before CI catches them.
+        validate_intent_doc_freeze(failed)
+        # Contract drift gate in --pre: pure Python over docs/contracts/*.yaml (sub-second), CD.25.
+        # Diff-aware Pass 2 runs only over changed files -- keeps the fast-tier budget safe.
+        validate_contract_drift(failed)
+        # CI-RCA taxonomy coverage in --pre: pure file-glob + YAML parse (sub-100ms), Decision 60.
+        validate_ci_rca_taxonomy(failed)
 
         elapsed = time.monotonic() - _t0
 

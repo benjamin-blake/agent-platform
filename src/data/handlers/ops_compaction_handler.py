@@ -1,5 +1,9 @@
 """Ops Compaction Lambda handler.
 
+DEPRECATED -- live Iceberg ops write path; retired at the T2.19 cutover when the DuckLake
+writer replaces it (Decision 78 clause 7). Do NOT disable before T2.19. Decommission runbook
+is in docs/runbooks/ducklake-catalog-operations.md (Section 5 / T2.19-gated steps).
+
 Triggered by S3 ObjectCreated events on the staging/ prefix of the
 agent-logs bucket.  Parses the S3 key to extract the ops table name and
 trade_date partition, then calls OpsWriter.compact() to write the staged
@@ -65,6 +69,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ANN
         else:
             logger.warning("ops_compaction_handler: could not parse date from %r", date_segment)
             return {"statusCode": 200, "rows_compacted": 0}
+
+    if table_name == "ops_recommendations":
+        logger.warning(
+            "ops_compaction_handler: ops_recommendations is excluded from Iceberg compaction -- "
+            "recs transit the DuckLake closed boundary (Decision 81 cl.7 / T2.19). No-op."
+        )
+        return {"statusCode": 200, "rows_compacted": 0, "table": table_name, "note": "recs_excluded_ducklake"}
 
     if table_name not in TABLE_NAMES:
         logger.warning(

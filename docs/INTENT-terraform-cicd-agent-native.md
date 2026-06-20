@@ -4,7 +4,7 @@ Status: PROPOSED -- candidate decision **CD.NN** (ratify as a numbered Decision 
 when Wave 1 ships, matching CD.31->Decision 78 / CD.33->Decision 81).
 Scope: single-account sandbox PLATFORM environment (`terraform/personal/` + `terraform/github/`).
 Extends (does NOT overturn): Decision 77 (auto-apply guard), Decision 35 (apply human-gated), Decision 76
-(async wake), Decision 72 / CD.20 (`main-protection` ruleset).
+(async wake), Decision 89 / CD.20 (`main-protection` ruleset).
 **Design-of-record for the architecture below.** The tier_items' canonical home is `docs/ROADMAP-PLATFORM.yaml`
 (transcribed from Section 8 post-review); this doc is design rationale, NOT the source-of-record for the
 tier_items themselves.
@@ -148,6 +148,28 @@ agent cannot merge the fix that clears it) or be bypassed by the admin-`always` 
 useful blocking. It **passes-on-absent-record** (the first *apply* writes the first record -- never a human
 seed, preserving the apply-only write-IAM invariant) and surfaces the red state for visibility. Net: a broken
 apply blocks the next *apply* server-side regardless; the advisory status just makes it visible.
+
+**Amendment (2026-06-10, pre-Wave-1 design review; mirrored in T2.20's roadmap entry):**
+(a) **Unlatch = dispatch-ack.** A red record blocks all push-triggered applies, and a refusal never
+overwrites the record. Clearing requires a `workflow_dispatch` acknowledge-and-retry run whose input names the
+red record's commit (or rec id); only a successful apply from that path writes green. The dispatch actor +
+input are the audit trail; the agent may dispatch via the MCP actions trigger after the rec review (Decision
+55/72), so autonomy is preserved. Auto-allow-descendants is rejected: on linear-history main every commit is a
+descendant, so the latch would never latch.
+(b) **Applies serialize** via a workflow `concurrency` group (`cancel-in-progress: false`), closing the
+read-precondition -> apply -> write-record race between rapid merges and keeping state-lock-timeout noise out
+of ci-rca.
+(c) **The record lives in its own S3 prefix** (e.g. `convergence/personal/sandbox.json`), NOT under `tfstate/`
+as sketched above: the advisory PR status reads it at PR time, and "`github_ci_pr` cannot read tfstate" must
+stay cleanly auditable -- the PR role gets read on the record prefix only. Write-IAM is
+**pipeline-writer-identity-only** via a shared record-writer policy ("apply identity alone" would contradict
+5.6's drift red-flip: the drift identity joins at Wave 5). Never PR roles, never laptops. `plan_sha` is null
+until Wave 2 introduces saved plans.
+(d) **Refusals dedupe; framing scoped.** A refusal-while-red carries a distinguishable failure marker and
+ci-rca dedupes it against the open red-record rec (coordinate with T1.13's structured taxonomy). The
+forced-failure verification rec is closed via `update_rec` annotated as synthetic. "Unbypassable" means by
+merge-path actors -- NOT against workflow self-edit; that residual is Wave 4 plus the CD.35 authority budget
+(detail points 6-9), and Decision text must not overclaim.
 
 ### 5.6 Drift detection
 A scheduled workflow runs `terraform plan` for drift. **Exit-code handling is explicit** (not assumed from

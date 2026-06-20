@@ -1,0 +1,946 @@
+audit:
+  id: PLATFORM-ROADMAP-AUDIT-2026-06-09
+  target: docs/ROADMAP-PLATFORM.yaml
+  target_git_sha: "038149661fade75cb94e02cb005cf312f00f4c7a"  # pragma: allowlist secret -- public commit hash, not a credential
+  date: "2026-06-09"
+  method: docs/AUDIT-PROMPT-platform-roadmap-audit.md
+  method_version: 1
+
+summary:
+  headline: |
+    The roadmap is mechanically sound (validator PASS, no duplicate ids, no dangling
+    depends_on, clean completed_at hygiene) and its status fields are broadly honest:
+    of 50 D3 verdicts, 31 confirmed and only 2 contradicted, with most partials
+    self-disclosed in notes. It is NOT yet a trustworthy autonomous control surface,
+    for four dominant reasons. First, the documented governance semantics are fiction
+    in places: the log-decision Lambda (T0.7b) is described as the ratification
+    vehicle while every ratified CD actually went through the ops portal, and that
+    fiction leaves CD.25/T1.12/T0.7a-c in a structural deadlock no bootstrap exemption
+    covers. Second, the consumer contract overstates what is implemented: preflight
+    never surfaces blocked-on-CD, nothing evaluates cross_tier_gates, and the
+    preflight report no longer carries the keys T-1.4 promises. Third, the forward
+    book of work (the T0.6-T1.4 Lambda wave, T1.5/T1.6, T3.2) was authored against
+    a pre-DuckLake / pre-CD.24 / pre-CD.21 world and was never re-grounded, so
+    several currently-eligible items would misdirect the next planning session.
+    Fourth, the recs cutover (T2.19) is genuinely closed on the write side but a
+    read-side Athena fallback in sync_ops plus three drifted contracts and a missing
+    validate.py topology guard leave the closed-boundary invariant unenforced.
+    Planning consumers can rely on next_eligible only with per-item re-verification.
+  findings_by_severity: {critical: 1, high: 10, medium: 18, low: 9}
+  findings_by_dimension: {D1: 2, D2: 7, D3: 7, D4: 3, D5: 2, D6: 2, D7: 5, D8: 3, D9: 1, D10: 1, D11: 5}
+  contract_closure: {closed: 3, open: 5, waived_prose_only: 2}
+  status_truth_verdicts: {confirmed: 31, partially_confirmed: 17, unsubstantiated: 0, contradicted: 2}
+  rubric_coverage:
+    - id: R1
+      element: "Document identity and governance"
+      present: true
+      carrier_keys: [document.id, document.version, document.status, document.filed_via, gate_helpers]
+      notes: "Schema-validated via T-1.5/validate.py. CD-level state/filed_via are free strings (CD.1 deviates); document.status=draft is consistent with CD.1 pending."
+    - id: R2
+      element: "Strategic frame"
+      present: true
+      carrier_keys: [north_star, header-prose, rebuild_vs_refactor]
+      notes: "NS.1-NS.5 present and current (NS.1 generalised per Decision 78). Sibling-boundary claim in the header is stale (F-029)."
+    - id: R3
+      element: "Current-state baseline"
+      present: true
+      carrier_keys: [foundation_already_shipped]
+      notes: "15 entries; 11 confirmed. F.2 describes retired infrastructure as live, F.14 is a dead pointer, F.7 has a stale locator (F-024/F-025)."
+    - id: R4
+      element: "Work breakdown"
+      present: true
+      carrier_keys: [tier_items]
+      notes: "Stable ids, intent, exit_criteria, effort, status lifecycle all present. Quality uneven on the forward book (D7 findings F-008, F-015, F-016)."
+    - id: R5
+      element: "Sequencing"
+      present: true
+      carrier_keys: [depends_on, tiers, PlatformRoadmapState]
+      notes: "Machine-checkable and cycle-free. Missing edges exist where out-of-order T2 execution broke the tier-order assumption (F-012); active_tier=T-1 no longer describes execution reality."
+    - id: R6
+      element: "Decision governance"
+      present: partial
+      carrier_keys: [candidate_decisions, decision_required_before, bootstrap clauses, bootstrap_completion_exempt]
+      notes: "Rich structure, but completion gating is unenforced and violated (F-011), the exemption flags drifted beyond both documented scopes, and the ratification vehicle is obsolete (F-001)."
+    - id: R7
+      element: "Risk register"
+      present: true
+      carrier_keys: [open_questions, known_gaps]
+      notes: "Present with resolution tiers; 6 OQs and 3 KGs are stale, and KG.11's own trigger is breached without the prescribed action (F-019/F-020)."
+    - id: R8
+      element: "Economics"
+      present: true
+      carrier_keys: [cost_projection, effort]
+      notes: "cost_projection updated through CD.21/CD.34 (runner retired, Neon $0) and carries reevaluation triggers. Effort calibration largely sane; L-without-strategic is freeze-era deliberate but unevenly annotated (F-027)."
+    - id: R9
+      element: "Measurability and freshness"
+      present: partial
+      carrier_keys: [exit_criteria, compute_state_dict stale_cache_note]
+      notes: "Per-item exit criteria are the norm; freshness mechanism is only the preflight mtime note. No periodic review mechanism; several complete items have unreproducible criteria (F-006); silent completion found (F-013)."
+    - id: R10
+      element: "Consumer integration"
+      present: partial
+      carrier_keys: [header consumer list, agent_instructions, session_preflight integration]
+      notes: "Consumers named and preflight integration real, but agent_instructions promise blocked-on-CD surfacing and gate enforcement that are not implemented (F-010)."
+    - id: R11
+      element: "Impact closure"
+      present: partial
+      carrier_keys: [files_in_scope, paired tier_items, docs/contracts cross-refs]
+      notes: "T2.16b is a model closed cutover. But CD.28 decommission work lives only in CD prose (not tier items), T2.19's deferred four-table migrations have no owning item, and contracts lag both cutovers (F-003/F-004/F-018/F-021)."
+
+findings:
+  - id: F-001
+    dimension: D2
+    severity: critical
+    confidence: high
+    title: "CD.25 ratification deadlock: T0.7a/b/c require T1.12 complete, T1.12 completion requires CD.25 ratified, CD.25's documented ratification vehicle is T0.7b"
+    detail: |
+      Under the document's own semantics the chain is circular and no bootstrap
+      exemption covers it. T0.7a/T0.7b/T0.7c each list T1.12 in depends_on, so the
+      log-decision Lambda cannot START until T1.12 is complete. T1.12 is gated for
+      COMPLETION by CD.25 (it appears in CD.25.gates) and explicitly carries
+      bootstrap_completion_exempt: false. CD.25's bootstrap allowance states
+      "ratification happens once T0.7b (log-decision Lambda) is available", and the
+      agent_instructions declare T0.7b "the first ratification vehicle". An agent
+      planning strictly from this document concludes the entire Lambda tooling
+      surface is permanently blocked. In practice the deadlock has already been
+      bypassed: CD.16, CD.24, CD.31 and CD.33 were all ratified via the ops portal
+      (ops_decisions:dec-1085/1086/1089) with T0.7b not_started - which proves the
+      documented vehicle is obsolete, but the roadmap never says so. The blast
+      radius is the whole T0.6-T1.4 wave plus T-1.1 (filing CD.1-CD.19), whose
+      incomplete ancestor set is {T-1.12, T0.12.7, T0.12.5, T0.13, T0.6, T1.12,
+      T0.7b}.
+    affected_ids: [CD.25, T1.12, T0.7a, T0.7b, T0.7c, T-1.1, CD.1]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2217 (T0.7a depends_on includes T1.12); :2240 (T0.7b); :2259 (T0.7c)"
+      - "docs/ROADMAP-PLATFORM.yaml:780 (CD.25.gates includes T1.12); :2858 (T1.12 bootstrap_completion_exempt: false)"
+      - "docs/ROADMAP-PLATFORM.yaml:751-753 (CD.25: 'ratification happens once T0.7b ... is available'); :85-86 ('the log-decision Lambda (T0.7b) is the first ratification vehicle')"
+      - "command: wave-1.5 reachability scan; output: CD.25 gated_incomplete_nonexempt=[T1.12], of_which_on_T0.7b_dependency_path=[T1.12]"
+      - "docs/DECISIONS.md (per subagent B): Decisions 78/79/81 ratified CD.31/CD.16+CD.24/CD.33 via ops portal with T0.7b not_started"
+    proposed_remediation: "Amend agent_instructions and CD.25 to name the ops portal (file_decision) as the interim ratification vehicle, or add a bootstrap exemption for T1.12, or drop the T1.12 edge from T0.7a/b/c. Proposal only."
+    proposed_rec: true
+
+  - id: F-002
+    dimension: D2
+    severity: high
+    confidence: high
+    title: "CD completion-gating rule is unenforced and violated by four unexempted completions; bootstrap exemption flags drifted beyond both documented scopes"
+    detail: |
+      The documented rule is that a CD must be ratified before its gated tier_items
+      can be marked complete, with a per-item bootstrap_completion_exempt flag as
+      the only sanctioned escape, scoped to two enumerated sets with termination
+      clauses. At HEAD: T0.10 (gated by pending CD.5), T2.12 (pending CD.20), and
+      T2.16b + T2.17 (pending CD.34) are complete WITHOUT the exemption flag - the
+      rule as written was simply not applied. Separately, eight items carry the
+      flag while belonging to NEITHER documented scope (T0.2, T0.3, T0.5, T2.1,
+      T2.2, T2.3, T2.10, T2.13), so no termination clause governs when their
+      exemptions end. The START-eligibility enumeration is also stale on both
+      sides: it lists T0.4 and T-1.4 as having depends_on:[] (they do not) and
+      omits T-1.7/T-1.9/T-1.11 (which do). Nothing in platform_roadmap.py or
+      validate.py checks any of this, so the governance layer the document
+      presents as binding is effectively advisory.
+    affected_ids: [T0.10, T2.12, T2.16b, T2.17, CD.5, CD.20, CD.34, T0.2, T0.3, T0.5, T2.1, T2.2, T2.3, T2.10, T2.13]
+    evidence:
+      - "command: wave-0 scan; output: complete_gated_by_pending_cd_no_exemption = [T0.10/CD.5, T2.12/CD.20, T2.16b/CD.34, T2.17/CD.34]"
+      - "docs/ROADMAP-PLATFORM.yaml:61-82 (two documented exemption scopes + termination clauses); flags outside both scopes at :2110, :2130, :2187, :2960, :2978, :2999, :3154, :3276"
+      - "docs/ROADMAP-PLATFORM.yaml:54-60 (START enumeration lists T0.4 despite depends_on [T0.3] at :2155; T-1.4 despite depends_on [T-1.0] at :1602)"
+      - "scripts/platform_roadmap.py:310-381 (PlatformRoadmapState reads no candidate_decisions; no completion-gating check exists)"
+    proposed_remediation: "Either enforce the rule (validate.py check: complete + pending gating CD requires the flag; flags require a documented scope) or rewrite the bootstrap clauses to describe the actual operating convention (complete first, ratify via portal afterwards). Proposal only."
+    proposed_rec: true
+
+  - id: F-006
+    dimension: D3
+    severity: high
+    confidence: high
+    title: "T0.3 is complete but its sole files_in_scope artifact (scripts/verify_platform_account.py) is absent and every exit criterion asserts checks of that nonexistent verifier"
+    detail: |
+      All T0.3 exit criteria are of the form "verifier check X passes" against
+      scripts/verify_platform_account.py, which does not exist at HEAD (and the
+      squashed clone has no history to show when it was removed). The IAM substrate
+      it verified (terraform/personal/platform_roles.tf, Pattern B roles) exists
+      and works - the session-start hook proves the chain daily - but the strongest
+      evidence class for this complete item is unreproducible, and exit criterion 5
+      (ops_decisions entry) is self-deferred to not_started T0.7b. T0.3 underpins
+      most downstream account work.
+    affected_ids: [T0.3]
+    evidence:
+      - "command: ls scripts/verify_platform_account.py; output: No such file or directory"
+      - "docs/ROADMAP-PLATFORM.yaml:2118-2124 (exit criteria all reference verifier checks); :2131-2132 (note + progress_note claim '14/14 checks pass')"
+      - "CD.28 discipline point at docs/ROADMAP-PLATFORM.yaml:993 still schedules edits to the now-absent verifier (PLAN-retire-bedrock-code-paths scope)"
+    proposed_remediation: "Restore or re-derive the verifier, or rewrite T0.3's exit criteria to the terraform-realized reality; also update CD.28's follow-on plan scope which edits the absent file. Proposal only."
+    proposed_rec: true
+
+  - id: F-007
+    dimension: D3
+    severity: high
+    confidence: high
+    title: "T2.13 (public flip) is the most overstated complete: its post-flip verification criteria were not satisfiable on the completion date and two dependencies were unmet"
+    detail: |
+      T2.13 completed 2026-05-30, but its exit criteria assert GHAS active,
+      branch protection active, and a green Codespace preflight - none of which
+      held at flip time by the item's own note. Its depends_on (T2.5 in_progress,
+      T2.11b in_progress) were and remain unmet; the green-Codespace criterion
+      depends on T2.11a, still not_started. The flip itself happened (Decision 76)
+      and most security criteria were later satisfied by T2.12 (2026-06-08), but
+      "complete" here recorded an event, not the written exit criteria. Since
+      downstream T2.15/T2.20 depend on T2.13, the status materially affects
+      eligibility computation.
+    affected_ids: [T2.13, T2.11a, T2.11b]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3263-3270 (exit criteria: GHAS verified post-flip, Codespace green preflight, branch protection); :3277 (note admits T2.11a/b + T2.12 outstanding at flip)"
+      - "command: wave-0 scan; output: T2.13 complete with incomplete deps [T2.5, T2.11b]"
+    proposed_remediation: "Either rescope T2.13's exit criteria to the flip event (moving verification to T2.11a/T2.12 where it now lives) or annotate the criteria as retrospectively satisfied where true. Proposal only."
+    proposed_rec: true
+
+  - id: F-009
+    dimension: D4
+    severity: high
+    confidence: high
+    title: "Stale 'Lambda-deploy DEFERRED per Decision 67' and 'DEFERRED until CD.16 ratifies' language survives on six-plus surfaces after Decision 79 lifted the freeze and CD.16 ratified"
+    detail: |
+      Decision 79 (dec-1086) lifted Decision 67's blanket Lambda-deploy freeze and
+      ratified CD.16/CD.24, and AGENTS.md states per-Lambda gating is the live rule.
+      Yet T2.19's intent still says "Lambda-deploy DEFERRED per Decision 67 / CD.16
+      until per-Lambda gating resolves" while the SAME item's exit criteria say the
+      clause was lifted by Decision 79 - an internal contradiction on a live
+      in_progress item. CD.31's discipline point says T2.19 "deploys nothing"
+      (it deploys four Lambdas). CD.28's follow-on inventory cites "Decision 67
+      deferred-deployment markers" three times, CD.27's T4.x template once, and
+      T1.12's intent still reads "DEFERRED until CD.16 ratifies" with a
+      decision_required_before naming an already-ratified CD.
+    affected_ids: [T2.19, CD.31, CD.28, CD.27, T1.12]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3550 (intent DEFERRED) vs :3570 (exit criteria: 'Decision 67 Lambda-deploy clause lifted by Decision 79')"
+      - "docs/ROADMAP-PLATFORM.yaml:1244 (CD.31: 'This plan is IMPLEMENTATION and deploys nothing'); :972-973, :998, :1025 (CD.28 inventory); :885 (CD.27 template); :2822, :2832-2833 (T1.12)"
+      - "docs/DECISIONS.md (per subagent B): Decision 79 = dec-1086 lifts the deploy clause; AGENTS.md Temporary Operational Constraints"
+    proposed_remediation: "One sweep replacing the lifted-freeze language with the CD.16 per-Lambda rule (deploy fine; only the dispatcher smoke-test deferral survives until T4.3). Proposal only."
+    proposed_rec: true
+
+  - id: F-011
+    dimension: D5
+    severity: high
+    confidence: high
+    title: "Product MVP.4 (real-money stage gate) depends on platform T3.5, which sits behind a fully not_started chain ending in an XL strategic item"
+    detail: |
+      MVP.4, L2.pc.10 and L3.exec.11 in ROADMAP-PRODUCT.yaml depend on PLATFORM:T3.5
+      (TCA aggregation). T3.5 is resolvable but practically blocked: its chain is
+      T3.5 <- T3.4 (XL strategic) <- T3.3 (L strategic) <- T3.2 <- T3.1 (L), all
+      not_started, with leaves T0.12.6 (not_started) and T3.6 (in_progress). The
+      CD.16 start-gate on T3.5 is satisfied (ratified), so depth is the blocker.
+      A product planner reading edge resolution alone would see T3.5 as available;
+      it is multiple strategic decompositions away. Also worth scrutiny: T3.5
+      depends on T3.4 (full control-plane loop closure), which is a heavyweight
+      prerequisite for what is otherwise an aggregation Lambda + contract.
+    affected_ids: [T3.5, T3.4, T3.3, T3.2, T3.1]
+    evidence:
+      - "docs/ROADMAP-PRODUCT.yaml:4073-4085 (MVP.4 cross_roadmap_depends_on PLATFORM:T3.5); :1854-1866 (L2.pc.10); :2495-2507 (L3.exec.11)"
+      - "docs/ROADMAP-PLATFORM.yaml:3857 (T3.5 depends_on [T0.7a, T0.12.5, T3.4]); :3831-3844 (T3.4 XL strategic not_started)"
+    proposed_remediation: "Re-examine whether T3.5 truly needs T3.4 (vs only T3.1/T3.2-grade verification), or resequence a minimal TCA path for the product MVP. Proposal only."
+    proposed_rec: true
+
+  - id: F-010
+    dimension: D6
+    severity: high
+    confidence: high
+    title: "agent_instructions promise consumer behavior that does not exist: blocked-on-CD surfacing is unimplemented, cross_tier_gates are evaluated by nothing, and the preflight report dropped the keys T-1.4's exit criteria require"
+    detail: |
+      Three documented-vs-implemented gaps. (1) Lines 41-43 claim "preflight
+      surfaces 'blocked-on-CD' when a tier_item is eligible-by-deps but a referenced
+      CD is pending" - compute_state_dict and PlatformRoadmapState never read
+      candidate_decisions; no such computation exists anywhere. (2) Line 44 declares
+      cross-tier gates "MUST hold, not advisory", but no consumer evaluates gate
+      rules (the validator checks grammar only; G.8's latest_run.verdict aggregation
+      was never built). G.1 and G.2 are in fact already violated by practice:
+      ratifications proceeded with T-1 at 10/20 complete, and all work happens in
+      web sessions with T0 at 8/19. (3) session_preflight._slim_roadmap_state
+      deliberately drops in_progress/blocked/active_tier, so the preflight report
+      contains only next_eligible+strategic_pending - T-1.4's exit criterion 1
+      (report contains all five keys) is regressed at HEAD. Consequence: the
+      computed next_eligible is the ONLY machine signal, and 5 of its 9 entries
+      currently misdirect (T-1.9 silently complete, T0.6 stale architecture,
+      T2.4 missing producer, T2.15 future-gated, T0.4 user-action-gated but the
+      flag is not surfaced).
+    affected_ids: [T-1.4, G.1, G.2, G.8]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:41-44 (blocked-on-CD + MUST-hold claims); :1606 (T-1.4 exit criterion listing five report keys)"
+      - "scripts/platform_roadmap.py:310-381 (no candidate_decisions consumption); scripts/session_preflight.py:1519-1531 (_slim_roadmap_state keeps only next_eligible+strategic_pending)"
+      - "command: compute_state_dict; output: next_eligible=[T-1.9,T0.4,T0.6,T1.11,T2.4,T2.8,T2.9,T2.15,T2.20], active_tier=T-1; gate liveness: G.1 tier(10/20), G.2 tier(8/19)"
+    proposed_remediation: "Either implement blocked-on-CD + gate evaluation in compute_state_dict (and restore the report keys), or rewrite agent_instructions/T-1.4 criteria to match the slim implementation. Proposal only."
+    proposed_rec: true
+
+  - id: F-008
+    dimension: D7
+    severity: high
+    confidence: high
+    title: "The forward Lambda-tooling wave (T0.6-T1.4) was authored pre-CD.24/CD.33/T2.19 and never re-grounded: wrong packaging artifacts, an Iceberg write path for a table now on DuckLake, and an obsolete read approach"
+    detail: |
+      Three compounding defects in the next Lambda wave's instructions. (1) T0.7a/b/c
+      and T1.1 prescribe Dockerfile + requirements.txt and omit manifest.yaml,
+      contradicting ratified-and-shipped CD.24 (zero Dockerfiles exist across all
+      12 Lambdas; manifests are the packaging SSOT; PROJECT_CONTEXT says "No Docker").
+      (2) T0.7a's intent specifies "idempotent Iceberg append" for log-rec, but
+      ops_recommendations now lives on DuckLake behind the closed writer boundary -
+      implementing T0.7a as written would open a second recs write path to a retired
+      backend. CD.33 already declared CD.10's six-Lambda enumeration illustrative,
+      and ducklake_writer/reader serve the recs path today; T0.6's exit criteria
+      still require the six-Lambda skeleton. (3) T1.1's read approach (Athena
+      _current view against the OLD company account, then DuckDB-on-Iceberg) is
+      doubly obsolete: the old account was migrated (T2.2/T2.3) and recs reads now
+      transit ducklake_reader. T0.6 is in next_eligible TODAY, so this misdirects
+      the very next planning session.
+    affected_ids: [T0.6, T0.7a, T0.7b, T0.7c, T0.8, T1.1, T1.2, T1.3, T1.4, T1.9, CD.10, CD.15]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2220-2221, 2243-2244, 2269-2270, 2588-2589 (Dockerfile+requirements.txt; no manifest.yaml); command: find src/lambdas -name Dockerfile | wc -l; output: 0"
+      - "docs/ROADMAP-PLATFORM.yaml:2213 (T0.7a 'idempotent Iceberg append'); AGENTS.md (recs writes transit only the portal->ducklake_writer path)"
+      - "docs/ROADMAP-PLATFORM.yaml:2579-2582 (T1.1 'Athena _current view against the OLD account'); :1373 (CD.33 supersedes CD.10's six-Lambda enumeration); :2199-2202 (T0.6 six-Lambda exit criteria)"
+    proposed_remediation: "Re-ground the wave before any of it is picked up: per-Lambda manifests in files_in_scope, recs verbs routed through the established DuckLake boundary (or explicitly scoped to the still-Iceberg tables), T1.1's bridging-window text deleted. Proposal only."
+    proposed_rec: true
+
+  - id: F-003
+    dimension: D11
+    severity: high
+    confidence: high
+    title: "Recs cache-pull silently falls back to the stale Athena view under the claimed-complete DuckLake recs cutover (split-brain risk, read side)"
+    detail: |
+      T2.19's progress note declares the recs slice complete and signed off, with
+      "no Athena escape hatch for recs" (matching AGENTS.md and Decision 81 cl.7).
+      The write path is genuinely closed (verified: all three OPS_STORAGE_BACKEND
+      default sites are 'ducklake'; portal write-gating reads have no Athena
+      fallback; the seed action was removed). But scripts/sync_ops.py's cache pull
+      and full cache rebuild fall back to the Athena ops_recommendations_current
+      view for ANY table, including recs, whenever the DuckLake reader call fails -
+      unconditional on the backend flag. Post-cutover that view is downstream-stale,
+      so a transient reader failure silently rebuilds logs/.recommendations-log.jsonl
+      from stale state. This is the exact fallback-hides-then-serves-stale pattern
+      the closed-boundary design exists to prevent. High not critical: writes are
+      unaffected and the path only feeds the local read cache.
+    affected_ids: [T2.19]
+    evidence:
+      - "scripts/sync_ops.py:303-305 (_pull_single_table: 'Athena fallback (CD.8/CD.15 escape hatch)' reached for recs when reader returns None)"
+      - "scripts/sync_ops.py:493-497 (_rebuild_local_cache: same fallback in the full-rebuild loop over _TABLE_TO_VIEW, which includes ops_recommendations)"
+      - "docs/ROADMAP-PLATFORM.yaml:3578-3580 (progress note: 'reads transit the reader (no Athena escape hatch for recs)'); AGENTS.md warehouse invariant: 'NO Athena escape hatch on the ducklake backend'"
+    proposed_remediation: "Gate the recs Athena fallback behind _ops_backend()=='iceberg' (designed rollback only), or make recs cache-pull loud-fail on the ducklake backend. Proposal only."
+    proposed_rec: true
+
+  - id: F-004
+    dimension: D11
+    severity: high
+    confidence: high
+    title: "No validate.py guard encodes the DuckLake recs topology - a regression re-opening the recs Iceberg/Athena path would pass CI"
+    detail: |
+      There is no CI check that (a) the OPS_STORAGE_BACKEND default is 'ducklake'
+      at the three flip sites, (b) the recs reader path has no Athena fallback, or
+      (c) sync_ops's Athena fallback is iceberg-gated. validate_warehouse_write_sources
+      still treats OpsWriter writes to ops_recommendations as fully canonical, so it
+      cannot distinguish the designed rollback from an accidental post-cutover
+      Iceberg write to recs. Per the audit method, a guard that still permits the
+      old path is a finding even with no current code on that path - and here
+      F-003 shows code IS on that path.
+    affected_ids: [T2.19, T2.5]
+    evidence:
+      - "scripts/validate.py:779-842 (validate_warehouse_write_sources whitelists OpsWriter ops_* writes; no backend awareness)"
+      - "command: rg -i 'ducklake|OPS_STORAGE_BACKEND' scripts/validate.py; output: zero topology-guard hits (per subagent F)"
+    proposed_remediation: "Add a topology guard to validate.py: assert the three ducklake defaults, assert the recs reader path raises (no Athena branch), and require backend-gating on any recs Athena reference. Proposal only."
+    proposed_rec: true
+
+  - id: F-005
+    dimension: D11
+    severity: high
+    confidence: high
+    title: "Contracts lag the recs cutover: read-engine.yaml declares an Athena escape hatch for recs and has zero DuckLake awareness; ops-data-store.md still places recs on Iceberg/Athena"
+    detail: |
+      read-engine.yaml (the T2.5 engine-choice contract) declares an Athena escape
+      hatch on recs read paths and never mentions DuckLake, directly contradicting
+      the closed-boundary end state in AGENTS.md and the shipped T2.19 recs path.
+      ops-data-store.md still declares ops_recommendations stored as Iceberg with
+      the _current Athena view and OpsWriter staging flow. Both are canonical
+      contract surfaces an agent would read before touching the read path; both
+      describe a topology the code no longer implements for recs. (They remain
+      accurate for the four deferred tables.) ops-data-store.md's planned
+      retirement (T0.12.5) is not started.
+    affected_ids: [T2.19, T2.5, T0.12.5]
+    evidence:
+      - "docs/contracts/read-engine.yaml:91-104 (athena_escape_hatch on recs reads); command: rg -c ducklake docs/contracts/read-engine.yaml; output: 0"
+      - "docs/contracts/ops-data-store.md:26-29,140-151,217-237 (recs on Iceberg/Athena _current + OpsWriter staging)"
+    proposed_remediation: "Amend read-engine.yaml for the per-backend topology (recs=DuckLake closed boundary; deferred tables=DuckDB-on-Iceberg+Athena) and patch ops-data-store.md's recs rows ahead of its T0.12.5 retirement. Proposal only."
+    proposed_rec: true
+
+  - id: F-012
+    dimension: D2
+    severity: medium
+    confidence: high
+    title: "Missing dependency edges where out-of-order T2 execution broke the tier-order assumption: T2.4 is eligible now but its producer T0.13 has not created the tool it extends; T2.5/T2.7 require the query Lambda with no edge to it"
+    detail: |
+      T2.4 (partition sweep, in next_eligible) has exit criteria requiring
+      scripts/schema_to_iceberg.py to emit partition clauses; that script is
+      created by T0.13 (not_started, blocked behind the contract chain) and there
+      is no dependency path between them. T2.5's remaining exit criteria (query-
+      Lambda verb parity, Lambda hot-path SSO removal) and T2.7's "all read paths
+      go through query Lambda" require T0.7c/T1.2 artifacts; neither item carries
+      an edge to them (T2.5's own progress note says criteria 1+2 are blocked on
+      the Lambda). The original tier ordering made these edges implicit; T2
+      executing ahead of T0/T1 invalidated that.
+    affected_ids: [T2.4, T0.13, T2.5, T2.7, T0.7c, T1.2]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3011 (T2.4 exit criterion on schema_to_iceberg.py) vs :2502-2504 (T0.13 creates it, '# new'); T2.4 depends_on [T2.1] only at :3005"
+      - "docs/ROADMAP-PLATFORM.yaml:3026-3027 + 3037 (T2.5 files/note: criteria blocked on Lambda deploy); :3063-3069 (T2.7 depends only on T2.5)"
+      - "command: wave-1.5 overlap scan; output: T0.13/T2.4 share scripts/schema_to_iceberg.py with no dependency path; T0.7c,T1.2/T2.5,T2.7 share src/lambdas/query/handler.py with no path"
+    proposed_remediation: "Add T2.4 -> T0.13 (or split the schema_to_iceberg criterion out of T2.4), and add T2.5/T2.7 edges to T0.7c/T1.2 or rescope their Lambda-dependent criteria. Proposal only."
+    proposed_rec: true
+
+  - id: F-017
+    dimension: D2
+    severity: medium
+    confidence: medium
+    title: "T1.4 (Iceberg maintenance Lambda) overlaps T2.18/ops_compaction and is unreconciled with the DuckLake cutover"
+    detail: |
+      T1.4 builds an EventBridge-scheduled Iceberg compact/optimize/vacuum Lambda
+      "replacing the compact/optimize half of legacy ops_data_portal". T2.18
+      (in_progress) builds the DuckLake maintenance pipeline that replaces
+      ops_compaction, and ops_compaction remains live for the four deferred Iceberg
+      tables. As tables migrate, T1.4's scope converges on what T2.18 + the
+      deferred-table ops_compaction already cover. T1.4 references neither DuckLake
+      nor T2.18, and its files_in_scope terraform/maintenance_schedule.tf does not
+      exist.
+    affected_ids: [T1.4, T2.18]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2629-2644 (T1.4) vs :3486-3538 (T2.18 + ops_compaction retirement ownership)"
+      - "command: ls terraform/maintenance_schedule.tf; output: No such file or directory"
+    proposed_remediation: "Rescope T1.4 to the post-cutover residue (or fold it into T2.18) and cross-reference the two. Proposal only."
+    proposed_rec: true
+
+  - id: F-018
+    dimension: D2
+    severity: medium
+    confidence: high
+    title: "T2.19's exit criteria still claim the FULL ops cutover while the item was rescoped recs-first, and the deferred four-table migrations have no owning tier item"
+    detail: |
+      Exit criterion 1 reads "All ops writes go through DuckLake writer"; the
+      progress note rescopes the item to recs-only and defers ops_decisions,
+      ops_session_log, ops_execution_plans and ops_priority_queue "to follow-up
+      migrations" - but no tier item owns those migrations, and the ops_compaction
+      retirement tail (T2.18's criterion) is likewise deferred into the same
+      unowned space. When T2.19 eventually flips complete on the recs scope, its
+      written criteria will be false; until the deferred work has a carrier, it is
+      invisible to eligibility computation.
+    affected_ids: [T2.19, T2.18]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3558 ('All ops writes go through DuckLake writer'); :3584-3586 + 3598-3599 (DEFERRED tables, no named owner)"
+      - "command: rg -n 'ops_decisions.*DuckLake|migrate.*ops_session_log' docs/ROADMAP-PLATFORM.yaml tier_items; output: no owning item"
+    proposed_remediation: "Either amend T2.19's criteria to the recs scope and add a successor item for the four deferred tables + ops_compaction retirement, or keep T2.19 open with per-table sub-criteria. Proposal only."
+    proposed_rec: true
+
+  - id: F-028
+    dimension: D2
+    severity: medium
+    confidence: high
+    title: "Cross-tier gates G.1 and G.2 are already violated by operating practice, and G.6 self-describes as redundant with depends_on yet was retained"
+    detail: |
+      G.1 ('T-1 must complete before T1+ ratifies anything new') is falsified:
+      CD.31/CD.33 (gating T2 items) ratified with T-1 at 10/20 complete - its
+      underlying rationale (schema + preflight exist) was satisfied by T-1.4/T-1.5
+      alone, so the rule over-claims. G.2 ('T0 must complete before web-container
+      sessions can do meaningful platform work') is falsified by the entire current
+      operating mode (all work is web sessions; T0 is 8/19). G.6's own rationale
+      says 'T1.6 depends_on T1.5 already encodes this' - the same redundancy for
+      which G.3/4/5/7/11/12/13 were deleted. Combined with F-010 (no gate
+      evaluation), the gate section currently misleads more than it constrains.
+    affected_ids: [G.1, G.2, G.6]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:4236-4250 (G.1/G.2/G.6 + G.6's self-described redundancy); :4244-4246 (deletion precedent comment)"
+      - "command: gate liveness; output: G.1 tier(10/20), G.2 tier(8/19) while ratifications/web work proceeded"
+    proposed_remediation: "Rewrite G.1 to its real constraint (schema+preflight precede ratification - already satisfied), retire or rescope G.2, delete G.6 per the documented precedent. Proposal only."
+    proposed_rec: true
+
+  - id: F-013
+    dimension: D3
+    severity: medium
+    confidence: high
+    title: "T-1.9 is silently complete: all three exit criteria are satisfied by the committed INTENT-session-log-architecture.md, and downstream T2.15 already cites it"
+    detail: |
+      T-1.9 (session-log architecture audit, REPORT-ONLY) is not_started and sits
+      in next_eligible, but docs/INTENT-session-log-architecture.md exists (660
+      lines), names itself the T-1.9 deliverable, audits both write surfaces,
+      proposes the CDs (CD.NN.a/b) and the follow-on plans - exactly the three
+      exit criteria. T2.15's intent already cites the INTENT as existing. The next
+      planning session would re-plan work that is done.
+    affected_ids: [T-1.9, T2.15]
+    evidence:
+      - "docs/INTENT-session-log-architecture.md:1-16 ('Substantive deliverable for platform tier_item T-1.9'; plan artefact PLAN-session-log-audit.md)"
+      - "docs/ROADMAP-PLATFORM.yaml:1752-1755 (T-1.9 exit criteria); :3320-3323 (T2.15 cites the INTENT + proposed CD.NN.a)"
+    proposed_remediation: "Flip T-1.9 to complete (or in_progress pending the named CD ratifications) with completed_at and a note. Proposal only."
+    proposed_rec: true
+
+  - id: F-014
+    dimension: D3
+    severity: medium
+    confidence: high
+    title: "Five complete items carry acknowledged-unmet or unreproducible exit criteria (re-interpreted realizations recorded only in notes)"
+    detail: |
+      T0.2 (env/setup.sh + persistent-volumes.yaml never created; realized via
+      bin/setup-cloud-env.sh), T0.5 (session_start.py never created; SSO criteria
+      obsoleted by CD.26; realized via session_start_aws.sh), T2.1 (inference-
+      credentials criterion outstanding; EC2-runner criterion superseded by CD.21),
+      T2.2 (the 722-recs/38-decisions parity claim has no reachable corroboration:
+      no preflight report on disk, no SESSION_LOG or git evidence), and T2.12
+      (GHAS secret-scanning and CodeQL-green remain live-probe-unverified per its
+      own progress note). Each is disclosed in a note - the status field alone
+      misleads; the exit criteria as written do not hold.
+    affected_ids: [T0.2, T0.5, T2.1, T2.2, T2.12]
+    evidence:
+      - "command: wave-0 files_in_scope scan; output: T0.2 env/setup.sh + env/persistent-volumes.yaml missing; T0.5 .claude/hooks/session_start.py missing"
+      - "docs/ROADMAP-PLATFORM.yaml:2961 (T2.1 note: two criteria outstanding/superseded); :2979 (T2.2 parity claim); :3248-3251 (T2.12 live-probe gaps)"
+      - "subagent A2: rg for '722|recommendation_sync' in docs/SESSION_LOG.md returned no corroboration"
+    proposed_remediation: "Rewrite the affected exit criteria to the realized mechanisms (the notes already contain the text), so criteria re-adjudicate true. Proposal only."
+    proposed_rec: true
+
+  - id: F-024
+    dimension: D3
+    severity: medium
+    confidence: high
+    title: "Foundation entry F.2 presents the retired EC2 runner as live substrate and F.14's only locator is a dead path"
+    detail: |
+      F.2 ('Self-hosted EC2 CI runner ... t3.medium in eu-west-2 ... replaces
+      hosted-runner billing') describes infrastructure retired 2026-05-28 per
+      CD.21/Decision 73; CI now runs the opposite way (hosted + OIDC). F.14 points
+      at docs/plans/briefings/BRIEFING-linux-container-migration.md - neither the
+      file nor the briefings/ directory exists at HEAD. foundation_already_shipped
+      is the current-state baseline (rubric R3); both entries mislead a planner.
+    affected_ids: [F.2, F.14]
+    evidence:
+      - "terraform/ec2_runner.tf:1 (DEPRECATED 2026-05-28 - CD.21); docs/ROADMAP-PLATFORM.yaml:236-239 (F.2 present-tense)"
+      - "command: ls docs/plans/briefings/; output: No such file or directory (F.14 at docs/ROADMAP-PLATFORM.yaml:283-284)"
+    proposed_remediation: "Mark F.2 retired/superseded-by-CD.21; fix or drop F.14's pointer. Proposal only."
+    proposed_rec: true
+
+  - id: F-025
+    dimension: D3
+    severity: medium
+    confidence: high
+    title: "Foundation entry F.7 and complete item T0.12's prose cite the relocated DQ config path"
+    detail: |
+      F.7 cites config/data_quality/*.yaml; the configs live at
+      config/agent/data_quality/. The capability claim is true (runner + configs
+      exist) but the locator is wrong, and the same stale prefix appears in the
+      complete T0.12's intent/exit text. Same root cause as F-015 but on the
+      baseline/complete surfaces rather than forward work.
+    affected_ids: [F.7, T0.12]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:257-259 (F.7); :2361, :2373 (T0.12 prose)"
+      - "command: ls config/data_quality/; output: No such file or directory; ls config/agent/data_quality/; output: ops.yaml telemetry.yaml decisions/ ..."
+    proposed_remediation: "Path sweep (same fix batch as F-015). Proposal only."
+    proposed_rec: false
+
+  - id: F-026
+    dimension: D4
+    severity: medium
+    confidence: high
+    title: "agent_instructions still mandate a STRATEGIC plan tree for L/XL items, contradicting the binding AGENTS.md CD.17 suspension and the roadmap's own CD.17 entry"
+    detail: |
+      Lines 51-53 state L and XL items "require their own STRATEGIC plan tree
+      before implementation" with no suspension caveat. AGENTS.md (binding) and
+      CD.17's own entry say STRATEGIC plans are suspended and strategic items
+      decompose into IMPLEMENTATION plans. Five L-effort items deliberately carry
+      strategic:false under the freeze (T1.13, T2.19, T2.22, T2.23, T3.1) but only
+      T3.1/T1.13 annotate the override - application is uneven, and the ambient
+      instruction is the part agents read first.
+    affected_ids: [CD.17, T1.13, T2.19, T2.22, T2.23, T3.1]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:51-53 (unconditional STRATEGIC-tree rule); :515-520 (CD.17 correcting it); AGENTS.md Temporary Operational Constraints"
+      - "command: scan; output: L/XL with strategic=false = [T1.13, T2.19, T2.22, T2.23, T3.1]"
+    proposed_remediation: "Add the freeze caveat + CD.17 pointer at lines 51-53; standardize the one-line freeze-override note on L items authored as IMPLEMENTATION. Proposal only."
+    proposed_rec: true
+
+  - id: F-023
+    dimension: D5
+    severity: medium
+    confidence: high
+    title: "T1.14's intent overclaims its product consumers: only E.env.8 references it; L3.exec.4/5 reference sibling T2.14 and L3.exec.6 references neither"
+    detail: |
+      T1.14 (reconciliation Lambda) claims "PRODUCT layer items E.env.8 +
+      L3.exec.4/5/6 depend on this". The product edge graph shows only E.env.8
+      referencing PLATFORM:T1.14; L3.exec.4 and L3.exec.5 depend on PLATFORM:T2.14
+      (broker secrets), and L3.exec.6 references neither absorber. The edges are
+      correct; the prose consumer list is conflated with T2.14's.
+    affected_ids: [T1.14, T2.14]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2918-2920 (T1.14 claim)"
+      - "docs/ROADMAP-PRODUCT.yaml:3929-3935 (E.env.8 -> T1.14); :2741-2753 + :2790-2801 (L3.exec.4/5 -> T2.14); :2838-2851 (L3.exec.6 -> neither)"
+    proposed_remediation: "Correct T1.14's consumer list to E.env.8 (and whatever L3.exec.6 actually needs). Proposal only."
+    proposed_rec: true
+
+  - id: F-022
+    dimension: D6
+    severity: medium
+    confidence: high
+    title: "T2.15 is computed-eligible but every exit criterion self-declares gating on far-future state (CD.17 reversal at T4.2, telemetry T3.2/T3.3)"
+    detail: |
+      T2.15 (CI verification-coverage restoration) depends only on T2.13, so it
+      appears in next_eligible. Its three exit criteria are each gated on the
+      CD.17 reversal (T4.2-era) or telemetry_agent_turns going live (T3.2/T3.3) -
+      none satisfiable for many tiers. A planning session selecting it from
+      next_eligible discovers non-actionability only after reading the body.
+    affected_ids: [T2.15]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3332 (depends_on [T2.13]); :3338-3340 (criteria gated on CD.17 reversal / T3.2/T3.3)"
+      - "command: compute_state_dict; output: T2.15 in next_eligible"
+    proposed_remediation: "Add the real dependencies (T3.2 or T4.2) or split the restorable-now portion from the gated portions. Proposal only."
+    proposed_rec: true
+
+  - id: F-015
+    dimension: D7
+    severity: medium
+    confidence: high
+    title: "Stale files_in_scope paths on forward work: T1.5/T1.6 cite the relocated DQ config tree, T-1.14 cites a moved routing config, T2.9 implies an existing terraform file that does not exist"
+    detail: |
+      DQ config moved from config/data_quality/ to config/agent/data_quality/;
+      T1.5 and T1.6 (whose purpose is to retire that directory) still cite the old
+      prefix, while T2.15 uses the correct one. T-1.14 cites
+      config/copilot_model_routing.yaml; the file lives at
+      config/agent/copilot/model_routing.yaml. T2.9 (eligible now) lists
+      terraform/secrets.tf with no '# new' marker, implying an existing file;
+      none exists - Secrets Manager resources live elsewhere.
+    affected_ids: [T1.5, T1.6, T-1.14, T2.9]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:2662 (T1.5), :2698 (T1.6) vs command: ls config/data_quality/; output: No such file or directory (actual: config/agent/data_quality/)"
+      - "docs/ROADMAP-PLATFORM.yaml:1937,1941 (T-1.14) vs actual config/agent/copilot/model_routing.yaml"
+      - "docs/ROADMAP-PLATFORM.yaml:3108 (T2.9 terraform/secrets.tf, unmarked) vs no such file"
+    proposed_remediation: "Path sweep across forward items after each config relocation; fix these four now. Proposal only."
+    proposed_rec: true
+
+  - id: F-016
+    dimension: D7
+    severity: medium
+    confidence: high
+    title: "Retired EC2-runner substrate persists in forward items: T3.2's exit criterion schedules via 'the EC2 runner cron'; T4.3 offers the retired self-hosted runner as a substrate option"
+    detail: |
+      The self-hosted runner was retired 2026-05-28 (CD.21/Decision 73; realized by
+      T2.10). T3.2's exit criterion "Scheduled hourly via the EC2 runner cron" is
+      unadjudicable and prescribes dead infrastructure - and T3.2 is on the critical
+      path to T3.3/T3.4/T4.x and the CD.17 reversal trigger. T4.3 still presents
+      "self-hosted runner cron (Decision 68)" as one of two live substrate options.
+    affected_ids: [T3.2, T4.3]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3811 (T3.2 criterion); :4093-4095 + :4107 (T4.3 substrate option)"
+      - "terraform/ec2_runner.tf:1 (DEPRECATED header per CD.21); command: rg 'self-hosted' .github/workflows/; output: retirement comments only"
+    proposed_remediation: "Replace T3.2's scheduling substrate with GH Actions schedule or EventBridge; strike the retired option from T4.3. Proposal only."
+    proposed_rec: true
+
+  - id: F-019
+    dimension: D8
+    severity: medium
+    confidence: high
+    title: "KG.11's own trigger is breached: the roadmap is 4559 lines against the 2500-line split threshold, the gap text still says ~1500 lines, and the prescribed rec was never filed"
+    detail: |
+      KG.11 commits to filing a split rec when the file exceeds 2500 lines or 50K
+      tokens. The file is 4559 lines (~1.8x), the gap still describes it as ~1500
+      lines / ~32K tokens, no tier item owns the split, and no rec could be located
+      (the recommendations read cache is absent in this checkout, so cache-side
+      confirmation is impossible - noted). Every /plan session pays the ambient
+      cost the gap was written to bound.
+    affected_ids: [KG.11]
+    evidence:
+      - "command: wc -l docs/ROADMAP-PLATFORM.yaml; output: 4559"
+      - "docs/ROADMAP-PLATFORM.yaml:4523-4527 (threshold + 'file a rec when the threshold is breached' + stale ~1500-line self-description)"
+    proposed_remediation: "File the split rec (or a tier item) and refresh KG.11's counts; alternatively raise the threshold deliberately. Proposal only."
+    proposed_rec: true
+
+  - id: F-020
+    dimension: D8
+    severity: medium
+    confidence: high
+    title: "Stale risk register: six open_questions are functionally resolved and two known_gaps are moot or frozen-stale"
+    detail: |
+      OQ.1 (symlink vs duplicate - decided, duplicate+CI parity shipped at T0.9),
+      OQ.2 (pre-commit scope - shipped at T0.10), OQ.4 (auth precedence - Pattern B
+      shipped at T0.3, OIDC at T2.10), OQ.8 and OQ.9 (RDS sizing/DR - resolved and
+      re-resolved by CD.34 with T2.16/T2.16b complete), OQ.11 (inlining - decided,
+      'Enacted at T2.18' in its own text) all remain listed as open. KG.8
+      (self-hosted runner SPOF) is moot - the runner is retired and CI is fully
+      hosted. KG.2's '258 open recommendations' is a frozen snapshot that cannot
+      be reproduced. The register is the consumers' risk surface; stale entries
+      dilute it.
+    affected_ids: [OQ.1, OQ.2, OQ.4, OQ.8, OQ.9, OQ.11, KG.8, KG.2]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:4275-4298 (OQ.1/2/4 with complete resolution tiers); :4333-4336, :4350-4354, :4392-4395 (re-resolved notes)"
+      - "docs/ROADMAP-PLATFORM.yaml:4494-4505 (KG.8) vs T2.1/T2.10 complete + 0 self-hosted workflows; :4454 (KG.2 '258 open recommendations')"
+    proposed_remediation: "Add a resolved/superseded state (or strike-through notes) for OQ.1/2/4/8/9/11 and KG.8; soften KG.2's count to a non-numeric claim. Proposal only."
+    proposed_rec: true
+
+  - id: F-027
+    dimension: D9
+    severity: medium
+    confidence: medium
+    title: "T5.2 (old-account teardown, cost-bearing) is gated on ALL of T2 completing while T2 keeps growing - the goalposts moved ~12 items since authoring"
+    detail: |
+      T5.2 depends_on [T2] and G.10 requires all_in_tier_with_status("T2",
+      "complete") + 30d grace from T2.1. T2 has since absorbed the CD.35 Terraform
+      CI/CD program (T2.20-T2.25), the DuckLake program (T2.16-T2.19) and absorbers
+      (T2.14/T2.15) - none of which the old company-account teardown actually needs.
+      The teardown's real preconditions are the migration items (T2.1/T2.2/T2.3)
+      plus grace; as written, old-account shutdown waits indefinitely on unrelated
+      platform work. Tier-shortcut dependencies on growing tiers are the structural
+      cause.
+    affected_ids: [T5.2, G.10]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:4154 (T5.2 depends_on [T2]); :4264-4267 (G.10)"
+      - "command: gate liveness; output: G.10 ref T2 = tier(9/27 complete)"
+    proposed_remediation: "Re-point T5.2 at the migration subset (T2.1, T2.2, T2.3 + grace) or freeze a named T2-migration milestone the gate can reference. Proposal only."
+    proposed_rec: true
+
+  - id: F-029
+    dimension: D10
+    severity: medium
+    confidence: high
+    title: "Header and document.description name the superseded docs/ROADMAP-PRODUCT.md as the product source of truth, contradicting KG.1 and both product files' own banners"
+    detail: |
+      Lines 9-11 and the document.description say ROADMAP-PRODUCT.md is the
+      product source of truth. KG.1, the .md's own SUPERSEDED banner, and
+      ROADMAP-PRODUCT.yaml's header all say the .yaml superseded it. A consumer
+      following the header is directed to a recovery artefact. This is the
+      first thing in the file.
+    affected_ids: [KG.1]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:9-11, :19-22 (header + description) vs :4442-4443 (KG.1)"
+      - "docs/ROADMAP-PRODUCT.md:3-9 (SUPERSEDED banner); docs/ROADMAP-PRODUCT.yaml:8-9 ('Supersedes docs/ROADMAP-PRODUCT.md')"
+    proposed_remediation: "s/ROADMAP-PRODUCT.md/ROADMAP-PRODUCT.yaml/ in the header and description. Proposal only."
+    proposed_rec: true
+
+  - id: F-021
+    dimension: D11
+    severity: medium
+    confidence: high
+    title: "CD.28's Bedrock/Copilot retirement is decided but every legacy surface still exists, the canonical inference-provider.md contract still calls Bedrock active, and the sweep work lives only in CD prose (not tier items)"
+    detail: |
+      All surfaces PLAN-retire-bedrock-code-paths names still exist: bedrock_client.py,
+      the _invoke_bedrock dispatch branch, _bedrock_call in llm_client.py (still the
+      transport fallthrough default), and bedrock:Invoke* grants in the retired
+      work-root terraform/lambda_tooling_iam.tf. They are dead_but_provisioned (no
+      schedule.yaml agent declares provider:bedrock; the dispatcher EventBridge rule
+      is disabled; the live personal-account PlatformDev policy has no bedrock
+      grant). inference-provider.md v6.0 still declares Bedrock dispatch active and
+      gemini-cli as the executor path, and its stated provider default ('bedrock')
+      disagrees with the code default ('github-models'). The five CD.28 follow-on
+      sweeps exist only as prose inventory inside the CD - invisible to
+      next_eligible - so this drift has no owning, schedulable work item.
+    affected_ids: [CD.28, T0.4]
+    evidence:
+      - "docs/contracts/inference-provider.md:14-19 (Bedrock active, v6.0); src/data/handlers/scheduled_agent_handler.py:435 (default 'github-models')"
+      - "scripts/bedrock_client.py exists; terraform/lambda_tooling_iam.tf:118-126 (bedrock:Invoke* in retired root); terraform/personal/platform_roles.tf (no bedrock grant - permission-closed for the live account)"
+      - "docs/ROADMAP-PLATFORM.yaml:975-1045 (follow-on plan inventory in CD prose only)"
+    proposed_remediation: "Promote PLAN-retire-bedrock-code-paths and PLAN-update-inference-provider-contract from CD prose to tier items (or recs) so the decommission is schedulable work. Proposal only."
+    proposed_rec: true
+
+  - id: F-030
+    dimension: D1
+    severity: low
+    confidence: high
+    title: "CD.1 filed_via uses the off-union literal 'log-decision-lambda'; CandidateDecision.filed_via is never validated"
+    detail: |
+      Every other pending CD uses 'pending_log_decision_lambda'. Only
+      DocumentMeta.filed_via has a validator; the CD-level field is a free string,
+      so the deviation passes CI. The same line carries a comment fixing a prior
+      'files_via' typo - the field is demonstrably typo-prone and unguarded.
+    affected_ids: [CD.1]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:299; scripts/platform_roadmap.py:154 (filed_via: str | None, no validator)"
+    proposed_remediation: "Normalize the literal and add the union validator to CandidateDecision.filed_via. Proposal only."
+    proposed_rec: false
+
+  - id: F-031
+    dimension: D1
+    severity: low
+    confidence: high
+    title: "T2.12's related_candidate_decisions contains 'dec-1084', which resolves to no CD id and is not locatable in DECISIONS.md"
+    detail: |
+      The field elsewhere holds CD ids. agent_instructions permit post-ratification
+      ops_decisions ids as decision references, but the field is unvalidated and
+      subagent B could not locate dec-1084 in DECISIONS.md (it is cited as the git
+      history-audit decision). Either an unrecorded decision id or a typo.
+    affected_ids: [T2.12]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3243; command: rg 'dec-1084' docs/DECISIONS.md; output: no hits (subagent B)"
+    proposed_remediation: "Confirm the id against the warehouse and either correct it or record the decision. Proposal only."
+    proposed_rec: false
+
+  - id: F-036
+    dimension: D2
+    severity: low
+    confidence: high
+    title: "Eight in_progress items for a sole developer, several of which are parked umbrellas whose deferred remainders have no named owner"
+    detail: |
+      T-1.12 (subsets d-g deferred to named follow-on plans), T0.14 (Phase 3
+      'deferred to follow-on plan' - none named), T1.13 (5 of 6 sub-plans
+      unlanded), T2.5 (criteria blocked on the Lambda wave), T2.11b, T2.18, T2.19,
+      T3.6 (verifier half open). The statuses are honest, but in_progress
+      overstates concurrent activity and the parked remainders are invisible to
+      eligibility computation.
+    affected_ids: [T-1.12, T0.14, T1.13, T2.5, T2.11b, T2.18, T2.19, T3.6]
+    evidence:
+      - "command: compute_state_dict; output: in_progress = 8 items; progress notes at docs/ROADMAP-PLATFORM.yaml:2567 (T0.14 Phase 3 deferred), :1890-1895 (T-1.12 subsets)"
+    proposed_remediation: "Consider a parked/blocked marker or per-remainder follow-on items so parked work is schedulable. Proposal only."
+    proposed_rec: false
+
+  - id: F-032
+    dimension: D3
+    severity: low
+    confidence: high
+    title: "T-1.0's first exit criterion (zero-hit grep) is not literally satisfied and an uncaught bare 'ROADMAP.md' reference survives in PROJECT_CONTEXT.md"
+    detail: |
+      The grep as written returns ~30 hits in an append-only token-budget log plus
+      the roadmap's own self-references, and PROJECT_CONTEXT.md:17 still references
+      bare 'ROADMAP.md' (the pattern only catches 'docs/ROADMAP.md'). Live consumers
+      are correctly rerouted, so this is residue, not breakage.
+    affected_ids: [T-1.0]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1530 (criterion); docs/PROJECT_CONTEXT.md:17 (bare ROADMAP.md x3); subagent A1 grep output (~30 residual hits)"
+    proposed_remediation: "Exclude the log file in the criterion and fix the PROJECT_CONTEXT.md line. Proposal only."
+    proposed_rec: false
+
+  - id: F-033
+    dimension: D4
+    severity: low
+    confidence: high
+    title: "The roadmap reserves 'provisionally Decision 82' for CD.34's ratification, but human Decision 82 now exists as the unrelated EC8 churn-gate correction"
+    detail: |
+      CD.34's detail and T2.16b's progress note both point CD.34 ratification at
+      'Decision 82'. DECISIONS.md's Decision 82 (2026-06-07) is the churn-gate
+      measurement-subject frame correction with no warehouse id and no CD
+      ratification. The reserved number collided; the pointer is now wrong.
+    affected_ids: [CD.34]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1396-1397, :3442; docs/DECISIONS.md Decision 82 entry (per subagent B: EC8 churn gate, no warehouse id)"
+    proposed_remediation: "Replace 'provisionally Decision 82' with 'a future numbered Decision via the log-decision path'. Proposal only."
+    proposed_rec: false
+
+  - id: F-034
+    dimension: D7
+    severity: low
+    confidence: high
+    title: "Id-convention drift: T-1.8 vs T1.8 differ only by a hyphen (one complete, one reserved), and the suffix scheme is inconsistent (T2.16/T2.16b vs T2.11a/T2.11b vs decimal T0.12.5)"
+    detail: |
+      Tooling parses all forms correctly (verified), but T-1.8 (manifest mechanism,
+      complete) vs T1.8 (reserved tombstone) is a human-legibility trap, and three
+      child-id schemes coexist. No functional hazard found; convention hygiene only.
+    affected_ids: [T-1.8, T1.8, T2.16b]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:1695 (T-1.8) vs :2725 (T1.8); :3392 (T2.16b) vs :3156/3181 (T2.11a/b)"
+    proposed_remediation: "Document the id grammar in agent_instructions; avoid future hyphen-only collisions. Proposal only."
+    proposed_rec: false
+
+  - id: F-035
+    dimension: D7
+    severity: low
+    confidence: medium
+    title: "Far-future strategic stubs carry unadjudicable criteria and 'varies' scopes (T3.3 threshold undefined; T3.4/T4.4 'varies' files_in_scope)"
+    detail: |
+      T3.3's "False-positive rate below threshold" names no threshold or contract
+      field; T3.4/T4.4 use 'varies' files_in_scope and 'documented' without a
+      location. Acceptable as deferred strategic stubs that decompose later;
+      flagged so their decomposition plans supply the missing definitions.
+    affected_ids: [T3.3, T3.4, T4.4]
+    evidence:
+      - "docs/ROADMAP-PLATFORM.yaml:3826 (threshold); :3837, :4122 ('varies')"
+    proposed_remediation: "Define thresholds/locations at decomposition time. Proposal only."
+    proposed_rec: false
+
+  - id: F-037
+    dimension: D8
+    severity: low
+    confidence: medium
+    title: "Unrepresented surfaces: scripts/sync_athena_to_pgvector.py is orphaned (no roadmap entry, no live caller) and two live session-start hooks are unnamed in the roadmap"
+    detail: |
+      sync_athena_to_pgvector.py has zero roadmap representation and no caller -
+      likely dead code on the retiring Athena path. The github-mcp and precommit
+      session-start hooks run on every web session but are newer than T0.5 and
+      uncovered by it. Bookkeeping-level gaps.
+    affected_ids: []
+    evidence:
+      - "command: rg -c sync_athena_to_pgvector docs/ROADMAP-PLATFORM.yaml; output: 0 (subagent C; self-import only)"
+      - ".claude/settings.json SessionStart entries for session_start_ensure_github_mcp.sh + session_start_precommit.sh; 0 roadmap hits"
+    proposed_remediation: "Add a cleanup rec for the orphan script; mention the hooks in T0.5's note or a foundation entry. Proposal only."
+    proposed_rec: false
+
+  - id: F-038
+    dimension: D11
+    severity: low
+    confidence: high
+    title: "instruction-architecture.md (prose contract) still names GEMINI.md / copilot-instructions.md as Layers 1-2; ops_compaction is provisioned from the retired work-root terraform"
+    detail: |
+      Two residual closure notes. The instruction-architecture contract's layer
+      table predates the Claude Code migration (live layers are CLAUDE.md/AGENTS.md
+      + PROJECT_CONTEXT.md) - prose-only, non-load-bearing, but it is the layer
+      contract agents are pointed at. ops_compaction (correctly live for the
+      deferred tables) is provisioned in retired terraform/scheduled_agents.tf
+      rather than terraform/personal/ - worth confirming the live deployment maps
+      to the active account before relying on it.
+    affected_ids: [T2.18]
+    evidence:
+      - "docs/contracts/instruction-architecture.md:18-23 (GEMINI.md/copilot-instructions.md layers; subagent F)"
+      - "terraform/scheduled_agents.tf:316 (ops_compaction in retired work-root; src/lambdas/ops-compaction/manifest.yaml status: active)"
+    proposed_remediation: "Refresh the layer table (T-1.13 will convert the file anyway); record where the live ops_compaction deployment is actually managed. Proposal only."
+    proposed_rec: false
+
+verification:
+  enforced_split:
+    machine_enforced:
+      - "tier_item id uniqueness (platform_roadmap.py:227-232)"
+      - "depends_on resolution to known ids / tier shortcuts (platform_roadmap.py:234-240)"
+      - "dependency cycle detection, DFS gray-set (platform_roadmap.py:242-265)"
+      - "candidate_decisions[].gates ref resolution (platform_roadmap.py:268-272)"
+      - "gate-rule helper names + arity on cross_tier_gates[].rule and decision_required_before strings (platform_roadmap.py:274-294; prose entries are documented no-ops)"
+      - "TierItem / CandidateDecision field whitelists, extra='forbid' (platform_roadmap.py:119,146)"
+      - "tier_items status + effort enums (platform_roadmap.py:130-132)"
+      - "document.version supported set + document.filed_via union format (platform_roadmap.py:103-115)"
+      - "PRODUCT->PLATFORM edge resolution via product_roadmap.load(platform_path=...) (validate.py:1825-1870; runs in --pre AND full tier)"
+      - "platform roadmap schema check wiring (validate.py:1644-1686; full presubmit tier only, not --pre)"
+    audit_surface:
+      - "completed_at not required when status==complete (covered: D1 prog check - zero violations)"
+      - "related_candidate_decisions refs never resolved (covered: D1 - one deviation, F-031)"
+      - "CandidateDecision.state free string (covered: D4 diff vs DECISIONS.md - aligned, B claims)"
+      - "CandidateDecision.filed_via format unvalidated (covered: D1/D4 - F-030)"
+      - "document.status free string (covered: D10 - consistent with CD.1 pending)"
+      - "tier_items[].tier never checked against canonical order (covered: D1 - zero violations)"
+      - "id uniqueness NOT checked for CD / gate / OQ / KG / foundation (covered: D1 - zero duplicates)"
+      - "gate-rule field paths tokenised never resolved (covered: D2/D6 - G.8 latest_run unresolvable at runtime, F-010)"
+      - "string arguments in helper calls never resolved (covered: D2 - all current args resolve)"
+      - "files_in_scope existence never checked (covered: D1 scan + D3/D7 triage - F-006/F-008/F-015/F-024)"
+      - "RoadmapDocument extra='ignore' silent top-level drop (covered: D1 key scan - zero unknown keys)"
+      - "truthfulness of every status field (covered: D3 - 50 verdicts)"
+      - "CD completion-gating semantics (gates vs status flips) unenforced (covered: D2 - F-002)"
+      - "bootstrap exemption scope/termination unenforced (covered: D2 - F-002)"
+      - "cross_tier_gates evaluated by no consumer (covered: D6 - F-010)"
+      - "all prose content (covered: D4/D5/D7/D9/D10 findings)"
+    waived: []
+  programmatic_checks:
+    - {name: validator_pass, command: "bin/venv-python -m scripts.platform_roadmap", result: "PASS (exit 0)"}
+    - {name: duplicate_id_scan_other_namespaces, command: "wave0_checks.py dup scan over CD/gate/OQ/KG/foundation ids", result: "PASS - no duplicates in any namespace"}
+    - {name: top_level_key_scan, command: "set(yaml top-level keys) - RoadmapDocument.model_fields", result: "PASS - no unknown top-level keys"}
+    - {name: completed_at_consistency, command: "wave0_checks.py", result: "PASS - 0 complete-without-completed_at; 0 non-complete-with-completed_at"}
+    - {name: related_candidate_decisions_resolution, command: "wave0_checks.py", result: "1 deviation: T2.12 -> dec-1084 (F-031)"}
+    - {name: tier_canonical_order, command: "wave0_checks.py vs _CANONICAL_TIER_ORDER", result: "PASS - all tiers in {T-1,T0,T1,T2,T3,T4,T5}"}
+    - {name: files_in_scope_existence, command: "wave0_checks.py existence scan", result: "100 missing paths; triaged: majority proposed-new ('# new'); complete-item misses fed to D3 (T0.2/T0.3/T0.5/T2.10); forward stale paths fed to D7 (F-015)"}
+    - {name: preflight_state, command: "compute_state_dict(docs/ROADMAP-PLATFORM.yaml)", result: "no error key; 9 eligible, 0 strategic_pending, 8 in_progress, 51 blocked, active_tier=T-1"}
+    - {name: complete_with_incomplete_deps, command: "wave15-style dep scan", result: "4 items: T2.1[T0.4,T0.6], T2.2[T0.7a,T0.7b], T2.12[T2.11b], T2.13[T2.5,T2.11b]"}
+    - {name: pending_cd_gated_completions, command: "wave0_checks.py CD-gate scan", result: "4 unexempted (T0.10, T2.12, T2.16b, T2.17); 12 exempted, of which 8 flags outside both documented scopes (F-002)"}
+    - {name: overlap_no_path_scan, command: "wave15_checks.py files_in_scope overlap x dependency reachability", result: "130 raw pairs; triaged to 2 material missing-edge clusters (F-012); remainder co-location notes"}
+    - {name: deadlock_reachability, command: "wave15_checks.py pending-CD gate analysis vs T0.7b ancestor set", result: "CD.25 -> T1.12 is the sole non-exempt gated item on T0.7b's own dependency path (F-001); T0.7b incomplete ancestors = {T-1.12,T0.12.5,T0.12.7,T0.13,T0.6,T1.12}"}
+    - {name: gate_rule_ref_resolution, command: "wave15_checks.py token scan over cross_tier_gates rules", result: "all quoted tier refs + item ids resolve; G.8 field path latest_run.verdict is a runtime aggregate no consumer computes (F-010)"}
+    - {name: tier_monotonicity, command: "wave0_checks.py later-tier dep scan", result: "4 inversions: T-1.1->T0.7b (documented), T0.7a/b/c->T1.12 (the F-001 chain)"}
+    - {name: deps_on_reserved, command: "wave0_checks.py", result: "PASS - nothing depends on reserved T1.8"}
+    - {name: line_count_threshold, command: "wc -l docs/ROADMAP-PLATFORM.yaml", result: "4559 lines (KG.11 threshold 2500 breached - F-019)"}
+  subagent_spot_checks:
+    - {subagent: A1, claim: "T-1.9 silent completion - INTENT-session-log-architecture.md satisfies all three exit criteria", verdict: confirmed, action_taken: "head of the INTENT names itself the T-1.9 deliverable with plan artefact; accepted into F-013"}
+    - {subagent: A2, claim: "F.14 locator docs/plans/briefings/BRIEFING-linux-container-migration.md does not exist", verdict: confirmed, action_taken: "ls confirms directory absent; accepted into F-024"}
+    - {subagent: B, claim: "CD.1 filed_via literal 'log-decision-lambda' deviates from the union; dec-1086 = Decision 79 ratifying CD.16+CD.24", verdict: confirmed, action_taken: "line 299 verified; DECISIONS.md mentions of Decision 79 consistent; accepted into F-030 and the F-001/F-009 evidence"}
+    - {subagent: C, claim: "scripts/ducklake_runtime.py cited by the roadmap does not exist (aspirational filename)", verdict: refuted, action_taken: "file exists at src/common/ducklake_runtime.py (roadmap line 3588 cites it without a path; C searched scripts/ only). C-007 discarded from synthesis; C's KG.11/KG.8 claims independently re-verified and retained"}
+    - {subagent: D, claim: "zero Dockerfiles under src/lambdas/ and terraform/maintenance_schedule.tf absent", verdict: confirmed, action_taken: "find + ls confirm; accepted into F-008/F-017"}
+    - {subagent: E, claim: "MVP.4 cross_roadmap_depends_on includes PLATFORM:T3.5", verdict: confirmed, action_taken: "product lines 4073-4085 verified; accepted into F-011"}
+    - {subagent: F, claim: "sync_ops recs cache pull falls back to Athena unconditionally on backend", verdict: confirmed, action_taken: "sync_ops.py:303-305 and :493-497 read directly; fallback is per-table-agnostic; accepted into F-003 at severity high"}
+
+open_questions_for_user:
+  - "Should the T0.6-T1.4 six-Lambda agent-tooling surface survive at all now that CD.33's writer/reader/maintenance split serves the recs path? F-008 flags the re-grounding need; whether the verb surface folds into ducklake_reader/writer (extensible verbs per CD.33) or remains a separate six-Lambda build is an architecture decision only you can make."
+  - "KG.11 split decision: the file is 4559 lines. Split per-tier now, raise the threshold deliberately, or accept the ambient cost? (F-019 only reports the breached trigger.)"
+  - "Should T2.19's deferred four-table migrations (ops_decisions, ops_session_log, ops_execution_plans, ops_priority_queue) become explicit tier items, or should T2.19 stay open as the umbrella? (F-018 needs one of the two.)"
+  - "Do you want the CD completion-gating + bootstrap-exemption model machine-enforced (validate.py), or rewritten to describe the actual complete-first-ratify-later convention? Both are defensible; F-002 only establishes that the current text matches neither."
+  - "active_tier semantics: the linear tier model reports T-1 active while execution concentrates in T2/T3. Worth either re-defining active_tier (e.g. lowest tier with in_progress) or dropping it from the preflight contract."
+  - "Audit-prompt errata, for the next run of this method: the Section 3 hint 'T-1.8 (reserved)' conflates two distinct items (T-1.8 complete manifest item vs T1.8 reserved tombstone), and both local read caches (logs/.recommendations-log.jsonl, logs/.decisions-index.jsonl) are absent on a fresh web container, so cache-dependent checks (D4 cache diff, KG.2/KG.11 rec lookups) cannot run as written."

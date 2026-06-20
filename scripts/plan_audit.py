@@ -16,6 +16,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from scripts.s3_log_store import append_jsonl
 
 ROOT = Path(__file__).parent.parent
@@ -27,6 +29,30 @@ RECS_LOG = ROOT / "logs" / ".recommendations-log.jsonl"
 # Import find_plan_file from the canonical module
 sys.path.insert(0, str(ROOT))
 from scripts.find_plan import find_plan_file  # noqa: E402
+
+
+def parse_scope(plan_path: Path) -> dict[str, str]:
+    """Extract planned file paths and actions from a plan file.
+
+    PLAN-*.yaml is the canonical format (scope[].file / scope[].action per
+    scripts/plan_document.py). The markdown Scope-table path is deprecated
+    (T1.11 / CD.22), warns on use, and is removed after one release cycle.
+    """
+    if plan_path.suffix == ".yaml":
+        data = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return {
+            str(entry["file"]): str(entry["action"])
+            for entry in data.get("scope", [])
+            if isinstance(entry, dict) and "file" in entry and "action" in entry
+        }
+    logger.warning(
+        "Parsing a markdown Scope table (%s). PLAN-*.md is deprecated (T1.11 / CD.22): author new plans as "
+        "PLAN-{slug}.yaml. The .md path is removed after one release cycle.",
+        plan_path,
+    )
+    return parse_scope_table(plan_path.read_text(encoding="utf-8"))
 
 
 def parse_scope_table(plan_content: str) -> dict[str, str]:
@@ -194,11 +220,13 @@ def _run_scope_drift_audit() -> None:
     """Original scope-drift audit (no-flag default behaviour)."""
     plan_path = find_plan_file()
     if plan_path is None:
-        print("No plan file found (checked PLAN-{slug}.md for current branch and legacy PLAN.md). Skipping audit.")
+        print(
+            "No plan file found (checked PLAN-{slug}.yaml then deprecated PLAN-{slug}.md "
+            "for current branch and legacy PLAN.md). Skipping audit."
+        )
         sys.exit(0)
 
-    plan_content = plan_path.read_text(encoding="utf-8")
-    planned = parse_scope_table(plan_content)
+    planned = parse_scope(plan_path)
     changed = get_changed_files()
 
     unplanned: list[str] = []

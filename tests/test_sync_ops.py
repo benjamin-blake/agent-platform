@@ -21,19 +21,16 @@ class TestDrain:
         assert result == {}
 
     def test_drain_reads_outbox_calls_opswriter_deletes_file(self, tmp_path):
-        """drain() reads files, calls OpsWriter.write(), and deletes the files."""
-        outbox_dir = tmp_path / "ops_recommendations"
+        """drain() reads non-migrated table files, calls OpsWriter.write(), and deletes the files."""
+        outbox_dir = tmp_path / "ops_session_log"
         outbox_dir.mkdir(parents=True)
-        entry = {"id": "rec-001", "status": "open"}
+        entry = {"session_id": "sess-001", "workflow": "plan"}
         (outbox_dir / "test-entry.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
         mock_writer_instance = MagicMock()
         mock_writer_cls = MagicMock(return_value=mock_writer_instance)
 
-        with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
-            patch("scripts.sync_ops.OpsWriter", mock_writer_cls, create=True),
-        ):
+        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path):
             from scripts import sync_ops
 
             # patch lazy import inside drain
@@ -42,13 +39,13 @@ class TestDrain:
 
         # Verify file was deleted
         assert not (outbox_dir / "test-entry.jsonl").exists()
-        assert result.get("ops_recommendations", 0) >= 0  # drained at least 0
+        assert result.get("ops_session_log", 0) >= 1  # drained at least 1
 
     def test_drain_factory(self, tmp_path):
-        """drain() with real outbox directory successfully drains entries."""
-        outbox_dir = tmp_path / "ops_recommendations"
+        """drain() with real outbox directory successfully drains non-migrated entries."""
+        outbox_dir = tmp_path / "ops_session_log"
         outbox_dir.mkdir(parents=True)
-        entry = {"id": "rec-drain-001", "status": "open"}
+        entry = {"session_id": "sess-drain-001", "workflow": "plan"}
         outfile = outbox_dir / "entry.jsonl"
         outfile.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -72,15 +69,15 @@ class TestDrain:
 
             result = sync_ops.drain()
 
-        assert result.get("ops_recommendations") == 1
-        mock_writer_instance.write.assert_called_once_with("ops_recommendations", entry)
+        assert result.get("ops_session_log") == 1
+        mock_writer_instance.write.assert_called_once_with("ops_session_log", entry)
         assert not outfile.exists()
 
     def test_drain_write_failure_keeps_file(self, tmp_path):
         """If OpsWriter.write() raises, the file is NOT deleted (retry next time)."""
-        outbox_dir = tmp_path / "ops_recommendations"
+        outbox_dir = tmp_path / "ops_session_log"
         outbox_dir.mkdir(parents=True)
-        entry = {"id": "rec-002"}
+        entry = {"session_id": "sess-002"}
         outfile = outbox_dir / "entry.jsonl"
         outfile.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -113,101 +110,21 @@ class TestDrain:
 
 
 class TestPull:
-    def test_pull_sso_expired_returns_empty(self):
-        """When reader fails and SSO is expired, _rebuild_local_cache() returns {}."""
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
-        with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=False),
-            patch.dict(
-                "sys.modules",
-                {"scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging")},
-            ),
-        ):
+    def test_pull_reader_unreachable_returns_zero_for_every_table(self):
+        """When the DuckLake reader is unreachable every table reports 0 (no Athena fallback).
+
+        Decision 84 I-1: _rebuild_local_cache() loops _TABLE_TO_LOCAL via the reader-only
+        _pull_single_table; a failure warns loudly and leaves the cache untouched.
+        """
+        with patch("scripts.sync_ops._pull_via_reader", return_value=None):
             from scripts.sync_ops import _rebuild_local_cache
 
             result = _rebuild_local_cache()
-        assert result == {}
-
-    def test_pull_queries_athena_writes_local_files(self, tmp_path):
-        """Athena fallback: _rebuild_local_cache() writes rows when reader fails."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.return_value = {"QueryExecutionId": "qid-001"}
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        # Simulate paginator with header row + one data row (all required fields included)
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {
-                        "Data": [
-                            {"VarCharValue": "id"},
-                            {"VarCharValue": "status"},
-                            {"VarCharValue": "title"},
-                            {"VarCharValue": "source"},
-                            {"VarCharValue": "effort"},
-                            {"VarCharValue": "priority"},
-                            {"VarCharValue": "file"},
-                            {"VarCharValue": "context"},
-                            {"VarCharValue": "acceptance"},
-                        ]
-                    },
-                    {
-                        "Data": [
-                            {"VarCharValue": "rec-001"},
-                            {"VarCharValue": "open"},
-                            {"VarCharValue": "Test rec"},
-                            {"VarCharValue": "manual"},
-                            {"VarCharValue": "S"},
-                            {"VarCharValue": "Low"},
-                            {"VarCharValue": "scripts/test.py"},
-                            {"VarCharValue": "context text"},
-                            {"VarCharValue": "tests pass"},
-                        ]
-                    },
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
-
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
-
-        local_file = tmp_path / ".recommendations-log.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
-
-        with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
-        ):
-            from scripts import sync_ops
-
-            result = sync_ops._rebuild_local_cache()
-
-        assert result.get("ops_recommendations") == 1
-        assert local_file.exists()
-        saved = json.loads(local_file.read_text(encoding="utf-8").strip())
-        assert saved["id"] == "rec-001"
+        assert result == {"ops_recommendations": 0, "ops_decisions": 0, "ops_priority_queue": 0}
 
     def test_pull_reader_path_writes_local_files(self, tmp_path):
         """Reader path: _rebuild_local_cache() uses reader rows directly when reader succeeds."""
         local_file = tmp_path / ".recommendations-log.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
 
         reader_data = [
             {
@@ -223,12 +140,7 @@ class TestPull:
         with (
             patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
             patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {"scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging")},
-            ),
         ):
             from scripts import sync_ops
 
@@ -239,189 +151,69 @@ class TestPull:
         saved = json.loads(local_file.read_text(encoding="utf-8").strip())
         assert saved["id"] == "rec-001"
 
-    def test_pull_reader_fallback_to_athena_on_reader_failure(self, tmp_path):
-        """When reader returns None, _rebuild_local_cache() falls back to Athena."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.return_value = {"QueryExecutionId": "qid-fbk"}
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {
-                        "Data": [
-                            {"VarCharValue": "id"},
-                            {"VarCharValue": "title"},
-                            {"VarCharValue": "source"},
-                            {"VarCharValue": "effort"},
-                            {"VarCharValue": "priority"},
-                        ]
-                    },
-                    {
-                        "Data": [
-                            {"VarCharValue": "rec-fbk"},
-                            {"VarCharValue": "Fallback rec"},
-                            {"VarCharValue": "manual"},
-                            {"VarCharValue": "S"},
-                            {"VarCharValue": "Low"},
-                        ]
-                    },
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
+    def test_pull_reader_failure_leaves_cache_untouched(self, tmp_path):
+        """Reader failure: no fallback path runs and the existing cache file is preserved."""
         local_file = tmp_path / ".recommendations-log.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
+        local_file.write_text(json.dumps({"id": "rec-stale", "status": "open"}) + "\n", encoding="utf-8")
 
         with (
             patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
             patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
         ):
             from scripts import sync_ops
 
-            result = sync_ops._rebuild_local_cache()
+            count = sync_ops._pull_single_table("ops_recommendations")
 
-        assert result.get("ops_recommendations") == 1
-        saved = json.loads(local_file.read_text(encoding="utf-8").strip())
-        assert saved["id"] == "rec-fbk"
+        assert count == 0
+        # Cache untouched -- the stale row is still there (never truncated on failure)
+        assert json.loads(local_file.read_text(encoding="utf-8").strip())["id"] == "rec-stale"
 
-    def test_pull_athena_failure_continues_to_next_table(self, tmp_path):
-        """Athena fallback: _rebuild_local_cache() continues to next table when Athena fails."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.side_effect = [
-            Exception("Athena unavailable"),
-            {"QueryExecutionId": "qid-002"},
-        ]
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {"Data": [{"VarCharValue": "id"}]},
-                    {"Data": [{"VarCharValue": "plan-001"}]},
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
+    def test_pull_one_table_failure_continues_to_next_table(self, tmp_path):
+        """_rebuild_local_cache() continues to the next table when one table's reader pull fails."""
 
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
+        def _per_table(table):
+            if table == "ops_recommendations":
+                return None  # reader failed for this table
+            return [{"rec_id": "rec-001", "rank": "1"}]
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.sync_ops._pull_via_reader", side_effect=_per_table),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch(
-                "scripts.sync_ops._TABLE_TO_VIEW",
-                {
-                    "ops_recommendations": "ops_recommendations_current",
-                    "ops_execution_plans": "ops_execution_plans",
-                },
-            ),
             patch(
                 "scripts.sync_ops._TABLE_TO_LOCAL",
                 {
                     "ops_recommendations": ".recommendations-log.jsonl",
-                    "ops_execution_plans": ".execution-plans.jsonl",
+                    "ops_priority_queue": "priority-queue/.priority-queue.jsonl",
                 },
             ),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
         ):
             from scripts import sync_ops
 
             result = sync_ops._rebuild_local_cache()
 
-        # Second table should have succeeded
-        assert result.get("ops_execution_plans") == 1
+        assert result["ops_recommendations"] == 0
+        assert result["ops_priority_queue"] == 1
 
     def test_pull_coerces_ops_recommendations_array_fields(self, tmp_path):
-        """Athena fallback: coercion applied for VarChar array fields (reader not available)."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.return_value = {"QueryExecutionId": "qid-coerce"}
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {
-                        "Data": [
-                            {"VarCharValue": "id"},
-                            {"VarCharValue": "dependencies"},
-                            {"VarCharValue": "tags"},
-                            {"VarCharValue": "execution_steps"},
-                            {"VarCharValue": "title"},
-                            {"VarCharValue": "source"},
-                            {"VarCharValue": "effort"},
-                            {"VarCharValue": "priority"},
-                            {"VarCharValue": "file"},
-                            {"VarCharValue": "context"},
-                            {"VarCharValue": "acceptance"},
-                        ]
-                    },
-                    {
-                        "Data": [
-                            {"VarCharValue": "rec-001"},
-                            {"VarCharValue": "[dep-001, dep-002]"},
-                            {"VarCharValue": "[]"},
-                            {"VarCharValue": "3"},
-                            {"VarCharValue": "Test rec"},
-                            {"VarCharValue": "manual"},
-                            {"VarCharValue": "S"},
-                            {"VarCharValue": "Low"},
-                            {"VarCharValue": "scripts/test.py"},
-                            {"VarCharValue": "context text"},
-                            {"VarCharValue": "tests pass"},
-                        ]
-                    },
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
+        """Coercion applies to string-serialised array fields in reader rows."""
         local_file = tmp_path / ".recommendations-log.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
+        reader_data = [
+            {
+                "id": "rec-001",
+                "dependencies": "[dep-001, dep-002]",
+                "tags": "[]",
+                "execution_steps": "3",
+                "title": "Test rec",
+                "source": "manual",
+                "effort": "S",
+                "priority": "Low",
+            }
+        ]
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
             patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
         ):
             from scripts import sync_ops
 
@@ -432,71 +224,24 @@ class TestPull:
         assert saved["execution_steps"] == 3
 
     def test_pull_strips_scd2_view_columns_from_rows(self, tmp_path):
-        """Athena fallback: _rn and row_num columns stripped from rows in local JSONL."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.return_value = {"QueryExecutionId": "qid-strip"}
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        # Athena returns a row that includes view-only SCD2 dedup columns plus all required fields
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {
-                        "Data": [
-                            {"VarCharValue": "id"},
-                            {"VarCharValue": "status"},
-                            {"VarCharValue": "_rn"},
-                            {"VarCharValue": "row_num"},
-                            {"VarCharValue": "title"},
-                            {"VarCharValue": "source"},
-                            {"VarCharValue": "effort"},
-                            {"VarCharValue": "priority"},
-                            {"VarCharValue": "file"},
-                            {"VarCharValue": "context"},
-                            {"VarCharValue": "acceptance"},
-                        ]
-                    },
-                    {
-                        "Data": [
-                            {"VarCharValue": "rec-001"},
-                            {"VarCharValue": "open"},
-                            {"VarCharValue": "1"},
-                            {"VarCharValue": "1"},
-                            {"VarCharValue": "Test rec"},
-                            {"VarCharValue": "manual"},
-                            {"VarCharValue": "S"},
-                            {"VarCharValue": "Low"},
-                            {"VarCharValue": "scripts/test.py"},
-                            {"VarCharValue": "context text"},
-                            {"VarCharValue": "tests pass"},
-                        ]
-                    },
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
-
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
-
+        """_rn and row_num dedup columns are stripped from pulled rows before caching."""
         local_file = tmp_path / ".recommendations-log.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
+        reader_data = [
+            {
+                "id": "rec-001",
+                "status": "open",
+                "_rn": 1,
+                "row_num": 1,
+                "title": "Test rec",
+                "source": "manual",
+                "effort": "S",
+                "priority": "Low",
+            }
+        ]
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
             patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
         ):
             from scripts import sync_ops
 
@@ -509,44 +254,16 @@ class TestPull:
         assert saved["id"] == "rec-001"
 
     def test_pull_rejects_hollow_ops_recommendations_row(self, tmp_path):
-        """Athena fallback: hollow rows (missing required fields) are rejected and logged."""
-        mock_athena = MagicMock()
-        mock_athena.start_query_execution.return_value = {"QueryExecutionId": "qid-hollow"}
-        mock_athena.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
-        # Row has id but empty title/source/effort/priority -- hollow record
-        mock_page = {
-            "ResultSet": {
-                "Rows": [
-                    {"Data": [{"VarCharValue": "id"}, {"VarCharValue": "title"}, {"VarCharValue": "source"}]},
-                    {"Data": [{"VarCharValue": "rec-hollow"}, {"VarCharValue": ""}, {"VarCharValue": ""}]},
-                ]
-            }
-        }
-        mock_paginator = MagicMock()
-        mock_paginator.paginate.return_value = [mock_page]
-        mock_athena.get_paginator.return_value = mock_paginator
-        mock_session = MagicMock()
-        mock_session.client.return_value = mock_athena
+        """Hollow rows (missing required fields) are rejected and logged."""
         local_file = tmp_path / ".recommendations-log.jsonl"
         reject_log = tmp_path / "debug" / "dq-sync-rejects.jsonl"
-        _bypass = MagicMock()
-        _bypass._bucket.return_value = ""
+        reader_data = [{"id": "rec-hollow", "title": "", "source": ""}]
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops.check_sso", return_value=True),
+            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
             patch("scripts.sync_ops._LOGS_DIR", tmp_path),
             patch("scripts.sync_ops._SYNC_REJECTS_LOG", reject_log),
-            patch("scripts.sync_ops._TABLE_TO_VIEW", {"ops_recommendations": "ops_recommendations_current"}),
             patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
-            patch.dict(
-                "sys.modules",
-                {
-                    "boto3": MagicMock(Session=MagicMock(return_value=mock_session)),
-                    "scripts.ops_writer": MagicMock(OpsWriter=lambda: _bypass, STAGING_PREFIX="staging"),
-                },
-            ),
-            patch("time.sleep"),
         ):
             from scripts import sync_ops
 
@@ -560,6 +277,14 @@ class TestPull:
         reject_entry = json.loads(reject_log.read_text(encoding="utf-8").strip())
         assert reject_entry["row"]["id"] == "rec-hollow"
         assert "title" in reject_entry["reason"] or "source" in reject_entry["reason"]
+
+    def test_pull_single_table_unknown_table_returns_zero(self):
+        """_pull_single_table() warns and returns 0 for a table with no local mapping."""
+        with patch("scripts.sync_ops._pull_via_reader") as mock_pull:
+            from scripts.sync_ops import _pull_single_table
+
+            assert _pull_single_table("telemetry_sessions") == 0
+        mock_pull.assert_not_called()
 
     def test_coerce_rows_list_handles_reader_typed_values(self) -> None:
         """_coerce_rows_list() tolerates already-typed values from the reader."""
@@ -595,15 +320,27 @@ class TestPull:
         assert json.loads(written[0])["id"] == "rec-001"
 
     def test_pull_via_reader_returns_none_on_exception(self) -> None:
-        """_pull_via_reader() returns None when DuckDBIcebergReader raises."""
-        with patch(
-            "src.common.iceberg_reader.DuckDBIcebergReader.current_state",
-            side_effect=RuntimeError("catalog down"),
-        ):
+        """_pull_via_reader() returns None when the DuckLake reader raises."""
+        reader = MagicMock()
+        reader.current_state.side_effect = RuntimeError("reader down")
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
             from scripts.sync_ops import _pull_via_reader
 
             result = _pull_via_reader("ops_recommendations")
         assert result is None
+
+    def test_pull_via_reader_uses_ducklake_reader_current_state(self) -> None:
+        """_pull_via_reader() routes through make_reader().current_state for every table."""
+        reader = MagicMock()
+        reader.current_state.return_value = [{"id": "rec-1"}]
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader) as mock_make:
+            from scripts.sync_ops import _pull_via_reader
+
+            result = _pull_via_reader("ops_decisions")
+
+        assert result == [{"id": "rec-1"}]
+        mock_make.assert_called_once_with(table="ops_decisions")
+        reader.current_state.assert_called_once_with("ops_decisions")
 
     def test_pull_single_table_uses_reader_first(self, tmp_path) -> None:
         """_pull_single_table() uses reader rows when reader succeeds."""
@@ -782,30 +519,27 @@ class TestTelemetryMappings:
 
     def test_telemetry_tables_absent_from_maps(self):
         """No telemetry table is mapped (they are not migrated to the personal account)."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
+        from scripts.sync_ops import _TABLE_TO_LOCAL
 
         for table in self._TELEMETRY_TABLES:
             assert table not in _TABLE_TO_LOCAL, f"{table} should be removed from _TABLE_TO_LOCAL"
-            assert table not in _TABLE_TO_VIEW, f"{table} should be removed from _TABLE_TO_VIEW"
 
     def test_non_migrated_ops_tables_absent(self):
         """ops_session_log and ops_execution_plans are not migrated and must be absent."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
+        from scripts.sync_ops import _TABLE_TO_LOCAL
 
         for table in self._REMOVED_OPS_TABLES:
             assert table not in _TABLE_TO_LOCAL
-            assert table not in _TABLE_TO_VIEW
 
     def test_migrated_ops_tables_present(self):
-        """The three migrated ops tables remain mapped to their _current views."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL, _TABLE_TO_VIEW
+        """All three migrated tables are cached locally; the Athena view map is deleted (Decision 84 I-1)."""
+        import scripts.sync_ops as sync_ops
 
-        migrated = {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
-        assert set(_TABLE_TO_VIEW) == migrated
-        assert set(_TABLE_TO_LOCAL) == migrated
-        assert _TABLE_TO_VIEW["ops_recommendations"] == "ops_recommendations_current"
-        assert _TABLE_TO_VIEW["ops_decisions"] == "ops_decisions_current"
-        assert _TABLE_TO_VIEW["ops_priority_queue"] == "ops_priority_queue_current"
+        assert set(sync_ops._TABLE_TO_LOCAL) == {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
+        assert sync_ops._DUCKLAKE_MIGRATED_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+        # The Athena pull estate is gone: no view map, no per-table Athena pull.
+        assert not hasattr(sync_ops, "_TABLE_TO_VIEW")
+        assert not hasattr(sync_ops, "_pull_single_table_athena")
 
     def test_drain_handles_telemetry_outbox_files(self, tmp_path):
         """drain() can process outbox files for telemetry tables."""
@@ -1136,32 +870,6 @@ class TestPipelineConsolidation:
             assert result is not None, f"expected non-None for id={valid_id!r}"
             assert result["id"] == valid_id
 
-    def test_rebuild_local_cache_guard_blocks_on_staging_files(self, tmp_path):
-        """_rebuild_local_cache raises RuntimeError when S3 staging files exist for today."""
-        from unittest.mock import MagicMock, patch
-
-        import pytest
-
-        mock_writer = MagicMock()
-        mock_writer._bucket.return_value = "my-bucket"
-        mock_client = MagicMock()
-        mock_writer._get_client.return_value = mock_client
-        mock_client.get_paginator.return_value.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-05-09/f.jsonl"}]}
-        ]
-
-        with (
-            patch("scripts.sync_ops.OpsWriter", return_value=mock_writer, create=True),
-            patch.dict(
-                "sys.modules",
-                {"scripts.ops_writer": MagicMock(OpsWriter=lambda: mock_writer, STAGING_PREFIX="staging")},
-            ),
-        ):
-            from scripts import sync_ops
-
-            with pytest.raises(RuntimeError, match="unstaged writes detected"):
-                sync_ops._rebuild_local_cache()
-
     def test_drain_cli_removed(self):
         """Running `python -m scripts.sync_ops drain` exits non-zero (subcommand removed)."""
         import subprocess
@@ -1191,3 +899,102 @@ class TestPipelineConsolidation:
             cwd=str(Path(__file__).parent.parent),
         )
         assert result.returncode != 0
+
+
+def test_coerce_athena_array_handles_native_list():
+    """DuckLake reader returns native lists; the coercion returns them element-typed (not re-parsed)."""
+    from scripts.sync_ops import _coerce_athena_array
+
+    assert _coerce_athena_array(["rec-1", "rec-2"]) == ["rec-1", "rec-2"]
+    assert _coerce_athena_array([1, 2, 3], elem_type=int) == [1, 2, 3]
+    assert _coerce_athena_array([None, "x"]) == ["x"]
+    # Athena string form still parses
+    assert _coerce_athena_array("[a, b]") == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# T2.19 DuckLake cutover -- drain() skips recs outbox
+# ---------------------------------------------------------------------------
+
+
+class TestDrainSkipsRecsOutbox:
+    """T2.19: drain() must skip the ops_recommendations outbox dir (Decision 81 cl.7)."""
+
+    def test_drain_skips_recs_outbox_dir(self, tmp_path):
+        """drain() skips ops_recommendations outbox files -- recs transit DuckLake boundary."""
+        recs_outbox = tmp_path / "ops_recommendations"
+        recs_outbox.mkdir(parents=True)
+        entry = {"id": "rec-001", "status": "open"}
+        outbox_file = recs_outbox / "entry.jsonl"
+        outbox_file.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        write_calls: list[tuple] = []
+
+        class _FakeOpsWriter:
+            def __init__(self):
+                pass
+
+            def write(self, table, e):
+                write_calls.append((table, e))
+
+        with (
+            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch.dict(
+                "sys.modules",
+                {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
+            ),
+        ):
+            from scripts import sync_ops
+
+            result = sync_ops.drain()
+
+        # ops_recommendations outbox entries must NOT be written via OpsWriter
+        assert not any(t == "ops_recommendations" for t, _ in write_calls), (
+            "drain() must not route ops_recommendations through OpsWriter (Decision 81 cl.7)"
+        )
+        # Outbox file for recs is NOT deleted (was never processed)
+        assert outbox_file.exists(), "recs outbox file should not be deleted (was skipped)"
+        # drain() reports 0 for ops_recommendations
+        assert result.get("ops_recommendations", 0) == 0
+
+    def test_drain_skips_every_ducklake_migrated_table_and_pending_dirs(self, tmp_path, caplog):
+        """drain() skips all _DUCKLAKE_MIGRATED_TABLES dirs and any *_pending dir, with a loud warning.
+
+        Decision 84 I-1/I-4: entries under these dirs are anomalies -- they must never be
+        re-staged to Iceberg via OpsWriter (stale-store hazard); the files stay in place.
+        """
+        import logging
+
+        skip_dirs = ["ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_recommendations_pending"]
+        for name in skip_dirs:
+            d = tmp_path / name
+            d.mkdir(parents=True)
+            (d / "entry.jsonl").write_text(json.dumps({"id": "x-001"}) + "\n", encoding="utf-8")
+
+        write_calls: list[tuple] = []
+
+        class _FakeOpsWriter:
+            def __init__(self):
+                pass
+
+            def write(self, table, e):
+                write_calls.append((table, e))
+
+        with (
+            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch.dict(
+                "sys.modules",
+                {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
+            ),
+            caplog.at_level(logging.WARNING, logger="scripts.sync_ops"),
+        ):
+            from scripts import sync_ops
+
+            result = sync_ops.drain()
+
+        assert write_calls == [], "no skipped-table entry may reach OpsWriter"
+        assert result == {}
+        for name in skip_dirs:
+            assert (tmp_path / name / "entry.jsonl").exists(), f"{name} entry must be left in place"
+        warned = " ".join(r.message for r in caplog.records)
+        assert "DuckLake" in warned and "outbox is retired" in warned

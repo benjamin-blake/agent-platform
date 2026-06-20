@@ -5,7 +5,11 @@ name: CI RCA
 
 on:
   workflow_run:
-    workflows: ["CI", "Main Canary"]
+    # CD.35 / T2.20: terraform-apply-sandbox is wired in so sandbox apply FAILURES (and the
+    # refusals-while-red they cause) file source=ci_rca recs. The dedup step below anchors
+    # terraform-apply-sandbox failures on the red convergence record's commit so one underlying
+    # apply failure + every later refusal collapse to ONE rec.
+    workflows: ["CI", "Main Canary", "terraform-apply-sandbox"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -88,6 +92,10 @@ jobs:
           RUN_ID_RAW: ${{ github.event.workflow_run.id || github.event.inputs.run_id }}
           HEAD_SHA_RAW: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_NAME_RAW: ${{ github.event.workflow_run.name }}
+          # CD.35 / T2.20: the convergence record (its own prefix, outside tfstate/). The branch role
+          # already reads the whole data-lake bucket, so no extra IAM grant is needed here.
+          CONVERGENCE_BUCKET: agent-platform-data-lake
+          CONVERGENCE_KEY: convergence/personal/sandbox.json
         run: |
           RUN_ID=$(printf '%s' "$RUN_ID_RAW" | tr -cd '0-9')
           HEAD_SHA="$HEAD_SHA_RAW"
@@ -103,18 +111,37 @@ jobs:
           WORKFLOW_SLUG=$(echo "$WORKFLOW_NAME" | tr '[:upper:]' '[:lower:]' | tr ' /' '_-' | sed 's/[^a-z0-9_-]//g')
           CONTEXT="ci-rca/${WORKFLOW_SLUG}"
 
+          # Convergence-refusal dedup (CD.35 5.5d): a terraform-apply-sandbox apply FAILURE and the
+          # refusals-while-red it causes on LATER commits are ONE underlying failure. Anchor the
+          # dedup on the RED record's commit (not the refusing run's head_sha) so the first failure
+          # files one rec and every later refusal dedupes against it. Non-apply-sandbox workflows and
+          # a green/absent record fall back to head_sha (unchanged behaviour).
+          ANCHOR_SHA="$HEAD_SHA"
+          if [ "$WORKFLOW_SLUG" = "terraform-apply-sandbox" ]; then
+            REC_JSON=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+            if [ -n "$REC_JSON" ]; then
+              REC_STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+              REC_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))" 2>/dev/null || echo "")
+              if [ "$REC_STATUS" = "red" ] && [ -n "$REC_COMMIT" ]; then
+                ANCHOR_SHA="$REC_COMMIT"
+                echo "Convergence dedup: anchoring on red-record commit ${REC_COMMIT} (run head ${HEAD_SHA})."
+              fi
+            fi
+          fi
+
           ALREADY_FILED="false"
-          if [ -n "$HEAD_SHA" ]; then
-            STATE=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/statuses" \
+          if [ -n "$ANCHOR_SHA" ]; then
+            STATE=$(gh api "repos/${{ github.repository }}/commits/${ANCHOR_SHA}/statuses" \
               --jq ".[] | select(.context == \"${CONTEXT}\") | .state" 2>/dev/null | head -1)
             if [ "$STATE" = "success" ]; then
               ALREADY_FILED="true"
-              echo "Dedup: ci-rca already filed for ${WORKFLOW_NAME}@${HEAD_SHA}; skipping."
+              echo "Dedup: ci-rca already filed for ${WORKFLOW_NAME}@${ANCHOR_SHA}; skipping."
             fi
           fi
 
           echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "anchor_sha=${ANCHOR_SHA}" >> "$GITHUB_OUTPUT"
           echo "context=${CONTEXT}" >> "$GITHUB_OUTPUT"
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
 
@@ -124,9 +151,59 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.dedup.outputs.run_id }}"
-          gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
-            || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
-            || true
+          # Retry loop: the workflow_run log-availability race means logs may not
+          # be ready immediately after the triggering run completes (rec-2117 / rec-2118).
+          LOG_FETCHED=false
+          for ATTEMPT in 1 2 3; do
+            gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
+              || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
+              || true
+            if test -s /tmp/ci-rca-failed.log; then
+              LOG_FETCHED=true
+              break
+            fi
+            echo "Attempt ${ATTEMPT}: log empty or unavailable; waiting before retry..." >&2
+            sleep $((ATTEMPT * 10))
+          done
+          if [ "$LOG_FETCHED" != "true" ]; then
+            echo "::error::ci-rca: log file is empty after ${ATTEMPT} attempts for run ${RUN_ID}. " \
+              "The log may not be available yet or the run produced no output. Failing loudly so " \
+              "the agent is not invoked on a 0-byte log (rec-2117 / rec-2118)."
+            exit 1
+          fi
+
+      - name: Fetch jobs JSON
+        id: jobs_json
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          gh run view "$RUN_ID" --repo "${{ github.repository }}" --json jobs \
+            > /tmp/ci-rca-jobs.json 2>/dev/null || echo '{}' > /tmp/ci-rca-jobs.json
+
+      - name: Generate evidence bundle
+        id: evidence
+        if: github.event.inputs.force_rca == 'true' || steps.dedup.outputs.already_filed != 'true'
+        continue-on-error: true
+        env:
+          S3_LOG_BUCKET: agent-platform-data-lake
+        run: |
+          RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          WORKFLOW_NAME="${{ github.event.workflow_run.name || 'unknown' }}"
+          .venv/bin/python -m scripts.ci_rca_evidence \
+            --log-file /tmp/ci-rca-failed.log \
+            --jobs-file /tmp/ci-rca-jobs.json \
+            --workflow-name "$WORKFLOW_NAME" \
+            --workflow-run-id "$RUN_ID" \
+            > /tmp/ci-rca-evidence-out.txt 2>/tmp/ci-rca-evidence-err.txt || true
+          BUNDLE_SHA=$(grep '^BUNDLE_SHA=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          BUNDLE_S3_URI=$(grep '^BUNDLE_S3_URI=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          BUNDLE_PATH=$(grep '^BUNDLE_PATH=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          echo "bundle_sha=${BUNDLE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "bundle_s3_uri=${BUNDLE_S3_URI}" >> "$GITHUB_OUTPUT"
+          echo "bundle_path=${BUNDLE_PATH}" >> "$GITHUB_OUTPUT"
 
       - name: Run ci-rca agent
         id: rca_agent
@@ -136,10 +213,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.dedup.outputs.run_id }}"
+          BUNDLE_SHA="${{ steps.evidence.outputs.bundle_sha }}"
+          BUNDLE_S3_URI="${{ steps.evidence.outputs.bundle_s3_uri }}"
+          BUNDLE_PATH="${{ steps.evidence.outputs.bundle_path }}"
+          EVIDENCE_CONTEXT=""
+          if [ -n "$BUNDLE_SHA" ]; then
+            EVIDENCE_CONTEXT=" Evidence bundle SHA: ${BUNDLE_SHA}. S3 URI: ${BUNDLE_S3_URI}. Local path: ${BUNDLE_PATH}."
+          fi
           # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
           # trailing positional prompt, leaving claude with no input ("Input must be provided
           # either through stdin or as a prompt argument when using --print").
-          PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log."
+          PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log.${EVIDENCE_CONTEXT}"
           printf '%s' "$PROMPT" | claude -p \
             --output-format json \
             --max-turns 30 \
@@ -163,10 +247,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          HEAD_SHA="${{ steps.dedup.outputs.head_sha }}"
+          # Mark the dedup ANCHOR (CD.35 5.5d): for terraform-apply-sandbox the anchor is the red
+          # record's commit, so a later refusal-while-red finds this success status and dedupes.
+          # For every other workflow the anchor IS head_sha (unchanged behaviour).
+          ANCHOR_SHA="${{ steps.dedup.outputs.anchor_sha }}"
           CONTEXT="${{ steps.dedup.outputs.context }}"
-          if [ -n "$HEAD_SHA" ] && [ -n "$CONTEXT" ]; then
-            gh api "repos/${{ github.repository }}/statuses/${HEAD_SHA}" \
+          if [ -n "$ANCHOR_SHA" ] && [ -n "$CONTEXT" ]; then
+            gh api "repos/${{ github.repository }}/statuses/${ANCHOR_SHA}" \
               --method POST \
               --field state=success \
               --field context="${CONTEXT}" \

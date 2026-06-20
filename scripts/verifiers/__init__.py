@@ -9,7 +9,7 @@ import fnmatch
 
 from .athena_views import AthenaViewsVerifier
 from .data_quality import DataQualityVerifier
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 from .outbox_health import OutboxHealthVerifier
 from .schema_integrity import SchemaIntegrityVerifier
 
@@ -83,6 +83,7 @@ __all__ = [
     "Verifier",
     "VerifierResult",
     "VerifierStatus",
+    "Hermeticity",
     "REGISTRY",
     "check_coverage",
     "run_all_verifiers",

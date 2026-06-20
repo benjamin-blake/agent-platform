@@ -75,11 +75,11 @@ class TestOpsWriterWrite:
             patch.object(writer2, "_bucket", return_value="test-bucket"),
             patch.object(writer2, "_is_test_env", return_value=False),
         ):
-            writer2.write("ops_recommendations", {**_VALID_REC})
+            writer2.write("ops_decisions", {"id": "dec-042"})
 
         assert len(captured) == 1
         entry = captured[0]
-        assert entry["id"] == "rec-001"
+        assert entry["id"] == "dec-042"
         assert "created_timestamp" in entry
         assert "last_updated_timestamp" in entry
 
@@ -99,7 +99,7 @@ class TestOpsWriterWrite:
             patch.object(writer, "_bucket", return_value="test-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
         ):
-            writer.write("ops_recommendations", {**_VALID_REC, "date": "2026-04-01"})
+            writer.write("ops_decisions", {"id": "dec-042", "date": "2026-04-01"})
 
         assert len(captured) == 1
         entry = captured[0]
@@ -218,8 +218,13 @@ class TestOpsWriterWrite:
 
         writer._client.put_object.assert_not_called()
 
-    def test_write_accepts_ops_recommendations_with_valid_rec_id(self):
-        """write() stages ops_recommendations records with a valid rec-NNN id."""
+    def test_write_rejects_ops_recommendations_regardless_of_id(self):
+        """T2.19: write() hard-rejects ALL ops_recommendations writes (Decision 81 cl.7).
+
+        Pre-T2.19 this test verified that rec-NNN format was accepted. After T2.19 the hard-reject
+        fires before any table-name or ID validation -- no staging occurs even for valid rec IDs.
+        Recs transit the DuckLake closed boundary via ops_data_portal.file_rec / update_rec.
+        """
         writer = _make_writer()
         writer._client = MagicMock()
 
@@ -229,7 +234,7 @@ class TestOpsWriterWrite:
         ):
             writer.write("ops_recommendations", {**_VALID_REC, "id": "rec-042"})
 
-        writer._client.put_object.assert_called_once()
+        writer._client.put_object.assert_not_called()
 
 
 class TestOpsWriterGetClient:
@@ -277,7 +282,7 @@ class TestOpsWriterGetClient:
 class TestOpsWriterCompact:
     """Tests for OpsWriter.compact()."""
 
-    def _make_mock_client_with_staging(self, entries: list[dict]) -> MagicMock:
+    def _make_mock_client_with_staging(self, entries: list[dict], table: str = "ops_execution_plans") -> MagicMock:
         """Build a mock boto3 client that returns *entries* as staging files."""
         mock_client = MagicMock()
 
@@ -285,7 +290,7 @@ class TestOpsWriterCompact:
 
         # list_objects_v2 paginator returns one page with one object
         mock_paginator = MagicMock()
-        mock_page = {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-04-20/batch-abc.jsonl"}]}
+        mock_page = {"Contents": [{"Key": f"staging/{table}/dt=2026-04-20/batch-abc.jsonl"}]}
         mock_paginator.paginate.return_value = [mock_page]
         mock_client.get_paginator.return_value = mock_paginator
 
@@ -296,8 +301,7 @@ class TestOpsWriterCompact:
         """compact() reads staging files, creates DataFrame, calls wr.athena.to_iceberg."""
         entries = [
             {
-                "id": "rec-001",
-                "status": "open",
+                "id": "ep-001",
                 "created_timestamp": "2026-04-20T10:00:00+00:00",
                 "last_updated_timestamp": "2026-04-20T10:00:00+00:00",
             },
@@ -315,13 +319,13 @@ class TestOpsWriterCompact:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
-            count = writer.compact("ops_recommendations", "2026-04-20")
+            count = writer.compact("ops_execution_plans", "2026-04-20")
 
         assert count == 1
         mock_wr.athena.to_iceberg.assert_called_once()
         call_kwargs = mock_wr.athena.to_iceberg.call_args[1]
         assert call_kwargs["database"] == "agent_platform"
-        assert call_kwargs["table"] == "ops_recommendations"
+        assert call_kwargs["table"] == "ops_execution_plans"
         assert call_kwargs["mode"] == "append"
         assert call_kwargs["workgroup"] == "agent-platform-production"
 
@@ -329,7 +333,7 @@ class TestOpsWriterCompact:
         """compact() calls delete_object for each staging file after success."""
         entries = [
             {
-                "id": "rec-001",
+                "id": "ep-001",
                 "created_timestamp": "2026-04-20T10:00:00+00:00",
                 "last_updated_timestamp": "2026-04-20T10:00:00+00:00",
             }
@@ -347,11 +351,11 @@ class TestOpsWriterCompact:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
-            writer.compact("ops_recommendations", "2026-04-20")
+            writer.compact("ops_execution_plans", "2026-04-20")
 
         mock_client.delete_object.assert_called_once_with(
             Bucket="my-bucket",
-            Key="staging/ops_recommendations/dt=2026-04-20/batch-abc.jsonl",
+            Key="staging/ops_execution_plans/dt=2026-04-20/batch-abc.jsonl",
         )
 
     def test_compact_returns_zero_when_awswrangler_unavailable(self):
@@ -441,19 +445,19 @@ class TestOpsWriterCompact:
             patch.object(writer, "_is_test_env", return_value=False),
         ):
             with pytest.raises(RuntimeError, match="infrastructure failure"):
-                writer.compact("ops_recommendations", "2026-04-20")
+                writer.compact("ops_execution_plans", "2026-04-20")
 
     def test_compact_drops_scd2_view_columns_before_iceberg(self):
         """compact() strips _rn and row_num from the DataFrame before calling to_iceberg."""
         import pandas as pd
 
-        entry = {"id": "rec-001", "status": "open", "_rn": "1", "row_num": 1}
+        entry = {"id": "ep-001", "_rn": "1", "row_num": 1}
         line_bytes = (json.dumps(entry) + "\n").encode()
 
         mock_client = MagicMock()
         mock_s3_paginator = MagicMock()
         mock_s3_paginator.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-04-20/batch-x.jsonl"}]}
+            {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-04-20/batch-x.jsonl"}]}
         ]
         mock_client.get_paginator.return_value = mock_s3_paginator
         mock_client.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=line_bytes))}
@@ -475,7 +479,7 @@ class TestOpsWriterCompact:
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             mock_wr.athena.to_iceberg.side_effect = _capture_df
-            writer.compact("ops_recommendations", "2026-04-20")
+            writer.compact("ops_execution_plans", "2026-04-20")
 
         assert len(captured) == 1
         df = captured[0]
@@ -491,8 +495,8 @@ class TestOpsWriterCompact:
 class TestOpsWriterCompactAll:
     """Tests for OpsWriter.compact_all()."""
 
-    def test_compact_all_calls_compact_for_all_five_tables(self):
-        """compact_all() calls compact() for each of the 5 TABLE_NAMES."""
+    def test_compact_all_calls_compact_for_all_tables(self):
+        """compact_all() calls compact() for each table in TABLE_NAMES (excludes ops_recommendations)."""
         from scripts.ops_writer import TABLE_NAMES
 
         writer = _make_writer()
@@ -708,7 +712,7 @@ class TestOpsWriterCompactEdgeCases:
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
         ):
-            writer.compact("ops_recommendations")  # trade_date=None
+            writer.compact("ops_execution_plans")  # trade_date=None
 
         # Verify the paginator was called with the today prefix
         paginate_call = mock_client.get_paginator.return_value.paginate.call_args[1]
@@ -777,7 +781,7 @@ class TestOpsWriterCompactEdgeCases:
         mock_client = MagicMock()
         mock_paginator = MagicMock()
         mock_paginator.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-04-20/batch-abc.jsonl"}]}
+            {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-04-20/batch-abc.jsonl"}]}
         ]
         mock_client.get_paginator.return_value = mock_paginator
         line_bytes = json.dumps(entries[0]).encode("utf-8")
@@ -796,7 +800,7 @@ class TestOpsWriterCompactEdgeCases:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
-            count = writer.compact("ops_recommendations", "2026-04-20")
+            count = writer.compact("ops_execution_plans", "2026-04-20")
 
         # Should still return 1 (row compacted), delete failure is non-fatal
         assert count == 1
@@ -831,7 +835,7 @@ class TestOpsWriterOutbox:
             patch("scripts.ops_writer.Path", lambda *args: tmp_path.joinpath(*args) if args else Path()),
         ):
             # Use _write_to_outbox directly with a patched outbox dir
-            outbox_dir = tmp_path / ".ops-outbox" / "ops_recommendations"
+            outbox_dir = tmp_path / ".ops-outbox" / "ops_decisions"
 
             def fake_write_to_outbox(table, staged_entry):
                 outbox_dir.mkdir(parents=True, exist_ok=True)
@@ -844,12 +848,12 @@ class TestOpsWriterOutbox:
                 )
 
             writer._write_to_outbox = fake_write_to_outbox
-            writer.write("ops_recommendations", entry)
+            writer.write("ops_decisions", {"id": "dec-042", **{k: v for k, v in entry.items() if k != "id"}})
 
         files = list(outbox_dir.glob("*.jsonl"))
         assert len(files) == 1
         saved = __import__("json").loads(files[0].read_text(encoding="utf-8"))
-        assert saved["id"] == "rec-001"
+        assert saved["id"] == "dec-042"
 
     def test_write_to_outbox_directly(self, tmp_path):
         """_write_to_outbox() creates a file in the outbox dir."""
@@ -891,7 +895,7 @@ class TestOpsWriterOutbox:
         from scripts.ops_writer import OpsWriter
 
         writer = OpsWriter()
-        entry = {**_VALID_REC, "id": "rec-003"}
+        entry = {"id": "dec-003"}
         outbox_calls = []
 
         with (
@@ -901,11 +905,11 @@ class TestOpsWriterOutbox:
             patch.object(writer, "_get_client", return_value=None),
             patch.object(writer, "_write_to_outbox", side_effect=lambda t, e: outbox_calls.append((t, e))),
         ):
-            writer.write("ops_recommendations", entry)
+            writer.write("ops_decisions", entry)
 
         assert len(outbox_calls) == 1
-        assert outbox_calls[0][0] == "ops_recommendations"
-        assert outbox_calls[0][1]["id"] == "rec-003"
+        assert outbox_calls[0][0] == "ops_decisions"
+        assert outbox_calls[0][1]["id"] == "dec-003"
 
     def test_test_env_no_outbox(self):
         """In test environment, _write_to_outbox is never called."""
@@ -1150,7 +1154,7 @@ class TestOpsWriterEmit:
 
 
 class TestOpsWriterCompactAllIncludesTelemetry:
-    """compact_all() covers all 12 tables (5 ops + 7 telemetry)."""
+    """compact_all() covers all 11 tables (4 ops + 7 telemetry; ops_recommendations excluded post-T2.19)."""
 
     def test_compact_all_includes_telemetry_tables(self):
         from scripts.ops_writer import TABLE_NAMES
@@ -1166,7 +1170,8 @@ class TestOpsWriterCompactAllIncludesTelemetry:
             result = writer.compact_all()
 
         assert sorted(compact_calls) == sorted(TABLE_NAMES)
-        assert len(TABLE_NAMES) == 12
+        assert len(TABLE_NAMES) == 11  # 4 ops (excl. recs) + 7 telemetry -- T2.19 cutover
+        assert "ops_recommendations" not in TABLE_NAMES  # recs excluded (Decision 81 cl.7)
         assert "telemetry_sessions" in compact_calls
         assert "telemetry_agent_invocations" in compact_calls
         assert set(result.keys()) == set(TABLE_NAMES)
@@ -1292,7 +1297,7 @@ class TestOpsWriterCompactTimestampHandling:
 class TestCompactErrorPaths:
     """Tests for the split compact() error paths introduced by the pipeline consolidation."""
 
-    def _make_staging_client(self, tmp_path, records):
+    def _make_staging_client(self, tmp_path, records, table: str = "ops_execution_plans"):
         """Return a mock S3 client that serves one staging file with *records*."""
         import io
 
@@ -1300,7 +1305,7 @@ class TestCompactErrorPaths:
 
         mock_client = MagicMock()
         mock_client.get_paginator.return_value.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-05-09/f.jsonl"}]}
+            {"Contents": [{"Key": f"staging/{table}/dt=2026-05-09/f.jsonl"}]}
         ]
         mock_client.get_object.return_value = {"Body": io.BytesIO(body)}
         mock_client.delete_object.return_value = {}
@@ -1319,7 +1324,7 @@ class TestCompactErrorPaths:
             patch.object(writer, "_is_test_env", return_value=False),
             patch.object(writer, "_get_client", return_value=mock_client),
         ):
-            result = writer.compact("ops_recommendations", "2026-05-09")
+            result = writer.compact("ops_execution_plans", "2026-05-09")
 
         assert result == 0
 
@@ -1328,7 +1333,7 @@ class TestCompactErrorPaths:
         import pytest
 
         writer = _make_writer()
-        mock_client = self._make_staging_client(None, [_VALID_REC])
+        mock_client = self._make_staging_client(None, [{"id": "ep-001"}])
 
         with (
             patch("scripts.ops_writer._AWR_AVAILABLE", True),
@@ -1341,15 +1346,15 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = Exception("Unable to locate credentials")
-            with pytest.raises(RuntimeError, match="infrastructure failure for ops_recommendations"):
-                writer.compact("ops_recommendations", "2026-05-09")
+            with pytest.raises(RuntimeError, match="infrastructure failure for ops_execution_plans"):
+                writer.compact("ops_execution_plans", "2026-05-09")
 
     def test_compact_passes_boto3_session_to_to_iceberg(self):
         """compact() forwards _get_boto3_session() to wr.athena.to_iceberg."""
 
         writer = _make_writer()
         fake_session = MagicMock(name="boto3_session")
-        mock_client = self._make_staging_client(None, [_VALID_REC])
+        mock_client = self._make_staging_client(None, [{"id": "ep-001"}])
 
         captured_kwargs: dict = {}
 
@@ -1367,7 +1372,7 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = _capture
-            writer.compact("ops_recommendations", "2026-05-09")
+            writer.compact("ops_execution_plans", "2026-05-09")
 
         assert captured_kwargs.get("boto3_session") is fake_session
 
@@ -1377,18 +1382,16 @@ class TestCompactErrorPaths:
         other tables. Without this, two compacts sharing s3://bucket/tmp/ as
         temp_path produce a temp Glue table whose LOCATION is the directory
         root -- INSERT INTO ... SELECT FROM that temp_table reads ALL parquets
-        in tmp/ regardless of which call wrote them, causing rows from
-        telemetry tables to be ingested into ops_recommendations as NULL-id
-        resurrections."""
+        in tmp/ regardless of which call wrote them."""
         import io
 
         writer = _make_writer()
 
         def make_fresh_client():
-            body = json.dumps(_VALID_REC).encode("utf-8")
+            body = json.dumps({"id": "ep-001"}).encode("utf-8")
             mc = MagicMock()
             mc.get_paginator.return_value.paginate.return_value = [
-                {"Contents": [{"Key": "staging/ops_recommendations/dt=2026-05-09/f.jsonl"}]}
+                {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-05-09/f.jsonl"}]}
             ]
             mc.get_object.return_value = {"Body": io.BytesIO(body)}
             mc.delete_object.return_value = {}
@@ -1410,12 +1413,91 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = _capture
-            writer.compact("ops_recommendations", "2026-05-09")
-            writer.compact("ops_recommendations", "2026-05-09")
+            writer.compact("ops_execution_plans", "2026-05-09")
+            writer.compact("ops_execution_plans", "2026-05-09")
 
         assert len(seen_paths) == 2
         assert seen_paths[0] != seen_paths[1], "two compact calls must use distinct temp_paths"
         for p in seen_paths:
-            assert p.startswith("s3://my-bucket/tmp/compact-ops_recommendations-")
+            assert p.startswith("s3://my-bucket/tmp/compact-ops_execution_plans-")
             assert p.endswith("/")
             assert p != "s3://my-bucket/tmp/", "temp_path must not be the bare tmp/ directory"
+
+
+# ---------------------------------------------------------------------------
+# T2.19 DuckLake cutover -- recs rejection locks
+# ---------------------------------------------------------------------------
+
+
+class TestRecsT219Rejection:
+    """T2.19 -- ops_recommendations rejected at the OpsWriter boundary (Decision 81 cl.7).
+
+    Acceptance-criteria locks from docs/plans/PLAN-ducklake-recs-cutover-completion.md:
+    - recs not in TABLE_NAMES
+    - write() hard-rejects without staging
+    - compact() hard-rejects returning 0 (no paginator call)
+    """
+
+    def test_ops_recommendations_not_in_table_names(self) -> None:
+        """ops_recommendations is excluded from TABLE_NAMES post-T2.19."""
+        from scripts.ops_writer import TABLE_NAMES
+
+        assert "ops_recommendations" not in TABLE_NAMES, (
+            "ops_recommendations must NOT be in OpsWriter TABLE_NAMES after T2.19 (Decision 81 cl.7)"
+        )
+
+    def test_write_hard_rejects_recs_no_s3_call(self) -> None:
+        """write() hard-rejects ops_recommendations -- S3 put_object is never called."""
+        writer = _make_writer()
+        writer._client = MagicMock()
+
+        with (
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+            patch.object(writer, "_is_test_env", return_value=False),
+        ):
+            writer.write("ops_recommendations", {**_VALID_REC})
+
+        writer._client.put_object.assert_not_called()
+
+    def test_write_hard_rejects_recs_does_not_raise(self) -> None:
+        """write() hard-rejects ops_recommendations silently -- no exception raised."""
+        writer = _make_writer()
+        writer._client = MagicMock()
+
+        with (
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+            patch.object(writer, "_is_test_env", return_value=False),
+        ):
+            result = writer.write("ops_recommendations", {**_VALID_REC})
+
+        assert result is None
+
+    def test_write_hard_rejects_recs_no_outbox_call(self) -> None:
+        """write() hard-rejects ops_recommendations before outbox -- outbox is never invoked."""
+        writer = _make_writer()
+        outbox_calls: list[tuple] = []
+
+        with (
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+            patch.object(writer, "_is_test_env", return_value=False),
+            patch.object(writer, "_write_to_outbox", side_effect=lambda t, e: outbox_calls.append((t, e))),
+        ):
+            writer.write("ops_recommendations", {**_VALID_REC})
+
+        assert len(outbox_calls) == 0, "outbox must NOT be called for ops_recommendations (hard-reject fires first)"
+
+    def test_compact_hard_rejects_recs_returns_zero(self) -> None:
+        """compact() hard-rejects ops_recommendations, returns 0 without touching S3."""
+        writer = _make_writer()
+        writer._client = MagicMock()
+
+        with (
+            patch("scripts.ops_writer._AWR_AVAILABLE", True),
+            patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+            patch.object(writer, "_is_test_env", return_value=False),
+        ):
+            count = writer.compact("ops_recommendations", "2026-06-09")
+
+        assert count == 0
+        writer._client.get_paginator.assert_not_called()

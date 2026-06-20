@@ -1,0 +1,190 @@
+schema_version: 1
+slug: "preflight-optimization"
+intent: >-
+  Reduce session_preflight.py wall-clock time (the workflow Step-1 tax every /plan,
+  /implement, and /develop-executor session pays) by removing redundant DuckLake reads
+  and parallelizing independent blocking I/O, without changing the report or weakening any gate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-preflight-optimization.yaml
+phase: >-
+  PLATFORM dev-tooling. Ad-hoc developer-velocity optimization, not a tier_item. Closest adjacent
+  eligible item is T-1.20 (preflight roadmap-state contract reconciliation) which concerns surfacing
+  MORE state, a different concern; this plan does not touch that surface. Treated as a
+  user_explicit_out_of_scope soft-warn per the planning skill.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Prime the DuckLake reader URL once (skip per-call SSM), collapse the duplicate full ops-table
+      pull into a single sync, dedupe the open_recs and decisions_max_updated verbs, and parallelize
+      the independent subprocess checks and the post-warm reader fan-out. No report field changes.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Add tests for single-sync collapse, one-time URL priming, verb dedupe, parallel-gather report
+      equivalence, and loud worker-thread error propagation; update the autouse fixture if needed.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    session_preflight.main() performs at most one full ops-table pull per run (the standalone
+    _sync_ops_pull()/_rebuild_local_cache() second pull is removed; sync_ops.sync() runs at most once).
+  - >-
+    The DuckLake reader Function URL is resolved at most once per run; subsequent reader calls reuse it
+    via the DUCKLAKE_READER_URL env override (no per-call SSM GetParameter).
+  - >-
+    The open_recs verb and the decisions_max_updated verb are each queried at most once per run.
+  - >-
+    Independent subprocess checks (check_credentials, check_main_freshness, check_terraform_pending) run
+    concurrently; the reader fan-out runs only after a single serial warm-up call and is capped at <= 4
+    concurrent workers.
+  - >-
+    logs/.preflight-report.json retains exactly the same top-level field set as before the change, with
+    correct live values (recs_read_status == "ok", open_recommendations > 0, venv_ok == true) when run
+    against the live warehouse with valid credentials.
+  - >-
+    A reader/verb failure inside a worker thread surfaces loudly in the main thread (raise or non-zero
+    exit), never a silent empty or false-zero; read_priority_queue still exits non-zero on verb failure
+    when creds are ok (Decision 55 / Decision 81).
+  - "ruff check and ruff format --check pass on both scope files; tests/test_session_preflight.py passes."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Capture a pre-change wall-clock baseline for the live preflight (run before implementing).
+    command: "s=$(date +%s); bin/venv-python -m scripts.session_preflight >/dev/null 2>&1; e=$(date +%s); echo baseline_seconds=$((e-s))"
+    expected: "Prints baseline_seconds=N; record N as the pre-change baseline to compare against step 7."
+    fix_if: "If the command errors before printing, the environment/creds are broken -- fix that before proceeding (not an optimization failure)."
+  - step: 2
+    phase: pre-deploy
+    action: Run the full preflight unit-test module.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py -q"
+    expected: "All tests pass, including the new collapse/priming/dedupe/parallel tests."
+    fix_if: "A failing assertion names the regressed behavior; fix the implementation, not the test, unless the test encodes a stale contract."
+  - step: 3
+    phase: pre-deploy
+    action: Prove the duplicate pull is gone -- sync runs at most once, no second standalone pull.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py -q -k 'SyncCollapse or sync_once'"
+    expected: "Test asserts sync_ops.sync called exactly once and the standalone pull is not invoked a second time; passes."
+    fix_if: "If sync is still called twice (or pull + sync both run), collapse them so recommendation_sync derives from the single pull."
+  - step: 4
+    phase: pre-deploy
+    action: Prove URL priming and verb dedupe -- URL resolved once, open_recs and decisions_max_updated each queried once.
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py -q -k 'UrlPriming or VerbDedup'"
+    expected: "Reader-call-counting tests confirm one URL resolution and one call each for open_recs and decisions_max_updated across a full main() run."
+    fix_if: "If a verb is queried twice, compute it once in main() and pass the value (open_recs count into read_context_files; decisions ts into both compute_state_dict calls)."
+  - step: 5
+    phase: pre-deploy
+    action: Prove loud failure propagation across threads (Decision 55/81).
+    command: "bin/venv-python -m pytest tests/test_session_preflight.py -q -k 'ErrorPropagation'"
+    expected: "When a Phase-B worker reader call raises (or read_priority_queue exits on verb failure with creds ok), main() surfaces it loudly rather than producing a silent-empty report; test passes."
+    fix_if: "If a worker exception is swallowed, ensure each future result is retrieved via future.result() so exceptions/SystemExit re-raise in the main thread."
+  - step: 6
+    phase: pre-deploy
+    action: Run the live preflight end-to-end and assert the on-disk report shape and key values are unchanged.
+    command: "bin/venv-python -m scripts.session_preflight && bin/venv-python -m json.tool logs/.preflight-report.json > /dev/null && grep -q '\"recs_read_status\": \"ok\"' logs/.preflight-report.json && grep -q '\"venv_ok\": true' logs/.preflight-report.json && echo REPORT_OK"
+    expected: "Prints REPORT_OK: the report is valid JSON, recs_read_status is ok, venv_ok is true (i.e. live reads still work and gates are intact)."
+    fix_if: "If the report is malformed or a gating field flipped to a degraded/false-zero value with creds present, the parallelization corrupted a read path -- restore loud-fail semantics."
+  - step: 7
+    phase: pre-deploy
+    action: Re-measure live wall-clock and confirm a material improvement over the step-1 baseline.
+    command: "s=$(date +%s); bin/venv-python -m scripts.session_preflight >/dev/null 2>&1; e=$(date +%s); echo optimized_seconds=$((e-s))"
+    expected: "optimized_seconds is materially lower than baseline_seconds from step 1 (target: reader-bound portion roughly halved; total improvement is capped by any single slow check such as terraform plan when present)."
+    fix_if: "If no improvement, confirm the duplicate pull was removed, SSM is actually skipped (DUCKLAKE_READER_URL set), and Phase-B reads run concurrently after the warm-up rather than serially."
+  - step: 8
+    phase: pre-deploy
+    action: Lint, format, and run the advisory presubmit edit-loop tier.
+    command: "bin/venv-python -m ruff check scripts/session_preflight.py tests/test_session_preflight.py && bin/venv-python -m ruff format --check scripts/session_preflight.py tests/test_session_preflight.py && bin/venv-python -m scripts.validate --pre"
+    expected: "ruff clean; validate --pre passes. (Remote CI on the PR is the authoritative gate.)"
+    fix_if: "Address ruff/format findings; if validate --pre flags an issue, fix it before pushing to reduce CI round-trips."
+constraints:
+  - "Do NOT modify src/common/iceberg_reader.py: it is packaged into the data-pipeline and ops-compaction status:active Lambdas, so editing it would force per-Lambda build/deploy/smoke-test (Decision 79/CD.16) for zero Lambda-side benefit. All changes stay in the preflight layer (Option A)."
+  - "Every read stays a registered named-verb call on the closed DuckLake reader boundary; no caller SQL, no Athena fallback (Decision 84 I-3 / Decision 81)."
+  - "Preserve loud-failure and degraded-mode semantics exactly: a worker-thread failure must surface as the same loud error / non-zero exit, never a silent empty or false-zero (Decision 55, Decision 81); credential-down degradation must keep emitting actionable guidance and must not silently weaken a gate (Decision 60)."
+  - "Warm the reader with one serial call before fanning out, and cap fan-out concurrency at <= 4 workers, to avoid the concurrent-Neon-connect p95 inflation documented in Decision 82."
+  - "Do not change any field of logs/.preflight-report.json or alter the ci-rca block surfacing at the top of the report (Decision 73)."
+  - "Out of scope (deferred by human): gating/skipping terraform plan, and any S3 shared cache. No recommendation is filed for these."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Root cause of slowness (confirmed by reading the code): main() pulls all 3 ops tables twice
+    (_sync_ops_pull() then sync_ops.sync()), issues ~10 separate DuckLake reader round-trips each
+    re-resolving the Function URL via SSM and building a fresh boto3 session, and runs terraform plan
+    (120s timeout), git fetch, sts, and gh run list serially. It is I/O-bound, not CPU-bound.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS. CITE: Decision 84 (DuckLake sole backend, named-verb closed
+    boundary), Decision 81 (closed boundary / no false zeros), Decision 60 (degrade with guidance, never
+    silently weaken a gate), Decision 55 (loud failure, no silent false zeros). RELATED: Decision 82
+    (warm-then-fan-out mitigates concurrent Neon connect p95), Decision 73 (preflight surfaces the ci-rca
+    block -- do not alter), Decision 79 (Lambda packaging -- the reason iceberg_reader.py is out of scope).
+  - >-
+    Option A chosen by human over Option B (instance-level caching in iceberg_reader.py): Option A
+    confines changes to session_preflight.py + its test, avoiding the two active-Lambda deploys Option B
+    would trigger. In Option A the SSM-skip comes from priming the DUCKLAKE_READER_URL env override (the
+    documented first-priority resolution per Decision 79 SSOT), NOT from per-instance session/credential
+    reuse (that lives in iceberg_reader.py and is deliberately not touched).
+  - >-
+    Known residual (accepted by human, no rec filed): parallelization bounds total time by the slowest
+    single check, so when terraform is installed with a configured backend, terraform plan (120s timeout)
+    dominates. The human will refactor again once the terraform-platform roadmap items complete. In the
+    current container terraform is unavailable so terraform_pending resolves to null near-instantly.
+  - >-
+    Test-fixture note: the autouse fixture in tests/test_session_preflight.py patches
+    session_preflight._sync_ops_pull, session_preflight._make_reader, and scripts.sync_ops.sync. Keep the
+    _sync_ops_pull import symbol importable (do not delete the alias) or update the fixture so the patch
+    target still resolves after the collapse.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/determined-noether-iu4n4e)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (NO_FLAGS)
+  - Both files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed src/common/iceberg_reader.py is NOT in scope (active-Lambda blast radius)
+execution_steps:
+  - >-
+    Capture the pre-change baseline (VP step 1) and record baseline_seconds before editing.
+  - >-
+    In scripts/session_preflight.py, add a one-time URL-priming helper (e.g. _prime_reader_url) that,
+    when creds_status == "ok", resolves the reader Function URL once (call the reader's resolution path
+    in a try/except) and sets os.environ["DUCKLAKE_READER_URL"] so all later reader calls skip SSM. On
+    resolution failure, log and continue (env unset -> existing per-call resolution applies). Call it
+    after credentials are confirmed and before the sync pull.
+  - >-
+    Collapse the duplicate pull in main(): remove the standalone _sync_ops_pull() call and derive the
+    recommendation_sync report field from the single sync_ops.sync() invocation's "pulled" result (run
+    only when creds_status == "ok"; on creds-down set recommendation_sync = {} with the existing loud
+    degraded warning). The single sync pull also serves as the reader warm-up (absorbs Neon cold-resume).
+  - >-
+    Dedupe verbs: compute the open_recs tally once in main() and pass the count into read_context_files
+    (add an open_recs_count param defaulting to None -> falls back to its own query for standalone use);
+    compute _get_latest_decision_ts() once and pass the value into both platform and product
+    compute_state_dict calls.
+  - >-
+    Parallelize Phase A: run check_credentials, check_main_freshness, and check_terraform_pending
+    concurrently via a ThreadPoolExecutor, then join (creds_status and origin/main freshness must be
+    known before the reader/git-log work). Apply _handle_credentials_startup to the creds result as today.
+  - >-
+    Parallelize Phase B (only after the serial warm-up): submit the remaining independent reads and
+    subprocess calls to a ThreadPoolExecutor with max_workers <= 4 -- _count_recommendations_reader,
+    _fetch_ci_rca_recs, read_priority_queue, _get_recent_main_commits, _check_ci_rca_liveness,
+    _get_latest_decision_ts, _check_forward_fix_recursion, _check_budget_bypass_alert. Retrieve every
+    future via future.result() so exceptions and SystemExit (read_priority_queue's sys.exit on verb
+    failure with creds ok) re-raise loudly in the main thread (Decision 55/81). Keep the print_* calls
+    (ci_rca, priority queue, recent commits) and report assembly serial and in their existing order so
+    stdout ordering and report fields are unchanged.
+  - >-
+    Add/extend tests in tests/test_session_preflight.py: (a) SyncCollapse -- sync called exactly once,
+    no second pull; (b) UrlPriming -- DUCKLAKE_READER_URL set once on creds-ok and priming-failure is
+    non-fatal; (c) VerbDedup -- open_recs and decisions_max_updated each queried once across a full
+    main() run (count via a call-counting reader stub); (d) parallel-gather report equivalence -- a full
+    mocked main() run yields the same report keys/values as before; (e) ErrorPropagation -- a worker
+    reader failure (and read_priority_queue sys.exit with creds ok) surfaces loudly. Update the autouse
+    fixture if the _sync_ops_pull patch target is affected. Ensure 100% coverage of new branches.
+  - >-
+    Execute the Verification Plan (steps 2-8); loop until all pass. On an unrecoverable V3 failure, stop
+    and RCA per Decision 55 rather than adding a workaround.
+  - "Report: what was implemented, the baseline vs optimized timing, and verification results."
+work_areas: []
+rollback: >-
+  Revert the two scope files (scripts/session_preflight.py, tests/test_session_preflight.py) to their
+  prior revision; no infrastructure, schema, or warehouse state changes are involved, so revert is clean.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -126,14 +126,12 @@ def test_automatable_override_warning(caplog):
     }
     with (
         patch("scripts.ops_data_portal.validate_source"),
-        patch("scripts.ops_data_portal._next_id", return_value="rec-999"),
         patch("scripts.ops_data_portal.Recommendation.model_validate"),
-        patch("scripts.ops_data_portal.OpsWriter") as mock_writer,
+        patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-999"}),
         patch("scripts.ops_data_portal._append_to_local_jsonl"),
         patch("scripts.ops_data_portal._sync_table"),
         caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
     ):
-        mock_writer.return_value = MagicMock()
         file_rec(fields)
 
     warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]

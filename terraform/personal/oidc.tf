@@ -91,6 +91,22 @@ resource "aws_iam_role_policy" "github_ci_branch" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
       },
       {
+        # CD.35 / T2.20 single-writer enforcement: the convergence record is written ONLY by the
+        # apply identity (github_ci_apply). This branch role (ci-rca, agent/* CI) MUST be able to
+        # READ the record (ci-rca anchors its refusal dedup on the red record's commit) but must NOT
+        # write or delete it -- an explicit Deny makes the "apply-identity-alone writes the record"
+        # integrity claim true at the IAM layer (explicit Deny overrides the bucket-wide S3ReadWrite
+        # Allow above; GetObject is untouched). Full privilege-tiering lands at Wave 4 (bootstrap
+        # root); this Deny is the Wave-1 enforcement among CI roles.
+        Sid    = "DenyConvergenceRecordWrite"
+        Effect = "Deny"
+        Action = [
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+      },
+      {
         Sid    = "S3List"
         Effect = "Allow"
         Action = [
@@ -132,6 +148,24 @@ resource "aws_iam_role_policy" "github_ci_branch" {
           "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${aws_glue_catalog_database.ops.name}",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${aws_glue_catalog_database.ops.name}/*"
         ]
+      },
+      {
+        # T2.19 recs cutover (rec-2111): CI/DQ reads recs over the DuckLake reader Function URL and
+        # may write recs via the writer. lambda:InvokeFunction is the action the Function-URL IAM
+        # authorizer actually checks (InvokeFunctionUrl alone is INSUFFICIENT -- live-verified).
+        # InvokeFunctionUrl retained alongside for AWS-doc alignment; not sufficient on its own.
+        # lambda:GetFunctionUrlConfig lets the runner RESOLVE the reader/writer URL via the AWS API
+        # when neither DUCKLAKE_*_URL env nor a terraform-init'd checkout is present (the CI case) --
+        # iceberg_reader / ops_data_portal fall back to get_function_url_config (post-cutover DQ).
+        Sid    = "DuckLakeInvokeCI"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
       }
     ]
   })
@@ -159,7 +193,16 @@ resource "aws_iam_role" "github_ci_pr" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/pull/*"
+            # A pull_request-triggered job presents sub = repo:OWNER/REPO:pull_request -- NOT
+            # refs/pull/* (that is the `ref` claim, not `sub`). The advisory terraform-converged
+            # status job (terraform-apply-sandbox.yml, pull_request) assumes this read-only role, so
+            # the pull_request sub MUST be trusted. refs/pull/* is retained for any ref-scoped or
+            # customized-sub consumer. This role stays read-only (athena/iceberg/convergence reads,
+            # no tfstate, no writes), so trusting the PR sub does not widen blast radius.
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${local.github_repo}:pull_request",
+              "repo:${local.github_repo}:ref:refs/pull/*"
+            ]
           }
         }
       }
@@ -209,6 +252,17 @@ resource "aws_iam_role_policy" "github_ci_pr" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/iceberg/*"]
       },
       {
+        # CD.35 / T2.20 advisory terraform-converged PR status. The read-only PR role reads the
+        # convergence record at PR time to derive the advisory status. Granted on the record prefix
+        # ONLY (convergence/personal/*) -- NOT tfstate/: the "github_ci_pr cannot read tfstate"
+        # invariant must stay cleanly auditable, which is precisely why the record lives in its own
+        # prefix outside tfstate/. Read-only (GetObject); this role never writes the record.
+        Sid      = "S3ReadConvergenceRecord"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+      },
+      {
         Sid    = "S3List"
         Effect = "Allow"
         Action = [
@@ -226,6 +280,23 @@ resource "aws_iam_role_policy" "github_ci_pr" {
           "glue:GetPartitions"
         ]
         Resource = "*"
+      },
+      {
+        # T2.19 recs cutover (rec-2111): PR CI reads recs over the DuckLake reader Function URL.
+        # lambda:InvokeFunction is the action the Function-URL IAM authorizer actually checks.
+        # InvokeFunctionUrl retained for AWS-doc alignment; not sufficient alone. PR CI is
+        # read-only (no rec writes) but scoped to writer ARNs for consistency / future-compat.
+        # lambda:GetFunctionUrlConfig lets the runner resolve the URL via the AWS API (no env / no
+        # terraform-init'd checkout) -- mirrors the branch role's DuckLakeInvokeCI grant.
+        Sid    = "DuckLakeInvokeCI"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
+        Resource = [
+          aws_lambda_function.ducklake_writer.arn,
+          "${aws_lambda_function.ducklake_writer.arn}:*",
+          aws_lambda_function.ducklake_reader.arn,
+          "${aws_lambda_function.ducklake_reader.arn}:*",
+        ]
       }
     ]
   })
@@ -236,8 +307,9 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 #
 # This is the role the .github/workflows/terraform-apply-sandbox.yml workflow assumes to run
 # `terraform apply` against terraform/personal on push to main. Its blast radius is the highest of
-# any CI role, so two compensating controls bound it (Decision 72 / CD.20 -- branch protection and
-# required status checks are NOT available):
+# any CI role, so two compensating controls bound it (branch protection is now active via the
+# main-protection ruleset, Decision 83 / CD.20, but deliberately non-wedging -- the controls
+# below remain the authoritative apply gate):
 #   1. Trust is scoped to refs/heads/main ONLY -- NOT agent/*, NOT pull/*. A PR or agent branch
 #      cannot assume this role; only a merge to main can.
 #   2. scripts/terraform_apply_guard.py runs (fail-closed) before apply and blocks any destroy,
@@ -306,6 +378,27 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/*"]
       },
       {
+        # CD.35 / T2.20 convergence record (the server-side anti-masking anchor). Among the CI roles
+        # the apply identity is the ONLY writer of the durable convergence record -- the integrity
+        # anchor the design rests on (a commit status alone is spoofable). Enforced at the IAM layer:
+        # this grant + the explicit DenyConvergenceRecordWrite on github_ci_branch + the PR role's
+        # read-only S3ReadConvergenceRecord = apply-identity-alone writes among CI roles (full
+        # privilege-tiering, incl. removing the admin/breakglass write path, lands at Wave 4). The
+        # record lives in its OWN prefix (convergence/personal/*), OUTSIDE tfstate/, so the read-only
+        # PR role can be granted read on it without ever seeing tfstate. Scoped to the record prefix
+        # only -- no DeleteObject (the record is overwrite-only; clearing red is a green PutObject
+        # from the dispatch-ack path, not a delete). This statement is intentionally explicit so the
+        # write-identity invariant is auditable in one Sid. At Wave 5 the T2.24 drift identity joins
+        # this shared record-writer grant.
+        Sid    = "ConvergenceRecordWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+      },
+      {
         # s3:GetBucketAcl + s3:GetBucketOwnershipControls are refresh-time reads the AWS provider
         # issues on aws_s3_bucket every plan; without them `terraform plan` fails AccessDenied
         # before the guard runs. Mirrors the platform_admin_datalake (AdminOps-side) grant, which
@@ -331,7 +424,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "s3:GetBucketAcl",
           "s3:GetBucketOwnershipControls"
         ]
-        Resource = [aws_s3_bucket.data_lake.arn]
+        # refresh-time reads the provider issues on every plan for all managed aws_s3_bucket resources;
+        # do not prune as unused.
+        Resource = [
+          aws_s3_bucket.data_lake.arn,
+          aws_s3_bucket.ducklake_catalog_dr.arn,
+        ]
       },
       {
         # athena:ListTagsForResource is the canonical (provider 5.x) refresh-time tag-read on
@@ -457,6 +555,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = [
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
         ]
       },
       {
@@ -486,13 +588,217 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # plan + apply time to initialise the Neon provider (the
         # data.aws_secretsmanager_secret_version.neon_api_key data source in neon_ducklake_catalog.tf).
         # Read-only -- the key's lifecycle is human-owned, not Terraform-managed.
-        Sid    = "SecretsManagerNeonAPIKeyRead"
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
+        Sid      = "SecretsManagerNeonAPIKeyRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
+      },
+      {
+        # Tfvars sourcing: the apply job fetches terraform.personal.tfvars from this secret
+        # (terraform-apply-sandbox.yml "Materialise tfvars" step) and passes it via -var-file.
+        # Mirrors the SecretsManagerNeonAPIKeyRead precedent. Read-only -- the secret lifecycle
+        # is human-owned, not Terraform-managed.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # secretsmanager:Describe*/Get* closes the iterative-discovery anti-pattern. Intentional
+        # read-surface expansion: Get* subsumes GetResourcePolicy (read-only metadata, no value
+        # exposure beyond the already-granted GetSecretValue) -- ARN-scoped to this one secret.
+        # rec-2219: runtime-read-only -- the workflow fetches this secret at apply time; no terraform data source reads it (unlike the Neon precedent).
+        Sid      = "SecretsManagerTfvarsRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
+      },
+      {
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # logs:Describe*/List* on * closes the iterative-discovery anti-pattern for CloudWatch Logs
+        # refresh reads. Resource: "*" required (logs:DescribeLogGroups has no resource-level scoping).
+        Sid      = "CloudWatchLogsRead"
+        Effect   = "Allow"
+        Action   = ["logs:Describe*", "logs:List*"]
+        Resource = ["*"]
+      },
+      {
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # lambda:Get*/List* on the ducklake layer + function ARNs covers the full refresh-read set
+        # incl. GetFunctionConcurrency / GetRuntimeManagementConfig (previously missing). Do not prune.
+        Sid    = "LambdaRead"
+        Effect = "Allow"
+        Action = ["lambda:Get*", "lambda:List*"]
+        # Literal ARNs (not resource references): a refresh-read grant should not create a
+        # Terraform dependency edge onto the resource it reads. Mirrors the IAMPlatformRolesRead
+        # literal-ARN convention.
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+        ]
+      },
+      {
+        # apply-phase MODIFY needs AddPermission on the four ducklake functions (EventBridge grants the
+        # rule trigger invocation right on the function resource policy at apply time).
+        Sid    = "LambdaPermissionWrite"
         Effect = "Allow"
         Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
+          "lambda:AddPermission",
+          "lambda:RemovePermission"
         ]
-        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+        ]
+      },
+      {
+        # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
+        # All FIVE ducklake rules in state are covered (catalog-dr, maintenance-merge, maintenance-gc,
+        # maintenance-hot-merge, maintenance-merge-ops) to avoid iterative-discovery rounds.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # events:Describe*/List* closes the iterative-discovery anti-pattern.
+        Sid    = "EventBridgeRead"
+        Effect = "Allow"
+        Action = ["events:Describe*", "events:List*"]
+        # Literal ARNs (not resource references): merge-ops is not yet in state, so a resource
+        # reference would force its creation; and a refresh-read grant should not depend on the
+        # lifecycle of the resource it reads. Mirrors the IAMPlatformRolesRead literal-ARN convention.
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+        ]
+      },
+      {
+        # apply-phase MODIFY/CREATE needs PutRule/PutTargets on ducklake EventBridge rules
+        # (catalog-dr cadence daily->weekly, maintenance-merge-ops new rule in #166).
+        Sid    = "EventBridgeWrite"
+        Effect = "Allow"
+        Action = [
+          "events:PutRule",
+          "events:DeleteRule",
+          "events:PutTargets",
+          "events:RemoveTargets",
+          "events:TagResource",
+          "events:UntagResource",
+          "events:EnableRule",
+          "events:DisableRule"
+        ]
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+        ]
+      },
+      {
+        # Refresh-time reads the provider issues on aws_sns_topic every plan.
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # sns:Get*/List* closes the iterative-discovery anti-pattern.
+        Sid      = "SNSRead"
+        Effect   = "Allow"
+        Action   = ["sns:Get*", "sns:List*"]
+        Resource = [aws_sns_topic.alerts.arn]
+      },
+      {
+        # sns:GetSubscriptionAttributes does NOT support resource-level permissions (SNS defines no
+        # subscription IAM resource type), so Resource: "*" is required -- a topic- or subscription-ARN
+        # scope evaluates as implicitDeny (verified via simulate-principal-policy). The provider issues
+        # it as a refresh-read on aws_sns_topic_subscription.alerts_email every plan. Do not prune.
+        Sid      = "SNSSubscriptionRead"
+        Effect   = "Allow"
+        Action   = ["sns:GetSubscriptionAttributes"]
+        Resource = ["*"]
+      },
+      {
+        # cloudwatch:DescribeAlarms has no resource-level scoping in IAM (account-wide API) -- Resource:
+        # "*" is required; ListTagsForResource is the per-alarm tag refresh-read. Both are refresh-time
+        # reads the provider issues on every aws_cloudwatch_metric_alarm plan (ducklake catalog-dr-
+        # freshness, maintenance-circuit-breaker, writer-errors).
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
+        # cloudwatch:Describe*/List* closes the iterative-discovery anti-pattern.
+        Sid      = "CloudWatchAlarmsRead"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:Describe*", "cloudwatch:List*"]
+        Resource = ["*"]
+      },
+      {
+        # apply-phase MODIFY needs PutMetricAlarm on the three ducklake alarms
+        # (freshness alarm re-cadenced to a 7-day daily window, period 86400, by #166 + rec-2252).
+        Sid    = "CloudWatchAlarmsWrite"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource"
+        ]
+        Resource = [
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-catalog-dr-freshness",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-maintenance-circuit-breaker",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-writer-errors",
+        ]
+      },
+      {
+        # T1.13 feature-flag SSM parameters auto-apply under terraform/personal (feature_flags.tf:
+        # ci_rca_strict_mode is a plain String param, guard-PASS). The apply identity manages them, so it
+        # needs create/update + tag + refresh-read on the feature-flags path -- scoped to that path, NOT
+        # ssm:* and NOT all parameters. This is the apply-role half the T1.13 param shipped without,
+        # which latched the convergence record red.
+        Sid    = "SSMFeatureFlagsManage"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:PutParameter",
+          "ssm:AddTagsToResource",
+          "ssm:RemoveTagsFromResource",
+          "ssm:ListTagsForResource"
+        ]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/feature-flags/*"]
+      },
+      {
+        # Refresh-time READ on every agent-platform SSM parameter the provider issues on each plan.
+        # Covers the ducklake function-URL params (/agent-platform/ducklake/{writer,reader}_url, managed
+        # in ducklake_lambdas.tf, admin-applied) which CD only refreshes -- read-only, since writes to the
+        # human-gated ducklake stack go via agent_platform_admin. Scoped to /agent-platform/* (NOT ssm:*
+        # and NOT all parameters).
+        # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure + rec-2276):
+        # ssm:Get*/Describe*/List* closes the iterative-discovery anti-pattern (resource-scoped to /agent-platform/*).
+        # ssm:List* added by PLAN-ci-apply-ssm-list-closure (rec-2276): ssm:ListTagsForResource is a
+        # List*-class action the AWS provider calls on every aws_ssm_parameter refresh; the original
+        # closure set Get*/Describe* and missed it, surfaced by the first apply-sandbox run under the
+        # github_ci_apply CI identity (run 27790838857, main 242178f9).
+        # Intentional read-surface expansion: the wildcard subsumes GetParameterHistory,
+        # GetParametersByPath, and ListTagsForResource in addition to GetParameter(s) -- all read-only
+        # and confined to the /agent-platform/* scope (no write, no cross-path enumeration).
+        Sid      = "SSMParameterRead"
+        Effect   = "Allow"
+        Action   = ["ssm:Get*", "ssm:Describe*", "ssm:List*"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
+      },
+      {
+        # ssm:DescribeParameters is the parameter-METADATA refresh-read the aws_ssm_parameter resource
+        # issues after GetParameter (Type/Tier/LastModified). It is a Describe/List-type action with NO
+        # resource-level scoping -- Resource: "*" is required (a parameter-ARN scope evaluates as
+        # implicitDeny; the provider calls it against arn:aws:ssm:<region>:<acct>:*). Mirrors the
+        # cloudwatch:DescribeAlarms / logs:DescribeLogGroups Resource: "*" convention. Do not prune.
+        Sid      = "SSMDescribeParameters"
+        Effect   = "Allow"
+        Action   = ["ssm:DescribeParameters"]
+        Resource = ["*"]
       }
     ]
   })

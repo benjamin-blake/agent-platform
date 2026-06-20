@@ -1,0 +1,265 @@
+schema_version: 1
+slug: "implement-skill-decomposition-hints"
+intent: >-
+  Complete the Contract ritual enforcement tier item (T-1.12) by teaching the implement
+  skill's tier_item bookkeeping rule to inherit bootstrap-completion exemption from a parent
+  tier_item onto its atomic child plans, so freeze-override decompositions stay
+  governance-consistent without per-child re-derivation -- closing the last enforcement gap
+  that keeps pre-codegen contract ratification a machine-checked ritual rather than voluntary
+  discipline.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-implement-skill-decomposition-hints.yaml
+phase: >-
+  Platform tier T-1.12 (Contract ritual enforcement) subset (g) -- the final open exit
+  criterion. Not a product-roadmap item.
+scope:
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a "Decomposition-hint exemption inheritance" subsection to the existing
+      "Tier_item bookkeeping (post-verification, pre-merge)" section so the bookkeeping walk
+      reads decomposition_hints.atomic_plans on parent tier_items and inherits the parent's
+      live bootstrap_completion_exempt value onto the atomic child plan at filing time.
+  - file: tests/test_implement_skill_decomposition_hints.py
+    action: Create
+    purpose: >-
+      Methodology content-assertion + live-data test: the inheritance clause is present and
+      co-located in the bookkeeping section, is non-vacuous (teeth), the Behavioural
+      Invariants block still parses, and the inheritance logic resolves correctly against
+      synthetic parents and the live T-1.12 parent.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    .claude/skills/implement/SKILL.md contains a "### Decomposition-hint exemption inheritance"
+    subsection inside the "## Tier_item bookkeeping (post-verification, pre-merge)" section that
+    instructs the bookkeeping walk to (a) find the parent tier_item via
+    decomposition_hints.atomic_plans, (b) inherit the parent's live bootstrap_completion_exempt
+    value onto the atomic child plan, and (c) treat the resolution as read-only at filing time.
+  - >-
+    The subsection cites the canonical examples (T-1.12 -> true so its children inherit true;
+    T1.12 -> false so its children stay CD.16-gated) and includes a T-1.12 subset-(g)
+    self-application note mirroring the existing T-1.10 self-application invariant.
+  - >-
+    tests/test_implement_skill_decomposition_hints.py exists and asserts: the clause is present
+    and co-located in the bookkeeping section; the assertion helper is non-vacuous (mutated
+    SKILL.md text with the subsection stripped makes it raise); the "## Behavioural Invariants"
+    block still parses via scripts.prompt_compliance.parse_invariants; and the inheritance
+    resolution returns the parent's flag for synthetic parents (true->true, false->false,
+    no-parent->None) and for the live T-1.12 parent (this plan inherits true).
+  - "bin/venv-python -m pytest tests/test_implement_skill_decomposition_hints.py passes with zero failures."
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0 (no ruff/format/prompt-compliance
+    regression introduced by the SKILL.md edit).
+  - >-
+    No file outside scope is modified. docs/ROADMAP-PLATFORM.yaml is NOT edited by this plan;
+    the T-1.12 status flip to complete is the implement bookkeeping walk's own sanctioned
+    follow-up commit, not this plan's in-scope work.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the new methodology test suite against the live SKILL.md and live roadmap. It
+      exercises prose presence, section co-location, non-vacuity (teeth), Behavioural
+      Invariants parse-integrity, and the inheritance-resolution logic on both synthetic
+      parents and the real T-1.12 parent.
+    command: bin/venv-python -m pytest tests/test_implement_skill_decomposition_hints.py -v
+    expected: >-
+      All tests pass (8 passed, 0 failed), including test_assertion_helper_has_teeth and
+      test_live_roadmap_this_plan_inherits_from_t_1_12.
+    fix_if: >-
+      ImportError or assertion failure means the inheritance subsection is missing, placed
+      outside the bookkeeping section, worded so a required token (decomposition_hints,
+      atomic_plans, bootstrap_completion_exempt, read-only, T-1.12, T1.12) is absent, the
+      Behavioural Invariants YAML block was corrupted by the edit, or the live roadmap no
+      longer names this plan in T-1.12's atomic_plans. Fix the SKILL.md text or the test target.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the advisory presubmit gate to confirm the SKILL.md edit and the new test file
+      introduce no ruff/format/prompt-compliance regression.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit code 0; no new lint/format/prompt-compliance failures attributable to the two scope files.
+    fix_if: >-
+      Non-zero exit. Inspect the reported check. If ruff/format flags the new test, run
+      bin/venv-python -m ruff format tests/test_implement_skill_decomposition_hints.py and
+      re-check. If prompt-compliance flags the skill, confirm the Behavioural Invariants block
+      was not altered and that no emoji/em-dash was introduced.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm no out-of-scope file was modified -- in particular that docs/ROADMAP-PLATFORM.yaml
+      is untouched by this plan's implementation work (the T-1.12 complete flip is bookkeeping,
+      a separate follow-up commit).
+    command: git status --porcelain
+    expected: >-
+      Only .claude/skills/implement/SKILL.md (modified) and
+      tests/test_implement_skill_decomposition_hints.py (added) appear; docs/ROADMAP-PLATFORM.yaml
+      does NOT appear among the implementation changes.
+    fix_if: >-
+      Any other path appears. Revert it. (Note: the implement skill's own post-verification
+      bookkeeping walk legitimately stages docs/ROADMAP-PLATFORM.yaml as a SEPARATE follow-up
+      commit AFTER this gate; that is sanctioned skill behaviour, not an in-scope edit, and must
+      not be mixed into the feat() commit.)
+constraints:
+  - >-
+    Scope STRICTLY .claude/skills/implement/SKILL.md (Modify) + tests/test_implement_skill_decomposition_hints.py
+    (Create). OUT OF SCOPE: scripts/platform_roadmap.py (subset b, done), scripts/contracts*.py (d/e),
+    scripts/session_preflight.py (f), scripts/prompt_compliance.py, and docs/ROADMAP-PLATFORM.yaml (roadmap data).
+  - >-
+    The rule MUST resolve inheritance from the parent tier_item's live bootstrap_completion_exempt
+    field -- the per-item flag is the single source of truth; the document-level "Bootstrap clause
+    (COMPLETION exemption)" prose enumeration is documentation only (decision-scout NOTE).
+  - >-
+    Inheritance is read-only resolution: the rule never writes the parent's decomposition_hints or
+    the child's flag during bookkeeping, and it is NOT a license to author STRATEGIC children -- the
+    CD.17 freeze stays in force and atomic children remain IMPLEMENTATION plans (decision-scout NOTE).
+  - "Plan Type stays IMPLEMENTATION (freeze override active; AGENTS.md Temporary Operational Constraints)."
+  - "Do not edit the '## Behavioural Invariants' YAML block in SKILL.md (the test guards that it still parses)."
+  - "No emojis; ASCII hyphens only; no em dashes (project code style)."
+  - "Use bin/venv-python for all Python invocations; Linux/bash-compatible commands only."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Implements T-1.12 exit criterion (g) -- the last open subset of Contract ritual enforcement.
+    Subsets a/b/c-absorption (PLAN-cd25-platform-gap-sequencing), d (PLAN-contracts-schema-and-loader),
+    and e+f (PLAN-contracts-enforcement-gate-and-hook) have landed; see the T-1.12 progress_note
+    dated 2026-06-15 in docs/ROADMAP-PLATFORM.yaml.
+  - >-
+    Rule semantics are grounded in docs/ROADMAP-PLATFORM.yaml: the document-level "Bootstrap clause
+    (COMPLETION exemption)" scope (b) Round-3 M2 note (approx lines 91-101) -- "atomic decomposition
+    children of a parent inherit the parent's bootstrap_completion_exempt value automatically; the
+    bookkeeping rule reads decomposition_hints at plan-filing time" -- and the canonical T1.12 example
+    (approx lines 3294-3300, parent bootstrap_completion_exempt: false so children inherit false).
+  - >-
+    scripts/platform_roadmap.py already carries the schema fields (TierItem.bootstrap_completion_exempt,
+    TierItem.decomposition_hints) from subset (b); no code helper computes inheritance and
+    platform_roadmap.py is out of scope. The rule is therefore pure methodology prose -- hence a
+    content-assertion + live-data test rather than a unit test of a production function. The test's
+    resolve_inherited_exemption helper is an in-test executable model of the documented rule, not new
+    production code.
+  - >-
+    Decisions to cite (decision-scout CITE): Decision 86 (no new standing prose-architecture doc under
+    docs/ -- this plan creates only a tests/ file and edits a skill, compliant); Decision 55 (no
+    workaround; read-only loud-failure posture); Decision 79 / CD.16 / CD.24 (V1 tier justified --
+    .claude/skills/** and tests/** are NOT Lambda-packaged, so no build/deploy/smoke-test step).
+    RELATED: CD.25 (T-1.12 gating CD, state pending; T-1.12 is bootstrap_completion_exempt so it may
+    complete ahead of ratification -- the exact inheritance case the rule teaches); CD.17 (the
+    freeze-override mechanism decomposition_hints operationalizes); Decision 76 (the later T-1.12
+    complete flip uses the sanctioned bookkeeping follow-up-commit path, not a Resolves: trailer --
+    a tier_item is not a rec).
+  - >-
+    CI-RCA HARD BLOCK deferral (logged per planning-skill Related-Work clause): 5 open ci_rca recs
+    (rec-2236, rec-2237, rec-2238, rec-2239, rec-2254) are all terraform/personal sandbox-apply +
+    Neon-registry-flake failures, being resolved by a separate concurrent agent per explicit human
+    direction (2026-06-18). This plan touches only .claude/skills/implement/SKILL.md plus a new tests/
+    file -- zero overlap with the terraform apply path (no same-file, same-Decision, or
+    same-failure-category relation to any of the 5 recs). Deferral authorized by the human.
+  - >-
+    Self-application: PLAN-implement-skill-decomposition-hints is itself an atomic child named in
+    T-1.12's decomposition_hints.atomic_plans. The implement bookkeeping walk that runs this plan will
+    resolve its exemption as inherited true from parent T-1.12 and, subset (g) being T-1.12's last open
+    exit criterion, stage T-1.12 -> status: complete in its own follow-up commit. That roadmap flip is
+    bookkeeping, NOT this plan's in-scope implementation work.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness.commits_behind == 0); no
+    Scope/main overlap. Closure Obligation is exempt: this plan is additive (adds a rule + test), it
+    resolves no recs and retires no surface (no Delete row, no X->Y cutover).
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/practical-planck-e99ivn)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "docs/DECISIONS.md context absorbed via the decision-scout gate (CITE: Decision 86, 55, 79; RELATED: CD.25, CD.17, 76)"
+  - "Both scope files located: .claude/skills/implement/SKILL.md exists; tests/test_implement_skill_decomposition_hints.py is new"
+  - "Confirmed scripts/platform_roadmap.py schema fields (bootstrap_completion_exempt, decomposition_hints) already landed in subset (b) -- no schema work needed and platform_roadmap.py stays untouched"
+  - "Acceptance criteria understood and verifiable"
+execution_steps:
+  - >-
+    Modify .claude/skills/implement/SKILL.md. Insert the following subsection verbatim into the
+    "## Tier_item bookkeeping (post-verification, pre-merge)" section, immediately AFTER the
+    "### Outcome rules" block (after its "Zero criteria pass -> no YAML change." line) and BEFORE
+    "### Replacement closure check (cutover / supersession items)". Use ASCII hyphens only, no em
+    dashes, no emojis. Exact text to insert:
+  - |
+    ### Decomposition-hint exemption inheritance (T-1.12 subset g)
+
+    A STRATEGIC parent tier_item that was split into atomic IMPLEMENTATION plans under the freeze
+    override (AGENTS.md Temporary Operational Constraints / CD.17; the T2.19 pattern) carries a
+    `decomposition_hints` block naming its children:
+    ```yaml
+    decomposition_hints:
+      split_by: <subsystem|per_lambda|phase|...>
+      atomic_plans:
+        - "PLAN-<child-slug> -- <description> (subset <x>)"
+      rationale: |
+        ...
+    ```
+    When the bookkeeping walk files a status outcome for the current plan, resolve the plan's
+    effective `bootstrap_completion_exempt` by INHERITANCE from its parent -- do NOT read it from
+    the child's own (often absent) flag:
+
+    1. **Find the parent.** Scan `docs/ROADMAP-PLATFORM.yaml` `tier_items[]` for an item whose
+       `decomposition_hints.atomic_plans[]` names the current plan. Match on the `PLAN-{slug}` token
+       at the head of each entry (`entry.strip().split()[0] == "PLAN-{slug}"`). Some parents enumerate
+       their children as prose descriptions rather than `PLAN-{slug}` tokens (e.g. T1.12's
+       "Ratify lambda-*.yaml" entries, T1.6's phase descriptions); when no head-token match exists,
+       map the current plan to its parent via the plan's Phase field / the decomposition rationale.
+    2. **Inherit the flag.** The child's effective exemption is the PARENT's live
+       `bootstrap_completion_exempt` value. The per-item flag is the single source of truth -- the
+       document-level "Bootstrap clause (COMPLETION exemption)" prose enumeration is documentation
+       only. A child of an exempt parent (`true`) MAY stage `status: complete` on its slice even while
+       the parent's gating CD is still `state: pending`; a child of a non-exempt parent (`false`)
+       follows the normal flow and stays gated on CD ratification. Canonical examples: T-1.12 is
+       `bootstrap_completion_exempt: true`, so its subset children inherit `true` (they may complete
+       ahead of CD.25); T1.12 is `false`, so its per-Lambda children inherit `false` and ratify
+       post-CD.16 under the normal flow.
+    3. **Read-only resolution.** Inheritance never writes the parent's `decomposition_hints` or the
+       child's flag during bookkeeping -- it is read-only resolution at filing time. Record the
+       inheritance in the bookkeeping output (e.g. "PLAN-<child-slug> inherits
+       bootstrap_completion_exempt=true from parent T-1.12"). This is not a license to author STRATEGIC
+       children: the freeze stays in force and atomic children remain IMPLEMENTATION plans.
+
+    **Self-application invariant (T-1.12 subset g):** `PLAN-implement-skill-decomposition-hints` is
+    itself an atomic child named in T-1.12's `decomposition_hints.atomic_plans`. The first `/implement`
+    run using this rule SHOULD therefore resolve this plan's exemption as inherited `true` from parent
+    T-1.12 and, subset (g) being T-1.12's last open exit criterion, stage `T-1.12 -> status: complete`
+    in the same bookkeeping pass. If the rule works, T-1.12 self-flips; if it does not, T-1.12 stays
+    `in_progress` and the discrepancy is observable (mirrors the T-1.10 self-application invariant below).
+  - >-
+    Create tests/test_implement_skill_decomposition_hints.py with type hints and ruff formatting
+    (line length 127). Module-level objects: (a) SKILL_PATH = repo-root /
+    ".claude/skills/implement/SKILL.md"; ROADMAP_PATH = repo-root / "docs/ROADMAP-PLATFORM.yaml".
+    (b) _bookkeeping_section(text) -> str: returns the slice from "## Tier_item bookkeeping" up to the
+    next top-level "\n## " header. (c) assert_inheritance_documented(text) -> None: raises AssertionError
+    unless the bookkeeping section contains the header "### Decomposition-hint exemption inheritance" AND
+    all required tokens within that section: "decomposition_hints", "atomic_plans",
+    "bootstrap_completion_exempt", "read-only", "inherit" (case-insensitive), "T-1.12", and "T1.12".
+    (d) resolve_inherited_exemption(roadmap_doc, plan_slug) -> bool | None: an in-test model of the rule
+    -- iterate roadmap_doc.tier_items; for any item with decomposition_hints containing atomic_plans,
+    if any entry's head token (entry.strip().split()[0]) equals f"PLAN-{plan_slug}", return that item's
+    bootstrap_completion_exempt; return None if no parent matches.
+  - >-
+    Add these tests to the file: test_inheritance_clause_present_in_live_skill (assert_inheritance_documented
+    on SKILL_PATH.read_text passes); test_clause_co_located_in_bookkeeping_section (the header appears inside
+    _bookkeeping_section(text), not merely anywhere in the file); test_assertion_helper_has_teeth (strip the
+    subsection from header to the next "###"/"## " boundary via regex, then assert_inheritance_documented on
+    the mutated text raises AssertionError -- proves non-vacuity); test_behavioural_invariants_block_still_parses
+    (scripts.prompt_compliance.parse_invariants(SKILL_PATH) returns a dict whose keys include preflight_run,
+    never_on_main, review_as_scope, auto_review_and_commit); test_resolution_exempt_parent (synthetic
+    RoadmapDocument via scripts.platform_roadmap with a parent bootstrap_completion_exempt=true naming
+    "PLAN-child-x" -> resolve returns True); test_resolution_non_exempt_parent (parent false -> returns False);
+    test_resolution_no_parent_returns_none (unrelated slug -> None); test_live_roadmap_this_plan_inherits_from_t_1_12
+    (load ROADMAP_PATH via scripts.platform_roadmap.load; resolve_inherited_exemption(doc,
+    "implement-skill-decomposition-hints") is True AND the matched parent id == "T-1.12"). Reuse the synthetic
+    roadmap-doc construction pattern from tests/test_platform_roadmap.py (_BASE_DOC / _item / _doc helpers) if
+    convenient, or build a minimal valid doc inline.
+  - >-
+    Execute the Verification Plan -- run each step; loop until every step passes; on an unrecoverable
+    failure stop and run RCA (Decision 55), do not inline-patch around a structural failure.
+  - "Report: what was implemented (the SKILL.md subsection + the test file), and the VP compliance table with actual outputs."
+work_areas: []
+rollback: >-
+  Revert the "### Decomposition-hint exemption inheritance" subsection in
+  .claude/skills/implement/SKILL.md and delete tests/test_implement_skill_decomposition_hints.py.
+  No data, infrastructure, or roadmap state is mutated by this plan (V1), so rollback is a pure
+  source revert.

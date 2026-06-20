@@ -1,12 +1,14 @@
 # complexity-waiver: decision-43
 """Provider-agnostic LLM client -- primary inference interface.
 
-Routes to the Bedrock transport (``_bedrock_call``) or Gemini CLI transport
-(``_gemini_call``) based on the ``LLM_PROVIDER`` environment variable.
+Routes to the Gemini CLI transport (``_gemini_call``).  The Bedrock
+transport was retired per CD.28 (Bedrock left the architecture as an LLM
+substrate); the LiteLLM tier model (Tier 1 DeepSeek-direct, Tier 2
+Anthropic-direct) lands with T4.2's transport rewrite.
 
-Defaults to ``"gemini"`` (via ``model_registry.resolve_provider()``) when no
-env var is set.  Lambda handlers do not use this path -- they route by the
-``provider`` field in ``schedule.yaml``.
+The active provider resolves via ``model_registry.resolve_provider()``
+(``LLM_PROVIDER`` env var, default ``"gemini"``).  Lambda handlers do not
+use this path -- they route by the ``provider`` field in ``schedule.yaml``.
 
 Usage
 -----
@@ -32,36 +34,6 @@ from scripts.llm_utils import LLMResponseError
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).parent.parent
-
-# ---------------------------------------------------------------------------
-# Model name mapping: shortnames -> Bedrock model IDs
-# ---------------------------------------------------------------------------
-
-_MODEL_MAP: dict[str, str] = {
-    "deepseek": "deepseek.v3.2",
-    "claude-sonnet-4.6": "anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-haiku-4.5": "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-opus-4.6": "anthropic.claude-opus-4-20250514-v1:0",
-    # Gemini shortnames (no mapping needed -- passed directly to CLI)
-    "gemini-3-pro-preview": "gemini-3-pro-preview",
-    "gemini-3-flash-preview": "gemini-3-flash-preview",
-}
-
-# ---------------------------------------------------------------------------
-# Bedrock per-token pricing (USD per 1M tokens): (input, output)
-# ---------------------------------------------------------------------------
-
-_PRICING: dict[str, tuple[float, float]] = {
-    "deepseek.v3.2": (0.90, 2.61),
-    "anthropic.claude-sonnet-4-20250514-v1:0": (3.00, 15.00),
-    "anthropic.claude-3-5-haiku-20241022-v1:0": (0.80, 4.00),
-    "anthropic.claude-opus-4-20250514-v1:0": (15.00, 75.00),
-    "gemini-3-flash-preview": (0.50, 3.00),
-}
-
-_DEFAULT_REGION = "eu-west-2"
-
 
 def _resolve_provider() -> str:
     """Return the active inference provider.
@@ -74,21 +46,6 @@ def _resolve_provider() -> str:
     from scripts.model_registry import resolve_provider
 
     return resolve_provider()
-
-
-def _resolve_model_id(model: str | None) -> str:
-    """Map a shortname or env-var model to a Bedrock model ID."""
-    if not model:
-        model = os.getenv("COPILOT_MODEL_EXECUTION", "deepseek.v3.2")
-    return _MODEL_MAP.get(model, model)
-
-
-def _compute_cost(model_id: str | None, tokens_in: int, tokens_out: int) -> float:
-    """Compute USD cost from token counts."""
-    if not model_id:
-        return 0.0
-    in_price, out_price = _PRICING.get(model_id, (0.0, 0.0))
-    return (tokens_in * in_price / 1_000_000) + (tokens_out * out_price / 1_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -127,41 +84,49 @@ def llm_call(
     resume_session_id: str | None = None,
     inline_instruction: str | None = None,
     check: bool = True,
-    profile_name: str | None = None,
     system_prompt: str | None = None,
 ) -> LLMResult:
     """Execute an LLM inference call via the configured provider.
 
-    Routes to ``_gemini_call()`` when ``LLM_PROVIDER=gemini`` is set, or
-    ``_bedrock_call()`` otherwise (default).
+    Routes to ``_gemini_call()``. Bedrock was retired per CD.28; a
+    non-gemini provider raises ``LLMResponseError`` until T4.2's LiteLLM
+    transport lands.
 
     Args:
         prompt: The prompt or context text.
         model: Model shortname or provider-specific ID (default from env).
         tools: If True, use agentic tool loop; if False, single-turn.
-        excluded_tools: Tool names to exclude from the agentic loop (Bedrock only).
+        excluded_tools: Accepted for caller compatibility; consumed only by
+            the retired Bedrock transport, ignored on gemini. Removed at
+            T4.2's LiteLLM rewrite.
         timeout: Read timeout in seconds.
         purpose: Telemetry label for this call.
         context_file_path: Path to a file whose content is prepended to prompt.
         inline_instruction: Short instruction prepended before the context.
         check: If True, raise ``LLMResponseError`` on empty content.
-        profile_name: AWS profile for Bedrock local CLI use.
-        system_prompt: Optional system prompt (Bedrock only).
+        system_prompt: Accepted for caller compatibility; consumed only by
+            the retired Bedrock transport, ignored on gemini. Removed at
+            T4.2's LiteLLM rewrite.
         resume_session_id: Gemini CLI session UUID to resume. When set, ``--resume``
             is appended to the CLI command so the GEMINI.md context is reused from
             the server-side token cache rather than cold-started on each call.
-            Ignored for Bedrock provider.
 
     Returns:
         LLMResult with inference output and metadata.
 
     Raises:
-        LLMResponseError: On empty response (when check=True) or API error.
+        LLMResponseError: On empty response (when check=True), API error, or
+            a provider other than ``gemini``.
     """
+    del excluded_tools, system_prompt  # compatibility-only (see docstring)
     provider = _resolve_provider()
     session_id = str(uuid.uuid4())
 
-    # Build the full prompt (both providers receive the same assembled prompt)
+    if provider != "gemini":
+        raise LLMResponseError(
+            f"provider {provider!r} retired per CD.28 -- gemini is the only llm_call transport until T4.2's LiteLLM lands"
+        )
+
     full_prompt = prompt
     if context_file_path:
         ctx_path = Path(context_file_path)
@@ -169,136 +134,24 @@ def llm_call(
             ctx_content = ctx_path.read_text(encoding="utf-8", errors="replace")
             full_prompt = ctx_content + "\n\n" + prompt
 
-    if provider == "gemini":
-        # For Gemini CLI: strip @path references from inline_instruction
-        # (Gemini doesn't expand @ in stdin mode — it's literal noise tokens)
-        _gemini_instruction = inline_instruction
-        if _gemini_instruction:
-            import re as _re
+    # For Gemini CLI: strip @path references from inline_instruction
+    # (Gemini doesn't expand @ in stdin mode — it's literal noise tokens)
+    _gemini_instruction = inline_instruction
+    if _gemini_instruction:
+        import re as _re
 
-            _gemini_instruction = _re.sub(r"\s*@\S+", "", _gemini_instruction).strip()
-        if _gemini_instruction:
-            full_prompt = _gemini_instruction + "\n\n" + full_prompt
-        return _gemini_call(
-            prompt=full_prompt,
-            model=model,
-            tools=tools,
-            timeout=timeout,
-            purpose=purpose,
-            session_id=session_id,
-            check=check,
-            resume_session_id=resume_session_id,
-        )
-
-    if inline_instruction:
-        full_prompt = inline_instruction + "\n\n" + full_prompt
-    else:
-        return _bedrock_call(
-            prompt=full_prompt,
-            model=model,
-            tools=tools,
-            excluded_tools=excluded_tools,
-            timeout=timeout,
-            purpose=purpose,
-            session_id=session_id,
-            check=check,
-            profile_name=profile_name,
-            system_prompt=system_prompt,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Bedrock transport
-# ---------------------------------------------------------------------------
-
-
-def _bedrock_call(
-    prompt: str,
-    model: str | None,
-    tools: bool,
-    excluded_tools: list[str] | None,
-    timeout: int,
-    purpose: str,
-    session_id: str,
-    check: bool,
-    profile_name: str | None,
-    system_prompt: str | None,
-) -> LLMResult:
-    """Execute a single LLM call via AWS Bedrock Converse API."""
-    from scripts.bedrock_client import converse, converse_with_tools
-
-    model_id = _resolve_model_id(model)
-    credentials = _get_bedrock_credentials()
-    profile = profile_name or os.getenv("AWS_PROFILE_BEDROCK")
-
-    if tools:
-        from scripts.tool_runtime import ToolRuntime
-
-        runtime = ToolRuntime(working_dir=_REPO_ROOT)
-        all_schemas = runtime.tool_schemas()
-
-        if excluded_tools:
-            excluded_set = set(excluded_tools)
-            all_schemas = [s for s in all_schemas if s.get("toolSpec", {}).get("name") not in excluded_set]
-
-        response = converse_with_tools(
-            prompt=prompt,
-            model_id=model_id,
-            tools=all_schemas,
-            tool_runtime=runtime,
-            system_prompt=system_prompt,
-            region=_DEFAULT_REGION,
-            max_tokens=4096,
-            max_turns=50,
-            profile_name=profile,
-            credentials=credentials,
-            read_timeout=timeout,
-        )
-    else:
-        response = converse(
-            prompt=prompt,
-            model_id=model_id,
-            region=_DEFAULT_REGION,
-            max_tokens=4096,
-            read_timeout=timeout,
-            system_prompt=system_prompt,
-            profile_name=profile,
-            credentials=credentials,
-        )
-
-    content = response.get("content", "")
-    tokens_in = response.get("input_tokens", 0)
-    tokens_out = response.get("output_tokens", 0)
-    has_error = response.get("error", False)
-    error_msg = response.get("message", "")
-
-    if has_error:
-        if check:
-            raise LLMResponseError(f"LLM call failed: {error_msg}")
-        return LLMResult(
-            content=error_msg,
-            exit_code=1,
-            session_id=session_id,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=_compute_cost(model_id, tokens_in, tokens_out),
-            model=model_id,
-        )
-
-    if check and not content.strip():
-        raise LLMResponseError("LLM returned empty content")
-
-    cost = _compute_cost(model_id, tokens_in, tokens_out)
-    _emit_telemetry("bedrock", model_id, purpose, tokens_in, tokens_out, cost)
-
-    return LLMResult(
-        content=content,
-        exit_code=0,
+        _gemini_instruction = _re.sub(r"\s*@\S+", "", _gemini_instruction).strip()
+    if _gemini_instruction:
+        full_prompt = _gemini_instruction + "\n\n" + full_prompt
+    return _gemini_call(
+        prompt=full_prompt,
+        model=model,
+        tools=tools,
+        timeout=timeout,
+        purpose=purpose,
         session_id=session_id,
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-        cost_usd=cost,
-        model=model_id,
+        check=check,
+        resume_session_id=resume_session_id,
     )
 
 
@@ -545,15 +398,6 @@ def _gemini_call(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _get_bedrock_credentials() -> dict[str, str] | None:
-    """Read Bedrock credentials from env or return None for default chain."""
-    key_id = os.getenv("BEDROCK_AWS_ACCESS_KEY_ID", "")
-    secret = os.getenv("BEDROCK_AWS_SECRET_ACCESS_KEY", "")
-    if key_id and secret:
-        return {"aws_access_key_id": key_id, "aws_secret_access_key": secret}
-    return None
 
 
 def _emit_telemetry(

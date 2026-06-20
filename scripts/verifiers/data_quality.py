@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scripts.aws_profile import resolve_aws_profile
 
-from .harness import Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
+from .harness import Hermeticity, Verifier, VerifierResult, VerifierSeverity, VerifierStatus, VerifierTier
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 _DQ_DIR = _ROOT / "config" / "agent" / "data_quality"
@@ -24,6 +24,7 @@ class DataQualityVerifier(Verifier):
         "scripts/ops_data_portal.py",
         "src/data/**",
     ]
+    hermeticity: Hermeticity = Hermeticity.NON_HERMETIC_BY_CONSTRUCTION  # network + live-state DQ run
 
     @property
     def tier(self) -> VerifierTier:
@@ -34,6 +35,7 @@ class DataQualityVerifier(Verifier):
             import boto3
 
             from scripts.data_quality_runner import (
+                apply_backend_routing,
                 build_tombstone_checks,
                 load_checks,
                 load_tombstones,
@@ -76,6 +78,10 @@ class DataQualityVerifier(Verifier):
 
         all_checks.extend(build_tombstone_checks(load_tombstones(), database=database))
 
+        # Route migrated recs checks to the DuckLake reader (Decision 81 cl.7). Without this the recs
+        # checks query the dropped ops_recommendations_current Athena view and error TABLE_NOT_FOUND.
+        all_checks = apply_backend_routing(all_checks, database)
+
         result = run_checks(all_checks, workgroup, database, profile_name=profile)
 
         if result.verdict == "SKIP":
@@ -101,9 +107,31 @@ class DataQualityVerifier(Verifier):
                 message=f"Data quality passed: {result.passed} passed, {result.warned} warned.",
             )
 
+        if result.verdict == "DEGRADED":
+            unavail = [r for r in result.results if r.verdict == "UNAVAILABLE"]
+            names = [
+                f"{r.check.table}{('.' + r.check.column) if r.check.column else ''} [{r.check.test_type}]"
+                for r in unavail[:10]
+            ]
+            return VerifierResult(
+                name=self.name,
+                status=VerifierStatus.SKIPPED,
+                message=(
+                    f"DQ degraded -- backend unavailable, gate not run. "
+                    f"Unavailable checks ({len(unavail)}): {', '.join(names)}"
+                ),
+            )
+
+        _FAIL_VERDICTS = {"FAIL", "UNENFORCED_FAIL", "ERROR", "HARD_GATE"}
+        failing = [r for r in result.results if r.verdict in _FAIL_VERDICTS]
+        lines = []
+        for r in failing[:10]:
+            col_part = f".{r.check.column}" if r.check.column else ""
+            lines.append(f"  {r.check.table}{col_part} [{r.check.test_type}] {r.verdict} ({r.violation_count} violation(s))")
+        breakdown = "\n".join(lines)
         msg = (
             f"Data quality {result.verdict}: {result.hard_gated} hard-gated, {result.failed} failed, "
-            f"{result.errored} errored, {result.warned} warned. Run validate.py --scope dq for details."
+            f"{result.errored} errored, {result.warned} warned.\n{breakdown}"
         )
         return VerifierResult(
             name=self.name,

@@ -1,0 +1,218 @@
+schema_version: 1
+slug: "ci-apply-ducklake-write-grants"
+intent: >-
+  Unblock the sandbox Terraform CD pipeline (CD.35 / T2.20 Wave 1) by granting the github_ci_apply role the
+  EventBridge / CloudWatch-alarm / Lambda-permission WRITE actions its apply requires, then clear the red
+  convergence record to green. A converging, self-observing infra pipeline is load-bearing platform automation
+  for the self-improving system: it lets infrastructure changes land autonomously behind a fail-closed guard
+  instead of stalling on grant-by-grant manual rounds.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-apply-ducklake-write-grants.yaml
+phase: >-
+  Platform tier T2.20 (Terraform CI/CD convergence, CD.35 Wave 1); product Phase 1 (Core Infrastructure, complete)
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add EventBridge-write, CloudWatch-alarm-write, and Lambda-permission-write grants to the github_ci_apply
+      inline policy, scoped to the existing ducklake rule / alarm / function ARNs (NOT service wildcards).
+      Resolves rec-2251 and ends the iterative read-grant rounds by granting the coherent write set the
+      affected resource family needs at apply time.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Append a note under "Out-of-band IAM grants" documenting this write-grant round (mirrors the rec-2223
+      read-grant round note): which actions were added, why (apply-phase MODIFY/CREATE on existing
+      catalog-dr/maintenance resources), and that it was admin-applied out-of-band behind the guard.
+bundled_recommendations: ["rec-2251"]
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf modifies the github_ci_apply IAM role policy -- an IAM-sensitive change.
+    scripts/terraform_apply_guard.py fail-closes it off the sandbox CD auto-apply path (Decision 77), so the
+    apply is human-gated: run terraform plan, present it, human/admin accepts, apply via
+    agent_platform_admin / platform_breakglass out-of-band (Decision 35). IAM apply must precede any
+    dependent resource apply.
+  - >-
+    The live convergence record (s3://agent-platform-data-lake/convergence/personal/sandbox.json) is red at
+    commit 8bfc9578 (run 27588481403). Per CD.35 / T2.20 it clears ONLY via a workflow_dispatch
+    acknowledge-and-retry run on .github/workflows/terraform-apply-sandbox.yml with
+    acknowledge_red_commit=8bfc9578; a successful apply from that path writes status=green. Dispatch via the
+    GitHub MCP actions trigger AFTER this rec review (Decision 55/72) -- a plain push never clears red.
+acceptance_criteria:
+  - >-
+    github_ci_apply inline policy in terraform/personal/oidc.tf grants events:PutRule, events:PutTargets,
+    events:TagResource (plus DeleteRule/RemoveTargets/UntagResource/EnableRule/DisableRule) scoped to the five
+    ducklake EventBridge rule ARNs
+  - >-
+    github_ci_apply grants cloudwatch:PutMetricAlarm and cloudwatch:DeleteAlarms (plus TagResource/UntagResource)
+    scoped to the three ducklake CloudWatch alarm ARNs (catalog-dr-freshness, maintenance-circuit-breaker,
+    writer-errors)
+  - >-
+    github_ci_apply grants lambda:AddPermission / lambda:RemovePermission scoped to the four ducklake Lambda
+    function ARNs
+  - >-
+    terraform plan on terraform/personal completes with zero AccessDenied errors and shows the github_ci_apply
+    policy change plus the in-flight catalog-dr/maintenance-merge-ops resource reconciliations
+  - >-
+    terraform_apply_guard.py classifies the oidc.tf change as IAM-sensitive (exit 2 BLOCKED), confirming the
+    apply routes to the human-gated admin path, not auto-apply
+  - >-
+    After the admin apply and the workflow_dispatch acknowledge-and-retry (acknowledge_red_commit=8bfc9578),
+    the convergence record reports status=green
+  - "rec-2251 is closed (Resolves: trailer on the implementation merge, or portal fallback)"
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the new EventBridge / CloudWatch / Lambda-permission write actions are present in github_ci_apply
+    command: "grep -E 'events:PutRule|events:PutTargets|events:TagResource|cloudwatch:PutMetricAlarm|cloudwatch:DeleteAlarms|lambda:AddPermission' terraform/personal/oidc.tf"
+    expected: "All six representative write actions match inside the github_ci_apply inline policy block"
+    fix_if: "If any action is missing, add it (scoped to the ducklake ARNs) to the appropriate new Sid"
+  - step: 2
+    phase: pre-deploy
+    action: Validate Terraform formatting and syntax for the personal module
+    command: "terraform -chdir=terraform/personal fmt -check && terraform -chdir=terraform/personal init -backend=false >/dev/null && terraform -chdir=terraform/personal validate"
+    expected: "fmt reports no diffs; validate reports the configuration is valid"
+    fix_if: "Run terraform fmt to fix formatting; fix any validate errors (mismatched braces, malformed ARNs, bad JSON in jsonencode)"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run terraform plan (authoritative enumeration). Materialise terraform.personal.tfvars first from the
+      agent-platform-terraform-personal-tfvars Secrets Manager secret OR recover the four no-default vars from
+      remote state per terraform/CLAUDE.md. Confirm zero AccessDenied and the expected diff.
+    command: "terraform -chdir=terraform/personal init -backend-config=backend-sandbox.hcl >/dev/null && terraform -chdir=terraform/personal plan -out=/tmp/plan.bin -var-file=terraform.personal.tfvars 2>&1 | tee /tmp/tfplan.txt; grep -c AccessDenied /tmp/tfplan.txt"
+    expected: >-
+      grep -c AccessDenied returns 0; the plan shows the aws_iam_role_policy.github_ci_apply update and the
+      in-flight catalog-dr/maintenance-merge-ops changes (events PutRule/PutTargets/TagResource,
+      cloudwatch PutMetricAlarm, lambda AddPermission). If the diff needs any write action not yet granted
+      (e.g. lambda:UpdateFunctionConfiguration), add it scoped in the SAME edit and re-plan -- do not defer.
+    fix_if: >-
+      Any AccessDenied at plan time means a refresh-read grant regressed -- restore it. Any post-apply action
+      the diff requires that is absent from the policy is a missed grant -- add it scoped and re-plan; do not
+      open a new round.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the apply guard classifies the change as IAM-sensitive (fail-closed -> human/admin apply path)
+    command: "terraform -chdir=terraform/personal show -json /tmp/plan.bin > /tmp/plan.json && bin/venv-python -m scripts.terraform_apply_guard /tmp/plan.json; echo exit=$?"
+    expected: "Prints 'BLOCKED -- this plan requires a manual admin apply' naming aws_iam_role_policy.github_ci_apply; exit=2"
+    fix_if: "If exit=0 (OK), the IAM change was not detected -- confirm the plan includes the github_ci_apply policy update; never auto-apply this change regardless of guard output"
+  - step: 5
+    phase: post-deploy
+    action: >-
+      After the human-gated admin apply (agent_platform_admin) and the workflow_dispatch acknowledge-and-retry
+      run, confirm the durable convergence record is green
+    command: "aws s3api get-object --bucket agent-platform-data-lake --key convergence/personal/sandbox.json /tmp/conv.json --profile agent_platform && jq -e '.status == \"green\"' /tmp/conv.json"
+    expected: "jq exits 0 -- the convergence record reports status=green, clearing the red latch"
+    fix_if: >-
+      If still red, inspect the dispatch run logs; if a further AccessDenied surfaced, add that scoped grant,
+      re-apply via admin, and re-dispatch acknowledge_red_commit with the new red commit SHA
+  - step: 6
+    phase: post-deploy
+    action: Confirm rec-2251 is closed in the warehouse after the resolving merge
+    command: "bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1; grep '\"id\": \"rec-2251\"' logs/.recommendations-log.jsonl | grep -q '\"status\": \"closed\"' && echo CLOSED"
+    expected: "Prints CLOSED -- rec-2251 auto-closed by the Resolves: trailer rec-autoclose workflow"
+    fix_if: "If not closed, close via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2251 --status closed --resolution 'Write grants applied; convergence green'"
+constraints:
+  - >-
+    IAM-sensitive: terraform_apply_guard.py fail-closes the oidc.tf change off sandbox CD auto-apply; the apply
+    is human-gated and admin-applied out-of-band (Decision 77, Decision 35). Never bypass the guard.
+  - >-
+    Grants are ENUMERATED least-privilege scoped to the existing ducklake rule / alarm / function ARNs -- never
+    events:* / cloudwatch:* / lambda:* and never Resource '*' except where an action genuinely has no
+    resource-level scoping (document any such case inline, matching the SSMDescribeParameters / CloudWatchAlarmsRead
+    convention already in the file).
+  - >-
+    Clear the red convergence record ONLY via the workflow_dispatch acknowledge-and-retry path
+    (acknowledge_red_commit=8bfc9578) AFTER this rec review -- no auto-remediation, no rescue loop
+    (Decision 55, Decision 72). A plain push never clears red.
+  - >-
+    Recommendation closures transit scripts.ops_data_portal only -- never edit logs/.recommendations-log.jsonl
+    directly (Decision 84, Single Portal Invariant).
+  - No emojis; ASCII hyphens only; line length 127.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness: ok, 0 behind / 0 ahead);
+    no Scope-file overlap with main divergence.
+  - >-
+    Governing record: CD.35 / T2.20 Wave 1 (docs/ROADMAP-PLATFORM.yaml). Completing this plan demonstrates T2.20
+    exit criteria (a) red-record refusal and (d) dispatch-ack green unlatch live, via a real (not forced) cycle.
+    T2.20 status stays not_started in the roadmap; this plan alone does NOT complete T2.20 (forced-failure
+    synthetic rec, serialization proof, and post-merge wake remain) -- adjudicate T2.20 completion in a follow-up
+    once green. T1.6 is separate (re-planned in #167, PLAN-dq-gate-to-monitor-roadmap.yaml) and out of scope.
+  - >-
+    Live convergence record at planning time: status=red, commit_sha=8bfc9578, run_id=27588481403,
+    timestamp 2026-06-16T01:47:24Z.
+  - >-
+    Sibling ci_rca recs closed during this /plan session after live verification: rec-2241, rec-2242, rec-2244
+    (resolved); rec-2243, rec-2240 (superseded). Only rec-2251 remained live, which this plan fixes.
+  - >-
+    Root cause: github_ci_apply had READ-only on EventBridge (EventBridgeRead) and CloudWatch alarms
+    (CloudWatchAlarmsRead) so terraform plan succeeds, but the in-flight #166 (neon-egress-reduction) changes
+    MODIFY existing resources (catalog-dr rule daily->weekly at ducklake_catalog_dr.tf:246; freshness alarm
+    25/25->192/192 at :284) and CREATE a new rule (maintenance-merge-ops at ducklake_maintenance.tf:302), all
+    of which need WRITE actions at apply time.
+  - >-
+    Iterative-discovery anti-pattern (terraform/CLAUDE.md 'Out-of-band IAM grants'): prior rounds #158-162 added
+    read grants one AccessDenied at a time. This plan deliberately grants the coherent write set for the
+    resource family to end the rounds; step-3 terraform plan is the authoritative enumeration and any straggler
+    is added in the SAME round.
+  - >-
+    Decision 79: oidc.tf and CI/CD pipeline files are build-tooling, NOT executor machinery (Decision 44
+    boundary untouched) -- this is a normal /plan -> /implement change.
+  - >-
+    EventBridge rule ARNs to scope (reuse EventBridgeRead literal list): catalog-dr, maintenance-merge,
+    maintenance-gc, maintenance-hot-merge, maintenance-merge-ops. Lambda function ARNs (reuse LambdaRead list):
+    catalog-dr, writer, reader, maintenance.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/... harness branch)
+  - docs/PROJECT_CONTEXT.md read
+  - terraform/CLAUDE.md read (apply posture, guard, out-of-band grant convention)
+  - "Decisions to cite read: CD.35/T2.20, Decision 77, 35, 55, 72, 84"
+  - All files in scope located and readable (terraform/personal/oidc.tf, terraform/CLAUDE.md)
+  - Live convergence record fetched and red commit (8bfc9578) recorded for the dispatch-ack input
+  - agent_platform / agent_platform_admin assume-role chain verified (aws sts get-caller-identity)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Read terraform/personal/oidc.tf in full; locate EventBridgeRead (around line 661), CloudWatchAlarmsRead
+    (around line 705), and the literal ducklake ARN lists used by LambdaRead / EventBridgeRead in the
+    github_ci_apply inline policy.
+  - >-
+    Add three new Sids to the github_ci_apply inline policy: (a) EventBridgeWrite -- events:PutRule,
+    events:DeleteRule, events:PutTargets, events:RemoveTargets, events:TagResource, events:UntagResource,
+    events:EnableRule, events:DisableRule, scoped to the five ducklake rule ARNs (reuse the EventBridgeRead
+    literal-ARN list); (b) CloudWatchAlarmsWrite -- cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms,
+    cloudwatch:TagResource, cloudwatch:UntagResource, scoped to the three ducklake alarm ARNs
+    (ducklake-catalog-dr-freshness, ducklake-maintenance-circuit-breaker, ducklake-writer-errors);
+    (c) LambdaPermissionWrite -- lambda:AddPermission, lambda:RemovePermission, scoped to the four ducklake
+    function ARNs (reuse the LambdaRead literal-ARN list). Add a one-line comment on each Sid explaining the
+    apply-time MODIFY/CREATE need, matching the file's commenting convention.
+  - Run terraform fmt and validate (VP step 2).
+  - >-
+    Run terraform plan (VP step 3) -- the authoritative enumeration. If the diff needs any write action not yet
+    granted (e.g. lambda:UpdateFunctionConfiguration, events:PutPermission), add it scoped in the SAME edit and
+    re-plan until the plan is clean (0 AccessDenied) and complete. Present the plan output.
+  - Run the apply guard against the plan JSON (VP step 4) and confirm IAM fail-closed (exit 2) -> human-gated admin path.
+  - >-
+    Append the write-grant round note to terraform/CLAUDE.md under 'Out-of-band IAM grants' (mirroring the
+    rec-2223 read-grant note): actions added, scope, rationale (apply-phase MODIFY/CREATE), admin-applied out-of-band.
+  - >-
+    Present the terraform plan to the human for acceptance (the Decision 77/35 human gate). On acceptance, apply
+    via agent_platform_admin / platform_breakglass.
+  - >-
+    After the live role has the grants, dispatch the workflow_dispatch acknowledge-and-retry run on
+    terraform-apply-sandbox.yml via the GitHub MCP actions trigger with acknowledge_red_commit=8bfc9578 (this
+    rec review satisfies Decision 55/72). Watch the run event-driven (subscribe_pr_activity / actions); do NOT
+    sleep or poll.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
+    (Decision 55). Confirm the convergence record is green (VP step 5).
+  - "Confirm rec-2251 closed (VP step 6); the implementation squash-merge body carries the Resolves: rec-2251 trailer."
+  - "Report: what was implemented, the terraform plan diff, apply outcome, convergence record final status, rec-2251 closure."
+work_areas: []
+rollback: >-
+  The oidc.tf grant is additive (new Sids); reverting the commit and re-applying via agent_platform_admin
+  removes the write grants and returns github_ci_apply to read-only on EventBridge/CloudWatch (the apply would
+  then fail-closed again at apply time, but no resource is destroyed). The convergence record is overwrite-only;
+  a red record is safe (it blocks applies, fails closed). No data-plane rollback needed.

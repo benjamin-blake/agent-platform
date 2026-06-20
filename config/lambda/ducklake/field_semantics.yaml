@@ -9,7 +9,8 @@
 #
 # Smoke tables: ducklake_smoke_history (append source-of-truth) +
 #               ducklake_smoke_current (Type-1 write-through projection).
-# META_SCHEMA: ducklake_ops
+# META_SCHEMA: ducklake_smoke  (relocated off the production `ducklake_ops` catalog -- rec-2099 fix;
+#              smoke can never again pin a DATA_PATH on the production meta-schema)
 # DATA_PATH:   s3://agent-platform-data-lake/ducklake-neon-smoke/
 #
 # Field roles:
@@ -141,3 +142,157 @@ connection_settings:
   autoinstall_known_extensions: false  # Lambda baked-extension posture
   autoload_known_extensions: false     # Lambda baked-extension posture
   custom_extension_repository: ""      # fail-closed: no network INSTALL at runtime
+
+# ===========================================================================
+# Production ops_* SCD2 schemas (T2.19 / Decision 81 / CD.33).
+# ===========================================================================
+# Per-table contract for the FIVE governance tables. The same schema_gate +
+# DDL + MERGE generator that the smoke `fields` map drives is now driven
+# per-table by these entries (src/common/ducklake_runtime.resolve_table_spec).
+#
+# Every table reproduces the SCD2 envelope:
+#   - ulid                   derived  history logical PK + idempotency dedup key
+#   - created_timestamp      derived  minted on insert, CARRIED unchanged on update
+#   - last_updated_timestamp derived  SCD2 ordering key (minted once per write)
+#   - <merge_key>            input    natural key; MERGE key of the `current` projection
+#   - <business columns>     input    caller-supplied, schema-gated
+#
+# `status: live`     -> exercised by the cutover. THIS SLICE migrates ONLY ops_recommendations
+#                      (recs-first, via file_rec/update_rec). ops_decisions is schema-ready but
+#                      DEFERRED to its own migration (its source of truth is DECISIONS.md, so it
+#                      rebuilds rather than migrates) and STAYS on the Iceberg/Athena path.
+# `status: dormant` -> schema-ready, NOT live-exercised. The executor write paths
+#                      (ops_priority_queue, ops_execution_plans) are paused per CD.17
+#                      and route through the generalized writer when the executor
+#                      resumes; ops_session_log is not provisioned in the personal
+#                      account (sync_ops 2026-05-28 note). Merge key is a placeholder
+#                      for the resume work (ops_priority_queue current-state is the
+#                      Decision-70 latest-queue_run correlated set, not a per-row MERGE).
+#
+# Column types are sourced from the authoritative in-repo contracts -- NOT inferred:
+#   ops_recommendations -> scripts/executor/jsonl_store.Recommendation + ops.yaml
+#   ops_decisions       -> scripts/executor/jsonl_store.Decision + ops.yaml
+#   array/int/bool coercions cross-checked against scripts/sync_ops._coerce_ops_*_row.
+# Derived ulid/created_timestamp/last_updated_timestamp are NOT supplied by the
+# caller (the portal projects them out); the runtime mints them once (CD.33 cl.2).
+
+ops_tables:
+  ops_recommendations:
+    status: live
+    merge_key: id
+    entity_id_prefix: "rec-"   # canonical id shape
+    id_keyspace: writer        # file_ops allocates; write_ops advances the counter (Decision 84 I-2)
+    history_table: ops_recommendations_history
+    current_table: ops_recommendations_current
+    partition:
+      history: "day(created_timestamp)"
+      current: "bucket(8, id)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      id: {role: input, sql_type: VARCHAR, nullable: false}
+      title: {role: input, sql_type: VARCHAR, nullable: true}
+      source: {role: input, sql_type: VARCHAR, nullable: true}
+      effort: {role: input, sql_type: VARCHAR, nullable: true}
+      priority: {role: input, sql_type: VARCHAR, nullable: true}
+      status: {role: input, sql_type: VARCHAR, nullable: false}
+      automatable: {role: input, sql_type: BOOLEAN, nullable: true}
+      risk: {role: input, sql_type: VARCHAR, nullable: true}
+      file: {role: input, sql_type: VARCHAR, nullable: true}
+      context: {role: input, sql_type: VARCHAR, nullable: true}
+      acceptance: {role: input, sql_type: VARCHAR, nullable: true}
+      verification: {role: input, sql_type: VARCHAR, nullable: true}
+      verification_tier: {role: input, sql_type: VARCHAR, nullable: true}
+      dependencies: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      tags: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      resolution: {role: input, sql_type: VARCHAR, nullable: true}
+      execution_result: {role: input, sql_type: VARCHAR, nullable: true}
+      execution_date: {role: input, sql_type: VARCHAR, nullable: true}
+      execution_branch: {role: input, sql_type: VARCHAR, nullable: true}
+      execution_pr_url: {role: input, sql_type: VARCHAR, nullable: true}
+      execution_steps: {role: input, sql_type: BIGINT, nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
+    migration_columns:  # additive ALTER TABLE migrations (post-initial-deploy; reconcile_table_columns applies these)
+      history:
+        context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
+      current:
+        context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
+
+  ops_decisions:
+    status: live
+    merge_key: id
+    entity_id_prefix: "dec-"   # canonical id shape
+    id_keyspace: caller        # ids follow DECISIONS.md numbering; file_ops REJECTED (Decision 84 I-2 exception)
+    history_table: ops_decisions_history
+    current_table: ops_decisions_current
+    partition:
+      history: "day(created_timestamp)"
+      current: "bucket(8, id)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      id: {role: input, sql_type: VARCHAR, nullable: false}
+      title: {role: input, sql_type: VARCHAR, nullable: false}
+      status: {role: input, sql_type: VARCHAR, nullable: false}
+      problem: {role: input, sql_type: VARCHAR, nullable: true}
+      decision_text: {role: input, sql_type: VARCHAR, nullable: true}
+      context: {role: input, sql_type: VARCHAR, nullable: true}
+      decided_date: {role: input, sql_type: VARCHAR, nullable: true}
+      related_decisions: {role: input, sql_type: "BIGINT[]", nullable: true}
+      related_decisions_v2: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      decision_id: {role: input, sql_type: BIGINT, nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+
+  ops_priority_queue:
+    status: dormant  # executor paused (CD.17); current-state is the Decision-70 latest-queue_run set
+    merge_key: rec_id
+    history_table: ops_priority_queue_history
+    current_table: ops_priority_queue_current
+    partition:
+      history: "day(created_timestamp)"
+      current: "bucket(8, rec_id)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      rec_id: {role: input, sql_type: VARCHAR, nullable: false}
+      queue_run_id: {role: input, sql_type: VARCHAR, nullable: true}
+      rank: {role: input, sql_type: BIGINT, nullable: true}
+      mode: {role: input, sql_type: VARCHAR, nullable: true}
+      compound_with: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      gates: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+
+  ops_session_log:
+    status: dormant  # not provisioned in the personal account (sync_ops 2026-05-28 migration note)
+    merge_key: session_id
+    history_table: ops_session_log_history
+    current_table: ops_session_log_current
+    partition:
+      history: "day(created_timestamp)"
+      current: "bucket(8, session_id)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      session_id: {role: input, sql_type: VARCHAR, nullable: false}
+      summary: {role: input, sql_type: VARCHAR, nullable: true}
+      recs_attempted: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      recs_closed: {role: input, sql_type: "VARCHAR[]", nullable: true}
+      duration_minutes: {role: input, sql_type: BIGINT, nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+
+  ops_execution_plans:
+    status: dormant  # executor paused (CD.17); not provisioned in the personal account
+    merge_key: rec_id
+    history_table: ops_execution_plans_history
+    current_table: ops_execution_plans_current
+    partition:
+      history: "day(created_timestamp)"
+      current: "bucket(8, rec_id)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      rec_id: {role: input, sql_type: VARCHAR, nullable: false}
+      plan: {role: input, sql_type: VARCHAR, nullable: true}
+      status: {role: input, sql_type: VARCHAR, nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}

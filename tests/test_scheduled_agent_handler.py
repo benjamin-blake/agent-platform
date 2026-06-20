@@ -11,7 +11,6 @@ import src.data.handlers.scheduled_agent_handler as handler_mod
 from src.data.handlers.scheduled_agent_handler import (
     _get_gemini_api_key,
     _get_github_pat,
-    _invoke_bedrock,
     _invoke_copilot_sdk,
     _invoke_gemini,
     _invoke_github_models,
@@ -90,44 +89,12 @@ class TestLoadManifest:
         assert agents == []
 
 
-class TestInvokeBedrock:
-    """Tests for _invoke_bedrock()."""
+class TestBedrockRetired:
+    """Bedrock dispatch left the handler with the CD.28 retirement."""
 
-    def test_returns_content_on_success(self) -> None:
-        fake_response = {
-            "content": "analysis result",
-            "stop_reason": "end_turn",
-            "input_tokens": 10,
-            "output_tokens": 20,
-            "error": False,
-            "message": "",
-        }
-        with patch("scripts.bedrock_client.converse", return_value=fake_response):
-            output, has_error, err_msg = _invoke_bedrock(
-                "test prompt",
-                "anthropic.claude-3-5-haiku-20241022-v1:0",
-            )
-        assert output == "analysis result"
-        assert has_error is False
-        assert err_msg == ""
-
-    def test_returns_error_on_failure(self) -> None:
-        fake_response = {
-            "content": "",
-            "stop_reason": "",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "error": True,
-            "message": "Model not found",
-        }
-        with patch("scripts.bedrock_client.converse", return_value=fake_response):
-            output, has_error, err_msg = _invoke_bedrock(
-                "test prompt",
-                "bad-model-id",
-            )
-        assert output == ""
-        assert has_error is True
-        assert err_msg == "Model not found"
+    def test_invoke_bedrock_absent(self) -> None:
+        assert not hasattr(handler_mod, "_invoke_bedrock")
+        assert not hasattr(handler_mod, "_get_bedrock_credentials")
 
 
 class TestInvokeGithubModels:
@@ -340,25 +307,18 @@ class TestHandler:
 
         assert captured_calls[0]["model"] == "gemini-3.0-flash"
 
-    def test_bedrock_provider_routes_to_converse(self) -> None:
-        """Bedrock agents use converse() and skip PAT retrieval."""
+    def test_retired_bedrock_provider_falls_through_to_default_branch(self) -> None:
+        """provider: bedrock has no branch (CD.28); it hits the github-models default."""
         agents = [
             self._make_agent(
                 name="code-smell",
                 provider="bedrock",
             )
         ]
-        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
-        fake_bedrock = {
-            "content": '[{"title": "smell", "file": "x.py"}]',
-            "stop_reason": "end_turn",
-            "input_tokens": 5,
-            "output_tokens": 10,
-            "error": False,
-            "message": "",
-        }
+        fake_response = {"choices": [{"message": {"content": "[]"}}]}
 
         with (
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test") as mock_pat,
             patch.object(handler_mod, "_load_manifest", return_value=agents),
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch(
@@ -366,9 +326,9 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.bedrock_client.converse",
-                return_value=fake_bedrock,
-            ) as mock_converse,
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_response,
+            ) as mock_gh,
             patch(
                 "scripts.s3_log_store.write_timestamped_findings",
                 return_value="agents/code-smell/ts.jsonl",
@@ -376,92 +336,11 @@ class TestHandler:
         ):
             result = handler({}, None)
 
-        mock_converse.assert_called_once_with(
-            prompt="prompt",
-            model_id="anthropic.claude-3-5-haiku-20241022-v1:0",
-            region="eu-west-2",
-            max_tokens=4096,
-            credentials=None,
-        )
+        # No Bedrock branch remains: the agent transits the default
+        # (github-models) branch, which requires the PAT.
+        mock_pat.assert_called_once()
+        mock_gh.assert_called_once()
         assert result["agents_run"] == 1
-        assert result["total_findings"] == 1
-
-    def test_bedrock_agent_does_not_require_pat(self) -> None:
-        """Bedrock agents run even without a PAT configured."""
-        agents = [
-            self._make_agent(
-                name="doc-freshness",
-                provider="bedrock",
-            )
-        ]
-        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
-        fake_bedrock = {
-            "content": "[]",
-            "stop_reason": "end_turn",
-            "input_tokens": 5,
-            "output_tokens": 10,
-            "error": False,
-            "message": "",
-        }
-
-        with (
-            patch.object(handler_mod, "_get_github_pat", return_value="") as mock_pat,
-            patch.object(handler_mod, "_load_manifest", return_value=agents),
-            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
-            patch(
-                "scripts.run_scheduled_agent.is_agent_due",
-                return_value=True,
-            ),
-            patch(
-                "scripts.bedrock_client.converse",
-                return_value=fake_bedrock,
-            ),
-            patch(
-                "scripts.s3_log_store.write_timestamped_findings",
-                return_value="agents/doc-freshness/ts.jsonl",
-            ),
-        ):
-            result = handler({}, None)
-
-        # PAT is not needed so handler should not fail.
-        mock_pat.assert_not_called()
-        assert "error" not in result
-        assert result["agents_run"] == 1
-
-    def test_bedrock_failure_counts_as_failed(self) -> None:
-        """Bedrock API error increments agents_failed."""
-        agents = [
-            self._make_agent(
-                name="code-smell",
-                provider="bedrock",
-            )
-        ]
-        agents[0]["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
-        fake_bedrock = {
-            "content": "",
-            "stop_reason": "",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "error": True,
-            "message": "ResourceNotFoundException",
-        }
-
-        with (
-            patch.object(handler_mod, "_load_manifest", return_value=agents),
-            patch.object(handler_mod, "_load_prompt", return_value="prompt"),
-            patch(
-                "scripts.run_scheduled_agent.is_agent_due",
-                return_value=True,
-            ),
-            patch(
-                "scripts.bedrock_client.converse",
-                return_value=fake_bedrock,
-            ),
-        ):
-            result = handler({}, None)
-
-        assert result["agents_failed"] == 1
-        assert result["agents_run"] == 0
 
     def test_default_missing_provider_falls_back_to_github_models(
         self,
@@ -499,28 +378,18 @@ class TestHandler:
         mock_gh.assert_called_once()
         assert result["agents_run"] == 1
 
-    def test_mixed_providers_only_requires_pat_for_github_models(
-        self,
-    ) -> None:
-        """When both providers are due, PAT is only required for
-        github-models."""
-        bedrock_agent = self._make_agent(name="bedrock-agent", provider="bedrock")
-        bedrock_agent["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+    def test_mixed_providers_share_cached_pat(self) -> None:
+        """copilot-sdk and github-models agents share one PAT lookup."""
+        sdk_agent = self._make_agent(name="sdk-agent", provider="copilot-sdk")
+        sdk_agent["model"] = "claude-haiku-4.5"
         gh_agent = self._make_agent(name="gh-agent", provider="github-models")
-        agents = [bedrock_agent, gh_agent]
+        agents = [sdk_agent, gh_agent]
 
-        fake_bedrock = {
-            "content": "[]",
-            "stop_reason": "end_turn",
-            "input_tokens": 5,
-            "output_tokens": 10,
-            "error": False,
-            "message": "",
-        }
+        fake_sdk = {"content": "[]", "error": False, "message": ""}
         fake_gh_response = {"choices": [{"message": {"content": "[]"}}]}
 
         with (
-            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test") as mock_pat,
             patch.object(handler_mod, "_load_manifest", return_value=agents),
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch(
@@ -528,8 +397,8 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.bedrock_client.converse",
-                return_value=fake_bedrock,
+                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
+                return_value=fake_sdk,
             ),
             patch(
                 "scripts.github_models_client.chat_completion",
@@ -542,24 +411,16 @@ class TestHandler:
         ):
             result = handler({}, None)
 
+        mock_pat.assert_called_once()
         assert result["agents_run"] == 2
         assert result["agents_failed"] == 0
 
-    def test_mixed_providers_runs_bedrock_when_pat_missing(self) -> None:
-        """Missing PAT should fail only github-models, not block bedrock."""
-        bedrock_agent = self._make_agent(name="bedrock-agent", provider="bedrock")
-        bedrock_agent["model"] = "anthropic.claude-3-5-haiku-20241022-v1:0"
+    def test_missing_pat_fails_pat_dependent_providers(self) -> None:
+        """Without a PAT, copilot-sdk and github-models agents both fail."""
+        sdk_agent = self._make_agent(name="sdk-agent", provider="copilot-sdk")
+        sdk_agent["model"] = "claude-haiku-4.5"
         gh_agent = self._make_agent(name="gh-agent", provider="github-models")
-        agents = [bedrock_agent, gh_agent]
-
-        fake_bedrock = {
-            "content": "[]",
-            "stop_reason": "end_turn",
-            "input_tokens": 5,
-            "output_tokens": 10,
-            "error": False,
-            "message": "",
-        }
+        agents = [sdk_agent, gh_agent]
 
         with (
             patch.object(handler_mod, "_get_github_pat", return_value="") as mock_pat,
@@ -570,9 +431,8 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.bedrock_client.converse",
-                return_value=fake_bedrock,
-            ) as mock_converse,
+                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
+            ) as mock_sdk,
             patch(
                 "scripts.github_models_client.chat_completion",
             ) as mock_gh,
@@ -584,10 +444,10 @@ class TestHandler:
             result = handler({}, None)
 
         mock_pat.assert_called_once()
-        mock_converse.assert_called_once()
+        mock_sdk.assert_not_called()
         mock_gh.assert_not_called()
-        assert result["agents_run"] == 1
-        assert result["agents_failed"] == 1
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 2
 
 
 class TestInvokeCopilotSdk:
@@ -633,7 +493,6 @@ class TestInvokeCopilotSdk:
                 "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
                 return_value=fake_response,
             ) as mock_sdk,
-            patch("scripts.bedrock_client.converse") as mock_bedrock,
             patch("scripts.github_models_client.chat_completion") as mock_gh,
             patch(
                 "scripts.s3_log_store.write_timestamped_findings",
@@ -643,7 +502,6 @@ class TestInvokeCopilotSdk:
             result = handler({}, None)
 
         mock_sdk.assert_called_once()
-        mock_bedrock.assert_not_called()
         mock_gh.assert_not_called()
         assert result["agents_run"] == 1
         assert result["agents_failed"] == 0
@@ -777,7 +635,6 @@ class TestInvokeGemini:
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
             patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")) as mock_gemini,
-            patch("scripts.bedrock_client.converse") as mock_bedrock,
             patch("scripts.github_models_client.chat_completion") as mock_gh,
             patch(
                 "scripts.s3_log_store.write_timestamped_findings",
@@ -787,7 +644,6 @@ class TestInvokeGemini:
             result = handler({}, None)
 
         mock_gemini.assert_called_once()
-        mock_bedrock.assert_not_called()
         mock_gh.assert_not_called()
         assert result["agents_run"] == 1
         assert result["agents_failed"] == 0
