@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import scripts.smoke_test_inference_credentials as _mod
 from scripts.smoke_test_inference_credentials import _parse_args, main, run
 
 
@@ -32,18 +31,26 @@ class TestParseArgs:
             args = _parse_args()
         assert args.provider == "deepseek"
         assert args.model is None
-        assert args.secret_id is None
+        assert args.envelope_id is None
         assert args.region == "eu-west-2"
 
     def test_provider_anthropic_with_overrides(self) -> None:
-        with patch(
-            "sys.argv",
-            ["smoke_test_inference_credentials", "--provider", "anthropic", "--model", "anthropic/claude-opus-4", "--secret-id", "my-secret", "--region", "us-east-1"],
-        ):
+        argv = [
+            "smoke_test_inference_credentials",
+            "--provider",
+            "anthropic",
+            "--model",
+            "anthropic/claude-opus-4",
+            "--secret-id",
+            "my-secret",
+            "--region",
+            "us-east-1",
+        ]
+        with patch("sys.argv", argv):
             args = _parse_args()
         assert args.provider == "anthropic"
         assert args.model == "anthropic/claude-opus-4"
-        assert args.secret_id == "my-secret"
+        assert args.envelope_id == "my-secret"
         assert args.region == "us-east-1"
 
 
@@ -113,7 +120,7 @@ class TestRunDeepseekSuccess:
             mock_session.return_value.client.return_value = sm_client
             mock_completion.return_value = _make_litellm_result("OK")
 
-            result = run("deepseek", secret_id="my-custom-secret")
+            result = run("deepseek", envelope_id="my-custom-secret")
 
         assert result == 0
         sm_client.get_secret_value.assert_called_once_with(SecretId="my-custom-secret")  # pragma: allowlist secret
