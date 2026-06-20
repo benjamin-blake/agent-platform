@@ -2438,7 +2438,12 @@ tier_items:
       provisioned in minutes.
     depends_on: [T0.3]
     files_in_scope:
-      - terraform/inference_credentials.tf    # new -- per-environment Secrets Manager secrets (envelope + null initial value; key material set out-of-band via console or CLI)
+      - terraform/personal/inference_credentials.tf    # new -- Secrets Manager envelopes; values out-of-band (Decision 37)
+      - terraform/personal/platform_roles.tf            # IAM: InferenceCredentialsRead statement on PlatformDev DailyOps
+      - scripts/smoke_test_inference_credentials.py    # V3 smoke-test CLI (boto3 + LiteLLM end-to-end)
+      - tests/test_smoke_test_inference_credentials.py # 100% coverage unit tests (mocked)
+      - requirements-dev.txt                           # litellm dev dependency (T4.2 promotes to requirements.txt)
+    note: "[Re-grounded 2026-06-20: files_in_scope moved off the retired work-root path (terraform/inference_credentials.tf) per CD.21/audit F-014 and expanded to the IAM grant + smoke-test + dev requirement the exit criteria require. Status remains not_started: CD.28 pending gates completion.]"
     exit_criteria:
       - "DeepSeek API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM smoke-test call against deepseek/deepseek-chat returns 200"
       - "Anthropic API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM smoke-test call against anthropic/claude-haiku-4-5 returns 200"
