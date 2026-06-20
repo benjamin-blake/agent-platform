@@ -120,6 +120,23 @@ document:
       with T1.5's import-site sweep. During the pending window,
       candidate_decisions with state == "pending" MUST still be treated as
       binding by any agent reading the roadmap.
+    - deferred_post_mvp status (Decision 93 -- Platform-MVP boundary): The
+      defer-by-exception convention governs platform scope: new platform work
+      is MVP-critical by default; items leave MVP scope only by conscious
+      deferral, never by enumerating the MVP set. A parked post-MVP item
+      carries status: deferred_post_mvp -- the living cousin of reserved.
+      Semantics: excluded from next_eligible + tier-completion math (a tier
+      of [complete, deferred_post_mvp] counts as complete and does not wedge
+      active_tier); absent from the lean preflight/orient digest; recorded in
+      the deferred_post_mvp bucket of the FULL compute_state (queryable on
+      demand); reactivatable per-item by restoring status -> not_started.
+      No live item (not_started or in_progress) may depend_on a
+      deferred_post_mvp item -- the platform_roadmap.py model_validator
+      enforces this at load time (fail loud; no silent blocking).
+      Cross-roadmap product deps on deferred platform items are permitted
+      (platform-internal restriction only) and are revisited when product
+      work begins. Platform MVP boundary (Decision 93): "the autonomous loop
+      closes end-to-end with no human in the critical path of one iteration."
     - This document is self-contained. No outbound substantive references to
       retired INTENT-compute-and-account-topology.md are valid. Mentions in
       retirement metadata (CD.14, T5.5, KG.4) are not references.
@@ -3731,7 +3748,7 @@ tier_items:
     related_candidate_decisions: [CD.6]
     effort: M
     strategic: false
-    status: not_started
+    status: deferred_post_mvp
   - id: T2.9
     tier: T2
     name: Secrets rotation policy + automation
@@ -3755,7 +3772,7 @@ tier_items:
     related_candidate_decisions: [CD.6, CD.28]
     effort: S
     strategic: false
-    status: not_started
+    status: deferred_post_mvp
   - id: T2.10
     tier: T2
     name: GitHub OIDC federation + hosted-runner migration; mark self-hosted runner deprecated
@@ -3816,8 +3833,8 @@ tier_items:
     related_candidate_decisions: [CD.2, CD.20]
     effort: XS
     strategic: false
-    status: not_started
-    progress_note: "Post-flip debt: .devcontainer/ not yet authored. Blocked by depends_on (T0.2 substrate + T0.14 Windows-assumption sweep). Follow-up plan required; unblocks T2.11b portal artefacts."
+    status: deferred_post_mvp
+    progress_note: "Post-flip debt: .devcontainer/ not yet authored. Blocked by depends_on (T0.2 substrate + T0.14 Windows-assumption sweep). Parked post-MVP (Decision 93): not on the autonomous-loop critical path."
   - id: T2.11b
     tier: T2
     name: Public-portal artefact authoring (README + EVALUATION-PROMPTS.yaml + SECURITY.md + architecture diagram)
@@ -3845,9 +3862,9 @@ tier_items:
     related_candidate_decisions: [CD.20, CD.23]
     effort: S
     strategic: false
-    status: in_progress
+    status: deferred_post_mvp
     progress_note: |
-      Post-flip debt: architecture diagram still outstanding. Gated by depends_on (T2.11a devcontainer substrate + T2.13 build).
+      Parked post-MVP (Decision 93): co-parked with T2.11a (depends_on T2.11a; same public-surface-polish category; downstream T2.12/T2.13 complete). Reactivate when T2.11a is reactivated.
       - 2026-06-05: README.md rewritten as agent-first projection portal; projection disclaimer, NS.1-NS.5, subsystem inventory, doc model, durable-only links - architecture diagram still deferred (PLAN-readme-platform-portal)
       - 2026-06-18: SECURITY.md enriched with projection-at-top per CD.23 (was at bottom); EVALUATION-PROMPTS.yaml authored at repo root (12 questions, all answer-loci resolve, CD.20 invariant clean) (PLAN-t2-11b-portal-artefacts). Architecture diagram deferred: gated on T2.13 (what is built) + T2.11a (.devcontainer substrate, not_started).
   - id: T2.12
@@ -3936,7 +3953,7 @@ tier_items:
       cross-system invariant governing which secret key maps to which broker /
       environment / Lambda. Absorbs GAP-broker-secrets-manager from
       ROADMAP-PRODUCT.yaml; PRODUCT layer items L3.exec.4/5 depend on this.
-    depends_on: [T2.1, T2.9]
+    depends_on: [T2.1]
     files_in_scope:
       - terraform/secrets_manager_brokers.tf
       - docs/contracts/credential-routing.yaml
