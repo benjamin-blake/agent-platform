@@ -1,0 +1,277 @@
+---
+# Class A data contract for ops_decisions (DuckLake SCD2 table).
+# Ratified under the CD.25 pre-codegen contract ratification ritual (T0.12.5).
+# Authored against the live DuckLake column inventory in
+# config/lambda/ducklake/field_semantics.yaml (13 columns + _contract_version = 14 total).
+#
+# Decision 65: this contract is the canonical field-semantic authority for ops_decisions.
+# Decision 84: sole backend is DuckLake-on-Neon. id follows DECISIONS.md numbering (caller);
+#              file_ops REJECTED (Decision 84 I-2 exception for ops_decisions).
+# Graduation arc: Phases 0+1 COMPLETE. Phases 2-6 NOT_STARTED.
+# Phase 2 (Semantic Definition) is a blocking gate on semantic migration.
+# NOTE: ops_decisions does NOT carry a source field -- DecisionPayload has no source
+#       attribute (source-lineage.yaml explicitly documents this; re-grounded 2026-06-19).
+contract:
+  id: ops_decisions
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-20"
+  ratified_via: >-
+    Step 11 smoke-test pass + PLAN-ratify-ops-class-a-contracts merge to main (T0.12.5)
+  description: >-
+    Class A schema contract for the ops_decisions DuckLake SCD2 table. 14 fields: 13
+    from the live DuckLake inventory in config/lambda/ducklake/field_semantics.yaml plus
+    _contract_version (stamped at write time by the ducklake_writer Lambda, T0.12.5).
+    Sole backend is DuckLake-on-Neon (Decision 84). id follows DECISIONS.md numbering and
+    is caller-supplied (NOT file_ops-allocated -- Decision 84 I-2 exception). Graduation
+    arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2 (Semantic Definition) is a
+    blocking gate on semantic migration -- open questions (dual id/decision_id keyspace,
+    status str not Literal, DqXxx with enforced=False) are explicitly deferred.
+fields:
+  ulid:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Monotonic ULID minted once per write attempt by ducklake_runtime, outside the
+      OCC-retry loop. Reused unchanged on retry. History table logical PK; idempotency
+      dedup key in MERGE-on-ULID append.
+    semantics: SCD2 envelope field; NOT caller-supplied.
+    populated_by: ducklake_runtime._derive_fields() -- minted once at op-start; NEVER caller-supplied.
+    dq_intent:
+      not_null:
+        enforced: true
+
+  id:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Stable natural key for the decision. Format: "dec-NNN" (e.g. dec-084). Follows
+      DECISIONS.md numbering; caller-supplied. file_ops REJECTED (Decision 84 I-2 exception:
+      ops_decisions rebuilds from DECISIONS.md rather than migrating, so file_ops would
+      allocate an id that conflicts with the existing numbering).
+    semantics: >-
+      Natural key and MERGE key for the current projection (ops_decisions_current).
+      Dual keyspace: some rows also carry decision_id (BIGINT legacy key); see decision_id.
+      Phase 2 graduation plan will decide keyspace consolidation.
+    populated_by: >-
+      Caller-supplied; must follow DECISIONS.md dec-N numbering. file_ops REJECTED.
+      id_keyspace=caller (field_semantics.yaml spec).
+    dq_intent:
+      not_null:
+        enforced: true
+
+  title:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: One-line human-readable title for the decision.
+    semantics: >-
+      Human-readable decision label consumed by /orient session summaries and triage.
+      Sourced from the DECISIONS.md heading; required signal for audit tooling.
+    populated_by: Caller-supplied; sourced from DECISIONS.md title line.
+    dq_intent:
+      not_null:
+        enforced: true
+
+  status:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Decision lifecycle status. Currently a free-text string (not a closed Literal enum).
+      Phase 2 graduation (Semantic Definition) will tighten this to a Literal type.
+    semantics: >-
+      Phase 2 graduation is a blocking gate on narrowing status to a Literal. Current
+      values in practice: active, superseded, pending, reverted. NOT enforced as
+      accepted_values until Phase 2. DQ enforcement deferred (open question, Phase 2).
+    populated_by: Caller-supplied; sourced from DECISIONS.md.
+    dq_intent:
+      not_null:
+        enforced: true
+
+  problem:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Problem statement that motivated this decision.
+    semantics: >-
+      Free-text problem framing sourced from DECISIONS.md. Consumed by LLM reasoning in
+      /orient and /plan sessions. Null for legacy decisions that predate the problem-field
+      extraction convention.
+    populated_by: Caller-supplied; sourced from DECISIONS.md problem section.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  decision_text:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The actual decision text (what was decided).
+    semantics: >-
+      Free-text decision body sourced from DECISIONS.md. Canonical statement of what was
+      decided and why. Primary LLM-consumption field for decision reasoning.
+    populated_by: Caller-supplied; sourced from DECISIONS.md decision section.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  context:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Background context and constraints relevant to this decision. Includes implications
+      and alternatives considered.
+    semantics: >-
+      Supplementary context field for the decision; includes implications and alternatives.
+      Consumed by LLM reasoning in /orient. Null for legacy decisions without a context section.
+    populated_by: Caller-supplied; sourced from DECISIONS.md context/implications section.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  decided_date:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: ISO date string (YYYY-MM-DD) when the decision was made.
+    semantics: >-
+      Decision chronology key. Used for temporal sorting and recency weighting in /orient.
+      Null for legacy decisions predating date extraction. NOT the same as created_timestamp
+      (which is the DuckLake write time, not the original decision date).
+    populated_by: Caller-supplied; sourced from DECISIONS.md date field.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  related_decisions:
+    type: "list[int]"
+    iceberg_type: "array<long>"
+    nullable: true
+    description: >-
+      Legacy array of related decision integer IDs (BIGINT[]). Phase 2 open question:
+      dual keyspace with related_decisions_v2 (string dec-N format). Deferred.
+    semantics: >-
+      BIGINT[] legacy cross-reference. Populated from DECISIONS.md "Related:" lines using
+      the old integer format. Phase 2 graduation will consolidate with related_decisions_v2.
+      Not DQ-enforced until Phase 2.
+    populated_by: Caller-supplied.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  related_decisions_v2:
+    type: "list[str]"
+    iceberg_type: "array<string>"
+    nullable: true
+    description: >-
+      Related decision string IDs in dec-N format (e.g. ["dec-083", "dec-044"]).
+      Supersedes related_decisions (BIGINT[] legacy). Phase 2 open question: consolidation
+      of the two keyspaces.
+    semantics: >-
+      String[] cross-reference in the canonical dec-N keyspace. Supersedes related_decisions
+      (BIGINT[] legacy). Phase 2 graduation will consolidate the two keyspaces.
+      Not DQ-enforced until Phase 2.
+    populated_by: Caller-supplied.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  decision_id:
+    type: int
+    iceberg_type: long
+    nullable: true
+    description: >-
+      Legacy integer decision ID. Dual keyspace with id (str dec-N format). Phase 2
+      open question: canonicalize to a single keyspace. Deferred.
+    semantics: >-
+      BIGINT legacy key present in some rows (especially bootstrap rows from DECISIONS.md
+      backfill). Phase 2 graduation plan will decide the keyspace consolidation strategy.
+      Do NOT apply DQ enforcement until Phase 2.
+    populated_by: Caller-supplied from DECISIONS.md numbering (legacy integer form).
+    dq_intent:
+      not_null:
+        enforced: false
+
+  created_timestamp:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC timestamp minted at first write (INSERT). Carried unchanged on all subsequent
+      UPDATEs to preserve original creation time across SCD2 versions.
+    semantics: >-
+      SCD2 envelope field. Minted once at op-start by ducklake_runtime, OUTSIDE the
+      OCC-retry loop. For UPDATE: existing value is carried unchanged. NOT caller-supplied.
+    populated_by: ducklake_runtime._derive_fields() -- NOT caller-supplied.
+    dq_intent:
+      not_null:
+        enforced: true
+
+  last_updated_timestamp:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: UTC timestamp of the most recent write. SCD2 ordering key.
+    semantics: >-
+      SCD2 envelope field. Minted once at op-start by ducklake_runtime, OUTSIDE the
+      OCC-retry loop. Stable across all retry iterations of the same write attempt.
+    populated_by: ducklake_runtime._derive_fields() -- NOT caller-supplied.
+    dq_intent:
+      not_null:
+        enforced: true
+
+  _contract_version:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Contract version string stamped by the ducklake_writer Lambda at write time.
+      Value "1" for all rows written after T0.12.5 ratification. Historical rows carry NULL.
+    semantics: >-
+      Handler-layer sentinel: the ducklake_writer handler stamps this on the write payload
+      before passing it to ducklake_runtime (action_write_ops, action_update_ops). Role is
+      `input` in field_semantics.yaml so the schema gate accepts it from the handler layer.
+      Callers SHOULD NOT supply it -- the handler default is "1"; a pre-supplied value is
+      honoured (allows future version bumps without a handler redeploy). COALESCE("1") in read paths
+      treats NULL historical rows (written before T0.12.5) as the pre-ratification "1" baseline.
+    populated_by: >-
+      ducklake_writer Lambda handler.py stamps _contract_version='1' on action_write_ops
+      and action_update_ops. action_file_ops is REJECTED for ops_decisions
+      (id_keyspace=caller). Historical rows NULL.
+    dq_intent:
+      not_null:
+        enforced: false
+
+governance:
+  table_class: SCD2
+  partition_by: "history=day(created_timestamp), current=bucket(8, id)"
+  dedup_view: ops_decisions_current
+  write_path: >-
+    scripts/ops_data_portal.py (backfill-decisions-md, update_rec) ->
+    ducklake_writer Lambda (agent-platform-ducklake-writer, action_update_ops) ->
+    src/common/ducklake_runtime.py. action_file_ops REJECTED (id_keyspace=caller,
+    Decision 84 I-2 exception).
+  id_allocator: >-
+    Caller-supplied; follows DECISIONS.md dec-N numbering. id_keyspace=caller.
+    action_file_ops REJECTED (Decision 84 I-2 exception -- ops_decisions rebuilds from
+    DECISIONS.md rather than migrating, so file_ops would conflict with the existing
+    number space).
+
+governance_notes: >-
+  Decision 65: This contract is the canonical field-semantic authority for ops_decisions.
+  ops.yaml (config/agent/data_quality/ops.yaml) retires via T1.6.
+  Decision 84: Sole backend is DuckLake-on-Neon. Reads via ducklake_reader boundary only.
+  No source field: DecisionPayload has no source attribute (re-grounded 2026-06-19;
+  source-lineage.yaml explicitly documents this).
+  Graduation arc: Phase 2 (Semantic Definition) is a blocking gate. Open questions deferred:
+  (1) dual id/decision_id keyspace consolidation; (2) status str -> Literal narrowing;
+  (3) DqXxx fields with enforced=False. Do NOT apply DQ enforcement to these fields until
+  Phase 2 ratifies the semantic definitions.
+
+amendment_log: []
+previous_versions: []

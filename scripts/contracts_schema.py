@@ -88,6 +88,7 @@ class FieldSpec(BaseModel):
     governance_notes_local: str | None = None
     joins: list[str] | None = None
     amendment_log: list[AmendmentLogEntry] = Field(default_factory=list)
+    derivation: dict[str, Any] | None = None
 
 
 class VerbSpec(BaseModel):

@@ -7,7 +7,9 @@ awswrangler.athena.to_iceberg at session close (session_postflight.compact_all).
 Follows the same PYTEST_CURRENT_TEST guard and graceful-degradation contract as
 scripts/s3_log_store.py. Never raises exceptions to callers.
 
-See docs/contracts/ops-data-store.md for table schemas and S3 prefix layout.
+See docs/contracts/ops_recommendations.yaml and docs/contracts/ops_decisions.yaml for
+the DuckLake-boundary Class A contracts. See docs/contracts/storage-substrate.yaml for
+the Iceberg-boundary tables (ops_session_log, ops_execution_plans) pending T2.26.
 """
 
 from __future__ import annotations
@@ -70,7 +72,7 @@ except ImportError:  # pragma: no cover
 
     _TELEMETRY_SCHEMAS_AVAILABLE = False
 
-# Recognised table names (ops data store) -- see docs/contracts/ops-data-store.md
+# Recognised table names (ops data store) -- see docs/contracts/storage-substrate.yaml
 # ops_recommendations is EXCLUDED: recs transit the DuckLake closed boundary (Decision 81 cl.7 /
 # T2.19 cutover). OpsWriter can no longer stage or compact recs to Iceberg.
 _OPS_TABLE_NAMES: list[str] = [

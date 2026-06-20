@@ -396,23 +396,49 @@ from scripts.executor.formatters import (  # noqa: E402, F401, I001
 # ---------------------------------------------------------------------------
 
 
-def run_acceptance(acceptance_cmd: str) -> bool:
+def _normalize_acceptance(acceptance_cmd: object) -> str:
+    """Normalize acceptance scalar-or-list to a str before any str methods are applied.
+
+    Handles three shapes (T0.12.5 CD.29 shim; full typed-check dispatch deferred to T3.6):
+      - str: returned unchanged.
+      - list[str]: elements joined with ' && '. An empty list or all-empty-strings list
+        is treated as null (empty string).
+      - list[dict] TypedCheck: the 'command' field from each element is extracted then
+        joined with ' && '. Only command_exit_zero / bare-command elements are executed at
+        T0.12.5; full typed-check dispatch by type deferred to T3.6.
+    """
+    if isinstance(acceptance_cmd, str):
+        return acceptance_cmd
+    if not isinstance(acceptance_cmd, list) or not acceptance_cmd:
+        return ""
+    if isinstance(acceptance_cmd[0], dict):
+        parts = [c.get("command", "") for c in acceptance_cmd if isinstance(c, dict)]
+    else:
+        parts = [str(p) for p in acceptance_cmd]
+    joined = " && ".join(p for p in parts if p and p.strip())
+    return joined
+
+
+def run_acceptance(acceptance_cmd: object) -> bool:
     """Run acceptance command for a plan step.
 
     Returns True immediately if acceptance_cmd is empty or whitespace
     (no check required).
 
     Returns True when acceptance_cmd is non-empty but contains no extractable
-    shell command — prose-only acceptance fields are silently allowed
+    shell command -- prose-only acceptance fields are silently allowed
     (backwards compatible with existing step patterns).
 
     LLM-generated acceptance commands may be wrapped in backticks (markdown
     inline code) or contain shell operators (&&, |, >). The command is run
     via ``bash -c`` so Unix tools (grep, python, git) and shell operators work
     on all platforms including Windows (Git Bash required).
+
+    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) per T0.12.5 shim.
     """
     global _LAST_ACCEPTANCE_OUTPUT
     _LAST_ACCEPTANCE_OUTPUT = ""
+    acceptance_cmd = _normalize_acceptance(acceptance_cmd)
     if not acceptance_cmd or not acceptance_cmd.strip():
         return True
 
@@ -598,16 +624,20 @@ def get_last_verification_output() -> str:
     return _LAST_VERIFICATION_OUTPUT
 
 
-def _extract_acceptance_command(acceptance_cmd: str) -> str:
+def _extract_acceptance_command(acceptance_cmd: object) -> str:
     """Extract the first executable shell command from an acceptance field string.
 
     Returns an empty string if no command could be found.
 
+    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) -- normalizes via
+    _normalize_acceptance before applying string-based extraction logic (T0.12.5 shim).
+
     Priority (highest to lowest):
-    0. Fenced code block (``` ... ```) — join the block body
-    1. Inline-code span (`...`) — content between first backtick pair
-    2. Line-by-line scan — fallback for plain-text commands
+    0. Fenced code block (``` ... ```) -- join the block body
+    1. Inline-code span (`...`) -- content between first backtick pair
+    2. Line-by-line scan -- fallback for plain-text commands
     """
+    acceptance_cmd = _normalize_acceptance(acceptance_cmd)
     # Pass 0: fenced code block
     fence_match = re.search(r"```(?:\w+)?\n(.*?)```", acceptance_cmd, re.DOTALL)
     if fence_match:
