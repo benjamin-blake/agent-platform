@@ -1,0 +1,550 @@
+schema_version: 1
+slug: "ratify-ops-class-a-contracts"
+intent: >-
+  Author and ratify the two Class A data contracts for ops_recommendations and ops_decisions
+  (tier_item T0.12.5). Scope upgraded from the roadmap's REPORT-ONLY intent to a full
+  IMPLEMENTATION on explicit human direction: extends FieldSpec with a native derivation key,
+  authors both contracts with full field ratification (derivation blocks for all derived
+  fields, acceptance scalar-or-list evolution per CD.29, $ref into the Class C source-lineage
+  contract), updates acceptance consumers in lockstep (Decision 44 executor boundary files via
+  human /implement), adds _contract_version to DuckLake field_semantics.yaml and stamps it in
+  the ducklake_writer Lambda (V3), creates storage-substrate.yaml as a non-ritual substrate
+  index, and retires docs/contracts/ops-data-store.md. The Class A contracts become the
+  canonical field-semantic authority per Decision 65; ops.yaml retires via T1.6 (out of scope
+  here).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ratify-ops-class-a-contracts.yaml
+phase: >-
+  Platform tier T0 (tier_item T0.12.5, depends_on T-1.12 + T0.12 + T0.12.7, all complete);
+  product Phase 1 Core Infrastructure. bootstrap_completion_exempt: true (CD.25 pending-state
+  exemption applies). Keystone for T0.12.6 (telemetry Class A), T2.29/T2.30/T2.31 (derivation
+  implementation), and T2.32 (exemplar gate). T2.33 (field_semantics.yaml projection, added by
+  T0.12.7) is the downstream consumer of the derivation semantics ratified here.
+scope:
+  - file: scripts/contracts_schema.py
+    action: Modify
+    purpose: >-
+      Add derivation: dict[str, Any] | None = None to FieldSpec (after amendment_log,
+      ~line 90). extra="forbid" rejects derivation blocks today; this unblocks authoring
+      contracts with machine-parseable derivation documentation. Type kept as dict[str, Any]
+      (not a typed submodel) -- vocabulary stabilises in T2.29.
+  - file: tests/test_contracts.py
+    action: Modify
+    purpose: >-
+      Add two assertions: (1) a FieldSpec with a derivation block round-trips through
+      load_contract without ValidationError; (2) a FieldSpec with a truly unknown key still
+      raises ValidationError -- extra=forbid is not weakened by the addition.
+  - file: docs/contracts/ops_recommendations.yaml
+    action: Create
+    purpose: >-
+      Class A contract for ops_recommendations. 26 fields (25 from DuckLake live inventory
+      in config/lambda/ducklake/field_semantics.yaml + _contract_version added by this plan):
+      ulid, id, title, source, effort, priority, status, automatable, risk, file, context,
+      acceptance, verification, verification_tier, dependencies, tags, resolution,
+      execution_result, execution_date, execution_branch, execution_pr_url, execution_steps,
+      created_timestamp, last_updated_timestamp, context_v2_json, _contract_version. source
+      $refs docs/contracts/source-lineage.yaml#/contract/fields/registry_key with
+      dq_intent_local not_null enforced (tighten from Class C loosest baseline). Four DERIVED
+      fields carry full derivation blocks: priority (concrete source_priority_map for all 29
+      registered sources mapped from source_registry.yaml, int 1-4 encoding 1=Critical..4=Low,
+      fallback_priority=3, target-state with realization pointer to T2.30), effort
+      (LOC-weighted int encoding, weights land at T2.31), automatable (recompute_trigger
+      capabilities.yaml maturity_ceiling change, per Decision 44/73), risk (degradation_policy
+      for absent radon/coverage.xml). acceptance evolved to str | list[str] union with
+      amendment_log entry (change_class=type_widen, semantic_break=False, migration_story
+      documents field-shape-early T0.12.5 / enforcement-late T3.6 skew per CD.29). Decision
+      65 supersession recorded: Class A contract + src/schemas/rec.py Annotated model are
+      now the canonical field-semantic authority (ops.yaml retires via T1.6). Decision 63
+      DQ-exclusion for execution_* fields documented (NOT DQ-enforced or derived). All
+      undocumented pass-through fields ratified. Stale facts corrected: id is writer/file_ops-
+      allocated (Decision 84 I-2, not DynamoDB); automatable and risk are portal-derived,
+      not role:input (field_semantics.yaml reconciliation is T2.29 scope).
+  - file: docs/contracts/ops_decisions.yaml
+    action: Create
+    purpose: >-
+      Class A contract for ops_decisions. 14 fields (13 from DuckLake live inventory +
+      _contract_version): ulid, id, title, status, problem, decision_text, context,
+      decided_date, related_decisions, related_decisions_v2, decision_id, created_timestamp,
+      last_updated_timestamp, _contract_version. Graduation arc Phases 2-6 NOT_STARTED: open
+      semantic questions (dual id/decision_id keyspace, status str not Literal, many DqXxx
+      with enforced=False) explicitly deferred to a follow-on graduation plan; the contract
+      ratifies the SETTLED live schema only and documents Phase 2 (Semantic Definition) as a
+      blocking gate on further migration.
+  - file: docs/contracts/storage-substrate.yaml
+    action: Create
+    purpose: >-
+      Non-ritual substrate index (no contract: block; CD.25 drift gate skips files lacking
+      a contract: mapping with a class: field). Bridges the documentation gap left by
+      ops-data-store.md retirement: records substrate type, write boundary, and read boundary
+      for tables lacking their own Class A contract today (ops_session_log,
+      ops_execution_plans, ops_priority_queue, and the 7 telemetry tables). References
+      docs/contracts/read-engine.yaml for DuckLake-boundary tables and
+      docs/INTENT-ducklake-consolidation.md for Iceberg-boundary tables pending T2.26
+      disposition.
+  - file: docs/contracts/ops-data-store.md
+    action: Delete
+    purpose: >-
+      Retire the legacy prose contract (stale DynamoDB/Iceberg references, superseded by
+      Decision 84 and the two Class A YAMLs). The two live docstring references are updated
+      in the same commit. All other occurrences (plans, INTENT docs, audit reports) are
+      historical artefacts -- do NOT modify them.
+  - file: scripts/ops_writer.py
+    action: Modify
+    purpose: >-
+      Fix two stale docstring references to ops-data-store.md (module docstring ~line 10
+      and inline comment ~line 73). Replace with references to
+      docs/contracts/ops_recommendations.yaml, docs/contracts/ops_decisions.yaml, and
+      docs/contracts/storage-substrate.yaml for the Iceberg-boundary tables.
+  - file: scripts/telemetry_schemas.py
+    action: Modify
+    purpose: >-
+      Fix module docstring reference to ops-data-store.md (~line 9). Replace with reference
+      to docs/contracts/storage-substrate.yaml (the telemetry table substrate index for the
+      tables that ops-data-store.md formerly documented in its Telemetry Tables section).
+  - file: scripts/executor/step_runner.py
+    action: Modify
+    purpose: >-
+      Acceptance scalar-or-list shim (executor boundary file per Decision 44 -- human-driven
+      /implement only, NOT automated executor). Update run_acceptance (~line 399) and
+      _extract_acceptance_command (~line 601) to normalize list[str] acceptance by joining
+      with " && " before any str methods are called. A bare str is unchanged. DqNotNull
+      semantics for list: an empty list or an all-empty-strings list is null (same semantics
+      as empty string today).
+  - file: scripts/executor/acceptance_lint.py
+    action: Modify
+    purpose: >-
+      Acceptance scalar-or-list shim for validate_acceptance_feasibility (~line 28) and
+      lint_acceptance_command (~line 96). Normalize list[str] to " && ".join(parts) before
+      the existing str-based validation runs. No structural change to validation logic.
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      Add _contract_version column (type: VARCHAR/string, nullable: true, role: derived,
+      stamped at write time by ducklake_writer, historical rows NULL, no DQ enforcement) to
+      both ops_recommendations and ops_decisions table specs. Authoritative live column
+      inventory bundled as a Lambda asset in ducklake-writer manifest.yaml (assets:).
+  - file: src/lambdas/ducklake_writer/handler.py
+    action: Modify
+    purpose: >-
+      Stamp _contract_version="1" into the record dict before calling rt.write_scd2 /
+      rt.file_scd2 in action_write_ops, action_file_ops, and action_update_ops. Does NOT
+      overwrite a caller-supplied value (allows future version bumps without a handler
+      redeploy). Historical rows remain NULL; COALESCE in read paths uses NULL as the
+      pre-ratification sentinel. Stamp only on ops_* table write paths (not the smoke-table
+      action_write path).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T0.12.5 exit criteria: replace stale "Iceberg column" language with DuckLake
+      field_semantics.yaml per Decision 84. Flip T0.12.5 status not_started -> complete
+      (+ completed_at: "2026-06-20" + progress_note) after verification passes and
+      plan-critique converges.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    ducklake-writer Lambda (artifact: ducklake-writer.zip; function:
+    agent-platform-ducklake-writer; status: active per manifest.yaml). Modifying handler.py
+    requires build + deploy + smoke-test per Decision 79/CD.16 (V3 tier). Deploy command:
+    bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform
+    (builds all 4 DuckLake zips + 3 layers + 4 functions: writer, reader, maintenance,
+    catalog-dr). config/lambda/ducklake/field_semantics.yaml is bundled as a Lambda asset
+    and is repackaged by the same --ducklake-only build.
+acceptance_criteria:
+  - >-
+    Both Class A contract YAMLs exist at contract_version 1, status ratified, class A,
+    non-empty fields mapping, no verbs key; both load cleanly via scripts.contracts.load_contract
+    (ContractDocument, no ValidationError).
+  - >-
+    ops_recommendations.yaml has 26 fields (25 DuckLake live inventory + _contract_version);
+    ops_decisions.yaml has 14 fields (13 DuckLake live inventory + _contract_version). Every
+    field carries at minimum description, type, iceberg_type, nullable, and either
+    populated_by/semantics or a $ref.
+  - >-
+    ops_recommendations.source resolves via resolve_refs to the canonical registry_key
+    description from source-lineage.yaml ($ref collapses, description carried,
+    dq_intent_local not_null enforced: true).
+  - >-
+    All four DERIVED fields in ops_recommendations (priority, effort, automatable, risk) carry
+    a non-None derivation block with formula, inputs, recompute_trigger, and failure_policy or
+    degradation_policy. priority.derivation.source_priority_map maps all 29 registered source
+    canonical_ids from source_registry.yaml to an int priority 1-4; fallback_priority is
+    present for future unregistered sources.
+  - >-
+    ops_recommendations.acceptance carries an amendment_log entry with change_class=type_widen,
+    semantic_break=False, and a migration_story documenting the field-shape-early (T0.12.5) /
+    enforcement-late (T3.6) skew per CD.29.
+  - >-
+    Acceptance scalar-or-list shim in place: step_runner.run_acceptance and
+    _extract_acceptance_command normalize list[str] to a joined string before execution;
+    acceptance_lint.validate_acceptance_feasibility and lint_acceptance_command do the same.
+    An empty list is treated as null. Existing tests pass after the change.
+  - >-
+    docs/contracts/ops-data-store.md is deleted; grep -r "ops-data-store.md" scripts/ returns
+    no matches (both docstring references fixed).
+  - >-
+    _contract_version column present in both ops_recommendations and ops_decisions sections of
+    config/lambda/ducklake/field_semantics.yaml (type VARCHAR/string, nullable true,
+    role derived).
+  - >-
+    ducklake_writer Lambda built, deployed (--ducklake-only), and smoke-tested
+    (--ops-read-your-write passes); handler stamps _contract_version="1" on write_ops,
+    file_ops, and update_ops paths; smoke-table action_write path is not affected.
+  - >-
+    CD.25 drift gate passes with exactly 5 ritual contracts (source-lineage, session-id,
+    project-id, ops_recommendations, ops_decisions) and no drift; full presubmit
+    (bin/venv-python -m scripts.validate, no flags) exits 0.
+  - >-
+    docs/contracts/storage-substrate.yaml exists and has no contract: block (verified via YAML
+    parse; CD.25 drift gate skips it safely).
+  - >-
+    T0.12.5 status is complete in docs/ROADMAP-PLATFORM.yaml with completed_at and
+    progress_note; roadmap still loads via scripts.platform_roadmap.load.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Load both Class A contracts via the real loader; assert class A, version 1, ratified,
+      non-empty fields mapping, no verbs key.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      for name in ("ops_recommendations", "ops_decisions"):
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "A", (name, "expected class A")
+          assert d.contract.contract_version == 1, (name, "expected version 1")
+          assert d.contract.status.value == "ratified", (name, "expected ratified")
+          assert d.fields, (name, "fields mapping must be non-empty")
+          assert d.verbs is None, (name, "Class A must not define verbs")
+          print("OK", name, len(d.fields), "fields")
+      PY
+    expected: "Two 'OK <name> <N> fields' lines and exit 0."
+    fix_if: >-
+      AssertionError or ContractValidationError -- the contract violates the Class A shape
+      (wrong status/version, missing fields, verbs present) or is not schema-valid against
+      the updated FieldSpec.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove ops_recommendations.source resolves via $ref to source-lineage.registry_key;
+      assert description is carried and dq_intent_local tightening applies.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract, resolve_refs
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      d = load_contract(src / "ops_recommendations.yaml")
+      resolved = resolve_refs(d, src)
+      s = resolved["source"]
+      assert s.ref is None, "source ref must collapse after resolution"
+      assert s.description, "canonical description must be carried from source-lineage"
+      nn = (s.dq_intent or {}).get("not_null", {})
+      assert nn.get("enforced") is True, "dq_intent_local must tighten not_null to enforced"
+      print("OK source $ref resolves; description carried; not_null enforced")
+      PY
+    expected: "One 'OK' line and exit 0."
+    fix_if: >-
+      AssertionError -- source field missing $ref, dangling target, description absent, or
+      dq_intent_local not_null tightening not applied. Verify $ref path matches
+      docs/contracts/source-lineage.yaml#/contract/fields/registry_key exactly.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert all four DERIVED fields in ops_recommendations carry a non-None derivation block
+      with required keys; assert priority.derivation.source_priority_map covers all 29
+      registered sources and has fallback_priority.
+    command: |
+      bin/venv-python - <<'PY'
+      import yaml, pathlib
+      src = pathlib.Path("docs/contracts")
+      raw = yaml.safe_load((src / "ops_recommendations.yaml").read_text())
+      fields = raw.get("fields", {})
+      for fname in ("priority", "effort", "automatable", "risk"):
+          d = fields.get(fname, {}).get("derivation")
+          assert d, f"{fname}: derivation block must be non-None"
+          assert d.get("formula"), f"{fname}: derivation.formula required"
+          assert d.get("inputs"), f"{fname}: derivation.inputs required"
+          assert d.get("recompute_trigger"), f"{fname}: derivation.recompute_trigger required"
+          assert d.get("failure_policy") or d.get("degradation_policy"), \
+              f"{fname}: failure_policy or degradation_policy required"
+          print("OK", fname)
+      registry = yaml.safe_load(pathlib.Path(
+          "config/agent/data_quality/source_registry.yaml").read_text())
+      registered = {e["canonical_id"] for e in registry["entries"]}
+      pmap = fields["priority"]["derivation"].get("source_priority_map", {})
+      missing = registered - pmap.keys()
+      assert not missing, f"priority source_priority_map missing: {missing}"
+      assert "fallback_priority" in fields["priority"]["derivation"], \
+          "fallback_priority required"
+      print("OK priority source_priority_map complete:", len(pmap), "sources")
+      PY
+    expected: >-
+      Four 'OK <field>' lines then 'OK priority source_priority_map complete: 29 sources'
+      and exit 0.
+    fix_if: >-
+      AssertionError -- a derived field is missing a derivation block or required key, or
+      the priority map does not cover all registered sources. Add the missing entries and
+      re-run.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert ops_recommendations.acceptance has an amendment_log entry with
+      change_class=type_widen and semantic_break=False; assert derivation round-trips through
+      load_contract (validates the FieldSpec extension).
+    command: |
+      bin/venv-python - <<'PY'
+      import yaml, pathlib
+      from scripts.contracts import load_contract
+      src = pathlib.Path("docs/contracts")
+      raw = yaml.safe_load((src / "ops_recommendations.yaml").read_text())
+      acc_log = raw.get("fields", {}).get("acceptance", {}).get("amendment_log", [])
+      assert acc_log, "acceptance.amendment_log must be non-empty"
+      tw = [e for e in acc_log if e.get("change_class") == "type_widen"]
+      assert tw, "acceptance.amendment_log must contain a type_widen entry"
+      assert tw[0].get("semantic_break") is False, "type_widen must have semantic_break: false"
+      assert tw[0].get("migration_story"), \
+          "migration_story required to document field-shape-early/enforcement-late skew"
+      print("OK acceptance type_widen amendment_log entry present")
+      d = load_contract(src / "ops_recommendations.yaml")
+      assert d.fields["priority"].derivation is not None, \
+          "derivation must round-trip through load_contract"
+      print("OK derivation round-trips through load_contract")
+      PY
+    expected: "Two 'OK' lines and exit 0."
+    fix_if: >-
+      AssertionError on amendment_log -- the acceptance field lacks the type_widen entry or
+      migration_story. AssertionError on derivation -- FieldSpec.derivation key not added to
+      contracts_schema.py (go back to that scope file first).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run acceptance consumer tests to verify the scalar-or-list shim does not break existing
+      executor test suite.
+    command: bin/venv-python -m pytest tests/ -x -q -k "acceptance or step_runner or acceptance_lint" 2>&1 | tail -10
+    expected: "All targeted tests pass; no AttributeError on str methods applied to list values."
+    fix_if: >-
+      AttributeError or test failure -- the shim is incomplete. Ensure both run_acceptance /
+      _extract_acceptance_command (step_runner.py) and validate_acceptance_feasibility /
+      lint_acceptance_command (acceptance_lint.py) normalise list[str] to " && ".join before
+      any .strip()/.split() calls.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the CD.25 contract-drift gate over docs/contracts/; verify exactly 5 ritual
+      contracts (source-lineage, session-id, project-id, ops_recommendations, ops_decisions)
+      and no drift.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; the '=== Contract drift gate (CD.25) ===' section prints 'PASS:' with 5 ritual
+      contract(s) scanned and no drift.
+    fix_if: >-
+      Any 'Contract drift' failure line or non-zero exit -- fix the offending contract field
+      and re-run. If the count is not 5, check that storage-substrate.yaml has no contract:
+      block (it must be non-ritual) and that ops-data-store.md is deleted.
+  - step: 7
+    phase: pre-deploy
+    action: Validate the plan artefact against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ratify-ops-class-a-contracts.yaml
+    expected: "PASS: docs/plans/PLAN-ratify-ops-class-a-contracts.yaml validates against PlanDocument schema."
+    fix_if: "FAIL: line naming a schema violation -- correct the plan field and re-run."
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Verify ops-data-store.md is deleted and no live docstring references to it remain in
+      scripts/.
+    command: |
+      test ! -f docs/contracts/ops-data-store.md &&
+      ! grep -r "ops-data-store\.md" scripts/ &&
+      echo "OK ops-data-store.md deleted and docstring refs removed"
+    expected: "'OK ...' and exit 0."
+    fix_if: >-
+      File still exists (delete it) or grep finds references (fix the remaining docstrings in
+      ops_writer.py and telemetry_schemas.py).
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Verify roadmap loads after the T0.12.5 status flip; assert status is complete.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      d = load("docs/ROADMAP-PLATFORM.yaml")
+      t = next(i for i in d.tier_items if i.id == "T0.12.5")
+      assert t.status.value == "complete", f"T0.12.5 status={t.status}; expected complete"
+      print("ROADMAP_LOADS", len(d.tier_items), "items; T0.12.5 complete")
+      PY
+    expected: "Prints 'ROADMAP_LOADS <N> items; T0.12.5 complete' and exits 0."
+    fix_if: >-
+      Pydantic ValidationError (roadmap schema violation) or AssertionError (status not yet
+      flipped -- run this step after the roadmap edit in execution_steps).
+  - step: 10
+    phase: deploy
+    action: >-
+      Build and deploy the ducklake_writer Lambda (--ducklake-only covers writer + reader +
+      maintenance + catalog-dr; all 4 functions + 3 layers deployed, including the updated
+      field_semantics.yaml asset).
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform
+    expected: "Exit 0; Lambda update-function-code for agent-platform-ducklake-writer succeeds."
+    fix_if: >-
+      Build error -- fix handler.py and re-run. Auth/IAM error -- confirm profile with
+      aws sts get-caller-identity --profile agent_platform.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Smoke-test the deployed writer via ops-read-your-write to verify the write_ops path
+      works end-to-end and _contract_version is stamped on the written record.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform
+    expected: >-
+      Exit 0; smoke test passes (write_ops via writer, read via reader, no loud-fail 409).
+      The test output or the written record returned by the reader should include
+      _contract_version='1'.
+    fix_if: >-
+      Connection failure -- confirm DSN / Neon catalog. 422 schema gate rejection -- verify
+      _contract_version added to field_semantics.yaml with correct type/role. 409 loud-fail
+      -- referential invariant violation (rec id absent in current table). Handler not stamping
+      -- re-check that action_write_ops, action_file_ops, action_update_ops all inject
+      _contract_version before calling rt.write_scd2 / rt.file_scd2.
+constraints:
+  - >-
+    IMPLEMENTATION (not REPORT-ONLY): user's explicit direction; scope includes code changes
+    to contracts_schema.py, executor boundary files, ducklake_writer Lambda, and docstrings.
+  - >-
+    Author contracts against the shipped scripts/contracts_schema.py AFTER adding derivation.
+    Do NOT use the INTENT 3E worked examples as templates -- their amendment_log `change:` key
+    and missing top-level fields block fail extra=forbid.
+  - >-
+    FieldSpec.derivation: dict[str, Any] | None (not a typed submodel). Vocabulary stabilises
+    in T2.29; premature closure now would cause a semantic_break amendment when the typed model
+    lands.
+  - >-
+    storage-substrate.yaml MUST NOT have a contract: block (non-ritual). If it gains one, the
+    CD.25 drift gate will count it as a 6th ritual contract and may apply drift checks to it.
+  - >-
+    ops-data-store.md references: only 2 live docstrings (ops_writer.py ~lines 10/73,
+    telemetry_schemas.py ~line 9) are in scope for this plan. The other 17 occurrences
+    (plans, INTENT docs, DECISIONS_ARCHIVE, audit reports) are historical artefacts --
+    do NOT modify them.
+  - >-
+    Decision 65 supersession: ops.yaml retirement is T1.6 scope. Do NOT retire or modify
+    config/agent/data_quality/ops.yaml in this plan -- only record the supersession note in
+    the contracts.
+  - >-
+    Decision 63: execution_* fields (execution_result, execution_date, execution_branch,
+    execution_pr_url, execution_steps) are DQ-EXCLUDED and non-derived. Document them in
+    the contract (description, semantics, populated_by) but add NO DQ enforcement or
+    derivation blocks.
+  - >-
+    Decision 44: step_runner.py and acceptance_lint.py are executor boundary files --
+    human-driven /implement is permitted; the automated executor must NOT self-modify these
+    files. The plan is authored to go through human /implement.
+  - >-
+    Lambda gating (Decision 79/CD.16): ducklake_writer status:active; V3 build+deploy+
+    smoke-test is mandatory. Stamp _contract_version in handler.py action paths ONLY
+    (write_ops, file_ops, update_ops), not in rt.write_scd2 itself -- the smoke table
+    action_write path must not be affected.
+  - >-
+    Do NOT create docs/contracts/_joins.yaml entries for _contract_version or any field in
+    these contracts. No join currently uses these as keys; the incremental-landing rule (INTENT
+    Part 5) requires both referenced contracts to ratify before a join entry can land.
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    T-1.12 complete (2026-06-18): shipped scripts/contracts_schema.py + scripts/contracts.py
+    + the validate.py CD.25 drift gate + scripts/contracts_enforcement.py. The Class A shape
+    was verified live in the T0.12.7 planning session.
+  - >-
+    T0.12.7 complete (2026-06-19): three Class C contracts ratified (source-lineage, session-id,
+    project-id). ops_recommendations.source will be the first Class A $ref into source-lineage.
+    The source-lineage contract explicitly notes that ops_decisions does NOT carry source
+    (DecisionPayload has no source attribute).
+  - >-
+    Decision 84 (DuckLake sole backend): _contract_version is a DuckLake column addition in
+    config/lambda/ducklake/field_semantics.yaml, NOT Iceberg DDL. The authoritative live column
+    inventories are from field_semantics.yaml (25 for ops_recommendations, 13 for ops_decisions
+    as of 2026-06-20). _contract_version does not exist anywhere in the codebase today (zero
+    occurrences confirmed); stamping "1" is safe with no conflict risk.
+  - >-
+    Decision 65 (ops.yaml supersession): recording the supersession in the Class A contracts
+    is mandatory (exit criterion). ops.yaml retirement is T1.6 scope; the Class A contracts
+    and src/schemas/rec.py Annotated model become canonical after this plan.
+  - >-
+    Decision scout FLAGS_FOUND: CD.29 acceptance structure is mandatory (resolved by inclusion
+    in scope); exit criteria re-grounding needed for stale Iceberg/DynamoDB wording (resolved
+    by roadmap edit); Decision 44 executor boundary acknowledged in constraints.
+  - >-
+    source_priority_map maps all 29 registered sources from source_registry.yaml
+    (canonical_ids added 2026-05-08 to 2026-05-28). Concrete mapping: ci_rca->1,
+    budget_breach->1; executor-postmortem->2, executor-supervision->2,
+    architectural-review->2; code-review->3, planning->3, implement-agent->3, brainstorm->3,
+    telemetry-audit->3, workflow-audit->3, delegate-investigation->3,
+    infra-recommendation-executor->3, executor-gap-analysis->3, scoping->3,
+    cli-migration-analysis->3, tech-debt->3, manual->3, implement-session->3,
+    budget_bypass->3, agent-cron->3, cc-scheduled-agent-test->4, doc-freshness->4,
+    orphan-code->4, transcript-review->4, code-smell->4, prompt-quality->4, rec-curator->4,
+    autonomous-postflight-cleanup->4, "Autonomous Postflight Cleanup"->4.
+    fallback_priority=3 for future unregistered sources.
+  - >-
+    ops_decisions graduation arc context: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2
+    (Semantic Definition) is a blocking gate on semantic migration. The ops_decisions.yaml contract
+    ratifies the settled live schema only and explicitly defers open questions (dual keyspace,
+    enforced=False DqXxx fields) to the graduation plan. This avoids a post-ratification
+    semantic_break amendment.
+  - >-
+    Acceptance consumer lockstep: _extract_acceptance_command is in step_runner.py (~line 601),
+    NOT in acceptance_lint.py. The functions needing the shim in acceptance_lint.py are
+    validate_acceptance_feasibility (~line 28) and lint_acceptance_command (~line 96).
+    _check_acceptance_on_main in acceptance_lint.py passes acceptance_cmd as a str to
+    run_acceptance; that call site is unchanged (the callee normalises).
+  - >-
+    Branch claude/happy-clarke-qsrtzx; 0 commits behind origin/main at planning time.
+    No scope-file overlap with recent main changes.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/happy-clarke-qsrtzx)."
+  - "docs/ROADMAP-PLATFORM.yaml T0.12.5 exit criteria read (lines 2798-2812); stale Iceberg wording identified."
+  - "scripts/contracts_schema.py read; FieldSpec has no derivation key today; adding dict[str, Any] | None."
+  - "config/lambda/ducklake/field_semantics.yaml read; authoritative column inventories confirmed (25 ops_recommendations, 13 ops_decisions)."
+  - "src/lambdas/ducklake_writer/handler.py read; action_write_ops/action_file_ops/action_update_ops identified as _contract_version injection points."
+  - "scripts/executor/step_runner.py and acceptance_lint.py read; str-method assumptions confirmed in run_acceptance, _extract_acceptance_command, validate_acceptance_feasibility, lint_acceptance_command."
+  - "scripts/ops_writer.py and telemetry_schemas.py read; two docstring references to ops-data-store.md confirmed."
+  - "source_registry.yaml read; all 29 canonical_ids confirmed for priority source_priority_map."
+  - "docs/contracts/source-lineage.yaml read; $ref path confirmed as docs/contracts/source-lineage.yaml#/contract/fields/registry_key."
+  - "Decision 44/63/65/84 constraints understood and encoded in constraints section."
+  - "Lambda manifest confirmed status: active; --ducklake-only build command verified via CLI --help."
+execution_steps:
+  - "Read scripts/contracts_schema.py; add derivation: dict[str, Any] | None = None to FieldSpec after the amendment_log field; ensure Any is imported from typing if not already present."
+  - "Add two test cases to tests/test_contracts.py: (1) derivation block round-trips through load_contract without ValidationError; (2) truly unknown key raises ValidationError."
+  - "Run: bin/venv-python -m pytest tests/test_contracts.py -x -q to verify FieldSpec extension passes."
+  - "Read config/lambda/ducklake/field_semantics.yaml to confirm exact column inventory and table spec structure for both ops_recommendations and ops_decisions before authoring contracts."
+  - "Author docs/contracts/ops_recommendations.yaml (26 fields; source $ref; derivation blocks for priority/effort/automatable/risk with full source_priority_map; acceptance amendment_log type_widen entry; Decision 63/65/84 governance notes)."
+  - "Author docs/contracts/ops_decisions.yaml (14 fields; graduation arc deferred note; Decision 84 substrate note)."
+  - "Run verification Steps 1-4 (loader check, $ref resolution, derivation blocks, amendment_log); fix any assertion failures before proceeding."
+  - "Author docs/contracts/storage-substrate.yaml (non-ritual substrate index; no contract: block; covers ops_session_log, ops_execution_plans, ops_priority_queue, and 7 telemetry tables)."
+  - "Delete docs/contracts/ops-data-store.md."
+  - "Fix docstring references in scripts/ops_writer.py (~lines 10 and 73) and scripts/telemetry_schemas.py (~line 9)."
+  - "Run verification Step 8 to confirm deletion and reference removal."
+  - "Update scripts/executor/step_runner.py: add list[str] normalization in run_acceptance and _extract_acceptance_command (join with ' && '; empty list = null)."
+  - "Update scripts/executor/acceptance_lint.py: add list[str] normalization in validate_acceptance_feasibility and lint_acceptance_command."
+  - "Run verification Step 5 (pytest on acceptance/step_runner tests) to confirm shim does not break existing tests."
+  - "Add _contract_version column to both ops_recommendations and ops_decisions table specs in config/lambda/ducklake/field_semantics.yaml (type: string/VARCHAR, nullable: true, role: derived)."
+  - "Update src/lambdas/ducklake_writer/handler.py: inject record['_contract_version'] = record.get('_contract_version', '1') in action_write_ops, action_file_ops, and action_update_ops before the rt.write_scd2/rt.file_scd2 calls. Do not touch action_write (smoke-table path)."
+  - "Run verification Step 6 (CD.25 drift gate; expect 5 ritual contracts, no drift)."
+  - "Run full presubmit: bin/venv-python -m scripts.validate and fix any failures."
+  - "Run verification Step 7 (plan document validation)."
+  - "After plan-critique subagent converges: flip T0.12.5 status not_started -> complete in docs/ROADMAP-PLATFORM.yaml (+ completed_at: '2026-06-20' + progress_note)."
+  - "Run verification Step 9 (roadmap load + T0.12.5 complete)."
+  - "Build and deploy: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform."
+  - "Run verification Step 11 (ops-read-your-write smoke-test; confirm _contract_version='1' in written record)."
+  - "Commit all changes with message referencing T0.12.5 + T0.12.7 (closes T0.12.5). Push to claude/happy-clarke-qsrtzx."
+rollback: >-
+  The Class A contract YAMLs, storage-substrate.yaml, and the roadmap edit are additive new
+  files plus a status flip. Rollback = delete docs/contracts/ops_recommendations.yaml and
+  docs/contracts/ops_decisions.yaml and docs/contracts/storage-substrate.yaml, revert the
+  T0.12.5 status flip in docs/ROADMAP-PLATFORM.yaml, revert the FieldSpec derivation addition
+  in scripts/contracts_schema.py and its tests, revert the two docstring fixes, revert the
+  acceptance consumer shims in step_runner.py and acceptance_lint.py, and revert the
+  _contract_version addition to field_semantics.yaml and handler.py (then redeploy Lambda
+  --ducklake-only to restore the prior handler). No runtime consumer reads the Class A contracts
+  yet (Class A $refs land in T0.12.6); removal is side-effect-free for the contracts. The
+  _contract_version column is nullable; historical rows remain NULL whether or not the handler
+  stamps it, so a Lambda rollback does not corrupt existing data.
