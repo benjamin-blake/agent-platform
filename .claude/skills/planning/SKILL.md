@@ -166,6 +166,14 @@ apply these rules:
 
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
 **Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.
+
+**Speculative-plan expectations (CD.35 Wave 2 / T2.21, active):** When `.tf` files under `terraform/personal/` are in scope, the plan must account for the speculative-plan pipeline:
+- **Pre-merge (PR):** the `speculative-plan` job plans under `github_ci_plan`, posts a redacted diff + the guard's **predicted** verdict as a PR comment, and persists `plan.bin` to `s3://.../tfplan/personal/<pr-head-sha>.bin`. The predicted verdict is advisory; the merge-time guard re-run on the saved plan is authoritative.
+- **At merge (push to main):** the `apply-sandbox` job fetches the saved `plan.bin` reviewed on the PR and applies it -- **no re-plan** (Decision 77 no-TOCTOU). Apply is gated on the merge-time guard `success()` with no `continue-on-error`.
+- **Stale saved plan:** if the saved plan.bin is stale (Terraform detects state-serial mismatch), the apply exits non-zero, the convergence record goes red, and ci-rca files a `source=ci_rca` rec. Recovery is the `workflow_dispatch` acknowledge-and-retry (re-plans fresh, human-reviewed). **No silent re-plan-and-apply; the push path has no fallback.**
+- **IAM-sensitive diffs (guard exit 2):** the guard blocks IAM/trust/destroy changes from auto-applying. These land via `agent_platform_admin` human-gated apply (existing loop in `terraform/CLAUDE.md`). The speculative-plan job still runs and posts its comment; the predicted verdict will be BLOCKED.
+- **Convergence record `plan_sha`:** populated with `sha256(plan.bin)` on the push (saved-plan) path; null on `workflow_dispatch` (fresh plan).
+
 **Lambda Deployment:** Use the manifest-derived file patterns (`bin/venv-python -m scripts.lambda_manifest --list-patterns`) to determine which scope files are Lambda-packaged, and `compute_affected_artifacts(changed_files)` to identify which active artifact(s) are affected. For each affected active artifact (status: active in its `src/lambdas/<slug>/manifest.yaml`), the plan MUST include per-Lambda build, deploy, smoke-test, and model ID validation steps (V3). Stub artifacts (status: stub) require no deploy step -- V1 suffices. Note: `config/agent/` is NOT Lambda-packaged and does NOT trigger this assessment. If `.tf` modifies IAM, terraform apply must precede Lambda deploy. (CD.16 + Decision 79)
 
 ## Complexity Assessment (Workflow Step 4)

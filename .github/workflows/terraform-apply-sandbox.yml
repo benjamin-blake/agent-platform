@@ -186,10 +186,14 @@ jobs:
       - name: Mask secret-sourced tfvars values in logs
         # rec-2214: emit ::add-mask:: for account_id and the two ExternalId trust secrets BEFORE any
         # step writes plan.json / review.txt, so they are redacted in all subsequent log output.
+        # rec-2285: split on first '=' only (line%%=* / line#*=) so values containing '=' are not
+        # truncated (the old IFS='=' read -r key value silently dropped everything after the second =).
         if: success()
         run: |
           set -euo pipefail
-          while IFS='=' read -r key value; do
+          while IFS= read -r line; do
+            key=${line%%=*}
+            value=${line#*=}
             key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
             case "$key" in
@@ -243,9 +247,40 @@ jobs:
           done
           set -e
 
-      - name: Terraform plan
+      - name: Fetch saved plan from S3 (push -- apply-the-saved-plan path, T2.21)
+        id: fetch_plan
+        # CD.35 Wave 2: on push to main, apply the SAME plan.bin reviewed on the PR (no re-plan).
+        # Resolve the originating PR head SHA from the merge commit, fetch the persisted tfplan
+        # object, and run terraform show -json to produce plan.json for the guard. Fail closed
+        # if no PR is found or no saved plan object exists -- recovery is the workflow_dispatch
+        # acknowledge-and-retry (dispatch re-plans fresh; push NEVER re-plans autonomously).
+        if: success() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${SHA}; failing closed (no saved plan -- recovery is workflow_dispatch ack)." >&2
+            exit 1
+          fi
+          PLAN_OBJ="s3://agent-platform-data-lake/tfplan/personal/${PR_HEAD_SHA}.bin"
+          echo "Fetching saved plan: ${PLAN_OBJ}"
+          if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
+            echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed (push path has no re-plan fallback)." >&2
+            exit 1
+          fi
+          aws s3 cp "$PLAN_OBJ" plan.bin
+          terraform show -json plan.bin > plan.json
+          echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Fetched and verified saved plan from ${PLAN_OBJ}"
+
+      - name: Terraform plan (workflow_dispatch -- fresh plan)
         id: plan
-        if: success()
+        if: success() && github.event_name == 'workflow_dispatch'
         working-directory: ${{ env.WORKDIR }}
         run: |
           terraform plan -input=false -lock-timeout=120s -var-file=terraform.personal.tfvars -out=plan.bin
@@ -330,6 +365,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           if [ "$REFUSED" = "true" ]; then
             echo "Precondition refused on a red record; NOT overwriting the convergence record (anchor integrity)."
@@ -346,9 +382,15 @@ jobs:
           fi
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
-          # plan_sha is null until T2.21 (Wave 2) introduces saved plans.
-          export STATUS TS SHA RUN_ID RUN_URL
-          RECORD=$(python3 -c "import json,os; print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':None}))")
+          # plan_sha: sha256 of the saved plan.bin applied on push (apply-the-saved-plan path, T2.21).
+          # Null on workflow_dispatch (dispatch uses a fresh plan not persisted to S3).
+          if [ "${EVENT_NAME}" = "push" ] && [ -f "${WORKDIR}/plan.bin" ]; then
+            PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
+          else
+            PLAN_SHA=""
+          fi
+          export STATUS TS SHA RUN_ID RUN_URL PLAN_SHA
+          RECORD=$(python3 -c "import json,os; v=os.environ.get('PLAN_SHA',''); print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':v if v else None}))")
           printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
           echo "Wrote convergence record: ${RECORD}"
           # rec-2211: post-write read-back -- re-GET the object and verify the written status matches
@@ -392,6 +434,223 @@ jobs:
             MSG="sandbox terraform-apply did NOT converge (RED) for ${SHA}; ci-rca will file a source=ci_rca rec. After review, unlatch via the workflow_dispatch acknowledge-and-retry path. (Best-effort wake.)"
           fi
           gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
+
+  # ---------------------------------------------------------------------------
+  # Speculative-plan job: pull_request ONLY, same-repo gated (CD.35 Wave 2 / T2.21).
+  # Plans under github_ci_plan (tfstate-read, tfplan-write), captures the guard's PREDICTED
+  # verdict, persists plan.bin keyed by PR head SHA for apply-the-saved-plan at merge, and
+  # posts a redacted diff + verdict as a PR comment. Fork PRs are excluded via the job-level
+  # if: guard (fork OIDC cannot assume github_ci_plan; the trust + job gate together enforce
+  # the capability split from github_ci_pr which has NO tfstate read).
+  # Decision 83 / CD.20: the speculative-plan PR comment is advisory -- do NOT add it to
+  # required_status_checks (would wedge autonomous fix-merges once any record is red).
+  # ---------------------------------------------------------------------------
+  speculative-plan:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write       # OIDC for the plan role
+      contents: read
+      pull-requests: write  # post the speculative-plan comment
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+      TF_VAR_aws_profile: ""
+      WORKDIR: terraform/personal
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials (OIDC -- plan role, PR only)
+        # Best-effort: before the admin apply creates agent-platform-github-ci-plan (bootstrap
+        # window), the assume-role fails. continue-on-error lets the job proceed; the plan step
+        # will fail on missing credentials, but the job failure is advisory (not a required check).
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-plan
+          aws-region: eu-west-2
+
+      - name: Read pinned Terraform version
+        id: tfver
+        run: echo "version=$(cat config/terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Materialise tfvars from Secrets Manager
+        if: success()
+        run: |
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
+            --secret-id agent-platform-terraform-personal-tfvars \
+            --query SecretString --output text \
+            > terraform/personal/terraform.personal.tfvars
+
+      - name: Mask secret-sourced tfvars values in logs
+        # rec-2285: split on first '=' only so values containing '=' are not truncated.
+        if: success()
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            key=${line%%=*}
+            value=${line#*=}
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+            case "$key" in
+              account_id|platform_dev_external_id|platform_admin_external_id)
+                if [ -n "$value" ]; then
+                  echo "::add-mask::${value}"
+                fi
+                ;;
+            esac
+          done < terraform/personal/terraform.personal.tfvars
+
+      - name: Assert tfvars file is non-empty (fail-closed)
+        if: success()
+        run: |
+          test -s terraform/personal/terraform.personal.tfvars || {
+            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+            exit 1
+          }
+
+      - name: Terraform init (S3 backend, sandbox)
+        if: success()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          # Bounded retry for transient registry.terraform.io 5xx (parity with validate.py
+          # _TRANSIENT_INIT_SIGNATURES: 502 / Bad Gateway / could not query provider registry / failed after ).
+          set +e
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"
+              break
+            fi
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+              if [ "$attempt" -lt 3 ]; then
+                delay=$(( 2 ** attempt ))
+                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+                echo "$out" >&2
+                sleep "$delay"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+            echo "$out" >&2
+            set -e
+            exit "$rc"
+          done
+          set -e
+
+      - name: Terraform speculative plan (-lock=false, read-only preview)
+        id: spec_plan
+        # -lock=false: github_ci_plan has no tfstate PutObject, so it cannot take the native S3
+        # lock. The merge-time apply under github_ci_apply still locks normally.
+        if: success()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform plan -lock=false -input=false -var-file=terraform.personal.tfvars -out=plan.bin
+          terraform show -json plan.bin > plan.json
+
+      - name: Deterministic apply guard (predicted verdict)
+        id: pred_guard
+        # Captures the PREDICTED verdict from the unmodified guard. This is advisory -- the
+        # authoritative verdict is the guard re-run at merge time on the saved plan. Exit codes:
+        #   0 = PASS, 2 = BLOCKED (IAM/trust/destroy), 1 = internal error.
+        if: success()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          python ../../scripts/terraform_apply_guard.py plan.json
+          PRED_RC=$?
+          set -e
+          if [ "$PRED_RC" -eq 0 ]; then
+            echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+          elif [ "$PRED_RC" -eq 2 ]; then
+            echo "verdict=BLOCKED" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=ERROR" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Persist saved plan to S3
+        # Keyed by PR head SHA: s3://agent-platform-data-lake/tfplan/personal/<sha>.bin.
+        # The apply job resolves this key at merge time via the merge commit's PR lookup.
+        if: success()
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          aws s3 cp plan.bin "s3://agent-platform-data-lake/tfplan/personal/${HEAD_SHA}.bin"
+          echo "Persisted saved plan to s3://agent-platform-data-lake/tfplan/personal/${HEAD_SHA}.bin"
+
+      - name: Build and post PR comment (redacted plan + predicted verdict)
+        # Post the speculative-plan diff + guard verdict as a PR comment. Scrub account_id and
+        # ExternalIds (same rec-2285-fixed parsing used in the mask step). Self-check fails the
+        # job if any 12-digit account-number sequence survives redaction (public-repo safety).
+        if: always() && steps.spec_plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREDICTED_VERDICT: ${{ steps.pred_guard.outputs.verdict || 'UNKNOWN' }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          # Extract values to scrub using the rec-2285-fixed first-'='-split parsing.
+          ACCOUNT_ID_VAL=""
+          DEV_EXT_ID=""
+          ADM_EXT_ID=""
+          while IFS= read -r line; do
+            key=${line%%=*}
+            value=${line#*=}
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+            case "$key" in
+              account_id)                  ACCOUNT_ID_VAL="$value" ;;
+              platform_dev_external_id)    DEV_EXT_ID="$value" ;;
+              platform_admin_external_id)  ADM_EXT_ID="$value" ;;
+            esac
+          done < terraform.personal.tfvars
+
+          # Build redacted plan text. Use Python str.replace (not sed) to avoid sed-injection:
+          # ExternalId trust secrets may contain '/' or '&' which break sed s/// delimiters.
+          PLAN_TEXT=$(terraform show -no-color plan.bin 2>/dev/null || echo "(plan output unavailable)")
+          PLAN_REDACTED=$(printf '%s' "$PLAN_TEXT" \
+            | _ACCT="$ACCOUNT_ID_VAL" _DEV="$DEV_EXT_ID" _ADM="$ADM_EXT_ID" \
+              python3 -c "import sys,os;s=sys.stdin.read();a=os.environ.get('_ACCT','');d=os.environ.get('_DEV','');m=os.environ.get('_ADM','');s=(s.replace(a,'[ACCOUNT_ID]') if a else s);s=(s.replace(d,'[ExternalId]') if d else s);s=(s.replace(m,'[ExternalId]') if m else s);sys.stdout.write(s)")
+
+          # Build the PR comment using concatenation (YAML block-scalar constraint: continuation
+          # lines of a bare bash string drop to column 0, which the YAML scanner treats as an
+          # alias token and fails to parse; keep all lines at run: | block indentation).
+          _NL=$'\n'
+          COMMENT="### Terraform Speculative Plan (CD.35 Wave 2 / T2.21)${_NL}"
+          COMMENT+="${_NL}**Predicted guard verdict: ${PREDICTED_VERDICT}**${_NL}"
+          COMMENT+="PR head SHA: \`${HEAD_SHA}\` -- this saved plan will be applied at merge (apply-the-saved-plan path).${_NL}"
+          COMMENT+="A stale saved plan fails closed at merge; recovery is the workflow_dispatch acknowledge-and-retry path.${_NL}"
+          COMMENT+="${_NL}<details>${_NL}<summary>Terraform plan output (sensitive values redacted)</summary>${_NL}"
+          COMMENT+="${_NL}\`\`\`${_NL}${PLAN_REDACTED}${_NL}\`\`\`${_NL}</details>"
+
+          # Redaction self-check: fail the job if any 12-digit sequence (account number) survives.
+          if printf '%s' "$COMMENT" | grep -qP '(?<!\d)\d{12}(?!\d)' 2>/dev/null || \
+             printf '%s' "$COMMENT" | python3 -c "import re,sys; s=sys.stdin.read(); sys.exit(1 if not re.search(r'(?<!\d)\d{12}(?!\d)',s) else 0)"; then
+            echo "::error::REDACTION_FAIL: comment body contains a 12-digit account number; failing job to prevent account-id leak." >&2
+            exit 1
+          fi
+
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$COMMENT" || true
 
   # ---------------------------------------------------------------------------
   # Advisory status job: pull_request ONLY, read-only (CD.35 5.5).
