@@ -28,7 +28,7 @@ _LOGS_DIR = _REPO_ROOT / "logs"
 # ---------------------------------------------------------------------------
 # OpsWriter write-through routing (Decision 50)
 # Best-effort: failures are logged and never propagate to callers.
-# ops_decisions has no automated write-through -- deferred to Phase 2.
+# ops_decisions write-through is the portal on the DuckLake boundary (Decision 84).
 # ---------------------------------------------------------------------------
 
 _OPS_TABLE_ROUTING: dict[str, str] = {

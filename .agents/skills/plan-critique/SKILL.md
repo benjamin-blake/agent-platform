@@ -1,6 +1,6 @@
 ---
 name: plan-critique
-description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.md before implementation. Mandatory gate between planning and implementation."
+description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.yaml before implementation. Mandatory gate between planning and implementation."
 required-context:
   - .github/copilot-instructions.md
   - docs/ROADMAP-PRODUCT.md
@@ -10,7 +10,7 @@ required-context:
 
 ## Intent
 
-Challenge PLAN-*.md from a different perspective than the model that wrote it. Evaluate strategic alignment, decision consistency, and work area scoping before implementation begins.
+Challenge PLAN-*.yaml from a different perspective than the model that wrote it. Evaluate strategic alignment, decision consistency, and work area scoping before implementation begins. (Plans are YAML documents validated against the `PlanDocument` schema in `scripts/plan_document.py` per T1.11 / CD.22; the legacy PLAN-*.md form is deprecated -- if handed a .md path, emit a deprecation warning in your output and critique it anyway for one release cycle. This legacy mirror is updated as voluntary hygiene -- `.claude/skills/plan-critique/SKILL.md` is canonical per Decision 76; no sync obligation exists.)
 
 This is a BLOCKING gate. The critique must assess whether the plan is strategically sound, well-bounded, and aligned with the North Star. A superficial review that only checks formatting is unacceptable.
 
@@ -20,7 +20,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 ### Phase 1: Load Context (MANDATORY - Do Not Skip)
 
-1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.md`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.md` and read the most recently modified one.
+1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.yaml`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.yaml` and read the most recently modified one (fall back to `PLAN-*.md` only if no .yaml exists, and note the deprecation in your output).
 
 2. Read `.github/copilot-instructions.md` (for North Star and rules).
 

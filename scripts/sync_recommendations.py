@@ -3,9 +3,10 @@
 next_id(counter_name): Atomically allocate the next sequential ID from DynamoDB.
 seed_counters(profile): Seed DynamoDB counters from local JSONL + DECISIONS.md.
 
-The merge_from_s3() and push_closures_to_s3() functions (agent-* ID sync) have
-been removed. All new writes go through scripts.ops_data_portal which uses
-DynamoDB atomic IDs and OpsWriter S3 staging as the single write path.
+ROLLBACK TOOLING ONLY (Decision 84 I-2): the ducklake_writer owns rec-NNN allocation;
+nothing on the live path calls next_id. These CLIs survive solely so a portal revert can
+reseed the DynamoDB counter FROM THE DUCKLAKE MAX first (stale ids silently overwrite
+writer-allocated recs otherwise). Retires with the counters table at demolition.
 """
 
 from __future__ import annotations

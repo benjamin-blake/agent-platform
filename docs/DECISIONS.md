@@ -2,6 +2,368 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-20
+**Warehouse ID:** dec-093 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The platform's telos is removing the human from the autonomous loop, which qualifies almost everything as "MVP-critical" -- there is no natural MVP boundary under that framing. Post-MVP hardening work (secrets rotation, backup/DR posture, devcontainer substrate, portal artefacts) competes on the same eligibility surface as critical-path items, making next-eligible noisy and sequencing ambiguous.
+
+**Decision:**
+Platform-MVP boundary defined as: "the autonomous loop closes end-to-end with no human in the critical path of one iteration (rec -> implement -> validate -> merge -> deploy -> observe -> next rec)." Introduces a `deferred_post_mvp` lifecycle status and the defer-by-exception rule to resolve the boundary without enumerating the MVP set upfront (which would trip the frame-lock anti-pattern, Decision 75).
+
+**Boundary definition:**
+An autonomous loop iteration is: a recommendation is filed, implemented by the agent, validated, merged, deployed, and produces the next observable state -- with no human in the critical path. When this closes end-to-end, the platform is at MVP. Everything after that is hardening / polish.
+
+**Defer-by-exception rule:**
+New platform work is MVP-critical by default; items leave MVP scope only by conscious deferral. The MVP set is never enumerated -- only the deferred set is. This avoids the frame-lock anti-pattern of committing to a fixed MVP surface before the autonomous loop is proven closed.
+
+**deferred_post_mvp status semantics:**
+- Living cousin of `reserved` (which marks tombstones/superseded items). Unlike `reserved`, a deferred item is REACTIVATABLE per-item by restoring status -> not_started.
+- Excluded from next_eligible and tier-completion math (alongside `reserved`); a tier of [complete, deferred_post_mvp] is treated as complete and does not wedge active_tier().
+- Absent from the lean preflight/orient digest, so parked items are excluded from the eligibility surface rather than displayed there. Recorded in a separate `deferred_post_mvp` bucket in the FULL compute_state (queryable on demand).
+- No live platform item (status == not_started or in_progress) may depend_on a deferred_post_mvp item. The platform_roadmap.py model_validator enforces this at load time (fail loud at validation, never silently strand a dependent).
+
+**PLATFORM-INTERNAL scoping:**
+The no-live-dep restriction is enforced by platform_roadmap.py model_validator ONLY -- not added to product_roadmap.py. Cross-roadmap edges from ROADMAP-PRODUCT.yaml to deferred platform items (e.g. E.env.3 -> PLATFORM:T2.9) are permitted and remain dormant until product work begins, per the platform-first directive. These edges are revisited when the product roadmap is activated.
+
+**Items parked (deferred_post_mvp) at Decision 93 ratification:**
+- T2.8 (backup/DR posture for the personal account): clean leaf; hardening, not on the autonomous-loop critical path.
+- T2.9 (secrets rotation policy + automation): hardening; platform edge T2.14 corrected (see below); product edge E.env.3 left dormant per platform-first directive.
+- T2.11a (Codespaces devcontainer substrate): public-surface polish; not in the autonomous-loop critical path.
+- T2.11b (public-portal artefacts): co-parked with T2.11a (depends_on T2.11a; same public-surface-polish category; downstream T2.12/T2.13 already complete so nothing live is stranded).
+
+**T5.2 exclusion rationale:**
+T5.2 (teardown) was considered but excluded: it is a near-due cost-saver (grace elapses ~2026-06-28), user_action_required, and currently eligible. Parking it would hide a billing-stopper from the eligibility surface.
+
+**T2.14 depends_on edge correction:**
+T2.14 (broker credential routing) declared depends_on: [T2.1, T2.9]. The T2.9 edge was incorrect: T2.14 provisions its own Secrets Manager surface and does not require rotation automation as a prerequisite. Edge re-pointed to depends_on: [T2.1]. Required for the no-live-dep invariant to pass with T2.9 parked.
+
+**Related:** Decision 73 (sandbox-only / forward-fix posture -- the boundary is consistent with it, not a re-derivation), Decision 75 (frame-lock anti-pattern; defer-by-exception avoids it), Decision 80 (validate.py single source of truth; the invariant lives in platform_roadmap.py model_validator, picked up by validate_platform_roadmap via load()), Decision 86 (no new prose-architecture doc; boundary semantics live in Decision 93 + ROADMAP-PLATFORM.yaml agent_instructions only), Decision 90 (four-tier workflow; parked items are excluded from the next_eligible eligibility surface, not surfaced in an orient bucket).
+
+---
+
+## Decision 92: Ratify CD.35 -- agent-native Terraform CI/CD (Wave 1 shipped) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-19
+**Warehouse ID:** dec-092 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+CD.35 (Agent-native Terraform CI/CD) specified a five-wave architecture ratified via the log-decision
+path once Wave 1 / T2.20 shipped. Wave 1 is now SHIPPED AND PRODUCTION-PROVEN: the convergence
+substrate landed in PRs #142 (#179 hardening, #185 SSM closure), real CONVERGENCE_RED latches fired
+(rec-2236 @7678d3e, rec-2238 @bfa5229f), were refused server-side, filed as source=ci_rca recs, and
+cleared via the dispatch-ack path -- behavioural proof of T2.20 exit criteria 1/2/4. The roadmap
+still showed T2.20 not_started and CD.35 state:pending with a pending_log_decision_lambda clause.
+
+**Decision:**
+Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is ratified:
+
+1. **Authorization division (INTENT 5.9):** native controls own AUTHORIZATION (required checks,
+   linear history, GitHub Environment reviewer gate); the deterministic guard narrows to plan-CONTENT
+   policy. The guard fails closed on IAM/trust/destroy changes and is never the authorization lock.
+
+2. **Server-side convergence anchor -- sole hard block (INTENT 5.5):** the apply job writes a durable
+   S3 convergence record (pipeline-writer-identity-only write-IAM; always-run, red-on-failure) and
+   reads it as a precondition that refuses to apply against a red record. An absent record = first-apply-
+   allowed (pass-on-absent). The record lives in its own S3 prefix outside tfstate/ so the PR role reads
+   it without seeing tfstate. A red record clears ONLY via the workflow_dispatch acknowledge-and-retry
+   path; a plain push never clears red (auto-allow-descendants rejected on linear-history main).
+   terraform-converged is an ADVISORY PR status ONLY (not a required check -- required would wedge the
+   autonomous fix-merge or be admin-bypassed; main-protection strict=false + bypass_mode=always, Decision 83).
+
+3. **Routine-vs-gated autonomy boundary and Environment-gates-execution security model (ratified
+   DIRECTION for Waves 2-5, INTENT 5.4 + 5.6):** routine (guard-PASS, non-IAM) changes ride the
+   record-backed pipeline; high-blast changes (IAM/trust/destroy) route to a GitHub Environment whose
+   required reviewer gates JOB EXECUTION. The privileged role OIDC trust stays pinned to refs/heads/main.
+
+4. **Rejected guard-self-grant exception + privilege-tiering (INTENT 5.8, Wave 4):** the CI/CD role's
+   own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
+   cycle. Without that separation any automated handling of the fail-closed set is self-approval.
+
+5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
+   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
+   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
+   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
+   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
+   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+
+6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
+   drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
+
+Waves 2-5 and Wave X are RATIFIED DIRECTION -- architecture decided, implementation pending their
+respective tier items (T2.21/T2.22/T2.23/T2.24/T2.25).
+
+**Supersession of CD.35's pending_log_decision_lambda clause:**
+CD.35's discipline_points contained a "does NOT edit DECISIONS.md while pending; ratified via the
+log-decision path" clause and field filed_via: pending_log_decision_lambda. This Decision 92 DELIBERATELY
+supersedes that clause -- the DECISIONS.md-edit + `ops_data_portal --backfill-decisions-md` ETL is the
+sanctioned ratification path per Decision 84 (canonical source + ETL) and the Decision 90/91 precedents
+(both ratified via the same path on 2026-06-18/19). The pending_log_decision_lambda mechanism is
+superseded as of this Decision; CD.35 is now filed_via: ops_decisions:dec-092.
+
+**Rationale:**
+Mirrors CD.31->Decision 78 and CD.33->Decision 81: architecture ratified once the implementation
+is production-proven. The DECISIONS.md-edit path (per Decision 84 + Decision 90/91 precedents) is
+cleaner than the log-decision path, which required a separate Lambda invocation -- Decision 84 retired
+the Lambda path for ops_decisions (DuckLake writer now owns it) and Decision 84 I-2 established backfill
+ETL from DECISIONS.md as the rebuild path. Ratifying CD.35 here confirms that the DECISIONS.md-edit
++ backfill ETL is the canonical ratification path for all future candidate decisions.
+
+**Related:** CD.35 (ratified here; filed_via: ops_decisions:dec-092), T2.20 (Wave 1 shipped),
+T2.21-T2.25 (direction ratified; implementation pending), Decision 77 (guard fail-closed; narrowing is
+T2.25/Wave X), Decision 83 (main-protection non-wedging; advisory-not-required advisory status),
+Decision 84 (DECISIONS.md canonical source + ETL), Decision 90/91 (edit-and-backfill precedents),
+Decision 55 (alarm + file recs; nothing auto-remediates), Decision 72 (RCA-as-plan-source).
+
+---
+
+## Decision 91: Ratify OQ.15 option (a) -- agent verb surface extends ducklake_writer/reader; T0.6 closed via supersession; CD.10 six-Lambda enumeration superseded (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-18
+**Warehouse ID:** dec-091 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+OQ.15 (opened 2026-06-09, audit F-008) asked whether the agent-facing verb surface should (a) extend
+the ducklake_writer/ducklake_reader verb sets directly, or (b) use thin verb Lambdas fronting them.
+The question was left open pending T0.6 plan time, but T0.6's original Terraform skeleton was never
+built in the personal account -- instead the ducklake_writer/reader closed boundary shipped (T2.17/T2.19)
+and T2.28 landed the NAMED_READS registry, realizing the functional scope of T0.6 via a different
+mechanism. Six src/lambdas/<verb>/ stub mocks (log_rec, log_decision, query, update_rec, list_tools,
+maintenance) and their work-root Terraform (lambda_tooling_platform.tf, lambda_tooling_outputs.tf,
+never applied per CD.21) accumulated as dead artefacts. CD.10's six-Lambda enumeration remained
+state:pending while the shipped architecture made it illustrative in practice (Decision 81 cl.2).
+The roadmap carried stale files_in_scope / exit_criteria pointing at deleted stubs in six tier items
+(T0.7a/b/c, T1.1/T1.2/T1.3) and stale query/ path comments in T2.5 and T2.7.
+
+**Decision:**
+1. Ratify OQ.15 option (a): the agent-facing verbs extend the ducklake_writer/ducklake_reader verb
+   sets directly. This ratifies the shipped architecture per Decision 81 cl.2 (extensible verb surface,
+   NOT a fresh design pick) and Decision 84 I-3 (named-verb closed boundary). The shipped routing is:
+   scripts/ops_data_portal.py routes file_rec->write_ops/file_ops, update_rec->update_ops, and
+   file_decision->write_ops on ducklake_writer; reads use the NAMED_READS registry
+   (src/common/ducklake_scd2_schema.py) via ducklake_reader.named_read. Function-URL+AWS_IAM is
+   live in terraform/personal/ducklake_lambdas.tf; PlatformDev/PlatformAdmin invoke via
+   DuckLakeInvokeRuntime (platform_roles.tf:142-152 + AdminOps).
+2. Close T0.6 (Lambda-tooling-platform Terraform skeleton) as realized-via-supersession. The verb
+   surface T0.6 planned to provision is already live as the ducklake_writer + ducklake_reader closed
+   boundary. T0.6's bootstrap_completion_exempt: true permits completion with CD.10 still state:pending.
+3. Supersede CD.10's six-Lambda enumeration (log-rec, log-decision, query, update-rec, list-tools,
+   maintenance as separate Lambdas). The enumeration was illustrative per Decision 81 cl.2; this
+   decision records its supersession. CD.10's PlatformDev/PlatformAdmin two-principal allow-list is
+   RETAINED -- realized in DuckLakeInvokeRuntime. CD.10 itself remains state:pending; only the
+   six-Lambda enumeration clause is superseded.
+4. Re-ground tier items T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 files_in_scope and exit_criteria to
+   the named-verb writer/reader surface. Status remains not_started; likely silent-completion of each
+   item is flagged in their notes for dedicated per-item closeout plans.
+5. Delete the six src/lambdas/<verb>/ stub directories, tests/test_lambda_stubs.py,
+   terraform/lambda_tooling_platform.tf, and terraform/lambda_tooling_outputs.tf. Retain
+   terraform/lambda_tooling_iam.tf (agent_auth.tf circular reference + T1.15 ownership).
+
+**Rationale:**
+The Decision 81 cl.2 extensible-verb-surface and Decision 84 I-3 named-verb boundary together made option
+(a) the natural landing point: fewer Lambdas, verb logic co-located with the schema gate, and the NAMED_READS
+registry already provides the query-surface discovery needed for T0.7c/T1.2/T1.3. Option (b)'s per-verb SLO
+benefit (T1.9) does not outweigh the added hop and the deployment blast radius of six separate Lambdas.
+Recording the resolution now cleans the roadmap of stale artefacts and stops agents from planning against
+deleted stub paths, while the conservative not_started status for T0.7x/T1.x preserves the formal closeout
+gate for each item's unit-test coverage and import_mode edge cases.
+
+**Related:** Decision 81 cl.2 (extensible verb surface superseding CD.10 six-Lambda enumeration),
+Decision 84 I-3 (named-verb read boundary + I-2 writer-owned keyspace), Decision 79 (per-Lambda deploy
+gating -- stubs are status:stub, no deploy step required), CD.10 (six-Lambda enumeration superseded here;
+two-principal allow-list retained; state:pending unchanged), CD.33 (closed read/write boundary ratified),
+OQ.15 (resolved to option (a) here), T0.6 (closed via supersession), T0.7a/b/c/T1.1/T1.2/T1.3
+(re-grounded; still not_started), ROADMAP-PLATFORM.yaml.
+
+---
+
+## Decision 90: Four-Tier Workflow Architecture (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-19
+**Warehouse ID:** dec-090 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 42 established the Three-Tier Workflow Architecture: `/plan` -> `/implement` -> `/develop-executor`. Since then, a read-only orientation step `/orient` was added as the entry point to the pipeline (PR #183, 2026-06-18). Multiple instruction surfaces (AGENTS.md, `.claude/skills/orient/SKILL.md`) continue to cite Decision 42 as a "three-tier" architecture, misframing the pipeline for planning agents that now enter via `/orient`.
+
+**Decision:**
+The canonical end-goal workflow architecture is four tiers:
+
+```
+/orient -> /plan -> /implement -> /develop-executor
+```
+
+Tier responsibilities:
+- `/orient` -- read-only orientation: surfaces eligible work, CI-RCA triage, ranked what-to-work-on, and up to N disjoint `/plan` prompts with an overlap matrix and keystone-first sequencing. Produces a chat reply only; writes nothing.
+- `/plan` -- clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.yaml`. Scopes work; does not execute code changes directly.
+- `/implement` -- executes IMPLEMENTATION plans directly; scopes STRATEGIC plans into atomic recommendations the executor consumes.
+- `/develop-executor` -- autonomous executor: consumes atomic recommendations from the priority queue.
+
+**Current operational state (2026-06-19):** `/orient` -> `/plan` -> `/implement` only. Executor and STRATEGIC plans are frozen per Decision 67 / CD.17; `/implement` makes code changes directly during the freeze.
+
+**Supersedes:** Decision 42 (Three-Tier Workflow Architecture). Supersedes Decision 42's framing; Decision 42's body is preserved intact with its status annotated "Superseded by Decision 90".
+
+**Related:** Decision 42 (superseded here), Decision 67 (executor + STRATEGIC freeze; the current operational constraint), Decision 76 (.claude/ as the canonical interactive layer).
+
+---
+
+## Decision 88: Neon catalog egress is a first-class budget -- four standing access-pattern invariants + a measurement obligation; amends CD.34's "negligible add-on" (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-16
+**Warehouse ID:** dec-088 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+On 2026-06-15 the DuckLake-on-Neon catalog breached Neon's free-tier 5 GB/month egress cap and forced a paid-plan upgrade. CU-hours stayed well under quota -- the low-compute / high-egress signature of bulk metadata transfer, not computation. The catalog holds only METADATA (row data is S3 Parquet; inlining is disabled), so the egress was self-inflicted access-pattern amplification, code-verified to four sources: (D1) a daily full-catalog pg_dump DR job; (D2) a fresh cold DuckLake ATTACH on every reader/writer invocation with no warm reuse, amplified by DuckDB's postgres scanner sequential-COPY of `ducklake_file_column_stats` per query (ducklake #859); (D3) production catalog metadata never snapshot-expired, so D1/D2 grow unbounded; (D4) a preflight reader fan-out of ~9-10 calls per session plus a full-table resync after every portal write. Nothing treated catalog egress as a budgeted resource, and nothing measured it -- the breach was the first signal.
+
+**Decision:**
+1. Catalog egress is a FIRST-CLASS cost budget for the platform, ranked beside compute and storage. It protects the near-zero-cost operating posture (Decision 84 / Decision 81) and is governed by four standing access-pattern invariants that any code touching the catalog MUST uphold:
+   (i) Reuse warm catalog connections across sequential invocations -- never a cold ATTACH per request where a container can hold one. A dead session (Neon scale-to-zero) is the one expected reopen condition (Decision 55: any other error still raises).
+   (ii) Never re-query data already in the local read-cache. Preflight and other read paths serve from the rows the single warm-up sync already pulled; a genuinely-needed warehouse read uses a registered named verb (Decision 84 I-3), never an ad-hoc re-fetch of data in hand.
+   (iii) Keep the catalog compacted: non-destructive merge runs on ALL live ops_* tables on a cadence sized to write rate (the smaller the `ducklake_file_column_stats` footprint, the smaller every read's per-query egress). Destructive expiry/cleanup/orphan deletion stays behind a proven restore drill (see clause 4).
+   (iv) Size the DR dump cadence to the durability tier and the MEASURED egress, not to a habit. A daily full dump is not free when egress is metered.
+2. Measurement obligation: catalog metadata size and Neon egress-by-source must be instrumentable on demand, so this budget is enforceable rather than aspirational. The `catalog_stats` maintenance action (read-only; reads the catalog's own Postgres metadata via psycopg2 -- no ATTACH, no data_path) is the supported measurement path (the DR bucket and direct CloudWatch reads are IAM-blocked from the dev role by design). It reports total catalog-metadata bytes (exact), the `ducklake_file_column_stats` row estimate (the #859 driver), and a per-ops_*-table breakdown. The dump size and implied monthly-egress numbers are folded into the Warehouse measurement record once the post-deploy `catalog_stats` invocation runs against the live catalog (the mechanism lands with this Decision; the figures are a post-deploy measurement step, not a planning-time guess).
+3. CD.34 amendment: CD.34 called the daily pg_dump-to-S3 DR "a negligible add-on". That holds for STORAGE (a versioned, lifecycle-expired bucket) but is FALSE for EGRESS -- a daily full-catalog dump is a session-independent metered-egress line. The DR cadence is lowered daily -> weekly (cron(0 3 ? * SUN *)); paid-tier Neon's 7-day PITR provides finer-grained recovery BETWEEN weekly full dumps, preserving the durability floor while cutting the pg_dump egress line ~7x. The co-required freshness-alarm lookback widens from >25h to ~8 days (evaluation_periods/datapoints_to_alarm 25 -> 192) so a weekly dump never leaves the alarm in perpetual ALARM.
+4. D3b deferral (destructive GC on ops_*) is OUT OF SCOPE and gated. Only non-destructive merge runs on production ops_*; expanding destructive expire_snapshots / cleanup_old_files / delete_orphaned_files to ops_* is gated by the rec-2113 pg_restore restore drill (T2.26 owns its retirement). GC_TABLE_SCOPE stays smoke-only until that gate clears -- compaction without a proven restore is not licensed to delete production catalog state (Decision 55).
+
+**Rationale:**
+The free-tier breach proved the cap is real and the access pattern, not the workload, drove it. Encoding catalog egress as a named budget with standing invariants prevents the class of mistake recurring: each invariant maps to a verified driver (i->D2, ii->D4, iii->D3, iv->D1), so a future change that reintroduces a cold-ATTACH-per-request or a read-cache re-fetch is checkable against a ratified rule rather than rediscovered via the next bill. The measurement obligation makes the budget enforceable -- a budget you cannot read is a wish. The work is shaped as one IMPLEMENTATION effort (Decision 67 / CD.17 STRATEGIC freeze). Form follows Decision 86: the durable rationale lives here, field/measurement semantics ride the maintenance action + ops.yaml, and no new standing prose-architecture doc is created (intent-doc-freeze compliant). Citation correction (2026-06-09 audit F-033): Decision 82 governs the DIRECT-vs-pooled endpoint basis and the EC8 churn-gate N=8->4 frame -- NOT the cold-resume warm-up; the preflight warm-up attribution to Decision 82 was a mis-citation and is corrected to this Decision's invariant (i).
+
+**Related:** Decision 84 (DuckLake sole ops backend; named-verb closed boundary I-3; no write buffering I-4 -- the cache refresh is downstream of the synchronous writer commit, never a write source), Decision 81 (maintenance cadence design, clause 6 -- merge/GC primitives this tunes), Decision 82 (DIRECT-vs-pooled endpoint + EC8 churn-gate frame; the cold-resume warm-up is NOT Decision 82, audit F-033), Decision 55 (loud failure -- the warm-connection reopen handles ONE expected condition; GC stays gated), Decision 86 (deliverable routing; intent-doc-freeze), CD.34 (amended here: "negligible add-on" is storage-true / egress-false), rec-2113 (DR restore-drill HARD GATE that unlatches D3b), rec-2096 (cold+warm connect-latency measurement, closed by this work), rec-2244 (ducklake_reader 502 -- the downstream symptom relieved by removing this egress pressure; closes on operational confirmation, not this merge), rec-2087 (Neon egress IP-allow-list -- a separate access-control concern, left open), T2.18 / T2.19 / T2.26 (`docs/ROADMAP-PLATFORM.yaml`).
+
+---
+
+## Decision 87: Plans, plan-critiques, and plan-revisions as first-class warehouse entities; authority-flip deferred to the autonomous producer (T4.x) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-14
+**Warehouse ID:** dec-087 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`/plan` produces git-tracked `PLAN-{slug}.yaml` artefacts (Decision 85, `PlanDocument` schema_version 1) reviewed via PR (Decision 76 cl.3). This is correct for the interactive era but does not support the autonomous plan -> critique -> revision loop that T4.x requires: plans are not queryable, plan<->rec linkage is not first-class, critique verdicts are ephemeral subagent output, and revision directives have no machine-actionable home. We record the destination (plans as warehouse entities) and, separately, the deliberate decision NOT to build it now -- so neither is re-litigated.
+
+**Decision:**
+1. Plans, plan-critiques, and plan-revisions WILL become first-class warehouse entities. Destination state: warehouse-authoritative, on the DuckLake-on-Neon SCD2 substrate (Decision 84).
+2. The authority-flip from git to warehouse is TIMED to the existence of the autonomous plan producer (`plan_agent`, a T4.x capability gated behind the CD.17 executor freeze) -- NOT now. For the interactive era, git/PR remains the authoritative approval surface, because `PLAN-{slug}.yaml` artefacts are human-authored, low-frequency, and diff-reviewed -- every property that favours git as source-of-truth. Warehouse-authoritative is the right model only once a machine produces plans at frequency.
+3. Until the flip, `ops_plans` is a downstream read-projection of the git-authoritative `PLAN-{slug}.yaml`, populated by git->warehouse ETL. This is the legitimate write path under the Decision 84 warehouse-SoT invariant -- the same sanctioned "ETL from a non-warehouse source of truth" pattern as `DECISIONS.md -> ops_decisions`, not a read-cache-as-write-source violation. The warehouse-SoT invariant remains absolute for operational records (recs, decisions, queue); plans are scoped as projection-until-T4.x.
+4. Lifecycle splits across three surfaces, by purpose:
+   - `ops_plans` (SCD2) -- the plan document + status gate: `pending -> approved | rejected | needs-revision` (lifecycle-state closure per Decision 70).
+   - `ops_plan_revisions` -- machine-actionable revision directives (the imperative: "change X -> Y"), authored by the critique agent for planning-agent consumption. A revision-request is to a plan what a rec is to the repo; the two may converge in shape later but are not unified now.
+   - telemetry -- the critique's full deliberation/rationale (observability), for optimization and debugging. The imperative lives in `ops_plan_revisions`; the deliberation lives in telemetry; they are not duplicated.
+5. RBAC is enforced at the verb layer, extending the Decision 84 closed writer boundary (I-2 writer-owned keyspace, I-3 named verbs) and the Decision 81 cl.2 extensible verb surface: planning agents get an `insert_plan` verb that hardcodes `status=pending` and cannot mutate status; critique agents get `set_plan_status` + `insert_revision` and cannot author plan bodies. All plan writes transit `ops_data_portal` (Single-Portal Invariant, Decisions 69/78); ids are writer-allocated atomically, never client-side.
+6. Plans and recs remain distinct grains: a rec is WHAT work should be done; a plan is HOW to implement it. Planning and implementation stay sequentially coupled (the executor's runtime `ExecutionPlan` stays in-process; only its persisted document would ever join `ops_plans`). Decoupling -- where plans are written faster than implemented and can go stale against an evolving repo -- is gated on a plan-staleness story (base-commit pinning + divergence detection + re-validate-before-implement) that does not yet exist. Frame-lock-aware deferral per Decision 75.
+
+**Rationale:**
+No downstream warehouse consumer of plans exists today, and the ones that would (autonomous `plan_agent`, plan-revision loop) are far off behind CD.17/T4.2. Flipping authority now would route the interactive loop through warehouse round-trips it does not need, for no consumer -- building ahead of need. Recording the destination + timing now captures the design while it is fresh and prevents both re-litigation ("should plans be warehouse entities?") and premature build. Form follows Decision 86: rationale here, field/schema semantics to `docs/contracts/*` (the `ops_plans`/`ops_plan_revisions` schema + verb-RBAC contract, when built), forward build intent to T4.x tier_items (T4.5-T4.7). No standing prose-architecture doc is created (intent-doc-freeze compliant).
+
+**Forward note:** At the T4.x authority-flip, Decision 85's git-authoritative clause for plans (and the plan-scoping of the Decision 84 invariant in cl.3 above) is superseded by warehouse-authoritative; until then both stand. Build work, when it lands, decomposes into atomic IMPLEMENTATION-type plans -- no STRATEGIC plan is authored under the CD.17 freeze (Decision 67 STRATEGIC clause).
+
+**Related:** Decision 84 (DuckLake sole ops backend; writer-owned keyspace; named-verb boundary -- substrate + write-path precedent), Decision 85 (`PLAN-{slug}.yaml` / `PlanDocument` -- the entity promoted), Decision 76 cl.3 (web PR/merge -- preserved interactive approval surface), Decision 81 cl.2 (extensible verb surface), Decision 86 (forward-routing form; intent-doc-freeze), Decisions 69/78 (Single-Portal Invariant), Decision 70 (lifecycle-state closure), Decision 75 (frame-lock-aware deferral), Decision 57 (autonomous-improvement control plane -- the loop this extends), CD.17/T4.2 (executor-freeze gate), T4.5-T4.7 tier_items (forward build), `docs/ROADMAP-PLATFORM.yaml`.
+
+---
+
+## Decision 86: INTENT prose docs retired -- architectural intent routes to roadmap tier_items, Decisions, or contracts; supersedes CD.14 (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-12
+**Warehouse ID:** dec-086 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The 18 `docs/INTENT-*.md` documents (~10.5k lines of prose) were authored to persist the owner's architectural vision across agent sessions. Two failure modes emerged: (1) **deliverables get lost** inside long narrative docs -- an agent must read the whole document to find what is actually actionable; and (2) the docs **drift** from live roadmap/decision state (e.g. CD.14 enumerated 10 docs to handle when 18 now exist; `ops-decisions-graduation` is half-superseded by Decision 84; several docs describe the pre-CD.27/28 executor substrate that no longer exists). Prose is a human-facing surface in an agent-first repo (NS.4, CD.13); the roadmap's YAML dependency edges now serve the cross-session-persistence role the INTENT docs were created for, readable without parsing narrative.
+
+The pending CD.14 chose to *demote* INTENT docs to "non-authoritative detail-companions" -- keeping the prose, stamping a footer, roadmap-wins-on-divergence. That preserves the drift surface (a second place agents must sync) rather than eliminating it.
+
+**Decision:**
+1. **CD.14 is SUPERSEDED.** Its demote-and-keep-prose model is replaced by extract-and-retire. The candidate decision is marked `state: superseded` (by this Decision) in `docs/ROADMAP-PLATFORM.yaml`, and tier_item `T5.5` is repointed from "demote + footer" to "extract content into tier_items/Decisions/contracts, then delete" -- mechanised by `docs/intent-migration/MANIFEST.yaml`. (This Decision is a *ratified* numbered entry under the DECISIONS.md numbering authority; ratifying it is the act that supersedes the *pending* CD.14 -- the roadmap-YAML edit lands in the Wave 0 follow-on.)
+2. **Forward routing rule (the "stop the bleeding" clause).** No new *standing prose-architecture / deliberation documents* anywhere under `docs/` -- the rule forbids the BEHAVIOUR, not merely the `docs/INTENT-*.md` filename glob (a doc renamed `docs/design-foo.md` or `docs/INTENTS/foo.md` is the same anti-pattern). Architectural content routes to its canonical machine-parseable home by type:
+   - **Forward-looking deliverables / sequencing** -> `docs/ROADMAP-PLATFORM.yaml` (or `ROADMAP-PRODUCT.yaml`) tier_items, with `depends_on` edges.
+   - **Rationale / choices / trade-offs** -> `docs/DECISIONS.md` (numbered) or `candidate_decisions[]` (pre-ratification).
+   - **Field/contract semantics** -> `docs/contracts/*.yaml`.
+   - **Already-ratified content** (a feasibility verdict or arc that graduated to a Decision) -> a pointer to that Decision; preserve any still-live trigger/watch-signal as a tier_item before removing the prose (the manifest's `delete_pointer` disposition).
+   - **Unbuilt exploratory direction** still referenced by a governing CD -> keep as a contract or a CD-gated future tier_item, not a standing prose doc (the manifest's `defer_or_contract` disposition).
+   - Deliberation that genuinely needs a working document uses a REPORT-ONLY plan deliverable scoped to a single decision, not a standing INTENT doc.
+3. **The existing 18 are grandfathered** and retired wave-by-wave per `docs/intent-migration/MANIFEST.yaml` (Waves 1-5), each with its own per-doc drift reconciliation. A `scripts/validate.py` guard (added in Wave 0) rejects new standing prose-architecture docs while allowing the grandfather set. The allowed set is DERIVED from the manifest -- a doc is permitted iff it has a `documents[]` entry with `disposition_state != done` -- so it shrinks automatically as each wave deletes a doc and flips its entry to `done`, with no hand-maintained list. Deleting a grandfathered doc requires the inbound-reference sweep (manifest findings X1/X2/X6/X7) to pass first.
+4. **Enforcement is wired in Wave 0** (`PLAN-intent-migration-wave0-enforcement`): `.claude/commands/plan.md`, `.claude/skills/planning/SKILL.md` (Documentation Artefact Design), and `AGENTS.md` (Agent-First Repository) gain the routing rule; the roadmap bookkeeping (CD.14 supersession + T5.5 repoint) and the validate guard land there.
+
+**Fast-track rationale:** This governance change is ratified directly (not filed as a pending CD that waits on the log-decision Lambda) because it is a *documentation-governance* rule with no infrastructure dependency, it is needed *now* to stop the corpus growing during the multi-wave extraction it authorises, and it only tightens an already-ratified direction (CD.13 markdown-with-prose retirement; NS.4 agent-first). The migration work it scopes is large (Wave 0 + ~5 extraction waves); each wave is an IMPLEMENTATION plan per the Decision 67 / CD.17 STRATEGIC-plan freeze.
+
+**Related:** CD.14 (superseded here), CD.13 (agent-first exemplar -- this enacts its prose-retirement thesis), NS.4 (the repo is for agents), Decision 67 / CD.17 (STRATEGIC freeze -- all migration waves are IMPLEMENTATION type), Decision 85 / Decision 76 (PLAN-*.yaml planning artefacts), Decision 84 (DuckLake / ops_decisions backfill path; ducklake-consolidation INTENT graduates to it), Decision 80 (bazel-feasibility graduation target), Decision 57 (amends the "INTENT authoritative for domain" grants as docs retire), Decision 75 (frame-lock pointers preserved on delete), CD.32 (multi-product-platform exploratory record). Mechanised by `docs/intent-migration/MANIFEST.yaml`.
+
+---
+
+## Decision 85: Ratify CD.22 -- PLAN-*.yaml planning artefacts with PlanDocument schema; amends Decision 76 clause 3 (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-11
+**Warehouse ID:** dec-1091
+**Renumbering note:** originally recorded as "Decision 84" by PR #127, allocated concurrently with the DuckLake-consolidation Decision 84 on a diverged branch (both 2026-06-11). Renumbered 85 at merge -- the consolidation number is cross-referenced from deployed Lambda code, contracts, and warehouse rows, so it keeps 84. PR #127's commit message and the dec-1091 warehouse id predate the renumber and are unchanged.
+
+**Problem:**
+CD.22 (pending, gates T1.11) prescribed migrating planning artefacts from PLAN-*.md to PLAN-*.yaml with Pydantic structural validation -- the last narrative-markdown artefact class in the planning pipeline (CD.13). Decision 76 clause 3 hard-codes the plan handoff artefact as `PLAN-{slug}.md`, which the migration supersedes.
+
+**Decision:**
+CD.22 is RATIFIED as implemented by T1.11. `PlanDocument` (`scripts/plan_document.py`, schema_version 1, `extra="forbid"`) is the canonical structure for `docs/plans/PLAN-{slug}.yaml`; `validate.py` enforces it in both the `--pre` and full presubmit tiers. `find_plan.py` resolves `.yaml` first; the `.md` path (find_plan.py, plan_audit.py, and the planning / implement / plan-critique skills in both skill roots) emits a deprecation warning for one release cycle, then is removed.
+
+**Decision 76 clause 3 is AMENDED:** the handoff artefact reference reads `docs/plans/PLAN-{slug}.yaml` (was `.md`). The `find_plan.py` deprecation fallback is the transition bridge until the `.claude/commands/plan.md` / `implement.md` reconciliation rec lands.
+
+Historical PLAN-*.md files remain in the working tree and commit history; none are retroactively converted (one-way, non-rolling migration). In-flight conversion list at implementation time (1 of 1): `PLAN-t1-11-plan-yaml-migration.md -> .yaml`.
+
+**Rationale:** Mirrors the RoadmapDocument gate (T-1.5) and the Decision 79 ratify-in-implementing-PR precedent. The `.agents/skills/` mirrors were updated as voluntary legacy hygiene -- Decision 76 supersedes Decision 58's sync obligation; no sync obligation is claimed.
+
+**Related:** CD.13, CD.22, T1.11, Decision 76 (clause 3 amended here), Decision 79 (ratification precedent), Decision 58 (superseded mirror rule), Decision 80 (registry-friendly check design).
+
+---
+
+## Decision 84: DuckLake is the sole ops-store backend; Athena ops estate retired; writer-owned keyspace; named-verb read boundary (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-11
+
+**Problem:**
+The T2.19 recs-first cutover left the ops store straddling two warehouses. The retained Iceberg copy stopped being a coherent rollback target the day writes moved to DuckLake (reads would time-travel while writes kept landing in DuckLake); the offline outbox inverted its purpose on ephemeral CC-web containers (gitignored pending files die with the container); client-side DynamoDB id allocation left the write boundary unable to police its own keyspace (a colliding write_ops create silently MERGEs); half-migrated read semantics produced the rec-2170 silent false zero; and preflight burned minutes polling Athena tables dead since the 2026-05-28 account migration.
+
+**Ratified premises:** All dev sessions run on Claude Code on the web (no local). All Athena-resident ops data is discardable. ops_decisions is recreatable from DECISIONS.md. The ops store is small and single-writer in practice.
+
+**Decision (four invariants):**
+- **I-1 Single backend.** DuckLake-on-Neon (closed reader/writer Function-URL boundary) is the only ops-store backend. The `OPS_STORAGE_BACKEND` rollback flag is deleted. The T2.19 cutover's flag-based rollback mechanism (an AGENTS.md source-of-truth provision, not a Decision 81 clause -- Decision 81 cl.7's closed boundary is RETAINED and extended) is retired. The Athena/Iceberg ops estate (tables, `_current` views, ops_compaction, OpsWriter ops paths, VarChar coercion) is demolished without data migration once live writers are repointed; demolition of non-recreatable tables is gated on the rec-2113 catalog-restore drill (T2.26 START GATE).
+- **I-2 Writer-owned keyspace (scoped).** The ducklake_writer owns the `rec-NNN` keyspace: `file_ops` allocates the id inside the write transaction (counter row in the same catalog commit; OCC conflict is the serialization point; client idempotency ULID makes response-lost retries replay-safe). The DynamoDB counters table retires. Sanctioned exceptions: `dec-NNN` follows the human-assigned DECISIONS.md numbering (callers supply `decision_id`); `test-`/probe prefixes remain caller-keyed via write_ops.
+- **I-3 Named-verb read boundary (staged).** Application reads use pre-established verbs registered server-side in the ducklake_reader; caller SQL is removed from application paths. `query_ops` is RETAINED for the DQ harness (its checks, including history-table checks, are not yet expressible as verbs) and is restricted/retired in a follow-up once a dq_check verb family exists. Structural `{column, value}` filters replace SQL-fragment row filters (closes rec-2170).
+- **I-4 No write buffering (per-table staging).** The recs and decisions pending outboxes are deleted now; a failed write fails loudly at the call site (transient-5xx retry is licensed by the idempotency key). The OpsWriter staging outbox survives ONLY for the not-yet-migrated telemetry/session_log/execution_plans paths and retires with them (Phase 3/4).
+
+**Operational consequences:** destructive Lambda actions gain explicit-confirm guards (create_ops_tables force_recreate; catalog_reinit loses its production-schema default); the telemetry preflight health check is stubbed until telemetry re-lands on DuckLake (Phase 4); catalog DR remains the existing ducklake_catalog_dr nightly pg_dump, with the restore-drill format gap tracked as rec-2113.
+
+**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27 (roadmap carriers), docs/INTENT-ducklake-consolidation.md (full program).
+
+---
+
+## Decision 83: Branch Protection Now Active -- Amends Decision 89 Premise (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-08
+**Warehouse ID:** dec-1090
+
+**Problem:**
+Decision 89 declared GitHub branch protection "permanently unavailable" for this repository under the free GitHub plan (private-repo restriction on `required_status_checks`). The repository was made public 2026-05-30 (Decision 73 / CD.21), removing that restriction. The `terraform/github/` human-gated local apply (CD.20 / T2.12) has since landed, activating the `main-protection` ruleset. Multiple instruction surfaces still assert the false "permanently unavailable" premise, misleading autonomous planning sessions.
+
+**Decision:**
+The "permanently unavailable" premise of Decision 89 is reversed. The `main-protection` ruleset is active (`enforcement = "active"`). Configuration: admin `bypass_mode = "always"`, `strict_required_status_checks_policy = false`, required checks = `pr-validate` + `terraform-validate` only, `terraform-converged` advisory-only (CD.35). The ruleset is deliberately non-wedging so the forward-fix model, the Decision 76 squash-merge flow, and autonomous merge all continue to hold.
+
+The merge-gate design consequences of Decision 89 are PRESERVED, not overturned. Convention-plus-tooling remains the effective gate. GitHub-native auto-merge (Decision 76 deferred follow-up) is now technically unblocked.
+
+**Live-probe verification (2026-06-08):**
+- Branch protection: `main` `protected: true` (GitHub API, authoritative).
+- Dependabot: 5 `dependabot/pip/*` branches active (authoritative).
+- GHAS secret-scanning + CodeQL: 403 on alert endpoints (web PAT lacks `security_events`); configuration evidence = `terraform/github/repo.tf` `secret_scanning status=enabled` + committed `.github/workflows/codeql.yml` + CodeQL workflow runs (`success`). Live-probe verification outstanding; one-time UI confirmation recommended.
+
+**Related:** Decision 89 (premise reversed here; merge-gate design preserved), Decision 76 (foresaw reversal; deferred follow-up now unblocked), Decision 77 (guard rationale preserved -- guard is the plan-CONTENT control, not a branch-protection substitute), Decision 73 (public flip enabling the apply), Decision 75 (sanctioned premise correction).
+
+---
+
 ## Decision 82: EC8 churn gate measures production invocation fan-out, not in-container thread contention (Decided)
 
 **Status:** Decided
@@ -177,7 +539,7 @@ CD.24 (per-Lambda manifests), OQ.7 / OQ.10 / OQ.11 (resolved), OQ.12 (left to T2
 A first-principles design conversation proposed adopting Bazel to manage the `scripts/validate.py` monolith and the forthcoming CD.27 agent fleet. On a single-language (Python + Markdown), sub-scale (~36.5k first-party SLOC, one developer), agent-first repo with no compiled build, adopting a polyglot-scale build system risks frame-lock (Decision 75) and large ongoing BUILD-maintenance toil for benefits the repo largely already holds or has sequenced ahead in the roadmap.
 
 **Decision:**
-Per the evidence in `docs/INTENT-bazel-feasibility.md` (a C1-C10 claims-verification matrix at commit `ddb85a0`, merged in PR #64):
+Per the evidence (a C1-C10 claims-verification matrix at commit `ddb85a0`, merged in PR #64):
 1. **Do NOT adopt Bazel or Pants repo-wide now.** Only C1/C1b (premise) and C7/C8 (Bazel-specific cost) discriminate against Bazel; C3/C5/C10 bind the lighter do-less path equally (sequencing, not anti-Bazel); C9 (durable-functions readiness) is orthogonal to the build tool.
 2. **Adopt the do-less baseline** -- `import-linter` (cycle + layering enforcement), a dependency lockfile, a wired revisit trigger, and a fail-closed edit-scope hook -- as the immediate-next IMPLEMENTATION plan (`PLAN-do-less-baseline`); not a STRATEGIC plan (Decision 67/79 freeze retained), no executor recs.
 3. **Decompose `validate.py` tool-free** as a separate IMPLEMENTATION plan. This Decision ratifies the *direction* (a local importable check-registry, NOT a Lambda; `validate.py` stays the thin CLI so the "ci.yml-first" single-source-of-truth invariant holds); the registry *mechanism* (severity-bearing Check protocol, affected-set selection, producer/consumer ordering) is designed in that plan, not ratified here.
@@ -191,7 +553,7 @@ At T4.1 concurrency = 1, the genuinely build-tool-only benefit (content-addresse
 - The `validate.py` decomposition is a separate IMPLEMENTATION plan (its registry mechanism designed there); the dominant cost is the `test_validate.py` patch-path migration (239 of 262 patches bind off `validate.<symbol>`).
 - No BUILD/WORKSPACE/`pants.toml` files are introduced.
 
-**Related:** Decision 43 (validate.py SLOC waiver this remediates), Decision 60 / Decision 73 (two-tier diff-aware CI the do-less path extends), Decision 75 (Frame-Lock Anti-Pattern, applied to the assessment itself), Decision 67 / Decision 79 (STRATEGIC freeze retained; Lambda-deploy lifted); ROADMAP KG.13, T4.1/T4.4, CD.27 (revisit triggers); `docs/INTENT-bazel-feasibility.md` (supporting analysis, PR #64).
+**Related:** Decision 43 (validate.py SLOC waiver this remediates), Decision 60 / Decision 73 (two-tier diff-aware CI the do-less path extends), Decision 75 (Frame-Lock Anti-Pattern, applied to the assessment itself), Decision 67 / Decision 79 (STRATEGIC freeze retained; Lambda-deploy lifted); ROADMAP KG.13, T4.1/T4.4, CD.27 (revisit triggers); the bazel-feasibility supporting analysis (PR #64, commit `ddb85a0`; prose retired per Decision 86).
 
 ---
 
@@ -286,7 +648,7 @@ sandbox where no real capital is at risk.
    (`scripts/terraform_apply_guard.py`, fail-closed on any destroy / IAM / trust-policy change) plus
    a subagent plan review (`.github/workflows/terraform-apply-sandbox.yml`). SIT and PROD stay
    human-gated. This scopes -- does not overturn -- Decision 35: apply stays human-gated everywhere
-   except the mocked sandbox, where the guard + review are the compensating gate (Decision 72 /
+   except the mocked sandbox, where the guard + review are the compensating gate (Decision 89 /
    CD.20: branch protection and required status checks are unavailable).
 
 4. **Product promotion stays config-only.** CDP.6 / CDP.7 remain valid for the product axis:
@@ -322,7 +684,7 @@ sandbox where no real capital is at risk.
 
 **Related:** Decision 24 (Multi-Environment Deployment Strategy), Decision 35 (Terraform Workflow
 Integration), Decision 73 (Two-Tier CI + promotion train), Decision 67 (STRATEGIC deferral; its
-Lambda-deploy clause was lifted by Decision 79), Decision 72 (RCA-as-Plan-Source / branch protection unavailable), CD.21 (GitHub-hosted
+Lambda-deploy clause was lifted by Decision 79), Decision 72 (RCA-as-Plan-Source), Decision 89 (branch protection unavailable), CD.21 (GitHub-hosted
 OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architecture.md` section 6.
 
 ---
@@ -342,15 +704,15 @@ OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architect
 5. Canonical layer: `.claude/commands/` + `.claude/skills/` are now the canonical interactive-workflow layer.
 
 **Amends / Supersedes:**
-- Amends Decision 72 ("GitHub Branch Protection Not Available"), clause 4 (`gh pr merge --squash` after CI): squash-merge policy preserved; transport changes to GitHub MCP `merge_pull_request(merge_method="squash")` because `gh` is unavailable on the web harness.
+- Amends Decision 89 ("GitHub Branch Protection Not Available"), clause 4 (`gh pr merge --squash` after CI): squash-merge policy preserved; transport changes to GitHub MCP `merge_pull_request(merge_method="squash")` because `gh` is unavailable on the web harness.
 - Amends Decision 23 ("slug derived from branch name"): slug is decoupled from the branch; the anti-contamination intent (one tracked plan per unit of work, branched from main) is satisfied by the harness per-session auto-branch model.
 - Supersedes Decision 58 ("`.agents` as canonical interactive workflow layer"): `.claude/` is now canonical; `.agents/` is demoted to legacy alongside `.github/` (no sync obligation).
 
 **Unaffected:** Decision 25 (git worktrees) is a local-dev affordance, unchanged. Decisions 60/73 (two-tier CI, forward-fix) govern the tiers this flow waits on. Decision 67 keeps plans IMPLEMENTATION-type. Decision 44 keeps executor machinery out of scope.
 
-**Deferred follow-up:** GitHub-native auto-merge (container fully out of the merge loop) is the robustness ceiling for the lost-webhook case; unblocked now the repo is public (reversing Decision 72's "permanently unavailable" premise) but needs branch protection + required status checks (CD.20, deferred).
+**Deferred follow-up:** GitHub-native auto-merge (container fully out of the merge loop) is the robustness ceiling for the lost-webhook case; unblocked by Decision 83 (branch protection active, CD.20 applied 2026-06-08). Implementation is a follow-on task (configure GitHub-native auto-merge on the PR).
 
-**Related:** Decision 72 (Branch Protection), 73, 60, 67, 44, 23, 25, 58, 55; CD.20, CD.21.
+**Related:** Decision 89 (Branch Protection), 73, 60, 67, 44, 23, 25, 58, 55; CD.20, CD.21.
 
 ## Decision 75: Frame-Lock Anti-Pattern in Architectural Planning (Decided)
 
@@ -450,7 +812,7 @@ Two changes to restore and harden the harness:
 **Date:** 2026-05-13
 
 **Problem:**
-Decision 60 (2026-05-05) specified a two-tier validation model with a 5-minute fast-tier budget. The budget was unattainable at ratification: V3 verifiers (PR #274, 2026-05-01) and the DQ runner integration (PR #289, same day as Decision 60) placed ~10 minutes of Athena round-trips in the default presubmit tier on day zero. Twelve subsequent commits to `validate.py` between 2026-05-06 and 2026-05-12 compounded the drift. Measured runtimes show median 18 min, max 50 min -- a 3-10x violation of the documented budget. The structural causes are: (1) the budget had no enforcement mechanism, (2) the tier was defined by exclusion of a barely-used pytest marker (`@pytest.mark.integration` is set on exactly 1 of ~30 AWS-touching test files), and (3) post-merge CI ran on push-to-main duplicating PR CI on the same content. Additionally, with GitHub branch protection permanently unavailable (Decision 72), Decision 72b made remote CI the only merge gate -- yet the gate runs the same slow tier that should be reserved for comprehensive validation. The merge model conflates pre-merge gating with comprehensive validation, and the planning queue currently treats 178 accumulated non-automatable recommendations as mandatory discussion items, which is operational noise while the executor is offline pending Decision 67 reversal.
+Decision 60 (2026-05-05) specified a two-tier validation model with a 5-minute fast-tier budget. The budget was unattainable at ratification: V3 verifiers (PR #274, 2026-05-01) and the DQ runner integration (PR #289, same day as Decision 60) placed ~10 minutes of Athena round-trips in the default presubmit tier on day zero. Twelve subsequent commits to `validate.py` between 2026-05-06 and 2026-05-12 compounded the drift. Measured runtimes show median 18 min, max 50 min -- a 3-10x violation of the documented budget. The structural causes are: (1) the budget had no enforcement mechanism, (2) the tier was defined by exclusion of a barely-used pytest marker (`@pytest.mark.integration` is set on exactly 1 of ~30 AWS-touching test files), and (3) post-merge CI ran on push-to-main duplicating PR CI on the same content. Additionally, with GitHub branch protection permanently unavailable (Decision 89), Decision 89 made remote CI the only merge gate -- yet the gate runs the same slow tier that should be reserved for comprehensive validation. The merge model conflates pre-merge gating with comprehensive validation, and the planning queue currently treats 178 accumulated non-automatable recommendations as mandatory discussion items, which is operational noise while the executor is offline pending Decision 67 reversal.
 
 **Decision:**
 Adopt a ten-layer CI/CD architecture (L1-L10) as specified in `docs/INTENT-ci-cd-architecture.md`. The model preserves Decision 60's two-tier abstraction while redefining tier semantics and adding forward-fix merge gating and scheduled promotion design.
@@ -488,7 +850,7 @@ Key elements:
 - Decision 68 (Self-Hosted Runner): compounds. Free CI minutes are what make the hourly L8 drift canary affordable.
 - Decision 71 (cc-scheduled-agents): compounds. The scheduled-cron infrastructure pattern is reused for L8.
 - Decision 72 (RCA-as-Plan-Source for CI): extended. ci-rca recs gain hard-block (L5) and merge-pause (L6) semantics.
-- Decision 72 (Branch Protection Unavailable): the forward-fix model is designed around branch protection being permanently unavailable.
+- Decision 89 (Branch Protection Unavailable): the forward-fix model is designed around branch protection being permanently unavailable. *(Premise reversed by Decision 83, 2026-06-08; design consequences preserved.)*
 
 **Consequences:**
 - Three follow-on IMPLEMENTATION plans are required to land the architecture: `validate-fast-tier-reshape`, `ci-workflow-restructure`, `planning-queue-governance`. Each is independently scoped and lands in its own PR.
@@ -502,7 +864,7 @@ Key elements:
 - Executor priority-queue rule for ci-rca recs: depends on Wave 4 + Decision 67 reversal.
 - `pytest --picked` may be upgraded to `pytest-testmon` later if false-negatives accumulate.
 
-**Related:** Decision 44, Decision 55, Decision 60, Decision 67, Decision 68, Decision 71, Decision 72 (both), `docs/INTENT-ci-cd-architecture.md`, `docs/ROADMAP-PRODUCT.md` (Phase Infra-Env).
+**Related:** Decision 44, Decision 55, Decision 60, Decision 67, Decision 68, Decision 71, Decision 72 (RCA-as-Plan-Source), Decision 89 (branch protection), `docs/INTENT-ci-cd-architecture.md`, `docs/ROADMAP-PRODUCT.md` (Phase Infra-Env).
 
 ---
 
@@ -713,7 +1075,7 @@ Migrate the surface to two named tiers:
 
 `--scope`, `--ci`, `--integration`, and `--verifiers` are deleted in the consolidation step. `--coverage` is retained as an advisory and remains exit-0 unconditional.
 
-**Substrate:** A self-hosted GitHub Actions runner on EC2 with the same SSO configuration as the developer machine. Branch protection on `main` requires the workflow to pass; the workflow calls `python -m scripts.validate` with no flags. Zero billed minutes for the default tier. Reversible in 30 seconds.
+**Substrate:** A self-hosted GitHub Actions runner on EC2 with the same SSO configuration as the developer machine. Branch protection on `main` requires the workflow to pass; the workflow calls `python -m scripts.validate` with no flags. Zero billed minutes for the default tier. Reversible in 30 seconds. *(2026-06 migration note: runner retired per CD.21; CI now on GitHub-hosted OIDC runners. Branch protection is now active per Decision 83 / T2.12.)*
 
 **Migration sequence (each step reversible):**
 1. [DONE] Land the architectural anchor (`docs/INTENT-validation-architecture.md`) and this Decision Record.
@@ -766,7 +1128,7 @@ Specific consequences:
 
 ---
 
-## Decision 72: GitHub Branch Protection Not Available -- CI Enforcement as the Only Merge Gate (Decided)
+## Decision 89: GitHub Branch Protection Not Available -- CI Enforcement as the Only Merge Gate (Decided)
 
 **Status:** Decided
 **Date:** 2026-05-09
@@ -783,13 +1145,13 @@ GitHub branch protection is permanently unavailable for this repository. The mer
 4. **No squash-bypass:** All merges must be squash merges via `gh pr merge --squash` after CI passes. Direct `git push` to `main` is blocked only by the never-on-main hook; human discipline is required outside Claude Code sessions.
 
 **Consequences:**
-- Acceptance criterion "Main branch protection enabled" from PLAN-validate-two-tier cannot be met. Superseded by this decision.
-- VP steps 9 and 10 from PLAN-validate-two-tier are permanently BLOCKED; they are retired here without resolution.
-- Any future migration to GitHub Pro or a public repository would unlock `required_status_checks` and should be revisited at that point.
+- Acceptance criterion "Main branch protection enabled" from PLAN-validate-two-tier cannot be met. Superseded by this decision. *(Superseded by Decision 83: criterion is now met.)*
+- VP steps 9 and 10 from PLAN-validate-two-tier are permanently BLOCKED; they are retired here without resolution. *(Superseded by Decision 83: branch protection is now active.)*
+- Any future migration to GitHub Pro or a public repository would unlock `required_status_checks` and should be revisited at that point. *(Superseded by Decision 83: the repository was made public 2026-05-30 per Decision 73 and the apply landed 2026-06-08.)*
 
 **Related:** Decision 60 (Two-tier validation architecture), Decision 68 (Self-hosted EC2 runner), PLAN-validate-two-tier.
 
-> **2026-05 migration update:** The repository was made public in 2026-05 (Decision 73 / CD.21), resolving the free-plan private-repo restriction on branch protection. Branch protection remains deferred per T2.12 security gate (CD.20); see `CLAUDE.md` T2.12 note. The repo-visibility block on `required_status_checks` is resolved.
+> **Amended by Decision 83 (2026-06-08):** Branch protection is now active. The `main-protection` ruleset is live (enforcement=active, non-wedging). The "permanently unavailable" premise is reversed; the merge-gate design consequences are preserved. See Decision 83 for live-probe verification and configuration details.
 
 ---
 
@@ -965,6 +1327,8 @@ The presubmit tier on the self-hosted EC2 runner already has SSO credentials and
 **Related:** Decision 57 (Autonomous Improvement Control Plane), Decision 60 (Two-tier validation architecture), `docs/INTENT-dq-enforcement.md` (Phase 3 Decision Registry), `docs/INTENT-validation-architecture.md`
 
 > **2026-05 migration update:** The SSO credential model and self-hosted EC2 runner referenced in the Rationale were superseded 2026-05-28 (CD.21); the presubmit DQ runner now executes on GitHub-hosted runners with OIDC. The core decision -- DQ as part of the presubmit tier, no separate Session E scheduling -- is unchanged. See Decision 73.
+
+> **2026-06-16 amendment (premise revisit -- live-reader DQ):** The 2026-05 footnote held the "core decision ... unchanged" after CD.21. That stays true for the Session E MECHANISM itself (cron agent -> EC2 -> commit `dq-latest.json` -> auto-merge), which remains retired. But the load-bearing PREMISE of the no-separate-routine conclusion -- "the presubmit tier already has SSO credentials and runs before every merge," i.e. live DQ is cheap on the credentialed gate -- is now invalidated: CD.21 retired the SSO/EC2 substrate, Decision 73 measured ~10-min presubmit round-trips, and a DuckLake-reader 502 storm added ~17-20 min of DQ-verifier hangs plus merge-gate flapping (2026-06-15; PLAN-dq-gate-infra-resilience). For LIVE-READER-dependent DQ checks specifically (e.g. ulid_history_unique, current_merge_key_unique), the "no separate scheduled routine" conclusion is therefore DELIBERATELY REVISITED -- not reinterpreted: those checks move to a scheduled, non-gating MONITOR/canary that files recs (alarm-not-gate, CD.12), with uniqueness enforced STRUCTURALLY at write time (Decision 81 cl.3 MERGE-on-ULID + cl.8 current-MERGE-key) and only hermetic structural contract checks remaining on the merge gate. The silent-cron failure mode 62 worried about is mitigated by a persistent-unavailability alarm (Decision 74). This revisit is owned by roadmap tier_item T1.6 and is distinct from the GitHub-Actions-scheduled meta-validation (T3.7), which never re-introduced Session E. See docs/ROADMAP-PLATFORM.yaml (T1.6) and docs/plans/PLAN-dq-gate-to-monitor-roadmap.yaml.
 
 ---
 
@@ -1184,7 +1548,7 @@ Back to /plan preflight (mandatory discussion)
 
 **Related:** Decision 38 (workflow consolidation), Decision 40 (Copilot SDK deferred)
 
-**Decision status:** Decided -- April 2026
+**Decision status:** Decided -- April 2026 (Superseded by Decision 90)
 
 ---
 

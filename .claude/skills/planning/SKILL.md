@@ -6,7 +6,7 @@ model: opus[1m]
 
 # Planning Methodology & Rules
 
-You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (docs/PROJECT_CONTEXT.md, skills) during a planning session. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
+You are using this skill to augment the `/plan` workflow. Apply these deep instructions when executing the workflow steps. You must NEVER initiate modifications to source code or global instructions (docs/PROJECT_CONTEXT.md, skills) during a planning session. SOLE EXCEPTION: roadmap-bookkeeping edits to `docs/ROADMAP-PLATFORM.yaml` / `docs/ROADMAP-PRODUCT.yaml` proposed by the Tier Item Freshness Gate (status closeouts, criteria re-grounding) -- and only after explicit human confirmation; these reconcile roadmap DATA with reality, they implement nothing. The planning phase ends with the commitment of the PLAN artifact. Implementation only begins after an explicit /implement trigger with ANOTHER agent.
 
 ## Behavioural Invariants
 ```yaml
@@ -30,7 +30,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`main_freshness.commits_behind > 20`** -- Surface as planning context warning: "Branch is N commits behind `origin/main`. Plan-critique (Step 9) reads `docs/PROJECT_CONTEXT.md`, `DECISIONS.md`, and `ROADMAP-PLATFORM.yaml` from the working tree; if these have moved on main, the critique evaluates against stale context. Recommend rebasing before continuing." Non-blocking but prompt the human to decide.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 4 Main Divergence Assessment. Non-blocking at this step.
 - **`cron_review_fresh: false`** -- Note to human (non-blocking).
-- **`outbox_synced: false`** -- Run `bin/venv-python -m scripts.sync_ops pull` to drain outbox and sync data (Decision 51). If fails, STOP.
+- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file the content via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync_ops sync`. If that fails, STOP.
 - **`open_recommendations > 0`** -- Surface counts and ask whether to address. Wait.
 - **`non_automatable_recommendations > 0`** -- Informational. Surface counts; do not require per-rec discussion. Individual review is suspended per Decision 73 until CD.17 / T4.2 reverses (Decision 67's Lambda-deploy clause was lifted by Decision 79; the STRATEGIC clause survives).
   - If `non_automatable_softcap_breached` is true (count > 250), surface as a planning context note.
@@ -39,16 +39,15 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`token_anomalies` non-empty** -- Surface as planning context: "Context file token warning: [file list] exceed the 50K token threshold."
 - **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: "Data quality checks failing ([N] failures across [tables]). Run `bin/venv-python -m scripts.data_quality_runner` for details." Non-blocking but relevant if the plan touches data pipelines or table schemas.
 - **`data_quality.last_run` is null** -- Note: "Data quality checks have never been run. After fixing the pipeline, run `bin/venv-python -m scripts.data_quality_runner` to establish a baseline." Non-blocking.
-- **`ci_rca_recs` non-empty** -- **HARD BLOCK**. `/plan` cannot scope unrelated work while any open ci-rca rec exists. Surface the list at the top of the planning context. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section.
-- **`ci_rca_liveness_alert` non-null** -- **HARD ALERT**. Main CI has been red with no corresponding ci-rca rec for >30 minutes. Triage before continuing.
-- **`forward_fix_recursion_alert` non-null** -- **HARD ALERT**. Three or more ci-rca recs targeting the same file were filed in the last 24 hours. Triage before continuing.
+- **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK** at commitment time. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.) Full triage surfacing and the SOFT PROMPT / HARD ALERT classification is `/orient`'s responsibility -- run `/orient` for the full ci-rca visibility layer.
+- **`ci_rca_likely_resolved_recs`, `ci_rca_liveness_alert`, `forward_fix_recursion_alert`** -- Full triage (SOFT PROMPT, HARD ALERT, forward-fix recursion) is surfaced by `/orient`. If still unresolved when `/plan` runs, apply the close or triage guidance from the orient skill.
 - **`budget_bypass_alert` non-null** -- **Informational**. Surface the count and recent bypass reasons as planning context: "Fast-tier budget bypassed N times in 7 days." Repeated `--ignore-budget` use indicates fast-tier drift and likely warrants a planning session to revisit the budget or identify which check is slow.
 
 ### What Telemetry Health Represents
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Session metrics** (from Athena): session count over 7 days, success rate, and staleness of the latest session. These answer: "Is the system producing telemetry records and are they reaching Athena?"
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (consolidation Phase 4, docs/INTENT-ducklake-consolidation.md). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 
@@ -63,24 +62,11 @@ If pipeline health is critical (no sessions in 7 days), the plan should prioriti
 
 ## Platform Roadmap Eligibility (Workflow Step 2)
 
-Read `preflight.platform_roadmap` from the already-loaded preflight JSON (Step 1 produced it). Surface the following to the planning agent context before any clarification or scoping work begins:
+Broad orientation -- surfacing `next_eligible`, `strategic_pending`, the eligibility summary, the soft-warn exception category list, and ci-rca triage -- is the responsibility of `/orient`. Run `/orient` before `/plan` to choose what to work on; `/plan` assumes a specific item (or ci-rca rec) has already been selected. The orient skill (`.claude/skills/orient/SKILL.md`) holds the full eligibility display and triage rules.
 
-- `next_eligible[]` -- tier_items whose depends_on are all complete and that are eligible to start now. These are the canonical candidates for this planning session.
-- `strategic_pending[]` -- tier_items flagged `strategic: true` that are blocked only by the executor freeze (AGENTS.md Temporary Operational Constraints). Surface as context only; do not scope STRATEGIC plans during the freeze.
+Retained here: the per-item **Tier Item Freshness Gate** (below), which fires at commitment time once intent resolves to a specific tier_item id. `/orient` references that gate; it does not re-author it.
 
-Print a summary line to the human (non-blocking):
-> "Platform roadmap: N eligible items (T-X.Y, ...). N strategic items pending freeze lift."
-
-If `next_eligible` is empty and `strategic_pending` is also empty, note that no roadmap work is currently eligible and proceed with the human's stated intent.
-
-**Soft-warn exception categories:** when the human's stated intent names work that does not resolve to any `tier_items[].id`, do NOT reject the session -- issue a soft warning and proceed. Documented exception categories that bypass tier_item alignment:
-- `ci_rca` -- CI failure investigation driven by a ci-rca rec (see preflight `ci_rca_recs`)
-- `hotfix` -- production incident or critical bug fix with immediate blast-radius concern
-- `security_advisory` -- security vulnerability requiring immediate remediation
-- `ad_hoc_rec` -- standalone recommendation from `logs/.recommendations-log.jsonl` not yet promoted to a tier_item
-- `user_explicit_out_of_scope` -- human explicitly states the work is outside current tier scope
-
-Reject only when the intent *claims* tier_item alignment (e.g., "implementing T-1.6") but the referenced id does not exist or the item's depends_on are not satisfied.
+**Soft-warn exception categories** (used by the Tier Item Freshness Gate firing condition): `ci_rca`, `hotfix`, `security_advisory`, `ad_hoc_rec`, `user_explicit_out_of_scope`. When the human's stated intent matches one of these and names no tier_item, the Freshness Gate is skipped. Do NOT reject the session -- issue a soft warning and proceed. Reject only when the intent *claims* tier_item alignment but the referenced id does not exist or its depends_on are not satisfied.
 
 ## Clarification (Workflow Step 3)
 Decompose the human's input into structured components:
@@ -93,6 +79,58 @@ Decompose the human's input into structured components:
 | **Phase alignment** | Does this fall within the current roadmap phase? Does it depend on something not yet built? |
 
 If the request is vague or missing key information, ask between 2 and 5 questions -- ranked by impact, no padding questions. Wait for answers before continuing.
+
+## Tier Item Freshness Gate (Workflow Step 3, fires once intent resolves to tier_items)
+
+Firing point: AFTER the Step 3 clarification has mapped the intent to one or more
+`tier_items[].id` values, and BEFORE any Step 4 assessment or Step 8 Scope is written. If
+the intent matches a soft-warn exception category (ci_rca, hotfix, security_advisory,
+ad_hoc_rec, user_explicit_out_of_scope) and names no tier_item, this gate is skipped.
+Scope: per-touched-item only -- this gate re-verifies the items THIS session plans against;
+it is not a roadmap-wide staleness sweep (that is a periodic audit's job, e.g. the
+2026-06-09 platform-roadmap audit).
+
+The roadmap can lag the repo: items go stale when decisions ratify, surfaces move, or
+sibling work absorbs their scope (2026-06-09 roadmap audit, findings F-008/F-013/F-016/F-017).
+Before scoping ANY tier_item -- whether picked from `next_eligible` or named by the human --
+re-verify it against the repo. Eligibility computation alone is NOT sufficient grounds to
+plan an item. Run four checks, cheapest first:
+
+1. **Silent-completion check.** Re-adjudicate the item's `exit_criteria[]` against the repo
+   (executable criteria via subprocess; prose criteria with the implement skill's conservative
+   bias). If ALL criteria already hold, do NOT plan the item -- propose a status closeout
+   instead: stage `status: complete` + `completed_at` + a note citing the evidence, present it
+   to the human, and on confirmation land it as a small roadmap-bookkeeping commit. Precedent:
+   T-1.9 sat `not_started` after its deliverable (docs/INTENT-session-log-architecture.md) had
+   already landed, and a downstream item (T2.15) was citing the deliverable as existing.
+2. **Stale-reference check.** Verify every `files_in_scope` path exists or is marked `# new`;
+   scan the item's intent/exit_criteria for surfaces or substrates that ratified decisions have
+   retired (e.g. the EC2 runner per CD.21/Decision 73, Bedrock per CD.28, SSO per CD.26, direct
+   Iceberg/Athena access for tables cut over to the DuckLake closed boundary per CD.31/CD.33/
+   Decision 81). A stale reference does not block planning -- but the plan MUST include
+   re-grounding the item's text as an explicit Scope row, and the implementation follows the
+   CURRENT architecture, never the stale instruction.
+3. **Supersession / redundancy check.** Search the roadmap for sibling tier_items or ratified-CD
+   amendment notes that have absorbed or superseded the item's scope (`rg` the item's key
+   artefacts across `tier_items[]` and `candidate_decisions[]`). Fully absorbed -> propose
+   closing the item out (`status: reserved` with a supersession note, preserving the id)
+   instead of planning duplicate work. Partial overlap -> the plan names the boundary
+   explicitly and cross-references the sibling.
+4. **Gating-decision and gate-rule check.** Read the item's `related_candidate_decisions` and
+   any `decision_required_before`; check each referenced CD's `state` in the roadmap. If a
+   gating CD is pending, surface it: starting is allowed (bootstrap allowance) but COMPLETION
+   is gated, and ratification currently transits the ops portal (see the roadmap
+   agent_instructions "ratification vehicle" note). Also grep `cross_tier_gates[]` for rules
+   naming the item or its tier and adjudicate them by hand (e.g. a grace_period_elapsed window
+   that has not elapsed makes an eligible-by-deps item not actually startable -- T5.2/G.10 is
+   the canonical case). This manual check stands in for the blocked-on-CD and gate-evaluation
+   preflight surfacing until T-1.20 lands.
+
+Output discipline: every closeout or re-grounding this gate proposes is staged as a roadmap
+edit in the plan's Scope table (or its own micro-commit on human confirmation) -- never
+applied silently, never dropped silently. If the gate finds nothing, say so in one line and
+continue. Closeouts replace dead work; they do not become an excuse to skip the human
+confirmation gate (Step 6b).
 
 ## Suggest Aligned Recommendations
 Search `logs/.recommendations-log.jsonl` for open recommendations that align with the current task (ensure cache is fresh via `bin/venv-python -m scripts.sync_ops pull` during preflight):
@@ -119,6 +157,12 @@ apply these rules:
   Do not create a separate briefing doc for the same information.
 - When a plan step proposes a new document, ask: "Could this information be a metadata
   field in an existing YAML?" If yes, prefer that over a new file.
+- Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
+  route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
+  Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
+  forbidden. The validate.py intent-doc-freeze guard enforces this on-disk.
+  Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml and
+  retire as extraction waves complete.
 
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
 **Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.
@@ -200,81 +244,79 @@ git branch --show-current
 ```
 If the result is `main`, STOP.
 
-Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.md`. After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
+Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.yaml` (schema-validated by `scripts/plan_document.py`; the legacy `PLAN-{slug}.md` form is DEPRECATED per T1.11 / CD.22 -- never author new .md plans; tooling warns on the .md path for one release cycle, then it is removed). After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
 
-## PLAN-{slug}.md Template (Workflow Step 8)
-Use exactly this structure:
-```markdown
-# Plan
+## PLAN-{slug}.yaml Template (Workflow Step 8)
+The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/plan_document.py`, enforced by `validate.py` in both tiers). Unknown keys FAIL validation (`extra="forbid"`). Use exactly this structure -- comments document field semantics:
+```yaml
+schema_version: 1                  # int; must be 1
+slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
+intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
+  ...
+plan_type: IMPLEMENTATION          # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
+verification_tier: V2              # V1 | V2 | V3
+plan_path: docs/plans/PLAN-{slug}.yaml   # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
+phase: >-                          # product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id
+  ...
+scope:                             # min 1 entry; only files listed here may be modified
+  - file: path/to/file.py
+    action: Create                 # Create | Modify | Delete
+    purpose: why this file changes
+bundled_recommendations: []        # included open recs (list of str), or []
+infrastructure_dependencies: []    # list of str; populate when .tf files appear in scope
+acceptance_criteria:               # min 1; each independently verifiable
+  - verifiable condition 1
+verification_plan:                 # min 1 step; step ids must be unique
+  - step: 1
+    phase: pre-deploy              # pre-deploy | post-deploy
+    action: exercise the feature
+    command: executable shell command   # REQUIRED non-empty -- prose-only VP steps fail the schema
+    expected: specific expected result
+    fix_if: what failure looks like
+constraints:
+  - limits from docs/PROJECT_CONTEXT.md and DECISIONS.md
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - Relevant decisions, phase dependencies, known gotchas
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:                   # REQUIRED non-empty for IMPLEMENTATION plans
+  - Specific file to create/modify -- what it must do
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []                     # STRATEGIC plans only (required there, forbidden otherwise);
+                                   # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
+rollback: optional rollback note   # optional str; omit if not applicable
+```
 
-## Intent
-[1-2 sentences: how this work contributes toward the North Star.]
-
-## Plan Type
-IMPLEMENTATION / STRATEGIC / REPORT-ONLY
-
-## Verification Tier
-V1 / V2 / V3
-
-## Plan Path
-docs/plans/PLAN-{slug}.md
-
-## Phase
-[phase number and name from ROADMAP.md]
-
-## Scope
-| File | Action | Purpose |
-|------|--------|---------|
-| [path] | Create / Modify / Delete | [why] |
-
-## Bundled Recommendations
-[List any included open recs, or "None".]
-
-## Infrastructure Dependencies (if applicable)
-[Only if .tf files appear in Scope.]
-
-## Acceptance Criteria
-- [ ] [verifiable condition 1]
-
-## Verification Plan
-| # | Phase | Action | Command | Expected Outcome | Fix If |
-|---|-------|--------|---------|-------------------|--------|
-| 1 | [pre-deploy] | [exercise the feature] | `[executable shell command]` | [specific expected result] | [what failure looks like] |
-
-## Constraints
-- [limits from docs/PROJECT_CONTEXT.md and DECISIONS.md]
-- No rescue agents or workaround loops (Decision 55)
-
-## Context
-- [Relevant decisions, phase dependencies, known gotchas]
-
-## Pre-Implementation Checklist
-- [ ] Branch confirmed not on `main`
-- [ ] docs/PROJECT_CONTEXT.md read
-- [ ] DECISIONS.md read
-- [ ] All files in Scope table located and readable
-- [ ] Acceptance Criteria understood and verifiable
-
-## Ordered Execution Steps
-1. [Specific file to create/modify -- what it must do]
-N. **Execute Verification Plan** -- run each step. Loop until pass. If V3 fails unrecoverably, stop and analyze root cause (Decision 55).
-N+1. Report: what was implemented, verification results.
-
-## Work Areas (STRATEGIC plans only)
-| Area | Scope | Rationale | Complexity |
-|------|-------|-----------|------------|
-| [area name] | [files affected] | [why] | XS/S/M/L/XL |
+After writing, validate before committing:
+```bash
+bin/venv-python -m scripts.plan_document docs/plans/PLAN-{slug}.yaml
 ```
 
 **Platform compatibility:** Verify shell commands are Linux/bash-compatible and use `bin/venv-python` for Python invocations.
 
 ## Related-Work Check (Workflow Step 8, when ci-rca recs are open)
 
-If `ci_rca_recs` is non-empty when writing the PLAN file, confirm the plan satisfies at least one of the following conditions before committing. A plan failing all three must include a logged deferral rationale in its Context section; otherwise write is refused.
+If `ci_rca_unresolved_recs` is non-empty when writing the PLAN file (or `ci_rca_recs` if the report predates the correlation field), confirm the plan satisfies at least one of the following conditions before committing. A plan failing all three must include a logged deferral rationale in its Context section; otherwise write is refused.
 
 1. **Same file**: the plan's Scope table includes the same file the ci-rca rec cites as `source_file`.
 2. **Same Decision Record**: the plan addresses the same Decision Record the ci-rca rec references (if any).
 3. **Same failure category**: the plan addresses the same failure category as the rec. Canonical categories: DQ check failure, schema verifier failure, validate.py false negative, terraform validate failure, pytest regression, mypy regression, prompt-compliance failure, V3 harness failure.
+
+## Closure Obligation (Workflow Step 8, CONDITIONAL)
+
+Apply this check when writing the PLAN file. It is CONDITIONAL -- additive plans that neither resolve recs nor retire a surface are exempt.
+
+**Trigger conditions (either/both):**
+1. **Rec-resolving plan**: the plan's scope or intent explicitly fixes one or more open recommendations. The plan MUST declare them in `bundled_recommendations` AND include a VP step that verifies each rec closed (e.g. grep the local cache after sync).
+2. **Surface-retiring plan**: the plan's scope includes a `Delete` row OR an explicit `X -> Y` migration/cutover (file, Lambda, write path, config flag, or backend). The plan MUST include a stale-reference sweep VP step that confirms the old surface is unreachable or deleted.
+
+**Enforcement:** a plan that meets a trigger condition but omits its closure obligation fails the plan-critique gate (see `plan-critique` skill, closure-obligation criterion). Surface the violation during Step 6 presentation and require the plan author to add the missing declaration or VP step before writing is allowed.
 
 ## Critique Gate (Workflow Step 9)
 **DO NOT output the completion message until this step completes.**
@@ -285,15 +327,15 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
 - `subagent_type: "general-purpose"` (needs `Skill`, `Read`, and `Grep` access)
 - `description: "Plan critique gate"`
 - `prompt:` self-contained, mentions:
-  - The absolute path to `docs/plans/PLAN-{slug}.md`
+  - The absolute path to `docs/plans/PLAN-{slug}.yaml` (a `.md` path is deprecated -- surface a deprecation warning and proceed)
   - Instruction to invoke the `plan-critique` skill via the `Skill` tool against that path
-  - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.md`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
+  - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
   - For IMPLEMENTATION plans: instruction to also read every file in the plan's Scope table
   - Requirement to return the skill's structured output verbatim, including the final `Recommendation: PROCEED / REVISE` line
   - Forbid file edits
 
 **Example prompt body:**
-> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.md`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.md`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
+> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.yaml`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
 
 Read the critique output returned by the subagent.
 If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan. Each Agent call is a fresh window, so the re-launch genuinely re-evaluates.
@@ -305,7 +347,7 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
 
 **Applies only when Plan Type is REPORT-ONLY.** For IMPLEMENTATION and STRATEGIC plans, Step 10 is a no-op; skip to Step 11.
 
-**Why this gate exists:** the Step 9 `plan-critique` skill reviews the planning artefact (`PLAN-{slug}.md`) -- it checks that the PLAN is well-formed, has executable verification steps, aligns with decisions, etc. But for REPORT-ONLY plans, the substantive deliverable is a SEPARATE document (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`) referenced from the PLAN's Scope table. That deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent fresh-context critique before the planning agent's mission completes.
+**Why this gate exists:** the Step 9 `plan-critique` skill reviews the planning artefact (`PLAN-{slug}.yaml`) -- it checks that the PLAN is well-formed, has executable verification steps, aligns with decisions, etc. But for REPORT-ONLY plans, the substantive deliverable is a SEPARATE document (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`) referenced from the PLAN's Scope table. That deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent fresh-context critique before the planning agent's mission completes.
 
 **Methodology:**
 
@@ -355,10 +397,10 @@ Emit the handoff naming the explicit plan path so the human can paste it directl
 
 - **IMPLEMENTATION / STRATEGIC:** use this block (STRATEGIC scopes into recs; IMPLEMENTATION executes directly):
   ```
-  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+  Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.yaml.
   To implement, open a NEW Claude Code session and paste:
 
-      /implement docs/plans/PLAN-{slug}.md
+      /implement docs/plans/PLAN-{slug}.yaml
 
   Summary: {one line on what the plan does}.
   ```

@@ -1,0 +1,34 @@
+artifact: ducklake-catalog-dr.zip
+functions:
+  - agent-platform-ducklake-catalog-dr
+handlers:
+  - src/lambdas/ducklake_catalog_dr/handler.py
+includes:
+  - src/__init__.py
+  - src/common/__init__.py
+  - src/common/catalog_dr.py
+  - src/common/ducklake_runtime.py
+  - src/common/ducklake_scd2_schema.py
+  - src/common/ducklake_spike.py  # transitive: ducklake_runtime imports ducklake_spike
+  - src/lambdas/__init__.py
+  - src/lambdas/ducklake_catalog_dr/__init__.py
+  - scripts/__init__.py
+  - scripts/aws_profile.py
+assets: []
+config: []
+pip_packages: []
+runtime_config: []
+status: active
+notes: >-
+  T2.18 FP-B catalog disaster-recovery Lambda (CD.34 / Decision 82). Runs
+  pg_dump --format=custom --serializable-deferrable via the ducklake-pgclient layer
+  (/opt/bin/pg_dump + libpq.so, PG16). DSN runtime-fetched from Secrets Manager
+  (ducklake-neon-catalog-dsn, Decision 37). Uploads engine-version-tagged dump to the
+  dedicated DR S3 bucket. Emits CatalogDumpSuccess metric to CloudWatch DuckLakeCatalogDR
+  namespace. pg_dump is a native binary in the pgclient layer -- NOT a pip wheel.
+  Layers: ducklake-pgclient (pg_dump + libpq) AND ducklake-deps (PyYAML + boto3); the
+  latter is required because catalog_dr.py imports ducklake_runtime, whose module-level
+  import of yaml fails otherwise. duckdb is imported lazily and never exercised here.
+  Scheduled cron(0 3 * * ? *); Function URL (AWS_IAM) for smoke invocation.
+  T2.19 carry: the restore drill (T2.16b) uses plain-SQL format (psql); FP-B produces
+  --format=custom dumps (pg_restore); the T2.19 restore-drill gate must be updated.

@@ -10,9 +10,7 @@ import pytest
 
 from scripts.llm_client import (
     LLMResult,
-    _compute_cost,
     _gemini_call,
-    _resolve_model_id,
     _resolve_provider,
     llm_call,
 )
@@ -44,42 +42,6 @@ class TestImports:
         assert r.model == "test"
 
 
-class TestResolveModelId:
-    def test_maps_shortname(self) -> None:
-        assert _resolve_model_id("deepseek.v3.2") == "deepseek.v3.2"
-
-    def test_maps_sonnet(self) -> None:
-        result = _resolve_model_id("claude-sonnet-4.6")
-        assert "anthropic" in result
-
-    def test_passthrough_unknown(self) -> None:
-        assert _resolve_model_id("custom.model.v1") == "custom.model.v1"
-
-    def test_default_from_env(self) -> None:
-        with patch.dict("os.environ", {"COPILOT_MODEL_EXECUTION": "deepseek.v3.2"}):
-            result = _resolve_model_id(None)
-            assert "deepseek" in result
-
-
-class TestComputeCost:
-    def test_known_model(self) -> None:
-        cost = _compute_cost("deepseek.v3.2", 1_000_000, 1_000_000)
-        assert abs(cost - (0.90 + 2.61)) < 0.01
-
-    def test_unknown_model_returns_zero(self) -> None:
-        # Unknown models (including Gemini) have no entry in _PRICING -- cost is 0.0
-        cost = _compute_cost("unknown.model", 1_000_000, 1_000_000)
-        assert cost == 0.0
-
-    def test_none_model_returns_zero(self) -> None:
-        cost = _compute_cost(None, 1_000_000, 1_000_000)
-        assert cost == 0.0
-
-    def test_gemini_pro_returns_zero(self) -> None:
-        cost = _compute_cost("gemini-3-pro-preview", 1_000_000, 1_000_000)
-        assert cost == 0.0
-
-
 class TestResolveProvider:
     def test_defaults_to_gemini(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LLM_PROVIDER", raising=False)
@@ -89,122 +51,59 @@ class TestResolveProvider:
         monkeypatch.setenv("LLM_PROVIDER", "gemini")
         assert _resolve_provider() == "gemini"
 
-    def test_env_var_bedrock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retired_bedrock_falls_back_to_gemini(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # bedrock left _VALID_PROVIDERS per CD.28; unknown values fall back
         monkeypatch.setenv("LLM_PROVIDER", "bedrock")
-        assert _resolve_provider() == "bedrock"
+        assert _resolve_provider() == "gemini"
 
     def test_invalid_falls_back_to_gemini(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         assert _resolve_provider() == "gemini"
 
 
-class TestDataResidency:
-    @patch("scripts.bedrock_client.converse")
-    def test_uses_eu_west_2(self, mock_converse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_PROVIDER", "bedrock")
-        mock_converse.return_value = {
-            "content": "ok",
-            "stop_reason": "end_turn",
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "error": False,
-            "message": "",
-        }
-        llm_call("test", tools=False, check=False)
-        _, kwargs = mock_converse.call_args
-        assert kwargs["region"] == "eu-west-2"
-
-
-@patch.dict("os.environ", {"LLM_PROVIDER": "bedrock"})
 class TestLLMCall:
-    @patch("scripts.bedrock_client.converse")
-    def test_single_turn_returns_llm_result(self, mock_converse: MagicMock) -> None:
-        mock_converse.return_value = {
-            "content": "response text",
-            "stop_reason": "end_turn",
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "error": False,
-            "message": "",
-        }
-        result = llm_call("test prompt", tools=False)
-        assert isinstance(result, LLMResult)
-        assert result.content == "response text"
-        assert result.exit_code == 0
-        assert result.tokens_in == 100
-        assert result.tokens_out == 50
+    """llm_call() assembly behaviour on the gemini transport."""
 
-    @patch("scripts.bedrock_client.converse")
-    def test_empty_response_raises_when_check(self, mock_converse: MagicMock) -> None:
-        mock_converse.return_value = {
-            "content": "",
-            "stop_reason": "end_turn",
-            "input_tokens": 10,
-            "output_tokens": 0,
-            "error": False,
-            "message": "",
-        }
-        with pytest.raises(LLMResponseError, match="empty"):
-            llm_call("test", tools=False, check=True)
-
-    @patch("scripts.bedrock_client.converse")
-    def test_error_raises_when_check(self, mock_converse: MagicMock) -> None:
-        mock_converse.return_value = {
-            "content": "",
-            "stop_reason": "",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "error": True,
-            "message": "model unavailable",
-        }
-        with pytest.raises(LLMResponseError, match="model unavailable"):
-            llm_call("test", tools=False, check=True)
-
-    @patch("scripts.bedrock_client.converse")
-    def test_error_returns_result_when_no_check(self, mock_converse: MagicMock) -> None:
-        mock_converse.return_value = {
-            "content": "",
-            "stop_reason": "",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "error": True,
-            "message": "model unavailable",
-        }
-        result = llm_call("test", tools=False, check=False)
-        assert result.exit_code == 1
-
-    @patch("scripts.bedrock_client.converse")
-    def test_context_file_path_prepended(self, mock_converse: MagicMock, tmp_path: Path) -> None:
+    @patch("scripts.llm_client._gemini_call")
+    def test_context_file_path_prepended(
+        self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("LLM_PROVIDER", "gemini")
         ctx_file = tmp_path / "context.md"
         ctx_file.write_text("CONTEXT DATA", encoding="utf-8")
-        mock_converse.return_value = {
-            "content": "ok",
-            "stop_reason": "end_turn",
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "error": False,
-            "message": "",
-        }
+        mock_gemini.return_value = LLMResult(
+            content="ok",
+            exit_code=0,
+            session_id="x",
+            tokens_in=10,
+            tokens_out=5,
+            cost_usd=0.0,
+            model="gemini-auto",
+        )
         llm_call("my prompt", tools=False, context_file_path=str(ctx_file))
-        call_args = mock_converse.call_args
-        prompt_sent = call_args[1]["prompt"]
+        prompt_sent = mock_gemini.call_args[1]["prompt"]
         assert "CONTEXT DATA" in prompt_sent
         assert "my prompt" in prompt_sent
 
-    @patch("scripts.bedrock_client.converse_with_tools")
-    def test_tools_mode_uses_converse_with_tools(self, mock_cwt: MagicMock) -> None:
-        mock_cwt.return_value = {
-            "content": "done",
-            "stop_reason": "end_turn",
-            "input_tokens": 50,
-            "output_tokens": 30,
-            "error": False,
-            "message": "",
-            "turn_count": 3,
-        }
-        result = llm_call("implement this", tools=True)
-        assert result.content == "done"
-        mock_cwt.assert_called_once()
+    @patch("scripts.llm_client._gemini_call")
+    def test_inline_instruction_prepended_with_at_refs_stripped(
+        self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LLM_PROVIDER", "gemini")
+        mock_gemini.return_value = LLMResult(
+            content="ok",
+            exit_code=0,
+            session_id="x",
+            tokens_in=1,
+            tokens_out=1,
+            cost_usd=0.0,
+            model="gemini-auto",
+        )
+        llm_call("body", tools=False, inline_instruction="Plan against the spec @spec.txt")
+        prompt_sent = mock_gemini.call_args[1]["prompt"]
+        assert prompt_sent.startswith("Plan against the spec")
+        assert "@spec.txt" not in prompt_sent
+        assert "body" in prompt_sent
 
 
 class TestGeminiCall:
@@ -566,20 +465,54 @@ class TestProviderRouting:
         mock_gemini.assert_called_once()
         assert result.content == "gemini response"
 
-    @patch("scripts.bedrock_client.converse")
-    def test_llm_provider_bedrock_routes_to_bedrock(self, mock_converse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    @patch("scripts.llm_client._gemini_call")
+    def test_retired_bedrock_provider_routes_to_gemini(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+        # bedrock left _VALID_PROVIDERS (CD.28): resolve_provider falls back
+        # to gemini, so the call still routes to the gemini transport.
         monkeypatch.setenv("LLM_PROVIDER", "bedrock")
-        mock_converse.return_value = {
-            "content": "bedrock response",
-            "stop_reason": "end_turn",
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "error": False,
-            "message": "",
-        }
+        mock_gemini.return_value = LLMResult(
+            content="fallback response",
+            exit_code=0,
+            session_id="x",
+            tokens_in=5,
+            tokens_out=5,
+            cost_usd=0.0,
+            model="gemini-auto",
+        )
         result = llm_call("test prompt", tools=False)
-        mock_converse.assert_called_once()
-        assert result.content == "bedrock response"
+        mock_gemini.assert_called_once()
+        assert result.content == "fallback response"
+
+    @patch("scripts.llm_client._resolve_provider", return_value="litellm")
+    def test_non_gemini_provider_raises_retirement_error(self, mock_provider: MagicMock) -> None:
+        # Unreachable via env config (resolve_provider falls back to gemini);
+        # defense-in-depth until T4.2's LiteLLM transport lands.
+        with pytest.raises(LLMResponseError, match="retired per CD.28"):
+            llm_call("test prompt", tools=False)
+
+    @patch("scripts.llm_client._gemini_call")
+    def test_compat_kwargs_accepted_and_ignored(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+        # scripts/executor/plan.py passes excluded_tools=, run_skill.py passes
+        # system_prompt= -- the signature must keep accepting both (their own
+        # tests mock llm_call, so a TypeError here would be invisible there).
+        monkeypatch.setenv("LLM_PROVIDER", "gemini")
+        mock_gemini.return_value = LLMResult(
+            content="ok",
+            exit_code=0,
+            session_id="x",
+            tokens_in=1,
+            tokens_out=1,
+            cost_usd=0.0,
+            model="gemini-auto",
+        )
+        result = llm_call(
+            "test prompt",
+            tools=False,
+            excluded_tools=["write", "bash"],
+            system_prompt="be terse",
+        )
+        mock_gemini.assert_called_once()
+        assert result.content == "ok"
 
     @patch("scripts.llm_client._gemini_call")
     def test_no_llm_provider_defaults_to_gemini(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:

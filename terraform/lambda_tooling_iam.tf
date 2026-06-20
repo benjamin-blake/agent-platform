@@ -115,16 +115,6 @@ resource "aws_iam_role_policy" "platform_dev_daily_ops" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "BedrockInvoke"
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream",
-          "bedrock:ListFoundationModels",
-        ]
-        Resource = "*"
-      },
-      {
         Sid      = "LambdaInvoke"
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunctionUrl", "lambda:InvokeFunction"]

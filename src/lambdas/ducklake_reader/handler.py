@@ -6,30 +6,71 @@ the Neon catalog credential), so a write attempt is denied at the IAM/S3 layer.
 
 Actions:
   attach_check         -- ATTACH proof + DuckDB version (mirror of the writer's, read-only).
-  read_current         -- return rows from the `current` write-through projection (EC1 / boundary).
+  read_current         -- return rows from the smoke `current` projection (EC1 / boundary).
   partition_prune_check-- a single-key `current` lookup that touches <=1 bucket-partition.
+  read_ops_current     -- production: current projection of an ops_* table (optional single-key filter).
+  read_ops_history     -- production: append-history rows of an ops_* table.
+  query_ops            -- production: a read-only SELECT over an ops_* current projection (pushdown).
 
-SINGLE-PORTAL DEFERRAL NOTE (Decision 78/81): this Function URL is a T2.17 smoke-test ingress ONLY;
-production reads transit the ops portal until the T2.19 cutover.
+PRODUCTION OPS PATH (T2.19 / Decision 81): the reader is the SOLE read authority for the ops_*
+governance tables -- the closed boundary. The read role is S3 GetObject only, so a write attempt is
+denied at IAM/S3. Every ops read transits this URL; there is no Athena escape hatch.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import time
 from typing import Any, Callable
 
+from src.common import ducklake_connect_probe as probe
 from src.common import ducklake_runtime as rt
 
 DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
+META_SCHEMA = os.environ.get("DUCKLAKE_META_SCHEMA", rt.META_SCHEMA)
 EXTENSION_DIRECTORY = os.environ.get("DUCKLAKE_EXTENSION_DIRECTORY", rt.LAMBDA_EXTENSION_DIRECTORY)
 
 
 def _open_reader_connection() -> Any:
     """Open a read-scoped baked-extension connection to the Neon catalog."""
     dsn = rt.fetch_dsn()
-    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, extension_directory=EXTENSION_DIRECTORY)
+    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
+
+
+def _warm_reader_connection(force_reopen: bool = False) -> tuple[Any, dict[str, Any]]:
+    """Acquire the per-container warm read connection (neon-egress-reduction D2).
+
+    Reuses one ATTACHed connection across sequential warm invocations -- no per-request re-ATTACH and
+    so no repeated ducklake_file_column_stats COPY / Neon metadata egress. The actual open routes
+    through _open_reader_connection (the single open seam), invoked only when (re)opening; the
+    warm-reuse path skips it (and its fetch_dsn) entirely.
+    """
+    return rt.get_warm_connection(opener=_open_reader_connection, force_reopen=force_reopen)
+
+
+def action_connect_probe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Phased connectivity diagnostic (T2.19 RCA). Runs before any connection open.
+
+    Returns the structured probe result even on a diagnosed failure (ok=False + failed_phase).
+    Logs each phase result to CloudWatch via print (Lambda stdout -> CloudWatch Logs).
+    """
+    dsn = rt.fetch_dsn()
+    timeout_s = int(os.environ.get("DUCKLAKE_CONNECT_TIMEOUT_S", "10"))
+    result = probe.probe_connection(
+        dsn,
+        data_path=DATA_PATH,
+        meta_schema=META_SCHEMA,
+        extension_directory=EXTENSION_DIRECTORY,
+        timeout_s=timeout_s,
+    )
+    print(
+        f"CONNECT_PROBE reader phase_reached={result['phase_reached']} "
+        f"failed_phase={result['failed_phase']} ok={result['ok']} "
+        f"dns_ms={result['dns_ms']} tcp_ms={result['tcp_ms']} "
+        f"auth_ms={result['auth_ms']} attach_ms={result['attach_ms']} "
+        f"error={result['error']!r}"
+    )
+    return result
 
 
 def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -41,6 +82,8 @@ def action_attach_check(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "version": getattr(duckdb, "__version__", "unknown"),
         "source": "layer" if EXTENSION_DIRECTORY else "network",
         "connect_ms": round(float(event.get("_connect_ms", 0.0)), 2),
+        # Warm-reuse observability (D2): True when this invocation reused the cached connection.
+        "connect_reused": bool(event.get("_connect_reused", False)),
     }
 
 
@@ -77,6 +120,90 @@ def action_write_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
         return {"ok": True, "write_denied": True, "detail": type(exc).__name__}
 
 
+def action_read_ops_current(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: return current-projection rows for an ops_* table (optional single-column filter).
+
+    Filter forms (newest first): `filter: {column, value}` -- structural, column validated against
+    the field-semantics contract (rec-2170 fix); `key`/`id` -- legacy merge-key-only equality.
+    """
+    table = event.get("table")
+    _require_ops_table(table)
+    key = event.get("key") if event.get("key") is not None else event.get("id")
+    key_column = None
+    flt = event.get("filter")
+    if flt is not None:
+        if not isinstance(flt, dict) or "column" not in flt or "value" not in flt:
+            raise rt.DuckLakeRuntimeError(
+                "read_ops_current 'filter' must be an object with BOTH 'column' and 'value' -- "
+                "a malformed filter must never degrade to an unfiltered full-table read"
+            )
+        key_column = flt["column"]
+        key = flt["value"]
+    rows = rt.read_current(con, table=table, key=key, key_column=key_column, limit=event.get("limit"))
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_named_read(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: execute a pre-established read verb (Decision 84 I-3).
+
+    The caller names a verb and binds named params; the SQL is registry content inside this
+    Lambda's bundle. No caller SQL crosses the boundary on this path.
+    """
+    verb = event.get("verb")
+    if not isinstance(verb, str) or not verb:
+        raise rt.DuckLakeRuntimeError("named_read requires a non-empty 'verb' string")
+    params = event.get("params") or {}
+    if not isinstance(params, dict):
+        raise rt.DuckLakeRuntimeError("named_read 'params' must be an object of named bind values")
+    rows = rt.named_read(con, verb=verb, params=params)
+    return {
+        "ok": True,
+        "verb": verb,
+        "registry_version": rt.NAMED_READS_VERSION,
+        "rows": _json_safe(rows),
+        "row_count": len(rows),
+    }
+
+
+def action_read_ops_history(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: return append-history rows for an ops_* table (optional single-key filter)."""
+    table = event.get("table")
+    _require_ops_table(table)
+    rows = rt.read_history(con, table=table, key=event.get("key"), limit=event.get("limit"))
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_query_ops(event: dict[str, Any], con: Any) -> dict[str, Any]:
+    """Production: run a read-only SELECT over an ops_* current projection. Use `{tbl}` for the table.
+
+    The SQL is caller-supplied (internal read paths: predicate pushdown). Only the current projection
+    is reachable; the read role is S3-read-only so the boundary holds even for an arbitrary SELECT.
+    """
+    table = event.get("table")
+    _require_ops_table(table)
+    sql = event.get("sql")
+    if not isinstance(sql, str) or not sql.strip():
+        raise rt.DuckLakeRuntimeError("query_ops requires a non-empty 'sql' string referencing {tbl}")
+    rows = rt.query_current(con, table=table, sql=sql, params=event.get("params") or [])
+    return {"ok": True, "table": table, "rows": _json_safe(rows), "row_count": len(rows)}
+
+
+def action_reset_warm_connection(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Test-only: drop the per-container warm connection so the NEXT invocation reconnects cold (D2 VP).
+
+    Connectionless (runs before any open). Lets the warm-reuse smoke gate exercise the cold-reconnect
+    path deterministically -- it does not touch the catalog or relax any boundary.
+    """
+    rt.reset_warm_connection()
+    return {"ok": True, "reset": True}
+
+
+def _require_ops_table(table: Any) -> None:
+    """Loud-fail if *table* is not a configured ops_* table (closed-boundary table allow-list)."""
+    if not isinstance(table, str) or table not in rt.ops_table_names():
+        raise rt.DuckLakeRuntimeError(f"unknown or missing ops table {table!r}: expected one of {list(rt.ops_table_names())}")
+
+
 def _json_safe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Coerce non-JSON-native values (datetimes) to ISO strings for the response body."""
     out: list[dict[str, Any]] = []
@@ -90,7 +217,17 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "read_current": action_read_current,
     "partition_prune_check": action_partition_prune_check,
     "write_probe": action_write_probe,
+    "read_ops_current": action_read_ops_current,
+    "read_ops_history": action_read_ops_history,
+    "named_read": action_named_read,
+    "query_ops": action_query_ops,
+    "connect_probe": action_connect_probe,
+    "reset_warm_connection": action_reset_warm_connection,
 }
+
+# Actions that run BEFORE the normal connection open (e.g. to diagnose a hanging connect, or to drop
+# the warm connection without opening a new one).
+_CONNECTIONLESS_ACTIONS = {"connect_probe", "reset_warm_connection"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -117,13 +254,24 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(400, {"ok": False, "error": f"unknown action {action!r}", "actions": sorted(_ACTIONS)})
 
     try:
-        t0 = time.perf_counter()
-        con = _open_reader_connection()
-        payload["_connect_ms"] = (time.perf_counter() - t0) * 1000.0
+        if action in _CONNECTIONLESS_ACTIONS:
+            return _response(200, fn(payload, None))
+        # Warm-reuse acquisition (D2): the connection is kept open for the next invocation (NOT closed
+        # in a finally). A dead session (Neon scale-to-zero) surfaces as a connection error from the
+        # action; reads are idempotent, so reopen ONCE and retry -- the reopen never leaks a 5xx for
+        # this expected transient. Any non-connection error still propagates (Decision 55).
+        con, conn_meta = _warm_reader_connection()
+        payload["_connect_ms"] = conn_meta["connect_ms"]
+        payload["_connect_reused"] = conn_meta["reused"]
         try:
             return _response(200, fn(payload, con))
-        finally:
-            con.close()
+        except Exception as exc:  # noqa: BLE001 -- narrowed immediately to the dead-connection case
+            if not rt.is_dead_connection_error(exc):
+                raise
+            con, conn_meta = _warm_reader_connection(force_reopen=True)
+            payload["_connect_ms"] = conn_meta["connect_ms"]
+            payload["_connect_reused"] = conn_meta["reused"]
+            return _response(200, fn(payload, con))
     except rt.VersionMismatchError as exc:
         return _response(500, {"ok": False, "error_type": "version_mismatch", "error": str(exc)})
     except rt.DuckLakeRuntimeError as exc:

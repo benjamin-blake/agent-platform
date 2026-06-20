@@ -1,3 +1,12 @@
+> **PARTIALLY SUPERSEDED by Decision 84 (2026-06-11):** the storage/transport mechanics described
+> below (DynamoDB `decisions` counter, `logs/.ops-outbox/ops_decisions_pending/` +
+> `drain_pending_decisions`, `OpsWriter().write("ops_decisions", ...)`, Athena
+> `ops_decisions_current` reads) are RETIRED. ops_decisions lives on the DuckLake closed boundary:
+> ids follow DECISIONS.md numbering via `fields['decision_id']`, writes transit `ducklake_writer`,
+> reads transit the `decision_by_id`/`decisions_max_updated` verbs, and the backfill is
+> `ops_data_portal --backfill-decisions-md`. SURVIVING SCOPE: the DQ graduation arc and the
+> DECISIONS.md decommission question. See docs/INTENT-ducklake-consolidation.md.
+
 # Intent: ops_decisions Graduation
 
 This document is the single strategic anchor for the `ops_decisions` graduation

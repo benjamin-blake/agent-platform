@@ -17,6 +17,7 @@ _SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
 _OPS_DECISIONS_RE = re.compile(r"^ops_decisions:dec-\d+$")
 _TIER_SHORTCUT_RE = re.compile(r"^T-?\d+$")
 _CANONICAL_TIER_ORDER: list[str] = ["T-1", "T0", "T1", "T2", "T3", "T4", "T5"]
+_INACTIVE_FOR_TIER: frozenset[str] = frozenset({"reserved", "deferred_post_mvp"})
 
 # Canonical helper table: name -> expected arity. Populated from document.gate_helpers
 # at validation time; this module-level dict is the fallback for test fixtures without
@@ -129,7 +130,7 @@ class TierItem(BaseModel):
     related_decisions: list[int] | None = None
     effort: Literal["XS", "S", "M", "L", "XL"] = "S"
     strategic: bool = False
-    status: Literal["not_started", "in_progress", "complete", "reserved"] = "not_started"
+    status: Literal["not_started", "in_progress", "complete", "reserved", "deferred_post_mvp"] = "not_started"
     completed_at: str | None = None
     note: str | None = None
     progress_note: str | None = None
@@ -293,6 +294,18 @@ class RoadmapDocument(BaseModel):
                     except ValueError as exc:
                         raise ValueError(f"CandidateDecision '{cd.id}'.decision_required_before: {exc}") from exc
 
+        # (f) no not_started/in_progress item may depend directly on a deferred_post_mvp item
+        deferred_ids: set[str] = {i.id for i in self.tier_items if i.status == "deferred_post_mvp"}
+        if deferred_ids:
+            for item in self.tier_items:
+                if item.status in {"not_started", "in_progress"}:
+                    for dep in item.depends_on:
+                        if dep in deferred_ids:
+                            raise ValueError(
+                                f"tier_item '{item.id}' (status={item.status}) depends_on "
+                                f"'{dep}' which is deferred_post_mvp -- no live item may depend on a parked item"
+                            )
+
         return self
 
 
@@ -320,7 +333,9 @@ class PlatformRoadmapState:
 
     def tier_complete(self, tier_name: str) -> bool:
         return all(
-            item.status == "complete" for item in self._doc.tier_items if item.tier == tier_name and item.status != "reserved"
+            item.status == "complete"
+            for item in self._doc.tier_items
+            if item.tier == tier_name and item.status not in _INACTIVE_FOR_TIER
         )
 
     def resolve_depends_on(self, item_id: str) -> list[TierItem]:
@@ -330,7 +345,7 @@ class PlatformRoadmapState:
         result: list[TierItem] = []
         for dep in item.depends_on:
             if _TIER_SHORTCUT_RE.match(dep):
-                result.extend(i for i in self._doc.tier_items if i.tier == dep and i.status != "reserved")
+                result.extend(i for i in self._doc.tier_items if i.tier == dep and i.status not in _INACTIVE_FOR_TIER)
             elif dep in self._by_id:
                 result.append(self._by_id[dep])
         return result
@@ -361,9 +376,12 @@ class PlatformRoadmapState:
     def strategic_pending_items(self) -> list[TierItem]:
         return [item for item in self.eligible_items() if item.strategic]
 
+    def deferred_post_mvp_items(self) -> list[TierItem]:
+        return [item for item in self._doc.tier_items if item.status == "deferred_post_mvp"]
+
     def active_tier(self) -> str | None:
         for tier_name in _CANONICAL_TIER_ORDER:
-            tier_items = [i for i in self._doc.tier_items if i.tier == tier_name and i.status != "reserved"]
+            tier_items = [i for i in self._doc.tier_items if i.tier == tier_name and i.status not in _INACTIVE_FOR_TIER]
             if tier_items and not all(i.status == "complete" for i in tier_items):
                 return tier_name
         return None
@@ -377,6 +395,7 @@ class PlatformRoadmapState:
             "in_progress": [_item_dict(i) for i in self.in_progress_items()],
             "blocked": [{**_item_dict(i), "blocked_on": self._blocked_on(i)} for i in self.compute_blocked()],
             "strategic_pending": [_item_dict(i) for i in self.strategic_pending_items()],
+            "deferred_post_mvp": [_item_dict(i) for i in self.deferred_post_mvp_items()],
             "active_tier": self.active_tier(),
         }
 
@@ -397,6 +416,7 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "in_progress": [],
             "blocked": [],
             "strategic_pending": [],
+            "deferred_post_mvp": [],
             "active_tier": None,
         }
 

@@ -1,0 +1,431 @@
+schema_version: 1
+slug: "ci-rca-evidence-script"
+intent: >-
+  Land Phase 2 of the T1.13 CI-RCA methodology contract: a deterministic evidence-bundle
+  generator (scripts/ci_rca_evidence.py + ci_rca_tier_map.py + ci_rca_taxonomy.py) that
+  pre-computes facts the ci-rca LLM agent cannot dispute (failure classification, validate.py
+  tier-membership via AST walk, earliest_viable_gate, runtime probe), uploads the bundle to the
+  configured agent-logs S3 bucket under ci-rca-evidence/<sha>.json, and wires generation + upload
+  + SHA-surfacing into .github/workflows/ci-rca.yml. Deepens RCA quality so the self-improving
+  control plane (T3.4) consumes well-formed root-cause signals instead of rescue-mode diagnoses.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-evidence-script.yaml
+phase: >-
+  PLATFORM tier_item T1.13 (CI-RCA methodology contract), Phase 2 per
+  docs/INTENT-ci-rca-methodology.md Section 6. Second of six depth follow-on plans (after
+  PLAN-ci-rca-schema-enforcement, landed 2026-06-15).
+scope:
+  - file: scripts/ci_rca_evidence.py
+    action: Create
+    purpose: >-
+      Generator core + CLI entry point (python -m scripts.ci_rca_evidence). Reads the pre-fetched
+      failed-run log and (optional) structured jobs JSON via FILE/FLAG inputs (NO gh dependency --
+      CC-web has no gh CLI; the workflow pre-fetches both). Orchestrates one evidence_bundle.json
+      per failed check (INTENT 3.3), assembles the bundle from the taxonomy classifier
+      (ci_rca_taxonomy) and the gate analysis (ci_rca_tier_map), computes the canonical-JSON SHA-256,
+      uploads to the configured s3_agent_logs_bucket under ci-rca-evidence/<sha>.json with a
+      logs/.ci-rca-evidence-pending/<sha>.json degraded fallback (upload_status=upload_failed), and
+      handles the INTENT 3.4 failure modes. Hard limit < 500 SLOC (Decision 43); no waiver.
+  - file: scripts/ci_rca_tier_map.py
+    action: Create
+    purpose: >-
+      Deterministic gate analysis. AST walker over scripts/validate.py producing tier_membership,
+      handling the four INTENT 3.2-step-3 control-flow cases: (a) direct validate_* calls in the
+      `if args.pre:` branch of main(), (b) one level of aggregator indirection via
+      run_python_checks / run_terraform_checks, (c) sys.exit/return short-circuits before
+      fallthrough (calls after the --pre branch's sys.exit are unreachable from --pre), and
+      (d) duplicate registration emitting ["pre","presubmit"]. Also the N=5 drop-extremes median
+      runtime probe (runtime_confidence string; dispersion > 50% -> null) and the
+      earliest_viable_gate decision tree (INTENT 3.2 step 4). Hosts the walker pinned by
+      tests/test_ci_rca_evidence_ast.py. Hard limit < 500 SLOC (Decision 43); no waiver.
+  - file: scripts/ci_rca_taxonomy.py
+    action: Create
+    purpose: >-
+      Taxonomy loader + classifier. Loads config/ci_rca_taxonomy.yaml; classifies a failure by
+      function_to_category (primary, function-name match on the log) then log_pattern_to_category
+      (regex fallback); resolves a workflow name to a tier via workflow_to_tier (miss-behaviour =
+      unknown + null actual_gate, INTENT 3.2 step 2). Exposes a workflow-name enumerator (glob
+      .github/workflows/*.yml -> name) reused by validate_ci_rca_taxonomy so the map and the check
+      share one source of truth. Hard limit < 500 SLOC (Decision 43); no waiver.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Create
+    purpose: >-
+      Initial taxonomy (INTENT 3.2 step 2): function_to_category (e.g. validate_sloc_limits:
+      sloc_violation), log_pattern_to_category (pytest/import/yaml fallbacks), and workflow_to_tier
+      with an entry for EVERY current .github/workflows/*.yml name (9 today). validate-gate
+      workflows map to a tier value (CI -> CI, Main Canary -> CI); non-validate workflows
+      (Deploy to AWS, CodeQL, Claude Code, rec-autoclose, Refresh Copilot Model Multipliers,
+      CI RCA, terraform-apply-sandbox) map to the sentinel not_a_gate. Carries schema_version and a
+      maintenance note (extend via source=ci_rca_taxonomy_extension recs).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add validate_ci_rca_taxonomy(failed) (imports the loader + workflow enumerator from
+      scripts.ci_rca_taxonomy) that fails if any .github/workflows/*.yml workflow name is absent
+      from workflow_to_tier. Wire it into BOTH the `if args.pre:` branch AND run_python_checks
+      (presubmit) per INTENT residual-findings "validator scope" item. Pure file-glob + YAML parse
+      (sub-100ms), so it is --pre-eligible (Decision 60).
+  - file: tests/test_ci_rca_evidence.py
+    action: Create
+    purpose: >-
+      Coverage-mapped test for scripts/ci_rca_evidence.py (test_coverage_checker maps
+      scripts/ci_rca_evidence.py -> here; --check-tests blocks without it). 100% line coverage:
+      file-input parsing, multi-failure loop, bundle assembly, canonical-JSON hash stability across
+      a fixture set, S3 upload success (mocked boto3 asserting bucket/key/body), degraded path
+      (forced upload failure -> pending dir + upload_status=upload_failed), every 3.4 failure mode.
+      Plus an env-gated test_live_s3_roundtrip (RUN_LIVE_S3=1, skipped otherwise) doing a REAL
+      put -> head -> get -> compare -> delete (self-cleaning) against the resolved bucket.
+  - file: tests/test_ci_rca_tier_map.py
+    action: Create
+    purpose: >-
+      Coverage-mapped test for scripts/ci_rca_tier_map.py (100%): the walker against an inline
+      mini-validate.py source exercising all four control-flow cases; the runtime probe with mocked
+      timing (median/dispersion/null branches); the earliest_viable_gate decision-tree branches;
+      probe-failure and dispersion-too-high null paths; AST-parse-failure path.
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Create
+    purpose: >-
+      Coverage-mapped test for scripts/ci_rca_taxonomy.py (100%): function-name classification,
+      log-pattern fallback, workflow_to_tier resolution + miss-behaviour, sentinel not_a_gate
+      handling, loader errors (missing file, malformed YAML), workflow-name enumeration.
+  - file: tests/test_ci_rca_evidence_ast.py
+    action: Create
+    purpose: >-
+      The roadmap-named AST-walker CONTRACT test (golden fixture mirror, INTENT 3.2 step 3). Pins
+      the walker output against a frozen expected tier_membership for a fixture mirror of validate.py
+      structure (all four control-flow cases) AND asserts against the LIVE scripts/validate.py that
+      validate_sloc_limits resolves to ["pre","presubmit"] (the duplicate-registration case is live
+      today at validate.py:2491 + :2941). Documents that fixture changes require Decision-Record-class
+      review. Distinct purpose from test_ci_rca_tier_map.py (regression/governance guard vs unit suite).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add validate_ci_rca_taxonomy unit tests: complete map passes; removing a workflow entry fails
+      with a diagnostic naming the missing workflow. (validate.py is a changed source file; test file
+      already exists -- test-existence gate satisfied. validate.py is subprocess-tested so its
+      per-file coverage is not whole-file-gated, confirmed empirically at planning time.)
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Add a best-effort (continue-on-error / non-fatal) "Generate evidence bundle" step AFTER the
+      AWS-credentials + Fetch-failed-run-logs steps and BEFORE "Run ci-rca agent". It also pre-fetches
+      the structured jobs JSON (gh run view <id> --json jobs, gh IS available on the CI runner),
+      runs python -m scripts.ci_rca_evidence with --log-file/--jobs-file/--workflow-name/
+      --workflow-run-id, and surfaces the bundle path(s) + sha(s) + s3_uri(s) into the agent PROMPT
+      (string append) so the Phase-3 agent can consume them. Gated on the same dedup condition as the
+      agent step. MUST preserve the existing main-branch trigger gate + FILED: marker contract
+      (Decision 74). The free-text agent prompt body is otherwise unchanged (agent consumption is Phase 3).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Append to the T1.13 progress_note: Phase-2 evidence-script landing (the three modules +
+      taxonomy YAML + validate_ci_rca_taxonomy + ci-rca.yml wiring), bucket resolved to the
+      configured s3_agent_logs_bucket (agent-platform-data-lake; the agent-platform-agent-logs
+      literal is a stale work-account name), and the remaining deferrals (Phase-3 agent rewrite for
+      context_v2_json referencing; Phase-4 cross-check enforcement, strict s3_uri pattern, and
+      Section 7 observability). progress_note text only; do not change files_in_scope or status.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    S3 upload dependency is PRE-SATISFIED -- no terraform required and none in scope. The bundle
+    uploads to the configured s3_agent_logs_bucket, which resolves to agent-platform-data-lake in
+    the personal account (config.personal.yaml). That bucket EXISTS and is writable by both the
+    agent_platform profile (local/CC-web) and the CI OIDC branch role agent-platform-github-ci-branch
+    (which already holds s3:PutObject on aws_s3_bucket.data_lake per terraform/personal/oidc.tf, and
+    already reads the convergence record there). The literal agent-platform-agent-logs from the
+    INTENT/roadmap/task text does NOT exist in the personal account (verified NoSuchBucket at planning
+    time) and is NOT used. A future Phase-4 plan owns the strict s3_uri pattern + lifecycle policy.
+acceptance_criteria:
+  - >-
+    scripts/ci_rca_evidence.py, scripts/ci_rca_tier_map.py, and scripts/ci_rca_taxonomy.py each
+    exist and are each < 500 SLOC with NO complexity-waiver header (Decision 43; validate_sloc_limits
+    now runs in --pre, so it gates this).
+  - >-
+    Running the generator against a pre-fetched failed-run log (file input, no gh) produces one
+    evidence_bundle.json per failed check carrying every INTENT 3.3 field (schema_version,
+    workflow_run_id, workflow_name, workflow_to_tier_resolution, failed_check, failure_category,
+    classification_source, tier_membership, earliest_viable_gate(+rationale), runtime_confidence,
+    actual_gate_that_caught_it, related_recs_by_category, decision_records_cited, ast_walker_version,
+    taxonomy_version, sha256), and the canonical-JSON SHA-256 roundtrips (recompute == stored).
+  - >-
+    The AST walker classifies the live scripts/validate.py correctly: validate_sloc_limits ->
+    ["pre","presubmit"] (duplicate registration); a presubmit-aggregator-only check (e.g.
+    validate_imports) -> ["presubmit"]; a --pre-direct check (e.g. validate_intent_doc_freeze) ->
+    includes "pre"; a call placed after the --pre branch sys.exit is NOT attributed to "pre".
+  - >-
+    Real-S3 roundtrip: the env-gated live test (RUN_LIVE_S3=1, AWS_PROFILE=agent_platform) uploads a
+    bundle to s3://<resolved s3_agent_logs_bucket>/ci-rca-evidence/<sha>.json, a head/get returns the
+    identical bytes, and the test deletes the object afterwards (self-cleaning). NOT mock.
+  - >-
+    Degraded path: when the upload target is unreachable (forced), the generator writes the bundle to
+    logs/.ci-rca-evidence-pending/<sha>.json and emits evidence_bundle_ref.upload_status=upload_failed
+    WITHOUT raising; a loud signal is logged.
+  - >-
+    config/ci_rca_taxonomy.yaml defines function_to_category, log_pattern_to_category, and
+    workflow_to_tier, and workflow_to_tier contains an entry for every .github/workflows/*.yml
+    workflow name (9 today).
+  - >-
+    validate_ci_rca_taxonomy passes on the complete map and fails (diagnostic naming the missing
+    workflow) when an entry is removed; it is invoked from BOTH the --pre branch and run_python_checks.
+  - >-
+    .github/workflows/ci-rca.yml runs the evidence step before the agent step, is non-fatal on script
+    failure, surfaces the bundle path + sha + s3_uri into the agent prompt, preserves the main-branch
+    trigger gate and FILED: marker, and passes validate's workflow guards (validate_ci_rca_trigger,
+    validate_ci_workflow_guards, validate_workflow_agent_safety).
+  - >-
+    Per-file coverage is 100% for all three new modules and a test file exists for each
+    (test_coverage_checker --check-tests --check-coverage); validate_ci_rca_taxonomy is exercised by
+    tests/test_validate.py.
+  - >-
+    The cross-check VALUES are present in the bundle but NO portal enforcement is added:
+    scripts/ops_data_portal.py is NOT modified (cross-check enforcement + strict s3_uri pattern are
+    Phase 4, out of scope). docs/ROADMAP-PLATFORM.yaml T1.13 progress_note records the Phase-2 landing.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-evidence-script.yaml
+    expected: Exit 0; prints validation success.
+    fix_if: Non-zero exit -- fix the named field; an unknown-key error means a stray top-level key.
+  - step: 2
+    phase: pre-deploy
+    action: All three new modules are under 500 SLOC and carry no complexity-waiver (Decision 43).
+    command: bin/venv-python -c "from scripts.validate import validate_sloc_limits as v; f=[]; v(f); assert not f, f; import pathlib; assert not any('complexity-waiver' in pathlib.Path(p).read_text() for p in ['scripts/ci_rca_evidence.py','scripts/ci_rca_tier_map.py','scripts/ci_rca_taxonomy.py']), 'waiver header present -- forbidden'; print('ok')"
+    expected: Prints ok (no SLOC failure on the changed set; no waiver header in any new module).
+    fix_if: SLOC failure -- rebalance functions ACROSS the three in-scope modules (do NOT add a waiver, do NOT add a new file); waiver assertion trips -- remove it and split instead.
+  - step: 3
+    phase: pre-deploy
+    action: AST-walker contract test + tier_map unit suite pass.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence_ast.py tests/test_ci_rca_tier_map.py -q
+    expected: All pass -- the contract test pins the four control-flow cases against the fixture mirror and asserts validate_sloc_limits -> ["pre","presubmit"] on the live validate.py.
+    fix_if: Contract test fails on the live assertion -- the walker mis-handles duplicate registration or the sys.exit short-circuit; fix the walker, not the fixture (fixture changes need Decision-Record-class review).
+  - step: 4
+    phase: pre-deploy
+    action: Taxonomy classifier + loader unit suite passes.
+    command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -q
+    expected: All pass -- function/log/workflow classification, sentinel not_a_gate, miss-behaviour, and loader-error paths.
+    fix_if: Classification wrong -- check function_to_category precedence over log_pattern_to_category; loader-error test fails -- the missing/malformed-YAML path must raise the documented error, not crash.
+  - step: 5
+    phase: pre-deploy
+    action: Evidence-module unit suite passes incl. canonical-JSON hash stability and the degraded path.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py -q
+    expected: All pass (live-S3 test skipped without RUN_LIVE_S3) -- hash is stable across the fixture set; forced-upload-failure writes to logs/.ci-rca-evidence-pending/ with upload_status=upload_failed and does not raise.
+    fix_if: Hash unstable -- canonical JSON must use json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=True) over all fields except sha256; degraded test raises -- the upload exception is not caught.
+  - step: 6
+    phase: pre-deploy
+    action: validate_ci_rca_taxonomy passes on the complete map and is wired into both tiers.
+    command: bin/venv-python -c "import inspect, scripts.validate as V; f=[]; V.validate_ci_rca_taxonomy(f); assert not f, f; src=inspect.getsource(V); assert src.count('validate_ci_rca_taxonomy(') >= 3, 'must be defined + called in --pre + run_python_checks'; print('ok')"
+    expected: Prints ok -- the check passes on the full map and appears as a definition plus two call sites.
+    fix_if: Assertion on call count fails -- wire the call into BOTH the if args.pre branch and run_python_checks; check failure means a workflow name is missing from workflow_to_tier.
+  - step: 7
+    phase: pre-deploy
+    action: Test-existence + 100% per-file coverage for the three new modules.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/ci_rca_evidence.py scripts/ci_rca_tier_map.py scripts/ci_rca_taxonomy.py
+    expected: 0 missing test files, 0 files below 100% coverage.
+    fix_if: Missing test file -- the mapped tests/test_<name>.py is absent; below 100% -- add tests for the uncovered lines (mock boto3/subprocess/timing for the I/O and probe paths).
+  - step: 8
+    phase: post-deploy
+    action: REAL S3 roundtrip (not mock) against the resolved agent-logs bucket, self-cleaning.
+    command: RUN_LIVE_S3=1 AWS_PROFILE=agent_platform bin/venv-python -m pytest tests/test_ci_rca_evidence.py -k live_s3 -q
+    expected: Passes -- a real bundle is put to s3://<resolved bucket>/ci-rca-evidence/<sha>.json, head/get returns identical bytes, then the object is deleted. Confirms the bucket resolves to agent-platform-data-lake and the uploader works end-to-end.
+    fix_if: NoSuchBucket -- the bucket resolver fell back to the non-existent agent-platform-agent-logs literal instead of s3_agent_logs_bucket; AccessDenied -- run under AWS_PROFILE=agent_platform (the static-key chain); object not deleted -- fix the test teardown.
+  - step: 9
+    phase: post-deploy
+    action: End-to-end generator run against a real pre-fetched failed-run log (no gh), producing a real bundle whose SHA roundtrips.
+    command: printf 'Run full validation\nvalidate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC, exceeds 500 (Decision 43)\n' > /tmp/ci_rca_probe.log && AWS_PROFILE=agent_platform bin/venv-python -m scripts.ci_rca_evidence --log-file /tmp/ci_rca_probe.log --workflow-name CI --workflow-run-id 0 --print-bundle
+    expected: Emits >=1 bundle JSON; the recomputed canonical SHA equals the stored sha256; failed_check + failure_category derive from the log; tier_membership comes from the live validate.py AST walk. (If the resolved bucket is reachable the bundle uploads; otherwise it lands in logs/.ci-rca-evidence-pending/ with upload_status=upload_failed -- both are acceptable here, step 8 proves the live upload.)
+    fix_if: gh ImportError/lookup -- the script must NOT call gh; it reads the log from --log-file; SHA mismatch -- canonical-JSON drift (see step 5 fix_if).
+  - step: 10
+    phase: post-deploy
+    action: Full presubmit (local mirror of CI) is green before push.
+    command: bin/venv-python -m scripts.validate
+    expected: All checks pass (lint, format, tests, prompts, workflow guards, sloc, coverage, ci-rca-trigger); exit 0.
+    fix_if: Any check fails -- fix before push; remote CI (Decision 83 required checks) is authoritative. A workflow-guard failure means the ci-rca.yml edit regressed the trigger gate or the FILED marker contract.
+constraints:
+  - >-
+    Each new module (ci_rca_evidence.py, ci_rca_tier_map.py, ci_rca_taxonomy.py) MUST be < 500 SLOC
+    with NO complexity-waiver header -- no exceptions (Decision 43, explicit human direction). If a
+    module approaches the limit, rebalance functions across the three IN-SCOPE modules; do NOT add a
+    waiver and do NOT create a fourth source file (scope is fixed).
+  - >-
+    The script MUST NOT depend on the gh CLI at runtime. CC-web has no gh; the ci-rca.yml runner
+    pre-fetches the failed log and the jobs JSON (gh exists there) and passes them as file/flag inputs.
+    This preserves the INTENT 3.2 contract (the bundle persists the log + jobs) while staying testable
+    in CC-web and functional in CI.
+  - >-
+    Cross-check is COMPUTED, NOT ENFORCED this slice (INTENT Section 6 Phase 2). The bundle carries
+    earliest_viable_gate and actual_gate_that_caught_it, but scripts/ops_data_portal.py is NOT
+    modified -- no portal rejection, no strict s3_uri pattern, no citation-existence/relevance check.
+    Those are Phase 4 (out of scope).
+  - >-
+    Every degradation path (taxonomy missing/malformed, AST parse failure, runtime-probe failure,
+    dispersion > 50%, S3 upload failure) emits a LOUD deterministic signal (the relevant field set to
+    null and/or upload_status=upload_failed and/or a logged marker) and NEVER silently succeeds. This
+    is loud-degrade, not silent-rescue, and is consistent with Decision 55 and Decision 60's
+    no-silent-fallback rule.
+  - >-
+    Preserve .github/workflows/ci-rca.yml's existing main-branch trigger gate and the FILED: marker
+    filing contract (Decision 74, PLAN-ci-rca-workflow-correctness). The new evidence step is
+    additive and non-fatal: a generator failure must NOT block the agent from filing its rec.
+  - >-
+    The agent's CONSUMPTION of the bundle (referencing the SHA in context_v2_json) is Phase 3
+    (PLAN-ci-rca-prompt-rewrite) and is OUT of scope. Do NOT modify .claude/agents/scheduled/ci-rca.md;
+    the workflow only surfaces the bundle into the prompt string.
+  - >-
+    The upload bucket resolves via the configured aws.s3_agent_logs_bucket (read through
+    src.common.config, or reuse ops_writer._bucket()), honouring an S3_LOG_BUCKET env override --
+    agent-platform-data-lake in the personal account. Do NOT resolve it through
+    scripts/s3_log_store.py: that module reads ONLY the S3_LOG_BUCKET env var, not the config key,
+    so relying on it would silently miss the data-lake default. Do NOT hardcode the non-existent
+    agent-platform-agent-logs literal. No terraform is in scope or required (bucket + IAM grant
+    pre-exist); no .tf files are modified (Decision 77).
+  - >-
+    Ops/warehouse storage is NOT touched (Decision 84/81): the script writes only to S3 and the local
+    pending dir. No new standing prose doc is created (Decision 86) -- only the roadmap progress_note
+    is edited.
+  - IMPLEMENTATION type only (Decision 67 / CD.17; the >5-file STRATEGIC heuristic is suspended under the freeze).
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable V3 failure, stop and RCA.
+context:
+  - >-
+    T1.13 is in_progress, decomposed into six atomic IMPLEMENTATION plans (freeze override,
+    strategic: false). This is Phase 2 (PLAN-ci-rca-evidence-script). Phase 1
+    (PLAN-ci-rca-schema-enforcement) landed 2026-06-15: CI_RCA_STRICT_MODE flag (default warn),
+    CiRcaContext model, get_rec_write_guidance('ci_rca'), warn-mode file_rec validation, the
+    context_v2_json column. Phase 1 explicitly DEFERRED the evidence-bundle SHA-256 work to THIS plan.
+    Remaining successors: PLAN-ci-rca-prompt-rewrite (P3), PLAN-ci-rca-evidence-dispute,
+    PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre.
+  - >-
+    Bucket finding (verified at planning time): the literal s3://agent-platform-agent-logs from the
+    INTENT/roadmap/task text does NOT exist in the personal account (NoSuchBucket) -- it is a stale
+    work-account name (config.company.yaml). The personal-account agent-logs bucket is
+    agent-platform-data-lake (config.personal.yaml s3_agent_logs_bucket), which exists and is writable
+    by agent_platform (local) and the CI OIDC branch role. The Phase-1 portal does NOT lock the bucket
+    name (_EvidenceBundleRef.s3_uri is shape-only `^s3://`). Human direction (2026-06-18 planning
+    session): resolve the bucket via s3_agent_logs_bucket (= data-lake). This makes real-S3
+    verification possible and needs no terraform. It also resolves the decision-scout's Decision 77
+    flag (which assumed the dead literal): the bucket + grant pre-exist, so the upload is NOT
+    degraded-on-arrival.
+  - >-
+    SLOC decomposition (Decision 43, explicit human direction "no module above 500 SLOC, no waiver"):
+    a single module was estimated at ~640-1010 SLOC, so the generator is split into three
+    single-responsibility modules -- ci_rca_evidence.py (orchestration/IO/bundle/SHA/S3),
+    ci_rca_tier_map.py (AST walker + runtime probe + earliest_viable_gate), ci_rca_taxonomy.py
+    (loader/classifier + workflow enumerator). Each gets a coverage-mapped test
+    (test_coverage_checker maps scripts/<name>.py -> tests/test_<name>.py; --check-tests blocks
+    otherwise). The roadmap-named tests/test_ci_rca_evidence_ast.py is the golden-fixture contract
+    test for the walker (distinct from the unit suites).
+  - >-
+    gh-free input contract: validated at planning time that CC-web has no gh CLI (per CLAUDE.md). The
+    INTENT 3.2 wording ("gh run view") assumed the self-hosted runner; the contract (bundle persists
+    log + jobs) is preserved by having the workflow pre-fetch both and pass them as file/flag inputs,
+    so the script never calls gh. This keeps it functional in CI and testable in CC-web /implement.
+  - >-
+    Decisions cited: Decision 72 line-104 instance (RCA-as-Plan-Source -- the governed workflow),
+    Decision 66 (Precision Context Injection -- the bundle pre-computes facts surfaced to the agent),
+    Decision 60 (two-tier pre/presubmit/CI vocabulary -- earliest_viable_gate enum + --pre-eligible
+    validator), Decision 73 (fast-tier budget _FAST_TIER_BUDGET_SECONDS=300 used by the probe headroom
+    logic; forward-fix consumer), Decision 48 (V3 tier), Decision 43 (SLOC limit -- drives the
+    decomposition and binds the new modules), Decision 55 (loud-fail / loud-degrade, no rescue loops),
+    Decision 77 (terraform out of scope; resolved by the data-lake decision), Decision 74 (ci-rca.yml
+    trigger + FILED: contract to preserve), Decision 67 / CD.17 (IMPLEMENTATION-only freeze).
+  - >-
+    RELATED (awareness, not contradicted): Decision 84/81 (DuckLake sole ops backend -- NOT touched;
+    S3-only), Decision 86 (intent-doc-freeze -- no new INTENT doc; only the roadmap progress_note),
+    Decision 79/CD.16 + CD.24 (per-Lambda deploy gating -- config/ and scripts/ here are NOT
+    Lambda-packaged, so no build/deploy/smoke steps apply; V3 is S3+CI integration, not a Lambda deploy).
+  - >-
+    ci-rca HARD-BLOCK deferral (Related-Work check): five source=ci_rca recs are OPEN
+    (rec-2236/2237/2238/2239/2254), ALL in the terraform apply-guard / convergence domain. This plan
+    is CI-RCA evidence TOOLING -- it does NOT satisfy same-file, same-Decision, or same-failure-category
+    against any of them. DEFERRAL RATIONALE: per explicit human direction (2026-06-18 planning session),
+    those recs are owned by another in-flight agent (the convergence plan) and are excluded from this
+    scope.
+  - >-
+    Branch claude/hopeful-bell-23u5rx was 0 commits behind origin/main at planning time
+    (main_freshness ok, no overlap), so no rebase was required during planning.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/hopeful-bell-23u5rx)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md adjudicated via the decision-scout gate (72/66/60/73/48/43/55/77/74/67 cited; FLAGS_FOUND, all NOTE, handled)
+  - docs/INTENT-ci-rca-methodology.md Section 3 read in full (the script contract)
+  - All 12 files in scope located/creatable
+  - Bucket resolution confirmed -- s3_agent_logs_bucket = agent-platform-data-lake (personal), exists + writable by agent_platform and the CI branch role
+  - gh-free input contract confirmed (script reads pre-fetched log/jobs files; the workflow pre-fetches them)
+  - AWS profile agent_platform reachable (aws sts get-caller-identity) for the live-S3 roundtrip
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/ci_rca_taxonomy.py: load_taxonomy(path) -> typed maps from
+    config/ci_rca_taxonomy.yaml; classify_failure(log_text, jobs) using function_to_category
+    (function-name match, primary) then log_pattern_to_category (regex fallback) returning
+    (failure_category, failed_check, classification_source); resolve_workflow_tier(workflow_name) ->
+    tier or unknown (sentinel not_a_gate -> unknown); enumerate_workflow_names() globbing
+    .github/workflows/*.yml. Keep < 500 SLOC. Defer validation to explicit calls (no raise at import).
+  - >-
+    Create config/ci_rca_taxonomy.yaml: schema_version + taxonomy_version; function_to_category
+    (seed validate_sloc_limits: sloc_violation and the common validate_* checks); log_pattern_to_category
+    (pytest collection error, ImportError/ModuleNotFoundError, YAML parse, terraform apply error);
+    workflow_to_tier with an entry for ALL nine current workflow names (CI -> CI, Main Canary -> CI;
+    Deploy to AWS / "CodeQL" / Claude Code / rec-autoclose / Refresh Copilot Model Multipliers /
+    CI RCA / terraform-apply-sandbox -> not_a_gate). Add a maintenance comment (extend via
+    source=ci_rca_taxonomy_extension).
+  - >-
+    Create scripts/ci_rca_tier_map.py: build_tier_membership(validate_path) -- ast.parse, find main(),
+    walk the `if args.pre:` block for direct validate_* Call nodes, walk run_python_checks /
+    run_terraform_checks for aggregated validate_* calls, detect sys.exit/return short-circuits so
+    post-exit calls are not attributed to --pre, and merge with duplicate-registration ->
+    ["pre","presubmit"]; probe_runtime(check) -- N=5 timed isolated invocations, drop highest+lowest,
+    median of 3, runtime_confidence string, dispersion > 50% -> null; compute_earliest_viable_gate(...)
+    -- the INTENT 3.2-step-4 decision tree (external-deps -> presubmit; in --pre already -> pre;
+    fits headroom vs _FAST_TIER_BUDGET_SECONDS -> pre; else presubmit; probe/AST failure -> null).
+    Expose AST_WALKER_VERSION. Keep < 500 SLOC.
+  - >-
+    Create scripts/ci_rca_evidence.py: argparse CLI (--log-file required, --jobs-file optional,
+    --workflow-name, --workflow-run-id, --repo, --validate-path default scripts/validate.py,
+    --print-bundle); read the log (and jobs) from files (NO gh); for each failed check, assemble the
+    bundle dict (INTENT 3.3) from ci_rca_taxonomy + ci_rca_tier_map; canonical-JSON SHA-256 over all
+    fields except sha256, then insert; resolve the bucket via src.common.config aws.s3_agent_logs_bucket
+    (or reuse ops_writer._bucket()) with an S3_LOG_BUCKET env override -- NOT via s3_log_store.py, which
+    reads only S3_LOG_BUCKET; upload to ci-rca-evidence/<sha>.json, on failure write logs/.ci-rca-evidence-pending/
+    <sha>.json + upload_status=upload_failed (loud log); handle all 3.4 failure modes; emit bundle(s)
+    + sha(s) + s3_uri(s). Keep < 500 SLOC -- rebalance into the other two modules if needed.
+  - >-
+    Modify scripts/validate.py: add validate_ci_rca_taxonomy(failed) importing the loader + enumerator
+    from scripts.ci_rca_taxonomy; fail (append) with a diagnostic naming any workflow absent from
+    workflow_to_tier; call it inside the `if args.pre:` block AND inside run_python_checks.
+  - >-
+    Create tests/test_ci_rca_taxonomy.py, tests/test_ci_rca_tier_map.py, tests/test_ci_rca_evidence.py
+    -- 100% per-file coverage (mock boto3/subprocess/timing; inline mini-validate.py source for the
+    walker; canonical-hash stability set; forced-upload-failure degraded path; env-gated
+    test_live_s3_roundtrip skipped unless RUN_LIVE_S3=1).
+  - >-
+    Create tests/test_ci_rca_evidence_ast.py -- the golden-fixture contract test: assert the walker's
+    tier_membership equals a frozen expected mapping for the inline fixture mirror (all four
+    control-flow cases) AND assert validate_sloc_limits -> ["pre","presubmit"] against the live
+    scripts/validate.py. Comment that fixture changes require Decision-Record-class review.
+  - >-
+    Modify tests/test_validate.py -- add validate_ci_rca_taxonomy tests (complete map passes; removing
+    a workflow entry fails with the naming diagnostic).
+  - >-
+    Modify .github/workflows/ci-rca.yml -- add the non-fatal "Generate evidence bundle" step (pre-fetch
+    jobs JSON via gh; run python -m scripts.ci_rca_evidence with the file/flag inputs; export
+    bundle/sha/s3_uri to GITHUB_OUTPUT) gated like the agent step, and append the bundle path + sha +
+    s3_uri to the agent PROMPT string. Preserve the trigger gate + FILED: contract; do not touch the
+    agent prompt body otherwise.
+  - >-
+    Update docs/ROADMAP-PLATFORM.yaml T1.13 progress_note (append the Phase-2 landing + bucket
+    resolution + remaining deferrals). Do not change files_in_scope or status.
+  - >-
+    Execute the Verification Plan steps 1-10 in order; loop until green. Run the live-S3 roundtrip
+    (step 8) under AWS_PROFILE=agent_platform. On unrecoverable V3 failure, stop and RCA (Decision 55)
+    -- do not rescue-loop.
+  - "Report: the three modules + taxonomy + validate check + workflow wiring landed, the live-S3 roundtrip result, coverage results, and the explicit deferred-to-Phase-3/4 list."
+work_areas: []
+rollback: >-
+  All additions are new files plus additive edits. Revert the three modules, the taxonomy YAML, the
+  four test files, and the validate.py / ci-rca.yml / ROADMAP progress_note edits via git. No
+  infrastructure to roll back (the data-lake bucket pre-exists; no terraform applied). The ci-rca.yml
+  evidence step is additive and non-fatal, so reverting it restores the prior agent-only behaviour.
+  No portal/schema change was made, so there is nothing to migrate back. Bundles written to
+  logs/.ci-rca-evidence-pending/ are gitignored ephemera.

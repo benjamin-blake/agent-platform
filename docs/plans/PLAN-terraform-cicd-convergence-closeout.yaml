@@ -1,0 +1,455 @@
+schema_version: 1
+slug: "terraform-cicd-convergence-closeout"
+intent: >-
+  Close out T2.20 (CD.35 Wave 1): ratify the agent-native Terraform CI/CD architecture as a numbered
+  Decision, reconcile the roadmap with the already-shipped-and-production-proven convergence substrate,
+  and fold in the open hardening recs on the apply pipeline -- so the self-improving platform's
+  infrastructure-change loop stays observable, sticky, and trustworthy as later CD.35 waves build on it.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-cicd-convergence-closeout.yaml
+phase: >-
+  Platform tier_item T2.20 (CD.35 Wave 1) closeout + ratification. Wave 1 implementation already merged
+  (PLAN-terraform-cicd-convergence #142, PLAN-terraform-sandbox-convergence-closure #179, SSM closure
+  #185); this plan ratifies CD.35, reconciles roadmap status, and hardens the apply pipeline. Foundation
+  for T2.21-T2.25. Product Phase 1 complete; Phase Platform runs in parallel.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 92 ratifying CD.35 (agent-native Terraform CI/CD). Records the Wave-1-established
+      architecture (guard<->native-controls authorization division INTENT 5.9; server-side convergence
+      anchor as the sole hard block + advisory-not-required terraform-converged check 5.5) and the ratified
+      DIRECTION for later waves (routine-vs-gated autonomy boundary Section 6; Environment-gates-execution
+      security model 5.4; privilege-tiering / rejected guard-self-grant exception 5.8; authority-budget +
+      ratchet model points 6-9, concrete classification deferred to T2.23/T2.25). States Wave 1 SHIPPED,
+      Waves 2-5 + X pending, and the conscious supersession of CD.35's pending_log_decision_lambda
+      pre-ratification clause (Decision 84 canonical-source + Decision 90/91 edit-and-backfill precedent).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Reconcile roadmap with reality: T2.20 status not_started -> complete (+ completed_at + evidence note);
+      CD.35 state pending -> ratified and filed_via pending_log_decision_lambda -> ops_decisions:dec-092 (+ a
+      ratification note in discipline_points); and re-ground T2.25 (Wave X), whose name/intent/exit-criterion
+      #5 currently duplicate "ratify CD.35" -- now a contradiction since CD.35 ratifies at Wave 1 -- to
+      "confirm CD.35 ratified at Wave 1 (Decision 92); amend with the authority-budget classification once
+      T2.23's bootstrap budget exists." No other tier_item text changes.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Fold in five hardening recs: rec-2214 (emit ::add-mask:: for the Secrets-Manager-sourced tfvars values
+      -- account_id + the two ExternalId trust secrets -- BEFORE terraform show -json writes plan.json, so
+      they are masked in plan.json / review.txt log output); rec-2209 (explicit CONVERGENCE_PARSE_ERROR
+      refusal branch in the precond step for a malformed-but-non-empty convergence record, replacing the
+      unguarded set -e abort); rec-2211 (post-write read-back verification in the record_write step that fails
+      on a status mismatch); rec-2215 (set -euo pipefail in the Materialise tfvars step); rec-2217 (one-line
+      comment documenting the --output text raw-body extraction intent). scripts/terraform_apply_guard.py is
+      NOT touched.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      rec-2219: add a one-line HCL '#' comment adjacent to the SecretsManagerTfvarsRead Sid (~line 609)
+      noting the secret is workflow-runtime-read-only (no terraform data source reads it, unlike the cited
+      Neon precedent). HCL comment only -- NOT inside any jsonencode JSON string -- so no rendered-policy
+      change and NO terraform apply is required.
+bundled_recommendations:
+  - rec-2160
+  - rec-2208
+  - rec-2209
+  - rec-2211
+  - rec-2214
+  - rec-2215
+  - rec-2217
+  - rec-2219
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf change is an HCL '#' comment only (rec-2219), adjacent to the
+    SecretsManagerTfvarsRead Sid and outside any JSON policy string. It produces NO Action/Resource diff and
+    NO terraform plan diff, so it does NOT auto-apply and does NOT need a human-gated agent_platform_admin
+    apply. terraform validate + fmt -check are the only Terraform gates (VP6). The guard's fail-closed IAM
+    set (Decision 77) is not engaged because there is no policy-document change.
+  - >-
+    LAMBDA-DEPLOY DEFERRED (CD.16 / Decision 79): docs/ROADMAP-PLATFORM.yaml is a packaged runtime asset of
+    the ACTIVE data-pipeline Lambda (src/lambdas/data-pipeline/manifest.yaml assets:; status: active).
+    compute_affected_artifacts({scope}) reports {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]}. The edit is
+    asset-only governance bookkeeping (status/note/state strings) with NO data-pipeline code change, and the
+    consuming scheduled agents are disabled (terraform/scheduled_agents.tf: SCHEDULED_AGENTS_ENABLED=false,
+    EventBridge rules state=DISABLED). No build/deploy/smoke-test is triggered; the packaged copy refreshes
+    on the next genuine data-pipeline deploy. Direct precedent: PLAN-decision-taxonomy-hygiene (#188,
+    gate-approved deferral of the identical coupling). If a consumer is later found to depend on the changed
+    strings, file a rec.
+  - >-
+    Decision 92 ratifies CD.35 via a docs/DECISIONS.md edit synced to ops_decisions by
+    `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (Decision 84 ETL; Decision 90/91
+    precedent). DECISIONS.md is the numbering authority; logs/.decisions-index.jsonl is a read-only cache and
+    is never edited directly (Single Portal Invariant). The next free decision number is 92 (91 verified as
+    current max 2026-06-19); confirm at execution time and renumber (Decision N, filed_via dec-0NN, Warehouse
+    ID) if another session has taken it.
+acceptance_criteria:
+  - >-
+    CD.35 is ratified as numbered Decision 92 in docs/DECISIONS.md (Status: Decided; Warehouse ID dec-092),
+    recording the Wave-1 architecture + the explicit supersession of CD.35's pending_log_decision_lambda
+    clause; after --backfill-decisions-md + --sync the dec-092 / CD.35 row is present in the decisions index.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema with: T2.20 status=complete +
+    completed_at + an evidence note; CD.35 state=ratified + filed_via=ops_decisions:dec-092; and T2.25 no
+    longer asserting "ratify CD.35" (re-grounded to confirm-at-Wave-1).
+  - >-
+    rec-2214: the apply workflow emits ::add-mask:: for the Secrets-Manager-sourced tfvars values BEFORE the
+    step that runs `terraform show -json plan.bin > plan.json` (mask step index < plan step index).
+  - >-
+    rec-2209: a malformed (non-empty) convergence record makes the precond step refuse with a distinguishable
+    CONVERGENCE_PARSE_ERROR marker, set refused=true, and exit non-zero WITHOUT overwriting the record --
+    proven by running the extracted precond script against a throwaway S3 key (never sandbox.json).
+  - >-
+    rec-2211: the always-run record_write step performs a post-write read-back and fails the step on a status
+    mismatch -- proven by running the extracted record_write script against a throwaway S3 key (success path
+    writes green AND the read-back verifies green).
+  - >-
+    rec-2215: the Materialise-tfvars step runs under `set -euo pipefail` (fail-fast on a failed secret
+    fetch); rec-2217: a one-line comment documents the --output text raw-body extraction intent.
+  - >-
+    rec-2219: terraform/personal/oidc.tf carries a runtime-read-only note adjacent to SecretsManagerTfvarsRead;
+    the change is comment-only (terraform validate + fmt -check pass; every added line is an HCL comment or
+    blank), so no terraform apply is required.
+  - >-
+    rec-2160 is closed as superseded (alerts_email is supplied via the secret-sourced -var-file, not a
+    missing TF_VAR) and rec-2208 is closed as verified (ci-rca's head_branch==default_branch gate blocks the
+    advisory-PR run from filing a rec); both carry a non-empty auditable resolution string.
+  - >-
+    All 8 bundled recs (2160/2208/2209/2211/2214/2215/2217/2219) are status=closed after the Resolves:
+    trailer merge + sync.
+  - >-
+    scripts/terraform_apply_guard.py is UNCHANGED; no Lambda build/deploy is performed (data-pipeline deploy
+    deferred per Decision 79 + the #188 precedent); full presubmit (scripts.validate, no flags) passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      rec-2214: assert the workflow masks the secret-sourced tfvars values BEFORE plan.json is produced (an
+      add-mask step positioned before the `terraform show -json plan.bin` step).
+    command: "bin/venv-python -c \"import yaml; s=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps']; mask=[i for i,x in enumerate(s) if 'add-mask' in (x.get('run') or '')]; show=[i for i,x in enumerate(s) if 'show -json plan.bin' in (x.get('run') or '')]; assert mask and show, ('mask=%s show=%s'%(mask,show)); assert min(mask) < min(show), 'add-mask must precede plan.json creation'; print('add-mask precedes plan.json OK', mask, show)\""
+    expected: "Prints 'add-mask precedes plan.json OK' with the mask index < the show index."
+    fix_if: >-
+      No mask step -> add a step after Materialise tfvars that emits ::add-mask:: for account_id + the two
+      ExternalIds. mask index >= show index -> move the mask step before the Terraform plan step.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      rec-2209 behavioural self-test: extract the precond step's shell, point it at a THROWAWAY S3 key
+      holding a malformed record, and assert it refuses with CONVERGENCE_PARSE_ERROR (refused=true, non-zero
+      exit) instead of an unguarded abort. Never touches the real sandbox.json.
+    command: |-
+      set -euo pipefail
+      bin/venv-python -c "import yaml; st=[x for x in yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps'] if x.get('id')=='precond'][0]['run']; open('/tmp/precond.sh','w').write(st)"
+      K="convergence/personal/_closeout_selftest_$$.json"
+      trap 'aws s3api delete-object --bucket agent-platform-data-lake --key "$K" --profile agent_platform >/dev/null 2>&1 || true' EXIT
+      printf 'this is not json {' | aws s3 cp - "s3://agent-platform-data-lake/$K" --profile agent_platform
+      export AWS_PROFILE=agent_platform CONVERGENCE_BUCKET=agent-platform-data-lake CONVERGENCE_KEY="$K" EVENT_NAME=push ACK="" GITHUB_OUTPUT="/tmp/ghout_$$"; : > "$GITHUB_OUTPUT"
+      set +e; bash /tmp/precond.sh > /tmp/precond.out 2>&1; rc=$?; set -e
+      cat /tmp/precond.out
+      grep -q 'CONVERGENCE_PARSE_ERROR' /tmp/precond.out && grep -q 'refused=true' "$GITHUB_OUTPUT" && [ "$rc" -ne 0 ] && echo 'parse-error refusal OK'
+    expected: >-
+      Prints 'parse-error refusal OK': the precond emits CONVERGENCE_PARSE_ERROR, writes refused=true, and
+      exits non-zero on a malformed record.
+    fix_if: >-
+      Step aborts without the marker / refused=true -> the json.load parse is still an unguarded set -e abort;
+      wrap it in an explicit parse-error branch that emits ::error::CONVERGENCE_PARSE_ERROR, writes
+      refused=true, and exits 1 without overwriting the record.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      rec-2211 behavioural self-test: extract the record_write step's shell, run the success path against a
+      THROWAWAY S3 key, and assert it writes green AND performs a read-back verification.
+    command: |-
+      set -euo pipefail
+      bin/venv-python -c "import yaml; st=[x for x in yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps'] if x.get('id')=='record_write'][0]['run']; open('/tmp/rw.sh','w').write(st)"
+      K="convergence/personal/_closeout_selftest_$$.json"
+      trap 'aws s3api delete-object --bucket agent-platform-data-lake --key "$K" --profile agent_platform >/dev/null 2>&1 || true' EXIT
+      export AWS_PROFILE=agent_platform CONVERGENCE_BUCKET=agent-platform-data-lake CONVERGENCE_KEY="$K" SHA=selftest RUN_ID=0 SERVER_URL=https://example REPO=x/y REFUSED=false BLOCKED=false APPLY_OUTCOME=success
+      bash /tmp/rw.sh > /tmp/rw.out 2>&1
+      cat /tmp/rw.out
+      grep -qiE 'read-back|read back|verified' /tmp/rw.out
+      aws s3 cp "s3://agent-platform-data-lake/$K" - --profile agent_platform | grep -q '"status": "green"'
+      echo 'record read-back OK'
+    expected: >-
+      Prints 'record read-back OK': record_write writes status=green and its log shows a read-back / verified
+      line.
+    fix_if: >-
+      No read-back line -> add a post-write re-GET that parses the object and fails (exit 1) if the read-back
+      status != the intended STATUS; keep the existing skip-on-refused/blocked branches.
+  - step: 4
+    phase: pre-deploy
+    action: "rec-2215: assert the Materialise tfvars step runs under set -euo pipefail (fail-fast)."
+    command: "bin/venv-python -c \"import yaml; s=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps']; m=[x for x in s if 'Materialise tfvars' in (x.get('name') or '')][0]['run']; assert 'set -euo pipefail' in m, 'Materialise tfvars must set -euo pipefail'; print('materialise fail-fast OK')\""
+    expected: "Prints 'materialise fail-fast OK'."
+    fix_if: "Assertion fails -> prepend `set -euo pipefail` as the first line of the Materialise tfvars step run."
+  - step: 5
+    phase: pre-deploy
+    action: "rec-2217 + rec-2219: assert the raw-body comment is in the workflow and the runtime-read-only note is in oidc.tf."
+    command: "grep -q 'raw-body' .github/workflows/terraform-apply-sandbox.yml && grep -q 'runtime-read-only' terraform/personal/oidc.tf && echo 'doc comments present OK'"
+    expected: "Prints 'doc comments present OK'."
+    fix_if: "Missing -> add the one-line --output text raw-body comment (workflow) and/or the runtime-read-only HCL comment by SecretsManagerTfvarsRead (oidc.tf)."
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      rec-2219: prove the oidc.tf change is comment-only -- terraform validate + fmt pass and every line added
+      vs origin/main is an HCL comment or blank (no Action/Resource change -> no apply needed).
+    command: |-
+      set -euo pipefail
+      terraform -chdir=terraform/personal init -backend=false -input=false -no-color >/dev/null
+      terraform -chdir=terraform/personal validate -no-color
+      terraform -chdir=terraform/personal fmt -check -no-color
+      ADDED=$(git diff origin/main -- terraform/personal/oidc.tf | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+      if printf '%s\n' "$ADDED" | grep -vE '^\+[[:space:]]*(#|$)' | grep -q .; then echo 'NON-COMMENT change in oidc.tf'; exit 1; else echo 'oidc.tf comment-only + validate/fmt OK'; fi
+    expected: "validate + fmt pass; prints 'oidc.tf comment-only + validate/fmt OK' (all added oidc.tf lines are comments/blank)."
+    fix_if: >-
+      validate/fmt fail -> fix HCL/format. NON-COMMENT change detected -> the rec-2219 edit altered a
+      policy line; revert it to a pure HCL '#' comment outside any JSON string.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      rec-2208 (verified): assert ci-rca's job gate requires head_branch == default_branch, so the
+      pull_request advisory-status run (head_branch = PR branch) cannot file a ci-rca rec.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('.github/workflows/ci-rca.yml')); cond=d['jobs']['rca'].get('if',''); assert 'head_branch == github.event.repository.default_branch' in cond, cond; print('ci-rca default-branch gate present (advisory PR runs cannot file recs) OK')\""
+    expected: "Prints the gate-present line (substantiates closing rec-2208 as verified)."
+    fix_if: "Gate absent -> rec-2208 is NOT verified; do not close it. (The gate is expected to already exist; this is a confirmation, not a code change.)"
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      rec-2160 (superseded): assert alerts_email is supplied via the secret-sourced -var-file (Materialise
+      tfvars step + plan -var-file), not a missing TF_VAR -- the original premise is obsolete.
+    command: "bin/venv-python -c \"import yaml; s=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps']; mat=[x for x in s if 'Materialise tfvars' in (x.get('name') or '')]; plan=[x for x in s if x.get('id')=='plan'][0]['run']; assert mat, 'Materialise tfvars step missing'; assert '-var-file=terraform.personal.tfvars' in plan, 'plan must use the secret-sourced var-file'; print('alerts_email supplied via secret-sourced var-file (rec-2160 superseded) OK')\""
+    expected: "Prints the superseded-confirmation line (substantiates closing rec-2160 as superseded)."
+    fix_if: "Materialise step or -var-file missing -> rec-2160 is NOT superseded; re-investigate before closing it."
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Decision 92: assert docs/DECISIONS.md carries the `## Decision 92` section with Status: Decided and the
+      dec-092 Warehouse ID, and that it states the CD.35 supersession.
+    command: "grep -qE '^## Decision 92' docs/DECISIONS.md && grep -q 'dec-092' docs/DECISIONS.md && grep -qiE 'CD\\.35' docs/DECISIONS.md && grep -qiE 'pending_log_decision_lambda|supersed' docs/DECISIONS.md && echo 'Decision 92 ratifies CD.35 (header + supersession) OK'"
+    expected: "Prints 'Decision 92 ratifies CD.35 (header + supersession) OK'."
+    fix_if: "Missing -> add the Decision 92 section (mirror the Decision 91 header shape) and ensure it names CD.35 + the pending_log_decision_lambda supersession."
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Roadmap reconciliation: parse docs/ROADMAP-PLATFORM.yaml and assert T2.20 complete+completed_at, CD.35
+      ratified + filed_via dec-092, and T2.25 no longer says "ratify CD.35".
+    command: |-
+      bin/venv-python -c "
+      import yaml, json
+      r=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      items={i['id']:i for i in r['tier_items']}
+      t=items['T2.20']; assert t.get('status')=='complete', t.get('status'); assert t.get('completed_at'), 'T2.20 missing completed_at'
+      cds={c['id']:c for c in r['candidate_decisions']}; cd=cds['CD.35']
+      assert cd.get('state')=='ratified', cd.get('state'); assert cd.get('filed_via')=='ops_decisions:dec-092', cd.get('filed_via')
+      t25=items['T2.25']; blob=(t25.get('name','')+t25.get('intent','')+json.dumps(t25.get('exit_criteria',[]))).lower()
+      assert 'ratify cd.35' not in blob, 'T2.25 still says ratify CD.35 (contradiction not re-grounded)'
+      print('roadmap reconciled: T2.20 complete, CD.35 ratified->dec-092, T2.25 re-grounded OK')"
+    expected: "Prints the reconciliation-OK line; the RoadmapDocument schema accepts the edits."
+    fix_if: >-
+      Assertion fails -> apply the missing edit. Schema/validation error (caught also in step 11) -> use only
+      allowed TierItem/CandidateDecision keys (status/completed_at/note; state/filed_via/discipline_points).
+  - step: 11
+    phase: pre-deploy
+    action: "Run the full presubmit suite identical to CI (lint, format, prompts, tests, plan/roadmap/decision schema, prompt-compliance)."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Presubmit passes (exit 0), including the RoadmapDocument schema, DECISIONS.md decision-format, and YAML-workflow checks."
+    fix_if: "A check fails -> address that specific check; do NOT add/remove checks in ci.yml (validate.py is the single source of truth, AGENTS.md merge protocol)."
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Ratify Decision 92 into the warehouse: run --backfill-decisions-md then --sync and assert the decisions
+      index carries the dec-092 / CD.35 ratification row (mirrors CD.31->Decision 78, CD.33->Decision 81).
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.decisions-index.jsonl') if l.strip()]; m=[d for d in rows if str(d.get('decision_id'))=='92' or 'dec-092' in json.dumps(d) or 'CD.35' in json.dumps(d)]; assert m, 'no Decision 92 / CD.35 ratification row in ops_decisions'; print('Decision 92 synced to ops_decisions OK')\""
+    expected: "Prints 'Decision 92 synced to ops_decisions OK' (the row is present after backfill + sync)."
+    fix_if: "No row -> the backfill did not pick up Decision 92; confirm the DECISIONS.md header parses (number + Status) and re-run --backfill-decisions-md."
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Confirm all 8 bundled recs closed after the Resolves: trailer merge + sync, and that rec-2160 / rec-2208
+      (closed by classification, not code) carry a non-empty resolution.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1; bin/venv-python -c "
+      import json
+      rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()]
+      st={r['id']:r.get('status') for r in rows}; res={r['id']:(r.get('resolution') or '') for r in rows}
+      want=['rec-2160','rec-2208','rec-2209','rec-2211','rec-2214','rec-2215','rec-2217','rec-2219']
+      bad=[x for x in want if st.get(x)!='closed']
+      un=[x for x in ('rec-2160','rec-2208') if not res.get(x,'').strip()]
+      print('OPEN:',bad) if bad else (print('UNAUDITED:',un) if un else print('all 8 closed + classification-recs audited OK'))"
+    expected: "Prints 'all 8 closed + classification-recs audited OK'."
+    fix_if: >-
+      OPEN -> a rec did not autoclose; close via `ops_data_portal --update-rec`. UNAUDITED -> set the
+      resolution for rec-2160 (superseded by secret-sourced var-file) and rec-2208 (verified via the
+      head_branch==default_branch gate) per execution step 12.
+constraints:
+  - "Only modify the four files in scope; out-of-scope bugs become recommendations via the ops portal (AGENTS.md)."
+  - >-
+    Decision 92 ratifies CD.35 via a docs/DECISIONS.md edit synced with `ops_data_portal --backfill-decisions-md`
+    (Decision 84 canonical-source + ETL; Decision 90/91 precedent). This DELIBERATELY supersedes CD.35's own
+    "do NOT edit DECISIONS.md while pending / pending_log_decision_lambda" clause -- state the supersession
+    explicitly in the Decision 92 text. Never edit logs/.decisions-index.jsonl (read-only cache; Single
+    Portal Invariant, Decision 84).
+  - >-
+    Decision 92 must NOT overclaim: Wave 1 (T2.20) is SHIPPED; Waves 2-5 + X are ratified DIRECTION, not
+    built. Mirror CD.31->Decision 78 / CD.33->Decision 81 (architecture ratified; implementation follows).
+  - >-
+    CD.35 ratifies at Wave 1 per INTENT-terraform-cicd-agent-native.md section 10 + the CD.35 roadmap entry;
+    T2.25's duplicate "ratify CD.35" wording is RE-GROUNDED (not deleted) to confirm-at-Wave-1 + amend the
+    Decision with the authority-budget/ratchet classification once T2.23's bootstrap budget exists.
+  - >-
+    LAMBDA-DEPLOY DEFERRED (CD.16 / Decision 79): the ROADMAP-PLATFORM.yaml edit is asset-only governance
+    bookkeeping (no data-pipeline code change; scheduled agents disabled). No build/deploy/smoke-test; the
+    packaged copy refreshes on the next data-pipeline deploy. Precedent: PLAN-decision-taxonomy-hygiene (#188).
+  - >-
+    scripts/terraform_apply_guard.py stays UNCHANGED (Decision 77 fail-closed; guard narrowing is T2.25 /
+    Wave X, NOT this plan). The hardening composes with the guard, never weakens it.
+  - >-
+    The oidc.tf edit (rec-2219) is an HCL '#' comment adjacent to the SecretsManagerTfvarsRead Sid, NOT inside
+    any jsonencode JSON string -> no rendered-policy change -> no terraform apply (Decision 35/77 envelope; a
+    comment produces no plan diff, proven by VP6).
+  - >-
+    No auto-remediation / rescue loops (Decision 55): the hardening preserves alarm-and-file-rec semantics; on
+    an unrecoverable V3 self-test failure STOP and RCA -- do not hand-patch around a structural failure.
+  - >-
+    Route all 8 rec closures through the Resolves: trailer + ops portal update_rec for resolution strings
+    (Decision 84 single portal; Decision 72 RCA-as-plan-source / rec-autoclose). Never edit the JSONL caches
+    directly.
+  - "Bash only, no PowerShell; bin/venv-python for Python; Python 3.12+, type hints, ruff format, line length 127, no emojis, ASCII hyphens only (AGENTS.md)."
+  - "Plan stays IMPLEMENTATION type (Decision 67 STRATEGIC clause retained during the freeze)."
+context:
+  - >-
+    T2.20 (CD.35 Wave 1) is already implemented, merged, and PRODUCTION-PROVEN. The convergence substrate
+    landed via PLAN-terraform-cicd-convergence (#142, 2026-06-14) and was hardened via
+    PLAN-terraform-sandbox-convergence-closure (#179, c099ba3, 2026-06-18) + the SSM read closure (#185). Real
+    CONVERGENCE_RED latches (rec-2236 @7678d3e, rec-2238 @bfa5229f) occurred, were refused server-side, filed
+    as source=ci_rca recs, and cleared -- behavioural proof of T2.20 exit criteria 1/2/4. All five recs bundled
+    by those plans are closed. The roadmap was never updated (T2.20 not_started; CD.35 pending), so this plan
+    is the silent-completion closeout the Tier Item Freshness Gate prescribes, plus the ratification + the
+    open hardening recs (folded in per the human's direction).
+  - >-
+    Decision-scout CITE: Decision 84 (DECISIONS.md canonical + --backfill-decisions-md ETL is the sanctioned
+    path for Decision 92; ops_decisions recreatable from DECISIONS.md); Decision 90 / Decision 91 (decision-via-
+    DECISIONS.md-edit precedents, 2026-06-18/19, both note the backfill sync); Decision 86 (rationale routes to
+    DECISIONS.md numbered, forward intent to roadmap -- no new prose doc); Decision 77 (sandbox auto-apply guard
+    fail-closed -- governs the hardened surfaces; guard unmodified); Decision 79 / CD.16 (per-Lambda deploy
+    gating -> data-pipeline deferral); Decision 55 (alarm + file recs; nothing auto-remediates).
+  - >-
+    Decision-scout RELATED: Decision 35 (apply human-gated -- N/A; oidc.tf comment-only, no apply); Decision 72
+    (RCA-as-plan-source -- the recs harden the ci-rca convergence path; Resolves: trailer); Decision 76 (poll-
+    free wake -- T2.20 exit criterion, satisfied by the shipped best-effort wake + next-session baseline);
+    Decision 67 (STRATEGIC suspension -- single IMPLEMENTATION plan); Decision 83 / Decision 89 (branch
+    protection live; terraform-converged advisory-not-required -- the architecture Decision 92 ratifies).
+  - >-
+    Decision-scout flags resolved (FLAGS_FOUND): (Decision 79 WARN) data-pipeline Lambda-deploy DEFERRED with
+    explicit rationale per the #188 precedent (asset-only docs change; scheduled agents disabled); (CD.35 NOTE)
+    the DECISIONS.md-edit ratification is a conscious self-supersession of CD.35's pending_log_decision_lambda
+    clause, stated in Decision 92.
+  - >-
+    Decision number 92 assumes 91 is the current max (verified 2026-06-19). /implement must confirm 92 is still
+    unused in DECISIONS.md at execution time and renumber consistently (Decision N header, filed_via dec-0NN,
+    Warehouse ID) if another session has taken it.
+  - >-
+    ci_rca HARD BLOCK: not applicable (ci_rca_unresolved_recs empty at planning time). Branch was 0 commits
+    behind/0 ahead of origin/main (no rebase; no overlap with main_files_changed_since_branch).
+  - >-
+    Closure obligation: this plan resolves 8 recs (declared in bundled_recommendations) -- VP step 13 verifies
+    all closed after the trailer merge. It does NOT retire a surface (no Delete; the hardening is additive), so
+    no stale-reference sweep is required.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/intelligent-hypatia-fb6hzu)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "DECISIONS.md adjudicated via the decision-scout subagent gate (FLAGS_FOUND: Decision 79 deferral + CD.35 self-supersession, both resolved); CITE list captured in context."
+  - "All four scope files located and read; scripts/terraform_apply_guard.py confirmed out-of-scope and unchanged."
+  - "AWS static-key chain verified (creds=ok); agent_platform reachable for the S3 self-tests (VP2/VP3, throwaway keys)."
+  - "compute_affected_artifacts({scope}) == {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]} -> deploy deferred (logged); no other artifact affected."
+  - "Acceptance criteria understood and independently verifiable."
+execution_steps:
+  - >-
+    docs/DECISIONS.md -- add `## Decision 92: Ratify CD.35 -- agent-native Terraform CI/CD (Wave 1 shipped)
+    (Decided)` mirroring the Decision 91 header shape (Status: Decided; Date; Warehouse ID: dec-092 ... synced
+    via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84). Body records: the guard<->
+    native-controls authorization division (INTENT 5.9); the server-side convergence anchor as the sole hard
+    block + advisory-not-required terraform-converged check (5.5); the routine-vs-gated autonomy boundary
+    (Section 6) and Environment-gates-execution security model (5.4) as ratified DIRECTION for Waves 2-5; the
+    rejected guard-self-grant exception + privilege-tiering to terraform/bootstrap/ (5.8, Wave 4); the
+    authority-budget + ratchet model (CD.35 points 6-9) as ratified direction with concrete classification
+    deferred to T2.23/T2.25; and the explicit supersession of CD.35's pending_log_decision_lambda clause
+    (Decision 84 + 90/91). State Wave 1 (T2.20) SHIPPED (PRs #142/#179/#185; rec-2236/2238 proof); Waves 2-5
+    + X pending. Confirm 92 is the next unused number; renumber if taken.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml (T2.20) -- set status: complete; completed_at: '2026-06-18'; note:
+    "Realized-via-shipped-implementation (PRs #142/#179/#185; ratified by Decision 92; production
+    CONVERGENCE_RED proof rec-2236 @7678d3e / rec-2238 @bfa5229f; all bundled recs closed)." Mirror the T0.6
+    note style. Do not alter T2.20 exit_criteria text.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml (CD.35) -- set state: ratified; filed_via: ops_decisions:dec-092; append one
+    discipline_points line: "Ratified at Wave 1 as Decision 92 (2026-06-19) via the DECISIONS.md-edit +
+    --backfill-decisions-md path, superseding this candidate's pending_log_decision_lambda clause (Decision 84
+    + Decision 90/91 precedent)."
+  - >-
+    docs/ROADMAP-PLATFORM.yaml (T2.25) -- re-ground: name "...+ ratify CD.35 (Wave X)" ->
+    "...+ confirm CD.35 ratification (Wave X)"; in intent replace "Ratify CD.35 as a numbered Decision via the
+    log-decision path." with "Confirm CD.35 is already ratified at Wave 1 (Decision 92); amend that Decision
+    with the concrete authority-budget / ratchet classification once T2.23's bootstrap budget exists."; replace
+    exit-criterion #5 with "CD.35 already ratified at Wave 1 (Decision 92); this wave records the
+    authority-budget/ratchet amendment if T2.23's budget is defined." Keep the other T2.25 criteria.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (rec-2214) -- after the Materialise tfvars step (secrets now
+    in terraform.personal.tfvars), add a step (or extend Materialise) that parses account_id + the two
+    ExternalId values out of the tfvars and runs `echo "::add-mask::$VALUE"` for each, positioned BEFORE the
+    Terraform plan step that runs `terraform show -json plan.bin > plan.json`. This masks them in plan.json /
+    review.txt / all later log output.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (rec-2209) -- in the precond step, guard the post-read
+    `python3 ... json.load` status/commit parse: on a non-empty but malformed record emit
+    `::error::CONVERGENCE_PARSE_ERROR ...`, write refused=true to $GITHUB_OUTPUT, and exit 1 WITHOUT
+    overwriting the record (an explicit refusal branch, not an unguarded set -e abort -- ci-rca then dedupes
+    it like a CONVERGENCE_RED refusal).
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (rec-2211) -- in the record_write step, after the
+    `aws s3 cp - s3://.../sandbox.json` write, add a read-back: re-GET the object, parse status, and fail the
+    step (exit 1) with a 'read-back' log marker if it != the intended STATUS. Keep the existing skip-on-
+    refused / skip-on-blocked branches intact.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (rec-2215 + rec-2217) -- prepend `set -euo pipefail` to the
+    Materialise tfvars step run, and add a one-line comment documenting the `--output text` raw-body
+    extraction intent in that step.
+  - >-
+    terraform/personal/oidc.tf (rec-2219) -- add a one-line HCL `#` comment adjacent to the
+    SecretsManagerTfvarsRead Sid (~line 609): the secret is workflow-runtime-read-only (no terraform data
+    source reads it, unlike the cited Neon precedent). HCL comment only -- not inside any JSON string; no
+    Action/Resource change; no terraform apply. Run terraform fmt.
+  - >-
+    Execute ALL pre-deploy Verification Plan steps (1-11); loop until green BEFORE opening the PR. The
+    rec-2209/2211 self-tests need agent_platform creds + S3 (throwaway _closeout_selftest key, never
+    sandbox.json).
+  - >-
+    Open a PR and squash-merge to main with a `Resolves: rec-2160, rec-2208, rec-2209, rec-2211, rec-2214,
+    rec-2215, rec-2217, rec-2219` trailer (rec-autoclose closes them). No terraform/personal apply (oidc.tf is
+    comment-only); no Lambda deploy (data-pipeline deferred).
+  - >-
+    Post-merge: run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` then `--sync` to
+    ratify Decision 92 into ops_decisions; then set the auditable resolutions for the classification recs:
+    `--update-rec rec-2160 --status closed --resolution "Superseded -- alerts_email is supplied via the
+    Secrets-Manager-sourced -var-file (Materialise tfvars step), not a missing TF_VAR; the original premise
+    predates the secret-sourcing refactor."` and `--update-rec rec-2208 --status closed --resolution
+    "Verified -- ci-rca's head_branch==default_branch job gate prevents the pull_request advisory-status run
+    (head_branch=PR branch) from filing a rec; only push/dispatch apply-job failures on main reach ci-rca."`
+    (Skip if the trailer already populated equivalents; VP13 verifies closed + audited.)
+  - >-
+    Execute ALL post-deploy Verification Plan steps (12-13). On an unrecoverable V3 failure STOP and RCA
+    (Decision 55) -- do not loop or hand-patch.
+  - >-
+    Report: files changed, the ratification (Decision 92 + roadmap reconciliation: T2.20 complete, CD.35
+    ratified, T2.25 re-grounded), the self-test results (parse-error refusal, record read-back), and the 8
+    rec closures.
+work_areas: []
+rollback: >-
+  Config/docs-only revert -- revert the squash-merge commit to restore the prior workflow / oidc.tf /
+  DECISIONS.md / roadmap. The convergence record (convergence/personal/sandbox.json) tracks apply OUTCOMES,
+  not config, and the self-tests use throwaway _closeout_selftest keys, so a revert corrupts no live state. If
+  the ratification is withdrawn, mark Decision 92 superseded via a follow-up DECISIONS.md edit + backfill and
+  revert CD.35 to state: pending / filed_via: pending_log_decision_lambda. No data migration, no Lambda
+  redeploy, no terraform apply to unwind.

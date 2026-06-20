@@ -18,7 +18,7 @@ never_on_main: true                # no file edits while on main branch
 
 ## Preflight Constraints (Workflow Step 1)
 When reading `logs/.preflight-report.json`, apply these conditionals:
-- **`venv_ok: false`** -- Auto-activate venv (`source .venv/Scripts/activate`) and rerun preflight. If still false, STOP.
+- **`venv_ok: false`** -- Verify `bin/venv-python -c "import sys; print(sys.executable)"` resolves to the venv interpreter and rerun preflight. If still false, STOP.
 - **`creds_status: "unavailable"`** -- **Static-key recovery (non-fatal, Decision 60):** the static-key assume-role chain has no interactive login. Verify it with `aws sts get-caller-identity --profile agent_platform`; if the `agent_static` key was rotated, refresh `~/.aws/credentials`. Do NOT block -- continue in degraded mode (credential-dependent verifiers are skipped, emitting SKIPPED). Autonomous executors never attempt recovery.
 - **`log_sync_result.status == "committed"`** -- Print: "Session logs synced to main ([N] file(s) committed)." Continue.
 - **`log_sync_result.status == "conflict"`** -- STOP. Print error and require human resolution.
@@ -123,70 +123,59 @@ IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
 The plan filename must match what find_plan.py will derive from the branch name (branch prefix agent/ is stripped, remainder is the slug).
-e.g., if plan is `docs/plans/PLAN-fix-telemetry-drift.md`, branch must be `agent/fix-telemetry-drift`.
+e.g., if plan is `docs/plans/PLAN-fix-telemetry-drift.yaml`, branch must be `agent/fix-telemetry-drift`.
 
-## PLAN-{slug}.md Template (Workflow Step 8)
-Use exactly this structure:
-```markdown
-# Plan
+## PLAN-{slug}.yaml Template (Workflow Step 8)
+(NOTE: this legacy mirror is updated as voluntary hygiene -- `.claude/skills/planning/SKILL.md` is canonical per Decision 76; no sync obligation exists.)
+The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/plan_document.py`, enforced by `validate.py`). The legacy `PLAN-{slug}.md` form is DEPRECATED (T1.11 / CD.22): never author new .md plans; tooling emits a deprecation warning on the .md path for one release cycle, then it is removed. Unknown keys FAIL validation. Use exactly this structure:
+```yaml
+schema_version: 1                  # int; must be 1
+slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
+intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
+  ...
+plan_type: IMPLEMENTATION          # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
+verification_tier: V2              # V1 | V2 | V3
+plan_path: docs/plans/PLAN-{slug}.yaml   # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
+phase: >-                          # phase / tier_item id from the roadmaps
+  ...
+scope:                             # min 1 entry; only files listed here may be modified
+  - file: path/to/file.py
+    action: Create                 # Create | Modify | Delete
+    purpose: why this file changes
+bundled_recommendations: []        # included open recs (list of str), or []
+infrastructure_dependencies: []    # list of str; populate when .tf files appear in scope
+acceptance_criteria:               # min 1; each independently verifiable
+  - verifiable condition 1
+verification_plan:                 # min 1 step; step ids must be unique
+  - step: 1
+    phase: pre-deploy              # pre-deploy | post-deploy
+    action: exercise the feature
+    command: executable shell command   # REQUIRED non-empty -- prose-only VP steps fail the schema
+    expected: specific expected result
+    fix_if: what failure looks like
+constraints:
+  - limits from copilot-instructions.md and DECISIONS.md
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - Relevant decisions, phase dependencies, known gotchas
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - copilot-instructions.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:                   # REQUIRED non-empty for IMPLEMENTATION plans
+  - Specific file to create/modify -- what it must do
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []                     # STRATEGIC plans only (required there, forbidden otherwise);
+                                   # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
+rollback: optional rollback note   # optional str; omit if not applicable
+```
 
-## Intent
-[1-2 sentences: how this work contributes toward the North Star.]
-
-## Plan Type
-IMPLEMENTATION / STRATEGIC / REPORT-ONLY
-
-## Verification Tier
-V1 / V2 / V3
-
-## Branch
-agent/{slug}
-
-## Phase
-[phase number and name from ROADMAP.md]
-
-## Scope
-| File | Action | Purpose |
-|------|--------|---------|
-| [path] | Create / Modify / Delete | [why] |
-
-## Bundled Recommendations
-[List any included open recs, or "None".]
-
-## Infrastructure Dependencies (if applicable)
-[Only if .tf files appear in Scope.]
-
-## Acceptance Criteria
-- [ ] [verifiable condition 1]
-
-## Verification Plan
-| # | Phase | Action | Command | Expected Outcome | Fix If |
-|---|-------|--------|---------|-------------------|--------|
-| 1 | [pre-deploy] | [exercise the feature] | `[executable shell command]` | [specific expected result] | [what failure looks like] |
-
-## Constraints
-- [limits from copilot-instructions.md and DECISIONS.md]
-- No rescue agents or workaround loops (Decision 55)
-
-## Context
-- [Relevant decisions, phase dependencies, known gotchas]
-
-## Pre-Implementation Checklist
-- [ ] Branch confirmed not on `main`
-- [ ] copilot-instructions.md read
-- [ ] DECISIONS.md read
-- [ ] All files in Scope table located and readable
-- [ ] Acceptance Criteria understood and verifiable
-
-## Ordered Execution Steps
-1. [Specific file to create/modify -- what it must do]
-N. **Execute Verification Plan** -- run each step. Loop until pass. If V3 fails unrecoverably, stop and analyze root cause (Decision 55).
-N+1. Report: what was implemented, verification results.
-
-## Work Areas (STRATEGIC plans only)
-| Area | Scope | Rationale | Complexity |
-|------|-------|-----------|------------|
-| [area name] | [files affected] | [why] | XS/S/M/L/XL |
+After writing, validate before committing:
+```bash
+python -m scripts.plan_document docs/plans/PLAN-{slug}.yaml
 ```
 
 **Platform compatibility:** Verify shell commands are Windows-compatible. Use Python scripts for automation.
@@ -195,15 +184,15 @@ N+1. Report: what was implemented, verification results.
 **DO NOT output the completion message until this step completes.**
 Run the automated zero-context critique using the CLI:
 ```bash
-python -m scripts.agent_development.run_skill --skill plan-critique --target docs/plans/PLAN-{slug}.md --context .github/copilot-instructions.md docs/ROADMAP-PRODUCT.md docs/ROADMAP-PLATFORM.yaml docs/DECISIONS.md
+python -m scripts.agent_development.run_skill --skill plan-critique --target docs/plans/PLAN-{slug}.yaml --context .github/copilot-instructions.md docs/ROADMAP-PRODUCT.md docs/ROADMAP-PLATFORM.yaml docs/DECISIONS.md
 ```
 Read the critique output from the terminal.
 If it suggests revisions, update the plan with these fixes.
 Loop if REVISE. Proceed if PROCEED.
 
 ## Confirmation Messages (Workflow Step 11)
-- **IMPLEMENTATION:** "Planning complete. `docs/plans/PLAN-{slug}.md` is ready and committed to branch `agent/{slug}`. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
-- **STRATEGIC:** "Planning complete. `docs/plans/PLAN-{slug}.md` is ready with Work Areas for scoping. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
-- **REPORT-ONLY:** "Planning complete. PLAN-{slug}.md contains a report/analysis for your review -- no implementation steps. Decide which items to act on, then start a new planning session for each. Do **not** send `/implement`."
+- **IMPLEMENTATION:** "Planning complete. `docs/plans/PLAN-{slug}.yaml` is ready and committed to branch `agent/{slug}`. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
+- **STRATEGIC:** "Planning complete. `docs/plans/PLAN-{slug}.yaml` is ready with Work Areas for scoping. Review and edit if needed. When satisfied, open a new chat and send **`/implement`**."
+- **REPORT-ONLY:** "Planning complete. PLAN-{slug}.yaml contains a report/analysis for your review -- no implementation steps. Decide which items to act on, then start a new planning session for each. Do **not** send `/implement`."
 
 **DO NOT PERFORM ANY FURTHER ACTIONS**

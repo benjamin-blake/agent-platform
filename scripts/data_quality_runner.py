@@ -27,6 +27,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -42,6 +43,7 @@ _DQ_DIR = _ROOT / "config" / "agent" / "data_quality"
 _TOMBSTONES_PATH = _DQ_DIR / "dq_tombstones.yaml"
 _POLL_INTERVAL = 2  # seconds between Athena status checks
 _MAX_POLL = 60  # max seconds to wait for a single query
+_TRANSIENT_HTTP_RE = re.compile(r"failed \(HTTP (?:502|503|504)\)")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +63,24 @@ class Check:
     severity: str = "error"
     enforced: bool = True
     exclude_before: str | None = None
+    backend: str = "athena"  # "athena" (Iceberg views) | "ducklake" (closed reader); set per-backend dispatch
+
+
+# Ops governance tables (the full set; telemetry_* stays on Athena per Decision 78 cl.2).
+_OPS_TABLES: frozenset[str] = frozenset(
+    {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_session_log", "ops_execution_plans"}
+)
+# RECS-FIRST SLICE: only ops_recommendations is migrated to DuckLake. Every other ops table stays on
+# Athena/Iceberg until their T2.26 disposition (Decision 84), so only this set routes to
+# the DuckLake reader when the flag is set.
+# Tables on the DuckLake closed boundary (Decision 84 I-1): their checks route to the reader.
+# ops_session_log / ops_execution_plans stay on the Athena views until their T2.26 disposition.
+_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+
+
+def _ops_backend() -> str:
+    """DuckLake is the sole ops backend (Decision 84 I-1; the rollback flag is retired)."""
+    return "ducklake"
 
 
 @dataclass
@@ -109,6 +129,10 @@ class RunResult:
     @property
     def hard_gated(self) -> int:
         return sum(1 for r in self.results if r.verdict == "HARD_GATE")
+
+    @property
+    def unavailable(self) -> int:
+        return sum(1 for r in self.results if r.verdict == "UNAVAILABLE")
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +443,159 @@ def _compile_column_test(
 # ---------------------------------------------------------------------------
 
 
+def _verdict_for(check: Check, violation_count: int, duration: float) -> CheckResult:
+    """Map a violation count to a verdict (shared by the Athena + DuckLake execution paths)."""
+    if violation_count == 0:
+        return CheckResult(check=check, verdict="PASS", violation_count=0, duration_seconds=duration)
+    # Tombstone resurrection is always HARD_GATE regardless of severity.
+    if check.test_type == "tombstone_resurrection":
+        return CheckResult(
+            check=check,
+            verdict="HARD_GATE",
+            violation_count=violation_count,
+            detail=f"resurrected tombstoned record ({violation_count} row(s))",
+            duration_seconds=duration,
+        )
+    if not check.enforced:
+        verdict = "UNENFORCED_FAIL" if check.severity == "error" else "WARN"
+    else:
+        verdict = "FAIL" if check.severity == "error" else "WARN"
+    return CheckResult(
+        check=check,
+        verdict=verdict,
+        violation_count=violation_count,
+        detail=f"{violation_count} violation(s)",
+        duration_seconds=duration,
+    )
+
+
+def to_ducklake_sql(sql: str, table: str, database: str) -> str:
+    """Translate an Athena/Trino check SQL to DuckDB dialect over the DuckLake `current` table.
+
+    - Rewrite the Athena table reference (`{database}.{table}_current` or `{database}.{table}`) to the
+      `{tbl}` placeholder the reader's query_ops substitutes with the DuckLake current TABLE.
+    - Translate Trino `regexp_like(x, p)` -> DuckDB `regexp_matches(x, p)`. `date_diff`, CURRENT_TIMESTAMP,
+      DATE('...'), COUNT(*), NOT IN, IS NULL are already DuckDB-compatible.
+    """
+    out = sql.replace(f"{database}.{table}_current", "{tbl}").replace(f"{database}.{table}", "{tbl}")
+    out = re.sub(r"\bregexp_like\(", "regexp_matches(", out)
+    return out
+
+
+def _uniqueness_sql(column: str) -> str:
+    """DuckDB COUNT-of-duplicates violation query for *column* over the `{tbl}` placeholder."""
+    dupes = f"SELECT {column}, COUNT(*) n FROM {{tbl}} GROUP BY {column} HAVING COUNT(*) > 1"
+    return f"SELECT COUNT(*) AS violation FROM ({dupes}) d"
+
+
+def build_clause8_checks(spec_yaml: dict, database: str, table_filter: str | None = None) -> list[Check]:
+    """Generate the CD.33 clause-8 DuckLake checks (ULID-history uniqueness, current merge-key uniqueness).
+
+    Driven by the ops.yaml `ducklake.clause8_checks` declaration + the field_semantics merge keys.
+    Referential integrity is enforced in-writer (L1); the relationships checks in ops.yaml are the L2
+    backstop, so no separate referential check is generated here. DuckLake backend only.
+    """
+    from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+    cfg = (spec_yaml.get("ducklake") or {}).get("clause8_checks") or {}
+    checks: list[Check] = []
+    for table in cfg.get("tables", []):
+        if table_filter and table != table_filter:
+            continue
+        spec = resolve_table_spec(table)
+        if cfg.get("ulid_history_unique"):
+            checks.append(
+                Check(
+                    table=table,
+                    column="ulid",
+                    test_type="ulid_history_unique",
+                    sql=_uniqueness_sql("ulid"),
+                    description=f"{spec.history_table}.ulid: history ULID unique (idempotency PK)",
+                    backend="ducklake",
+                )
+            )
+        if cfg.get("current_merge_key_unique"):
+            mk = spec.merge_key
+            checks.append(
+                Check(
+                    table=table,
+                    column=mk,
+                    test_type="current_merge_key_unique",
+                    sql=_uniqueness_sql(mk),
+                    description=f"{spec.current_table}.{mk}: current has one row per merge key",
+                    backend="ducklake",
+                )
+            )
+    return checks
+
+
+def _query_ops_rows(reader: Any, table: str, sql: str) -> list[dict]:
+    """Call the reader's raising _invoke surface and return the rows list."""
+    body = reader._invoke({"action": "query_ops", "table": table, "sql": sql, "params": []})
+    return list(body.get("rows", []))
+
+
+def _is_reader_unavailable(exc: BaseException) -> bool:
+    """True when exc indicates a transient DuckLake reader infra outage.
+
+    Transient: requests ConnectionError/Timeout, or a RuntimeError whose message
+    matches the reader's own transient set {502,503,504} with no structured error_type marker.
+    Structured handler errors (HTTP 500 + error_type, 4xx) are not transient -- they gate.
+    """
+    try:
+        import requests as _req  # noqa: PLC0415
+
+        if isinstance(exc, (_req.ConnectionError, _req.Timeout)):
+            return True
+    except ImportError:
+        pass
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if _TRANSIENT_HTTP_RE.search(msg) and "error_type" not in msg:
+            return True
+    return False
+
+
+def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
+    """Execute a single ops-table check against DuckLake via the closed reader. DuckDB dialect.
+
+    `ulid_history_unique` runs over the history table (read_ops_history surface); the other checks run
+    over the current projection via query_ops. A cross-table relationships check cannot be expressed
+    through the single-`{tbl}` reader surface and is SKIPPED on this backend (priority_queue FK is
+    dormant + unenforced).
+    """
+    start = time.time()
+    if check.test_type == "relationships":
+        return CheckResult(
+            check=check,
+            verdict="SKIP",
+            detail="cross-table FK not run on ducklake backend (dormant/unenforced)",
+            duration_seconds=0.0,
+        )
+    table = check.table
+    is_history = check.test_type == "ulid_history_unique"
+    sql = check.sql if check.backend == "ducklake" else to_ducklake_sql(check.sql, table, "agent_platform")
+    try:
+        if is_history:
+            from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+            hist = resolve_table_spec(table).history_table
+            rows = _query_ops_rows(reader, table, sql.replace("{tbl}", f"ops_catalog.{hist}"))
+        else:
+            rows = _query_ops_rows(reader, table, sql)
+        if rows is None:
+            return CheckResult(
+                check=check, verdict="ERROR", detail="ducklake reader returned None", duration_seconds=time.time() - start
+            )
+        violation_count = int(next(iter(rows[0].values()))) if rows else 0
+    except Exception as exc:  # noqa: BLE001
+        verdict = "UNAVAILABLE" if _is_reader_unavailable(exc) else "ERROR"
+        return CheckResult(
+            check=check, verdict=verdict, detail=f"ducklake query failed: {exc}", duration_seconds=time.time() - start
+        )
+    return _verdict_for(check, violation_count, time.time() - start)
+
+
 def _execute_check(
     check: Check,
     athena_client: Any,
@@ -494,41 +671,27 @@ def _execute_check(
             duration_seconds=time.time() - start,
         )
 
-    duration = time.time() - start
+    return _verdict_for(check, violation_count, time.time() - start)
 
-    if violation_count == 0:
-        return CheckResult(
-            check=check,
-            verdict="PASS",
-            violation_count=0,
-            duration_seconds=duration,
-        )
 
-    # Tombstone resurrection is always HARD_GATE regardless of severity
-    if check.test_type == "tombstone_resurrection":
-        return CheckResult(
-            check=check,
-            verdict="HARD_GATE",
-            violation_count=violation_count,
-            detail=f"resurrected tombstoned record ({violation_count} row(s))",
-            duration_seconds=duration,
-        )
+def apply_backend_routing(all_checks: list[Check], database: str, *, table_filter: str | None = None) -> list[Check]:
+    """Route the migrated-table checks to the DuckLake reader (sole backend, Decision 84 I-1).
 
-    # Non-zero violations: enforce-aware labelling.
-    # enforced=False + error severity -> UNENFORCED_FAIL (tracked but non-blocking).
-    # enforced=False + warn severity -> WARN (purely informational).
-    # enforced=True -> FAIL (error) or WARN (warn).
-    if not check.enforced:
-        verdict = "UNENFORCED_FAIL" if check.severity == "error" else "WARN"
-    else:
-        verdict = "FAIL" if check.severity == "error" else "WARN"
-    return CheckResult(
-        check=check,
-        verdict=verdict,
-        violation_count=violation_count,
-        detail=f"{violation_count} violation(s)",
-        duration_seconds=duration,
-    )
+    Rewrite every check on a migrated
+    recs table to the DuckLake closed reader (DuckDB dialect over the `current` TABLE) and append
+    the CD.33 clause-8 checks. iceberg (rollback) leaves all checks on the Athena views.
+
+    Shared by main() AND DataQualityVerifier so the verifier harness routes recs through the
+    reader -- NOT the dropped ops_recommendations_current Athena view (which would TABLE_NOT_FOUND).
+    Mutates and returns *all_checks*.
+    """
+    for c in all_checks:
+        if c.table in _DUCKLAKE_OPS_TABLES:
+            c.sql = to_ducklake_sql(c.sql, c.table, database)
+            c.backend = "ducklake"
+    ops_spec_yaml = yaml.safe_load((_DQ_DIR / "ops.yaml").read_text(encoding="utf-8")) or {}
+    all_checks.extend(build_clause8_checks(ops_spec_yaml, database, table_filter=table_filter))
+    return all_checks
 
 
 def run_checks(
@@ -549,28 +712,51 @@ def run_checks(
             duration_seconds=time.time() - run_start,
         )
 
-    try:
-        import boto3
-    except ImportError:
-        logger.error("boto3 not available")
-        return RunResult(
-            results=[CheckResult(check=c, verdict="SKIP", detail="boto3 unavailable") for c in checks],
-            verdict="SKIP",
-            duration_seconds=0.0,
-        )
+    # DuckLake checks route through the closed reader; Athena checks need the boto3 client. Build
+    # each lazily so a pure-DuckLake run does not require boto3 and vice versa.
+    needs_athena = any(c.backend != "ducklake" for c in checks)
+    needs_ducklake = any(c.backend == "ducklake" for c in checks)
 
-    from scripts.aws_profile import resolve_aws_profile
+    athena = None
+    if needs_athena:
+        try:
+            import boto3
+        except ImportError:
+            logger.error("boto3 not available")
+            return RunResult(
+                results=[CheckResult(check=c, verdict="SKIP", detail="boto3 unavailable") for c in checks],
+                verdict="SKIP",
+                duration_seconds=0.0,
+            )
+        from scripts.aws_profile import resolve_aws_profile
 
-    _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
-    session = boto3.Session(profile_name=_profile)
-    athena = session.client("athena", region_name="eu-west-2")
+        _profile = resolve_aws_profile(profile_name, default=os.environ.get("AWS_DEFAULT_PROFILE") or "agent_platform")
+        athena = boto3.Session(profile_name=_profile).client("athena", region_name="eu-west-2")
+
+    reader = None
+    if needs_ducklake:
+        from src.common.iceberg_reader import DuckLakeReader  # noqa: PLC0415
+
+        reader = DuckLakeReader(profile=profile_name)
 
     results: list[CheckResult] = []
     for check in checks:
-        result = _execute_check(check, athena, workgroup, database)
+        if check.backend == "ducklake":
+            result = _execute_check_ducklake(check, reader)
+        else:
+            result = _execute_check(check, athena, workgroup, database)
         results.append(result)
         # Log as we go
-        symbol = {"PASS": ".", "FAIL": "F", "UNENFORCED_FAIL": "U", "WARN": "W", "ERROR": "E", "SKIP": "S"}
+        symbol = {
+            "PASS": ".",
+            "FAIL": "F",
+            "UNENFORCED_FAIL": "U",
+            "WARN": "W",
+            "ERROR": "E",
+            "SKIP": "S",
+            "HARD_GATE": "G",
+            "UNAVAILABLE": "A",
+        }
         print(symbol.get(result.verdict, "?"), end="", flush=True)
 
     print()  # newline after progress dots
@@ -582,7 +768,10 @@ def run_checks(
         has_hard_gate = any(r.verdict == "HARD_GATE" for r in results)
         has_fail = any(r.verdict == "FAIL" and r.check.enforced for r in results)
         has_error = any(r.verdict == "ERROR" for r in results)
-        verdict = "HARD_GATE" if has_hard_gate else ("FAIL" if (has_fail or has_error) else "PASS")
+        has_unavailable = any(r.verdict == "UNAVAILABLE" for r in results)
+        verdict = (
+            "HARD_GATE" if has_hard_gate else "FAIL" if (has_fail or has_error) else "DEGRADED" if has_unavailable else "PASS"
+        )
 
     return RunResult(
         results=results,
@@ -608,6 +797,7 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
             "warned": run_result.warned,
             "errored": run_result.errored,
             "skipped": run_result.skipped,
+            "unavailable": run_result.unavailable,
             "duration_seconds": round(run_result.duration_seconds, 1),
             "checks": [
                 {
@@ -629,19 +819,24 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
     print(f"\n{'=' * 60}")
     print(f"Data Quality: {run_result.verdict}")
     print(f"{'=' * 60}")
+    if run_result.verdict == "DEGRADED":
+        print(f"  *** DEGRADED: {run_result.unavailable} check(s) could not reach the DuckLake backend. ***")
+        print("  *** Gate not enforced -- infra outage, not a data violation. ***")
     print(
         f"  Passed: {run_result.passed}  "
         f"Failed: {run_result.failed}  "
         f"Unenforced: {run_result.unenforced_fail}  "
         f"Warned: {run_result.warned}  "
         f"Errors: {run_result.errored}  "
-        f"Skipped: {run_result.skipped}"
+        f"Skipped: {run_result.skipped}  "
+        f"Unavailable: {run_result.unavailable}"
     )
     print(f"  Duration: {run_result.duration_seconds:.1f}s")
     print()
 
-    # Show failures and warnings
-    issues = [r for r in run_result.results if r.verdict in ("FAIL", "UNENFORCED_FAIL", "WARN", "ERROR", "HARD_GATE")]
+    # Show failures, warnings, and unavailable checks
+    _ISSUE_VERDICTS = ("FAIL", "UNENFORCED_FAIL", "WARN", "ERROR", "HARD_GATE", "UNAVAILABLE")
+    issues = [r for r in run_result.results if r.verdict in _ISSUE_VERDICTS]
     if issues:
         print("Issues:")
         for r in issues:
@@ -651,6 +846,7 @@ def _print_results(run_result: RunResult, as_json: bool = False) -> None:
                 "WARN": "WARN",
                 "ERROR": "ERR ",
                 "HARD_GATE": "GATE",
+                "UNAVAILABLE": "UNAVL",
             }[r.verdict]
             print(f"  [{prefix}] {r.check.description}")
             if r.detail:
@@ -744,6 +940,13 @@ def main() -> int:
     tombstones = load_tombstones()
     all_checks.extend(build_tombstone_checks(tombstones, table_filter=args.table, database=database))
 
+    # Backend dispatch (Decision 84): route ONLY the
+    # migrated recs checks to the DuckLake reader (DuckDB dialect over the `current` TABLE) and emit the
+    # CD.33 clause-8 checks for recs. ops_decisions + the deferred ops_* tables + telemetry stay on
+    # Athena (recs-first slice). iceberg (default) leaves everything on the Athena views -- the rollback
+    # path, byte-identical to pre-cutover. Shared with DataQualityVerifier via apply_backend_routing.
+    all_checks = apply_backend_routing(all_checks, database, table_filter=args.table)
+
     # Filter by check type (e.g. --checks tombstone_resurrection)
     if args.checks:
         all_checks = [c for c in all_checks if c.test_type == args.checks]
@@ -783,7 +986,7 @@ def main() -> int:
     # Save latest result for preflight consumption
     _save_latest_result(result)
 
-    return 0 if result.verdict == "PASS" else 1
+    return 0 if result.verdict in {"PASS", "DEGRADED", "SKIP"} else 1
 
 
 def _save_latest_result(result: RunResult) -> None:
@@ -804,6 +1007,7 @@ def _save_latest_result(result: RunResult) -> None:
         "warned": result.warned,
         "errored": result.errored,
         "hard_gated": result.hard_gated,
+        "unavailable": result.unavailable,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "duration_seconds": round(result.duration_seconds, 1),
         "checks": [

@@ -1,0 +1,326 @@
+schema_version: 1
+slug: "terraform-sandbox-convergence-closure"
+intent: >-
+  Make the sandbox Terraform CD pipeline (T2.20 / CD.35) self-sustaining by replacing the reactive
+  round-by-round github_ci_apply IAM-grant cycle with a one-shot read closure, decoupling a guard
+  BLOCK from a genuine apply failure so the convergence record stops latching red on pending admin
+  applies, and hardening terraform init against transient registry 5xx -- so the automation
+  substrate that the self-improving platform depends on stays green without manual intervention.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-sandbox-convergence-closure.yaml
+phase: >-
+  Platform tier T2.20 (Terraform CI/CD convergence substrate, CD.35 Wave 1); ci_rca hardening
+  session resolving rec-2236/2237/2238/2239/2254. Product Phase 1 complete; Phase Platform runs in
+  parallel. Not a product-phase item.
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Convert the github_ci_apply role's AWS-service refresh-READ Sids (lambda / events / cloudwatch
+      / logs / ssm / sns / secretsmanager-read) from fragile per-action enumeration to per-service
+      read wildcards scoped to the existing ducklake ARNs, granting the full DuckLake reader/writer/
+      maintenance/catalog_dr read closure in one set. WRITE Sids and IAM read Sids stay enumerated.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      (c) Capture the guard exit code; treat exit 2 (BLOCKED) like the precondition-refusal -- do NOT
+      overwrite the convergence record red (only a genuine apply failure writes red). (d) Wrap the
+      Terraform init step in a bounded retry for transient provider-registry 5xx.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      (d) Wrap the `terraform init -backend=false` invocation in run_terraform_creds_free() in a
+      bounded retry that retries only on transient registry-5xx signatures -- rec-2237's actual
+      failure locus (the terraform-validate / --terraform-only CI job).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the init-retry branch (transient 5xx twice then success -> not failed; non-transient ->
+      fail fast) to satisfy 100% new-code coverage (test_coverage_checker).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Replace the now-obsolete round-by-round "Out-of-band IAM grants" narrative with a one-shot
+      read-wildcard closure note so the directory instruction stays accurate.
+bundled_recommendations:
+  - rec-2236
+  - rec-2237
+  - rec-2238
+  - rec-2239
+  - rec-2254
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf modifies the github_ci_apply IAM inline policy. IAM is in the
+    Decision-77 guard's fail-closed set, so it CANNOT auto-apply: the closure lands via a ONE-TIME
+    human-gated agent_platform_admin apply (B1). No Lambda code deploy is involved
+    (compute_affected_artifacts({oidc.tf, workflow, validate.py, test, CLAUDE.md}) == {}).
+  - >-
+    Trust-policy lockout invariant (platform_roles.tf banner): the admin apply MUST show NO
+    assume_role_policy diff on PlatformDev / PlatformAdmin / any CI or ducklake role. A trust diff =>
+    STOP (risk of locking the agent_static assume-role chain out). The wildcard edit touches only the
+    github_ci_apply INLINE POLICY action lists, never any trust document.
+  - >-
+    Convergence record s3://agent-platform-data-lake/convergence/personal/sandbox.json is GREEN on
+    5816c93 at planning time. The merge-push will guard-block (IAM diff pending the admin apply) but,
+    under the new (c) logic, will NOT latch red -- this is the in-band behavioral proof of (c).
+  - >-
+    Apply ordering: the guard runs before apply in both the CD workflow and the human-gated path;
+    IAM precedence (terraform CLAUDE.md) is moot here as no Lambda deploy follows.
+acceptance_criteria:
+  - >-
+    github_ci_apply's AWS-service refresh-read surface is per-service wildcards (lambda:Get*/List*,
+    events:Describe*/List*, cloudwatch:Describe*/List*, logs:Describe*, ssm:Get*/Describe*,
+    sns:Get*/List*, secretsmanager:Describe*+GetSecretValue) scoped to the existing ducklake ARNs;
+    a simulate-principal-policy against the LIVE applied role returns "allowed" for the full provider
+    refresh-read action set (incl. the previously-missing lambda:GetFunctionConcurrency /
+    GetRuntimeManagementConfig) with no implicitDeny.
+  - >-
+    The deterministic guard is unchanged: tests/test_terraform_apply_guard.py all pass and the guard
+    still returns exit 2 on an IAM update (B1 -- no guard weakening, Decision 77).
+  - >-
+    terraform-apply-sandbox.yml anti-masking, BOTH directions verified: a guard exit-2 (BLOCKED) does
+    NOT overwrite the convergence record red (record stays green after the merge-push guard-block,
+    VP8), AND a genuine apply failure / guard exit-1 STILL writes red (proven by the record-write
+    decision self-test against a throwaway key, VP11). Only a real, non-skipped failure latches red.
+  - >-
+    terraform init is retried on transient registry 5xx in BOTH the apply-sandbox workflow and
+    scripts/validate.py (the validate.py retry unit test passes; non-transient errors still fail fast).
+  - >-
+    The IAM closure is applied via one human-gated agent_platform_admin apply; a subsequent CD
+    terraform plan shows ZERO AccessDenied and ZERO IAM diff (converged) and the convergence record is
+    green.
+  - >-
+    rec-2236, rec-2237, rec-2238, rec-2239, rec-2254 are closed via the Resolves: trailer
+    (rec-autoclose); docs/DECISIONS.md is NOT edited and no Lambda build/deploy is performed.
+  - >-
+    terraform/CLAUDE.md reflects the one-shot read-wildcard closure (round-by-round narrative removed).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the oidc.tf wildcard closure is valid HCL and formatted.
+    command: "terraform -chdir=terraform/personal init -backend=false -input=false -no-color >/dev/null && terraform -chdir=terraform/personal validate -no-color && terraform -chdir=terraform/personal fmt -check -no-color"
+    expected: "validate reports success; fmt -check exits 0 (no diff); overall exit 0."
+    fix_if: "HCL syntax error in the wildcard Action arrays, or unformatted -- run terraform fmt and fix the statement."
+  - step: 2
+    phase: pre-deploy
+    action: Regression-guard the deterministic guard (must stay byte-for-byte behavioural, B1 -- no weakening).
+    command: "bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q"
+    expected: "All guard tests pass -- IAM update still blocks (exit 2), clean update passes (exit 0), neon rules intact."
+    fix_if: "A guard test fails -> the guard was inadvertently modified; revert scripts/terraform_apply_guard.py (it must NOT change)."
+  - step: 3
+    phase: pre-deploy
+    action: Exercise the validate.py terraform-init retry behaviour (transient 5xx retried; non-transient fails fast).
+    command: "bin/venv-python -m pytest tests/test_validate.py -q"
+    expected: "All pass, including the new cases: init fails with a 502/registry signature twice then succeeds (3 run calls, NOT appended to failed); a non-transient init error fails after 1 attempt and is appended to failed."
+    fix_if: "Retry does not detect the 5xx signature, retries a non-transient error, or over/under-counts attempts -- adjust the signature match and attempt cap."
+  - step: 4
+    phase: pre-deploy
+    action: "Assert the (c) three-way branch SHAPE in the workflow: guard sets blocked only on rc==2; the fail-closed (rc==1) and apply-failure paths still write red; record_write skips on blocked OR refused."
+    command: "bin/venv-python -c \"import yaml; s=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps']; g=[x for x in s if x.get('id')=='guard'][0]['run']; rw=[x for x in s if x.get('id')=='record_write'][0]['run']; assert 'blocked=true' in g and '-eq 2' in g, 'guard must set blocked=true gated on rc==2'; assert 'exit 1' in g, 'guard must keep the fail-closed rc==1 exit path'; assert 'blocked' in rw and 'refused' in rw.lower(), 'record_write must skip on blocked OR refused'; assert 'green' in rw and 'red' in rw, 'record_write must still write green on success / red on a non-skipped failure'; print('three-way branch shape present')\""
+    expected: "Prints 'three-way branch shape present'; exit 0. The guard sets blocked=true ONLY under the rc==2 condition, retains the rc==1 fail-closed exit, and record_write skips on blocked/refused yet still writes red on a genuine non-skipped failure."
+    fix_if: "AssertionError -> the wiring is incomplete: e.g. blocked is set unconditionally (would let exit-1 errors skip the red write, breaking anti-masking), the fail-closed exit is missing, or record_write no longer writes red on failure. Build the full three-way branch."
+  - step: 5
+    phase: pre-deploy
+    action: Run the full credential-free terraform gate (the --terraform-only CI surface) end to end.
+    command: "bin/venv-python -m scripts.validate --terraform-only"
+    expected: "Terraform init/validate/fmt pass for all roots (init now retry-wrapped); exit 0."
+    fix_if: "A genuine validate/fmt error surfaces -> fix the offending .tf; a registry flake should now be retried, not fail the gate."
+  - step: 6
+    phase: post-deploy
+    action: "[human-gated] Plan terraform/personal and confirm the guard flags ONLY the github_ci_apply IAM update (exit 2 expected) with NO trust/destroy diff, then apply the closure via agent_platform_admin."
+    command: "terraform -chdir=terraform/personal init -input=false -backend-config=backend-sandbox.hcl >/dev/null && terraform -chdir=terraform/personal plan -input=false -var-file=terraform.personal.tfvars -out=/tmp/closure.plan && terraform -chdir=terraform/personal show -json /tmp/closure.plan > /tmp/closure.plan.json && bin/venv-python scripts/terraform_apply_guard.py /tmp/closure.plan.json; echo \"guard_rc=$?\""
+    expected: "Plan shows an update to aws_iam_role_policy.github_ci_apply ONLY (plus any pending guard-PASS resource), NO assume_role_policy diff, NO destroy/replace; guard_rc=2 (IAM update correctly blocked). After human review, `terraform -chdir=terraform/personal apply /tmp/closure.plan` succeeds."
+    fix_if: "Any assume_role_policy (trust) diff or destroy/replace appears -> STOP (lockout/blast-radius risk), do NOT apply, RCA. guard_rc!=2 -> the guard was weakened (must be 2)."
+  - step: 7
+    phase: post-deploy
+    action: Authoritative closure proof -- simulate the LIVE applied github_ci_apply role for the full provider refresh-read set on a ducklake function ARN.
+    command: "ACC=$(aws sts get-caller-identity --query Account --output text --profile agent_platform_admin); aws iam simulate-principal-policy --policy-source-arn \"arn:aws:iam::$ACC:role/agent-platform-github-ci-apply\" --action-names lambda:GetFunction lambda:GetFunctionConcurrency lambda:GetRuntimeManagementConfig lambda:GetFunctionUrlConfig lambda:ListVersionsByFunction events:DescribeRule events:ListTagsForResource --resource-arns \"arn:aws:lambda:eu-west-2:$ACC:function:agent-platform-ducklake-maintenance\" \"arn:aws:events:eu-west-2:$ACC:rule/agent-platform-ducklake-maintenance-merge\" --profile agent_platform_admin --query \"EvaluationResults[?EvalDecision!='allowed'].EvalActionName\" --output text"
+    expected: "Empty output -> every refresh-read action is allowed by the live policy (closure complete)."
+    fix_if: "Any action name printed (implicit/explicitDeny) -> a wildcard typo or wrong ARN scope; fix the Sid and re-apply via agent_platform_admin."
+  - step: 8
+    phase: post-deploy
+    action: Prove (c) -- the merge-push guard-block did NOT latch the convergence record red.
+    command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | grep -q '\"status\": \"green\"'"
+    expected: "Exit 0 -- record still green after the merge-push guard-blocked (the BLOCK skipped the record write; no red latch)."
+    fix_if: "Record is red -> the guard-block wrote red; the record_write step is not skipping on the blocked output -- fix the (c) branch."
+  - step: 9
+    phase: post-deploy
+    action: Confirm the CD pipeline converges -- a dispatch/plan run shows zero AccessDenied and zero IAM diff after the closure apply.
+    command: "terraform -chdir=terraform/personal init -input=false -backend-config=backend-sandbox.hcl >/dev/null && terraform -chdir=terraform/personal plan -input=false -var-file=terraform.personal.tfvars -detailed-exitcode -no-color 2>&1 | tee /tmp/conv.plan.txt; echo \"exit=${PIPESTATUS[0]}\"; ! grep -qi 'AccessDenied' /tmp/conv.plan.txt && ! grep -qE 'aws_iam_role_policy.github_ci_apply will be updated' /tmp/conv.plan.txt && echo CONVERGED"
+    expected: "No AccessDenied lines; no pending github_ci_apply IAM update; prints CONVERGED (plan is a no-op or only guard-PASS resources remain)."
+    fix_if: "AccessDenied present -> a read action is still missing (add to the wildcard Sid); IAM update still pending -> the admin apply did not land; re-apply."
+  - step: 10
+    phase: post-deploy
+    action: "Confirm the five ci_rca recs closed AND that rec-2237 / rec-2254 (closed at a locus other than their stated target file) carry an auditable resolution string."
+    command: "bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl')]; st={r['id']:r.get('status') for r in rows}; res={r['id']:(r.get('resolution') or '') for r in rows}; bad=[x for x in ['rec-2236','rec-2237','rec-2238','rec-2239','rec-2254'] if st.get(x)!='closed']; un=[x for x in ('rec-2237','rec-2254') if not res.get(x,'').strip()]; print('OPEN:',bad) if bad else (print('UNAUDITED:',un) if un else print('all closed + locus-audited'))\""
+    expected: "Prints 'all closed + locus-audited' (all five closed; rec-2237 and rec-2254 have a non-empty resolution recording the locus divergence)."
+    fix_if: "OPEN -> a rec did not autoclose; close via the portal. UNAUDITED -> set the resolution: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2237 --status closed --resolution 'Fixed at the true locus (terraform-validate init retry in validate.py + apply-sandbox workflow), not main.tf'` and similarly rec-2254 ('Resolved via B1 human-gated admin apply, guard left fail-closed per Decision 77 -- not a guard allowance')."
+  - step: 11
+    phase: pre-deploy
+    action: "Behavioural fail-closed proof (the anti-masking safety property), runnable pre-merge: replay the REAL record-write decision (extracted from the edited workflow) against a THROWAWAY key (never sandbox.json) and assert apply-failure -> red, apply-success -> green, blocked -> the red write is suppressed."
+    command: |-
+      set -euo pipefail
+      bin/venv-python -c "import yaml; rw=[x for x in yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml'))['jobs']['apply-sandbox']['steps'] if x.get('id')=='record_write'][0]['run']; open('/tmp/rw.sh','w').write(rw)"
+      K="convergence/personal/_selftest_$$.json"
+      export AWS_PROFILE=agent_platform CONVERGENCE_BUCKET=agent-platform-data-lake CONVERGENCE_KEY="$K" SHA=selftest RUN_ID=0 SERVER_URL=https://example REPO=x/y
+      trap 'aws s3api delete-object --bucket agent-platform-data-lake --key "$K" >/dev/null 2>&1 || true' EXIT
+      REFUSED=false BLOCKED=false APPLY_OUTCOME=failure bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "red"'
+      REFUSED=false BLOCKED=false APPLY_OUTCOME=success bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "green"'
+      REFUSED=false BLOCKED=true APPLY_OUTCOME=failure bash /tmp/rw.sh
+      aws s3 cp "s3://agent-platform-data-lake/$K" - | grep -q '"status": "green"'
+      echo "fail-closed proof OK: failure->red, success->green, blocked-suppresses-red"
+    expected: "Prints the proof line. A non-blocked apply failure writes red; success writes green; with BLOCKED=true the prior green is NOT overwritten (the red write is suppressed) -- so anti-masking is preserved in the fail-closed direction while a guard-block no longer latches red."
+    fix_if: "The blocked run flips the record to red -> the skip branch does not cover BLOCKED (anti-masking false-skip). The failure run does NOT write red -> the red path was lost. Re-wire record_write so it skips ONLY on refused/blocked and writes red on every other non-success outcome. (Uses a throwaway _selftest key; the real sandbox.json is never touched.)"
+constraints:
+  - >-
+    Scope strictly to the 5 listed files. scripts/terraform_apply_guard.py is in the allowed scope but
+    stays UNCHANGED (B1 chosen over a guard allowance): its 0/2/1 exit-code contract is the correct
+    boundary and needs no edit. The capability to ACT on exit 2 distinctly from exit 1 is NEW shell
+    wiring this plan ADDS to the workflow (capture the guard rc; set a `blocked` output ONLY on rc==2;
+    branch record_write on it). The workflow today cannot tell exit 2 from exit 1 -- both merely fail
+    the step -- so the implementer must build the full three-way branch and NOT assume the exit-code
+    contract alone delivers the (c) behaviour. Weakening the guard to auto-apply IAM would contradict
+    Decision 77.
+  - >-
+    Do NOT edit docs/DECISIONS.md. CD.35 ratifies via the log-decision path when Wave 1 ships
+    (roadmap agent_instructions). Do NOT narrow the guard's blocking set -- guard-narrowing is
+    T2.25 / Wave-X (Decision 75 frame-lock).
+  - >-
+    Only the AWS-service refresh-READ surface becomes per-service wildcards; all WRITE actions stay
+    enumerated + ARN-scoped, and the IAM role-read Sids stay enumerated (the 9-role set is bounded and
+    IAM is the most sensitive surface -- least-privilege preserved on the mutation surface).
+  - >-
+    Transient-5xx signature parity (anti-drift, AGENTS.md): the init-retry signature set is implemented
+    twice (bash in the workflow, Python in validate.py) because they run in different contexts and no
+    cross-language constant is practical. The two lists MUST be identical token-for-token; each carries
+    a comment naming validate.py as the canonical list, and the validate.py retry test asserts the exact
+    set so any drift in the Python side fails CI. Keep them in sync in the same edit.
+  - >-
+    No rescue agents or workaround loops (Decision 55): the closure IS the permanent root-cause fix
+    that replaces the round-by-round workaround; on an unrecoverable V3 failure STOP and RCA, do not
+    hand-patch another single grant.
+  - >-
+    Python 3.12, type hints, ruff line length 127, no emojis, plain ASCII hyphens. Use bin/venv-python.
+    The self-grant closure is a Wave-1 stopgap; do not foreclose T2.23's terraform/bootstrap/
+    authority-budget re-homing of the pipeline's own IAM.
+context:
+  - >-
+    Root cause of the cluster: github_ci_apply's per-action refresh-read enumeration forced a new
+    grant round on every new ducklake resource/attribute (#158-#162, #169 in git history); each IAM
+    round needed an out-of-band admin apply (the guard fail-closes IAM), and any blocked/failed apply
+    wrote status=red, latching the pipeline. This is the iterative-discovery anti-pattern.
+  - >-
+    Live state at planning time: the convergence record is GREEN on 5816c93 (2026-06-17T14:38:22Z).
+    rec-2236/2238 (red latches on 7678d3e/bfa5229f) are ALREADY cleared; rec-2239 (GetFunctionUrlConfig)
+    landed in config in #160 (bb022f7) and is live; rec-2254's immediate block cleared via the #169
+    admin apply; rec-2237 (kislerdm/neon 502) is the one genuinely-unfixed structural issue. This plan
+    makes green DURABLE and ends the cycle rather than firefighting.
+  - >-
+    Concrete proof the enumeration is incomplete NOW: lambda:GetFunctionConcurrency and
+    lambda:GetRuntimeManagementConfig are present in the platform_admin LambdaAdminManagement Sid
+    (because ducklake_maintenance sets reserved_concurrent_executions=1) but ABSENT from github_ci_apply's
+    LambdaRead Sid. The per-service wildcards close this and every future read gap in the family.
+  - >-
+    Decisions cited (decision-scout CITE): Decision 77 (sandbox auto-apply guard, fail-closed on any
+    IAM/trust/destroy -- governing contract, kept unchanged); CD.35 / T2.20 (the convergence substrate
+    being hardened -- the "guard-BLOCK must not write red, mirroring the refusal record-write skip" IS
+    the literal T2.20 exit criterion); Decision 55 (anti-masking / loud-failure; closure as permanent
+    fix); Decision 72 (RCA-as-plan-source for ci_rca recs; Resolves: trailer); Decision 83 / CD.20
+    (branch protection active but non-wedging -> the convergence record, not a required check, is the
+    server-side anchor).
+  - >-
+    Decision-scout NOTE flags (non-blocking): V3 is driven by terraform/IAM/external-AWS (Decision 48),
+    NOT a Lambda manifest -- compute_affected_artifacts == {}, so no build_lambda deploy step.
+    Plan-type is IMPLEMENTATION (Decision 67 STRATEGIC suspension; 5 files, well within IMPLEMENTATION).
+  - >-
+    ci_rca HARD BLOCK satisfied (Related-Work): same-file for rec-2239 (oidc.tf) and rec-2236/2238
+    (terraform-apply-sandbox.yml); same failure-category (terraform apply/guard/convergence +
+    terraform init transient 5xx) for rec-2237/2254. Route all rec closure through the ops portal /
+    Resolves: trailer (Decision 84 single-portal) -- never edit the JSONL caches directly.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness.commits_behind == 0); no
+    rebase needed. Scope files had no overlap with main_files_changed_since_branch.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/brave-hamilton-mi2jp8)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md adjudicated via the decision-scout subagent gate (not read in-context); CITE list captured above
+  - All 5 scope files located and read; scripts/terraform_apply_guard.py read and confirmed to need no change (B1)
+  - AWS static-key chain verified (creds=ok); agent_platform + agent_platform_admin reachable for the V3 post-deploy steps
+  - Acceptance criteria understood and independently verifiable
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf: in the aws_iam_role_policy.github_ci_apply inline policy, convert the
+    AWS-service refresh-READ Sids to per-service read wildcards scoped to the existing ARNs --
+    LambdaRead -> lambda:Get*/lambda:List* (covers GetFunctionConcurrency / GetRuntimeManagementConfig
+    + all current reads) on the layer + function ARNs; EventBridgeRead -> events:Describe*/events:List*
+    on the 5 rule ARNs; CloudWatchAlarmsRead -> cloudwatch:Describe*/cloudwatch:List* (Resource:"*" as
+    today); CloudWatchLogsRead -> logs:Describe*/logs:List* (Resource:"*"); SSMParameterRead ->
+    ssm:Get*/ssm:Describe* on /agent-platform/* (DescribeParameters stays "*"); SNSRead ->
+    sns:Get*/sns:List* on the topic ARN + sns:GetSubscriptionAttributes on "*"; the SecretsManager read
+    Sids -> secretsmanager:Describe*/secretsmanager:Get* on the two secret ARNs. Leave WRITE Sids
+    (EventBridgeWrite, CloudWatchAlarmsWrite, LambdaPermissionWrite, SSMFeatureFlagsManage,
+    ConvergenceRecordWrite, IAMRoleReconcile, OIDCProviderReconcile) and the IAM read Sids
+    (IAMPlatformRolesRead) ENUMERATED + ARN-scoped. Run terraform fmt.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (c): in the "Deterministic apply guard" step, capture
+    the exit code (set +e; python ../../scripts/terraform_apply_guard.py plan.json; rc=$?; set -e);
+    when rc==2 write `blocked=true` to $GITHUB_OUTPUT and exit 2 (apply stays gated off via if:success);
+    when rc==1 exit 1 (fail-closed). In the "Write convergence record" step, add a branch: if
+    steps.guard.outputs.blocked == 'true' (alongside the existing REFUSED check) print a skip notice and
+    exit 0 WITHOUT the aws s3 cp -- the record is not overwritten. green only on apply success; red only
+    on a genuine non-blocked, non-refused failure.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml (d): replace the single `terraform init ...` command
+    in the "Terraform init (S3 backend, sandbox)" step with a bash retry loop (3 attempts, sleep 2/4/8s)
+    that re-runs init only when the captured output matches the transient registry-5xx signature
+    (502 | "Bad Gateway" | "could not query provider registry" | "failed after .* attempts"); a
+    non-transient init failure exits immediately. Add a comment pointing to scripts/validate.py as the
+    CANONICAL signature list (parity constraint).
+  - >-
+    scripts/validate.py: in run_terraform_creds_free(), replace the bare init invoke_step with a bounded
+    retry helper (3 attempts, exponential backoff) that runs `terraform -chdir=<root> init -backend=false
+    -input=false -no-color`, captures stdout+stderr, and retries ONLY on the transient-5xx signature;
+    non-transient failures append to `failed` immediately (fail fast). validate + fmt steps unchanged.
+    Define the signature set as a module-level constant (the CANONICAL list referenced by the workflow
+    comment). Keep lines <=127.
+  - >-
+    tests/test_validate.py: extend the terraform creds-free tests -- (a) init returns a 5xx-signature
+    failure twice then succeeds: assert 3 init run calls and `failed` stays empty; (b) init returns a
+    non-transient error: assert 1 init attempt and the step is appended to `failed`; (c) the existing
+    both-roots / skip tests still pass; (d) assert the canonical transient-5xx signature constant equals
+    the exact expected token set (parity anchor -- fails CI if the Python side drifts). Mock validate.run
+    to return per-attempt returncode/stderr; ensure 100% coverage of the new retry branch.
+  - >-
+    terraform/CLAUDE.md: replace the "Out-of-band IAM grants" round-by-round bullets (rec-2223 /
+    rec-2251 rounds) with a single note: github_ci_apply's AWS-service refresh-READ surface is now a
+    per-service read-wildcard closure (the iterative-discovery cycle is closed); WRITE actions remain
+    enumerated + ARN-scoped; the closure landed via a one-time human-gated agent_platform_admin apply.
+    Retain the PlatformDev / PlatformAdmin codification bullets.
+  - "Execute ALL pre-deploy Verification Plan steps (the validate/guard/retry checks, the branch-shape assertion, and the fail-closed self-test); loop until green BEFORE opening the PR."
+  - >-
+    Open a PR and squash-merge to main with a `Resolves: rec-2236, rec-2237, rec-2238, rec-2239,
+    rec-2254` trailer (rec-autoclose closes them). Expect the merge-push apply-sandbox run to guard-block
+    on the pending IAM diff but NOT latch red (VP step 8 proof of (c)).
+  - >-
+    Record auditable closure loci for the two recs closed away from their stated target file:
+    `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2237 --status closed --resolution
+    "Fixed at the true locus -- transient-5xx retry on terraform init in scripts/validate.py
+    (run_terraform_creds_free) + the apply-sandbox workflow -- not main.tf, which only holds the pin."`
+    and rec-2254 --resolution "Resolved by B1: one-time human-gated agent_platform_admin apply of the
+    IAM read-closure; the guard stays fail-closed per Decision 77 (no guard allowance)." (Skip if the
+    trailer already populated equivalent resolutions; VP10 verifies they are non-empty.)
+  - >-
+    Human-gated closure apply (B1): run the VP step-6 plan, present it (expect ONLY the github_ci_apply
+    policy update, NO trust/destroy diff), confirm guard_rc=2, then apply via agent_platform_admin.
+  - "Execute ALL post-deploy Verification Plan steps (closure apply, live simulate, record-stays-green, CD-plan convergence, rec closure); on an unrecoverable V3 failure STOP and RCA (Decision 55) -- do not loop or hand-patch."
+  - "Report: files changed, pre/post-deploy verification results, the closure-apply outcome, the live simulate result, the fail-closed self-test result, and the convergence-record status."
+work_areas: []
+rollback: >-
+  Config-only revert: restore the enumerated github_ci_apply read Sids in oidc.tf and re-apply via
+  agent_platform_admin; revert the workflow, validate.py, test, and CLAUDE.md commits. The convergence
+  record tracks apply OUTCOMES, not config, so a revert does not corrupt it; if a genuine red latch
+  occurs, clear it via `workflow_dispatch acknowledge_red_commit=<commit-or-rec-id>` after the revert
+  applies clean. No data migration, no Lambda redeploy.

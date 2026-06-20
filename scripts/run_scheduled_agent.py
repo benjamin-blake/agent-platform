@@ -1,15 +1,17 @@
-"""Scheduled agent dispatcher.
+"""Scheduled agent manifest tooling and Lambda trigger/smoke CLI.
 
-Reads .github/agents/schedule.yaml and dispatches agents based on their cron
-schedules. Writes session telemetry and any recommendations to the configured
-log backend (S3 or local).
+Reads .github/agents/schedule.yaml for manifest listing, cron evaluation,
+and dry-run validation. Live LOCAL inference was retired per CD.28 (the
+direct Bedrock path is gone): ``--agent NAME`` without ``--dry-run`` and
+``--due`` now fail loudly; run agents via the deployed dispatcher with
+``--trigger-lambda NAME`` instead. The LiteLLM dispatch rebuild lands with
+PLAN-resolve-scheduled-agent-provider.
 
 Usage
 -----
 python -m scripts.run_scheduled_agent --list
 python -m scripts.run_scheduled_agent --agent doc-freshness --dry-run
-python -m scripts.run_scheduled_agent --due
-python -m scripts.run_scheduled_agent --agent doc-freshness
+python -m scripts.run_scheduled_agent --trigger-lambda doc-freshness
 python -m scripts.run_scheduled_agent --smoke-test doc-freshness
 """
 
@@ -29,16 +31,10 @@ from typing import Any
 
 import yaml
 
-from scripts.bedrock_client import converse
-from scripts.s3_log_store import append_jsonl
-
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).parent.parent
 _MANIFEST_PATH = _REPO_ROOT / ".github" / "agents" / "schedule.yaml"
-_CURATOR_FINDINGS_KEY = ".rec-curator-findings.jsonl"
-OUTCOME_COMPLETED = "completed"
-OUTCOME_FAILED = "failed"
 
 # Optional model override (e.g. set in CI to force a specific model)
 _MODEL_OVERRIDE = os.getenv("SCHEDULED_AGENT_MODEL")
@@ -153,9 +149,15 @@ def parse_findings(output: str) -> list[dict[str, Any]]:
 
 
 def run_agent(agent: dict[str, Any], *, dry_run: bool = False) -> bool:
-    """Invoke Bedrock Converse API for *agent* and write output to the log backend.
+    """Validate *agent* and report on the retired local invocation path.
 
-    Returns True on success, False on any error.
+    The local direct-inference path invoked the Bedrock Converse API, which
+    was retired per CD.28 (T1.15 sweep). Live local invocation now fails
+    loudly; use ``--trigger-lambda NAME`` to run an agent via the deployed
+    dispatcher, or ``--dry-run`` to validate manifest entries. The dispatch
+    rebuild onto LiteLLM lands with PLAN-resolve-scheduled-agent-provider.
+
+    Returns True for the disabled-skip and dry-run paths, False otherwise.
     """
     name: str = agent["name"]
 
@@ -183,107 +185,13 @@ def run_agent(agent: dict[str, Any], *, dry_run: bool = False) -> bool:
         print(f"[dry-run] Prompt length: {len(prompt_text)} chars")
         return True
 
-    outcome = OUTCOME_FAILED
-    findings: list[dict[str, Any]] = []
-
-    from src.data.handlers.agent_telemetry import (
-        close_invocation as _close_invocation,
+    logger.error(
+        "Agent '%s': local direct invocation retired per CD.28 (Bedrock left the architecture). "
+        "Use --trigger-lambda %s to run via the deployed dispatcher, or --dry-run to validate.",
+        name,
+        name,
     )
-    from src.data.handlers.agent_telemetry import (
-        open_invocation as _open_invocation,
-    )
-    from src.data.handlers.agent_telemetry import (
-        record_model_call as _record_model_call,
-    )
-
-    _open_invocation(agent_name=name, trigger="manual", model=model, provider="bedrock")
-
-    try:
-        logger.info("Running agent '%s' with model=%s via Bedrock", name, model)
-        profile = os.environ.get("AWS_PROFILE_BEDROCK")
-        response = converse(
-            prompt=prompt_text,
-            model_id=model,
-            region="eu-west-2",
-            profile_name=profile,
-        )
-        if response.get("error"):
-            logger.error(
-                "Agent '%s' Bedrock inference failed: %s",
-                name,
-                response.get("message"),
-            )
-            _record_model_call(
-                provider="bedrock",
-                model=model,
-                purpose="findings",
-                error=response.get("message"),
-            )
-        else:
-            output_text = response.get("content", "")
-            findings = parse_findings(output_text)
-            outcome = OUTCOME_COMPLETED
-            _record_model_call(
-                provider="bedrock",
-                model=model,
-                purpose="findings",
-            )
-            logger.info("Agent '%s' completed: %d finding(s)", name, len(findings))
-
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Agent '%s' failed: %s", name, exc)
-        outcome = OUTCOME_FAILED
-
-    end_time = datetime.now(timezone.utc).isoformat()
-
-    # Write each finding as a recommendation entry
-    rec_findings: list[dict] = []
-    for finding in findings:
-        finding.setdefault("agent", name)
-        finding.setdefault("timestamp", end_time)
-        if name == "rec-curator" and not os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
-            append_jsonl(_CURATOR_FINDINGS_KEY, finding)
-        else:
-            rec_findings.append(finding)
-
-    if rec_findings:
-        import tempfile as _tempfile  # noqa: PLC0415
-
-        from scripts.ops_data_portal import enqueue_findings  # noqa: PLC0415
-
-        _fd, _tmp_str = _tempfile.mkstemp(suffix=".jsonl")
-        _tmp = Path(_tmp_str)
-        try:
-            import os as _os  # noqa: PLC0415
-
-            _os.close(_fd)
-            _tmp.write_text(
-                "\n".join(json.dumps(f) for f in rec_findings) + "\n",
-                encoding="utf-8",
-            )
-            _result = enqueue_findings(_tmp)
-            logger.info(
-                "Agent '%s': enqueued %d findings (invalid: %d, skipped: %d)",
-                name,
-                _result["enqueued"],
-                _result["invalid"],
-                _result["skipped"],
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Agent '%s': enqueue_findings failed: %s", name, exc)
-        finally:
-            _tmp.unlink(missing_ok=True)
-
-    # Write session telemetry via agent_telemetry (replaces legacy write_session_envelope)
-    try:
-        _close_invocation(
-            outcome="success" if outcome == OUTCOME_COMPLETED else "failed",
-            findings_count=len(findings),
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to write agent telemetry: %s", exc)
-
-    return outcome == OUTCOME_COMPLETED
+    return False
 
 
 # ---------------------------------------------------------------------------

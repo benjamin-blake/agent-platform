@@ -7,7 +7,7 @@ Outputs JSON to logs/.preflight-report.json for use by plan.prompt.md.
 Exits 1 on critical failure (wrong venv), 0 otherwise.
 
 Usage:
-    python scripts/session_preflight.py
+    bin/venv-python -m scripts.session_preflight
 """
 
 from __future__ import annotations
@@ -18,16 +18,19 @@ import os
 import re
 import subprocess
 import sys
-import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from scripts import platform_roadmap
 from scripts import product_roadmap as product_roadmap_module
 from scripts.aws_profile import resolve_aws_profile
 from scripts.s3_log_store import get_backend, read_jsonl
-from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull
-from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader
+from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull  # noqa: F401  (kept for back-compat test patch targets)
+from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader  # noqa: F401  (kept for back-compat refs)
+from src.common.iceberg_reader import make_reader as _make_reader
 
 ROOT = Path(__file__).resolve().parent.parent
 PREFLIGHT_REPORT = ROOT / "logs" / ".preflight-report.json"
@@ -44,10 +47,6 @@ PRIORITY_QUEUE_FILE = ROOT / "logs" / "priority-queue" / ".priority-queue.jsonl"
 
 TELEMETRY_ACTIVE_SESSION_FILE = ROOT / "logs" / ".telemetry-active-session.json"
 
-_ATHENA_DATABASE = "agent_platform"
-_ATHENA_WORKGROUP = "agent-platform-production"
-_ATHENA_OUTPUT_LOCATION = "s3://agent-platform-data-lake/athena-results/"
-_ATHENA_POLL_TIMEOUT_SECONDS = 10
 _NON_AUTOMATABLE_SOFTCAP = 250
 
 
@@ -285,6 +284,28 @@ def check_credentials() -> str:
         return "unavailable"
 
 
+def _prime_reader_url(creds_status: str) -> None:
+    """Resolve the DuckLake reader URL once and cache it in DUCKLAKE_READER_URL.
+
+    Subsequent _make_reader() calls find the env override and skip SSM
+    (Decision 79 first-priority resolution). Non-fatal on failure: if URL
+    resolution raises, the env var stays unset and each reader falls through
+    to its own SSM resolution as before.
+    """
+    if creds_status != "ok":
+        return
+    if os.environ.get("DUCKLAKE_READER_URL"):
+        return  # already primed (CI override or earlier call)
+    try:
+        url = _make_reader()._reader_url()  # type: ignore[union-attr]
+        if isinstance(url, str) and url:
+            os.environ["DUCKLAKE_READER_URL"] = url
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log  # noqa: PLC0415
+
+        _log.getLogger(__name__).warning("session_preflight._prime_reader_url: URL resolution failed: %s", exc)
+
+
 def _handle_credentials_startup(creds_status: str) -> str:
     """Report credential health at preflight startup -- non-fatal (Decision 60).
 
@@ -302,7 +323,8 @@ def _handle_credentials_startup(creds_status: str) -> str:
             f"       Verify the chain: aws sts get-caller-identity --profile {profile}\n"
             "       There is no interactive login to recover; if the agent_static\n"
             "       key was rotated, refresh ~/.aws/credentials. Continuing in DEGRADED mode:\n"
-            "       Athena-backed reads fall back to the local cache or empty results.",
+            "       warehouse reads (DuckLake reader for recs; Iceberg/Athena for deferred tables)\n"
+            "       fall back to the local cache or empty results.",
             file=sys.stderr,
         )
     return creds_status
@@ -317,152 +339,173 @@ def parse_last_session() -> str:
     return matches[-1] if matches else ""
 
 
-def _run_athena_query(sql: str) -> list[dict] | None:
-    """Execute *sql* against the Athena ops views and return rows as dicts.
+# ---------------------------------------------------------------------------
+# Cache-serving derivations (neon-egress-reduction D4).
+#
+# The Phase-A warm-up sync (sync_ops.warm_sync) pulls ops_recommendations / ops_decisions /
+# ops_priority_queue ONCE and returns the rows in-memory. Each Phase-B signal is then DERIVED from
+# those rows here -- a client-side re-expression of the corresponding ducklake_reader named verb --
+# so Phase B issues ZERO additional reader calls (was ~6-9). The derivations are kept equivalent to
+# the canonical verb SQL (src.common.ducklake_scd2_schema.NAMED_READS) by the VP-step-1 equivalence
+# test, which runs each verb's SQL over a fixture in-process and asserts it equals the derivation.
+#
+# Boundary note (Decision 84 I-3): this reads LOCAL rows only; it never issues caller SQL across the
+# reader boundary. The rows themselves came from the warm-up sync's named-verb / current_state pulls.
+# ---------------------------------------------------------------------------
 
-    Returns ``None`` on any failure (timeout, unavailable credentials, missing
-    CLI) so callers can fall back to local file reads.  Each row is a dict keyed
-    by column name with string values (Athena ``get-query-results`` returns
-    everything as VarChar).
-    """
-    profile = resolve_aws_profile()
-    profile_args = ["--profile", profile] if profile else []
-    cmd_start = [
-        "aws",
-        "athena",
-        "start-query-execution",
-        "--query-string",
-        sql,
-        "--work-group",
-        _ATHENA_WORKGROUP,
-        "--query-execution-context",
-        f"Database={_ATHENA_DATABASE}",
-        "--result-configuration",
-        f"OutputLocation={_ATHENA_OUTPUT_LOCATION}",
-        *profile_args,
-        "--output",
-        "text",
-        "--query",
-        "QueryExecutionId",
-    ]
-    try:
-        result = subprocess.run(
-            cmd_start,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-        execution_id = result.stdout.strip()
-    except (subprocess.TimeoutExpired, OSError):
+# Sentinel default distinguishing "no cache rows supplied -> use the reader (back-compat / tests)"
+# from "cache rows supplied but None -> reader pull failed -> degrade" (a real None is meaningful).
+_READER_SENTINEL: object = object()
+
+
+def _row_ts(row: dict, field: str = "created_timestamp") -> datetime | None:
+    """Parse a row timestamp field (ISO string or datetime) into a UTC-aware datetime, or None."""
+    val = row.get(field)
+    if val is None or val == "":
         return None
-
-    # Poll for completion (up to ~30 s)
-    for _ in range(15):
-        time.sleep(2)
-        cmd_status = [
-            "aws",
-            "athena",
-            "get-query-execution",
-            "--query-execution-id",
-            execution_id,
-            *profile_args,
-            "--output",
-            "text",
-            "--query",
-            "QueryExecution.Status.State",
-        ]
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if hasattr(val, "isoformat"):  # date / other temporal
         try:
-            sr = subprocess.run(
-                cmd_status,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-            state = sr.stdout.strip()
-        except (subprocess.TimeoutExpired, OSError):
-            continue
-        if state == "SUCCEEDED":
-            break
-        if state in ("FAILED", "CANCELLED"):
+            return datetime.fromisoformat(val.isoformat()).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
             return None
-    else:
-        return None
+    return _parse_ts_utc(str(val))
 
-    # Fetch results as JSON
-    cmd_results = [
-        "aws",
-        "athena",
-        "get-query-results",
-        "--query-execution-id",
-        execution_id,
-        *profile_args,
-        "--output",
-        "json",
+
+def _derive_open_recs(rows: list[dict]) -> list[dict]:
+    """Client-side `open_recs` verb: open rows projected to the tally columns, ordered by id."""
+    open_rows = [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "context": r.get("context", ""),
+            "created_timestamp": r.get("created_timestamp"),
+            "automatable": r.get("automatable"),
+        }
+        for r in rows
+        if r.get("status") == "open"
     ]
-    try:
-        rr = subprocess.run(
-            cmd_results,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-        if rr.returncode != 0:
-            return None
-        payload = json.loads(rr.stdout)
-    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
-        return None
+    return sorted(open_rows, key=lambda r: r.get("id") or "")
 
-    rows_raw = payload.get("ResultSet", {}).get("Rows", [])
-    if len(rows_raw) < 2:
+
+def _derive_ci_rca_open(rows: list[dict]) -> list[dict]:
+    """Client-side `ci_rca_open` verb: open/in-progress ci_rca recs, newest first, capped at 5."""
+    matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") in ("open", "in_progress")]
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "priority": r.get("priority", ""),
+            "created_timestamp": r.get("created_timestamp"),
+            "file": r.get("file", ""),
+        }
+        for r in matched[:5]
+    ]
+
+
+def _derive_ci_rca_closed(rows: list[dict]) -> list[dict]:
+    """Client-side derive: closed ci_rca recs projected to the sibling-cluster fields."""
+    matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") == "closed"]
+    return [
+        {
+            "id": r.get("id", ""),
+            "file": r.get("file", ""),
+            "title": r.get("title", ""),
+            "last_updated_timestamp": r.get("last_updated_timestamp"),
+        }
+        for r in matched
+    ]
+
+
+def _derive_ci_rca_since(rows: list[dict], since_ts: str) -> list[dict]:
+    """Client-side `ci_rca_since` verb: ci_rca rec ids created strictly after *since_ts*."""
+    cutoff = _parse_ts_utc(since_ts)
+    if cutoff is None:
         return []
+    out: list[dict] = []
+    for r in rows:
+        if r.get("source") != "ci_rca":
+            continue
+        ts = _row_ts(r)
+        if ts is not None and ts > cutoff:
+            out.append({"id": r.get("id", "")})
+    return out
 
-    # First row is the header
-    headers = [col.get("VarCharValue", "") for col in rows_raw[0].get("Data", [])]
-    results: list[dict] = []
-    for row in rows_raw[1:]:
-        values = [col.get("VarCharValue", "") for col in row.get("Data", [])]
-        results.append(dict(zip(headers, values)))
-    return results
+
+def _derive_forward_fix_recursion(rows: list[dict], since_ts: str) -> list[dict]:
+    """Client-side `forward_fix_recursion` verb: files with >=3 ci_rca recs since *since_ts*."""
+    cutoff = _parse_ts_utc(since_ts)
+    if cutoff is None:
+        return []
+    counts: dict[str, int] = {}
+    for r in rows:
+        if r.get("source") != "ci_rca":
+            continue
+        ts = _row_ts(r)
+        if ts is None or ts <= cutoff:
+            continue
+        counts[r.get("file") or ""] = counts.get(r.get("file") or "", 0) + 1
+    return [{"file": f, "cnt": c} for f, c in counts.items() if c >= 3]
 
 
-def _count_recommendations_athena() -> tuple[int, int, int, list[dict]] | None:
-    """Return open recommendation counts from the warehouse.
+def _derive_budget_bypass_recent(rows: list[dict], *, now: datetime | None = None) -> list[dict]:
+    """Client-side `budget_bypass_recent` verb: budget_bypass recs in the last 7 days, newest first, <=10."""
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=7)
+    matched = []
+    for r in rows:
+        if r.get("source") != "budget_bypass":
+            continue
+        ts = _row_ts(r)
+        if ts is not None and ts > cutoff:
+            matched.append(r)
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {"id": r.get("id", ""), "context": r.get("context", ""), "created_timestamp": r.get("created_timestamp")}
+        for r in matched[:10]
+    ]
 
-    Tries DuckDBIcebergReader first (with predicate + projection pushdown),
-    falls back to the Athena CLI on reader failure.
 
-    Returns ``None`` if both paths fail, allowing the caller to fall back to
-    the local JSONL file (graceful degradation, T2.5 exit criterion).
+def _derive_decisions_max_updated(rows: list[dict]) -> list[dict]:
+    """Client-side `decisions_max_updated` verb: [{ts: max(last_updated_timestamp)}] (mirrors the verb row)."""
+    stamps = [_row_ts(r, "last_updated_timestamp") for r in rows]
+    stamps = [s for s in stamps if s is not None]
+    if not stamps:
+        return [{"ts": None}]
+    newest = max(stamps)
+    # Echo the original string form when present (the verb returns the stored value, not a re-format).
+    for r in rows:
+        if _row_ts(r, "last_updated_timestamp") == newest:
+            return [{"ts": r.get("last_updated_timestamp")}]
+    return [{"ts": newest.isoformat()}]
+
+
+def _count_recommendations_reader(cache_rows: object = _READER_SENTINEL) -> tuple[int, int, int, list[dict]] | str:
+    """Return open recommendation counts -- from the warm-pulled cache rows, else the DuckLake reader.
+
+    cache_rows (neon-egress-reduction D4): when supplied, the count is DERIVED from the warm-up sync's
+    already-pulled rows (zero reader call). A supplied None means the warm-up recs pull FAILED ->
+    "reader_unreachable" (Decision 55: loud degraded signal, never a false zero). When omitted
+    (sentinel) the function falls back to its own reader call -- the back-compat path for standalone
+    callers and tests.
+
+    Returns the tally tuple on success, or the string "reader_unreachable" on reader failure.
     """
-    # -- DuckDB reader path --
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return "reader_unreachable"
+        return _tally_rec_counts(_derive_open_recs(cache_rows), source="cache")  # type: ignore[arg-type]
+
     try:
-        reader = _DuckDBIcebergReader()
-        rows = reader.current_state(
-            "ops_recommendations",
-            row_filter="status = 'open'",
-            selected_fields=("id", "title", "context", "created_timestamp", "automatable"),
-        )
-        if rows is not None:
-            return _tally_rec_counts(rows, source="reader")
+        rows = _make_reader().named("open_recs")
+        return _tally_rec_counts(rows, source="reader")
     except Exception as exc:  # noqa: BLE001
         import logging as _log  # noqa: PLC0415
 
-        _log.getLogger(__name__).warning("session_preflight._count_recommendations_athena: reader failed: %s", exc)
+        _log.getLogger(__name__).warning("session_preflight._count_recommendations_reader: reader unreachable: %s", exc)
 
-    # -- Athena fallback --
-    sql = "SELECT id, title, context, created_timestamp, automatable FROM ops_recommendations_current WHERE status = 'open'"
-    rows_raw = _run_athena_query(sql)
-    if rows_raw is None:
-        return None
-    return _tally_rec_counts(rows_raw, source="athena")
+    return "reader_unreachable"
 
 
 def _tally_rec_counts(
@@ -493,7 +536,8 @@ def _tally_rec_counts(
                     aging_count += 1
             except (ValueError, AttributeError, TypeError):
                 pass
-        # Athena returns booleans as strings "true"/"false"; reader returns Python bool or string
+        # Reader rows carry native Python bools; rows migrated from the legacy Athena path may
+        # still serialise booleans as the strings "true"/"false" -- normalise both forms.
         raw_auto = entry.get("automatable", True)
         if isinstance(raw_auto, bool):
             automatable = raw_auto
@@ -517,15 +561,28 @@ def _tally_rec_counts(
 def count_recommendations() -> tuple[int, int, int, list[dict]]:
     """Count open, aging (>30 days), and non-automatable recommendations.
 
-    Tries the ops_recommendations_current Athena view first when credentials are
-    available.  Falls back to the local JSONL file if the query fails.
-    """
-    # Try Athena view first (authoritative source per Decision 50)
-    athena_result = _count_recommendations_athena()
-    if athena_result is not None:
-        print("  (recommendations sourced from Athena ops_recommendations_current view)")
-        return athena_result
+    Reads from the DuckLake reader first (Decision 81 cl.7 / T2.19 cutover); there is
+    no Athena fallback. On reader failure, emits a LOUD reader_unreachable warning
+    (Decision 55: never a silent false zero) and degrades to counting from the local
+    read cache (S3 backend or logs/.recommendations-log.jsonl), which may be stale.
 
+    Note: main() does not call this function -- it calls _count_recommendations_reader()
+    directly and reports the sentinel (0,0,0,[]) plus recs_read_status=reader_unreachable
+    on failure. This cache-counting fallback is retained for non-main consumers.
+    """
+    result = _count_recommendations_reader()
+    if result != "reader_unreachable":
+        print("  (recommendations sourced from DuckLake reader)")
+        return result  # type: ignore[return-value]
+
+    print(
+        "[WARN] session_preflight: recs reader unreachable -- recs counts are DEGRADED "
+        "(recs_read_status=reader_unreachable). Run `aws sts get-caller-identity --profile "
+        "agent_platform` to verify credentials. The ops loop is impaired until the reader "
+        "is reachable.",
+        file=sys.stderr,
+    )
+    # Return sentinel -- callers must check recs_read_status in the report
     open_count = 0
     aging_count = 0
     non_auto_count = 0
@@ -575,9 +632,20 @@ def count_recommendations() -> tuple[int, int, int, list[dict]]:
 
 
 def _shape_priority_queue_rows(rows: list[dict], max_items: int) -> list[dict]:
-    """Normalise raw rows into the {rank, rec_id, rationale, north_star_impact} shape."""
+    """Normalise rows into the {rank, rec_id, rationale, north_star_impact} shape, rank-sorted.
+
+    Sort BEFORE slicing: with more rows than max_items, slice-then-sort presented an arbitrary
+    subset as the top N (unparseable ranks sort last).
+    """
+
+    def _rank_key(row: dict) -> tuple:
+        try:
+            return (False, int(row.get("rank", 0)))
+        except (ValueError, TypeError):
+            return (True, 0)
+
     result = []
-    for row in rows[:max_items]:
+    for row in sorted(rows, key=_rank_key)[:max_items]:
         try:
             rank = int(row.get("rank", 0))
         except (ValueError, TypeError):
@@ -627,54 +695,54 @@ def _read_priority_queue_cache(max_items: int) -> list[dict]:
     return _shape_priority_queue_rows(rows, max_items)
 
 
-def read_priority_queue(max_items: int = 5, creds_status: str = "ok") -> list[dict]:
-    """Read the priority queue from the warehouse (DuckDB reader, Athena fallback).
+def read_priority_queue(max_items: int = 5, creds_status: str = "ok", cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Read the priority queue via the priority_queue_current read verb (DuckLake reader).
 
-    Decision 70: priority queue uses the correlated-subquery current-state pattern
-    (all entries from the latest curator run); DuckDBIcebergReader handles this
-    internally.
+    Decision 70: the verb's correlated subquery returns ALL entries of the latest
+    curator run -- the generic latest-per-key current projection would silently
+    change these semantics.
+
+    cache_rows (neon-egress-reduction D4): when supplied, the queue is served from the warm-up
+    sync's already-pulled priority_queue_current rows (zero reader call) -- the local cache IS that
+    verb's output, so no re-derivation is needed, only shaping. A supplied None means the warm-up
+    pull FAILED: degrade to the local read-cache with a staleness warning (the warm-up sync already
+    surfaced the reader failure loudly; preflight completes in degraded mode, Decision 60). When
+    omitted (sentinel) the function uses the reader directly -- the back-compat path below.
 
     When *creds_status* is not "ok" credentials are unavailable: fall back to the
     local read-cache with a staleness warning (empty-with-warning when absent; never
     crash -- T2.5 graceful-degradation requirement).
 
-    When credentials ARE "ok" but both reader and Athena return None, that is a
-    genuine infrastructure fault -- hard-exit with code 1 rather than masking it
-    (Decision 60: source of truth; never silently weaken a gate).
+    When credentials ARE "ok" and the verb fails, that is a genuine infrastructure
+    fault -- hard-exit with code 1 rather than masking it (Decision 60).
 
     Returns a list of dicts shaped as {rank, rec_id, rationale, north_star_impact}.
     Returns [] if the queue is empty.
     """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return _read_priority_queue_cache(max_items)
+        shaped = _shape_priority_queue_rows(cache_rows, max_items)  # type: ignore[arg-type]
+        shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
+        return shaped
+
     if creds_status != "ok":
         return _read_priority_queue_cache(max_items)
 
-    # -- DuckDB reader path (Decision 70: correlated subquery applied internally) --
+    # Decision 70 semantics (all entries of the LATEST curator run) are preserved inside the
+    # priority_queue_current verb's correlated subquery -- not by the generic current projection.
     try:
-        reader = _DuckDBIcebergReader()
-        reader_rows = reader.current_state("ops_priority_queue")
-        if reader_rows is not None:
-            shaped = _shape_priority_queue_rows(reader_rows, max_items)
-            shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
-            return shaped
+        reader_rows = _make_reader(table="ops_priority_queue").named("priority_queue_current")
+        shaped = _shape_priority_queue_rows(reader_rows, max_items)
+        shaped.sort(key=lambda r: (r.get("rank") is None, r.get("rank", 0)))
+        return shaped
     except Exception as exc:  # noqa: BLE001
-        import logging as _log  # noqa: PLC0415
-
-        _log.getLogger(__name__).warning("session_preflight.read_priority_queue: reader failed: %s", exc)
-
-    # -- Athena fallback --
-    rows = _run_athena_query(
-        "SELECT rec_id, rank, rationale, north_star_impact "
-        f"FROM {_ATHENA_DATABASE}.ops_priority_queue_current "
-        "ORDER BY CAST(rank AS INTEGER)"
-    )
-    if rows is None:
         print(
-            "[ERROR] ops_priority_queue_current query failed -- infrastructure problem, not masking with fallback",
+            f"[ERROR] priority_queue_current verb failed ({exc}) -- infrastructure problem, "
+            "not masking with fallback (Decision 60)",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    return _shape_priority_queue_rows(rows, max_items)
 
 
 def print_priority_queue(items: list[dict]) -> None:
@@ -692,34 +760,29 @@ def print_priority_queue(items: list[dict]) -> None:
     print()
 
 
-def _fetch_ci_rca_recs() -> list[dict]:
-    """Return up to 5 open CI-RCA recs from the warehouse. Returns [] on any failure."""
-    sql = (
-        "SELECT id, title, priority, created_timestamp "
-        "FROM {tbl} "
-        "WHERE source = ? AND status IN (?, ?) "
-        "ORDER BY created_timestamp DESC LIMIT 5"
-    )
-    try:
-        reader = _DuckDBIcebergReader()
-        rows = reader.query("ops_recommendations", sql, params=("ci_rca", "open", "in_progress"))
-        if rows is not None:
-            return rows
-    except Exception:  # noqa: BLE001
-        pass
+def _fetch_ci_rca_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return up to 5 open CI-RCA recs -- from the warm-pulled cache rows, else the DuckLake reader.
 
-    # Athena fallback
-    athena_sql = (
-        "SELECT id, title, priority, created_timestamp "
-        "FROM ops_recommendations_current "
-        "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
-        "ORDER BY created_timestamp DESC LIMIT 5"
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via _derive_ci_rca_open
+    (zero reader call); a supplied None means the warm-up pull failed -> [] (degraded). Omitted
+    (sentinel) -> reader path (back-compat / tests). Returns [] with a loud warning on reader failure
+    (Decision 55 / Decision 81 cl.7: no Athena fallback; loud degraded signal).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_open(cache_rows)  # type: ignore[arg-type]
+
+    _reader_exc: Exception | None = None
+    try:
+        return _make_reader().named("ci_rca_open")
+    except Exception as exc:  # noqa: BLE001
+        _reader_exc = exc
+
+    print(
+        f"[WARN] preflight: ci_rca recs reader unreachable ({_reader_exc}) -- CI RCA Recs "
+        "section degraded (recs_read_status=reader_unreachable). No Athena fallback (Decision 81 cl.7).",
+        file=sys.stderr,
     )
-    rows_raw = _run_athena_query(athena_sql)
-    if rows_raw is None:
-        print("[WARNING] preflight: ci_rca query failed -- CI RCA Recs section may be incomplete", file=sys.stderr)
-        return []
-    return rows_raw
+    return []
 
 
 def _check_non_automatable_softcap(non_auto_count: int) -> bool:
@@ -727,33 +790,31 @@ def _check_non_automatable_softcap(non_auto_count: int) -> bool:
     return non_auto_count > _NON_AUTOMATABLE_SOFTCAP
 
 
-def _fetch_ci_rca_recs_since(ts: str) -> list[dict]:
-    """Return ci_rca recs created after *ts*. Returns [] on any failure."""
+def _fetch_ci_rca_recs_since(ts: str, cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return ci_rca recs created after *ts* -- from the warm-pulled cache rows, else the DuckLake reader.
+
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via _derive_ci_rca_since
+    (zero reader call); a supplied None -> []. Omitted (sentinel) -> reader path (back-compat).
+    Returns [] on any failure (Decision 81 cl.7: no Athena fallback).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_since(cache_rows, ts)  # type: ignore[arg-type]
     try:
-        reader = _DuckDBIcebergReader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT id FROM {tbl} WHERE source = ? AND created_timestamp > ?",
-            params=("ci_rca", ts),
-        )
-        if rows is not None:
-            return rows
+        return _make_reader().named("ci_rca_since", since_ts=ts)
     except Exception:  # noqa: BLE001
         pass
-
-    # Athena fallback
-    sql = f"SELECT id FROM ops_recommendations_current WHERE source = 'ci_rca' AND created_timestamp > '{ts}'"
-    rows_raw = _run_athena_query(sql)
-    if rows_raw is None:
-        return []
-    return rows_raw
+    return []
 
 
-def _check_ci_rca_liveness(creds_status: str) -> dict | None:
+def _check_ci_rca_liveness(creds_status: str, cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when main CI has been red with no ci-rca rec for >30 min.
 
     Calls `gh run list` to determine the latest push-to-main ci.yml result.
     Returns None when credentials are unavailable, gh call fails, or conditions are not met.
+
+    cache_rows (neon-egress-reduction D4) is threaded to _fetch_ci_rca_recs_since so the "any ci_rca
+    rec since the red run?" check is served from the warm-pulled rows (zero reader call). The gh CLI
+    call is unaffected (it is the CI-status source, not a warehouse read).
     """
     if creds_status != "ok":
         return None
@@ -806,51 +867,35 @@ def _check_ci_rca_liveness(creds_status: str) -> dict | None:
     if elapsed_minutes <= 30:
         return None
 
-    if _fetch_ci_rca_recs_since(created_at):
+    if _fetch_ci_rca_recs_since(created_at, cache_rows=cache_rows):
         return None
 
     return {"run_url": run.get("url", ""), "elapsed_minutes": round(elapsed_minutes, 1)}
 
 
-def _check_forward_fix_recursion() -> dict | None:
+def _check_forward_fix_recursion(cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when >=3 ci-rca recs targeting the same file appear in the last 24h.
 
-    Returns None when no recursion is detected or the warehouse is unreachable.
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_forward_fix_recursion (zero reader call); a supplied None -> degrade to None. Omitted
+    (sentinel) -> reader path. Returns None when no recursion is detected or the warehouse is
+    unreachable.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
 
-    try:
-        reader = _DuckDBIcebergReader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT file, COUNT(*) AS cnt FROM {tbl} "
-            "WHERE source = ? AND created_timestamp > ? "
-            "GROUP BY file HAVING COUNT(*) >= 3",
-            params=("ci_rca", cutoff),
-        )
-        if rows is not None:
-            if not rows:
-                return None
-            first = rows[0]
-            try:
-                count = int(first.get("cnt", 3))
-            except (ValueError, TypeError):
-                count = 3
-            return {"file": first.get("file", ""), "count": count, "threshold": 3}
-    except Exception:  # noqa: BLE001
-        pass
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_forward_fix_recursion(cache_rows, cutoff)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader().named("forward_fix_recursion", since_ts=cutoff)
+        except Exception:  # noqa: BLE001
+            return None
 
-    # Athena fallback
-    athena_sql = (
-        "SELECT file, COUNT(*) AS cnt "
-        "FROM ops_recommendations_current "
-        f"WHERE source = 'ci_rca' AND created_timestamp > '{cutoff}' "
-        "GROUP BY file HAVING COUNT(*) >= 3"
-    )
-    rows_raw = _run_athena_query(athena_sql)
-    if not rows_raw:
+    if not rows:
         return None
-    first = rows_raw[0]
+    first = rows[0]
     try:
         count = int(first.get("cnt", 3))
     except (ValueError, TypeError):
@@ -858,56 +903,258 @@ def _check_forward_fix_recursion() -> dict | None:
     return {"file": first.get("file", ""), "count": count, "threshold": 3}
 
 
-def _check_budget_bypass_alert() -> dict | None:
+def _check_budget_bypass_alert(cache_rows: object = _READER_SENTINEL) -> dict | None:
     """Return alert dict when >= 3 budget_bypass recs were filed in the last 7 days.
 
-    Returns None when count < 3 or the warehouse is unreachable.
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_budget_bypass_recent (zero reader call); a supplied None -> degrade to None. Omitted
+    (sentinel) -> reader path. Returns None when count < 3 or the warehouse is unreachable.
+    """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_budget_bypass_recent(cache_rows)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader().named("budget_bypass_recent")
+        except Exception:  # noqa: BLE001
+            return None
+
+    if rows is None or len(rows) < 3:
+        return None
+    return {"count": len(rows), "entries": rows}
+
+
+def _parse_ts_utc(ts: str) -> datetime | None:
+    """Parse an ISO-like timestamp string into a UTC-aware datetime, or None on failure."""
+    ts = ts.strip()
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(ts, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
+def _get_recent_main_commits(n: int = 5) -> list[dict]:
+    """Return the last *n* commits on origin/main as structured dicts.
+
+    Each dict has keys: sha, date (ISO), subject, files (list of changed paths).
+    Returns [] on subprocess failure or when origin/main is unreachable.
+    Does NOT call git fetch -- relies on origin/main already being fresh from
+    check_main_freshness().
     """
     try:
-        reader = _DuckDBIcebergReader()
-        rows = reader.query(
-            "ops_recommendations",
-            "SELECT id, context, created_timestamp FROM {tbl} WHERE source = ? "
-            "AND created_timestamp > (current_timestamp - INTERVAL 7 DAY) "
-            "ORDER BY created_timestamp DESC LIMIT 10",
-            params=("budget_bypass",),
+        result = subprocess.run(
+            [
+                "git",
+                "log",
+                "origin/main",
+                f"-n{n * 3 + 5}",
+                "--format=COMMIT:%H|%aI|%s",
+                "--name-only",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            cwd=ROOT,
         )
-        if rows is not None:
-            if len(rows) < 3:
-                return None
-            return {"count": len(rows), "entries": rows}
-    except Exception:  # noqa: BLE001
-        pass
+    except (subprocess.TimeoutExpired, OSError):
+        return []
 
-    # Athena fallback
-    try:
-        athena_sql = (
-            "SELECT id, context, created_timestamp "
-            "FROM ops_recommendations_current "
-            "WHERE source = 'budget_bypass' "
-            "AND created_timestamp > (current_timestamp - INTERVAL '7' DAY) "
-            "ORDER BY created_timestamp DESC "
-            "LIMIT 10"
-        )
-        rows_raw = _run_athena_query(athena_sql)
-        if rows_raw is None:
-            return None
-        if len(rows_raw) < 3:
-            return None
-        return {"count": len(rows_raw), "entries": rows_raw}
-    except Exception:  # noqa: BLE001
-        import logging as _logging  # noqa: PLC0415
+    if result.returncode != 0:
+        return []
 
-        _logging.getLogger(__name__).warning("_check_budget_bypass_alert: query failed; degrading to None")
-        return None
+    commits: list[dict] = []
+    current: dict | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("COMMIT:"):
+            if current is not None and len(commits) < n:
+                commits.append(current)
+            parts = line[7:].split("|", 2)
+            current = {
+                "sha": parts[0] if len(parts) > 0 else "",
+                "date": parts[1] if len(parts) > 1 else "",
+                "subject": parts[2] if len(parts) > 2 else "",
+                "files": [],
+            }
+        elif line.strip() and current is not None:
+            current["files"].append(line.strip())
+    if current is not None and len(commits) < n:
+        commits.append(current)
+    return commits
 
 
-def print_ci_rca_recs(recs: list[dict]) -> None:
-    """Print the CI RCA Recs section to terminal."""
+_CI_TITLE_STOPWORDS: frozenset[str] = frozenset({"ci", "failure", "failed", "error", "lint", "test", "fix", "rca"})
+
+
+def _title_jaccard(title_a: str, title_b: str) -> float:
+    """Lowercased alphanumeric-token Jaccard between two titles, with common CI stopwords removed."""
+
+    def _tokens(s: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", s.lower()) if t not in _CI_TITLE_STOPWORDS}
+
+    set_a = _tokens(title_a)
+    set_b = _tokens(title_b)
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / len(union)
+
+
+def _file_paths_correlate(rec_file: str, changed: str) -> bool:
+    """Return True when rec_file and changed refer to the same repository file.
+
+    Matches on exact equality or a trailing path-component suffix match: split
+    both on "/" and compare the last N components (N = min of the two lengths).
+    A bare basename rec file therefore matches any changed path that ends with
+    that basename, but a substring that crosses a component boundary does not.
+    """
+    if rec_file == changed:
+        return True
+    parts_rec = rec_file.split("/")
+    parts_changed = changed.split("/")
+    n = min(len(parts_rec), len(parts_changed))
+    return parts_rec[-n:] == parts_changed[-n:]
+
+
+def correlate_ci_rca_with_main(
+    recs: list[dict],
+    commits: list[dict],
+    closed_ci_rca_recs: list[dict] | None = None,
+) -> dict[str, list[dict]]:
+    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+
+    A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
+    AFTER the rec's created_timestamp either:
+      - modified the rec's ``file`` field (path-suffix / basename match), or
+      - mentions the rec's ``id`` in its subject line.
+
+    When ``closed_ci_rca_recs`` is provided (cache path only), a rec that is
+    still uncorrelated after the commit loop is also classified LIKELY-RESOLVED
+    when a closed ci_rca sibling on the same file has a sufficiently similar
+    title and was closed at/after this rec's creation (window-independent
+    closed-sibling cluster signal). The matched sibling id is recorded on the
+    rec as ``_resolved_reason`` for the operator's verify-and-close prompt.
+
+    Recs whose file/id cannot be correlated by either signal retain the HARD
+    BLOCK designation (UNRESOLVED).
+
+    Args:
+        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
+        commits:           Recent main commits from _get_recent_main_commits().
+        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path),
+                           or None to skip cluster detection.
+
+    Returns:
+        Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
+    """
+    if not recs:
+        return {"likely_resolved": [], "unresolved": []}
+
+    likely_resolved: list[dict] = []
+    unresolved: list[dict] = []
+
+    for rec in recs:
+        rec_id = (rec.get("id") or "").lower()
+        rec_file = (rec.get("file") or "").strip()
+        rec_created_dt = _parse_ts_utc(rec.get("created_timestamp") or "")
+
+        correlated = False
+        for commit in commits:
+            commit_dt = _parse_ts_utc(commit.get("date") or "")
+
+            # Only consider commits that landed AFTER the rec was created.
+            if rec_created_dt is not None and commit_dt is not None:
+                if commit_dt <= rec_created_dt:
+                    continue
+
+            # Check subject for explicit rec id mention.
+            subject_lower = (commit.get("subject") or "").lower()
+            if rec_id and rec_id in subject_lower:
+                correlated = True
+                break
+
+            # Check changed files for the rec's source file.
+            if rec_file:
+                for changed in commit.get("files") or []:
+                    if _file_paths_correlate(rec_file, changed):
+                        correlated = True
+                        break
+            if correlated:
+                break
+
+        # Closed-sibling cluster: window-independent signal (Decision 88 invariant ii --
+        # served from the already-pulled cache, never a fresh reader call).
+        if not correlated and closed_ci_rca_recs and rec_file:
+            for sibling in closed_ci_rca_recs:
+                sib_file = (sibling.get("file") or "").strip()
+                if not sib_file:
+                    continue
+                if not _file_paths_correlate(rec_file, sib_file):
+                    continue
+                if _title_jaccard(rec.get("title") or "", sibling.get("title") or "") < 0.5:
+                    continue
+                sib_closed_dt = _row_ts(sibling, "last_updated_timestamp")
+                # Require a dateable closure. No timestamp means we cannot
+                # confirm the sibling was closed after this rec was created;
+                # skip it to avoid false positives from undated historical closes.
+                if sib_closed_dt is None:
+                    continue
+                if rec_created_dt is not None and sib_closed_dt < rec_created_dt:
+                    continue
+                rec = {**rec, "_resolved_reason": f"likely resolved by sibling {sibling.get('id', '')}"}
+                correlated = True
+                break
+
+        if correlated:
+            likely_resolved.append(rec)
+        else:
+            unresolved.append(rec)
+
+    return {"likely_resolved": likely_resolved, "unresolved": unresolved}
+
+
+def _print_recent_main_commits(commits: list[dict]) -> None:
+    """Print the Recent main commits context block."""
+    print("\n--- Recent main commits ---")
+    if not commits:
+        print("  (none fetched -- offline or origin/main unreachable)")
+    else:
+        for c in commits:
+            sha_short = (c.get("sha") or "")[:8]
+            date_part = (c.get("date") or "")[:10]
+            subject = c.get("subject") or ""
+            print(f"  {date_part} {sha_short} {subject}")
+    print()
+
+
+def print_ci_rca_recs(recs: list[dict], correlation: dict[str, list[dict]] | None = None) -> None:
+    """Print the CI RCA Recs section to terminal.
+
+    When ``correlation`` is provided, recs are split into LIKELY-RESOLVED
+    (soft verify+close prompt) and UNRESOLVED (HARD BLOCK retained).
+    When ``correlation`` is None all recs are treated as UNRESOLVED (backward compat).
+    """
     print("\n--- CI RCA Recs (open) ---")
     if not recs:
         print("  (none)")
-    else:
+        print()
+        return
+
+    if correlation is None:
+        # Backward-compat path: all recs are HARD BLOCK.
         print("  [HARD BLOCK] /plan cannot scope unrelated work while these recs are open.")
         for rec in recs:
             rec_id = rec.get("id", "unknown")
@@ -915,6 +1162,36 @@ def print_ci_rca_recs(recs: list[dict]) -> None:
             priority = rec.get("priority", "")
             created = rec.get("created_timestamp", "")
             print(f"  {rec_id} [{priority}] {created}: {title}")
+        print()
+        return
+
+    likely_resolved = correlation.get("likely_resolved") or []
+    unresolved = correlation.get("unresolved") or []
+
+    if likely_resolved:
+        print(
+            "  [SOFT -- LIKELY RESOLVED] A recent main commit appears to have fixed these recs. Verify and close before /plan:"
+        )
+        for rec in likely_resolved:
+            rec_id = rec.get("id", "unknown")
+            title = rec.get("title", "")
+            priority = rec.get("priority", "")
+            created = rec.get("created_timestamp", "")
+            print(f"  {rec_id} [{priority}] {created}: {title}")
+            print(
+                f"    -> bin/venv-python -m scripts.ops_data_portal --update-rec {rec_id}"
+                ' --status closed --resolution "Verified resolved by main commit"'
+            )
+
+    if unresolved:
+        print("  [HARD BLOCK] /plan cannot scope unrelated work while these recs remain open.")
+        for rec in unresolved:
+            rec_id = rec.get("id", "unknown")
+            title = rec.get("title", "")
+            priority = rec.get("priority", "")
+            created = rec.get("created_timestamp", "")
+            print(f"  {rec_id} [{priority}] {created}: {title}")
+
     print()
 
 
@@ -1017,8 +1294,15 @@ def run_log_sync() -> dict:
     return {"status": "committed", "files": log_files}
 
 
-def read_context_files() -> dict:
+def read_context_files(open_recs_count: int | None = None) -> dict:
     """Read key context documents and return a summary dict for plan.prompt.md.
+
+    Args:
+        open_recs_count: Pre-computed open-recs count from the caller. When provided,
+            the open_recs verb query is skipped (dedup: avoids a second named() call
+            when main() has already fetched the count via _count_recommendations_reader).
+            Standalone callers (e.g. tests) may omit it; the function falls back to
+            its own open_recs query in that case.
 
     Returns:
         Dict with keys: roadmap_phase, open_decisions_count, recent_sessions,
@@ -1078,24 +1362,16 @@ def read_context_files() -> dict:
             except ValueError:
                 continue
 
-    # recommendations_count: try Athena view first, fall back to local JSONL
-    recommendations_count = 0
-    athena_rows = _run_athena_query("SELECT COUNT(*) AS cnt FROM ops_recommendations_current WHERE status = 'open'")
-    if athena_rows is not None and athena_rows:
+    # recommendations_count: use pre-computed count when available (avoids a second
+    # open_recs verb call when main() already fetched the count in Phase B).
+    if open_recs_count is not None:
+        recommendations_count = open_recs_count
+    else:
+        recommendations_count = 0
         try:
-            recommendations_count = int(athena_rows[0].get("cnt", "0"))
-        except (ValueError, IndexError):
-            recommendations_count = 0
-    elif RECOMMENDATIONS_FILE.exists():
-        for line in RECOMMENDATIONS_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip() or line.startswith("#"):
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("status", "").lower() == "open":
-                    recommendations_count += 1
-            except json.JSONDecodeError:
-                pass
+            recommendations_count = len(_make_reader().named("open_recs"))
+        except Exception:  # noqa: BLE001
+            pass
 
     return {
         "roadmap_phase": roadmap_phase,
@@ -1132,153 +1408,19 @@ def sync_copilot_instructions() -> None:
             )
 
 
-def _athena_run_query(client: object, sql: str, *, poll_timeout: int = _ATHENA_POLL_TIMEOUT_SECONDS) -> list[list[str]]:
-    """Execute a SQL query via Athena and return rows as lists of string values.
-
-    Polls for completion up to *poll_timeout* seconds.  Returns an empty list
-    on timeout; raises on execution error.  The first row is always the column
-    header row and is included in the return value.
-    """
-    response = client.start_query_execution(  # type: ignore[union-attr]
-        QueryString=sql,
-        WorkGroup=_ATHENA_WORKGROUP,
-        QueryExecutionContext={"Database": _ATHENA_DATABASE},
-        ResultConfiguration={"OutputLocation": _ATHENA_OUTPUT_LOCATION},
-    )
-    execution_id = response["QueryExecutionId"]
-    deadline = time.monotonic() + poll_timeout
-    while time.monotonic() < deadline:
-        status = client.get_query_execution(QueryExecutionId=execution_id)  # type: ignore[union-attr]
-        state = status["QueryExecution"]["Status"]["State"]
-        if state in ("SUCCEEDED",):
-            break
-        if state in ("FAILED", "CANCELLED"):
-            reason = status["QueryExecution"]["Status"].get("StateChangeReason", "")
-            raise RuntimeError(f"Athena query {state}: {reason}")
-        time.sleep(0.5)
-    else:
-        return []  # timeout -- treat as empty result
-
-    results = client.get_query_results(QueryExecutionId=execution_id)  # type: ignore[union-attr]
-    rows: list[list[str]] = []
-    for row in results.get("ResultSet", {}).get("Rows", []):
-        rows.append([datum.get("VarCharValue", "") for datum in row.get("Data", [])])
-    return rows
-
-
 def check_telemetry_health() -> dict:
-    """Query Athena for telemetry session metrics and return health dict.
-
-    Uses ``agent_platform.telemetry_sessions_current`` (7-day window) to
-    compute session count, success rate, and latest session staleness.  Also
-    queries ``telemetry_process_events`` for the top-5 recent friction patterns.
-
-    Telemetry tables were NOT migrated to the personal account (public-migration,
-    2026-05-28); these queries therefore fail with TABLE_NOT_FOUND and are caught
-    below, degrading to a non-fatal warning rather than raising.
-
-    Degrades gracefully when credentials are unavailable or Athena is unreachable --
-    returns ``overall: "unknown"`` with a single ``athena-query`` check entry.
+    """Telemetry health stub: the Athena telemetry tables died with the 2026-05-28 account
+    migration, so the previous implementation polled TABLE_NOT_FOUND for ~a minute every
+    session. Telemetry re-lands on DuckLake in consolidation Phase 4 (Decision 84); until
+    then this reports not_migrated WITHOUT issuing any query.
 
     Returns a dict compatible with ``print_telemetry_health()``.
     """
-    checks: list[dict] = []
-    friction_patterns: list[dict] = []
-    has_warning = False
-    has_critical = False
-
-    try:
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=resolve_aws_profile())
-        client = session.client("athena", region_name="eu-west-2")
-
-        # -- Session count + success rate + latest session staleness --
-        sessions_sql = (
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) AS success_count, "
-            "MAX(started_at) AS latest "
-            f"FROM {_ATHENA_DATABASE}.telemetry_sessions_current "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY"
-        )
-        try:
-            rows = _athena_run_query(client, sessions_sql)
-            if len(rows) >= 2:
-                _header, data_row = rows[0], rows[1]
-                total = int(data_row[0]) if data_row[0].isdigit() else 0
-                success_count = int(data_row[1]) if data_row[1].isdigit() else 0
-                latest_ts_str = data_row[2] if len(data_row) > 2 else ""
-
-                checks.append({"check": "sessions-7d", "value": str(total), "severity": "ok"})
-                if total > 0:
-                    success_rate = success_count / total
-                    rate_display = f"{success_rate:.0%}"
-                    rate_severity = "ok"
-                    if success_rate < 0.5:
-                        rate_severity = "warning"
-                        has_warning = True
-                    checks.append({"check": "success-rate-7d", "value": rate_display, "severity": rate_severity})
-
-                if latest_ts_str:
-                    try:
-                        latest_ts = datetime.fromisoformat(latest_ts_str.replace("Z", "+00:00"))
-                        if latest_ts.tzinfo is None:
-                            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
-                        now = datetime.now(timezone.utc)
-                        staleness_h = (now - latest_ts).total_seconds() / 3600.0
-                        stale_display = f"{staleness_h:.1f}h"
-                        stale_severity = "ok"
-                        if staleness_h >= 168:
-                            stale_severity = "critical"
-                            has_critical = True
-                        elif staleness_h >= 72:
-                            stale_severity = "warning"
-                            has_warning = True
-                        checks.append(
-                            {
-                                "check": "latest-session-staleness",
-                                "value": stale_display,
-                                "severity": stale_severity,
-                            }
-                        )
-                    except (ValueError, TypeError):
-                        pass
-            else:
-                checks.append({"check": "sessions-7d", "value": "0", "severity": "ok"})
-        except Exception as exc:  # noqa: BLE001
-            checks.append({"check": "sessions-query", "value": str(exc)[:60], "severity": "warning"})
-            has_warning = True
-
-        # -- Top-5 friction patterns from process events --
-        friction_sql = (
-            "SELECT category, description, COUNT(*) AS occurrences "
-            f"FROM {_ATHENA_DATABASE}.telemetry_process_events "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '7' DAY "
-            "GROUP BY category, description "
-            "ORDER BY occurrences DESC LIMIT 5"
-        )
-        try:
-            fp_rows = _athena_run_query(client, friction_sql)
-            for row in fp_rows[1:]:  # skip header row
-                if len(row) >= 3:
-                    friction_patterns.append(
-                        {"category": row[0], "description": row[1], "occurrences": int(row[2]) if row[2].isdigit() else 0}
-                    )
-        except Exception:  # noqa: BLE001
-            pass  # friction patterns are informational; failure is non-critical
-
-    except Exception:  # noqa: BLE001
-        # credentials unavailable, boto3 missing, or other connectivity failure -- degrade gracefully
-        checks.append({"check": "athena-query", "value": "unavailable", "severity": "unknown"})
-        return {"overall": "unknown", "checks": checks, "friction_patterns": friction_patterns}
-
-    overall = "ok"
-    if has_critical:
-        overall = "critical"
-    elif has_warning:
-        overall = "warning"
-
-    return {"overall": overall, "checks": checks, "friction_patterns": friction_patterns}
+    return {
+        "overall": "unknown",
+        "checks": [{"check": "telemetry-store", "value": "not migrated (Phase 4)", "severity": "unknown"}],
+        "friction_patterns": [],
+    }
 
 
 def check_data_quality_coverage() -> dict:
@@ -1320,6 +1462,7 @@ def check_data_quality_coverage() -> dict:
                 "passed": data.get("passed", 0),
                 "failed": data.get("failed", 0),
                 "warned": data.get("warned", 0),
+                "unavailable": data.get("unavailable", 0),
                 "timestamp": data.get("timestamp", ""),
             }
         except Exception:  # noqa: BLE001
@@ -1355,19 +1498,37 @@ def print_telemetry_health(health: dict) -> None:
         print(f"\n  Data quality: {dq['checks_defined']} checks across {dq['tables_covered']} tables")
         if dq["last_run"]:
             lr = dq["last_run"]
-            print(f"  Last run: {lr['verdict']} ({lr['passed']}P/{lr['failed']}F/{lr['warned']}W) at {lr['timestamp']}")
+            unavail_str = f"/{lr.get('unavailable', 0)}U" if lr.get("unavailable", 0) else ""
+            verdict_tag = " [DEGRADED -- backend unavailable]" if lr["verdict"] == "DEGRADED" else ""
+            print(
+                f"  Last run: {lr['verdict']}{verdict_tag} "
+                f"({lr['passed']}P/{lr['failed']}F/{lr['warned']}W{unavail_str}) at {lr['timestamp']}"
+            )
         else:
             print("  Last run: never (run: python -m scripts.data_quality_runner)")
     print()
 
 
-def _get_latest_decision_ts() -> str | None:
-    """Return the max last_updated_timestamp from ops_decisions_current, or None on any failure."""
-    rows = _run_athena_query("SELECT max(last_updated_timestamp) AS ts FROM ops_decisions_current")
+def _get_latest_decision_ts(cache_rows: object = _READER_SENTINEL) -> str | None:
+    """Return the max decision last_updated_timestamp -- from the warm-pulled rows, else the verb.
+
+    cache_rows (neon-egress-reduction D4): a supplied row list is served via
+    _derive_decisions_max_updated (zero reader call); a supplied None -> None. Omitted (sentinel) ->
+    decisions_max_updated verb (back-compat / tests).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        if cache_rows is None:
+            return None
+        rows = _derive_decisions_max_updated(cache_rows)  # type: ignore[arg-type]
+    else:
+        try:
+            rows = _make_reader(table="ops_decisions").named("decisions_max_updated")
+        except Exception:  # noqa: BLE001
+            return None
     if not rows:
         return None
-    ts = rows[0].get("ts", "")
-    return ts if ts else None
+    ts = rows[0].get("ts") or ""
+    return str(ts) if ts else None
 
 
 def main() -> int:
@@ -1397,32 +1558,37 @@ def main() -> int:
     if log_sync_result.get("status") == "committed":
         uncommitted = False
 
-    main_freshness = check_main_freshness()
+    # Phase A: run credential check, git freshness, and terraform check concurrently.
+    # creds_status and main_freshness must be resolved before Phase B starts.
+    with ThreadPoolExecutor(max_workers=3) as phase_a:
+        fut_creds = phase_a.submit(check_credentials)
+        fut_freshness = phase_a.submit(check_main_freshness)
+        fut_terraform = phase_a.submit(check_terraform_pending)
+        creds_result = fut_creds.result()
+        main_freshness = fut_freshness.result()
+        terraform_pending = fut_terraform.result()
 
-    terraform_pending = check_terraform_pending()
-    creds_status = _handle_credentials_startup(check_credentials())
+    creds_status = _handle_credentials_startup(creds_result)
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
 
-    # Pull ops_recommendations (and all ops tables) from Athena into local cache (best-effort)
-    try:
-        recommendation_sync = _sync_ops_pull()
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"WARNING: sync_ops.pull failed: {exc}", file=sys.stderr)
-        recommendation_sync = {}
+    # Prime the DuckLake reader URL once so all subsequent named() calls skip SSM
+    # (Decision 79 first-priority resolution). The remaining reader fan-out in Phase B
+    # then hits the Lambda URL directly rather than re-resolving SSM on each call.
+    _prime_reader_url(creds_status)
 
-    try:
-        from scripts.ops_data_portal import drain_pending  # noqa: PLC0415
-
-        _drain = drain_pending()
-        if _drain.get("drained", 0) > 0:
-            print(f"[preflight] Drained {_drain['drained']} pending rec(s)", file=sys.stderr)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Outbox summary (always available, even without credentials)
+    # Single warm-up sync: drain outbox then pull every migrated ops table ONCE, holding the rows
+    # in-memory. This is the one serial reader touch that absorbs the Neon cold-resume before the
+    # Phase B work; every Phase-B signal is then DERIVED from these rows -- ZERO additional reader
+    # calls (neon-egress-reduction D4: catalog egress was self-inflicted by a ~9-10-call fan-out).
+    # (The cold-resume warm-up is NOT attributable to Decision 82 -- that Decision concerns the
+    # DIRECT-vs-pooled endpoint basis and the EC8 churn-gate N=8->4 frame, audit F-033; the warm
+    # connection reuse / egress-budget rationale is the neon-egress-reduction Decision.)
+    outbox: dict = {}
+    recommendation_sync: dict = {}
+    warm_rows: dict[str, list[dict] | None] = {}
+    warm_reader_ok: dict[str, bool] = {}
     try:
         from scripts.sync_ops import outbox_summary  # noqa: PLC0415
-        from scripts.sync_ops import sync as sync_ops_sync
 
         outbox = outbox_summary()
         if outbox:
@@ -1431,37 +1597,96 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         outbox = {}
 
-    # Drain outbox + pull fresh data if credentials are available
     if creds_status == "ok":
         try:
-            result = sync_ops_sync()
-            drained = sum(result.get("drained", {}).values())
-            pulled = sum(result.get("pulled", {}).values())
+            from scripts.sync_ops import warm_sync  # noqa: PLC0415
+
+            warm = warm_sync()
+            recommendation_sync = warm.get("pulled", {})  # type: ignore[assignment]
+            warm_rows = warm.get("rows", {})  # type: ignore[assignment]
+            warm_reader_ok = warm.get("reader_ok", {})  # type: ignore[assignment]
+            drained = sum((warm.get("drained") or {}).values())  # type: ignore[union-attr]
+            pulled = sum((warm.get("pulled") or {}).values())  # type: ignore[union-attr]
             if drained or pulled:
                 print(
-                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from Athena",
+                    f"Ops sync: drained {drained} outbox entries, pulled {pulled} rows from the warehouse",
                     file=sys.stderr,
                 )
         except Exception:  # noqa: BLE001
             pass  # sync is best-effort
 
     last_session = parse_last_session()
-    open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = count_recommendations()
-    ci_rca_recs = _fetch_ci_rca_recs()
-    if ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs)
-    priority_queue = read_priority_queue(creds_status=creds_status)
+
+    # Resolve the per-table warm-pull outcome. cache_rows semantics (D4): a list => serve from it;
+    # None => that table's reader pull FAILED (degrade loudly); never the reader sentinel here, so
+    # NO Phase-B signal re-touches the reader. creds-down also yields None (degraded read-cache).
+    recs_cache = warm_rows.get("ops_recommendations") if warm_reader_ok.get("ops_recommendations") else None
+    pq_cache = warm_rows.get("ops_priority_queue") if warm_reader_ok.get("ops_priority_queue") else None
+    dec_cache = warm_rows.get("ops_decisions") if warm_reader_ok.get("ops_decisions") else None
+
+    # Phase B: the Neon reader fan-out is gone (D4) -- signals are derived from the warm-up rows
+    # above. The executor now fans out only the independent SUBPROCESS calls (git log, gh run list)
+    # plus the cheap local derivations. Cap at <=4 concurrent workers to avoid Neon connect p95
+    # inflation (Decision 82). Retrieve every future via .result() so exceptions and SystemExit
+    # re-raise in the main thread (Decision 55/81).
+    with ThreadPoolExecutor(max_workers=4) as phase_b:
+        fut_rec_count = phase_b.submit(_count_recommendations_reader, recs_cache)
+        fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs, recs_cache)
+        fut_pq = phase_b.submit(read_priority_queue, 5, creds_status, pq_cache)
+        fut_commits = phase_b.submit(_get_recent_main_commits)
+        fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
+        fut_ci_liveness = phase_b.submit(_check_ci_rca_liveness, creds_status, recs_cache)
+        fut_forward_fix = phase_b.submit(_check_forward_fix_recursion, recs_cache)
+        fut_budget = phase_b.submit(_check_budget_bypass_alert, recs_cache)
+
+        _rec_result = fut_rec_count.result()
+        ci_rca_recs = fut_ci_rca.result()
+        priority_queue = fut_pq.result()
+        recent_main_commits = fut_commits.result()
+        latest_decision_ts = fut_decision_ts.result()
+        ci_rca_liveness_alert = fut_ci_liveness.result()
+        forward_fix_alert = fut_forward_fix.result()
+        budget_bypass_alert = fut_budget.result()
+
+    recs_read_status: str
+    if _rec_result == "reader_unreachable":
+        recs_read_status = "reader_unreachable"
+        open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = 0, 0, 0, []
+    else:
+        recs_read_status = "ok"
+        open_recommendations, aging_recommendations, non_automatable_count, non_automatable_details = _rec_result  # type: ignore[misc]
+
+    closed_ci_rca_recs = _derive_ci_rca_closed(recs_cache) if recs_cache is not None else None
+    correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=closed_ci_rca_recs)
+    print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     print_priority_queue(priority_queue)
-    if not ci_rca_recs:
-        print_ci_rca_recs(ci_rca_recs)
-    context = read_context_files()
-    platform_roadmap_state = platform_roadmap.compute_state_dict(
-        ROADMAP_PLATFORM_PATH, latest_decision_ts=_get_latest_decision_ts()
-    )
+    _print_recent_main_commits(recent_main_commits)
+
+    # Scan provisional contracts inline (reads only local docs/contracts/ -- no creds, no ThreadPoolExecutor).
+    # No production telemetry exists today, so the metrics provider returns None and nothing fires;
+    # the evaluation logic is fully built and tested via injected metrics (PLAN context: subset f deferral).
+    provisional_contracts_due = _scan_provisional_contracts()
+
+    print("\n--- Provisional contracts due ---")
+    if provisional_contracts_due:
+        for contract_id in provisional_contracts_due:
+            print(f"  {contract_id}: re_ratification_trigger fired -- ratification review required")
+    else:
+        print("  (none)")
+    print()
+
+    # Dedupe open_recs: count already computed in Phase B; pass to read_context_files
+    # to skip the second open_recs verb call (Decision 84 I-3: closed named-verb boundary).
+    open_recs_count = open_recommendations if recs_read_status == "ok" else None
+    context = read_context_files(open_recs_count=open_recs_count)
+
+    # Dedupe decisions_max_updated: timestamp fetched once in Phase B; reuse for both
+    # roadmap compute_state_dict calls rather than re-issuing the verb.
+    platform_roadmap_state = platform_roadmap.compute_state_dict(ROADMAP_PLATFORM_PATH, latest_decision_ts=latest_decision_ts)
     product_roadmap_state = product_roadmap_module.compute_state_dict(
         ROADMAP_PRODUCT_PATH,
         platform_yaml_path=ROADMAP_PLATFORM_PATH,
-        latest_decision_ts=_get_latest_decision_ts(),
+        latest_decision_ts=latest_decision_ts,
     )
 
     report: dict = {
@@ -1479,8 +1704,12 @@ def main() -> int:
         "aging_recommendations": aging_recommendations,
         "non_automatable_recommendations": non_automatable_count,
         "priority_queue": priority_queue,
-        "priority_queue_source": "athena" if creds_status == "ok" else "cache",
+        "priority_queue_source": "ducklake_reader" if creds_status == "ok" else "cache",
+        "recs_read_status": recs_read_status,
         "ci_rca_recs": ci_rca_recs,
+        "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
+        "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
+        "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
         "recommendation_sync": recommendation_sync,
@@ -1492,10 +1721,10 @@ def main() -> int:
         "session_start": session_start,
     }
 
+    report["provisional_contracts_due"] = provisional_contracts_due
     report["non_automatable_softcap_breached"] = _check_non_automatable_softcap(non_automatable_count)
-    report["ci_rca_liveness_alert"] = _check_ci_rca_liveness(creds_status)
-    report["forward_fix_recursion_alert"] = _check_forward_fix_recursion()
-    budget_bypass_alert = _check_budget_bypass_alert()
+    report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
+    report["forward_fix_recursion_alert"] = forward_fix_alert
     report["budget_bypass_alert"] = budget_bypass_alert
     if budget_bypass_alert is not None:
         print(
@@ -1535,15 +1764,49 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
     mf = report.get("main_freshness", {}) or {}
     behind = mf.get("commits_behind", "?")
     ahead = mf.get("commits_ahead", "?")
+    recs_status = report.get("recs_read_status", "ok")
+    recs_status_suffix = "" if recs_status == "ok" else f" [DEGRADED: recs_read_status={recs_status}]"
+    ci_rca_unresolved = len(report.get("ci_rca_unresolved_recs") or [])
+    ci_rca_likely = len(report.get("ci_rca_likely_resolved_recs") or [])
+    if ci_rca_unresolved or ci_rca_likely:
+        ci_rca_summary = f"ci_rca_unresolved={ci_rca_unresolved} ci_rca_likely_resolved={ci_rca_likely}"
+    else:
+        ci_rca_summary = "ci_rca=0"
     return (
         f"Preflight OK -> {report_path}\n"
         f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
         f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
         f"  open_recs={report.get('open_recommendations')} "
         f"non_automatable={report.get('non_automatable_recommendations')} "
-        f"ci_rca={len(report.get('ci_rca_recs') or [])}\n"
+        f"{ci_rca_summary}{recs_status_suffix}\n"
         f"  Read the report file for full constraint detail."
     )
+
+
+def _scan_provisional_contracts(
+    contracts_dir: Path | None = None,
+    metrics_provider: Callable[[], dict[str, Any] | None] | None = None,
+) -> list[str]:
+    """Return contract ids whose provisional_v0 re_ratification_trigger is met.
+
+    Reads local docs/contracts/ files only -- no warehouse reader, no credentials.
+    ``metrics_provider`` is called with no arguments to obtain a dict[str, Any] | None;
+    when absent (default None), no condition can fire (fail-safe: no false positives).
+    """
+    from scripts.contracts import load_all_contracts  # noqa: PLC0415
+    from scripts.contracts_enforcement import evaluate_provisional_trigger  # noqa: PLC0415
+
+    target_dir = contracts_dir if contracts_dir is not None else ROOT / "docs" / "contracts"
+    metrics = metrics_provider() if metrics_provider is not None else None
+    due: list[str] = []
+    try:
+        for contract_id, doc in load_all_contracts(target_dir).items():
+            met, _ = evaluate_provisional_trigger(doc, metrics)
+            if met:
+                due.append(contract_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return due
 
 
 def open_telemetry_session(workflow: str, branch: str) -> str:

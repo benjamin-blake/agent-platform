@@ -65,18 +65,23 @@ Canonical values: `"queued"`, `"executing"`, `"done"`.
 ### Canonical Producer (Phase 1+)
 
 Scheduled agents produce `type: "priority-queue-entry"` findings and pass
-them to `enqueue_findings()` in `scripts/ops_data_portal.py`. The findings
-are buffered locally in `logs/.ops-outbox/` and flushed to the
-`ops_priority_queue` Iceberg table in Athena by `sync_ops`. The
-`ops_priority_queue_current` view filters to the latest `queue_run_id`
-via a correlated subquery (no `_rn` ambiguity) and is the canonical read
-source for all consumers (Decision 61).
+them to `enqueue_findings()` in `scripts/ops_data_portal.py`, which files
+each via `file_rec` (writer-allocated, loud-fail -- Decision 84; no local
+buffering). The Decision-70 current-state semantics (all entries of the
+latest `queue_run_id`) live INSIDE the reader's `priority_queue_current`
+named verb -- the canonical read source for all consumers.
 
-- **Consumer:** `session_preflight.py` calls `_run_athena_query` against
-  `trading_formulas_db.ops_priority_queue_current`. Hard-exits on query
-  failure -- no silent fallback (Decision 57).
-- **Local JSONL (`logs/priority-queue/.priority-queue.jsonl`):** write-only
-  outbox drain buffer. No consumer reads it after Phase 1.
+> Legacy producer note: the dormant rec-curator Lambda flow still stages
+> queue rows via `scripts/s3_log_store.py` -> OpsWriter/Iceberg; it MUST be
+> repointed to the boundary before re-enable (T2.26; see the AGENTS.md
+> re-enable runbook caveat).
+
+- **Consumer:** `session_preflight.py` reads the `priority_queue_current`
+  verb via the DuckLake reader. Hard-exits on verb failure with creds ok --
+  no silent fallback (Decision 57/60); creds-down degrades to the local
+  cache with a staleness warning.
+- **Local JSONL (`logs/priority-queue/.priority-queue.jsonl`):** read cache
+  only (degraded-mode fallback). Never a write source.
 
 ### Legacy Producer (deprecated, active until Phase 5)
 

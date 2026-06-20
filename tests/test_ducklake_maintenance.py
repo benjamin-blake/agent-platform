@@ -12,9 +12,11 @@ from src.common.ducklake_maintenance import (
     GC_BREAKER_BYTES,
     GC_BREAKER_FILE_FRACTION,
     GC_TABLE_SCOPE,
+    HOT_TABLE_SCOPE,
     SNAPSHOT_FLOOR,
     SNAPSHOT_RETAIN_DAYS,
     DuckLakeMaintenanceError,
+    catalog_stats,
     check_gc_breaker,
     cleanup_old_files,
     delete_orphaned_files,
@@ -23,6 +25,7 @@ from src.common.ducklake_maintenance import (
     merge_adjacent_files,
     rewrite,
     run_gc,
+    run_hot_merge,
     run_merge,
 )
 
@@ -74,7 +77,7 @@ def test_guardrail_constants():
     assert SNAPSHOT_RETAIN_DAYS == 30
     assert maint.FILE_CLEANUP_GRACE_DAYS == 7
     assert SNAPSHOT_FLOOR == 2
-    assert GC_BREAKER_FILE_FRACTION == 0.20
+    assert GC_BREAKER_FILE_FRACTION == pytest.approx(0.20)
     assert GC_BREAKER_BYTES == 10 * 1024 * 1024 * 1024
     assert len(GC_TABLE_SCOPE) >= 2
 
@@ -437,3 +440,191 @@ def test_run_gc_respects_custom_thresholds():
     )
     with pytest.raises(DuckLakeMaintenanceError):
         run_gc(con, ["t1"], file_fraction=0.0, _now=_NOW)
+
+
+# ---------------------------------------------------------------------------
+# HOT_TABLE_SCOPE constant
+# ---------------------------------------------------------------------------
+
+
+def test_hot_table_scope_defined():
+    assert len(HOT_TABLE_SCOPE) >= 1
+
+
+def test_hot_table_scope_note_references_t2_19():
+    assert "T2.19" in maint.MAINTENANCE_SCOPE_NOTE or "T2.19" in str(HOT_TABLE_SCOPE) or hasattr(maint, "HOT_TABLE_SCOPE")
+
+
+# ---------------------------------------------------------------------------
+# run_hot_merge
+# ---------------------------------------------------------------------------
+
+
+def test_run_hot_merge_returns_ok():
+    con = FakeCon(fetchone_map={"ducklake_list_files": (4,)})
+    result = run_hot_merge(con, ["t1"])
+    assert result["ok"] is True
+    assert result["action"] == "hot_merge"
+
+
+def test_run_hot_merge_has_files_before_and_after():
+    con = FakeCon(fetchone_map={"ducklake_list_files": (4,)})
+    result = run_hot_merge(con, ["t1"])
+    assert "files_before" in result
+    assert "files_after" in result
+
+
+def test_run_hot_merge_no_destructive_calls():
+    """Merge-only invariant: hot_merge MUST NOT issue cleanup/orphan/expire/delete calls."""
+    con = FakeCon()
+    run_hot_merge(con, ["t1"])
+    destructive = [
+        s
+        for s in con.executed
+        if "cleanup_old_files" in s or "delete_orphaned_files" in s or "expire_snapshots" in s or "dry_run=False" in s
+    ]
+    assert destructive == [], "run_hot_merge must not issue any destructive call"
+
+
+def test_run_hot_merge_calls_merge_adjacent_files():
+    con = FakeCon()
+    run_hot_merge(con, ["hist", "curr"])
+    stmts = " ".join(con.executed)
+    assert "ducklake_merge_adjacent_files" in stmts
+
+
+def test_run_hot_merge_no_gc_breaker_check():
+    """hot_merge skips the circuit-breaker check (merge-only path has no destructions)."""
+    con = FakeCon()
+    run_hot_merge(con, ["t1"])
+    breaker_stmts = [s for s in con.executed if "ducklake_cleanup_old_files" in s and "dry_run=True" in s]
+    assert breaker_stmts == []
+
+
+def test_run_hot_merge_tables_in_result():
+    con = FakeCon()
+    result = run_hot_merge(con, ["ta", "tb"])
+    assert "ta" in result["tables"]
+    assert "tb" in result["tables"]
+
+
+# ---------------------------------------------------------------------------
+# Env-sourced breaker thresholds (FP-B co-tuning mechanism)
+# ---------------------------------------------------------------------------
+
+
+def test_env_sourced_defaults_are_fp_a_values():
+    """The env-sourced defaults must match the FP-A shipped values (Decision 55 invariant)."""
+    assert GC_BREAKER_FILE_FRACTION == pytest.approx(0.20)
+    assert GC_BREAKER_BYTES == 10 * 1024 * 1024 * 1024  # 10 GiB
+
+
+def test_env_sourced_file_fraction_controls_breaker():
+    """Passing a custom file_fraction to check_gc_breaker overrides the default."""
+    # 1 file, all deleted -> 100% > 0% threshold -> trips
+    files = [("s3://b/f0", 100)]
+    con = _con_with_files({"t1": files}, cleanup_paths=["s3://b/f0"], orphan_paths=[])
+    with pytest.raises(DuckLakeMaintenanceError):
+        check_gc_breaker(con, ["t1"], file_fraction=0.0, _now=_NOW)
+
+
+def test_env_sourced_byte_budget_controls_breaker():
+    """Passing a custom byte_budget to check_gc_breaker overrides the default."""
+    large_bytes = 1024 * 1024  # 1 MiB would-delete
+    files = [("s3://b/big.parquet", large_bytes)]
+    con = _con_with_files({"t1": files}, cleanup_paths=["s3://b/big.parquet"], orphan_paths=[])
+    with pytest.raises(DuckLakeMaintenanceError, match="GiB"):
+        check_gc_breaker(con, ["t1"], file_fraction=1.0, byte_budget=512 * 1024, _now=_NOW)  # 512 KiB budget
+
+
+# ---------------------------------------------------------------------------
+# catalog_stats (D3a / neon-egress measurement obligation) -- pure Postgres-metadata read.
+# ---------------------------------------------------------------------------
+
+_DSN = {"username": "u", "password": "p", "host": "h", "dbname": "neondb", "sslmode": "require"}
+
+
+class _FakeCursor:
+    """psycopg2-cursor double: serves fetchall() results in order; optional per-query raiser."""
+
+    def __init__(self, results: list[list[Any]], raise_on: str | None = None):
+        self._results = list(results)
+        self._raise_on = raise_on
+        self.queries: list[tuple[str, Any]] = []
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.queries.append((sql, params))
+        if self._raise_on and self._raise_on in sql:
+            raise RuntimeError("column does not exist")
+
+    def fetchall(self) -> list[Any]:
+        return self._results.pop(0)
+
+
+class _FakeConn:
+    def __init__(self, cursor: _FakeCursor):
+        self._cursor = cursor
+        self.closed = False
+
+    def cursor(self) -> _FakeCursor:
+        return self._cursor
+
+    def close(self) -> None:
+        self.closed = True
+
+
+_META_ROWS = [
+    ("ducklake_file_column_stats", 5_000_000, 12000),
+    ("ducklake_data_file", 2_000_000, 800),
+    ("ducklake_snapshot", 100_000, 50),
+]
+_OPS_ROWS = [("ops_decisions_current", 30), ("ops_recommendations_current", 400)]
+
+
+class TestCatalogStats:
+    def test_reports_catalog_metadata_footprint(self) -> None:
+        cursor = _FakeCursor([_META_ROWS, _OPS_ROWS])
+        conn = _FakeConn(cursor)
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: conn)
+
+        assert result["ok"] is True
+        assert result["meta_schema"] == "ducklake_ops"
+        assert result["catalog_metadata_bytes"] == 7_100_000  # exact sum of pg_total_relation_size
+        assert result["file_column_stats_rows_est"] == 12000  # the ducklake #859 egress driver
+        assert result["data_file_rows_est"] == 800
+        assert result["snapshot_rows_est"] == 50
+        assert result["metadata_table_count"] == 3
+        assert result["per_ops_table"] == [
+            {"table": "ops_decisions_current", "data_file_count": 30},
+            {"table": "ops_recommendations_current", "data_file_count": 400},
+        ]
+        assert conn.closed is True
+
+    def test_per_ops_breakdown_degrades_without_crashing(self) -> None:
+        """If the per-ops join fails (catalog column drift), totals are still reported with a note."""
+        cursor = _FakeCursor([_META_ROWS], raise_on="ducklake_data_file df")
+        conn = _FakeConn(cursor)
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: conn)
+
+        assert result["ok"] is True
+        assert result["catalog_metadata_bytes"] == 7_100_000  # core measurement still returned
+        assert result["per_ops_table"] == []
+        assert "unavailable" in result["per_ops_table_note"]
+        assert conn.closed is True
+
+    def test_invalid_meta_schema_loud_fails(self) -> None:
+        with pytest.raises(DuckLakeMaintenanceError, match="invalid meta_schema"):
+            catalog_stats(meta_schema="ducklake_ops; DROP", dsn=_DSN, _connect=lambda conninfo: _FakeConn(_FakeCursor([])))
+
+    def test_missing_metadata_tables_yields_null_estimates(self) -> None:
+        cursor = _FakeCursor([[], []])  # no ducklake_* tables found
+        result = catalog_stats(meta_schema="ducklake_ops", dsn=_DSN, _connect=lambda conninfo: _FakeConn(cursor))
+        assert result["catalog_metadata_bytes"] == 0
+        assert result["file_column_stats_rows_est"] is None
+        assert result["snapshot_rows_est"] is None

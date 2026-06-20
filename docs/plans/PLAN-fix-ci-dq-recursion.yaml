@@ -1,0 +1,211 @@
+schema_version: 1
+slug: "fix-ci-dq-recursion"
+intent: >-
+  Restore green CI on main by clearing the warehouse data residue that fails the DQ HARD_GATE,
+  fixing a static-check false positive, and making DQ failures diagnosable so the ci-rca
+  forward-fix recursion terminates -- keeping the self-improving ops loop trustworthy.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-fix-ci-dq-recursion.yaml
+phase: >-
+  Platform / operational-data integrity (Decision 84 DuckLake ops backend). ci_rca hotfix
+  (soft-warn exception category); not aligned to a tier_item by design.
+scope:
+  - file: scripts/ops_writer.py
+    action: Modify
+    purpose: >-
+      rec-2187: rewrite the class-docstring example (line ~124) from a DuckLake-migrated table
+      to a still-Iceberg table so validate.py's _MIGRATED_BLOCK_PATTERNS no longer self-flags it.
+      Docstring-only; zero runtime delta.
+  - file: scripts/verifiers/data_quality.py
+    action: Modify
+    purpose: >-
+      rec-2179: extend the FAIL message (lines 109-118) to enumerate each failing check from
+      result.results (table.column, test_type, verdict, violation_count), instead of aggregate
+      counts only. Makes the failing check identifiable in CI logs; breaks the recursion.
+  - file: tests/test_verifiers/test_data_quality.py
+    action: Modify
+    purpose: >-
+      Populate the _run_result mock's `results` with check-bearing entries and assert the failing
+      check's identity (table + test_type) appears in result.message.
+bundled_recommendations:
+  - rec-2187
+  - rec-2179
+infrastructure_dependencies:
+  - >-
+    DuckLake-on-Neon ops warehouse (ops_catalog.ops_recommendations_current): one-off operator DML
+    runs through a ducklake_writer DuckDB+ATTACH connection (psql against Neon will NOT work -- it is
+    a DuckLake table). No Terraform change.
+  - >-
+    ducklake_writer Lambda (agent-platform-ducklake-writer, manifest status: active): the
+    create_ops_tables action (non-force) repairs/confirms the entity-id counter. No Terraform change.
+acceptance_criteria:
+  - scripts/ops_writer.py no longer matches validate.py's migrated-table block regex (warehouse write-source check passes).
+  - The DataQualityVerifier FAIL message names each failing check (table.column, test_type, verdict) drawn from result.results.
+  - ops_recommendations_current holds exactly 1 row for rec-2179 (duplicate residue collapsed).
+  - The current_merge_key_unique DQ check returns 0 violations (DQ HARD_GATE no longer fails on it).
+  - The ducklake_writer create_ops_tables (non-force) call for ops_recommendations returns ok:true with a non-null counter_seed (counter confirmed at one row).
+  - tests/test_verifiers/test_data_quality.py passes and asserts the failing-check identity appears in the verifier message.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: rec-2187 -- confirm the ops_writer.py docstring no longer trips validate.py's migrated-block regex.
+    command: |-
+      ! grep -qE '\b(writer|ops|_writer)\.(write|compact)\("ops_(recommendations|decisions|priority_queue)' scripts/ops_writer.py
+    expected: exit 0 -- the regex (mirror of validate.py:825) finds no match in scripts/ops_writer.py.
+    fix_if: >-
+      Non-zero exit means the docstring still shows a write/compact to a migrated table; change the
+      example table to ops_session_log (still-Iceberg) or an ops_data_portal.file_rec example.
+  - step: 2
+    phase: pre-deploy
+    action: rec-2179 -- run the DQ verifier unit tests including the new failing-check-name assertion.
+    command: bin/venv-python -m pytest tests/test_verifiers/test_data_quality.py -q
+    expected: all tests pass; the FAIL-path test asserts a failing check's table + test_type are in result.message.
+    fix_if: >-
+      Failure usually means the _run_result mock's `results` entries lack .check/.verdict attributes
+      the new message builder reads, or the asserted substring does not match the emitted format.
+      Align the mock shape and the assertion with the message-building code.
+  - step: 3
+    phase: pre-deploy
+    action: rec-2179 -- structural confirmation the FAIL branch enumerates result.results.
+    command: grep -q 'r.check' scripts/verifiers/data_quality.py && grep -q 'verdict' scripts/verifiers/data_quality.py
+    expected: exit 0 -- the verifier references per-result check + verdict (no longer aggregate-only).
+    fix_if: Non-zero means the FAIL branch still builds the message from counts only; add the per-result enumeration.
+  - step: 4
+    phase: post-deploy
+    action: >-
+      Confirm the rec-2179 residue is collapsed -- re-run the recs-scoped DQ checks against the live
+      DuckLake reader and assert current_merge_key_unique now PASSes. Run AFTER the operator DML.
+    command: |-
+      bin/venv-python -m scripts.data_quality_runner --table ops_recommendations --json --severity error > /tmp/dq_recs.json 2>/dev/null; grep -A1 '"test": "current_merge_key_unique"' /tmp/dq_recs.json | grep -q '"verdict": "PASS"'
+    expected: exit 0 -- current_merge_key_unique reports verdict PASS (0 duplicate merge keys).
+    fix_if: >-
+      Still FAIL means the DML did not collapse rec-2179 to one row. Re-run the one-off DML (see
+      context) keeping exactly one row, then verify GROUP BY id HAVING COUNT(*)>1 returns empty.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      [Operator] Repair/confirm the ops_recommendations entity-id counter so no new duplicate ids
+      mint -- invoke the ducklake_writer create_ops_tables action (non-force, non-destructive).
+    command: |-
+      aws lambda invoke --function-name agent-platform-ducklake-writer --cli-binary-format raw-in-base64-out --payload '{"action":"create_ops_tables","table":"ops_recommendations"}' --profile agent_platform /tmp/writer_resp.json >/dev/null && grep -q '"ok": true' /tmp/writer_resp.json && grep -q 'counter_seed' /tmp/writer_resp.json
+    expected: invoke returns ok:true with a non-null counter_seed (bootstrap_entity_counter ran; counter at one row).
+    fix_if: >-
+      AccessDenied on invoke -> retry with the agent_platform_admin profile or POST the Function URL
+      with SigV4. counter_seed null -> ops_recommendations resolved without a writer keyspace
+      (unexpected); stop and RCA rather than forcing.
+constraints:
+  - >-
+    The one-off residue repair is an exceptional, deliberate physical deletion (Decision 70 posture).
+    DuckLake mechanism -- NOT the Iceberg DELETE/OPTIMIZE/VACUUM protocol. Touch ONLY
+    ops_recommendations_current; the history table is append-only and is retained untouched. This is
+    a one-off, NOT a new routine delete_rec path.
+  - >-
+    No new writer Lambda action (per the confirmed approach). The residue DML is operator-executed
+    through a ducklake_writer DuckDB+ATTACH connection; the implement agent has no direct DML surface
+    and must NOT fabricate one or re-stage from any local cache (Decision 84 I-4).
+  - >-
+    Decision 79 no-deploy exception: scripts/ops_writer.py is bundled in data-pipeline and
+    ops-compaction (both active), but this change is docstring-only with zero runtime delta and the
+    failing gate is the static warehouse-write check in validate.py/CI, not a runtime path. File
+    membership is unchanged, so validate_lambda_bundle_completeness is unaffected. Deploy is a
+    documented no-op; do NOT pull the two Lambda deploys into this CI hotfix.
+  - >-
+    All recommendation/decision writes go through the portal only (file_rec/update_rec); never edit
+    logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl (Single Portal Invariant,
+    Decision 84).
+  - No rescue agents or workaround loops; on an unrecoverable V3 failure, stop and RCA (Decision 55).
+  - Modify only the three files in scope; the residue DML and counter repair touch live data, not repo files.
+context:
+  - >-
+    Root-cause chain (three coupled layers). (1) The DQ HARD_GATE fails because
+    ops_recommendations_current holds 4 "current" rows for rec-2179 (duplicate merge key), failing
+    the enforced current_merge_key_unique check -> DataQualityVerifier FAIL -> validate.py exit 1.
+    (2) Independently, scripts/ops_writer.py:124's class-docstring example writer.write("ops_decisions", ...)
+    self-trips validate.py's _MIGRATED_BLOCK_PATTERNS (validate.py:825), which scans all files incl.
+    the whitelist (rec-2187). (3) Meta-reason: the verifier reported aggregate counts only and
+    discarded result.results, so which check failed never reached CI logs; the ci-rca agent re-filed
+    the diagnosability rec (rec-2179, 4x), tripping the preflight forward_fix_recursion_alert on
+    scripts/verifiers/data_quality.py.
+  - >-
+    The 4 rec-2179 rows were minted 2026-06-11 14:45 UTC by a concurrent entity-id self-seed race.
+    The allocation hardening (bootstrap_entity_counter serial seed + loud-fail on a duplicated
+    counter + no hot-path self-seed) landed in commit 0eaa9ff (#128, 2026-06-11 20:05 UTC) and is
+    already on main HEAD. rec-2187 allocated cleanly post-fix (20:37 UTC), ids sequential through
+    rec-2187. The code-level cause is resolved; only the data residue, the docstring, and the
+    diagnosability gap remain. The entity counter is writer-internal (not readable via the closed
+    reader); step 5 repairs/confirms it as belt-and-braces.
+  - >-
+    Exactly one duplicate merge key exists live (rec-2179), confirmed by a full DQ run (failed=1 on
+    current_merge_key_unique) and by a direct reader GROUP BY ... HAVING COUNT(*)>1. No other id is
+    duplicated.
+  - >-
+    One-off operator DML (run through a ducklake_writer DuckDB+ATTACH connection; keeps the
+    earliest-created row to honour the Decision-64 created anchor; leaves the history table
+    untouched):
+  - |-
+    DELETE FROM ops_catalog.ops_recommendations_current
+    WHERE id = 'rec-2179'
+      AND ulid <> (
+        SELECT ulid FROM ops_catalog.ops_recommendations_current
+        WHERE id = 'rec-2179'
+        ORDER BY created_timestamp ASC
+        LIMIT 1
+      );
+  - >-
+    ci_rca hard-block satisfied (Related-Work condition 1, same file, for BOTH open recs): rec-2187
+    cites scripts/ops_writer.py (in scope); rec-2179 cites scripts/verifiers/data_quality.py (in scope).
+  - >-
+    Non-blocking follow-up (NOT in this plan's critical path; file as a separate rec via the portal):
+    ops_decisions.status has 25 accepted_values UNENFORCED_FAIL violations (vocabulary drift vs
+    [Decided, Superseded, Open]). Unenforced -> does not gate CI.
+  - >-
+    Decisions to cite: Decision 84 (DuckLake closed-boundary ops backend, writer-owned ids, no
+    offline outbox), Decision 81 (CD.33 SCD2 runtime: history append-only + current write-through),
+    Decision 55 (loud-fail, no workaround loops -- the rationale for fixing the root data + the
+    diagnosability instead of another forward patch), Decision 73 (two-tier CI forward-fix loop this
+    work runs inside). Flags: Decision 79 (no-deploy exception), Decision 70 (exceptional deletion).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md context loaded (Decision 84, 81, 73, 70, 55, 79 surfaced via decision-scout)
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - Operator availability confirmed for the one-off DML + writer create_ops_tables invocation (steps 4-5 depend on it)
+execution_steps:
+  - >-
+    Modify scripts/ops_writer.py: in the OpsWriter class docstring (line ~124), change the example
+    from writer.write("ops_decisions", {"id": "dec-042", ...}) to writer.write("ops_session_log", {...})
+    -- a still-Iceberg table that does not transit the closed boundary. Docstring-only; no code path changes.
+  - >-
+    Modify scripts/verifiers/data_quality.py: in the FAIL branch (currently lines 109-118), before
+    constructing the message iterate result.results, select those with r.verdict in
+    {"FAIL", "UNENFORCED_FAIL", "ERROR", "HARD_GATE"}, and build a short per-check breakdown of
+    f"{r.check.table}{'.'+r.check.column if r.check.column else ''} [{r.check.test_type}] {r.verdict}
+    ({r.violation_count} violation(s))". Append the breakdown (cap to the first ~10 to bound length)
+    to the existing aggregate-count message. Keep VerifierStatus.FAIL + HARD_GATE severity unchanged.
+  - >-
+    Modify tests/test_verifiers/test_data_quality.py: update the _run_result helper so each `results`
+    entry is a mock carrying .check.table, .check.column, .check.test_type, .verdict, and
+    .violation_count; update test_verify_fail (and/or add a case) to assert the failing check's table
+    and test_type appear in result.message. Keep the existing count-based assertions.
+  - Execute Verification Plan pre-deploy steps (1-3); loop until all pass.
+  - >-
+    [Operator] Execute the one-off DML (see context) against the DuckLake writer connection to
+    collapse rec-2179's current rows from 4 to 1. The implement agent verifies via the reader; it
+    does NOT run the DML itself and must NOT re-stage from any local cache.
+  - >-
+    [Operator] Invoke the ducklake_writer create_ops_tables action (non-force) for ops_recommendations
+    to repair/confirm the entity-id counter (Verification Plan step 5).
+  - Execute Verification Plan post-deploy steps (4-5); confirm current_merge_key_unique PASS and counter ok.
+  - >-
+    File a separate, non-blocking recommendation via the portal (file_rec) for the 25
+    ops_decisions.status accepted_values violations. Do not fold it into this plan's critical path.
+  - >-
+    Report: what was implemented, the verification results, and confirmation CI is green. On any NEW
+    CI failure, stop and RCA via the ci-rca path -- do not inline-patch (Decision 55).
+rollback: >-
+  Code changes (ops_writer.py docstring, data_quality.py message, test) are trivially revertible via
+  git. The residue DML is delete-only against the current projection; the 4 original rows remain in
+  ops_recommendations_history (append-only), so the prior current-state can be reconstructed from
+  history if needed. create_ops_tables (non-force) is idempotent and non-destructive.

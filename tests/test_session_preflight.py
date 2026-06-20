@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -23,12 +24,13 @@ _spec.loader.exec_module(_preflight)  # type: ignore[union-attr]
 
 
 @pytest.fixture(autouse=True)
-def _disable_athena_queries(request: pytest.FixtureRequest):
-    """Prevent all tests from hitting real Athena and from doing real git fetches.
+def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
+    """Prevent all tests from hitting the real DuckLake reader and from doing real git fetches.
 
-    Athena: returns [] for ops_priority_queue_current queries so read_priority_queue() does
-    not sys.exit(1) in tests that exercise main(). Returns None for all other queries,
-    which preserves the JSONL fallback path in count_recommendations() and other consumers.
+    Reader: every warehouse read in this module transits _make_reader().named(verb)
+    (Decision 84 I-3). The default stub returns [] for every verb so read_priority_queue()
+    does not sys.exit(1) and the rec counters report empty rather than reaching the network.
+    Tests that need specific rows or failures re-patch session_preflight._make_reader.
 
     Git fetch: check_main_freshness() shells out to ``git fetch origin main``; patch it to
     a deterministic stub for every test except TestCheckMainFreshness (which exercises the
@@ -36,10 +38,9 @@ def _disable_athena_queries(request: pytest.FixtureRequest):
     """
     from contextlib import ExitStack  # noqa: PLC0415
 
-    def _stub(sql: str) -> list | None:
-        if "ops_priority_queue_current" in sql:
-            return []
-        return None
+    reader_stub = MagicMock()
+    reader_stub.named.return_value = []
+    reader_stub.current_state.return_value = []
 
     freshness_stub = {
         "status": "ok",
@@ -50,10 +51,21 @@ def _disable_athena_queries(request: pytest.FixtureRequest):
     }
     class_name = request.cls.__name__ if request.cls else ""
 
+    # warm_sync is the single warm-up reader touch main() makes (neon-egress-reduction D4); stub it
+    # so main() integration tests never hit the network. reader_ok=True + empty rows => main derives
+    # empty signals (0 open recs etc.), matching the prior empty-reader-stub behaviour.
+    warm_sync_stub = {
+        "drained": {},
+        "pulled": {},
+        "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+        "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+    }
+
     with ExitStack() as stack:
-        stack.enter_context(patch("session_preflight._run_athena_query", side_effect=_stub))
-        stack.enter_context(patch("session_preflight._athena_run_query", return_value=[]))
+        stack.enter_context(patch("session_preflight._make_reader", return_value=reader_stub))
         stack.enter_context(patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}))
+        stack.enter_context(patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub))
+        stack.enter_context(patch("session_preflight._sync_ops_pull", return_value={}))
         if class_name != "TestCheckMainFreshness":
             stack.enter_context(patch("session_preflight.check_main_freshness", return_value=freshness_stub))
         yield
@@ -295,6 +307,8 @@ class TestFormatPreflightSummary:
             "open_recommendations": 12,
             "non_automatable_recommendations": 4,
             "ci_rca_recs": [{"id": "rec-1"}, {"id": "rec-2"}],
+            "ci_rca_unresolved_recs": [{"id": "rec-1"}],
+            "ci_rca_likely_resolved_recs": [{"id": "rec-2"}],
         }
         summary = _preflight._format_preflight_summary(report, Path("/tmp/foo.json"))
         assert "/tmp/foo.json" in summary
@@ -302,7 +316,8 @@ class TestFormatPreflightSummary:
         assert "3 behind" in summary
         assert "1 ahead" in summary
         assert "open_recs=12" in summary
-        assert "ci_rca=2" in summary
+        assert "ci_rca_unresolved=1" in summary
+        assert "ci_rca_likely_resolved=1" in summary
         assert "Read the report file" in summary
 
     def test_summary_handles_missing_main_freshness(self) -> None:
@@ -429,7 +444,7 @@ class TestJsonOutputSchema:
             assert key in data, f"Missing key: {key}"
 
     def test_recommendation_sync_field_in_output(self, tmp_path: Path) -> None:
-        """recommendation_sync field appears in output and _sync_ops_pull is called."""
+        """recommendation_sync field appears in output and is derived from sync_ops.warm_sync()['pulled']."""
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
@@ -450,9 +465,14 @@ class TestJsonOutputSchema:
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
-                "session_preflight._sync_ops_pull",
-                return_value={"ops_recommendations": 5},
-            ) as mock_sync,
+                "scripts.sync_ops.warm_sync",
+                return_value={
+                    "drained": {},
+                    "pulled": {"ops_recommendations": 5},
+                    "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                    "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+                },
+            ) as mock_warm_sync,
             patch(
                 "session_preflight.read_context_files",
                 return_value={
@@ -473,7 +493,7 @@ class TestJsonOutputSchema:
         ):
             _preflight.main()
 
-        mock_sync.assert_called_once()
+        mock_warm_sync.assert_called_once()
         data = json.loads(preflight_report.read_text(encoding="utf-8"))
         assert data["recommendation_sync"] == {"ops_recommendations": 5}
 
@@ -487,7 +507,10 @@ class TestGracefulMissingFiles:
 
     def test_missing_recommendations(self, tmp_path: Path) -> None:
         missing = tmp_path / "RECOMMENDATIONS.md"
-        with patch("session_preflight.RECOMMENDATIONS_FILE", missing):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", missing),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 0
         assert aging_count == 0
@@ -510,10 +533,13 @@ class TestNonAutomatableRecommendations:
     )
 
     def test_non_automatable_count_and_details(self, tmp_path: Path) -> None:
-        """count_recommendations returns non-automatable count and details."""
+        """count_recommendations returns non-automatable count and details (cache fallback path)."""
         recs_file = tmp_path / ".recommendations-log.jsonl"
         recs_file.write_text(self._REC_001 + self._REC_002 + self._REC_003, encoding="utf-8")
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 2
         assert non_auto_count == 1
@@ -531,7 +557,10 @@ class TestNonAutomatableRecommendations:
         )
         lines = [_line.format(i=i) for i in range(1, 16)]
         recs_file.write_text("".join(lines), encoding="utf-8")
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 15
         assert len(non_auto_details) == 10
@@ -546,7 +575,7 @@ class TestNonAutomatableRecommendations:
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight.parse_last_session", return_value=""),
             patch(
-                "session_preflight.count_recommendations",
+                "session_preflight._count_recommendations_reader",
                 return_value=(2, 0, 1, [{"id": "rec-001", "title": "Manual", "context_excerpt": "ctx"}]),
             ),
             patch("session_preflight._sync_ops_pull", return_value={}),
@@ -585,7 +614,10 @@ class TestNonAutomatableRecommendations:
             '{"id": "rec-001", "status": "open", "title": "No automatable field", "date": "2026-01-01", "context": "ctx"}\n',
             encoding="utf-8",
         )
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 0
         assert non_auto_details == []
@@ -597,7 +629,10 @@ class TestNonAutomatableRecommendations:
             '{"id": "rec-001", "status": "open", "date": "not-a-date", "title": "Bad date", "context": "ctx"}\n',
             encoding="utf-8",
         )
-        with patch("session_preflight.RECOMMENDATIONS_FILE", recs_file):
+        with (
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+        ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 1
         assert aging_count == 0  # malformed date is not counted as aging
@@ -863,83 +898,27 @@ class TestLogSync:
 
 
 class TestTelemetryHealth:
-    """Tests for check_telemetry_health() and --health CLI flag."""
+    """Tests for the check_telemetry_health() stub (telemetry re-lands on DuckLake in Phase 4)."""
 
-    def _make_boto3_mock(self, session_raises: Exception | None = None) -> MagicMock:
-        """Return a standalone boto3 module mock. boto3 is imported locally inside
-        check_telemetry_health(), so we inject it via patch.dict(sys.modules)."""
-        mock_boto3 = MagicMock()
-        if session_raises is not None:
-            mock_boto3.Session.side_effect = session_raises
-        return mock_boto3
+    def test_stub_returns_not_migrated_shape(self) -> None:
+        """The stub reports the fixed not-migrated payload compatible with print_telemetry_health()."""
+        result = _preflight.check_telemetry_health()
+        assert result == {
+            "overall": "unknown",
+            "checks": [{"check": "telemetry-store", "value": "not migrated (Phase 4)", "severity": "unknown"}],
+            "friction_patterns": [],
+        }
 
-    def test_athena_returns_session_data(self) -> None:
-        """When _athena_run_query returns session rows, health metrics are computed."""
-        from datetime import timedelta
+    def test_stub_makes_no_aws_calls(self) -> None:
+        """The stub must not touch boto3 or shell out -- the Athena polling loop is retired."""
+        import boto3
 
-        now = datetime.now(timezone.utc)
-        recent_ts = (now - timedelta(hours=1)).isoformat()
-        sessions_rows = [["total", "success_count", "latest"], ["10", "8", recent_ts]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
         with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
+            patch.object(boto3, "Session", side_effect=AssertionError("stub must not construct a boto3 Session")),
+            patch("session_preflight.subprocess.run", side_effect=AssertionError("stub must not shell out")),
         ):
             result = _preflight.check_telemetry_health()
-
-        assert result["overall"] in ("ok", "warning")
-        assert "friction_patterns" in result
-        names = [c["check"] for c in result["checks"]]
-        assert "sessions-7d" in names
-        assert "success-rate-7d" in names
-
-    def test_athena_unreachable_returns_unknown(self) -> None:
-        """When boto3.Session raises (SSO expired), returns overall: unknown."""
-        mock_boto3 = self._make_boto3_mock(session_raises=Exception("auth error"))
-        with patch.dict(sys.modules, {"boto3": mock_boto3}):
-            result = _preflight.check_telemetry_health()
-
         assert result["overall"] == "unknown"
-        assert any(c["check"] == "athena-query" for c in result["checks"])
-
-    def test_athena_no_data_rows(self) -> None:
-        """When _athena_run_query returns only a header row, sessions-7d is 0."""
-        sessions_rows = [["total", "success_count", "latest"]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
-        with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
-        ):
-            result = _preflight.check_telemetry_health()
-
-        sessions_check = next((c for c in result["checks"] if c["check"] == "sessions-7d"), None)
-        assert sessions_check is not None
-        assert sessions_check["value"] == "0"
-
-    def test_low_success_rate_flags_warning(self) -> None:
-        """Success rate < 50% triggers a warning check."""
-        from datetime import timedelta
-
-        now = datetime.now(timezone.utc)
-        recent_ts = (now - timedelta(hours=1)).isoformat()
-        sessions_rows = [["total", "success_count", "latest"], ["10", "4", recent_ts]]
-        friction_rows: list[list[str]] = [["category", "description", "occurrences"]]
-
-        mock_boto3 = self._make_boto3_mock()
-        with (
-            patch.dict(sys.modules, {"boto3": mock_boto3}),
-            patch("session_preflight._athena_run_query", side_effect=[sessions_rows, friction_rows]),
-        ):
-            result = _preflight.check_telemetry_health()
-
-        rate_check = next((c for c in result["checks"] if c["check"] == "success-rate-7d"), None)
-        assert rate_check is not None
-        assert rate_check["severity"] == "warning"
-        assert result["overall"] in ("warning", "critical")
 
     def test_open_session_creates_state_file(self, tmp_path: Path) -> None:
         """open_telemetry_session writes state file with correct schema."""
@@ -1032,30 +1011,19 @@ class TestTelemetryHealth:
             _preflight.print_telemetry_health(health)
 
 
-class TestReadPriorityQueueAthena:
-    """Tests for read_priority_queue() -- Athena path and degraded-mode cache fallback."""
+class TestReadPriorityQueueDegraded:
+    """Tests for read_priority_queue() -- verb hard-fail and degraded-mode cache fallback."""
 
-    def test_success_path_returns_correct_shape(self) -> None:
-        """Athena rows are parsed into correctly shaped dicts with int rank."""
-        rows = [
-            {"rec_id": "rec-100", "rank": "1", "rationale": "First", "north_star_impact": "high"},
-            {"rec_id": "rec-200", "rank": "2", "rationale": "Second", "north_star_impact": "medium"},
-        ]
-        with patch("session_preflight._run_athena_query", return_value=rows):
-            result = _preflight.read_priority_queue()
-        assert len(result) == 2
-        assert result[0]["rec_id"] == "rec-100"
-        assert result[0]["rank"] == 1  # Athena returns strings; parser must cast to int
-        assert set(result[0].keys()) == {"rank", "rec_id", "rationale", "north_star_impact"}
-
-    def test_hard_fail_on_none(self) -> None:
-        """_run_athena_query returning None causes SystemExit(1)."""
-        with patch("session_preflight._run_athena_query", return_value=None):
+    def test_hard_fail_when_verb_fails_with_creds_ok(self) -> None:
+        """A verb failure with credentials ok is an infrastructure fault -> SystemExit(1) (Decision 60)."""
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("ducklake_reader 'named_read' failed (HTTP 500)")
+        with patch("session_preflight._make_reader", return_value=reader):
             with pytest.raises(SystemExit):
-                _preflight.read_priority_queue()
+                _preflight.read_priority_queue(creds_status="ok")
 
     def test_cache_fallback_returns_rows_when_creds_unavailable(self, tmp_path: Path) -> None:
-        """creds_status != 'ok' -> rows from the local cache, Athena never queried."""
+        """creds_status != 'ok' -> rows from the local cache, the reader never queried."""
         cache = tmp_path / ".priority-queue.jsonl"
         cache.write_text(
             '{"rec_id": "rec-9", "rank": "1", "rationale": "cached", "north_star_impact": "high"}\n'
@@ -1065,10 +1033,10 @@ class TestReadPriorityQueueAthena:
         )
         with (
             patch.object(_preflight, "PRIORITY_QUEUE_FILE", cache),
-            patch("session_preflight._run_athena_query") as mock_q,
+            patch("session_preflight._make_reader") as mock_reader,
         ):
             result = _preflight.read_priority_queue(creds_status="unavailable")
-        mock_q.assert_not_called()
+        mock_reader.assert_not_called()
         assert [r["rec_id"] for r in result] == ["rec-9", "rec-8"]
         assert result[0]["rank"] == 1
 
@@ -1268,7 +1236,7 @@ class TestMainIncludesPriorityQueue:
         assert "priority_queue" in data
         assert len(data["priority_queue"]) == 1
         assert data["priority_queue"][0]["rec_id"] == "rec-500"
-        assert data.get("priority_queue_source") == "athena"
+        assert data.get("priority_queue_source") == "ducklake_reader"
 
     def test_terminal_output_includes_queue_section(
         self,
@@ -1432,42 +1400,53 @@ class TestCiRcaLivenessAlert:
 
 
 class TestForwardFixRecursion:
-    """Tests for _check_forward_fix_recursion()."""
+    """Tests for _check_forward_fix_recursion() -- forward_fix_recursion named verb."""
 
     def test_alert_set_at_threshold(self) -> None:
         rows = [{"file": "scripts/validate.py", "cnt": "3"}]
-        with patch("session_preflight._run_athena_query", return_value=rows):
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_forward_fix_recursion()
         assert result is not None
         assert result["file"] == "scripts/validate.py"
         assert result["count"] == 3
         assert result["threshold"] == 3
+        verb, kwargs = MockReader.return_value.named.call_args[0][0], MockReader.return_value.named.call_args.kwargs
+        assert verb == "forward_fix_recursion"
+        assert "since_ts" in kwargs  # the 24h cutoff is bound as a verb param
 
     def test_alert_none_when_no_groups(self) -> None:
-        with patch("session_preflight._run_athena_query", return_value=[]):
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = []
             result = _preflight._check_forward_fix_recursion()
         assert result is None
 
-    def test_alert_none_when_athena_unavailable(self) -> None:
-        with patch("session_preflight._run_athena_query", return_value=None):
+    def test_alert_none_when_reader_unavailable(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
             result = _preflight._check_forward_fix_recursion()
         assert result is None
 
 
 class TestCredentialsOrderingInMain:
-    """Verify that the credential check runs before ops pull in main()."""
+    """Verify that the credential check runs before ops sync in main()."""
 
-    def test_credentials_startup_precedes_pull(self, tmp_path: Path) -> None:
-        """_handle_credentials_startup is called before _sync_ops_pull in main()."""
+    def test_credentials_startup_precedes_sync(self, tmp_path: Path) -> None:
+        """_handle_credentials_startup is called before scripts.sync_ops.warm_sync in main()."""
         call_order: list[str] = []
 
         def _track_creds(status: str) -> str:
             call_order.append("creds")
             return "ok"
 
-        def _track_pull() -> dict:
-            call_order.append("pull")
-            return {}
+        def _track_sync(profile: str = "agent_platform") -> dict:
+            call_order.append("sync")
+            return {
+                "drained": {},
+                "pulled": {},
+                "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+            }
 
         preflight_report = tmp_path / ".preflight-report.json"
 
@@ -1484,7 +1463,7 @@ class TestCredentialsOrderingInMain:
             patch("session_preflight.check_terraform_pending", return_value=False),
             patch("session_preflight.check_credentials", return_value="ok"),
             patch("session_preflight._handle_credentials_startup", side_effect=_track_creds),
-            patch("session_preflight._sync_ops_pull", side_effect=_track_pull),
+            patch("scripts.sync_ops.warm_sync", side_effect=_track_sync),
             patch("session_preflight.parse_last_session", return_value=""),
             patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight.read_priority_queue", return_value=[]),
@@ -1502,19 +1481,18 @@ class TestCredentialsOrderingInMain:
             patch("session_preflight.check_data_quality_coverage", return_value={}),
             patch("session_preflight._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
-            patch("scripts.ops_data_portal.drain_pending", return_value={"drained": 0, "skipped": 0, "deduped": 0}),
         ):
             _preflight.main()
 
         assert "creds" in call_order
-        assert "pull" in call_order
-        assert call_order.index("creds") < call_order.index("pull"), (
-            f"credential check must precede pull; got order: {call_order}"
+        assert "sync" in call_order
+        assert call_order.index("creds") < call_order.index("sync"), (
+            f"credential check must precede sync; got order: {call_order}"
         )
 
 
 class TestBudgetBypassAlert:
-    """Tests for _check_budget_bypass_alert()."""
+    """Tests for _check_budget_bypass_alert() -- budget_bypass_recent named verb."""
 
     def test_returns_none_under_threshold(self) -> None:
         """Returns None when fewer than 3 bypass recs exist in 7 days."""
@@ -1522,9 +1500,11 @@ class TestBudgetBypassAlert:
             {"id": "rec-001", "context": "bypass 1", "created_timestamp": "2026-05-12 10:00:00"},
             {"id": "rec-002", "context": "bypass 2", "created_timestamp": "2026-05-11 10:00:00"},
         ]
-        with patch("session_preflight._run_athena_query", return_value=rows):
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is None
+        MockReader.return_value.named.assert_called_once_with("budget_bypass_recent")
 
     def test_returns_dict_at_threshold(self) -> None:
         """Returns dict with count and entries when >= 3 bypass recs exist."""
@@ -1533,21 +1513,24 @@ class TestBudgetBypassAlert:
             {"id": "rec-002", "context": "bypass 2", "created_timestamp": "2026-05-11 10:00:00"},
             {"id": "rec-003", "context": "bypass 3", "created_timestamp": "2026-05-10 10:00:00"},
         ]
-        with patch("session_preflight._run_athena_query", return_value=rows):
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is not None
         assert result["count"] == 3
         assert len(result["entries"]) == 3
 
-    def test_returns_none_on_query_failure(self) -> None:
-        """Returns None (not raises) when Athena query raises an exception."""
-        with patch("session_preflight._run_athena_query", side_effect=RuntimeError("Athena unreachable")):
+    def test_returns_none_on_reader_failure(self) -> None:
+        """Returns None (not raises) when reader raises an exception (Decision 55)."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader unreachable")
             result = _preflight._check_budget_bypass_alert()
         assert result is None
 
-    def test_returns_none_when_athena_returns_none(self) -> None:
-        """Returns None when _run_athena_query returns None (query failed or SSO expired)."""
-        with patch("session_preflight._run_athena_query", return_value=None):
+    def test_returns_none_when_verb_returns_empty(self) -> None:
+        """Returns None when the verb returns an empty row list (count 0 < 3)."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = []
             result = _preflight._check_budget_bypass_alert()
         assert result is None
 
@@ -1571,52 +1554,49 @@ class TestActivateHint:
 
 
 class TestReadPriorityQueueReader:
-    """Tests for read_priority_queue() -- DuckDB reader path (CD.8)."""
+    """Tests for read_priority_queue() -- priority_queue_current named verb (Decision 84 I-3)."""
 
     _PQ_ROWS = [
-        {"rec_id": "rec-10", "rank": 1, "rationale": "top", "north_star_impact": "high"},
         {"rec_id": "rec-20", "rank": 2, "rationale": "second", "north_star_impact": "low"},
+        {"rec_id": "rec-10", "rank": 1, "rationale": "top", "north_star_impact": "high"},
     ]
 
-    def test_reader_path_returns_shaped_rows(self) -> None:
-        """DuckDBIcebergReader success -> rows shaped and sorted without Athena call."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = list(self._PQ_ROWS)
+    def test_reader_path_returns_shaped_sorted_rows(self) -> None:
+        """Verb success -> rows shaped {rank, rec_id, rationale, north_star_impact} and rank-sorted."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = list(self._PQ_ROWS)
 
             result = _preflight.read_priority_queue()
 
+        MockReader.assert_called_once_with(table="ops_priority_queue")
+        MockReader.return_value.named.assert_called_once_with("priority_queue_current")
         assert len(result) == 2
-        assert result[0]["rec_id"] == "rec-10"
+        assert result[0]["rec_id"] == "rec-10"  # sorted by rank
+        assert result[0]["rank"] == 1
+        assert set(result[0].keys()) == {"rank", "rec_id", "rationale", "north_star_impact"}
+
+    def test_reader_string_rank_cast_to_int(self) -> None:
+        """String ranks from the reader are cast to int during shaping."""
+        rows = [{"rec_id": "rec-99", "rank": "1", "rationale": "r", "north_star_impact": "medium"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+
+            result = _preflight.read_priority_queue()
+
         assert result[0]["rank"] == 1
 
-    def test_reader_failure_falls_back_to_athena(self) -> None:
-        """Reader raises -> Athena fallback is used (success path)."""
-        athena_rows = [
-            {"rec_id": "rec-99", "rank": "1", "rationale": "athena-row", "north_star_impact": "medium"},
-        ]
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
-
-            with patch("session_preflight._run_athena_query", return_value=athena_rows):
-                result = _preflight.read_priority_queue()
-
-        assert len(result) == 1
-        assert result[0]["rec_id"] == "rec-99"
-
     def test_reader_empty_returns_empty_list(self) -> None:
-        """Reader returns [] -> function returns [] without calling Athena."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = []
+        """Verb returns [] -> function returns [] (empty queue, not an error)."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = []
 
-            with patch("session_preflight._run_athena_query") as mock_q:
-                result = _preflight.read_priority_queue()
+            result = _preflight.read_priority_queue()
 
-        mock_q.assert_not_called()
         assert result == []
 
 
 class TestCountRecommendationsReader:
-    """Tests for _count_recommendations_athena() -- DuckDB reader path (T2.5 graceful degradation)."""
+    """Tests for _count_recommendations_reader() -- DuckLake reader path (T2.19 cutover)."""
 
     _OPEN_ROWS = [
         {
@@ -1636,46 +1616,833 @@ class TestCountRecommendationsReader:
     ]
 
     def test_reader_path_returns_counts(self) -> None:
-        """DuckDBIcebergReader success -> counts returned without Athena call."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.return_value = list(self._OPEN_ROWS)
+        """open_recs verb success -> counts returned as tuple."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = list(self._OPEN_ROWS)
 
-            with patch("session_preflight._run_athena_query") as mock_q:
-                result = _preflight._count_recommendations_athena()
+            result = _preflight._count_recommendations_reader()
 
-        mock_q.assert_not_called()
-        assert result is not None
+        MockReader.return_value.named.assert_called_once_with("open_recs")
+        assert isinstance(result, tuple)
         open_count, _aging, non_auto_count, _details = result
         assert open_count == 2
         assert non_auto_count == 1
 
-    def test_reader_failure_falls_back_to_athena(self) -> None:
-        """Reader raises -> Athena fallback is used."""
-        athena_rows = [
-            {
-                "id": "rec-003",
-                "title": "Athena rec",
-                "context": "ctx",
-                "created_timestamp": "2026-05-01T00:00:00Z",
-                "automatable": "true",
-            }
-        ]
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
+    def test_reader_failure_returns_reader_unreachable_string(self) -> None:
+        """Reader raises -> returns 'reader_unreachable' string (no Athena fallback, Decision 55)."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
 
-            with patch("session_preflight._run_athena_query", return_value=athena_rows):
-                result = _preflight._count_recommendations_athena()
+            result = _preflight._count_recommendations_reader()
 
+        assert result == "reader_unreachable"
+
+    def test_reader_failure_only_returns_reader_unreachable(self) -> None:
+        """Reader fails -> 'reader_unreachable' string, never None (T2.19: no Athena escape)."""
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = ConnectionError("timeout")
+
+            result = _preflight._count_recommendations_reader()
+
+        assert result == "reader_unreachable"
         assert result is not None
-        open_count, _aging, _non_auto, _details = result
-        assert open_count == 1
 
-    def test_both_paths_fail_returns_none(self) -> None:
-        """Both reader and Athena fail -> returns None (graceful degradation, T2.5)."""
-        with patch("session_preflight._DuckDBIcebergReader") as MockReader:
-            MockReader.return_value.current_state.side_effect = RuntimeError("reader down")
 
-            with patch("session_preflight._run_athena_query", return_value=None):
-                result = _preflight._count_recommendations_athena()
+class TestRecsReadStatusDegradation:
+    """Verify that reader outage produces a loud recs_read_status signal (Decision 55)."""
 
-        assert result is None
+    def test_reader_unreachable_yields_loud_degraded_signal_not_false_zero(self, tmp_path: Path) -> None:
+        """reader_unreachable -> report shows recs_read_status=reader_unreachable (Decision 55 / T2.19)."""
+        preflight_report = tmp_path / ".preflight-report.json"
+
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch(
+                "session_preflight.check_main_freshness",
+                return_value={
+                    "status": "ok",
+                    "fetched_at": "2026-06-09T00:00:00+00:00",
+                    "commits_behind": 0,
+                    "commits_ahead": 0,
+                    "main_files_changed_since_branch": [],
+                },
+            ),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("session_preflight._sync_ops_pull", return_value={}),
+            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch("session_preflight.print_priority_queue"),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 2",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch(
+                "session_preflight.check_telemetry_health",
+                return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+            ),
+            patch(
+                "session_preflight.check_data_quality_coverage",
+                return_value={"tables_covered": 0, "checks_defined": 0, "last_run": None},
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight._fetch_ci_rca_recs", return_value=[]),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        data = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert data.get("recs_read_status") == "reader_unreachable"
+        # open_recommendations sentinel is 0 on degradation -- distinguish via recs_read_status
+        assert data.get("open_recommendations") == 0
+
+
+class TestFetchCiRcaRecs:
+    """_fetch_ci_rca_recs / _fetch_ci_rca_recs_since transit the ci_rca_* named verbs."""
+
+    def test_fetch_ci_rca_recs_uses_ci_rca_open_verb(self) -> None:
+        rows = [{"id": "rec-900", "title": "CI broken", "priority": "critical"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+            result = _preflight._fetch_ci_rca_recs()
+        assert result == rows
+        MockReader.return_value.named.assert_called_once_with("ci_rca_open")
+
+    def test_fetch_ci_rca_recs_degrades_to_empty_with_warning(self, capsys: pytest.CaptureFixture) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            result = _preflight._fetch_ci_rca_recs()
+        assert result == []
+        assert "reader unreachable" in capsys.readouterr().err
+
+    def test_fetch_ci_rca_recs_since_binds_since_ts(self) -> None:
+        rows = [{"id": "rec-901"}]
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = rows
+            result = _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z")
+        assert result == rows
+        MockReader.return_value.named.assert_called_once_with("ci_rca_since", since_ts="2026-06-10T00:00:00Z")
+
+    def test_fetch_ci_rca_recs_since_returns_empty_on_failure(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            assert _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z") == []
+
+
+class TestDeriveCiRcaClosed:
+    """Unit tests for _derive_ci_rca_closed() -- closed-sibling cluster projection."""
+
+    def _make_row(
+        self,
+        rec_id: str,
+        source: str = "ci_rca",
+        status: str = "closed",
+        file: str = "scripts/foo.py",
+        title: str = "CI failure",
+        last_updated: str = "2026-06-11T10:00:00Z",
+    ) -> dict:
+        return {
+            "id": rec_id,
+            "source": source,
+            "status": status,
+            "file": file,
+            "title": title,
+            "last_updated_timestamp": last_updated,
+        }
+
+    def test_only_closed_ci_rca_rows_returned(self) -> None:
+        rows = [
+            self._make_row("rec-901", status="closed"),
+            self._make_row("rec-902", status="open"),
+            self._make_row("rec-903", status="in_progress"),
+            self._make_row("rec-904", source="manual", status="closed"),
+        ]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert [r["id"] for r in result] == ["rec-901"]
+
+    def test_projects_expected_fields(self) -> None:
+        rows = [self._make_row("rec-910", file="scripts/bar.py", title="mypy error", last_updated="2026-06-15T12:00:00Z")]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert len(result) == 1
+        assert set(result[0].keys()) == {"id", "file", "title", "last_updated_timestamp"}
+        assert result[0]["id"] == "rec-910"
+        assert result[0]["file"] == "scripts/bar.py"
+        assert result[0]["title"] == "mypy error"
+        assert result[0]["last_updated_timestamp"] == "2026-06-15T12:00:00Z"
+
+    def test_empty_rows_returns_empty(self) -> None:
+        assert _preflight._derive_ci_rca_closed([]) == []
+
+    def test_multiple_closed_ci_rca_all_returned(self) -> None:
+        rows = [
+            self._make_row("rec-920"),
+            self._make_row("rec-921"),
+            self._make_row("rec-922", status="superseded"),
+        ]
+        result = _preflight._derive_ci_rca_closed(rows)
+        assert [r["id"] for r in result] == ["rec-920", "rec-921"]
+
+
+class TestGetLatestDecisionTs:
+    """_get_latest_decision_ts() reads via the decisions_max_updated verb."""
+
+    def test_returns_ts_from_first_row(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = [{"ts": "2026-06-10T12:00:00+00:00"}]
+            result = _preflight._get_latest_decision_ts()
+        assert result == "2026-06-10T12:00:00+00:00"
+        MockReader.assert_called_once_with(table="ops_decisions")
+        MockReader.return_value.named.assert_called_once_with("decisions_max_updated")
+
+    def test_returns_none_on_empty_rows(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = []
+            assert _preflight._get_latest_decision_ts() is None
+
+    def test_returns_none_on_empty_ts_value(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.return_value = [{"ts": ""}]
+            assert _preflight._get_latest_decision_ts() is None
+
+    def test_returns_none_on_reader_failure(self) -> None:
+        with patch("session_preflight._make_reader") as MockReader:
+            MockReader.return_value.named.side_effect = RuntimeError("reader down")
+            assert _preflight._get_latest_decision_ts() is None
+
+
+class TestReadContextFilesRecsCount:
+    """read_context_files() counts open recs via the open_recs verb (Decision 84 I-3)."""
+
+    def test_recommendations_count_is_len_of_open_recs_rows(self, tmp_path: Path) -> None:
+        reader = MagicMock()
+        reader.named.return_value = [{"id": "rec-1"}, {"id": "rec-2"}, {"id": "rec-3"}]
+        with (
+            patch("session_preflight._make_reader", return_value=reader),
+            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+        ):
+            result = _preflight.read_context_files()
+        assert result["recommendations_count"] == 3
+        reader.named.assert_called_once_with("open_recs")
+
+    def test_recommendations_count_zero_on_reader_failure(self, tmp_path: Path) -> None:
+        reader = MagicMock()
+        reader.named.side_effect = RuntimeError("reader down")
+        with (
+            patch("session_preflight._make_reader", return_value=reader),
+            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+        ):
+            result = _preflight.read_context_files()
+        assert result["recommendations_count"] == 0
+
+
+class TestRetiredAthenaEstate:
+    """Decision 84: the Athena query helpers and the outbox drain are gone from preflight."""
+
+    def test_athena_helpers_deleted(self) -> None:
+        for name in ("_run_athena_query", "_athena_run_query"):
+            assert not hasattr(_preflight, name), f"retired symbol still present: {name}"
+        athena_constants = [n for n in dir(_preflight) if n.startswith("_ATHENA")]
+        assert athena_constants == [], f"retired Athena constants still present: {athena_constants}"
+
+    def test_main_no_longer_drains_pending(self) -> None:
+        source = _MODULE_PATH.read_text(encoding="utf-8")
+        assert "drain_pending" not in source, "preflight must not reference the retired outbox drain"
+
+
+class TestPriorityQueueSourceCache:
+    """priority_queue_source reports 'cache' when credentials are unavailable."""
+
+    def test_report_source_cache_when_creds_down(self, tmp_path: Path) -> None:
+        preflight_report = tmp_path / ".preflight-report.json"
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="unavailable"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight._count_recommendations_reader", return_value=(0, 0, 0, [])),
+            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 2",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        data = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert data["creds_status"] == "unavailable"
+        assert data["priority_queue_source"] == "cache"
+
+
+class TestCiRcaCorrelation:
+    """Tests for correlate_ci_rca_with_main() -- soft/hard classification."""
+
+    def _make_rec(self, rec_id: str, file: str = "scripts/foo.py", created: str = "2026-06-10T10:00:00Z") -> dict:
+        return {"id": rec_id, "file": file, "title": "CI failure", "priority": "critical", "created_timestamp": created}
+
+    def _make_commit(self, sha: str, date: str, subject: str, files: list[str] | None = None) -> dict:
+        return {"sha": sha, "date": date, "subject": subject, "files": files or []}
+
+    def _make_closed_sibling(
+        self,
+        sib_id: str,
+        file: str = "scripts/foo.py",
+        title: str = "CI failure",
+        closed: str = "2026-06-11T10:00:00Z",
+    ) -> dict:
+        return {
+            "id": sib_id,
+            "file": file,
+            "title": title,
+            "last_updated_timestamp": closed,
+        }
+
+    # --- LIKELY-RESOLVED cases ---
+
+    def test_correlated_by_file_classified_likely_resolved(self) -> None:
+        rec = self._make_rec("rec-2187", file="scripts/foo.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("abc1234", "2026-06-11T10:00:00+00:00", "fix: repair foo", files=["scripts/foo.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_correlated_by_rec_id_in_subject_classified_likely_resolved(self) -> None:
+        rec = self._make_rec("rec-2188", file="scripts/bar.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("def5678", "2026-06-11T10:00:00+00:00", "fix(ci): closes rec-2188 mypy issue", files=[])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    # --- UNRESOLVED / HARD BLOCK retained ---
+
+    def test_no_matching_commit_classified_unresolved(self) -> None:
+        rec = self._make_rec("rec-2190", file="scripts/baz.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "fff9999", "2026-06-11T10:00:00+00:00", "feat: unrelated change", files=["scripts/other.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_commit_before_rec_creation_does_not_correlate(self) -> None:
+        rec = self._make_rec("rec-2191", file="scripts/foo.py", created="2026-06-12T10:00:00Z")
+        commit = self._make_commit("aaa1111", "2026-06-11T10:00:00+00:00", "fix: repair foo", files=["scripts/foo.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_empty_recs_returns_empty(self) -> None:
+        commit = self._make_commit("abc1234", "2026-06-11T10:00:00+00:00", "fix: something")
+        result = _preflight.correlate_ci_rca_with_main([], [commit])
+        assert result == {"likely_resolved": [], "unresolved": []}
+
+    def test_empty_commits_all_unresolved(self) -> None:
+        rec = self._make_rec("rec-9999", file="scripts/x.py")
+        result = _preflight.correlate_ci_rca_with_main([rec], [])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    # --- precision: component-boundary path matching ---
+
+    def test_basename_substring_of_unrelated_path_not_correlated(self) -> None:
+        # "utils.py" must NOT match "scripts/test_utils.py" (substring crosses component boundary).
+        rec = self._make_rec("rec-2195a", file="utils.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "bbb1111", "2026-06-11T10:00:00+00:00", "fix: update test_utils", files=["scripts/test_utils.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_ci_py_not_matched_by_cli_py(self) -> None:
+        # "ci.py" must NOT match "scripts/cli.py".
+        rec = self._make_rec("rec-2195b", file="ci.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("ccc2222", "2026-06-11T10:00:00+00:00", "feat: cli improvements", files=["scripts/cli.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["unresolved"] == [rec]
+        assert result["likely_resolved"] == []
+
+    def test_basename_only_rec_matches_full_path_with_same_basename(self) -> None:
+        # "session_preflight.py" (basename) must match "scripts/session_preflight.py".
+        rec = self._make_rec("rec-2195c", file="session_preflight.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "ddd3333", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_full_path_exact_match_correlated(self) -> None:
+        # "scripts/session_preflight.py" must match "scripts/session_preflight.py" exactly.
+        rec = self._make_rec("rec-2195d", file="scripts/session_preflight.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit(
+            "eee4444", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    # --- mixed batch ---
+
+    def test_mixed_batch_split_correctly(self) -> None:
+        rec_corr = self._make_rec("rec-100", file="scripts/a.py", created="2026-06-10T10:00:00Z")
+        rec_not = self._make_rec("rec-101", file="scripts/b.py", created="2026-06-10T10:00:00Z")
+        commit = self._make_commit("aaa2222", "2026-06-11T10:00:00+00:00", "fix: patch a", files=["scripts/a.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec_corr, rec_not], [commit])
+        assert result["likely_resolved"] == [rec_corr]
+        assert result["unresolved"] == [rec_not]
+
+    # --- end-to-end derive->correlate regression (rec-2268 incident shape) ---
+
+    def test_end_to_end_derive_to_correlate_classifies_rec_2268_shape(self) -> None:
+        """rec-2268 shape: the open ci_rca rec's file was modified by a newer main commit, but
+        _derive_ci_rca_open() previously dropped the `file` field so correlate_ci_rca_with_main()
+        could not match it and the rec was incorrectly left as HARD BLOCK."""
+        raw_row = {
+            "id": "rec-2268",
+            "title": "mypy failure in ci_rca_tier_map",
+            "priority": "critical",
+            "created_timestamp": "2026-06-17T08:00:00Z",
+            "source": "ci_rca",
+            "status": "open",
+            "file": "scripts/ci_rca_tier_map.py",
+        }
+        derived = _preflight._derive_ci_rca_open([raw_row])
+        assert len(derived) == 1
+        assert derived[0]["file"] == "scripts/ci_rca_tier_map.py", "file must survive _derive_ci_rca_open projection"
+
+        commit = self._make_commit(
+            "e779dd30",
+            "2026-06-18T09:00:00+00:00",
+            "fix: add encoding utf-8 to ci_rca_tier_map (#184)",
+            files=["scripts/ci_rca_tier_map.py"],
+        )
+        result = _preflight.correlate_ci_rca_with_main(derived, [commit])
+        assert result["likely_resolved"] == derived, "rec-2268 shape must classify as likely_resolved end-to-end"
+        assert result["unresolved"] == []
+
+    # --- closed-sibling cluster tests ---
+
+    def test_closed_sibling_cluster_positive_same_file_similar_title_sibling_after(self) -> None:
+        """Positive: open rec with a closed sibling on the same file, similar title, sibling closed after rec created."""
+        rec = self._make_rec("rec-2274", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = self._make_closed_sibling(
+            "rec-2260", file="scripts/foo.py", title="mypy failure in foo module", closed="2026-06-18T09:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert len(result["likely_resolved"]) == 1
+        assert result["likely_resolved"][0]["id"] == "rec-2274"
+        assert "rec-2260" in result["likely_resolved"][0].get("_resolved_reason", "")
+        assert result["unresolved"] == []
+
+    def test_closed_sibling_cluster_negative_dissimilar_title(self) -> None:
+        """Negative: same file but Jaccard < 0.5 (unrelated title) -- must NOT flag as likely_resolved."""
+        rec = self._make_rec("rec-2275", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy type annotation failure"
+        sibling = self._make_closed_sibling(
+            "rec-2261", file="scripts/foo.py", title="ruff import order violation", closed="2026-06-18T09:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_negative_stale_sibling(self) -> None:
+        """Negative: same file + similar title but sibling was closed BEFORE the open rec was created -- stale guard."""
+        rec = self._make_rec("rec-2276", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = self._make_closed_sibling(
+            "rec-2262", file="scripts/foo.py", title="mypy failure in foo module", closed="2026-06-16T07:00:00Z"
+        )
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_negative_null_timestamp(self) -> None:
+        """Negative: same file + similar title but sibling has no last_updated_timestamp -- must NOT flag."""
+        rec = self._make_rec("rec-2277", file="scripts/foo.py", created="2026-06-17T08:00:00Z")
+        rec["title"] = "mypy failure in foo module"
+        sibling = {
+            "id": "rec-2263",
+            "file": "scripts/foo.py",
+            "title": "mypy failure in foo module",
+            "last_updated_timestamp": None,
+        }
+        result = _preflight.correlate_ci_rca_with_main([rec], [], closed_ci_rca_recs=[sibling])
+        assert result["likely_resolved"] == []
+        assert result["unresolved"] == [rec]
+
+
+class TestPrintCiRcaRecsWithCorrelation:
+    """Tests for the new correlation-aware print_ci_rca_recs() output."""
+
+    def _capture_output(self, recs: list[dict], correlation: dict | None) -> str:
+        printed: list[str] = []
+
+        def capture(*args: object, **kwargs: object) -> None:
+            printed.append(" ".join(str(a) for a in args))
+
+        with patch("builtins.print", side_effect=capture):
+            _preflight.print_ci_rca_recs(recs, correlation=correlation)
+        return "\n".join(printed)
+
+    def test_hard_block_shown_for_unresolved_rec(self) -> None:
+        rec = {"id": "rec-9999", "title": "CI broken", "priority": "critical", "created_timestamp": "2026-05-13"}
+        correlation = {"likely_resolved": [], "unresolved": [rec]}
+        output = self._capture_output([rec], correlation)
+        assert "HARD BLOCK" in output
+        assert "SOFT" not in output
+        assert "rec-9999" in output
+
+    def test_soft_prompt_shown_for_likely_resolved_rec(self) -> None:
+        rec = {"id": "rec-2187", "title": "mypy fail", "priority": "critical", "created_timestamp": "2026-06-10"}
+        correlation = {"likely_resolved": [rec], "unresolved": []}
+        output = self._capture_output([rec], correlation)
+        assert "SOFT" in output
+        assert "LIKELY RESOLVED" in output
+        assert "HARD BLOCK" not in output
+        assert "rec-2187" in output
+        assert "--update-rec rec-2187" in output
+
+    def test_both_soft_and_hard_block_when_mixed(self) -> None:
+        r_soft = {"id": "rec-100", "title": "old fail", "priority": "critical", "created_timestamp": "2026-06-10"}
+        r_hard = {"id": "rec-101", "title": "new fail", "priority": "critical", "created_timestamp": "2026-06-12"}
+        correlation = {"likely_resolved": [r_soft], "unresolved": [r_hard]}
+        output = self._capture_output([r_soft, r_hard], correlation)
+        assert "SOFT" in output
+        assert "HARD BLOCK" in output
+        assert "rec-100" in output
+        assert "rec-101" in output
+
+    def test_none_correlation_falls_back_to_all_hard_block(self) -> None:
+        rec = {"id": "rec-999", "title": "CI broken", "priority": "critical", "created_timestamp": "2026-05-13"}
+        output = self._capture_output([rec], correlation=None)
+        assert "HARD BLOCK" in output
+        assert "SOFT" not in output
+
+    def test_empty_recs_shows_none(self) -> None:
+        output = self._capture_output([], correlation={"likely_resolved": [], "unresolved": []})
+        assert "(none)" in output
+
+
+class TestSyncCollapse:
+    """sync_ops.sync is called exactly once; the standalone _sync_ops_pull is not called in main()."""
+
+    _FULL_MAIN_PATCHES: dict = {}  # class-level placeholder; built per test
+
+    @staticmethod
+    def _full_main_ctx(tmp_path: Path, extra: dict | None = None):
+        """Return a list of patch context managers sufficient to run main() in isolation."""
+        patches = [
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            # Phase B / pre-Phase-A subprocess users -- patch by name so main() never
+            # shells out to real git (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 1.5",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", tmp_path / ".preflight-report.json"),
+            patch("builtins.print"),
+        ]
+        if extra:
+            for tgt, kwargs in extra.items():
+                patches.append(patch(tgt, **kwargs))
+        return patches
+
+    def test_sync_called_exactly_once(self, tmp_path: Path) -> None:
+        """scripts.sync_ops.warm_sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
+        sync_call_count: list[int] = []
+
+        def tracking_sync(profile: str = "agent_platform") -> dict:
+            sync_call_count.append(1)
+            return {
+                "drained": {},
+                "pulled": {"ops_recommendations": 10},
+                "rows": {"ops_recommendations": [], "ops_decisions": [], "ops_priority_queue": []},
+                "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+            }
+
+        from contextlib import ExitStack  # noqa: PLC0415
+
+        with ExitStack() as stack:
+            for p in self._full_main_ctx(tmp_path):
+                stack.enter_context(p)
+            stack.enter_context(patch("scripts.sync_ops.warm_sync", side_effect=tracking_sync))
+            _preflight.main()
+
+        assert len(sync_call_count) == 1, f"warm_sync called {len(sync_call_count)} times; expected exactly 1"
+        report_path = tmp_path / ".preflight-report.json"
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["recommendation_sync"] == {"ops_recommendations": 10}
+
+    def test_sync_ops_pull_not_called_in_main(self, tmp_path: Path) -> None:
+        """_sync_ops_pull (= _rebuild_local_cache) is never called from main() after the sync collapse."""
+        pull_calls: list[int] = []
+
+        from contextlib import ExitStack  # noqa: PLC0415
+
+        with ExitStack() as stack:
+            for p in self._full_main_ctx(tmp_path):
+                stack.enter_context(p)
+            stack.enter_context(patch("session_preflight._sync_ops_pull", side_effect=lambda: pull_calls.append(1) or {}))
+            _preflight.main()
+
+        assert pull_calls == [], "_sync_ops_pull must not be called from main() after the sync collapse"
+
+
+class TestUrlPriming:
+    """_prime_reader_url() resolves the DuckLake reader Function URL once and sets DUCKLAKE_READER_URL."""
+
+    def test_sets_env_var_when_creds_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On creds ok, DUCKLAKE_READER_URL is set from the resolved URL."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        fake_url = "https://abc123.lambda-url.eu-west-2.on.aws"
+        mock_reader = MagicMock()
+        mock_reader._reader_url.return_value = fake_url
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")
+        assert os.environ.get("DUCKLAKE_READER_URL") == fake_url
+
+    def test_skips_when_creds_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Credentials unavailable -> reader is never called and env var is not set."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        with patch("session_preflight._make_reader") as mock_make:
+            _preflight._prime_reader_url("unavailable")
+        mock_make.assert_not_called()
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+    def test_skips_if_already_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If DUCKLAKE_READER_URL is already set, the existing value is preserved."""
+        monkeypatch.setenv("DUCKLAKE_READER_URL", "https://original.url")
+        with patch("session_preflight._make_reader") as mock_make:
+            _preflight._prime_reader_url("ok")
+        mock_make.assert_not_called()
+        assert os.environ["DUCKLAKE_READER_URL"] == "https://original.url"
+
+    def test_priming_failure_is_nonfatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If URL resolution raises, _prime_reader_url does not propagate; env var is not set."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        mock_reader = MagicMock()
+        mock_reader._reader_url.side_effect = RuntimeError("SSM unavailable")
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")  # must not raise
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+    def test_non_string_url_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If _reader_url() returns a non-string (e.g. MagicMock), the env var is not polluted."""
+        monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+        mock_reader = MagicMock()
+        mock_reader._reader_url.return_value = MagicMock()  # not a string
+        with patch("session_preflight._make_reader", return_value=mock_reader):
+            _preflight._prime_reader_url("ok")
+        assert "DUCKLAKE_READER_URL" not in os.environ
+
+
+class TestVerbDedup:
+    """Phase B issues ZERO reader verb calls -- every signal is served from the warm-sync rows (D4).
+
+    Before neon-egress-reduction D4, main() de-duplicated the Phase-B reader fan-out down to one call
+    per verb. D4 supersedes that: the warm-up sync (warm_sync) pulls the tables ONCE and Phase B
+    derives every signal from those in-memory rows, so the per-verb count is now ZERO. This is the
+    main()-level encoding of acceptance criterion 1 (zero additional Phase-B reader verb calls).
+    """
+
+    @staticmethod
+    def _make_counting_reader(verb_calls: dict[str, int]) -> MagicMock:
+        """Return a reader stub that counts named() calls per verb."""
+        reader = MagicMock()
+
+        def _named(verb: str, **kwargs: object) -> list:
+            verb_calls[verb] = verb_calls.get(verb, 0) + 1
+            return []
+
+        reader.named.side_effect = _named
+        return reader
+
+    def _run_main_with_counting_reader(self, tmp_path: Path, verb_calls: dict[str, int]) -> None:
+        counting_reader = self._make_counting_reader(verb_calls)
+        preflight_report = tmp_path / ".preflight-report.json"
+        # warm_sync returns NON-empty rows for all three tables so the derivations have real input;
+        # the counting reader must STILL see zero verb calls in Phase B (everything served from rows).
+        warm_sync_rows = {
+            "drained": {},
+            "pulled": {"ops_recommendations": 2, "ops_decisions": 1, "ops_priority_queue": 0},
+            "rows": {
+                "ops_recommendations": [
+                    {
+                        "id": "rec-001",
+                        "status": "open",
+                        "source": "manual",
+                        "automatable": True,
+                        "title": "t1",
+                        "context": "c1",
+                        "created_timestamp": "2026-06-10T00:00:00+00:00",
+                    },
+                    {
+                        "id": "rec-002",
+                        "status": "closed",
+                        "source": "ci_rca",
+                        "automatable": False,
+                        "title": "t2",
+                        "context": "c2",
+                        "created_timestamp": "2026-06-11T00:00:00+00:00",
+                    },
+                ],
+                "ops_decisions": [
+                    {"id": "dec-001", "last_updated_timestamp": "2026-06-12T00:00:00+00:00"},
+                ],
+                "ops_priority_queue": [],
+            },
+            "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+        }
+        with (
+            patch("session_preflight._make_reader", return_value=counting_reader),
+            patch("scripts.sync_ops.warm_sync", return_value=warm_sync_rows),
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            # Patch subprocess users by name so the verb-count assertions are not perturbed
+            # by real git calls (tests/CLAUDE.md isolation: no real subprocess in unit tests).
+            patch("session_preflight._get_recent_main_commits", return_value=[]),
+            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+    def test_open_recs_not_called_in_phase_b(self, tmp_path: Path) -> None:
+        """open_recs verb is NOT queried in Phase B -- the open count is derived from the warm-sync rows (D4)."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        count = verb_calls.get("open_recs", 0)
+        assert count == 0, f"open_recs called {count} times; expected 0 (served from the warm-sync rows, D4)"
+
+    def test_decisions_max_updated_not_called_in_phase_b(self, tmp_path: Path) -> None:
+        """decisions_max_updated verb is NOT queried in Phase B -- the timestamp is derived from rows (D4)."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        count = verb_calls.get("decisions_max_updated", 0)
+        assert count == 0, f"decisions_max_updated called {count} times; expected 0 (derived from rows, D4)"
+
+    def test_no_reader_verb_calls_in_phase_b(self, tmp_path: Path) -> None:
+        """The whole Phase-B fan-out issues ZERO reader verb calls (acceptance criterion 1)."""
+        verb_calls: dict[str, int] = {}
+        self._run_main_with_counting_reader(tmp_path, verb_calls)
+        assert verb_calls == {}, f"Phase B issued reader verb calls {verb_calls}; expected none (served from rows, D4)"
+
+
+class TestErrorPropagation:
+    """Worker thread exceptions and SystemExit propagate to the main thread via future.result()."""
+
+    def test_worker_sysexit_propagates(self, tmp_path: Path) -> None:
+        """sys.exit(1) from read_priority_queue (verb failure, creds ok) re-raises in main thread."""
+        preflight_report = tmp_path / ".preflight-report.json"
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight.read_priority_queue", side_effect=SystemExit(1)),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 1.5",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            with pytest.raises(SystemExit):
+                _preflight.main()
+
+
+class TestGetRecentMainCommits:
+    """Tests for _get_recent_main_commits()."""
+
+    _GIT_LOG_OUTPUT = (
+        "COMMIT:abc12345|2026-06-12T10:00:00+00:00|feat(scope): fix bar\n"
+        "scripts/foo.py\n"
+        "scripts/bar.py\n"
+        "\n"
+        "COMMIT:def67890|2026-06-11T09:00:00+00:00|fix: repair baz\n"
+        "scripts/baz.py\n"
+    )
+
+    def _make_git_result(self, stdout: str, returncode: int = 0) -> MagicMock:
+        r = MagicMock()
+        r.returncode = returncode
+        r.stdout = stdout
+        return r
+
+    def test_returns_list_of_commits(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result(self._GIT_LOG_OUTPUT)):
+            result = _preflight._get_recent_main_commits()
+        assert len(result) == 2
+        assert result[0]["sha"] == "abc12345"
+        assert result[0]["subject"] == "feat(scope): fix bar"
+        assert "scripts/foo.py" in result[0]["files"]
+        assert result[1]["sha"] == "def67890"
+
+    def test_returns_empty_on_nonzero_exit(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result("", returncode=1)):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_returns_empty_on_oserror(self) -> None:
+        with patch("session_preflight.subprocess.run", side_effect=OSError("git not found")):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_returns_empty_on_timeout(self) -> None:
+        with patch("session_preflight.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 15)):
+            result = _preflight._get_recent_main_commits()
+        assert result == []
+
+    def test_empty_output_returns_empty(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_git_result("")):
+            result = _preflight._get_recent_main_commits()
+        assert result == []

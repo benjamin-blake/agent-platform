@@ -1,0 +1,273 @@
+# COVERAGE-GAP-SCANNER C -- Wave 1 audit output (D8: coverage and gap analysis)
+# Target: docs/ROADMAP-PLATFORM.yaml | Repo: /home/user/agent-platform | Date: 2026-06-09
+# REPORT-ONLY. Representation checked via rg over the roadmap; "active" = runs/deployed today.
+claims:
+
+  # ============================================================
+  # SECTION 1: OPERATIONAL SURFACE SWEEP
+  # ============================================================
+
+  - id: C-001
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "rg over roadmap: every terraform/*.tf (root) + terraform/personal/*.tf + terraform/github/*.tf maps to T2.1(terraform/), T2.16/T2.16b, T2.12(github/), or foundation F.1/F.2"
+      - "All 8 .github/workflows/*.yml represented (ci 2, main-canary 1, terraform-apply-sandbox 3, deploy 2, claude 2, refresh-copilot-multipliers 2, ci-rca 7, codeql 2) -- named in T2.10 files_in_scope + tier bodies"
+      - "All 6 .claude/skills (planning/plan-critique/code-review/implement named; decision-scout/executor-rca are tooling not roadmap surfaces), commands plan/implement, hooks never_on_main/scheduled_agent_log_only/session_start_aws represented"
+      - "docs/contracts/*: build-lambda/cli-json-output/copilot-cli/delegate-cli/environment-taxonomy/inference-provider/instruction-architecture/log-storage/ops-data-store/read-engine all owned by T-1.13..T-1.19 / T2.x"
+      - "src/lambdas active set: ducklake_writer/reader/maintenance/catalog_dr (T2.17/T2.18), data-pipeline + ops-compaction (T-1.8 migration path + T2.18); stub set log_rec/log_decision/query/update_rec/list_tools/maintenance owned by T0.7a-c/T1.1-T1.4"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Summary row. The overwhelming majority of operational surfaces have roadmap representation. Specific gaps/notes are itemized below."
+
+  - id: C-002
+    affected_ids: []
+    verdict_or_classification: unrepresented_active_surface
+    evidence:
+      - "scripts/sync_athena_to_pgvector.py: 0 roadmap hits (rg -c sync_athena_to_pgvector docs/ROADMAP-PLATFORM.yaml = 0)"
+      - "Self-import only: rg -l shows the script references only itself in scripts/src/.github -- no active caller wires it in"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Athena->pgvector sync script. No roadmap representation AND no live caller found; behaves as dead/orphan code (Athena read path is being retired under T2.7/T2.19). Classify as unrepresented-but-likely-dead; at most a note, candidate for T5-era cleanup or explicit known_gap."
+
+  - id: C-003
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "scripts/sync_ops.py (0 literal hits) + scripts/sync_recommendations.py (0 literal hits) are wired into active code: session_preflight.py, session_postflight.py, validate.py, ops_data_portal.py, executor/batch.py"
+      - "Covered indirectly by F.9 (Single Portal Invariant + local-first outbox) and T1.5 (ops_data_portal import-site sweep, files_in_scope lists ops_data_portal.py)"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "sync_ops/sync_recommendations are ACTIVE (outbox/portal machinery) but never named literally in the roadmap. Defensibly covered by the F.9 Single Portal Invariant foundation + T1.5; flagging only because literal traceability is absent."
+
+  - id: C-004
+    affected_ids: []
+    verdict_or_classification: unrepresented_active_surface
+    evidence:
+      - ".claude/hooks/session_start_ensure_github_mcp.sh + session_start_precommit.sh: 0 roadmap hits each"
+      - "Both wired live in .claude/settings.json (SessionStart commands, lines ~59/63)"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Two session-start hooks run on every web session but are unnamed in the roadmap. Arguably subsumed by T0.5 ('Session-start hook with device-code SSO bootstrap') which only names session_start.py + session_start_aws; the github-mcp + precommit bootstrap hooks are newer and uncovered. Low severity bookkeeping gap."
+
+  - id: C-005
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "scripts/terraform_apply_guard.py named in T2.16b files_in_scope (roadmap line ~744) and narrated at lines 3357/3417 as the EXISTING Decision-77 fail-closed sandbox-apply guard"
+      - "Wired live: .github/workflows/terraform-apply-sandbox.yml line 102 runs scripts/terraform_apply_guard.py plan.json"
+      - "T2.20-T2.25 (CD.35) are FUTURE work that narrows/extends the guard; the existing guard is owned by completed T2.16b"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Resolves the prompt's open question: the EXISTING Decision-77 sandbox auto-apply guard is represented (T2.16b complete, plus narrative). T2.20-25 CD.35 future-work does not orphan it."
+
+  - id: C-006
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "ducklake_* lambdas: ducklake_writer/reader (T2.17), ducklake_maintenance (T2.18, replaces ops_compaction), ducklake_catalog_dr (terraform/personal/ducklake_catalog_dr.tf + roadmap hit); scheduled_agent_dispatcher + findings_processor named in T-1.8 migration path (line 716)"
+      - "ops_compaction: 9+ roadmap hits, explicitly retired/replaced by T2.18; data-pipeline: named in T-1.8 zip flow (lines 670/1727)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All prompt-flagged lambdas (ducklake_*, ops_compaction, data-pipeline, scheduled_agent_dispatcher, findings_processor) are represented. ops_compaction/data-pipeline remain status:active on the Iceberg path until the T2.19 cutover -- correctly reflected as in-flight."
+
+  - id: C-007
+    affected_ids: []
+    verdict_or_classification: unrepresented_dead_surface
+    evidence:
+      - "scripts/ducklake_runtime.py referenced once (roadmap line 3588 as a SLOC example: 'ducklake_runtime.py 432 SLOC < 500 no waiver') but NOT present on disk (ls scripts/ducklake_runtime.py -> absent)"
+      - "Only scripts/ducklake_neon_smoke_test.py exists; ducklake runtime logic lives in src/lambdas/ducklake_writer/handler.py"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Roadmap cites a not-yet-created scripts/ducklake_runtime.py as a forward SLOC-budget illustration inside a plan inventory. Aspirational filename, not a live surface; trivial -- note only."
+
+  - id: C-008
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "Root terraform/ (agent_auth/dynamodb/data_pipeline/cost_monitoring/scheduled_agents .tf) = company-aws-profile dormant account per roadmap line 578 ('committed account_id and bblake-* references point at a dormant account pending T5.2')"
+      - "Covered by T2.1 (files_in_scope: terraform/, complete) + T5.2 (company-aws-profile teardown, 30d grace); live substrate is terraform/personal/"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "0-literal-hit root terraform files are the legacy-account IaC retained pending T5.2 teardown, not unrepresented. Adequately covered by T2.1 + T5.2."
+
+  # ============================================================
+  # SECTION 2: PLANS / HANDOFFS SWEEP
+  # ============================================================
+
+  - id: C-009
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "23 PLAN- slugs in roadmap have no file on disk (PLAN-llm-client-litellm-transport, PLAN-persona-*, PLAN-contracts-*, PLAN-ci-rca-*, PLAN-retire-bedrock-code-paths, PLAN-update-inference-provider-contract, etc.)"
+      - "Each is framed as FUTURE/follow-on, not as existing: e.g. line 4075 'PLAN-llm-client-litellm-transport -- ... (precursor; lands before persona plans)'; line 984 'PLAN-retire-bedrock-code-paths (priority high)' under a follow-on plan inventory; lines 1857-1859 PLAN-contracts-* tagged 'subset c/d/e'"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "The missing PLAN refs are forward-looking plan-inventory entries (work to be written), NOT roadmap claims that artifacts already exist. Legitimate planning notation; no roadmap_claims_missing_artifact finding warranted."
+
+  - id: C-010
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "Recent (post-2026-05-18) plans map to in-flight tiers: PLAN-ducklake-neon-connect-rca/recs-cutover-completion/ops-finalize/churn-latency-rca all state they serve T2.19/T2.17 (in_progress)"
+      - "PLAN-cd25-platform-gap-sequencing(06-03), PLAN-multi-product-*(06-03)->KG.14/CD.32, PLAN-readme-platform-portal(06-05)->T2.11b, PLAN-ducklake-rds-retirement(06-05)->T2.16b, PLAN-terraform-cicd-agent-native(06-05)->T2.20-25, PLAN-ops-decisions-phase-0-1(06-03)->T1.5/F.8, PLAN-platform-env-and-sandbox-cd(06-03)->T2.20"
+      - "docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md -> T2.17 (complete)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "All recent plans + the single handoff map to an existing tier item (mostly the in-progress DuckLake T2.16b-T2.19 / multi-product / CD.35 clusters). No plan-without-roadmap-reflection found."
+
+  # ============================================================
+  # SECTION 3: STALE OPEN QUESTIONS
+  # ============================================================
+
+  - id: C-011
+    affected_ids: [OQ.1]
+    verdict_or_classification: stale_open_question
+    evidence:
+      - "OQ.1 asks: AGENTS.md symlink vs duplicate-with-CI-parity. Resolution tier T0.9 = complete"
+      - "On disk: AGENTS.md is a regular file 17552 bytes, NOT a symlink ( if -L AGENTS.md -> false); CLAUDE.md is an 11-byte pointer. Duplicate mechanism was chosen and shipped"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "The symlink-vs-duplicate question is functionally decided (duplicate-with-pointer; T0.9 complete). OQ.1's own note even says T0.9 'cannot complete without committing to a mechanism'. Should be marked resolved, not open."
+
+  - id: C-012
+    affected_ids: [OQ.2]
+    verdict_or_classification: stale_open_question
+    evidence:
+      - "OQ.2 (pre-commit bundling scope) resolution tier T0.10 = complete"
+      - "T0.10 'Pre-commit safety net' shipped .pre-commit-config.yaml + requirements-dev.txt; session_start_precommit.sh hook wired in settings.json"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Pre-commit scope was settled when T0.10 landed. Question is decided; still listed open. Low because the residual scope detail (ruff/EOF/secrets) is verifiable in the shipped config."
+
+  - id: C-013
+    affected_ids: [OQ.4]
+    verdict_or_classification: stale_open_question
+    evidence:
+      - "OQ.4 (OIDC vs personal-account precedence) resolution tier T0.3 = complete"
+      - "Roadmap line 807/2131: 'Realized via terraform/personal/platform_roles.tf Pattern B IAM roles (PR #4)'; OQ.4 note already records the resolved direction (Pattern B now, OIDC deferred to T2.10/CD.21 which is itself now complete)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Precedence is decided and shipped (Pattern B static-key chain; OIDC landed separately at T2.10 complete). OQ.4 reads as settled history; should be closed."
+
+  - id: C-014
+    affected_ids: [OQ.8, OQ.9]
+    verdict_or_classification: stale_open_question
+    evidence:
+      - "Both resolution_tier T2.16 = complete; T2.16b (Neon migration) = complete; both OQ notes carry full 'Re-resolved (CD.34)' direction (Neon backend, Secrets Manager DSN, daily pg_dump DR)"
+      - "BUT CD.34 ratification is pending Decision 82 (roadmap lines 1397/1420: 'Does NOT edit DECISIONS.md while pending ... provisionally Decision 82')"
+    proposed_severity: medium
+    proposed_confidence: medium
+    note: "OQ.8 (RDS sizing/proxy/cred) and OQ.9 (catalog DR/SPOF) are functionally answered -- the work shipped (Neon, T2.16/T2.16b complete) and both carry detailed re-resolutions. Formally still pending CD.34/Decision 82 ratification, which is the only reason to keep them open. Recommend converting to resolved-pending-ratification rather than plain open."
+
+  - id: C-015
+    affected_ids: [OQ.11]
+    verdict_or_classification: stale_open_question
+    evidence:
+      - "OQ.11 note says 'Enacted at T2.18' (twice: CD.33 direction + CD.34 re-resolution, inlining disabled for ALL tables)"
+      - "But T2.18 status = in_progress (not complete); CD.34 pending Decision 82"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Inlining-flush policy is decided (inlined_rows=0 all tables) and annotated 'Enacted at T2.18', yet T2.18 is in_progress and CD.34 unratified. Mild status tension; defensibly open until T2.18 completes + CD.34 ratifies. Tag as resolved-pending-enactment."
+
+  - id: C-016
+    affected_ids: [OQ.3, OQ.5, OQ.6, OQ.7, OQ.10, OQ.12, OQ.13, OQ.14]
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "OQ.5 T0.13 not_started, OQ.3 T2.6 not_started, OQ.6 T1.6 not_started -> legitimately open (resolution tiers unstarted)"
+      - "OQ.7/OQ.10 (T2.19 in_progress, CD.33 direction recorded but enactment ongoing), OQ.12 (T2.17 upgrade policy), OQ.13 (CD.31/NS.1, pending), OQ.14 (FP-C deferred) -> open by design"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Summary row: these 8 OQs are legitimately open -- their resolution tiers are not_started/in_progress or explicitly deferred (FP-C). No staleness."
+
+  # ============================================================
+  # SECTION 4: STALE KNOWN GAPS
+  # ============================================================
+
+  - id: C-017
+    affected_ids: [KG.8]
+    verdict_or_classification: stale_known_gap
+    evidence:
+      - "KG.8 = 'Self-hosted runner SPOF during T2.1 re-deploy'. T2.1 = complete; T2.10 = complete (runner retired)"
+      - "All workflows now runs-on: ubuntu-latest (rg runs-on .github/workflows/*.yml -> 11x ubuntu-latest, 0 self-hosted); ci.yml line 118 comment 'CD.21 -- self-hosted runner retired'; roadmap line 3155 'EC2 runner retired; ec2_runner.tf retained with deprecation header per CD.21'"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "The self-hosted-runner SPOF gap is moot: the runner was retired (CD.21/Decision 73), T2.1 and T2.10 are complete, and CI runs entirely on GitHub-hosted ubuntu-latest. KG.8 should be closed/marked superseded."
+
+  - id: C-018
+    affected_ids: [KG.11]
+    verdict_or_classification: stale_known_gap
+    evidence:
+      - "KG.11: file a rec when ROADMAP-PLATFORM.yaml exceeds 2500 lines OR 50K tokens; gap text still says 'file is ~1500 lines / ~32K tokens'"
+      - "wc -l docs/ROADMAP-PLATFORM.yaml = 4559 lines (threshold breached ~1.8x)"
+      - "No rec on disk: logs/.recommendations-log.jsonl is ABSENT (file missing from logs/); rg -l ROADMAP-PLATFORM over it impossible -- no filed split rec located"
+    proposed_severity: medium
+    proposed_confidence: high
+    note: "KG.11's own trigger condition (>2500 lines / >50K tokens) is now BREACHED at 4559 lines, but its body still quotes the stale ~1500-line figure and no split rec has been filed (recs-log not present on disk to even check). The gap's described action is overdue; update the line count and file the per-tier-split rec, or convert KG.11 into an owned tier item."
+
+  - id: C-019
+    affected_ids: [KG.2]
+    verdict_or_classification: stale_known_gap
+    evidence:
+      - "KG.2 hard-codes '258 open recommendations not directly mapped to tier items'"
+      - "logs/.recommendations-log.jsonl is ABSENT on disk (session_preflight.py:37 expects logs/.recommendations-log.jsonl; file not present); logs/.preflight-report.json also absent -- the 258 count cannot be reproduced and is almost certainly stale"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "The '258 open recs' figure is a frozen snapshot; the recommendations log is not even present in this checkout, so the count is unverifiable and likely drifted. Soften KG.2 to not assert a precise count, or recompute from the live store. Low because KG.2's substance (recs are implementation hints, not tier items) still holds."
+
+  - id: C-020
+    affected_ids: [KG.6, KG.10]
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "KG.6 'PROMOTED to CD.18' with decision_required_before T1.5 gate; KG.10 'PROMOTED to CD.19' with decision_required_before T2.2 gate -- both explicitly retained for historical traceability"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "KG.6 and KG.10 are deliberately retained pointers to their promoted CDs (CD.18/CD.19). Correct bookkeeping, not stale -- no action."
+
+  - id: C-021
+    affected_ids: [KG.7]
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "KG.7 rewritten 2026-05-27 per CD.28 (Bedrock retired); now tracks Anthropic Tier-2 pool-exhaustion + simultaneous-outage availability concerns -- both forward-looking, tied to T4.2 autonomous loop"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "KG.7 is current (post-CD.28 rewrite) and describes still-live availability risks. Not stale."
+
+  - id: C-022
+    affected_ids: [KG.5, KG.9, KG.13, KG.14]
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "KG.5 (telemetry migration) gated on T2.2 scope -- telemetry tables pre-live throwaway, still valid; KG.9 (CC-on-web deprecation) forward contingency, valid"
+      - "KG.13 (TIA/result caching) explicitly T4.4-era deferral, valid; KG.14 (multi-product enforcement unbuilt) tied to CD.32 + INTENT-multi-product-platform build-state, current"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "Summary row: KG.5/KG.9/KG.13/KG.14 are legitimately-open forward gaps with correct tier/CD anchoring. KG.3 (provider-agnostic executor INTENT, T4.2-era) and KG.1/KG.4/KG.12 likewise current. No staleness."
+
+  # ============================================================
+  # SECTION 5: INTENT DOCUMENT REFERENCES
+  # ============================================================
+
+  - id: C-023
+    affected_ids: []
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "rg 'INTENT-' over roadmap yields 17 referenced docs; 16 exist on disk in docs/"
+      - "The one non-existent ref, INTENT-compute-and-account-topology.md, is referenced ONLY as explicitly RETIRED (lines 22/88/468/4199/4225: 'retired ... per CD.14', 'INTENT-compute-and-account-topology.md deleted', content inlined into the roadmap)"
+    proposed_severity: low
+    proposed_confidence: high
+    note: "No dangling INTENT claims. Every INTENT-*.md the roadmap cites as existing is on disk; the single missing one is correctly described as deliberately retired/deleted (CD.14, inlined). The roadmap is internally consistent here."
+
+  # ============================================================
+  # SECTION 6: NOTE -- live-but-deprecated default path
+  # ============================================================
+
+  - id: C-024
+    affected_ids: [KG.7]
+    verdict_or_classification: adequately_covered
+    evidence:
+      - "scripts/bedrock_client.py is still the DEFAULT llm_client transport (scripts/llm_client.py:136 '_bedrock_call() otherwise (default)'; imported at runtime by run_scheduled_agent.py:32, llm_client.py:228) despite CD.28 retiring Bedrock"
+      - "data-pipeline + ops-compaction manifests are status:active and bundle scripts/bedrock_client.py (manifest.yaml lines 17/10)"
+      - "Retirement tracked as future PLAN-retire-bedrock-code-paths (roadmap line 984, priority high) -- not yet executed"
+    proposed_severity: low
+    proposed_confidence: medium
+    note: "Observation, not a coverage gap: the retired-by-CD.28 Bedrock transport remains the wired default in llm_client + two active lambdas, pending the unwritten PLAN-retire-bedrock-code-paths. Roadmap DOES represent the retirement intent, so coverage is adequate; flagging the live-vs-decided lag as a low-severity note for the executor."

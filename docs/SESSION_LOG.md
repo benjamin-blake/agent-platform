@@ -9,6 +9,335 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-06-15] - ducklake-prod-merge: Decision 84 Phase-4 maintenance repoint (merge-only slice)
+
+**Goal:** Pay down the per-read Neon catalog-metadata egress driving network transfer to 3.78/5GB (free tier)
+by adding a daily non-destructive merge cadence for the live production ops_* SCD2 tables that the existing
+scheduled maintenance skips. Also close a latent DuckLake maintenance/DR code leak in the data-pipeline and
+ops-compaction Lambda bundles.
+
+**Root cause of egress:** ~7,293 small Parquet files for ~900 rows in the production ops_* tables (inlining-off
++ SCD2 append-only). Every ops read re-reads the per-file column-stat metadata from Neon, driving transfer.
+Existing maintenance is scoped to `ducklake_smoke_*` only.
+
+**What landed:**
+- `action_merge_ops` handler action (connectionless, production catalog, information_schema discovery of
+  ops_*_history/_current pairs, maint.merge_adjacent_files per table, MergeOps* CloudWatch metrics).
+  Non-destructive only -- no expire/cleanup/orphan (gated by rec-2113/T2.26, Decision 55).
+- EventBridge rule `agent-platform-ducklake-maintenance-merge-ops` (cron 04:30 UTC, ENABLED) invoking
+  merge_ops daily against ducklake_ops @ s3://agent-platform-data-lake/ducklake/. No new IAM (reuses
+  existing maintenance role).
+- Manifest `excludes` extended in data-pipeline + ops-compaction to block `ducklake_maintenance.py`,
+  `catalog_dr.py`, `src/lambdas/ducklake_maintenance`, `src/lambdas/ducklake_catalog_dr` from those zips.
+- 9 new handler tests (100% coverage of new lines), full validate exit 0.
+
+**Deployment:** Sandbox CD auto-apply (terraform-apply-sandbox.yml, Decision 77/CD.35) handles the 3 new
+EventBridge resources post-merge. Lambda code deploy via build_lambda --ducklake-only --deploy + full
+--deploy follows. Post-deploy VP steps 9-13 (live merge_ops invocation + files_before/after proof +
+read-your-write + smoke regression + EventBridge ENABLED check) to be executed in the next session.
+
+**Honest framing:** Non-destructive merge reduces per-read current-snapshot metadata but does NOT
+immediately shrink pg_dump or reclaim storage -- the catalog row-count temporarily grows (old + merged files
+coexist) until gated GC (T2.26/rec-2113) prunes. Net egress is a win because reads >> daily dumps.
+
+**Gated follow-up:** Destructive GC for production tables (expire_snapshots + cleanup_old_files +
+delete_orphaned_files) remains gated by rec-2113 (pg_restore restore-drill) via T2.26.
+
+## [2026-06-11] - t1-11-plan-yaml-migration: T1.11 COMPLETE, CD.22 ratified (Decision 84, dec-1091)
+
+Autonomous /goal session (plan #126 -> implement). PLAN-*.md -> PLAN-*.yaml migration landed:
+- `scripts/plan_document.py`: PlanDocument Pydantic schema (schema_version 1, extra=forbid; enums, unique VP
+  step ids, non-empty VP commands, STRATEGIC<->work_areas coupling, plan_path/slug/filename consistency) +
+  loader + PASS/FAIL CLI, mirroring the T-1.5 RoadmapDocument pattern.
+- `validate.py`: `validate_plan_documents` wired into BOTH --pre and full presubmit (product-roadmap placement
+  rationale); `plans_dir` override is the malformed-fixture test seam (fixtures live under
+  `tests/fixtures/plan_documents/`, never docs/plans/).
+- Read path: `find_plan.py` resolves .yaml first (.md fallback warns, one release cycle); `plan_audit.py`
+  parses YAML scope with deprecated markdown-table fallback; planning/implement/plan-critique skills updated
+  in `.claude/skills/` (canonical) and `.agents/skills/` (voluntary legacy hygiene -- Decision 76 supersedes
+  the Decision 58 sync obligation).
+- In-flight conversion list (1 of 1): PLAN-t1-11-plan-yaml-migration.md -> .yaml (the plan itself; audit of
+  all 41 post-initial-commit plans found none other in flight). Historical .md plans untouched.
+- Bookkeeping: T1.11 complete; CD.22 ratified via Decision 84 (dec-1091, filed through the portal), including
+  the Decision 76 clause-3 artefact amendment (.md -> .yaml). Follow-up rec filed for .claude/commands
+  plan/implement .md-reference reconciliation.
+- Decision-scout flagged (resolved in plan): .agents mirror voluntary-only; Decision 76 cl.3 amendment;
+  Decision 73 L5 check vs degraded reader (ci_rca_recs=[] from synced cache).
+
+## [2026-06-09] - ducklake-ops-finalize: T2.19 recs cutover SIGNED OFF (PHASE 2/3 tail)
+
+Completed the recs-first DuckLake cutover (PLAN-ducklake-ops-finalize, resuming from VP9 after #108/#109/#111).
+
+**Sign-off path (all VP gates PASS):**
+- VP9a connectivity readiness: `connect_probe` reader+writer `phase_reached=attach ok=True`; cold-resume ATTACH ~9-11s (within 18s budget).
+- VP9/10 IAM: confirmed PlatformDev `lambda:InvokeFunction` live (#109); added `lambda:InvokeFunction` + `lambda:GetFunctionUrlConfig` to the `github_ci` branch+pr OIDC roles (human-gated apply, 2 in-place policy updates). The GetFunctionUrlConfig grant + a boto3 URL-resolution fallback in `iceberg_reader`/`ops_data_portal` let the post-flip CI DQ resolve+reach the reader URL (no env / no terraform in CI).
+- VP11 deploy: 4 DuckLake functions (writer/reader/maintenance/catalog_dr) + data-pipeline/ops-compaction rebuilt/deployed; per-function smoke (writer attach, reader closed-path, catalog-dr DR dump, maintenance catalog_reinit). NOTE: maintenance merge/gc gate is blocked post-cutover (writer->prod / maintenance->smoke catalogs no longer shared) and restore_drill is the documented pg_restore deferral -- both filed as rec-2115.
+- VP12 DQ-over-DuckLake: initially FAIL on 2 rows (stale rec-001 + a leaked `test-ryw` smoke probe); RCA showed DuckLake was a stale seed. Re-seeded from current Iceberg current-state (parity 812/812) -> DQ PASS (37 checks). The 7 "context_short" rows were a red herring (created<2026-05-01, correctly excluded by the D64 anchor).
+- VP13 rollback: DuckLake read 812 + Iceberg read 812 via Athena. The `iceberg` `--selftest-read` direct-pyarrow path is ACCESS_DENIED under PlatformDev from CC-web (pre-existing; Athena is the working rollback read) -- filed as rec-2115.
+- VP14 sign-off: outbox empty -> flipped `_DEFAULT_OPS_STORAGE_BACKEND` iceberg->ducklake in all 3 sites (`ops_data_portal.py`, `iceberg_reader.py`, `data_quality_runner.py`) -> `--selftest-roundtrip` GREEN. The roundtrip leaves a `test-roundtrip-*` probe (automatable unset -> fails DQ); purged via a second re-seed (bumped maintenance timeout 300->900s for the 812-row seed, restored after). Docs (AGENTS.md / PROJECT_CONTEXT / runbook Section 6) flipped atomically.
+- VP15 closed boundary: removed `seed_ops_recommendations` (+ helpers + tests) from the maintenance handler, redeployed (live Lambda now returns "unknown action"); made `drain_pending` backend-aware; confirmed every `OpsWriter().write("ops_recommendations")` is behind the `iceberg` rollback branch.
+
+**Test impact of the flip:** the default flip broke ~29 tests assuming the iceberg default -> added a module-autouse `iceberg`-pinning fixture in test_ops_data_portal.py + updated the 3 `*_default*` backend tests + added drain/URL-fallback coverage. All green.
+
+**Bookkeeping:** rec-2113 (restore-drill HARD GATE), rec-2114 (selftest probe leak), rec-2115 (post-cutover smoke/rollback-read hardening) filed via the live DuckLake write path; rec-2099 + rec-2111 closed. T2.19 -> recs-complete (stays `in_progress`: decisions/other ops tables + restore-drill deferred). DuckLake recs = 815 rows, DQ-clean.
+
+## [2026-06-09] - ducklake-neon-connect-rca: connectivity unblocked, lambda_attach GREEN
+
+**Root cause identified and fixed.** The previous 120s Lambda hangs were caused by `libpq_conninfo`
+having NO `connect_timeout`, so any DNS/TCP/AUTH/ATTACH failure silently blocked to the OS/Lambda
+wall -- making all failure modes look identical. Fix: bounded `connect_timeout=10s`
+(`DUCKLAKE_CONNECT_TIMEOUT_S`-overridable) added to `libpq_conninfo` in `ducklake_runtime.py`.
+
+**Probe result (post-deploy):**
+- `CONNECT_PROBE reader=phase_reached:attach failed_phase:None ok:True dns_ms:6.3 tcp_ms:1.76 auth_ms:726.83 attach_ms:10172.24`
+- `CONNECT_PROBE writer=phase_reached:attach failed_phase:None ok:True dns_ms:2.57 tcp_ms:4.87 auth_ms:145.33 attach_ms:15552.73`
+- `LAMBDA_ATTACH OK version=1.5.3 source=layer connect_ms=596.51 commit_ms=0.8`
+- `READER OK rows=4 write_denied=true`
+
+The 10-15s attach_ms is DuckLake scale-to-zero cold-resume (within 18s budget). No Neon endpoint or
+credential fix was needed - the root cause was purely the absent connect_timeout making cold-resume
+indistinguishable from a blackhole.
+
+**What shipped:** `src/common/ducklake_connect_probe.py` (phased DNS->TCP->AUTH->ATTACH diagnostic);
+`connect_probe` action added to writer + reader handlers (pre-connection, via `_CONNECTIONLESS_ACTIONS`);
+manifests updated (includes for writer/reader, excludes for data-pipeline/ops-compaction);
+`--connect-probe` flag added to smoke test driver; 167 tests all pass; full validate green.
+
+**4 stale ci_rca recs closed:** rec-2107/2108 (SLOC=589, moot since f2e5cd9: now 426) and
+rec-2109/2110 (DQ FAIL, moot since 3e5152e: 0 violations). ci_rca_recs=0 post-close.
+
+**Follow-up rec filed:** rec-2111 (High) - resume `PLAN-ducklake-ops-finalize.md` PHASE 2/3. Key
+correction: oidc.tf grant must be `lambda:InvokeFunction` not `lambda:InvokeFunctionUrl`. Branch:
+`claude/ducklake-neon-connect-rca-17a47n`.
+
+---
+
+## [2026-06-08] - CLOSING REPORT: ducklake-ops-cutover recs-first -- LIVE CUTOVER ~90% (handoff to planning)
+
+**Read this first.** This is the authoritative handoff. The recs-first DuckLake cutover was driven
+LIVE this session and is ~90% complete: the recs data is migrated + verified on DuckLake, the closed
+boundary works, and most sign-off gates pass. Two items block the final `OPS_STORAGE_BACKEND=ducklake`
+default flip. A new plan should finish from "Remaining work" below. Branch `claude/upbeat-heisenberg-TO0fB`
+@ `df98738` (pushed; NOT merged, NO PR opened). Plan: `docs/plans/PLAN-ducklake-ops-cutover.md` (recs-first).
+
+### DONE -- code (committed + pushed, df98738)
+All pre-deploy code from the recs-first plan: runtime `meta_schema` param + `SMOKE_META_SCHEMA` +
+`write_scd2 created_override`; maintenance `catalog_reinit`/`seed_ops_recommendations`/`restore_drill`
+actions (+ manifest catalog_dr include + field_semantics asset); portal recs-only routing (decisions
+stay Iceberg); `make_reader(table=...)` table-aware; recs-only DQ dispatch; smoke harness ->
+ducklake_smoke + `catalog_restore_drill` invokes the maintenance action + `--emit-recs-seed-payload`;
+terraform (maintenance prod IAM/env/pgclient layer + DailyOps InvokeFunctionUrl). 546 ducklake tests
+green; `validate --pre` green. (`migrate_ops_iceberg_to_ducklake.py` was intentionally KEPT -- deleting
+it broke validate's changed-files ruff step because get_changed_files() feeds deleted paths to ruff;
+it is now dead/superseded by the maintenance seed -- a planning item to remove it + fix that gate.)
+
+### DONE -- live AWS (terraform state in S3 + live infra; survives container resets)
+- VP7 terraform apply (writer/reader prod DATA_PATH + IAM were already live from an earlier session;
+  THIS session applied maintenance prod-S3 IAM + DUCKLAKE_META_SCHEMA=ducklake_smoke +
+  DUCKLAKE_FIELD_SEMANTICS_PATH env + pgclient:2 layer; + DailyOps DuckLakeInvokeRuntime grant).
+- VP8 deploy: writer/reader/maintenance running the df98738 code (verified: maintenance lists the 3 new
+  actions). NOTE deploy was MANUAL (`build_lambda --ducklake-only` builds the function zips then FAILS
+  at the pgclient LAYER build -> I uploaded the function zips to S3 + `aws lambda update-function-code`).
+- VP9 `catalog_reinit` OK: `ducklake_ops` re-initialized at `s3://agent-platform-data-lake/ducklake/`
+  (rec-2099 RESOLVED). Required a fix (DuckLake 1.5.3 does NOT auto-create the PG meta-schema on ATTACH;
+  `_drop_meta_schema(recreate=True)` now drops + recreates empty before ATTACH).
+- VP10 seed OK: **806 recs seeded, current_rows=806, parity=true**, ids + timestamps preserved, D70
+  exclude-list empty (no recs tombstones in dq_tombstones.yaml). Persisted (admin reader confirms 807
+  current = 806 + the VP12 test probe).
+- VP12 read-your-write OK (write->read->update reflected; absent-update -> 409 referential).
+- VP13 churn/OCC re-gate OK on WARM Neon: collision 0.0, p95 1210ms (<2000). NOTE: a COLD run fails the
+  2000ms budget purely on Neon scale-to-zero connect (~17s); the gate measures warm steady-state. Future
+  runs must warm Neon first (or the gate needs a documented warm-up pre-step).
+- writer + reader `attach_check` succeed at the prod path (closed boundary live).
+
+### ISSUES / GOTCHAS hit (for the planner)
+1. **Two container resets wiped UNCOMMITTED work.** The ephemeral container reset on session resume and
+   discarded the entire working tree both times. First reset lost a full implementation (re-done from
+   context). LESSON ENFORCED: commit+push after every coherent slice on long V3 work. All work is now
+   safely pushed.
+2. **No Neon 5432 egress from CC-web** (only 443). All Postgres-direct ops MUST be Lambda-mediated
+   (catalog_reinit/seed/restore_drill run INSIDE the maintenance Lambda). This is why the plan was
+   rescoped recs-first + Lambda-mediated. Confirmed again this session.
+3. **pgclient layer ships pg_dump but NOT pg_restore** -> `restore_drill` (VP11) FAILS with
+   `/opt/bin/pg_restore` FileNotFoundError. Adding pg_restore needs the RHEL9/AL2023 seed-bundle rebuild
+   (`pgclient-bundle.tar.gz` in s3 .../ducklake-pgclient/; runbook Section 4 closure-build). That bundle
+   is also why `build_lambda --ducklake-only` can't rebuild layers here at all.
+4. **PlatformDev (agent_platform) InvokeFunctionUrl was wrong twice.** Function-URL IAM auth evaluates
+   the QUALIFIED function ARN (`...:function:NAME:$LATEST`); an unqualified-only grant implicit-denies,
+   and a `lambda:FunctionUrlAuthType` condition also broke it (AWS doesn't reliably populate that context
+   key for identity-policy eval). Fixed: grant InvokeFunctionUrl on BOTH `<arn>` and `<arn>:*` (df98738),
+   no condition. IAM simulate now allows it. BUT live PlatformDev invokes were STILL 403 at end of session
+   (data-plane propagation lag and/or Neon cold-start timeouts on verification). MUST be confirmed live
+   before sign-off (admin works; PlatformDev is the runtime portal identity).
+5. terraform applies churn writer/reader/maintenance `source_code_hash` + the deps/extensions LAYERS
+   whenever `lambda-packages/*.zip` are present (build artifacts). REMOVE `lambda-packages/*.zip` before
+   any terraform plan/apply intended to be infra-only (the `try(filemd5(zip),null)` pattern -> null = no
+   churn). A stray `lambda-packages/` build left from the VP8 build caused a layer replacement during a
+   1-line IAM apply this session (harmless -- same layer content -- but avoid it).
+
+### REMAINING WORK (for the new plan -- VP11/14/15/16/17 + docs)
+1. **Confirm PlatformDev InvokeFunctionUrl works live** (the grant is correct; verify it propagated:
+   `OPS_STORAGE_BACKEND=ducklake AWS_PROFILE=agent_platform bin/venv-python -c "from src.common.iceberg_reader import make_reader; print(make_reader(table='ops_recommendations').query('ops_recommendations','SELECT 1 AS n FROM {tbl} LIMIT 1'))"`
+   -> expect a row, not None/403). The CI/DQ role and any other reader consumer likely need the SAME
+   InvokeFunctionUrl grant (only PlatformDev DailyOps was granted; the github_ci OIDC role in oidc.tf was
+   NOT -- post-cutover CI DQ would 403 on the reader). Audit all reader/writer URL consumers.
+2. **VP14 DQ over DuckLake**: re-run `OPS_STORAGE_BACKEND=ducklake bin/venv-python -m scripts.data_quality_runner`
+   once (1) is confirmed -- the recs checks returned "reader returned None" ONLY because of the 403; the
+   reader query path itself works (verified via admin). Expect PASS (clause-8 + recency + D64 anchor).
+3. **VP11 restore_drill**: rebuild the pgclient layer to include pg_restore (operator: RHEL9 seed bundle),
+   redeploy maintenance, then `bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill`.
+   USER DECISION PENDING: defer this DR-restore gate (proceed to sign-off; daily pg_dump unaffected) vs
+   hold sign-off until it passes. (User left the call to the new plan.)
+4. **VP15 rollback rehearsal**: `OPS_STORAGE_BACKEND=iceberg ... --selftest-read` and
+   `OPS_STORAGE_BACKEND=ducklake ... --selftest-read` (needs (1)).
+5. **VP16 SIGN-OFF**: flip `_DEFAULT_OPS_STORAGE_BACKEND` "iceberg"->"ducklake" in scripts/ops_data_portal.py
+   + src/common/iceberg_reader.py + scripts/data_quality_runner.py; `--selftest-roundtrip`; ATOMIC
+   AGENTS.md + docs/PROJECT_CONTEXT.md source-of-truth update (recs->DuckLake; decisions/others->Athena;
+   only-write-surface=portal; recs break-glass=Neon+S3). DO NOT flip until (1)+(4) green.
+6. **VP17 post-sign-off**: remove `seed_ops_recommendations` from the maintenance handler + redeploy;
+   confirm no recs bypass write path remains.
+7. **Docs still owed by the plan**: runbook `docs/runbooks/ducklake-catalog-operations.md` Section 6
+   rewrite (still describes the OLD direct-Neon `migrate_ops_iceberg_to_ducklake` sequence at line ~473;
+   replace with the Lambda-mediated reinit/seed/restore_drill + ducklake_smoke + rollback). AGENTS.md +
+   PROJECT_CONTEXT source-of-truth flip (land with VP16).
+8. **Cleanup**: remove the superseded `scripts/migrate_ops_iceberg_to_ducklake.py` + its test AND fix
+   `scripts/validate.get_changed_files()` to drop deleted paths before feeding ruff (else the deletion
+   reddens CI). Consider warming Neon in the churn gate. Remove `AgentPlatformRuntime` redundant inline
+   policy (pre-existing follow-up).
+
+### Environment / how to resume
+- Branch `claude/upbeat-heisenberg-TO0fB` @ df98738 (recreate locally from origin: `git reset --hard
+  origin/claude/upbeat-heisenberg-TO0fB`). terraform: `cd terraform/personal && terraform init
+  -backend-config=backend-sandbox.hcl`; reconstruct gitignored `terraform.personal.tfvars` from live infra
+  (account_id from STS=707578707169, owner_email from the maintenance Lambda Owner tag, external_ids from
+  the PlatformDev/PlatformAdmin role trust policies, alerts_email from the SNS subscription state).
+- Profiles: `agent_platform` (PlatformDev, runtime) / `agent_platform_admin` (PlatformAdmin, apply +
+  break-glass Lambda invoke). The maintenance operational actions were invoked with admin this session.
+- Production is SAFE: `OPS_STORAGE_BACKEND` default is still `iceberg`; the live ops portal is unaffected;
+  DuckLake recs are seeded + staged but not the active backend until VP16.
+
+---
+
+## [2026-06-08] - implement: ducklake-ops-cutover (recs-first rescope -- pre-deploy code re-landed)
+
+**Mode:** Implementation (PLAN-ducklake-ops-cutover.md, recs-first rescope, V3 tier). Continuation after
+the plan was rewritten in response to the VP8 findings (rec-2099 catalog data-path pin + no Neon 5432
+egress from CC-web).
+
+**What shipped (committed 3adb255, branch claude/upbeat-heisenberg-TO0fB; flag default stays
+`OPS_STORAGE_BACKEND=iceberg` -- zero live-behaviour change until the human-gated cutover):**
+- Runtime: `meta_schema` param on `open_connection` + `SMOKE_META_SCHEMA="ducklake_smoke"` (rec-2099
+  root-cause: smoke no longer squats the production `ducklake_ops` catalog); `write_scd2`
+  `created_override` so the operational seed preserves the original created vs last_updated.
+- Maintenance handler: `catalog_reinit` / `seed_ops_recommendations` (TEMP, removed post-sign-off) /
+  `restore_drill` operational actions, invoked over 443 via `aws lambda invoke` (NOT agent surfaces);
+  connectionless dispatch; manifest gains `catalog_dr` + the `field_semantics.yaml` asset.
+- Portal/readers: recs-only DuckLake routing; ops_decisions + the deferred ops_* tables STAY on
+  Iceberg/Athena (`make_reader(table=...)` table-aware); `sync`/`_sync_table` recs-aware.
+- DQ: recs-only clause-8 + DuckLake dispatch (`_DUCKLAKE_OPS_TABLES`); decisions stay on Athena.
+- Smoke harness: `ducklake_smoke` meta-schema; `catalog_restore_drill` now invokes the maintenance
+  action (no local pg_dump -> Neon 5432); `--emit-recs-seed-payload` reads recs from Iceberg/Athena.
+- Terraform: maintenance S3 prod prefix + meta-schema/field-semantics env + pgclient layer; DailyOps
+  `InvokeFunctionUrl` on writer/reader so the runtime portal (PlatformDev) can reach the closed boundary.
+- Tests: 546 green; `validate --pre` green.
+
+**IMPORTANT continuity note:** an earlier in-session implementation of this same slice was LOST when the
+ephemeral container reset on a session resume (uncommitted working tree wiped). It was re-implemented
+from context and committed/pushed immediately (lesson: commit early on long V3 work).
+
+**Live state carried over from the first session (terraform state is in S3, survives the reset):** VP7
+terraform apply (writer/reader prod DATA_PATH + IAM widening) and the writer/reader code deploy (the
+merged #102 build) were applied to LIVE AWS in the first session. The catalog is still pinned to the
+smoke path (rec-2099), so writer/reader `attach_check` fails until `catalog_reinit` runs. The NEW code
+(3adb255) and the NEW terraform (maintenance + DailyOps) are committed but NOT yet deployed/applied.
+
+**Remaining (live cutover, human-gated apply):** present the VP7 terraform plan for the maintenance +
+DailyOps changes -> apply -> deploy writer/reader/maintenance code -> VP9 catalog_reinit -> VP10 seed +
+parity -> VP11-15 gates (restore-drill, read-your-write, churn, DQ, rollback) -> VP16 sign-off flip +
+atomic AGENTS.md/PROJECT_CONTEXT update -> VP17 remove the seed action. Runbook Section 6 still needs the
+recs-first Lambda-mediated rewrite.
+
+---
+
+## [2026-06-08] - implement: ducklake-ops-cutover (T2.19 -- DuckLake ops persistence cutover, pre-deploy)
+
+**Mode:** Implementation (PLAN-ducklake-ops-cutover.md, V3 tier). Big-bang cutover + documented rollback.
+**Goal:** Cut the live ops persistence layer from Iceberg/Athena to the closed DuckLake-on-Neon
+writer/reader boundary (T2.19), Single-Portal caller surface unchanged. Closes the T2.18 tail.
+
+**What shipped this session (pre-deploy, all flag-gated `OPS_STORAGE_BACKEND`, default `iceberg` --
+zero live-behaviour change until the human-gated cutover):**
+- `config/lambda/ducklake/field_semantics.yaml`: per-table `ops_tables` SCD2 schemas (recs/decisions
+  authoritative from the Pydantic models + ops.yaml; priority_queue/session_log/execution_plans
+  schema-ready/dormant). Smoke `fields` retained for T2.17 back-compat.
+- `src/common/ducklake_runtime.py`: table-parameterized `resolve_table_spec`/`create_scd2_tables`/
+  `write_scd2`/`read_current` + new `read_history`/`query_current`; MERGE/DDL generated from the
+  spec; `_PY_TYPE_FOR_SQL` extended (arrays/ints/booleans); `ReferentialError` + `require_exists`
+  in-tx referential gate (CD.33 cl.8). Smoke path byte-identical (49 T2.17 tests still green).
+- `src/lambdas/ducklake_writer/handler.py`: `write_ops`/`update_ops`/`create_ops_tables` (sole write
+  authority); referential -> 409. `ducklake_reader/handler.py`: `read_ops_current`/`read_ops_history`/
+  `query_ops` (sole read authority, closed boundary).
+- `scripts/ops_data_portal.py`: transport swap behind the flag (writer Function URL, SigV4);
+  caller surface + DynamoDB ID alloc preserved; `update_rec`/`update_decision` referential loud-fail
+  (permissive upsert-on-absent REMOVED); `sync` re-pointed to a DuckLake cache-pull (Iceberg
+  outbox-drain/compact retires on ducklake); `--sync`/`--selftest-read`/`--selftest-roundtrip` CLI.
+- `src/common/iceberg_reader.py`: `DuckLakeReader` (Reader protocol over the reader URL) + `make_reader`
+  factory; `DuckDBIcebergReader` retained as rollback target. `sync_ops`/`session_preflight` route via
+  the factory; `_coerce_athena_array` is now backend-agnostic (native lists).
+- `scripts/migrate_ops_iceberg_to_ducklake.py` (new): one-time backfill, parity verify (row count +
+  content hash, excl. Decision-70 tombstones), idempotent by DROP+recreate (resurrection-loop guard).
+- `config/agent/data_quality/ops.yaml` + `scripts/data_quality_runner.py`: dual-backend dispatch
+  (ops checks -> DuckLake DuckDB dialect when flag=ducklake; Athena retained for iceberg/telemetry);
+  clause-8 checks (ULID-history + current merge-key uniqueness); Decision-64 anchor preserved.
+- `src/common/catalog_dr.py`: `build_pg_restore_cmd`/`run_pg_restore` (custom-format restore drill).
+- `scripts/ducklake_neon_smoke_test.py`: `--ops-read-your-write`, `--ops-churn-regate`,
+  `--catalog-restore-drill` gates.
+- `terraform/personal/ducklake_lambdas.tf`: writer/reader IAM widened to the production `ducklake/`
+  prefix (writer RW, reader RO; smoke retained) + `DUCKLAKE_DATA_PATH` flipped smoke->prod. HUMAN-GATED.
+- Tests: runtime ops-schema tests; portal transport+referential+selftest; migration parity/D70/idempotency;
+  DuckLakeReader; pg_restore; DQ dual-backend; writer/reader ops actions; smoke gates. 600+ pass; ruff clean.
+- `docs/runbooks/ducklake-catalog-operations.md`: Section 6 (cutover/rollback/restore-drill/closed-boundary).
+
+**VP status:** VP1-4 PASS (runtime/portal/migration unit tests + manifest validate). VP5 (full validate)
+run this session. VP6 (build) + VP7 (HUMAN-GATED IAM apply via agent_platform_admin) + VP8-16
+(post-deploy: backfill+parity, restore drill, read-your-write, churn re-gate, DQ, rollback rehearsal,
+cutover sign-off, ops_compaction retirement) are the live cutover sequence, driven interactively with
+operator confirmation.
+
+**DEFERRED to cutover sign-off (VP15+), NOT in this commit (would assert a false state pre-cutover):**
+the `OPS_STORAGE_BACKEND` default flip to `ducklake`; the atomic `AGENTS.md`/`docs/PROJECT_CONTEXT.md`
+source-of-truth flip; ROADMAP T2.18/T2.19 completion; `ops_compaction` retirement (Decision 78 cl.7).
+
+---
+
+## [2026-06-07] - implement: ducklake-maintenance-fpb (T2.18 FP-B -- catalog DR, SNS alerts, co-tuning)
+
+**Mode:** Implementation (PLAN-ducklake-maintenance-fpb.md, V3 tier). FP-B slice.
+**Goal:** Complete T2.18 by shipping catalog DR (pg_dump -> S3), SNS alarm wiring, and the co-tuning mechanism (hot_merge + env-configurable breaker thresholds).
+
+**What shipped (pre-deploy):**
+- `src/common/catalog_dr.py`: DR primitives (build_pg_dump_cmd with --format=custom + --serializable-deferrable, build_dr_key engine-version-tagged, build_dr_object_metadata, CatalogDrError loud-fail, run_catalog_dump orchestrator). dsn_uri() exported to eliminate drift with smoke test.
+- `src/lambdas/ducklake_catalog_dr/handler.py` + `__init__.py`: DR Lambda entrypoint, DSN from Secrets Manager, force_* event fields, 5xx on CatalogDrError.
+- `src/lambdas/ducklake_catalog_dr/manifest.yaml`: CD.24 manifest (status: active).
+- `src/common/ducklake_maintenance.py`: HOT_TABLE_SCOPE constant (smoke-scoped + T2.19 forward-pointer), run_hot_merge orchestrator (merge-only, no destructive calls), env-sourced GC_BREAKER_FILE_FRACTION + GC_BREAKER_BYTES defaults.
+- `src/lambdas/ducklake_maintenance/handler.py`: action_hot_merge dispatch, env-threshold reading (_ENV_GC_BREAKER_FILE_FRACTION/_ENV_GC_BREAKER_BYTES), hot_merge added to _ACTIONS.
+- `terraform/personal/sns_alerts.tf`: shared aws_sns_topic.alerts + email subscription (var.alerts_email gitignored) + output.
+- `terraform/personal/ducklake_catalog_dr.tf`: DR Lambda + pgclient layer + DR bucket (versioned/SSE/PAB/lifecycle) + IAM role + log group + EventBridge cron(0 3) rule/target/permission + Function URL (AWS_IAM) + >25h freshness alarm wired to SNS.
+- `terraform/personal/ducklake_maintenance.tf`: breaker alarm alarm_actions/ok_actions wired to SNS; hot_merge EventBridge rule/target/permission added; GC_BREAKER_* env vars added to Lambda.
+- `src/data/handlers/ops_compaction_handler.py`: deprecation marker (module docstring).
+- `src/lambdas/ops-compaction/manifest.yaml`: deprecation notes line added.
+- `scripts/ducklake_neon_smoke_test.py`: --lambda-catalog-dr gate (dump object + engine-tag + metric assert) + --lambda-maintenance-hot-merge gate (merge-only, files_after <= files_before). CATALOG_DR_URL_ENV constant. _dsn_uri() delegates to catalog_dr.dsn_uri() (single impl).
+- `scripts/build_lambda.py`: build_pgclient_layer (S3 fetch + pg_dump --version assert), catalog-dr zip in _run_ducklake_build (4 zips + 3 layers), DUCKLAKE_CATALOG_DR_FUNCTION added to _DUCKLAKE_FUNCTION_ZIP_KEYS.
+- `tests/test_catalog_dr.py`: unit tests -- pg_dump flags, key/metadata, metric payload, loud-fail-on-failure (no metric on failed dump), no S3 upload on failure.
+- `tests/test_ducklake_maintenance.py`: HOT_TABLE_SCOPE, run_hot_merge (merge-only, no destructive calls), env-sourced threshold tests.
+- `tests/test_ducklake_maintenance_handler.py`: action_hot_merge dispatch, env threshold pass-through, hot_merge in actions list.
+- `docs/runbooks/ducklake-catalog-operations.md`: Sections 4 (catalog DR, SNS wiring, co-tuning, restore-drill carry) + 5 (T2.19-gated ops_compaction decommission runbook). Section 3 circuit-breaker note updated (alarm now wired to SNS). T2.19 hot_merge expansion forward-pointer added.
+- `docs/ROADMAP-PLATFORM.yaml`: T2.18 progress_note updated with FP-B criteria closed + T2.19 carry items. Status remains in_progress.
+
+**VP status:** Pre-deploy steps VP1-6 run next (unit tests + manifest validate + terraform plan). Steps VP7-14 are human-gated (terraform apply via agent_platform_admin + post-deploy Lambda invocations).
+
+---
+
 ## [2026-06-07] - implement: ducklake-maintenance (T2.18 FP-A -- DuckLake maintenance pipeline)
 
 **Mode:** Implementation (PLAN-ducklake-maintenance.md, V3 tier). FP-A slice only; FP-B pending.
