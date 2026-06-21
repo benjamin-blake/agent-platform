@@ -80,8 +80,10 @@ acceptance_criteria:
     After the secret values are set out-of-band, the smoke test passes end-to-end for both providers
     (exercises the InferenceCredentialsRead grant) (rec-2295).
   - >-
-    All four recs (rec-2301, rec-2302, rec-2303, rec-2295) are closed via the Resolves: trailer on the
-    squash-merge.
+    Recs close at the correct time: rec-2301 closes via the squash-merge Resolves: trailer (canary fix live at
+    merge); rec-2303 is closed manually with its decline-rationale resolution note (also merge-satisfied);
+    rec-2302 and rec-2295 are closed manually via the ops portal only after the post-merge human-gated apply and
+    the smoke tests (VP steps 7-9) pass. VP step 10 confirms all four reach status closed.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -122,13 +124,16 @@ verification_plan:
   - step: 7
     phase: post-deploy
     action: >-
-      Human-gated admin apply convergence check. After rebasing onto post-#203 main, recovering the
-      four no-default vars per terraform/CLAUDE.md (init with backend-sandbox.hcl), presenting the plan
-      and getting human acceptance, and running terraform apply under agent_platform_admin, re-run plan
-      and confirm no pending diff (rec-2295 + rec-2302 converged).
-    command: "terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars"
+      Human-gated admin apply convergence check. After rebasing onto post-#203 main, running
+      `terraform -chdir=terraform/personal init -backend-config=backend-sandbox.hcl`, presenting the plan and
+      getting explicit human acceptance, and running terraform apply under agent_platform_admin, re-run plan and
+      confirm no pending diff (rec-2295 + rec-2302 converged). The gitignored terraform.personal.tfvars is absent
+      on a fresh clone, so the command materialises it from the agent-platform-terraform-personal-tfvars Secrets
+      Manager secret first (the var-sourcing terraform/CLAUDE.md documents); the alternative is recovering the four
+      no-default vars from remote S3 state and passing them via -var.
+    command: "aws secretsmanager get-secret-value --secret-id agent-platform-terraform-personal-tfvars --query SecretString --output text --profile agent_platform_admin > terraform/personal/terraform.personal.tfvars && terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars"
     expected: Exit code 0 -- no pending diff for the github_ci_apply Secrets Manager statement and the platform_dev_runtime InferenceCredentialsRead statement.
-    fix_if: Exit 2 (diff remains) -> the apply did not converge; re-examine the plan output and re-apply. Exit 1 (error) -> check var recovery / init backend config / admin credential chain.
+    fix_if: Exit 2 (diff remains) -> the apply did not converge; re-examine the plan output and re-apply. Exit 1 (error) -> check tfvars materialisation, init backend config (backend-sandbox.hcl), and the agent_platform_admin credential chain.
   - step: 8
     phase: post-deploy
     action: End-to-end smoke test for Tier 1 (DeepSeek) after the secret value is set out-of-band -- exercises the InferenceCredentialsRead grant and a real completion call.
@@ -141,6 +146,16 @@ verification_plan:
     command: "bin/venv-python -m scripts.smoke_test_inference_credentials --provider anthropic"
     expected: "PASS [anthropic] anthropic/claude-haiku-4-5 -> '<reply>' (exit 0)."
     fix_if: AccessDenied -> IAM grant not applied/propagated; ResourceNotFound -> envelope not created; auth error -> secret value invalid or unset.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      After the merge-time close of rec-2301 (trailer) and the manual portal closes of rec-2303 (decline note),
+      rec-2302, and rec-2295 (post-apply), refresh the local read cache and confirm all four recs reached status
+      closed. This discharges the closure obligation and guards against the premature-close race.
+    command: |-
+      bin/venv-python -m scripts.sync_ops pull && grep -E '"rec-(2301|2302|2303|2295)"' logs/.recommendations-log.jsonl
+    expected: 'All four matched lines show "status": "closed".'
+    fix_if: 'Any rec still open -> close it via ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."; never close rec-2302/rec-2295 before VP steps 7-9 pass.'
 constraints:
   - >-
     These are source=ci_rca recs: do not inline-patch beyond this reviewed plan (Decision 55,
@@ -171,10 +186,13 @@ context:
     #201 provision DeepSeek+Anthropic envelopes + IAM grant).
   - >-
     rec-2301 and rec-2303 are the SAME main-canary failure seen by two RCA runs. main-canary.yml runs the
-    full validate tier (which runs pytest) but installs only requirements.txt; litellm lives in
-    requirements-dev.txt and is imported at module top by scripts/smoke_test_inference_credentials.py, so
-    pytest collection aborts with ModuleNotFoundError. ci.yml main-validate installs BOTH files (so push-to-main
-    is green); PR CI runs only the fast tier (no pytest), which is why the break was invisible on the introducing PR.
+    full validate tier (full pytest) but installs only requirements.txt; litellm lives in requirements-dev.txt
+    and is imported at module top by scripts/smoke_test_inference_credentials.py, so pytest collection aborts
+    with ModuleNotFoundError. The canary is the ONLY job that runs the full pytest with requirements.txt but
+    WITHOUT requirements-dev.txt: ci.yml main-validate (push) installs BOTH files, and the PR fast tier
+    (ci.yml pr-validate) installs requirements-fast.txt + requirements-dev.txt and runs pytest --picked --
+    litellm is present on both paths, so both stay green. That is why the break stayed invisible until the
+    scheduled canary ran.
   - >-
     rec-2295 is classified Environment (deliberate manual gate, not a code regression): the InferenceCredentialsRead
     statement is already committed to platform_roles.tf; only the human-gated admin apply is outstanding.
@@ -223,8 +241,11 @@ execution_steps:
     admin-created; values out-of-band; no Put/Create/Update). Run VP steps 4-6.
   - >-
     Open the /implement PR with both code changes; ensure pre-deploy VP (steps 1-6) is green via remote CI;
-    squash-merge with the trailer `Resolves: rec-2301, rec-2302, rec-2303, rec-2295`. The canary fix goes live on
-    merge to main.
+    squash-merge with the trailer `Resolves: rec-2301` ONLY. Do NOT auto-emit rec-2302, rec-2303, or rec-2295 into
+    the merge trailer (this overrides the default bundled_recommendations -> trailer behaviour): rec-2302 and
+    rec-2295 are satisfied only by the post-merge human-gated apply + smoke test, and rec-2303 needs its decline
+    rationale recorded -- all three are closed manually via the portal at the documented times (see the Closure
+    step). The canary fix goes live on merge to main.
   - >-
     Phase B apply (post-deploy, human-gated): on the merged/rebased state, recover the four no-default vars from
     remote S3 state per terraform/CLAUDE.md, run `terraform -chdir=terraform/personal init
@@ -238,6 +259,13 @@ execution_steps:
   - >-
     Verify (post-deploy): run VP steps 8-9 (smoke test both providers -> PASS). Optionally workflow_dispatch
     main-canary via the GitHub MCP and confirm the run is green as the live canary confirmation.
+  - >-
+    Closure (post-deploy): after VP steps 8-9 pass, close the two apply-gated recs via the ops portal with
+    resolutions citing the apply + smoke results -- `bin/venv-python -m scripts.ops_data_portal --update-rec
+    rec-2302 --status closed --resolution '...'` and the same for rec-2295. Separately write rec-2303's decline
+    rationale via `--update-rec rec-2303 --status closed --resolution 'Resolved by the canary requirements-dev.txt
+    install (rec-2301 fix); declined add-to-requirements.txt because litellm is dev/test/smoke-test-only,
+    promotion deferred to T4.2 per T0.4'`. Then run VP step 10 to confirm all four recs are closed.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure STOP and run RCA
     (Decision 55), do not paper over it.
