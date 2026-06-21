@@ -1,0 +1,50 @@
+name: tf-gated-apply-prototype
+
+# Gate smoke-test / de-risk prototype (CD.35 Wave 3 / T2.22 / Decision 92).
+#
+# Purpose: demonstrate that ANY job declaring environment: tf-gated-apply is gated by the
+# required reviewer regardless of what it does (exit criterion 2). This job is intentionally
+# INERT -- it runs only `aws sts get-caller-identity` and applies nothing. Retained as a
+# re-runnable manual proof; it cannot apply any Terraform.
+#
+# When to run: before or after terraform/github/ is applied to confirm the Environment's
+# required-reviewer protection is live. Trigger manually via the GitHub Actions UI or the
+# GitHub MCP actions_run_trigger tool.
+#
+# Expected behaviour:
+#   1. Job enters "waiting" state pending reviewer approval.
+#   2. After benjamin-blake approves in the GitHub Actions UI, the job executes.
+#   3. aws sts get-caller-identity prints the assumed agent-platform-github-ci-apply role ARN.
+#
+# This proves:
+#   - The Environment gates ANY referencing job (not just the gated-apply job in
+#     terraform-apply-sandbox.yml) -- the protection is role-based, not job-specific.
+#   - The OIDC trust still works post-approval (refs/heads/main sub assumed successfully).
+#   - The reviewer must approve before job execution -- preventing direct bypass.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: tf-gated-apply
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials (OIDC -- apply role, after reviewer approval)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-apply
+          aws-region: eu-west-2
+
+      - name: Verify assumed identity (gate smoke-test -- no apply)
+        # Proves OIDC works post-approval and the correct role is assumed.
+        # This job applies NOTHING -- it is a read-only identity check only.
+        run: aws sts get-caller-identity

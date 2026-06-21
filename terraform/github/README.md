@@ -2,7 +2,8 @@
 
 This module manages GitHub repository settings for `benjamin-blake/agent-platform` via the
 `integrations/github` Terraform provider: GitHub Advanced Security (secret scanning + push
-protection), the `main` branch-protection ruleset, and Actions permissions.
+protection), the `main` branch-protection ruleset, Actions permissions, and the
+`tf-gated-apply` GitHub Environment (CD.35 Wave 3 / T2.22 / Decision 92).
 
 ## NEVER auto-apply this module
 
@@ -29,18 +30,48 @@ export GITHUB_TOKEN=$(aws secretsmanager get-secret-value \
   --output text \
   --profile agent_platform)
 
-# 2. Initialise (uses the S3 backend in agent-platform-data-lake).
+# 2. Resolve the numeric GitHub user ID for the tf-gated-apply reviewer.
+#    benjamin-blake's numeric ID (NOT the login string):
+REVIEWER_ID=$(gh api /user --jq .id)   # run as the reviewer account
+#    Or use the GitHub MCP get_me tool in Claude Code on the web.
+
+# 3. Initialise (uses the S3 backend in agent-platform-data-lake).
 terraform -chdir=terraform/github init
 
-# 3. Plan -- review carefully before applying.
-#    STOP if plan shows any destroy/replace of github_repository OR any unintended
-#    in-place reset of description/homepage/topics/visibility/features.
-#    An in-place UPDATE that resets metadata is NOT a destroy and must also be absent.
-terraform -chdir=terraform/github plan -var="admin_bypass_actor_id=5"
+# 4. Plan -- review carefully before applying.
+#    STOP if plan shows any destroy/replace of github_repository, any unintended
+#    in-place reset of description/homepage/topics/visibility/features, or any
+#    change to the main-protection ruleset required_status_checks.
+terraform -chdir=terraform/github plan \
+  -var="admin_bypass_actor_id=5" \
+  -var="gated_apply_reviewer_user_ids=[${REVIEWER_ID}]"
 
-# 4. Apply -- only after plan is confirmed safe.
-terraform -chdir=terraform/github apply -var="admin_bypass_actor_id=5"
+# 5. Apply -- only after plan is confirmed safe.
+terraform -chdir=terraform/github apply \
+  -var="admin_bypass_actor_id=5" \
+  -var="gated_apply_reviewer_user_ids=[${REVIEWER_ID}]"
 ```
+
+## tf-gated-apply Environment
+
+The `tf-gated-apply` GitHub Environment (defined in `environments.tf`) gates the post-merge
+Terraform apply job for the guard fail-closed set (IAM/trust/destroy diffs). After a change
+in that set is merged to main, the `gated-apply` job in `terraform-apply-sandbox.yml` blocks
+on Environment reviewer approval -- the job does not start until benjamin-blake approves via
+the GitHub Actions UI.
+
+Key constraints:
+- `prevent_self_review = false`: sole-developer repo; self-approval is intentional.
+- `deployment_branch_policy.protected_branches = true`: the gated job is only reachable from
+  protected branches (main). No custom branch policies.
+- The reviewer user ID is passed via `gated_apply_reviewer_user_ids` at apply time; it is
+  **never** committed with a literal default.
+
+**NEVER auto-apply.** This module (`terraform/github/**`) is excluded from
+`terraform-apply-sandbox.yml`'s path filter (`terraform/personal/**`) and must never be
+added to any auto-apply workflow. The `terraform_apply_guard.py` is AWS-IAM-only and cannot
+inspect `github_*` resource diffs; an ungated branch-protection change could lock out the
+push-to-main flow the CD pipeline depends on.
 
 ## Lockout recovery
 

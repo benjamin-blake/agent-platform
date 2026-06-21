@@ -31,12 +31,23 @@ from re-conflating.
 
 | environment | money real? | code vs infra | apply gating | account |
 |-------------|-------------|---------------|--------------|---------|
-| sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 77) | current personal account |
+| sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 77); fail-closed set (IAM/trust/destroy) routes to gated-apply job requiring tf-gated-apply Environment reviewer approval (CD.35 Wave 3 / T2.22) | current personal account |
 | SIT | no (system-integration, mocked capital) | same code path | manual apply after review | future dedicated account (not yet stood up) |
 | PROD | yes (real capital) | same code path | manual apply + second approver | future dedicated account (not yet stood up) |
 
 The platform split is mock-vs-real at ONE code version, not version-skew tiers. The same code path
 runs in each environment; only the externals (mocked vs real) and the apply gate differ.
+
+**Sandbox gated-apply path (CD.35 Wave 3 / T2.22 / Decision 92):** When the deterministic guard
+exits 2 (IAM/trust/destroy diff), the `apply-sandbox` job sets `routed=true` and exits green
+(routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`, `environment:
+tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On approval, it
+applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU) and writes
+the convergence record green/red via the T2.20 always-run write. The Environment is the
+authorization boundary; the OIDC sub stays pinned to `refs/heads/main` (not an environment claim).
+This gates the apply JOB, NOT a PR status check (adding it to required checks would wedge
+autonomous fix-merges, Decision 83). IAM changes beyond `github_ci_apply`'s current scope remain
+admin-gated until T2.23 (bootstrap root + authority budget).
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 

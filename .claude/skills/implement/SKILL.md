@@ -313,6 +313,15 @@ only via the `workflow_dispatch` acknowledge-and-retry path (naming the red comm
 reviewed -- never an inline workaround (Decision 55). Unsubscribe once the record is green (apply converged)
 or the next planning session has assumed the baseline.
 
+**Fail-closed set (IAM/trust/destroy diffs -- CD.35 Wave 3 / T2.22):** if the change hits the guard's
+fail-closed set (guard exits 2), the post-merge path routes to the `gated-apply` job rather than auto-applying.
+The job declares `environment: tf-gated-apply` and **blocks until benjamin-blake approves in GitHub Actions**
+(Actions tab -> select the run -> Review pending deployments -> Approve). This is NOT a PR required status
+check -- the PR merges normally; the gated apply is a separate post-merge job. After approval, the gated-apply
+job applies the same saved plan.bin and writes the convergence record. The authoritative baseline is still
+the next planning session's convergence-record re-check (not the wake). The gated apply gates the JOB, never
+from a laptop.
+
 ### Pre-Push Rebase (applies to both flows)
 After the local commit, before pushing, refresh and rebase so the PR opens against current main:
 ```bash

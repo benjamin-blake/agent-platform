@@ -325,6 +325,21 @@ resource "aws_iam_role" "github_ci_apply" {
   name        = "agent-platform-github-ci-apply"
   description = "GitHub Actions sandbox auto-apply (Decision 77): refs/heads/main ONLY via OIDC"
 
+  # CD.35 Wave 3 / T2.22 note (comment only -- no resource change):
+  # The tf-gated-apply GitHub Environment (terraform/github/environments.tf) gates the
+  # post-merge apply JOB for the guard fail-closed set (IAM/trust/destroy diffs). The
+  # Environment is the authorization boundary, NOT an "environment:" claim in the OIDC sub --
+  # a GitHub environment claim in the sub is NOT an authorization boundary (the job's
+  # environment: key just names the deployment environment; the trust condition would need to
+  # match it explicitly, and the GitHub-documented footgun is that a required_reviewer Environment
+  # does not change the token's sub claim). Trust STAYS pinned exactly to refs/heads/main.
+  # Any job on main can mint a token with this sub -- but only a job declaring
+  # environment: tf-gated-apply (with its required reviewer gate) reaches the gated-apply
+  # apply path. The routine auto-apply path (guard PASS, no gated job) also assumes this role.
+  # The residual workflow-self-edit concern (a workflow file could in principle route around the
+  # gate by adding environment: tf-gated-apply) is Wave 4 / T2.23 (bootstrap root + authority
+  # budget). Not closed here.
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -339,6 +354,7 @@ resource "aws_iam_role" "github_ci_apply" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
             # Trust is pinned to the exact main ref -- NOT a StringLike wildcard. agent/* and
             # pull/* cannot assume this role; only a merge to main can trigger auto-apply.
+            # This trust condition is UNCHANGED by CD.35 Wave 3 (see note above).
             "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
           }
         }

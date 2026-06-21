@@ -4403,8 +4403,13 @@ tier_items:
     related_candidate_decisions: [CD.35]
     effort: M
     strategic: false
-    status: in_progress
-    progress_note: "2026-06-20: shipped speculative-plan job + apply-the-saved-plan path + github_ci_plan IAM role + rec-2285 IFS fix; pending admin apply of oidc.tf to create the role in AWS and V3 post-deploy verification (VP steps 5-11)"
+    status: complete
+    completed_at: "2026-06-21"
+    progress_note: >-
+      2026-06-21: T2.21 closeout -- convergence record at merge commit 8e0f7d6f (PR #203) shows
+      status=green with a non-null plan_sha (29be1183...), proving the speculative-plan ->
+      apply-the-saved-plan chain ran in production; github_ci_plan role confirmed created via admin
+      apply; all four exit criteria met in production.
   - id: T2.22
     tier: T2
     name: "Terraform CI/CD: gated CD apply via GitHub Environment (CD.35 Wave 3)"
@@ -4422,11 +4427,16 @@ tier_items:
       approval here is the human signing an authority-budget exception, not routine change review.
     depends_on: [T2.20]
     files_in_scope:
-      - terraform/personal/oidc.tf    # tf-gated-apply Environment; privileged role trust pinned to refs/heads/main
+      - terraform/github/environments.tf    # tf-gated-apply Environment resource (github provider)
+      - terraform/github/variables.tf    # gated_apply_reviewer_user_ids variable
+      - terraform/github/README.md    # runbook: how to pass reviewer var; never-auto-apply reaffirmed
+      - terraform/personal/oidc.tf    # comment-only: trust STAYS refs/heads/main; Environment is the gate
       - .github/workflows/terraform-apply-sandbox.yml    # route fail-closed plans to the environment-gated job
-      - AGENTS.md    # Safety: gated-CD-apply replaces manual branch-first
-      - docs/contracts/environment-taxonomy.md    # the gated apply path
-      - .claude/skills/implement/SKILL.md    # human-gated-action example update
+      - .github/workflows/tf-gated-apply-prototype.yml    # inert gate smoke-test / de-risk prototype
+      - AGENTS.md    # Safety: gated-CD-apply replaces manual branch-first for fail-closed subset
+      - docs/contracts/environment-taxonomy.md    # Axis A apply-gating cell: gated path documented
+      - terraform/CLAUDE.md    # apply-posture: fail-closed routes to gated-apply; interactive loop fallback
+      - .claude/skills/implement/SKILL.md    # human-gated-action example: approve in GitHub Actions
     exit_criteria:
       - "An IAM/destroy change auto-routes to the tf-gated-apply Environment and blocks until a reviewer approves, then applies in CD (never from a laptop)"
       - "A non-gated workflow that merely declares environment: tf-gated-apply still cannot bypass the reviewer (verified)"
@@ -4434,7 +4444,12 @@ tier_items:
     related_candidate_decisions: [CD.35]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
-    status: not_started
+    status: in_progress
+    progress_note: >-
+      2026-06-21: code shipped -- environments.tf, variables.tf, README.md, oidc.tf (comment),
+      terraform-apply-sandbox.yml (guard exit-2 routing + gated-apply job), tf-gated-apply-prototype.yml,
+      AGENTS.md, environment-taxonomy.md, terraform/CLAUDE.md, implement SKILL.md all updated; pending
+      V3 post-deploy steps 5-11 (human-gated local terraform/github apply + end-to-end verification).
   - id: T2.23
     tier: T2
     name: "Terraform CI/CD: privilege-tiering / bootstrap root for the CI role's own IAM (CD.35 Wave 4)"
