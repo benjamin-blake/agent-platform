@@ -15,6 +15,9 @@
 # interactive human-gated plan -> present -> accept -> apply loop. IAM apply precedes any runtime
 # use of the credentials (IAM-precedence rule).
 
+# Tag values: ASCII-tag-charset only (letters/digits/spaces and + - = . _ : / @). The AWS Secrets
+# Manager tagging service rejects parentheses, so the tier reference is written "T0.4", not "(T0.4)"
+# (the latter fails TagResource with InvalidRequestException and blocks every module apply).
 resource "aws_secretsmanager_secret" "deepseek_api_key" {
   name        = "agent-platform-deepseek-api-key"
   description = "DeepSeek API key -- Tier 1 executor inference (CD.28 / T0.4). ROTATION: quarterly, calendar-reminded (T2.5 cross-secret rotation policy; user_action_required). Value set out-of-band via put-secret-value; never Terraform-managed (Decision 37)."
