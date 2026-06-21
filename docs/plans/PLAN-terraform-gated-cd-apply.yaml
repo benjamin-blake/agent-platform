@@ -1,0 +1,438 @@
+schema_version: 1
+slug: "terraform-gated-cd-apply"
+intent: >-
+  Close CD.35 Wave 3 (T2.22): route the Terraform sandbox auto-apply guard's fail-closed set
+  (IAM-sensitive / trust-policy / destroy diffs) to a GitHub-Environment-gated CD apply job so a
+  human reviewer authorizes the apply in CD instead of a laptop -- making the self-improving
+  platform's privileged infra changes auditable and hands-off while preserving the human authority
+  gate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-gated-cd-apply.yaml
+phase: >-
+  PLATFORM tier_item T2.22 (CD.35 Wave 3 / Decision 92). depends_on T2.20 (complete). Sibling
+  T2.21 (Wave 2) is functionally complete -- this plan also lands its roadmap closeout. Out of
+  scope (later waves): T2.23 bootstrap-root privilege tier + authority budget; T2.25 guard
+  narrowing.
+scope:
+  - file: terraform/github/environments.tf
+    action: Create
+    purpose: >-
+      Define the github_repository_environment "tf-gated-apply" with a required reviewer
+      (benjamin-blake), prevent_self_review=false (sole-developer self-approval), and
+      deployment_branch_policy { protected_branches = true; custom_branch_policies = false }.
+      Placed in the github-provider root (NOT terraform/personal/oidc.tf, which has no github
+      provider). This root is human-gated LOCAL apply only -- the Environment is a security control
+      and must NEVER be added to any auto-apply workflow path (terraform/github/README.md rule).
+  - file: terraform/github/variables.tf
+    action: Modify
+    purpose: >-
+      Add variable gated_apply_reviewer_user_ids (list(number)) supplied at apply time (mirrors the
+      admin_bypass_actor_id convention). The implementer resolves benjamin-blake's numeric GitHub
+      user id at apply time (GitHub MCP get_me / users API); it is not committed with a literal
+      default.
+  - file: terraform/github/README.md
+    action: Modify
+    purpose: >-
+      Document the tf-gated-apply Environment in the module description and extend the apply runbook
+      (how to pass gated_apply_reviewer_user_ids). Reaffirm the never-auto-apply rule.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Comment-only (no terraform diff): document that github_ci_apply's OIDC trust STAYS pinned to
+      refs/heads/main and that the tf-gated-apply GitHub Environment -- not an environment claim in
+      the OIDC sub -- is the authorization boundary for the fail-closed set (the known GitHub
+      footgun). Note the workflow-self-edit residual is the Wave-4 / T2.23 concern.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Restructure the apply path: the guard BLOCK verdict (exit 2) now sets an apply-sandbox job
+      output routed=true and does NOT fail the job (routing is not a failure); the apply + record
+      steps skip when routed. Add a new gated-apply job (needs: apply-sandbox, if routed and push,
+      environment: tf-gated-apply) that re-fetches the SAME saved plan.bin from S3 and applies it
+      verbatim after human approval (no re-plan -- Decision 77 no-TOCTOU), reusing the T2.20
+      always-run red-on-failure convergence record write + best-effort wake. The routine guard-PASS
+      auto-apply path is unchanged.
+  - file: .github/workflows/tf-gated-apply-prototype.yml
+    action: Create
+    purpose: >-
+      Inert workflow_dispatch prototype/gate-smoke-test whose single job declares environment:
+      tf-gated-apply, assumes github_ci_apply, and runs only aws sts get-caller-identity. De-risks
+      the never-used job-level environment: and demonstrates that ANY job referencing the
+      environment is gated (exit criterion 2). Retained as a re-runnable manual gate proof; it can
+      apply nothing.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Safety section: state that gated-CD-apply via the tf-gated-apply Environment replaces the
+      manual branch-first/laptop apply for the guard fail-closed set (within github_ci_apply's
+      existing IAM scope); broader IAM remains human-gated admin until T2.23. Keep terse (T2.25
+      consolidates the apply-model convention).
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Document the gated-apply path on Axis A: the sandbox apply-gating cell notes that the
+      fail-closed set routes to the tf-gated-apply Environment whose required reviewer gates job
+      execution (not a laptop). Allowlisted file for the taxonomy lint.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      (Beyond the roadmap's stated scope -- added to avoid a contradictory ambient instruction.)
+      Update the apply-posture so the T2.20 section no longer asserts the interactive human-gated
+      loop is the path for ALL IAM/trust/destroy changes: the fail-closed subset github_ci_apply can
+      apply now routes to the gated-CD Environment; the interactive loop remains the fallback for
+      beyond-scope IAM until T2.23.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Update the human-gated-action example (the "Hold subscription through apply" / BLOCKED VP
+      note): for a terraform/personal PR whose change hits the fail-closed set, the apply is gated by
+      the tf-gated-apply Environment reviewer (approve in GitHub Actions), not a laptop apply. The
+      gate gates the post-merge apply JOB; it is NOT a PR required check.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Tier Item Freshness Gate closeout for T2.21 (status complete + completed_at 2026-06-21 + note
+      citing the green convergence record with non-null plan_sha at commit 8e0f7d6f). Flip T2.22 to
+      in_progress with a progress_note; on full VP pass flip to complete. Re-ground T2.22's
+      files_in_scope line (Environment lives in terraform/github/, oidc.tf is comment-only).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    GitHub Environment "tf-gated-apply" is provisioned via terraform/github/ (integrations/github
+    provider) by a HUMAN-GATED LOCAL terraform apply (export GITHUB_TOKEN from Secrets Manager;
+    terraform -chdir=terraform/github plan/apply). It is NEVER auto-applied and must never be added
+    to terraform-apply-sandbox.yml's path filter (terraform/github/README.md / Decision 77).
+    Pre-deploy ordering: the Environment must exist before the gated route can function; until then
+    a routed change's gated-apply job has no Environment to gate against.
+  - >-
+    No new AWS IAM role. The gated-apply job reuses the existing agent-platform-github-ci-apply role
+    (trust UNCHANGED, pinned to refs/heads/main). The Environment, not the OIDC token, is the gate.
+    The role already holds ConvergenceRecordWrite (record write identity) and the scoped IAM-write /
+    destroy grants for the fail-closed subset it can apply (CI-role PutRolePolicy /
+    UpdateAssumeRolePolicy / TagRole, OIDC reconcile, scoped DeleteObject/DeleteTable/DeleteRule/
+    DeleteAlarms/RemovePermission). Changes beyond that scope (e.g. iam:CreateRole for a brand-new
+    role) remain AccessDenied and human-gated admin until T2.23's bootstrap tier.
+  - >-
+    The gated-apply job reuses the existing S3 surfaces: the saved plan at
+    s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin (read via github_ci_apply's
+    DataLakeObjectIO) and the convergence record at convergence/personal/sandbox.json
+    (ConvergenceRecordWrite). No new S3 prefix or IAM grant.
+  - >-
+    Apply-failure wiring is inherited: ci-rca.yml already triggers on the terraform-apply-sandbox
+    workflow_run, so a failed gated apply (red convergence record) files a source=ci_rca rec with no
+    ci-rca.yml change. Red clears only via the existing workflow_dispatch acknowledge-and-retry path.
+acceptance_criteria:
+  - >-
+    The tf-gated-apply GitHub Environment exists with benjamin-blake as a required reviewer,
+    prevent_self_review=false, and deployment_branch_policy restricting deployments to protected
+    branches -- provisioned via terraform/github/ by the human-gated local apply (never auto-applied).
+  - >-
+    A fail-closed change (IAM-sensitive / trust / destroy; guard exit 2) merged to main auto-routes
+    to the gated-apply job, which blocks on the Environment reviewer until a human approves, then
+    applies in CD (never from a laptop) and writes a green convergence record carrying the new
+    commit_sha.
+  - >-
+    A job that merely declares environment: tf-gated-apply (the prototype workflow) still cannot
+    bypass the reviewer -- it enters a waiting state until approved (Environment protection applies to
+    any referencing job).
+  - >-
+    github_ci_apply's OIDC trust remains pinned to refs/heads/main (no assume_role_policy diff); the
+    privileged apply for the fail-closed set is reachable only via the Environment-gated job. The
+    residual workflow-self-edit path is documented as the Wave-4 / T2.23 concern, not closed here.
+  - >-
+    The gated-apply job applies the SAME saved plan.bin the guard inspected, with no re-plan
+    (Decision 77 no-TOCTOU); a stale saved plan fails closed -> red convergence record -> ci-rca rec.
+  - >-
+    The routine guard-PASS sandbox auto-apply path is unchanged (still auto-applies ungated); the
+    Environment gate is wired only to the post-merge apply job and is NOT a PR required status check.
+  - >-
+    AGENTS.md, docs/contracts/environment-taxonomy.md, terraform/CLAUDE.md, and the implement skill
+    describe gated-CD-apply replacing the manual branch-first apply for the fail-closed subset; the
+    full validate.py suite (environment-taxonomy lint, workflow agent-safety, ci-workflow guards,
+    prompt_compliance, plan_document) passes.
+  - >-
+    Roadmap reconciled: T2.21 marked complete with evidence; T2.22 marked complete on full VP pass.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: terraform/github/ (the new Environment resource) is syntactically valid HCL.
+    command: terraform -chdir=terraform/github init -backend=false && terraform -chdir=terraform/github validate
+    expected: "Success! The configuration is valid."
+    fix_if: >-
+      validate errors -- a missing argument on github_repository_environment (reviewers /
+      deployment_branch_policy / prevent_self_review block shape) or an undeclared variable; fix the
+      resource/variable and re-run.
+  - step: 2
+    phase: pre-deploy
+    action: The deterministic guard still classifies the fail-closed set (the routing trigger is intact; guard is unmodified).
+    command: bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q
+    expected: All guard tests pass, including the IAM-sensitive update and destroy/trust BLOCK (exit 2) cases.
+    fix_if: >-
+      A guard test fails -- the guard must not be edited by this plan (routing is shell-layer only,
+      T2.20 B1 precedent). Revert any guard change.
+  - step: 3
+    phase: pre-deploy
+    action: terraform-apply-sandbox.yml declares the gated-apply job bound to the Environment and wired to the routed output.
+    command: >-
+      grep -qE '^[[:space:]]+gated-apply:' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -qE '^[[:space:]]+environment:[[:space:]]+tf-gated-apply' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -qE 'routed' .github/workflows/terraform-apply-sandbox.yml
+    expected: All three greps match (job present, environment bound, routed wiring present).
+    fix_if: The job is missing, the environment binding is absent, or the routed output is not wired; add them.
+  - step: 4
+    phase: pre-deploy
+    action: Full presubmit passes (taxonomy lint, workflow agent-safety, ci-workflow guards, prompt_compliance, plan_document schema).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 -- all gates PASS; no environment/phase taxonomy violation from "tf-gated-apply"; prompt_compliance unbroken.
+    fix_if: >-
+      A gate fails -- e.g. a headless claude -p step in the gated job lacks an output assertion
+      (workflow agent-safety), or an AGENTS.md/implement-skill edit broke a behavioural invariant.
+      Fix the flagged file and re-run.
+  - step: 5
+    phase: post-deploy
+    action: Human applies terraform/github/ to create the Environment (human-gated LOCAL apply -- BLOCKED until applied).
+    command: >-
+      terraform -chdir=terraform/github init && terraform -chdir=terraform/github apply
+      -var="gated_apply_reviewer_user_ids=[<benjamin-blake-user-id>]" && terraform -chdir=terraform/github
+      state list | grep -q github_repository_environment.tf_gated_apply
+    expected: >-
+      Apply succeeds (GITHUB_TOKEN exported from Secrets Manager first per the README runbook) and the
+      resource is in state. The GitHub API
+      (repos/benjamin-blake/agent-platform/environments/tf-gated-apply) shows a required_reviewers
+      protection rule listing benjamin-blake and prevent_self_review=false.
+    fix_if: >-
+      Apply errors on the reviewer (wrong user id / insufficient PAT scope) or the deployment branch
+      policy; correct the var / PAT scope and re-apply. STOP if plan shows any destroy/replace of the
+      repo or ruleset.
+  - step: 6
+    phase: post-deploy
+    action: A job merely declaring the environment is gated (exit criterion 2 / prototype de-risk).
+    command: >-
+      gh workflow run tf-gated-apply-prototype.yml --repo benjamin-blake/agent-platform
+      (or the GitHub MCP actions_run_trigger equivalent), then observe the run.
+    expected: >-
+      The prototype job enters status "waiting" (pending reviewer approval) and does NOT execute until
+      approved; after benjamin-blake approves, it runs and aws sts get-caller-identity prints the
+      assumed agent-platform-github-ci-apply role -- proving the Environment gates job execution and
+      OIDC works post-approval.
+    fix_if: >-
+      The job runs without waiting -- the Environment lacks the required reviewer (re-check step 5) or
+      the job did not actually bind environment: tf-gated-apply.
+  - step: 7
+    phase: post-deploy
+    action: End-to-end fail-closed routing + gated apply in CD (exit criterion 1).
+    command: >-
+      Open a test PR adding a benign tag to a CI role in terraform/personal/oidc.tf (e.g. a
+      Purpose tag on aws_iam_role.github_ci_apply -- guard classifies aws_iam_role UPDATE as BLOCKED,
+      and github_ci_apply has iam:TagRole on the CI roles). Confirm the speculative-plan comment shows
+      predicted verdict BLOCKED. Squash-merge. After the gated approval, read the convergence record:
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform
+    expected: >-
+      apply-sandbox routes (routed=true, job green, record untouched while pending); the gated-apply
+      job waits on the reviewer; on approval it applies the tag in CD and the convergence record reads
+      status=green with commit_sha = the test merge commit and a non-null plan_sha. The Actions log
+      shows the apply ran in the gated job (never a laptop).
+    fix_if: >-
+      The change auto-applies without gating (routing/guard-output wiring wrong), or the gated job
+      cannot apply the tag (AccessDenied -- the chosen test change exceeds github_ci_apply's IAM scope;
+      pick a tag/policy edit on a CI role, not a new-role create). The benign tag is reversible.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Routed-but-unapproved invariant (anti-masking, Decision 55/72): while the gated-apply job is
+      pending approval, the convergence record is NOT mutated and NO ci-rca rec is filed. Verifies the
+      exit-2-semantics change (guard BLOCK now sets routed=true + green job instead of failing) does
+      not spuriously red the record or file a false rec.
+    command: >-
+      After the step-7 merge but BEFORE approving the gated job, read the record:
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform;
+      then refresh and inspect open recs:
+      bin/venv-python -m scripts.sync_ops pull && grep -c '"source": "ci_rca".*"status": "open"' logs/.recommendations-log.jsonl
+    expected: >-
+      During the pending window the record's commit_sha is still the PRIOR (pre-test) converged commit
+      (unchanged, not red) and the apply-sandbox job is green-with-routed; no NEW source=ci_rca open rec
+      references this run. The record flips to the test merge commit only AFTER approval (step 7).
+    fix_if: >-
+      The record went red or mutated while merely routed (the record_write skip-on-routed logic is
+      wrong -- a routed run must not overwrite the record), or a spurious ci-rca rec was filed (the
+      routed path must conclude the apply-sandbox job green, not failure). Fix the routed-output gating.
+  - step: 9
+    phase: post-deploy
+    action: github_ci_apply trust unchanged + no-re-plan invariant held (exit criterion 3 / Decision 77).
+    command: >-
+      grep -A4 'role/agent-platform-github-ci-apply' terraform/personal/oidc.tf | grep -q 'refs/heads/main';
+      and inspect the step-7 gated-apply Actions log for a single "terraform apply ... plan.bin" with no
+      intervening "terraform plan" on the push path.
+    expected: >-
+      github_ci_apply's assume-role sub is still exactly refs/heads/main (no trust widening to an
+      environment claim); the step-7 test PR plan showed no assume_role_policy diff on github_ci_apply;
+      the gated apply consumed the saved plan.bin verbatim (no re-plan).
+    fix_if: >-
+      Trust was widened (revert the trust change -- the Environment is the gate, not the token) or the
+      gated job re-plans after approval (remove the re-plan; apply the saved plan.bin only).
+  - step: 10
+    phase: post-deploy
+    action: Failure path wiring -- a gated apply failure reds the record and files ci-rca; nothing auto-remediates (Decision 55/72/92).
+    command: >-
+      Within the gated-apply job confirm the convergence write step is if: always() with red-on-failure
+      (grep the job block), and confirm ci-rca.yml triggers on the terraform-apply-sandbox workflow:
+      grep -q 'terraform-apply-sandbox' .github/workflows/ci-rca.yml
+    expected: >-
+      The gated-apply job reuses the always-run red-on-failure record write (a failed gated apply writes
+      status=red), and ci-rca.yml's workflow_run trigger includes terraform-apply-sandbox -- so a gated
+      failure files a source=ci_rca rec. Recovery is the dispatch-ack path; no auto-remediation.
+    fix_if: >-
+      The gated job omits the always-run record write or ci-rca does not watch the workflow; add the
+      always-run red-on-failure write and confirm the ci-rca trigger.
+  - step: 11
+    phase: post-deploy
+    action: Roadmap reconciled and presubmit still green after the status edits.
+    command: >-
+      grep -A2 'id: T2.21' docs/ROADMAP-PLATFORM.yaml | grep -q 'status: complete' &&
+      grep -A2 'id: T2.22' docs/ROADMAP-PLATFORM.yaml | grep -q 'status: complete' &&
+      bin/venv-python -m scripts.validate --pre
+    expected: T2.21 and T2.22 both marked complete; the fast presubmit tier passes.
+    fix_if: A status edit is missing or malformed YAML; fix and re-run.
+constraints:
+  - >-
+    No new AWS IAM role and no trust change. Reuse agent-platform-github-ci-apply; its OIDC trust
+    STAYS pinned to refs/heads/main. The broader IAM permissions-boundary + bootstrap root is T2.23;
+    do not pull that scope forward.
+  - >-
+    Do NOT narrow scripts/terraform_apply_guard.py -- guard narrowing is T2.25. The guard is
+    unmodified; routing is shell-layer only (T2.20 B1 precedent).
+  - >-
+    Do NOT auto-apply terraform/github/. It is human-gated LOCAL apply only and must never be added to
+    terraform-apply-sandbox.yml's path filter or any apply workflow (Decision 77 /
+    terraform/github/README.md). terraform_apply_guard.py is AWS-IAM-only and cannot inspect github_*
+    diffs.
+  - >-
+    The gated-apply job applies the guard-inspected plan.bin verbatim -- NO re-plan after approval
+    (Decision 77 no-TOCTOU). A stale plan fails closed -> red record -> ci-rca; recovery is the
+    workflow_dispatch acknowledge-and-retry path only.
+  - >-
+    The Environment gates the post-merge apply JOB only. Never add terraform-converged or the gated
+    job to main-protection required_status_checks -- a required check would wedge the autonomous
+    fix-merge or be admin-bypassed (Decision 92 point 2 / Decision 83).
+  - >-
+    prevent_self_review MUST be false -- this is a sole-developer repo; if self-review is prevented the
+    only reviewer cannot approve and the pipeline wedges permanently.
+  - >-
+    Apply failures wire into ci-rca and nothing auto-remediates (Decision 55 / 72). No rescue agents or
+    workaround loops; on an unrecoverable V3 failure, STOP and run RCA.
+  - >-
+    No emojis; plain ASCII hyphens only; keep AGENTS.md / implement-skill edits within their existing
+    behavioural-invariant structure so prompt_compliance stays green.
+context:
+  - >-
+    Implements CD.35 Wave 3 (ratified Decision 92, point 3): high-blast IAM/trust/destroy changes
+    route to a GitHub Environment whose required reviewer gates JOB EXECUTION; the privileged role
+    OIDC trust stays pinned to refs/heads/main (an environment claim in the OIDC sub is NOT an
+    authorization boundary -- the known footgun). depends_on T2.20 (complete).
+  - >-
+    Decisions to cite: Decision 92 (CD.35 Wave 3 keystone, points 1-9), Decision 77 (guard / apply
+    gating, no-TOCTOU), Decision 35 (human-gated apply -- the Environment reviewer is the native
+    implementation), Decision 83 + CD.20 (live main-protection ruleset; strict=false,
+    bypass_mode=always, advisory terraform-converged), Decision 55 + 72 (failure-must-be-seen, no
+    auto-remediation), Decision 76 (web merge flow), Decision 44 + 79 (CI/CD workflow files + the
+    implement skill are build-tooling, NOT executor machinery -- editable).
+  - >-
+    Decision-scout NOTE guardrails (verdict NO_FLAGS): (a) the gated job must apply the guard-inspected
+    plan.bin verbatim, never re-plan; (b) the Environment gates the post-merge apply job and must not
+    become a PR required check; (c) plan-type is IMPLEMENTATION (the >5-file/>8-step STRATEGIC
+    heuristic is suspended under the Decision 67 freeze override).
+  - >-
+    T2.21 (Wave 2) is functionally complete -- the convergence record at commit 8e0f7d6f (PR #203, the
+    T2.21 merge) is status=green with a non-null plan_sha (29be1183...), and a non-null plan_sha is set
+    ONLY on the apply-the-saved-plan push path; that proves the speculative-plan -> apply-the-saved-plan
+    chain ran in production and that github_ci_plan exists. This plan lands the T2.21 closeout. Six
+    open speculative-plan polish recs (rec-2287/2296/2297/2298/2299/2300, Medium/Low, none ci-rca) are
+    non-blocking follow-ons and are deliberately NOT bundled (separate file-section -- the PR-comment
+    job, not T2.22's apply path).
+  - >-
+    github_ci_apply IAM-scope boundary: the gated path applies only the fail-closed subset the role
+    already has rights for (CI-role policy/trust edits, OIDC reconcile, scoped destroys, role tags).
+    Changes beyond that scope (e.g. a brand-new IAM role) stay AccessDenied + human-gated admin until
+    T2.23. The VP test change (a CI-role tag) is chosen to be within scope and reversible.
+  - >-
+    Concurrency tradeoff (accepted, correct-by-design): a gated-apply job pending human approval holds
+    the terraform-apply-sandbox concurrency group (cancel-in-progress: false), so later applies queue
+    behind it. This is the same serialization that prevents the saved plan from going stale during the
+    pending window; the cost (routine applies wait on a pending approval) is acceptable given near-zero
+    gated frequency and that applies must serialize against shared tfstate anyway. Document in
+    terraform/CLAUDE.md; if an approval is abandoned, reject it (or let it time out) to release the queue.
+  - >-
+    Roadmap file-scope re-grounding: T2.22's files_in_scope names terraform/personal/oidc.tf for the
+    Environment, but GitHub Environments require the github provider, which only exists in
+    terraform/github/. The Environment is created there; oidc.tf gets a comment-only edit. terraform/
+    CLAUDE.md is added beyond the stated scope to avoid leaving a contradictory ambient apply-posture
+    instruction.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (no Scope/main divergence).
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scanned via the decision-scout gate (NO_FLAGS; CITE list captured in context)
+  - All files in scope located and readable; terraform/github/ and terraform/personal/oidc.tf reviewed
+  - github_ci_apply IAM scope reviewed (fail-closed subset it can apply confirmed)
+  - Acceptance criteria understood and verifiable; V3 post-deploy steps are human-gated
+execution_steps:
+  - >-
+    terraform/github/environments.tf -- create github_repository_environment "tf-gated-apply"
+    (repository = github_repository.this.name) with prevent_self_review = false, reviewers { users =
+    var.gated_apply_reviewer_user_ids }, and deployment_branch_policy { protected_branches = true;
+    custom_branch_policies = false }. terraform/github/variables.tf -- add variable
+    gated_apply_reviewer_user_ids (list(number), no committed literal default). terraform/github/
+    README.md -- document the Environment + how to pass the reviewer var; reaffirm never-auto-apply.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml -- (a) in the apply-sandbox job, change the guard
+    handling so exit 2 sets a job output routed=true and the step exits 0 (job stays green; routing is
+    not a failure); gate the apply, subagent-review, and record-write steps so they SKIP when routed.
+    (b) Add job output routed from the guard step. (c) Add a new gated-apply job: needs: apply-sandbox;
+    if: always() && needs.apply-sandbox.outputs.routed == 'true' && github.event_name == 'push';
+    environment: tf-gated-apply; permissions id-token: write, contents: read, pull-requests: write.
+    Steps: checkout, configure-aws-credentials (github_ci_apply), setup terraform/python, init, fetch
+    the saved plan.bin from s3://.../tfplan/personal/<pr-head-sha>.bin (resolve PR head SHA from the
+    merge commit -- same logic as the apply-the-saved-plan path), terraform apply plan.bin VERBATIM
+    (no re-plan), the T2.20 always-run red-on-failure convergence record write (reused), and the
+    best-effort post-merge wake. Human approval is the authorization on this path; the subagent PROCEED
+    gate is not required here (it remains on the auto path). Any headless claude -p step added must
+    assert its output (workflow agent-safety).
+  - >-
+    .github/workflows/tf-gated-apply-prototype.yml -- create an inert workflow_dispatch workflow with a
+    single job declaring environment: tf-gated-apply, permissions id-token: write + contents: read,
+    that assumes agent-platform-github-ci-apply and runs only aws sts get-caller-identity. No terraform,
+    no apply. Label clearly as the gate smoke-test.
+  - >-
+    terraform/personal/oidc.tf -- comment-only edit on the github_ci_apply block: trust STAYS pinned to
+    refs/heads/main; the tf-gated-apply Environment (not an OIDC environment claim) is the gate for the
+    fail-closed set; the workflow-self-edit residual is the Wave-4 / T2.23 concern. No resource change.
+  - >-
+    Docs: AGENTS.md (Safety -- gated-CD-apply replaces manual branch-first for the fail-closed subset;
+    broader IAM admin-gated until T2.23); docs/contracts/environment-taxonomy.md (Axis A apply-gating
+    note for the gated path); terraform/CLAUDE.md (apply-posture -- fail-closed subset routes to the
+    gated Environment; interactive loop is the fallback for beyond-scope IAM; document the concurrency
+    tradeoff); .claude/skills/implement/SKILL.md (human-gated-action example -- approve the gated apply
+    in GitHub Actions; the gate is the post-merge apply job, not a PR check).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- T2.21 closeout (status: complete, completed_at: "2026-06-21", note
+    citing the green convergence record + non-null plan_sha at 8e0f7d6f). T2.22 -> in_progress with a
+    progress_note; re-ground the files_in_scope line (Environment in terraform/github/; oidc.tf
+    comment-only; terraform/CLAUDE.md added). On full VP pass flip T2.22 -> status: complete +
+    completed_at.
+  - >-
+    Execute the Verification Plan -- run pre-deploy steps 1-4 and loop until green; then the human-gated
+    post-deploy steps 5-11 (apply terraform/github, prototype gate, end-to-end fail-closed routing,
+    routed-but-unapproved invariant, trust/no-re-plan, failure-path wiring, roadmap reconcile). On an
+    unrecoverable V3 failure, STOP and run RCA (Decision 55) -- do not inline-patch around a structural
+    failure.
+  - "Report: what was implemented, the verification results, and any deferred follow-ons (the six T2.21 polish recs)."
+work_areas: []
+rollback: >-
+  Revert the terraform-apply-sandbox.yml restructure (remove the gated-apply job; restore guard exit 2
+  as the suppress-and-await-admin path) and delete tf-gated-apply-prototype.yml -- the routine
+  auto-apply path plus the existing manual admin apply for the fail-closed set returns unchanged. The
+  tf-gated-apply Environment can be left in place (inert without a referencing job) or destroyed via
+  terraform/github/ (human-gated). Doc edits revert with the workflow change. No data migration; the
+  convergence record + saved-plan S3 surfaces are unchanged.
