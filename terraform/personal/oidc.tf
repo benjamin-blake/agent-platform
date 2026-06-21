@@ -1131,6 +1131,19 @@ resource "aws_iam_role_policy" "github_ci_plan" {
         Effect   = "Allow"
         Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:ducklake-neon-catalog-dsn-*"]
+      },
+      {
+        # Inference credential envelopes (DeepSeek + Anthropic) -- plan-time refresh-read so the
+        # speculative-plan job can DescribeSecret these during the provider refresh walk. Mirrors
+        # github_ci_apply's SecretsManagerInferenceCredentialsRead (inference-creds-ci-recovery);
+        # read-only -- the apply role owns the secret lifecycle.
+        Sid    = "SecretsManagerInferenceCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-anthropic-api-key-*",
+        ]
       }
     ]
   })
