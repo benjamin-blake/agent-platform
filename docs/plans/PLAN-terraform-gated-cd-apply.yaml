@@ -239,6 +239,26 @@ verification_plan:
       pick a tag/policy edit on a CI role, not a new-role create). The benign tag is reversible.
   - step: 8
     phase: post-deploy
+    action: >-
+      Routed-but-unapproved invariant (anti-masking, Decision 55/72): while the gated-apply job is
+      pending approval, the convergence record is NOT mutated and NO ci-rca rec is filed. Verifies the
+      exit-2-semantics change (guard BLOCK now sets routed=true + green job instead of failing) does
+      not spuriously red the record or file a false rec.
+    command: >-
+      After the step-7 merge but BEFORE approving the gated job, read the record:
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform;
+      then refresh and inspect open recs:
+      bin/venv-python -m scripts.sync_ops pull && grep -c '"source": "ci_rca".*"status": "open"' logs/.recommendations-log.jsonl
+    expected: >-
+      During the pending window the record's commit_sha is still the PRIOR (pre-test) converged commit
+      (unchanged, not red) and the apply-sandbox job is green-with-routed; no NEW source=ci_rca open rec
+      references this run. The record flips to the test merge commit only AFTER approval (step 7).
+    fix_if: >-
+      The record went red or mutated while merely routed (the record_write skip-on-routed logic is
+      wrong -- a routed run must not overwrite the record), or a spurious ci-rca rec was filed (the
+      routed path must conclude the apply-sandbox job green, not failure). Fix the routed-output gating.
+  - step: 9
+    phase: post-deploy
     action: github_ci_apply trust unchanged + no-re-plan invariant held (exit criterion 3 / Decision 77).
     command: >-
       grep -A4 'role/agent-platform-github-ci-apply' terraform/personal/oidc.tf | grep -q 'refs/heads/main';
@@ -251,7 +271,7 @@ verification_plan:
     fix_if: >-
       Trust was widened (revert the trust change -- the Environment is the gate, not the token) or the
       gated job re-plans after approval (remove the re-plan; apply the saved plan.bin only).
-  - step: 9
+  - step: 10
     phase: post-deploy
     action: Failure path wiring -- a gated apply failure reds the record and files ci-rca; nothing auto-remediates (Decision 55/72/92).
     command: >-
@@ -265,7 +285,7 @@ verification_plan:
     fix_if: >-
       The gated job omits the always-run record write or ci-rca does not watch the workflow; add the
       always-run red-on-failure write and confirm the ci-rca trigger.
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: Roadmap reconciled and presubmit still green after the status edits.
     command: >-
@@ -403,9 +423,10 @@ execution_steps:
     completed_at.
   - >-
     Execute the Verification Plan -- run pre-deploy steps 1-4 and loop until green; then the human-gated
-    post-deploy steps 5-10 (apply terraform/github, prototype gate, end-to-end fail-closed routing,
-    trust/no-re-plan, failure-path wiring, roadmap reconcile). On an unrecoverable V3 failure, STOP and
-    run RCA (Decision 55) -- do not inline-patch around a structural failure.
+    post-deploy steps 5-11 (apply terraform/github, prototype gate, end-to-end fail-closed routing,
+    routed-but-unapproved invariant, trust/no-re-plan, failure-path wiring, roadmap reconcile). On an
+    unrecoverable V3 failure, STOP and run RCA (Decision 55) -- do not inline-patch around a structural
+    failure.
   - "Report: what was implemented, the verification results, and any deferred follow-ons (the six T2.21 polish recs)."
 work_areas: []
 rollback: >-
