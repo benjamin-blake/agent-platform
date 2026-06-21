@@ -55,6 +55,9 @@ scope:
       (description/semantics for the write-guidance surface), both from the one contract. CLI: default
       write mode; --check (regenerate in-memory, byte-diff committed, non-zero on drift, NO auto-write);
       --slice {mechanical,semantic}. Houses the iceberg_type->sql_type map (fail-closed on unmapped).
+      Also ENFORCES that each sidecar migration_columns entry is a subset of (and type-consistent with)
+      that table's projected columns, raising on violation -- this gives the previously-unread
+      migration_columns block a consumer and resolves rec-2232 (the "enforce" path).
   - file: config/lambda/ducklake/field_semantics.yaml
     action: Modify
     purpose: >-
@@ -75,14 +78,27 @@ scope:
       (realized:true->derived, realized:false->input, no-derivation->input); envelope derived +
       effort/priority/risk/automatable input; merge_key + partition projection; history/current table
       name synthesis; mechanical-slice-has-no-prose; semantic-slice-has-prose; full-document data-
-      equivalence vs the pre-change file; --check detects an injected drift without writing.
+      equivalence vs the pre-change file; --check detects an injected drift without writing; and the
+      migration_columns-subset enforcement raises on a non-subset entry (rec-2232).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the new fail-closed drift-gate function added to scripts/validate.py (drift detected ->
+      appended failure, no auto-write). test_coverage_checker enforces 100% per-file coverage on the
+      new lines, so the full presubmit (VP step 7) fails without this.
+  - file: tests/test_contracts_schema.py
+    action: Modify
+    purpose: >-
+      Cover the new ContractGovernance.merge_key field (accepted when present; the model still rejects
+      unknown governance keys via extra="forbid"). Required for 100%-on-new-lines coverage.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
       Roadmap bookkeeping (T2.33 deliverables): mark the T2.32 KNOWN GAP closed; re-point the
       field_semantics hand-edit exit-criteria of T2.29 (#7), T2.30 and T2.31 to "generator-emitted,
       verified by the validate.py drift gate"; set T2.33 status: complete with completed_at + evidence.
-bundled_recommendations: []
+bundled_recommendations:
+  - rec-2232
 infrastructure_dependencies:
   - "No .tf / IAM changes. Code+config redeploy only."
   - "Lambda deploy (Decision 79, V3): ducklake_writer (active) -- bundles field_semantics.yaml"
@@ -115,6 +131,10 @@ acceptance_criteria:
   - >-
     scripts/validate.py regenerates and byte-compares the committed field_semantics.yaml, fails
     closed (non-zero, no auto-write) on any drift, and runs in both --pre and full presubmit tiers.
+  - >-
+    The generator enforces that every sidecar migration_columns entry is a subset of (and type-
+    consistent with) that table's projected columns, raising on a non-subset/mistyped entry. This
+    gives migration_columns a consumer and resolves rec-2232 (status closed via the Resolves trailer).
   - >-
     The three active ducklake Lambdas (writer, reader, maintenance) rebuild, redeploy, and pass the
     post-deploy smoke gates (attach, schema loud-fail, idempotency, partition prune, closed reader).
@@ -176,6 +196,26 @@ verification_plan:
       risk/automatable would wrongly read derived). Mapping test fails -> incomplete iceberg->sql map.
   - step: 5
     phase: pre-deploy
+    action: >-
+      Generator ENFORCES migration_columns subset (rec-2232): a sidecar migration_columns entry not
+      present in the table's projected columns makes the generator raise (fail-closed).
+    command: >-
+      cp config/lambda/ducklake/field_semantics.static.yaml /tmp/fs_static.yaml &&
+      bin/venv-python -c "import yaml; p='config/lambda/ducklake/field_semantics.static.yaml';
+      d=yaml.safe_load(open(p));
+      d['ops_tables']['ops_recommendations']['migration_columns']['history']['__bogus__']={'role':'input','sql_type':'VARCHAR','nullable':True};
+      yaml.safe_dump(d, open(p,'w'))" ;
+      bin/venv-python -m scripts.schema_to_field_semantics --check; rc=$? ;
+      cp /tmp/fs_static.yaml config/lambda/ducklake/field_semantics.static.yaml; echo "gen_rc=$rc"
+    expected: >-
+      gen_rc is non-zero (the generator rejected __bogus__ as not a subset of the ops_recommendations
+      columns). Sidecar is then restored. (tests/test_schema_to_field_semantics.py -k migration_columns
+      also covers this.)
+    fix_if: >-
+      gen_rc==0 -> the generator does not enforce the subset rule; add the check so migration_columns
+      has a consumer (rec-2232). Restore the sidecar from /tmp/fs_static.yaml if the run left it dirty.
+  - step: 6
+    phase: pre-deploy
     action: Drift gate fails CLOSED on an injected drift and does NOT auto-write.
     command: >-
       cp config/lambda/ducklake/field_semantics.yaml /tmp/fs_committed.yaml &&
@@ -190,13 +230,17 @@ verification_plan:
       validate_rc==0 -> gate not wired into --pre or not comparing bytes. File auto-reverted -> the
       gate is self-healing instead of fail-closed; remove the auto-write (Decision 55). This step also
       discharges the closure obligation: hand-editing field_semantics.yaml is now a caught, closed path.
-  - step: 6
+  - step: 7
     phase: pre-deploy
     action: Full presubmit is green on the committed (regenerated) state.
     command: bin/venv-python -m scripts.validate
-    expected: PASS (drift gate green; contract enforcement green; plan-document + roadmap checks green).
-    fix_if: Any failure -> fix the cited check; re-run until green (CI is authoritative).
-  - step: 7
+    expected: >-
+      PASS (drift gate green; contract enforcement green; plan-document + roadmap checks green;
+      test_coverage_checker green on the new lines in validate.py and contracts_schema.py).
+    fix_if: >-
+      Coverage failure on validate.py/contracts_schema.py new lines -> add the missing tests to
+      tests/test_validate.py / tests/test_contracts_schema.py. Any other failure -> fix the cited check.
+  - step: 8
     phase: pre-deploy
     action: Confirm the changed file maps to the three active ducklake artifacts (V3 scope, Decision 79).
     command: >-
@@ -208,19 +252,19 @@ verification_plan:
     fix_if: >-
       Fewer than three -> a manifest dropped field_semantics.yaml from its static_files; reconcile
       before deploying.
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: Build, upload and deploy ONLY the ducklake artifacts (Decision 79 per-Lambda gating).
     command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform
     expected: writer, reader and maintenance function code updated from the freshly built packages.
     fix_if: Build/deploy error -> resolve (creds via agent_platform, package size, manifest) and retry.
-  - step: 9
+  - step: 10
     phase: post-deploy
     action: Deployed writer attaches the Neon catalog (reachability + bundled config load).
     command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-attach --profile agent_platform
     expected: PASS (EC1 in-Lambda ATTACH proof).
     fix_if: Failure -> the deployed package or Function URL is broken; RCA before further gates.
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: >-
       Deployed schema gate still rejects unknown/mistyped fields -- proves the regenerated
@@ -230,13 +274,13 @@ verification_plan:
     fix_if: >-
       Failure -> the regenerated columns/roles diverged from the prior schema gate; cross-check against
       step 3 (parsed-data equivalence should have caught it). Stop and RCA (Decision 55).
-  - step: 11
+  - step: 12
     phase: post-deploy
     action: Derived-field minting (ulid) + idempotent append intact under the regenerated map.
     command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-idempotency --profile agent_platform
     expected: PASS (EC10 idempotent ULID append -> exactly one history row on retry).
     fix_if: Failure -> a derived role (ulid/created/last_updated) was mis-projected; reconcile.
-  - step: 12
+  - step: 13
     phase: post-deploy
     action: Partition transforms (day(created_timestamp) / bucket(8, merge_key)) intact; closed reader serves.
     command: >-
@@ -246,6 +290,22 @@ verification_plan:
     fix_if: >-
       Partition failure -> merge_key->partition synthesis diverged; reader failure -> reader bundle
       stale. Reconcile and redeploy. Stop and RCA on unrecoverable V3 failure (Decision 55).
+  - step: 14
+    phase: post-deploy
+    action: >-
+      rec-2232 lifecycle closure verified (runs AFTER the squash-merge, whose `Resolves: rec-2232`
+      trailer triggers rec-autoclose; sync then pulls the closed status).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull &&
+      bin/venv-python -c "import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl')];
+      r=[x for x in rows if x.get('id')=='rec-2232'];
+      assert r and r[0].get('status')=='closed', 'rec-2232 not closed';
+      print('rec-2232 closed')"
+    expected: Prints 'rec-2232 closed'.
+    fix_if: >-
+      Not closed -> the Resolves trailer did not fire rec-autoclose; close manually:
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2232 --status closed --resolution
+      "migration_columns now enforced as subset of columns by schema_to_field_semantics.py".
 constraints:
   - >-
     V3 SAFETY INVARIANT: whole-file regeneration MUST be parsed-data-identical to the prior committed
@@ -275,12 +335,12 @@ context:
     schema-as-code for Iceberg only; this extends the pattern to the DuckLake ops runtime map.
   - >-
     Decision-scout gate verdict: FLAGS_FOUND (one NOTE, no BLOCK). NOTE (Decision 55): the drift gate
-    must raise on drift, never auto-heal -- discharged by the fail-closed --check and VP step 5.
+    must raise on drift, never auto-heal -- discharged by the fail-closed --check and VP step 6.
   - >-
     Decisions to CITE: 81 (CD.33 DuckLake runtime -- behavior unchanged), 84 (sole backend / writer-owned
     keyspace), 79 (per-Lambda V3 deploy), 65 (contract is the canonical field-semantic authority -- the
     motivation), 86 (sidecar is data, not prose -- compliant), 44 (executor self-modification boundary --
-    NONE of the 9 scope files match the boundary table; untouched). RELATED: 63 (execution_* fields are
+    NONE of the 11 scope files match the boundary table; untouched). RELATED: 63 (execution_* fields are
     DQ-excluded and carry NO derivation block, so they project to role:input naturally), 70, 48/73 (drift
     gate at both tiers), 88 (smoke gates reuse warm catalog connections).
   - >-
@@ -302,13 +362,25 @@ context:
     Python constants (agent-first). field_semantics.yaml becomes pure output; the sidecar is the editable
     home for the smoke section, the three dormant tables, and the contract-backed tables' operational keys.
   - >-
+    rec-2232 (open, source=code-review, file=config/lambda/ducklake/field_semantics.yaml: "Remove or
+    enforce unread migration_columns block") is bundled and resolved via the "enforce" path: the
+    generator gives migration_columns a consumer by asserting it is a subset of the projected columns.
+    This plan relocates migration_columns to the sidecar, so without this the block would remain unread
+    and rec-2232 harder to close. Closure is via the Resolves: rec-2232 squash-merge trailer (VP step 14).
+    Surfaced by the plan-critique gate as the primary latent-interaction risk.
+  - >-
+    test_coverage_checker enforces 100% coverage on NEW lines per changed source file. Because this plan
+    modifies scripts/validate.py (new drift-gate fn) and scripts/contracts_schema.py (new merge_key), the
+    full presubmit (VP step 7) requires tests in tests/test_validate.py and tests/test_contracts_schema.py
+    -- not only the new generator test file. Added to scope and execution_steps after the plan-critique gate.
+  - >-
     Authored on branch claude/festive-dirac-02tyv6. If origin/main has moved on any scope file, rebase
     before /implement; VP step 3 fetches origin/main fresh for the equivalence baseline.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/festive-dirac-02tyv6)
   - docs/PROJECT_CONTEXT.md read
   - DECISIONS.md relevant entries read (81, 84, 79, 65, 86, 44, 63, 70, 48, 73, 88; CD.25 ritual)
-  - All nine files in scope located and readable
+  - All eleven files in scope located and readable
   - >-
     Both contracts read; confirmed envelope fields lack derivation blocks (must be added with
     realized:true) and effort/priority/automatable/risk already have derivation blocks (add realized:false)
@@ -346,7 +418,9 @@ execution_steps:
     history/current table names synth from table id; mechanical slice (no prose) + semantic slice
     (description/semantics); merge sidecar + projected blocks into the full document; emit deterministic
     canonical YAML with a "GENERATED -- DO NOT EDIT (scripts/schema_to_field_semantics.py)" header; CLI
-    flags --check (byte-diff, non-zero on drift, no write) and --slice {mechanical,semantic}.
+    flags --check (byte-diff, non-zero on drift, no write) and --slice {mechanical,semantic}. ENFORCE
+    that each sidecar migration_columns entry is a subset of (type-consistent with) the table's
+    projected columns, raising on violation (rec-2232 "enforce" path).
   - >-
     Run `bin/venv-python -m scripts.schema_to_field_semantics` to regenerate field_semantics.yaml; then
     run VP step 3 (parsed-data equivalence vs origin/main) and reconcile until identical.
@@ -356,7 +430,12 @@ execution_steps:
     --pre block (next to the existing CD.25 contract drift gate) and run_python_checks (full presubmit).
   - >-
     Create tests/test_schema_to_field_semantics.py per the scope purpose (include the full-document
-    data-equivalence test and the --check-detects-injected-drift-without-writing test).
+    data-equivalence test, the --check-detects-injected-drift-without-writing test, and the
+    migration_columns-subset enforcement test).
+  - >-
+    Extend tests/test_validate.py (new fail-closed drift-gate function: drift -> failure, no auto-write)
+    and tests/test_contracts_schema.py (new ContractGovernance.merge_key field) so test_coverage_checker
+    sees 100% coverage on the new lines.
   - "Run `bin/venv-python -m scripts.validate` (full presubmit); loop until green."
   - >-
     docs/ROADMAP-PLATFORM.yaml bookkeeping: close the T2.32 KNOWN GAP; re-point the field_semantics
@@ -364,7 +443,7 @@ execution_steps:
     drift gate"; set T2.33 status: complete with completed_at 2026-06-21 and an evidence note.
   - >-
     Build + deploy the three ducklake Lambdas (`--ducklake-only --deploy`) and run the post-deploy smoke
-    gates (VP steps 9-12).
+    gates (VP steps 9-13). At squash-merge, emit the `Resolves: rec-2232` trailer; verify closure (VP 14).
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
     (Decision 55), do NOT inline-patch.
