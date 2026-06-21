@@ -768,6 +768,7 @@ jobs:
     needs: [apply-sandbox]
     if: >-
       always() &&
+      needs.apply-sandbox.result == 'success' &&
       needs.apply-sandbox.outputs.routed == 'true' &&
       github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -880,6 +881,13 @@ jobs:
         # Recovery: dispatch-ack path (naming the red commit or rec-id) after rec review -- nothing
         # auto-remediates. plan_sha: sha256 of the applied plan.bin (same convention as apply-sandbox
         # push path; proves the saved plan -- not a re-plan -- was applied).
+        #
+        # No convergence-record precondition check here (unlike apply-sandbox's hard-block at Step 1):
+        # the shared concurrency group (cancel-in-progress: false) serializes ALL applies on the
+        # same tfstate, so the record cannot go red via the CD path while this job holds the group.
+        # A workflow_dispatch ack run also queues behind this job (same group). This is an implicit
+        # serialization invariant, not an explicit read-then-refuse gate -- accepted design tradeoff
+        # for the gated path where the concurrency group provides the safety guarantee.
         if: always()
         env:
           SHA: ${{ github.sha }}
