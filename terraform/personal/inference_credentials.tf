@@ -21,7 +21,7 @@ resource "aws_secretsmanager_secret" "deepseek_api_key" {
 
   tags = {
     Name    = "DeepSeek API Key"
-    Purpose = "CD.28 Tier 1 inference - LiteLLM deepseek/deepseek-chat (T0.4)"
+    Purpose = "CD.28 Tier 1 inference - LiteLLM deepseek/deepseek-chat T0.4"
   }
 }
 
@@ -31,7 +31,7 @@ resource "aws_secretsmanager_secret" "anthropic_api_key" {
 
   tags = {
     Name    = "Anthropic API Key"
-    Purpose = "CD.28 Tier 2 inference - LiteLLM anthropic/claude-haiku-4-5 (T0.4)"
+    Purpose = "CD.28 Tier 2 inference - LiteLLM anthropic/claude-haiku-4-5 T0.4"
   }
 }
 
