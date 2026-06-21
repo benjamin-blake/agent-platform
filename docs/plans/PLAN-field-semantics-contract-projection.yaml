@@ -1,0 +1,377 @@
+schema_version: 1
+slug: field-semantics-contract-projection
+intent: >-
+  Make the DuckLake runtime field-map (config/lambda/ducklake/field_semantics.yaml) a
+  GENERATED projection of the ratified Class A contracts so the contract is the single
+  source of truth for ops storage schema, eliminating the hand-reconciliation "drift by
+  design" between two files and advancing the agent-first contract-driven data architecture.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-field-semantics-contract-projection.yaml
+phase: >-
+  Platform tier_item T2.33 (DuckLake schema-as-code-from-contract). Closes the T2.32-recorded
+  KNOWN GAP; T0.13's schema-as-code was Iceberg-only. STRATEGIC suspended (executor freeze):
+  authored as a single IMPLEMENTATION plan per AGENTS.md Temporary Operational Constraints.
+scope:
+  - file: scripts/contracts_schema.py
+    action: Modify
+    purpose: >-
+      Add `merge_key: str | None = None` to the ContractGovernance Pydantic model so the
+      contracts can declare their SCD2 merge key. (projects_to already exists on ContractMeta;
+      derivation is already dict[str, Any] so the `realized` key needs no schema change.)
+  - file: docs/contracts/ops_recommendations.yaml
+    action: Modify
+    purpose: >-
+      Additive CD.25 amendment (change_class: field_add, semantic_break: false): populate
+      contract.projects_to (target field_semantics.yaml + table ops_recommendations + generator),
+      add governance.merge_key: id, add realized:true derivation blocks to the three SCD2-envelope
+      fields (ulid, created_timestamp, last_updated_timestamp), add realized:false to the EXISTING
+      derivation blocks on effort/priority/automatable/risk (forward-pointers; stay role:input
+      today), and append one amendment_log entry. MUST land in the same commit as contracts_schema.py.
+  - file: docs/contracts/ops_decisions.yaml
+    action: Modify
+    purpose: >-
+      Same additive amendment: contract.projects_to (table ops_decisions), governance.merge_key: id,
+      realized:true derivation blocks on ulid/created_timestamp/last_updated_timestamp (no
+      deferred-derivation fields exist on this table), one amendment_log entry.
+  - file: config/lambda/ducklake/field_semantics.static.yaml
+    action: Create
+    purpose: >-
+      Sidecar holding the non-contract content the generator splices verbatim: the smoke section
+      (tables/fields/derivation_timing/partition_transforms/connection_settings), the three dormant
+      ops_tables (ops_priority_queue, ops_session_log, ops_execution_plans -- no Class A contract),
+      and the operational keys for the two contract-backed tables that are NOT contract field-
+      semantics (status, entity_id_prefix, id_keyspace, migration_columns). Machine-parseable config
+      data (Decision 86 compliant -- not a prose-architecture doc). This is the editable home for
+      non-contract config; field_semantics.yaml becomes pure generator output.
+  - file: scripts/schema_to_field_semantics.py
+    action: Create
+    purpose: >-
+      The generator. Loads docs/contracts/ops_recommendations.yaml and ops_decisions.yaml via
+      scripts.contracts.load_contract + resolve_refs (resolving the source $ref), projects each into
+      its ops_tables.<table> block, merges with the sidecar, and emits the WHOLE field_semantics.yaml
+      to a deterministic canonical style with a "GENERATED -- DO NOT EDIT" header. Subset-aware: a
+      mechanical slice (role/sql_type/nullable + partition + merge_key, NO prose) and a semantic slice
+      (description/semantics for the write-guidance surface), both from the one contract. CLI: default
+      write mode; --check (regenerate in-memory, byte-diff committed, non-zero on drift, NO auto-write);
+      --slice {mechanical,semantic}. Houses the iceberg_type->sql_type map (fail-closed on unmapped).
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      Regenerated from the generator (one-time reformat to canonical style + generated header). MUST
+      parse to data IDENTICAL to the prior committed version (only comments/formatting change) -- this
+      is the V3 safety invariant that keeps the live ops backend behavior unchanged.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a fail-closed drift gate: regenerate field_semantics.yaml in-memory and byte-compare the
+      committed file; on drift append to `failed` (contracts_enforcement list[str] style) and NEVER
+      auto-write (Decision 55). Wire into BOTH the --pre tier (adjacent to the existing CD.25 contract
+      drift gate; pure Python sub-second) and run_python_checks (full presubmit).
+  - file: tests/test_schema_to_field_semantics.py
+    action: Create
+    purpose: >-
+      Unit tests: iceberg->sql mapping incl. unmapped-raises; realized-derivation role rule
+      (realized:true->derived, realized:false->input, no-derivation->input); envelope derived +
+      effort/priority/risk/automatable input; merge_key + partition projection; history/current table
+      name synthesis; mechanical-slice-has-no-prose; semantic-slice-has-prose; full-document data-
+      equivalence vs the pre-change file; --check detects an injected drift without writing.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping (T2.33 deliverables): mark the T2.32 KNOWN GAP closed; re-point the
+      field_semantics hand-edit exit-criteria of T2.29 (#7), T2.30 and T2.31 to "generator-emitted,
+      verified by the validate.py drift gate"; set T2.33 status: complete with completed_at + evidence.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "No .tf / IAM changes. Code+config redeploy only."
+  - "Lambda deploy (Decision 79, V3): ducklake_writer (active) -- bundles field_semantics.yaml"
+  - "Lambda deploy (Decision 79, V3): ducklake_reader (active) -- bundles field_semantics.yaml"
+  - "Lambda deploy (Decision 79, V3): ducklake_maintenance (active) -- bundles field_semantics.yaml"
+acceptance_criteria:
+  - >-
+    scripts/schema_to_field_semantics.py exists; running it in write mode regenerates
+    config/lambda/ducklake/field_semantics.yaml from the two contracts + sidecar, and a second run
+    is byte-identical (idempotent / byte-stable).
+  - >-
+    The regenerated field_semantics.yaml parses to data IDENTICAL (yaml.safe_load deep-equal) to the
+    prior committed version on origin/main -- only comments and formatting differ. Runtime schema gate,
+    DDL, partition transforms and MERGE behavior are unchanged for all five ops tables.
+  - >-
+    Role is projected by the explicit rule: role:derived iff the field has a derivation block with
+    realized:true. ulid/created_timestamp/last_updated_timestamp are derived; effort/priority/risk/
+    automatable remain input (realized:false); all other fields without a derivation block are input.
+  - >-
+    sql_type is projected from the contract iceberg_type via the generator's mapping; an unmapped
+    iceberg_type raises (fail-closed), it is never silently defaulted.
+  - >-
+    The mechanical slice carries NO prose (no description/semantics keys); the semantic slice
+    (--slice semantic) carries description/semantics. Both project from the one contract.
+  - >-
+    Both contracts carry contract.projects_to (pointing at field_semantics.yaml + their table) and
+    governance.merge_key: id, with realized markers on the relevant fields and one additive
+    amendment_log entry each (change_class: field_add, semantic_break: false). ContractGovernance
+    accepts merge_key and all contracts still load via scripts.contracts.load_contract.
+  - >-
+    scripts/validate.py regenerates and byte-compares the committed field_semantics.yaml, fails
+    closed (non-zero, no auto-write) on any drift, and runs in both --pre and full presubmit tiers.
+  - >-
+    The three active ducklake Lambdas (writer, reader, maintenance) rebuild, redeploy, and pass the
+    post-deploy smoke gates (attach, schema loud-fail, idempotency, partition prune, closed reader).
+  - >-
+    ROADMAP-PLATFORM.yaml: T2.32 KNOWN GAP marked closed; T2.29 #7 / T2.30 / T2.31 field_semantics
+    exit-criteria re-pointed to the generator; T2.33 marked complete with evidence.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Contracts still load and now expose merge_key + projects_to after the amendments.
+    command: >-
+      bin/venv-python -c "from scripts.contracts import load_contract, resolve_refs;
+      import pathlib;
+      [print(c, load_contract(p).contract.governance.merge_key, bool(load_contract(p).contract.projects_to),
+      len(resolve_refs(load_contract(p), 'docs/contracts')))
+      for c,p in [('recs','docs/contracts/ops_recommendations.yaml'),('decs','docs/contracts/ops_decisions.yaml')]]"
+    expected: >-
+      Both lines print merge_key == 'id', projects_to truthy, and a non-zero resolved field count
+      (26 recs / 14 decisions). No exception (proves ContractGovernance.merge_key accepted and the
+      source $ref resolves).
+    fix_if: >-
+      Pydantic ValidationError on merge_key -> the contracts_schema.py field add and the contract YAML
+      edits did not land in the same commit. ImportError/KeyError -> loader API drift.
+  - step: 2
+    phase: pre-deploy
+    action: Generator is idempotent / byte-stable (write then --check is a no-op).
+    command: >-
+      bin/venv-python -m scripts.schema_to_field_semantics &&
+      bin/venv-python -m scripts.schema_to_field_semantics --check; echo "exit=$?"
+    expected: "--check prints no drift and exit=0 immediately after a write."
+    fix_if: >-
+      Non-deterministic emission (dict ordering, timestamp in header, float/quote style) -> make the
+      canonical emitter fully deterministic; the header must carry no run-varying content.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      KEYSTONE SAFETY GATE -- regenerated field_semantics.yaml is data-identical to origin/main
+      (whole-document parsed deep-equal; formatting-only change).
+    command: >-
+      git fetch origin main --quiet &&
+      git show origin/main:config/lambda/ducklake/field_semantics.yaml > /tmp/fs_old.yaml &&
+      bin/venv-python -c "import yaml; a=yaml.safe_load(open('/tmp/fs_old.yaml'));
+      b=yaml.safe_load(open('config/lambda/ducklake/field_semantics.yaml'));
+      assert a==b, 'DATA DRIFT: regenerated field_semantics differs in PARSED DATA from origin/main';
+      print('OK: parsed data identical; formatting/comments-only change')"
+    expected: "Prints 'OK: parsed data identical ...' -- the entire parsed document is unchanged."
+    fix_if: >-
+      AssertionError -> the generator/sidecar changed semantics (wrong role/sql_type/nullable/merge_key/
+      partition, dropped/added a field, or an operational key lost in the sidecar split). STOP and
+      reconcile until parsed data is identical -- do NOT relax the assertion (Decision 55).
+  - step: 4
+    phase: pre-deploy
+    action: Generator unit tests (role rule, mapping, slices, merge_key/partition, table-name synth).
+    command: bin/venv-python -m pytest tests/test_schema_to_field_semantics.py -q
+    expected: All tests pass, including realized:false->input, unmapped-iceberg-type-raises, and
+      mechanical-slice-has-no-prose / semantic-slice-has-prose.
+    fix_if: >-
+      Role-rule test fails -> the rule used "derivation present" not "realized:true" (effort/priority/
+      risk/automatable would wrongly read derived). Mapping test fails -> incomplete iceberg->sql map.
+  - step: 5
+    phase: pre-deploy
+    action: Drift gate fails CLOSED on an injected drift and does NOT auto-write.
+    command: >-
+      cp config/lambda/ducklake/field_semantics.yaml /tmp/fs_committed.yaml &&
+      printf '\n# injected drift\n' >> config/lambda/ducklake/field_semantics.yaml &&
+      bin/venv-python -m scripts.validate --pre; rc=$?;
+      bin/venv-python -c "import sys; sys.exit(0 if open('config/lambda/ducklake/field_semantics.yaml').read().endswith('# injected drift\n') else 1)" &&
+      cp /tmp/fs_committed.yaml config/lambda/ducklake/field_semantics.yaml; echo "validate_rc=$rc"
+    expected: >-
+      validate_rc is non-zero (drift gate flagged the divergence) AND the injected line is still
+      present afterward (the gate did NOT silently regenerate/overwrite). File is then restored.
+    fix_if: >-
+      validate_rc==0 -> gate not wired into --pre or not comparing bytes. File auto-reverted -> the
+      gate is self-healing instead of fail-closed; remove the auto-write (Decision 55). This step also
+      discharges the closure obligation: hand-editing field_semantics.yaml is now a caught, closed path.
+  - step: 6
+    phase: pre-deploy
+    action: Full presubmit is green on the committed (regenerated) state.
+    command: bin/venv-python -m scripts.validate
+    expected: PASS (drift gate green; contract enforcement green; plan-document + roadmap checks green).
+    fix_if: Any failure -> fix the cited check; re-run until green (CI is authoritative).
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the changed file maps to the three active ducklake artifacts (V3 scope, Decision 79).
+    command: >-
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts;
+      print(sorted(compute_affected_artifacts(['config/lambda/ducklake/field_semantics.yaml'])))"
+    expected: >-
+      Output includes the writer, reader and maintenance ducklake artifacts (all status: active) ->
+      each requires build + deploy + smoke-test.
+    fix_if: >-
+      Fewer than three -> a manifest dropped field_semantics.yaml from its static_files; reconcile
+      before deploying.
+  - step: 8
+    phase: post-deploy
+    action: Build, upload and deploy ONLY the ducklake artifacts (Decision 79 per-Lambda gating).
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform
+    expected: writer, reader and maintenance function code updated from the freshly built packages.
+    fix_if: Build/deploy error -> resolve (creds via agent_platform, package size, manifest) and retry.
+  - step: 9
+    phase: post-deploy
+    action: Deployed writer attaches the Neon catalog (reachability + bundled config load).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-attach --profile agent_platform
+    expected: PASS (EC1 in-Lambda ATTACH proof).
+    fix_if: Failure -> the deployed package or Function URL is broken; RCA before further gates.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Deployed schema gate still rejects unknown/mistyped fields -- proves the regenerated
+      field_semantics.yaml drives the live writer schema gate.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-loudfail --profile agent_platform
+    expected: PASS (EC7 schema/OCC loud-fail).
+    fix_if: >-
+      Failure -> the regenerated columns/roles diverged from the prior schema gate; cross-check against
+      step 3 (parsed-data equivalence should have caught it). Stop and RCA (Decision 55).
+  - step: 11
+    phase: post-deploy
+    action: Derived-field minting (ulid) + idempotent append intact under the regenerated map.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-idempotency --profile agent_platform
+    expected: PASS (EC10 idempotent ULID append -> exactly one history row on retry).
+    fix_if: Failure -> a derived role (ulid/created/last_updated) was mis-projected; reconcile.
+  - step: 12
+    phase: post-deploy
+    action: Partition transforms (day(created_timestamp) / bucket(8, merge_key)) intact; closed reader serves.
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-partition --profile agent_platform &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-reader --profile agent_platform
+    expected: Both PASS (EC6 partition prune; EC1/boundary closed reader path).
+    fix_if: >-
+      Partition failure -> merge_key->partition synthesis diverged; reader failure -> reader bundle
+      stale. Reconcile and redeploy. Stop and RCA on unrecoverable V3 failure (Decision 55).
+constraints:
+  - >-
+    V3 SAFETY INVARIANT: whole-file regeneration MUST be parsed-data-identical to the prior committed
+    field_semantics.yaml (verified by VP step 3). No change to schema gate, DDL, partition transforms,
+    or MERGE behavior for any of the five ops tables. Only comments/formatting may change.
+  - >-
+    The drift gate fails CLOSED (non-zero, no auto-write) on drift -- never silently regenerate-and-pass
+    (Decision 55). Self-healing the gate is a rejected anti-pattern.
+  - >-
+    The iceberg_type->sql_type mapping lives in the generator (contracts stay backend-agnostic), NOT in
+    contracts_schema.py; an unmapped iceberg_type raises rather than defaulting.
+  - >-
+    Contract amendments are additive (change_class: field_add, semantic_break: false) and DO NOT trigger
+    the full CD.25 ratification ritual. The contracts_schema.py merge_key add and the contract YAML edits
+    MUST land in one commit (the loader rejects merge_key on a stale model otherwise).
+  - >-
+    field_semantics.static.yaml is machine-parseable config data, not a prose-architecture doc
+    (Decision 86 compliant). No new docs/INTENT-*.md.
+  - >-
+    Only modify files listed in scope. No rescue agents, no workaround loops (Decision 55). No eval/exec;
+    no exceptions raised at module import (defer validation to explicit calls).
+  - >-
+    ducklake build/deploy uses --ducklake-only (Decision 79); no .tf/IAM changes, so no terraform apply.
+context:
+  - >-
+    T2.33 closes the T2.32-recorded KNOWN GAP (DuckLake schema-as-code-FROM-contract). T0.13 delivered
+    schema-as-code for Iceberg only; this extends the pattern to the DuckLake ops runtime map.
+  - >-
+    Decision-scout gate verdict: FLAGS_FOUND (one NOTE, no BLOCK). NOTE (Decision 55): the drift gate
+    must raise on drift, never auto-heal -- discharged by the fail-closed --check and VP step 5.
+  - >-
+    Decisions to CITE: 81 (CD.33 DuckLake runtime -- behavior unchanged), 84 (sole backend / writer-owned
+    keyspace), 79 (per-Lambda V3 deploy), 65 (contract is the canonical field-semantic authority -- the
+    motivation), 86 (sidecar is data, not prose -- compliant), 44 (executor self-modification boundary --
+    NONE of the 9 scope files match the boundary table; untouched). RELATED: 63 (execution_* fields are
+    DQ-excluded and carry NO derivation block, so they project to role:input naturally), 70, 48/73 (drift
+    gate at both tiers), 88 (smoke gates reuse warm catalog connections).
+  - >-
+    The naive "derivation block present -> role:derived" rule is BROKEN against the live contracts:
+    effort/priority/automatable/risk already carry derivation blocks (formula/inputs) but are role:input
+    today. The explicit realized:true|false flag disambiguates intent-to-derive from realized-derivation,
+    and makes the future T2.29/T2.30/T2.31 flips one-line realized:false->true contract edits.
+  - >-
+    Field order in both contracts already matches the current field_semantics column order (verified:
+    26 recs fields, 14 decisions fields), so emitting in contract-field order reproduces the current
+    column order -- supporting the parsed-data-equivalence invariant.
+  - >-
+    The single $ref field (ops_recommendations.source -> source-lineage.yaml registry_key) resolves to
+    iceberg_type string / nullable true -> projects to {role: input, sql_type: VARCHAR, nullable: true},
+    exactly the current field_semantics source entry. The generator MUST use resolve_refs, not raw fields.
+  - >-
+    Sidecar vs embedded constants: the sidecar is chosen because a fully-generated "do not edit" file
+    requires its non-contract input to live externally, and a YAML sidecar is more machine-parseable than
+    Python constants (agent-first). field_semantics.yaml becomes pure output; the sidecar is the editable
+    home for the smoke section, the three dormant tables, and the contract-backed tables' operational keys.
+  - >-
+    Authored on branch claude/festive-dirac-02tyv6. If origin/main has moved on any scope file, rebase
+    before /implement; VP step 3 fetches origin/main fresh for the equivalence baseline.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/festive-dirac-02tyv6)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant entries read (81, 84, 79, 65, 86, 44, 63, 70, 48, 73, 88; CD.25 ritual)
+  - All nine files in scope located and readable
+  - >-
+    Both contracts read; confirmed envelope fields lack derivation blocks (must be added with
+    realized:true) and effort/priority/automatable/risk already have derivation blocks (add realized:false)
+  - field_semantics.yaml read; sidecar boundary understood (contract slice vs operational/dormant/smoke)
+  - scripts.contracts load_contract + resolve_refs API confirmed; ducklake_neon_smoke_test gates confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    contracts_schema.py: add `merge_key: str | None = None` to ContractGovernance (alphabetical-ish with
+    the other governance keys; keep extra="forbid").
+  - >-
+    docs/contracts/ops_recommendations.yaml (SAME commit as the model change): set contract.projects_to
+    to {artifact: config/lambda/ducklake/field_semantics.yaml, table: ops_recommendations, generator:
+    scripts/schema_to_field_semantics.py}; add governance.merge_key: id; add derivation blocks with
+    realized: true to ulid, created_timestamp, last_updated_timestamp (kind: runtime_envelope + a one-line
+    formula referencing ducklake_runtime._derive_fields); add realized: false to the existing derivation
+    blocks on effort, priority, automatable, risk (minimal one-key addition; leave formula/inputs intact);
+    append one amendment_log entry (date 2026-06-21, semantic_break: false, change_class: field_add,
+    summary + migration_story covering projects_to + merge_key + realized markers).
+  - >-
+    docs/contracts/ops_decisions.yaml: same projects_to (table ops_decisions) + governance.merge_key: id +
+    realized: true derivation blocks on ulid/created_timestamp/last_updated_timestamp; append one
+    amendment_log entry. (No deferred-derivation fields on this table.)
+  - >-
+    Create config/lambda/ducklake/field_semantics.static.yaml: move the smoke section
+    (tables/fields/derivation_timing/partition_transforms/connection_settings), the three dormant
+    ops_tables verbatim, and the operational keys (status, entity_id_prefix, id_keyspace, migration_columns)
+    for ops_recommendations + ops_decisions out of field_semantics.yaml into this sidecar.
+  - >-
+    Create scripts/schema_to_field_semantics.py: load both contracts (load_contract + resolve_refs);
+    iceberg->sql map covering string->VARCHAR, boolean->BOOLEAN, long->BIGINT, timestamptz->TIMESTAMP WITH
+    TIME ZONE, array<string>->VARCHAR[], array<long>->BIGINT[] (plus int->INTEGER for robustness),
+    raising on any unmapped type; role rule (realized:true derivation -> derived, else input); merge_key
+    from governance; partition synth (history=day(created_timestamp), current=bucket(8, merge_key));
+    history/current table names synth from table id; mechanical slice (no prose) + semantic slice
+    (description/semantics); merge sidecar + projected blocks into the full document; emit deterministic
+    canonical YAML with a "GENERATED -- DO NOT EDIT (scripts/schema_to_field_semantics.py)" header; CLI
+    flags --check (byte-diff, non-zero on drift, no write) and --slice {mechanical,semantic}.
+  - >-
+    Run `bin/venv-python -m scripts.schema_to_field_semantics` to regenerate field_semantics.yaml; then
+    run VP step 3 (parsed-data equivalence vs origin/main) and reconcile until identical.
+  - >-
+    scripts/validate.py: add the drift-gate function (regenerate in-memory, byte-compare committed,
+    append failures, no auto-write) following the contracts_enforcement list[str] pattern; wire into the
+    --pre block (next to the existing CD.25 contract drift gate) and run_python_checks (full presubmit).
+  - >-
+    Create tests/test_schema_to_field_semantics.py per the scope purpose (include the full-document
+    data-equivalence test and the --check-detects-injected-drift-without-writing test).
+  - "Run `bin/venv-python -m scripts.validate` (full presubmit); loop until green."
+  - >-
+    docs/ROADMAP-PLATFORM.yaml bookkeeping: close the T2.32 KNOWN GAP; re-point the field_semantics
+    hand-edit exit-criteria of T2.29 (#7), T2.30, T2.31 to "generator-emitted; verified by the validate.py
+    drift gate"; set T2.33 status: complete with completed_at 2026-06-21 and an evidence note.
+  - >-
+    Build + deploy the three ducklake Lambdas (`--ducklake-only --deploy`) and run the post-deploy smoke
+    gates (VP steps 9-12).
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
+    (Decision 55), do NOT inline-patch.
+  - "Report: what was implemented, parsed-data-equivalence result, drift-gate behavior, deploy + smoke results."
+work_areas: []
+rollback: >-
+  Revert the branch commits: field_semantics.yaml returns to the hand-maintained committed version and
+  the contracts/sidecar/generator/validate changes are undone. Because the regeneration is parsed-data-
+  identical, no warehouse state migration is needed; redeploy the three ducklake Lambdas from the prior
+  package (`build_lambda --ducklake-only --deploy`) to restore the prior bundled config bytes.
