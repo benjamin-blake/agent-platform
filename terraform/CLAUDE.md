@@ -38,11 +38,30 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
 - **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
   trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
 
-**Apply posture (current):** the planned CD auto-apply path is the FUTURE state but has issues right now,
-so for now the CC-web agent works the loop **iteratively: run `terraform plan` -> PRESENT it -> the human
-accepts the presented plan (this acceptance IS the human gate, Decision 77/35) -> agent runs `terraform
-apply`.** The deterministic `scripts/terraform_apply_guard.py` (fail-closed on any destroy/IAM/trust change)
-still runs as the safety net. Do not apply without presenting the plan and getting acceptance first.
+**Apply posture (current -- guard-PASS changes):** routine (guard-PASS, non-IAM/trust/destroy) changes
+auto-apply via CD (`terraform-apply-sandbox.yml`). The CC-web agent presents the plan on PRs via the
+speculative-plan comment; at merge the SAME reviewed plan.bin is applied (no re-plan, T2.21). The
+deterministic `scripts/terraform_apply_guard.py` (fail-closed on any destroy/IAM/trust change) is the
+authoritative gate.
+
+**Apply posture (fail-closed set: IAM/trust/destroy, CD.35 Wave 3 / T2.22):** when the guard exits 2,
+the `gated-apply` job in `terraform-apply-sandbox.yml` takes over. After the merge, the job blocks on
+the `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
+the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
+`workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec. Broader IAM changes
+beyond `github_ci_apply`'s current scope (e.g. creating a brand-new IAM role) remain AccessDenied and
+admin-gated until T2.23 (bootstrap root + authority budget).
+
+**Concurrency tradeoff (correct-by-design):** a gated-apply job pending human approval holds the
+`terraform-apply-sandbox` concurrency group (`cancel-in-progress: false`), so later auto-applies queue
+behind it. This is intentional: serialisation prevents the saved plan.bin from going stale during the
+pending window, and applies must serialise on shared tfstate regardless. Expected cost is low (near-zero
+gated frequency). If an approval is abandoned, reject it in the GitHub Actions UI to release the queue.
+
+**Interactive loop fallback:** if you want to apply any change by hand (e.g. during bootstrap or to
+reverse a manual admin change), the CC-web agent still supports the iterative loop: `terraform plan` ->
+PRESENT -> human accepts -> agent runs `terraform apply`. Do not apply without presenting the plan and
+getting acceptance first (Decision 77).
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
