@@ -1,0 +1,250 @@
+schema_version: 1
+slug: "inference-creds-ci-recovery"
+intent: >-
+  Restore CI/CD signal integrity for the self-improving platform by clearing the four ci-rca recs
+  left by the CD.28 / T0.4 inference-credential rollout: return the scheduled main-canary to green and
+  unblock the sandbox Terraform CD path plus the PlatformDev runtime credential reads that the future
+  LiteLLM inference transport depends on.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-inference-creds-ci-recovery.yaml
+phase: >-
+  Platform follow-up: CD.28 / T0.4 inference-credential rollout (ci-rca recovery) and CD.35 / T2.20
+  sandbox CD path. Product: Phase 1 Core Infrastructure (complete) -- platform-infra only, no
+  product-phase advancement.
+scope:
+  - file: .github/workflows/main-canary.yml
+    action: Modify
+    purpose: >-
+      Add `pip install -r requirements-dev.txt` to the Install dependencies step so the scheduled
+      canary's environment mirrors ci.yml main-validate (which installs both requirements files).
+      Fixes the litellm ModuleNotFoundError at pytest collection. Resolves rec-2301 and rec-2303.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add a read-only Secrets Manager statement to aws_iam_role_policy.github_ci_apply (Describe*/Get*,
+      ARN-scoped to the two new inference-secret ARNs) so terraform plan in the sandbox-CD apply job no
+      longer fails AccessDenied on DescribeSecret. Mirrors the SecretsManagerNeonAPIKeyRead precedent.
+      Resolves rec-2302.
+bundled_recommendations:
+  - rec-2301
+  - rec-2302
+  - rec-2303
+  - rec-2295
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf modifies an IAM policy (aws_iam_role_policy.github_ci_apply) -> the
+    deterministic apply guard fail-closes on IAM changes (Decision 77) -> the change rides the
+    interactive human-gated plan -> present -> accept -> apply loop under agent_platform_admin, NOT the
+    sandbox auto-apply path.
+  - >-
+    The SAME admin apply converges the already-committed InferenceCredentialsRead statement on
+    aws_iam_role_policy.platform_dev_runtime (terraform/personal/platform_roles.tf lines 174-180,
+    rec-2295) -- that statement is on main; only its apply is outstanding.
+  - >-
+    IAM precedence (terraform/CLAUDE.md): the IAM apply must precede any runtime use of the
+    credentials -- run the smoke test only after the apply lands.
+  - >-
+    Secret VALUES (deepseek + anthropic API keys) are set out-of-band via put-secret-value
+    (Decision 37); never Terraform-managed, never committed, never pasted in chat. The smoke test
+    requires them present.
+  - >-
+    Sequencing (decision-scout NOTE): PR #203 (open, CD.35 Wave 2 / T2.21) also edits oidc.tf's
+    github_ci_apply policy (a different Sid, IAMCIPlanRoleRead) and itself needs an admin apply. Rebase
+    this plan's branch onto post-#203 main and confirm `terraform plan` shows only the intended
+    InferenceCredentialsRead Secrets Manager statement diff (no unexpected github_ci_plan churn) before
+    presenting the plan for acceptance. The two applies may optionally be folded into one.
+  - >-
+    No Lambda artifact is packaged by either scope file (Decision 79); scripts/build_lambda.py does not
+    consume requirements.txt. No per-Lambda build/deploy/smoke-test step is required.
+acceptance_criteria:
+  - >-
+    .github/workflows/main-canary.yml Install dependencies step installs requirements-dev.txt, so the
+    canary mirrors ci.yml main-validate (rec-2301).
+  - >-
+    pytest collection of tests/test_smoke_test_inference_credentials.py succeeds (the litellm import is
+    resolvable in the canary's dependency set) and the test module passes (rec-2303).
+  - >-
+    litellm remains in requirements-dev.txt and is NOT added to requirements.txt -- it is a
+    dev/test/smoke-test-only dependency, not a Lambda or production runtime import (rec-2303 decision).
+  - >-
+    aws_iam_role_policy.github_ci_apply in terraform/personal/oidc.tf grants read-only Secrets Manager
+    access (secretsmanager:Describe* + Get*) ARN-scoped to agent-platform-deepseek-api-key-* and
+    agent-platform-anthropic-api-key-* (rec-2302).
+  - terraform validate + fmt pass for both roots (terraform/ and terraform/personal/).
+  - >-
+    After the human-gated admin apply, terraform -chdir=terraform/personal plan -detailed-exitcode
+    reports no pending diff (exit 0) for the github_ci_apply and platform_dev_runtime IAM statements
+    (rec-2302 and rec-2295 converged).
+  - >-
+    After the secret values are set out-of-band, the smoke test passes end-to-end for both providers
+    (exercises the InferenceCredentialsRead grant) (rec-2295).
+  - >-
+    All four recs (rec-2301, rec-2302, rec-2303, rec-2295) are closed via the Resolves: trailer on the
+    squash-merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the canary Install dependencies step now installs requirements-dev.txt (rec-2301 acceptance).
+    command: "grep -q 'requirements-dev.txt' .github/workflows/main-canary.yml"
+    expected: Exit 0 -- the canary install step references requirements-dev.txt.
+    fix_if: Non-zero -> add `pip install -r requirements-dev.txt` after the requirements.txt install in the Install dependencies step.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm litellm stays a dev dependency -- present in requirements-dev.txt, absent from requirements.txt (rec-2303 decision).
+    command: "grep -Eq '^litellm' requirements-dev.txt && ! grep -Eq '^litellm' requirements.txt"
+    expected: Exit 0 -- litellm is in requirements-dev.txt and NOT in requirements.txt.
+    fix_if: Non-zero -> litellm was added to requirements.txt or removed from requirements-dev.txt; restore it to requirements-dev.txt only.
+  - step: 3
+    phase: pre-deploy
+    action: Run the smoke-test unit tests -- collection (the exact failure rec-2303/rec-2301 hit) plus the tests must pass with the dev deps present.
+    command: "bin/venv-python -m pytest tests/test_smoke_test_inference_credentials.py -q"
+    expected: All tests pass, no ModuleNotFoundError for litellm at collection.
+    fix_if: ImportError/ModuleNotFoundError on litellm -> ensure requirements-dev.txt is installed in the venv; collection failure -> inspect the import chain.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the github_ci_apply policy now scopes both new inference-secret ARNs (rec-2302 acceptance).
+    command: "grep -qF 'agent-platform-deepseek-api-key-*' terraform/personal/oidc.tf && grep -qF 'agent-platform-anthropic-api-key-*' terraform/personal/oidc.tf"
+    expected: Exit 0 -- both ARNs appear in oidc.tf.
+    fix_if: Non-zero -> add the read-only Secrets Manager statement (Describe*/Get*) scoped to both ARNs to aws_iam_role_policy.github_ci_apply.
+  - step: 5
+    phase: pre-deploy
+    action: Validate terraform formatting + schema across both roots (the change must be well-formed before any apply).
+    command: "bin/venv-python -m scripts.validate --terraform-only"
+    expected: PASS -- init -backend=false + validate + fmt -check succeed for terraform/ and terraform/personal/.
+    fix_if: fmt failure -> run `terraform fmt terraform/personal`; validate failure -> fix the HCL in the new statement.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the InferenceCredentialsRead statement (rec-2295) is already present on platform_dev_runtime -- no code edit needed, apply only.
+    command: "grep -q 'InferenceCredentialsRead' terraform/personal/platform_roles.tf"
+    expected: Exit 0 -- the runtime grant is committed; only its apply is outstanding.
+    fix_if: Non-zero -> rebase onto main; the statement should already exist (committed by PR #201). Do NOT re-author it unless it is genuinely missing.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Human-gated admin apply convergence check. After rebasing onto post-#203 main, recovering the
+      four no-default vars per terraform/CLAUDE.md (init with backend-sandbox.hcl), presenting the plan
+      and getting human acceptance, and running terraform apply under agent_platform_admin, re-run plan
+      and confirm no pending diff (rec-2295 + rec-2302 converged).
+    command: "terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars"
+    expected: Exit code 0 -- no pending diff for the github_ci_apply Secrets Manager statement and the platform_dev_runtime InferenceCredentialsRead statement.
+    fix_if: Exit 2 (diff remains) -> the apply did not converge; re-examine the plan output and re-apply. Exit 1 (error) -> check var recovery / init backend config / admin credential chain.
+  - step: 8
+    phase: post-deploy
+    action: End-to-end smoke test for Tier 1 (DeepSeek) after the secret value is set out-of-band -- exercises the InferenceCredentialsRead grant and a real completion call.
+    command: "bin/venv-python -m scripts.smoke_test_inference_credentials --provider deepseek"
+    expected: "PASS [deepseek] deepseek/deepseek-chat -> '<reply>' (exit 0)."
+    fix_if: AccessDenied -> IAM grant not applied/propagated; ResourceNotFound -> envelope not created by apply; auth error -> the secret value is invalid or unset, re-run put-secret-value.
+  - step: 9
+    phase: post-deploy
+    action: End-to-end smoke test for Tier 2 (Anthropic) after the secret value is set out-of-band.
+    command: "bin/venv-python -m scripts.smoke_test_inference_credentials --provider anthropic"
+    expected: "PASS [anthropic] anthropic/claude-haiku-4-5 -> '<reply>' (exit 0)."
+    fix_if: AccessDenied -> IAM grant not applied/propagated; ResourceNotFound -> envelope not created; auth error -> secret value invalid or unset.
+constraints:
+  - >-
+    These are source=ci_rca recs: do not inline-patch beyond this reviewed plan (Decision 55,
+    Decision 72). No rescue agents or workaround loops.
+  - >-
+    litellm stays in requirements-dev.txt. Do NOT add it to requirements.txt -- it is imported only by
+    scripts/smoke_test_inference_credentials.py and two test modules, not by any Lambda or production
+    runtime path (build_lambda.py does not consume requirements.txt). This declines rec-2303's proposed
+    add-to-requirements.txt fix; rec-2303 is resolved by the canary dev-deps install with a resolution note.
+  - >-
+    Terraform apply is human-gated: the IAM diffs fail-close the apply guard (Decision 77). Run plan,
+    PRESENT it, get explicit human acceptance, then apply under agent_platform_admin (Decision 35).
+    Never auto-apply, never apply without presenting the plan.
+  - >-
+    The github_ci_apply Secrets Manager grant is READ-ONLY (Describe*/Get*), ARN-scoped. Do NOT grant
+    PutSecretValue/CreateSecret/UpdateSecret -- the envelopes are created by the admin apply and the
+    values are out-of-band; CI must never write the API-key material.
+  - >-
+    Secret VALUES are set out-of-band only (Decision 37). Never commit them, never paste them in chat,
+    never put them in Terraform.
+  - >-
+    Only modify the two files in scope (.github/workflows/main-canary.yml, terraform/personal/oidc.tf).
+    platform_roles.tf and inference_credentials.tf are already on main -- apply only, do not edit.
+  - Never edit or commit on main; work on the harness branch. ASCII only, line length 127, no emojis.
+context:
+  - >-
+    All four recs originate from the CD.28 / T0.4 inference-credentials work (PRs #199 inference-credentials,
+    #201 provision DeepSeek+Anthropic envelopes + IAM grant).
+  - >-
+    rec-2301 and rec-2303 are the SAME main-canary failure seen by two RCA runs. main-canary.yml runs the
+    full validate tier (which runs pytest) but installs only requirements.txt; litellm lives in
+    requirements-dev.txt and is imported at module top by scripts/smoke_test_inference_credentials.py, so
+    pytest collection aborts with ModuleNotFoundError. ci.yml main-validate installs BOTH files (so push-to-main
+    is green); PR CI runs only the fast tier (no pytest), which is why the break was invisible on the introducing PR.
+  - >-
+    rec-2295 is classified Environment (deliberate manual gate, not a code regression): the InferenceCredentialsRead
+    statement is already committed to platform_roles.tf; only the human-gated admin apply is outstanding.
+  - >-
+    rec-2302: aws_iam_role_policy.github_ci_apply scopes Secrets Manager only to ducklake-neon-catalog-dsn-*,
+    neon-api-key-*, and agent-platform-terraform-personal-tfvars-*. Refresh-time DescribeSecret on the two new
+    inference ARNs is denied, so every terraform plan in the sandbox-CD apply job fails AccessDenied. The fix mirrors
+    the read-only SecretsManagerNeonAPIKeyRead (oidc.tf line 595) and SecretsManagerTfvarsRead (line 610) precedents.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (one NOTE): PR #203 (open) also edits oidc.tf's github_ci_apply policy
+    (IAMCIPlanRoleRead) and needs its own admin apply -- different Sid, no text conflict expected, but the apply
+    must run against post-#203 main state. See infrastructure_dependencies for the rebase/sequencing step.
+  - >-
+    Decisions cited: 77 (guard fail-closed, human-gated apply), 35 (IAM mutation via agent_platform_admin),
+    55 + 72 (RCA-as-plan, no inline patching), 79 (no Lambda packaged -> negative), 83 (canary advisory; branch
+    protection non-wedging), 37 + the in-file SecretsManagerNeonAPIKeyRead out-of-band precedent (secret values),
+    48 (verification tiers: canary fix V2-class, IAM apply V3 -> highest wins = V3).
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight); no scope-file divergence at that point.
+    Re-check before the apply because PR #203 may land in the interim.
+  - >-
+    Combined-plan caveat (per human structuring choice): the canary fix and the oidc.tf change land in one
+    /implement PR; the canary fix goes live on merge to main, while the IAM apply is a separate post-merge
+    human-gated action. The canary one-liner is therefore coupled to the IAM code change in the same PR.
+pre_implementation_checklist:
+  - Branch confirmed not main (git branch --show-current)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the decision-scout gate (verdict FLAGS_FOUND, one NOTE)
+  - Both scope files located and readable (.github/workflows/main-canary.yml, terraform/personal/oidc.tf)
+  - requirements.txt / requirements-dev.txt / scripts/smoke_test_inference_credentials.py reviewed for litellm placement
+  - terraform/personal/platform_roles.tf InferenceCredentialsRead statement confirmed present (rec-2295, apply-only)
+  - PR #203 status re-checked; rebase/sequencing for the second oidc.tf apply understood
+  - agent_platform_admin chain available for the human-gated apply (aws sts get-caller-identity --profile agent_platform_admin)
+  - Acceptance criteria understood and independently verifiable
+execution_steps:
+  - >-
+    Phase A (canary, pre-deploy): in .github/workflows/main-canary.yml, add `pip install -r requirements-dev.txt`
+    to the Install dependencies step (after the existing requirements.txt install), mirroring ci.yml main-validate.
+    Do NOT add litellm to requirements.txt. Run VP steps 1-3.
+  - >-
+    Phase B code (oidc.tf, pre-deploy): rebase onto current origin/main (capture any PR #203 changes). Add a
+    read-only Secrets Manager statement to aws_iam_role_policy.github_ci_apply -- Sid e.g.
+    SecretsManagerInferenceCredentialsRead, Action ["secretsmanager:Describe*","secretsmanager:Get*"], Resource the
+    two ARNs arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-* and
+    ...agent-platform-anthropic-api-key-* -- with a comment documenting the read-only rationale (envelopes
+    admin-created; values out-of-band; no Put/Create/Update). Run VP steps 4-6.
+  - >-
+    Open the /implement PR with both code changes; ensure pre-deploy VP (steps 1-6) is green via remote CI;
+    squash-merge with the trailer `Resolves: rec-2301, rec-2302, rec-2303, rec-2295`. The canary fix goes live on
+    merge to main.
+  - >-
+    Phase B apply (post-deploy, human-gated): on the merged/rebased state, recover the four no-default vars from
+    remote S3 state per terraform/CLAUDE.md, run `terraform -chdir=terraform/personal init
+    -backend-config=backend-sandbox.hcl` then `plan`; PRESENT the plan to the human; on explicit acceptance run
+    `terraform apply` under agent_platform_admin. This converges the new github_ci_apply statement (rec-2302) AND the
+    already-committed platform_dev_runtime InferenceCredentialsRead (rec-2295). Run VP step 7.
+  - >-
+    Out-of-band (human): set the two secret values --
+    `aws secretsmanager put-secret-value --secret-id agent-platform-deepseek-api-key --secret-string '<key>'
+    --profile agent_platform_admin` and the anthropic equivalent. Never in chat, never committed.
+  - >-
+    Verify (post-deploy): run VP steps 8-9 (smoke test both providers -> PASS). Optionally workflow_dispatch
+    main-canary via the GitHub MCP and confirm the run is green as the live canary confirmation.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure STOP and run RCA
+    (Decision 55), do not paper over it.
+  - "Report: what was implemented, verification results per VP step, which recs closed, and any deferrals."
+rollback: >-
+  Canary: revert the one-line main-canary.yml change (canary returns to its prior install set; no runtime impact
+  beyond the canary). oidc.tf: revert the added read-only statement and re-apply under admin to remove the grant, or
+  leave it (read-only, ARN-scoped, harmless). The platform_dev_runtime InferenceCredentialsRead statement and the
+  secret envelopes are the intended forward state (rec-2295) -- rolling them back would remove inference-credential
+  capability and is not desired; secret values can be cleared via put-secret-value if ever required.
