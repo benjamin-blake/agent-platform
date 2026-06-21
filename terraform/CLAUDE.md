@@ -58,6 +58,51 @@ an earlier apply failure. The interactive human-gated loop above remains the pat
 changes (the guard fail-closes them; they never auto-apply) and is still valid for any change you want to
 apply by hand. Routine (guard-PASS, non-IAM) changes are designed to ride the record-backed pipeline.
 
+### Speculative plan + apply-the-saved-plan (CD.35 / T2.21 Wave 2)
+
+Wave 2 closes the review->apply loop: a PR that touches `terraform/personal/**` now gets a
+speculative plan (human-readable, guard-verdict-annotated) BEFORE it lands, and at merge the
+SAME reviewed plan.bin is applied -- not a re-plan.
+
+**Speculative-plan job** (`speculative-plan` in `terraform-apply-sandbox.yml`):
+- Triggers on `pull_request` paths `terraform/personal/**`; same-repo fork-gated (`if: head.repo.full_name == github.repository`).
+- Assumes `agent-platform-github-ci-plan` (tfstate-read, tfplan-write; no convergence write, no tfstate write/delete).
+- Runs `terraform plan -lock=false` (read-only; the plan role cannot take the S3 native lock).
+- Runs the unmodified guard to capture the **PREDICTED** verdict (advisory; the merge-time verdict is authoritative).
+- Persists `plan.bin` to `s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin`.
+- Scrubs account_id + ExternalIds from the comment; self-fails if any 12-digit sequence survives (public-repo safety).
+- Posts the redacted plan diff + predicted verdict as a PR comment.
+- Does NOT add a required status check (Decision 83 / CD.20 -- a required check wedges autonomous fix-merges).
+
+**Apply-the-saved-plan path** (push to main in `apply-sandbox`):
+- Resolves the PR head SHA from the merge commit (`gh api .../commits/<sha>/pulls`).
+- Fetches `tfplan/personal/<pr-head-sha>.bin` from S3; `terraform show -json` -> plan.json.
+- **No re-plan**: if no PR is found or no saved object exists, the step fails closed (exit 1). Recovery is the existing `workflow_dispatch` acknowledge-and-retry (which re-plans fresh -- the only human-reviewed re-plan path).
+- Runs the guard against the saved plan's plan.json at merge time (authoritative verdict; **no `continue-on-error`** -- Decision 77 no-TOCTOU preserved).
+- Applies `plan.bin` -- the exact artefact reviewed on the PR.
+- Convergence record `plan_sha` is set to `sha256(plan.bin)` on the push path; null on `workflow_dispatch` (dispatch uses a fresh plan not persisted to S3).
+
+**`workflow_dispatch` path** (unchanged except gating):
+- The `Terraform plan` step is now `if: github.event_name == 'workflow_dispatch'` -- dispatch is the only auto-apply path that re-plans.
+- Use dispatch for the acknowledge-and-retry unlatch (naming the red commit or rec-id) OR for out-of-band applies (e.g. rolling back a manual admin change).
+
+**Stale saved plan (fail-closed, Decision 55 / CD.35)**:
+- Terraform's native staleness check errors if the saved plan.bin's state serial is stale.
+- The apply step exits non-zero -> the always-run convergence record write sets `status=red` -> ci-rca files a `source=ci_rca` rec.
+- Recovery: `workflow_dispatch` acknowledge-and-retry (re-plans fresh, human-reviewed). NO silent re-plan-and-apply; the push path has no fallback.
+
+**tfplan/personal/ S3 prefix**:
+- `s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin` -- write-IAM is `github_ci_plan` only; read is `github_ci_apply` via its existing `DataLakeObjectIO` bucket-wide grant.
+- Objects are inert once the speculative-plan job is removed; prune optionally.
+
+**Capability split (github_ci_pr vs github_ci_plan)**:
+- `github_ci_pr`: athena/iceberg reads, convergence record read, DuckLake invoke. **No tfstate read** (fork-safe; `simulate-principal-policy` returns implicitDeny on `s3:GetObject tfstate/...`).
+- `github_ci_plan`: tfstate READ, tfplan WRITE, full refresh-read surface (mirrors apply-role plan-time reads). No convergence write, no tfstate write/delete, no DeleteObject anywhere.
+- Fork gating: enforced at the WORKFLOW JOB level (`if: head.repo.full_name == github.repository`) -- NOT the OIDC trust condition. Trust mirrors `github_ci_pr` (pull_request sub). The job gate + read-only policy together give the desired fork isolation.
+
+**Role creation is guard-BLOCKED**:
+- `github_ci_plan` is a new IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). It lands via `agent_platform_admin` apply BEFORE the first PR that exercises the speculative-plan job. The job's `continue-on-error` on the assume-role step covers the bootstrap window.
+
 ### Convergence anchor (CD.35 / T2.20 Wave 1)
 
 The server-side anti-masking anchor. All four pieces live in `terraform-apply-sandbox.yml` + `oidc.tf`:
