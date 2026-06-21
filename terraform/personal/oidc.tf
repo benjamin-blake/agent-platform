@@ -613,6 +613,21 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
       },
       {
+        # Inference credential secrets (CD.28 / T0.4): the apply role issues DescribeSecret at
+        # plan + apply time for the DeepSeek and Anthropic API key envelopes. Read-only -- the
+        # envelopes are created by the admin apply (inference_credentials.tf) and the secret
+        # VALUES are set out-of-band (Decision 37); CI must never write them.
+        # Mirrors the SecretsManagerNeonAPIKeyRead and SecretsManagerTfvarsRead precedents.
+        # Describe*/Get* closes the iterative-discovery anti-pattern (rec-2302).
+        Sid    = "SecretsManagerInferenceCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-anthropic-api-key-*",
+        ]
+      },
+      {
         # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
         # logs:Describe*/List* on * closes the iterative-discovery anti-pattern for CloudWatch Logs
         # refresh reads. Resource: "*" required (logs:DescribeLogGroups has no resource-level scoping).
