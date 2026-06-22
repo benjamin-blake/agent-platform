@@ -3397,49 +3397,67 @@ tier_items:
 
   - id: T1.12
     tier: T1
-    name: Ratify Class B Lambda verb contracts (gated on CD.16 ratification)
+    name: Ratify Class B Lambda verb contracts (DuckLake writer/reader/maintenance; completion gated on CD.25)
     intent: |
-      REPORT-ONLY parent placeholder. [Deferral EXPIRED 2026-06-03: CD.16 ratified
-      via Decision 79 (dec-1086), so the original "DEFERRED until CD.16 ratifies"
-      condition is satisfied -- audit F-009/B-009; the item is now gated only by its
-      depends_on. Historical rationale: Class B ratifications under the old blanket
-      Lambda-deploy freeze would have produced contracts that never transition out
-      of provisional_v0 (no traffic = no signal).] Decomposes into per-Lambda atomic REPORT-ONLY plans
-      authoring lambda-log-rec.yaml, lambda-log-decision.yaml, lambda-query.yaml,
-      lambda-update-rec.yaml, lambda-list-tools.yaml, lambda-maintenance.yaml
-      (the maintenance contract now describes ducklake_maintenance per T2.18 --
-      T1.4 is reserved) at status: provisional_v0 with staggered re-ratification
-      triggers per INTENT Part 6B. Absorbs GAP-class-b-product-lambdas from
-      ROADMAP-PRODUCT.yaml.
+      REPORT-ONLY. Author the Class B "Lambda verb" contracts at status: provisional_v0 under the
+      CD.25 pre-codegen contract ratification ritual. [CD.16 gate SATISFIED 2026-06-03: ratified via
+      Decision 79 (dec-1086), so per-Lambda deploy gating is in force and the v0-provisional clock can
+      start.] RE-GROUNDED 2026-06-22 (6 -> 3) from the superseded six-Lambda model onto the
+      consolidated DuckLake boundary: CD.10's six-Lambda enumeration is illustrative not canonical
+      (audit F-008); CD.33 / Decision 81 / Decision 91 ratified the writer/reader/maintenance split +
+      closed boundary. The deploy unit (what CD.16 gates) is the Lambda, so the contracts are
+      per-Lambda: three contracts (ducklake_writer.yaml, ducklake_reader.yaml,
+      ducklake_maintenance.yaml) document the real verb surface (writer: file_ops / update_ops /
+      write_ops / create_ops_tables; reader: read_ops_current / read_ops_history / named_read /
+      query_ops; maintenance: merge / gc / hot_merge / breaker_probe + operational catalog_reinit /
+      restore_drill / merge_ops / catalog_stats / reconcile_columns). The old "log-rec / log-decision
+      / update-rec" semantic operations are table-parameterized writer verbs, not separate Lambdas;
+      "list-tools" is the reader's named_read registry, not a separate Lambda. Absorbs
+      GAP-class-b-product-lambdas from ROADMAP-PRODUCT.yaml. COMPLETION gated on CD.25 ratification
+      (T1.12 is bootstrap_completion_exempt: false); authoring is allowed now (started).
     depends_on: [T-1.12, T0.12.5, T0.12.7]
     decision_required_before:
       - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
-    files_in_scope: []
+      - "CD.25 ratifies (pre-codegen contract ritual) gates COMPLETION, not authoring; T1.12 is bootstrap_completion_exempt: false [PENDING as of 2026-06-22]"
+    files_in_scope:
+      - docs/contracts/ducklake_writer.yaml
+      - docs/contracts/ducklake_reader.yaml
+      - docs/contracts/ducklake_maintenance.yaml
     decomposition_hints:
       split_by: per_lambda
       atomic_plans:
-        - "Ratify lambda-log-rec.yaml (provisional_v0; trigger 500 invocations OR 60 days)"
-        - "Ratify lambda-log-decision.yaml (provisional_v0; trigger 200 invocations OR 90 days)"
-        - "Ratify lambda-query.yaml (provisional_v0; trigger 2000 invocations OR 60 days)"
-        - "Ratify lambda-update-rec.yaml (provisional_v0; trigger 500 invocations OR 90 days)"
-        - "Ratify lambda-list-tools.yaml (provisional_v0; trigger 500 invocations OR 120 days)"
-        - "Ratify lambda-maintenance.yaml (provisional_v0; trigger 90 days only)"
+        - "Ratify ducklake_writer.yaml (provisional_v0; trigger 500 production invocations OR 60 days)"
+        - "Ratify ducklake_reader.yaml (provisional_v0; trigger 2000 production invocations OR 60 days)"
+        - "Ratify ducklake_maintenance.yaml (provisional_v0; trigger 90 days only)"
       rationale: |
-        Each Lambda has distinct verb semantics; per-Lambda atomic plans give each
-        contract its own Step 10 critique. Triggers staggered per INTENT Part 6B.
-        Round-3 M2: atomic decomposition children inherit the parent's
-        bootstrap_completion_exempt status automatically. T1.12's parent is
-        bootstrap_completion_exempt: false, so children inherit false -- they
-        ratify post-CD.16 under the normal flow, not under bootstrap.
+        RE-GROUNDED 2026-06-22 (6 -> 3): the canonical deploy units are the three DuckLake Lambdas
+        (CD.10 F-008 / CD.33 / Decision 81 / Decision 91), not the six legacy verb-Lambdas. The deploy
+        unit (what CD.16 gates) is the Lambda; each contract's verbs: map captures the semantic
+        operations within it. The three contracts were authored together in one REPORT-ONLY plan
+        (PLAN-ratify-class-b-lambda-verb-contracts) with one Step 10 multi-perspective critique covering
+        all three deliverables -- the same grouping the Class C wave (T0.12.7) used. Triggers re-mapped
+        from the per-verb Part 6B stagger onto the three Lambdas (writer = hottest write path; reader =
+        hottest read path; maintenance = scheduled/low-volume, days-only). T1.12 is
+        bootstrap_completion_exempt: false, so completion ratifies post-CD.16 under the normal flow.
     exit_criteria:
-      - "All six Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0"
-      - "Each carries explicit re_ratification trigger per INTENT Part 6B stagger"
-      - "Each atomic plan independently converges on Step 10 critique"
+      - "All three DuckLake Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0 (ducklake_writer, ducklake_reader, ducklake_maintenance)"
+      - "Each carries an explicit re_ratification_trigger.first_of per the re-mapped Part 6B stagger, parseable by scripts/contracts_enforcement.evaluate_provisional_trigger"
+      - "Each contract's verbs: map matches the live handler dispatch surface; the CD.25 contract-drift gate passes"
+      - "The Step 10 multi-perspective critique converged on the three contract deliverables"
+      - "COMPLETION gate: flips in_progress -> complete only when CD.25 ratifies (T1.12 is bootstrap_completion_exempt: false)"
     related_candidate_decisions: [CD.25, CD.10, CD.11, CD.16]
     effort: L
     strategic: true
     bootstrap_completion_exempt: false
-    status: not_started
+    status: in_progress
+    progress_note: >-
+      2026-06-22: authored the three re-grounded Class B contracts (docs/contracts/ducklake_writer.yaml,
+      ducklake_reader.yaml, ducklake_maintenance.yaml) at provisional_v0 via
+      PLAN-ratify-class-b-lambda-verb-contracts; CD.25 contract-drift gate + loader validation pass.
+      Re-grounded the decomposition 6 -> 3 onto the canonical DuckLake boundary (CD.10 F-008 / CD.33 /
+      Decision 81 / Decision 91). Status held at in_progress (NOT complete): completion is gated on
+      CD.25 ratification (bootstrap_completion_exempt: false). Remaining for complete: CD.25 ratifies
+      via the ops portal, then flip to complete.
 
   - id: T1.13
     tier: T1

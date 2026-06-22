@@ -1,0 +1,174 @@
+---
+# Class B Lambda verb contract for the ducklake_maintenance Lambda (singleton catalog maintenance).
+# Authored at status: provisional_v0 under the CD.25 pre-codegen contract ratification ritual
+# (platform tier_item T1.12, Class B wave). CD.16 ratified (dec-1086); the Lambda is deployed (T2.18).
+#
+# This is the maintenance contract the T1.12 roadmap intent already re-grounded onto ducklake_maintenance
+# (per T2.18). It is NOT a public agent surface: scheduled actions are EventBridge-triggered and
+# operational actions are human-invoked over 443 via `aws lambda invoke`. Documented here so the
+# closed-boundary maintenance verb surface carries the same ratified-contract guarantees as the
+# writer/reader. CD.33 / Decision 81 / Decision 91 ratified the writer/reader/maintenance split.
+#
+# Authored against the shipped scripts/contracts_schema.py + scripts/contracts.py loader (NOT the
+# INTENT worked examples). Verb surface read from src/lambdas/ducklake_maintenance/handler.py dispatch.
+contract:
+  id: ducklake_maintenance
+  class: B
+  contract_version: 1
+  status: provisional_v0
+  description: >-
+    Singleton DuckLake catalog-maintenance Lambda. SCHEDULED actions (merge / gc / hot_merge) run on
+    EventBridge cron over the smoke catalog (ducklake_smoke); OPERATIONAL actions (catalog_reinit,
+    restore_drill, merge_ops, catalog_stats, reconcile_columns) are human-invoked over 443 via
+    `aws lambda invoke` against the PRODUCTION catalog (ducklake_ops) with explicit data_path +
+    meta_schema event params. No LLM / agent invocation anywhere in this path (CD.33 cl.5 /
+    Decision 81 cl.6). Singleton via reserved_concurrent_executions=1. breaker_probe is a
+    forced-threshold circuit-breaker test (VP instrumentation).
+  governance:
+    auth_type: >-
+      NOT a public Function URL / agent surface. Scheduled actions (merge / gc / hot_merge) are
+      EventBridge-triggered (daily merge 04:00 UTC; weekly gc 05:00 UTC Sunday). Operational actions
+      are human-invoked over 443 via `aws lambda invoke` (AWS_IAM). Singleton:
+      reserved_concurrent_executions=1 (Decision 81 cl.6).
+    principal_classes:
+      - PlatformAdmin
+    admin_only_features:
+      - "catalog_reinit: DESTRUCTIVE + IRREVERSIBLE meta-schema drop+reinit; requires confirm=<meta_schema> and an explicit s3:// data_path (no production default)."
+      - "restore_drill: pg_dump->pg_restore DR gate on an isolated scratch meta-schema (production-safe)."
+      - "merge_ops: non-destructive merge over production ops_* table pairs; requires explicit data_path + meta_schema."
+      - "reconcile_columns: ALTER TABLE ADD COLUMN (never DROP) on production; requires explicit data_path + meta_schema."
+      - "catalog_stats: read-only catalog-metadata footprint (psycopg2 metadata read; ATTACH-free; requires explicit meta_schema)."
+    human_initiated_value: >-
+      Operational actions are human-invoked (aws lambda invoke) with explicit catalog params;
+      scheduled actions are EventBridge cron. No-arg invokes of the operational actions are refused
+      so they can never hit the smoke catalog by accident (Decision 84/81 guard).
+  provisional_v0:
+    authored_at: "2026-06-22"
+    authored_via: >-
+      PLAN-ratify-class-b-lambda-verb-contracts (T1.12 Class B wave); Step 10 multi-perspective
+      critique + merge to main.
+    rationale: >-
+      Class B contracts start provisional_v0 (INTENT Part 6A/6B). Maintenance is scheduled/low-volume,
+      so an invocation-count trigger is not meaningful; the stagger is a 90-day clock only (INTENT
+      Part 6B: lambda-maintenance trigger is "90 days only").
+    re_ratification_trigger:
+      first_of:
+        - "days_since_first_production_invocation >= 90"
+    re_ratification_owner: "human + Step 10 multi-perspective critique"
+verbs:
+  merge:
+    payload_schema_ref: >-
+      event envelope {action: "merge", force_recreate_tables?}. Daily non-destructive merge
+      (flush_inlined_data + merge_adjacent_files) over the smoke-table scope.
+    response_codes:
+      200: "merged; body {ok, files_before, files_after_merge, elapsed_ms, ...}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeMaintenanceError (breaker) / DuckLakeRuntimeError / VersionMismatchError"
+    typed_errors:
+      breaker: "circuit-breaker trip; emits MaintenanceBreakerTrip=1; deletes nothing (500)"
+      runtime: "runtime loud-fail (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  gc:
+    payload_schema_ref: >-
+      event envelope {action: "gc", force_recreate_tables?, force_file_fraction?, force_byte_budget?}.
+      Weekly guarded GC (five-step sequence) over the smoke-table scope; circuit-breaker guarded.
+    response_codes:
+      200: "gc complete; body {ok, files_before, files_after, snapshots_expired, files_cleaned, orphans_deleted, elapsed_ms}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeMaintenanceError (breaker trip; deletes nothing) / DuckLakeRuntimeError / VersionMismatchError"
+    typed_errors:
+      breaker: "file-fraction or byte-budget breaker trip; emits MaintenanceBreakerTrip=1; deletes nothing (500)"
+      runtime: "runtime loud-fail (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  hot_merge:
+    payload_schema_ref: >-
+      event envelope {action: "hot_merge", force_recreate_tables?}. Higher-frequency merge-only
+      cadence (merge_adjacent_files) over the HOT table scope; no expiry, no deletion (T2.18 FP-B /
+      CD.34).
+    response_codes:
+      200: "merged; body {ok, files_before, files_after, elapsed_ms}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeMaintenanceError (breaker) / DuckLakeRuntimeError / VersionMismatchError"
+    typed_errors:
+      breaker: "circuit-breaker trip (500)"
+      runtime: "runtime loud-fail (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  breaker_probe:
+    payload_schema_ref: >-
+      event envelope {action: "breaker_probe"}. Forced-threshold circuit-breaker test (thresholds
+      zeroed so any deletable file trips it); asserts the breaker raises and deletes nothing.
+    response_codes:
+      200: "breaker did NOT trip (no deletable files in probe); body {ok, breaker_tripped: false, message}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeMaintenanceError: breaker tripped (expected for the probe); body {ok: false, breaker_tripped: true}"
+    typed_errors:
+      breaker: "breaker tripped (the asserted probe outcome); emits MaintenanceBreakerTrip=1 (500)"
+  catalog_reinit:
+    payload_schema_ref: >-
+      event envelope {action: "catalog_reinit", data_path (s3://), meta_schema, confirm}. OPERATIONAL
+      break-glass: drop the squatting meta-schema + re-initialize at data_path. DESTRUCTIVE +
+      IRREVERSIBLE; requires confirm == meta_schema.
+    response_codes:
+      200: "reinitialized; body {ok, meta_schema, data_path, dropped_existing, reinitialized}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeRuntimeError: missing/non-s3 data_path, missing meta_schema, or confirm mismatch / VersionMismatchError"
+    typed_errors:
+      runtime: "missing s3:// data_path, missing meta_schema, or confirm-guard mismatch (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  restore_drill:
+    payload_schema_ref: >-
+      event envelope {action: "restore_drill", scratch_meta?, scratch_data_path?, probe_id?}.
+      OPERATIONAL DR gate: pg_dump(custom)->pg_restore round-trip + read-your-write on an isolated
+      scratch meta-schema. Requires the pgclient layer (pg_dump/pg_restore).
+    response_codes:
+      200: "restore verified; body {ok, scratch_meta, probe_id, restored, pg_version}"
+      400: "unknown action (dispatcher)"
+      500: "CatalogDrError: pg_dump/pg_restore non-zero or read-your-write failed (Decision 55 stop)"
+    typed_errors:
+      catalog_dr: "pg_dump/pg_restore failure or read-your-write mismatch; stops the cutover (500)"
+      runtime: "runtime loud-fail (500)"
+  merge_ops:
+    payload_schema_ref: >-
+      event envelope {action: "merge_ops", data_path (s3://), meta_schema}. OPERATIONAL: non-destructive
+      merge over ALL live ops_* SCD2 table pairs in the production catalog (discovered via
+      information_schema). No expire/cleanup/orphan.
+    response_codes:
+      200: "merged; body {ok, tables, files_before, files_after, elapsed_ms, per_table}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeRuntimeError: missing/non-s3 data_path, missing meta_schema, or no ops_* pairs discovered / VersionMismatchError"
+    typed_errors:
+      runtime: "missing s3:// data_path / meta_schema, or no ops_* table pairs discovered (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  catalog_stats:
+    payload_schema_ref: >-
+      event envelope {action: "catalog_stats", meta_schema, ops_table_filter?}. OPERATIONAL read-only:
+      catalog-metadata footprint of the production ops_* catalog (psycopg2 metadata read; ATTACH-free;
+      no data_path). Read-only -- no merge/expire/cleanup/orphan.
+    response_codes:
+      200: "stats; body {catalog_metadata_bytes, file_column_stats_rows_est, ...}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeRuntimeError: missing meta_schema / VersionMismatchError"
+    typed_errors:
+      runtime: "missing meta_schema (no production default) (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+  reconcile_columns:
+    payload_schema_ref: >-
+      event envelope {action: "reconcile_columns", data_path (s3://), meta_schema, table}. OPERATIONAL:
+      ALTER TABLE ADD COLUMN (never DROP) to add any spec columns missing from the physical history +
+      current tables. Idempotent. Requires explicit data_path + meta_schema (no-arg refused).
+    response_codes:
+      200: "reconciled; body {ok, table, meta_schema, data_path, added_history, added_current, columns_pre_existing}"
+      400: "unknown action (dispatcher)"
+      500: "DuckLakeRuntimeError: missing/non-s3 data_path, missing meta_schema, or empty table / VersionMismatchError"
+    typed_errors:
+      runtime: "missing s3:// data_path / meta_schema / table (no-arg invokes refused) (500)"
+      version_mismatch: "DuckDB/extension version mismatch (500)"
+audit_invariants:
+  - "Singleton: reserved_concurrent_executions=1 enforces a single concurrent maintenance run (Decision 81 cl.6)."
+  - "No LLM / agent invocation anywhere in this path (CD.33 cl.5 / Decision 81 cl.6)."
+  - "Scheduled merge/gc/hot_merge operate on the smoke catalog (ducklake_smoke); operational actions target the PRODUCTION catalog via explicit event data_path + meta_schema (no-arg invokes are refused so they can never hit production)."
+  - "GC is circuit-breaker guarded (file-fraction + byte-budget); a trip raises DuckLakeMaintenanceError, emits MaintenanceBreakerTrip=1, and deletes nothing."
+  - "Destructive operational actions (catalog_reinit) require an explicit confirm=<meta_schema> token (Decision 84 destructive-action guard)."
+  - "An unknown `action` returns 400 with the sorted action allow-list (no silent no-op)."
+amendment_log: []
+previous_versions: []
