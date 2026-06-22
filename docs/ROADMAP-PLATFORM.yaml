@@ -2909,26 +2909,39 @@ tier_items:
     tier: T0
     name: Iceberg DDL generator from Pydantic models
     intent: |
-      Walk model_fields, map Pydantic types to Iceberg types (Optional → nullable; Literal → string + check;
-      datetime → timestamp; list[T] → array<T>). Emit terraform-consumable schema fragments including partition
-      clauses (CD.9). Generator never emits destructive DDL — field removal requires DqDeleted marker + explicit
-      follow-on plan. ~100-200 LOC of glue; pyiceberg helpers cover the bulk.
-    depends_on: [T0.12, T0.12.5]    # T0.12.5 (ratified ops Class A contracts) added by T-1.12 per CD.25 ritual
+      Walk model_fields of an Annotated-Pydantic model and emit Athena Iceberg CREATE TABLE DDL in
+      the repo house convention. Consumers are product D.lake.* + market_data Iceberg tables (CD.31,
+      Decision 78); ops_recommendations/ops_decisions/ops_priority_queue moved to DuckLake (Decision 84)
+      and are no longer Iceberg - the original round-trip validation against RecPayload is replaced by
+      a synthetic CoverageModel fixture (KG.1 PLATFORM-only scope). Type map: str->string,
+      int->bigint (Iceberg integer-promotion safety - never int), float->double, bool->boolean,
+      datetime->timestamp, date->date, list[T]->array<T>, Literal->string. DqNotNull: pyiceberg
+      required field + COMMENT; no SQL NOT NULL (Athena Iceberg has none). @partition_by required
+      on every model (CD.9). Non-destructive: DqDeleted fields excluded from CREATE; a deployed
+      column absent from the model and not DqDeleted raises; --emit-drop only for DqDeleted.
+      T0.13 = Iceberg-only; T2.33 owns DuckLake schema-as-code (field_semantics.yaml) - scopes do not overlap.
+    depends_on: [T0.12]    # T0.12.5 (ratified ops Class A contracts) dropped - re-scope uses synthetic fixture, not ops Class A; T0.12 (Annotated vocabulary) retained
     files_in_scope:
       - scripts/schema_to_iceberg.py    # new
-      - terraform/iceberg_tables_generated.tf    # new — generated, gitignored or committed depending on CI flow (decided in OQ.5)
+      - src/schemas/annotations.py    # added partition_by class decorator
+      - tests/fixtures/iceberg_fixture.py    # new - synthetic CoverageModel type-coverage fixture
+      - tests/fixtures/iceberg/coverage_model.ddl.sql    # new - checked-in golden DDL
+      - tests/test_schema_to_iceberg.py    # new - generator test suite (100% coverage)
+      - tests/test_annotations.py    # added partition_by decorator test
+      - terraform/iceberg_tables_generated.tf    # deferred to first product consumer (OQ.5 open)
     exit_criteria:
-      - "scripts/schema_to_iceberg.py RecPayload emits a valid Iceberg DDL fragment"
-      - "Round-trip test: existing ops_recommendations schema regenerated from RecPayload matches current ops.yaml-derived schema"
-      - "Generator handles Optional, Literal, datetime, str, int, float, list[primitive]"
-      - "Generator emits PARTITIONED BY clause from a class-level @partition_by('day(last_updated_timestamp)') annotation (uniform rule per CD.9)"
-      - "Field absent from model but present in deployed schema raises a generator error UNLESS marked DqDeleted; no auto-DROP COLUMN"
-      - "DqDeleted retirement tooling exists: scripts/schema_to_iceberg.py --emit-drop FIELD generates the ALTER TABLE DROP COLUMN DDL fragment for an explicit follow-on plan; never invoked automatically"
-    related_candidate_decisions: [CD.9, CD.12]
+      - "`bin/venv-python -m pytest tests/test_schema_to_iceberg.py -q` passes (golden byte-match, type matrix, pyiceberg Schema validity, DqNotNull required, DqDeleted exclusion, non-destructive raise, emit-drop guard, partition enforcement)"
+      - "Generator emits correct type map: str->string, int->bigint (never int), float->double, bool->boolean, datetime->timestamp, date->date, list[T]->array<inner>, Literal->string"
+      - "`bin/venv-python -m pytest tests/test_schema_to_iceberg.py::test_pyiceberg_schema_valid -q` passes - emitted columns build a valid pyiceberg Schema; required fields == DqNotNull fields"
+      - "Generator emits PARTITIONED BY clause from @partition_by; model without @partition_by raises MissingPartitionSpec (CD.9); partition transform referencing absent column raises UnknownPartitionColumn"
+      - "Non-destructive: deployed column absent from model and not DqDeleted raises DestructiveSchemaChange; DqDeleted fields excluded from CREATE; --emit-drop emits ALTER TABLE DROP COLUMN only for DqDeleted fields"
+      - "`bin/venv-python -m pytest tests/test_annotations.py -q` passes - partition_by sets __partition_by__; test_seven_markers_exposed still counts exactly 7 Dq markers"
+    related_candidate_decisions: [CD.9, CD.12, CD.31]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
-    status: not_started
+    status: complete
+    completed_at: "2026-06-22"
   - id: T0.14
     tier: T0
     name: Windows-assumption sweep across the codebase
@@ -3965,24 +3978,38 @@ tier_items:
       INFRASTRUCTURE + Class C contract. Stand up the Secrets Manager surface in
       the personal account for broker credentials (Alpaca live + paper, plus
       future brokers). Land docs/contracts/credential-routing.yaml as the Class C
-      cross-system invariant governing which secret key maps to which broker /
-      environment / Lambda. Absorbs GAP-broker-secrets-manager from
+      cross-system invariant governing which secret maps to which broker /
+      account-type / Lambda. Absorbs GAP-broker-secrets-manager from
       ROADMAP-PRODUCT.yaml; PRODUCT layer items L3.exec.4/5 depend on this.
     depends_on: [T2.1]
     files_in_scope:
-      - terraform/secrets_manager_brokers.tf
+      - terraform/personal/secrets_manager_brokers.tf    # path corrected from terraform/secrets_manager_brokers.tf -- work-root retired per CD.21; terraform/personal/ is the applied module
       - docs/contracts/credential-routing.yaml
       - scripts/broker_secrets.py
     exit_criteria:
       - "Secrets Manager entries for Alpaca live + paper provisioned via Terraform"
       - "credential-routing.yaml ratified at contract_version: 1"
-      - "Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks"
+      - "Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks, enforced by a scripts/validate.py CI guard that rejects direct broker-API-key env reads in src/ and scripts/"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
-    status: not_started
+    status: in_progress
+    progress_note: |
+      Phase 1 (Class C contract) complete 2026-06-21: docs/contracts/credential-routing.yaml
+      ratified at contract_version 1 via the Step 10 multi-perspective critique
+      (PLAN-broker-credential-routing). Satisfies exit criteria 2 (contract ratified) and 4
+      (Step 10 converges). REMAINING (codegen follow-on -- a named IMPLEMENTATION plan that
+      consumes the ratified contract per CD.25 pre-codegen ordering): exit criterion 1 (Secrets
+      Manager envelopes for Alpaca paper + live provisioned via
+      terraform/personal/secrets_manager_brokers.tf, values out-of-band per Decision 37,
+      ARN-scoped IAM read added to platform_roles.tf -- the IAM statement fail-closes the apply
+      guard so that plan is human-gated) and exit criterion 3 (scripts/broker_secrets.py resolves
+      credentials by routing key; no direct env-var fallback). Vocabulary re-grounded (Decision
+      77): broker paper / live are product-phase / account-type selectors, not platform
+      environments. NOTE: final T2.14 completion is additionally gated on CD.25 ratification
+      (this item is bootstrap_completion_exempt: false), independent of the codegen follow-on.
 
   - id: T2.15
     tier: T2
