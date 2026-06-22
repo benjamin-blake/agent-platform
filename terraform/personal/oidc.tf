@@ -179,13 +179,6 @@ resource "aws_iam_role" "github_ci_pr" {
   name        = "agent-platform-github-ci-pr"
   description = "GitHub Actions CI (read-only): PR context via OIDC"
 
-  # TEMPORARY VP9 re-test marker (proves the OIDC trust fix made the gated-apply path work
-  # end-to-end). Tag-only IAM update -> guard exit-2 -> tf-gated-apply gated CD apply. Reverted
-  # immediately after the gated apply succeeds.
-  tags = {
-    vp9_retest = "2026-06-22"
-  }
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
