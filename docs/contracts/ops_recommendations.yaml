@@ -25,6 +25,10 @@ contract:
     (Decision 84); reads transit the closed ducklake_reader boundary (NAMED VERBS only).
     id is allocated atomically by file_ops (Decision 84 I-2); ULID is derived by the runtime.
     Five execution_* fields are DQ-EXCLUDED (Decision 63).
+  projects_to:
+    artifact: config/lambda/ducklake/field_semantics.yaml
+    table: ops_recommendations
+    generator: scripts/schema_to_field_semantics.py
 fields:
   ulid:
     type: str
@@ -42,6 +46,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: python-ulid monotonic generation; minted once at op-start by ducklake_runtime._derive_fields()
+      inputs: []
+      realized: true
 
   id:
     type: str
@@ -108,6 +116,7 @@ fields:
       degradation_policy: >-
         Absent radon/coverage data: retain caller-supplied string value unchanged.
         Null file: retain caller-supplied value. Derivation is best-effort until T2.31.
+      realized: false
 
   priority:
     type: str
@@ -126,6 +135,7 @@ fields:
       not_null:
         enforced: false
     derivation:
+      realized: false
       formula: >-
         source_priority_map[source] if source in source_priority_map else fallback_priority.
         Encoding: 1=Critical, 2=High, 3=Medium, 4=Low. Realization pointer: T2.30.
@@ -210,6 +220,7 @@ fields:
       failure_policy: >-
         Capability mismatch or missing capabilities.yaml: set False (conservative -- do not
         automate what the capability map cannot confirm). Null file: set False.
+      realized: false
 
   risk:
     type: str
@@ -237,6 +248,7 @@ fields:
       degradation_policy: >-
         Absent radon or coverage.xml: retain caller-supplied string value unchanged.
         Null file: retain caller-supplied value. Derivation is best-effort until T2.31.
+      realized: false
 
   file:
     type: str
@@ -465,6 +477,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: high-precision now() minted ONCE at op-start by ducklake_runtime._derive_fields(); carried unchanged on UPDATE
+      inputs: []
+      realized: true
 
   last_updated_timestamp:
     type: datetime
@@ -481,6 +497,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: high-precision now() minted ONCE at op-start by ducklake_runtime._derive_fields(); stable across OCC retries
+      inputs: []
+      realized: true
 
   context_v2_json:
     type: str
@@ -533,6 +553,7 @@ governance:
   id_allocator: >-
     ducklake_writer/file_ops allocates id atomically in-transaction (Decision 84 I-2).
     Client MUST NOT pre-generate ids.
+  merge_key: id
 
 governance_notes: >-
   Decision 65: This contract and src/schemas/rec.py Annotated model are the canonical
@@ -550,5 +571,19 @@ governance_notes: >-
   _contract_version: nullable sentinel field stamped by the Lambda handler. Historical rows
   (written before T0.12.5) carry NULL; production rows carry "1".
 
-amendment_log: []
+amendment_log:
+  - date: "2026-06-21"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      CD.25 additive amendment (T2.33): add contract.projects_to, governance.merge_key=id,
+      and realized markers on envelope/deferred-derivation fields. No column added or removed.
+    migration_story: >-
+      Adds contract.projects_to pointing field_semantics.yaml at this contract + its generator
+      (scripts/schema_to_field_semantics.py); governance.merge_key=id for the generator
+      partition-synthesis rule; realized=true on ulid/created_timestamp/last_updated_timestamp
+      (these are SCD2 envelope fields actually derived by ducklake_runtime._derive_fields());
+      realized=false on effort/priority/automatable/risk (derivation blocks are forward-pointers
+      to T2.29/T2.30/T2.31; those fields remain role:input today). The runtime schema gate,
+      DDL, partition transforms and MERGE behavior are unchanged. semantic_break=false.
 previous_versions: []

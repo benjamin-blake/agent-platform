@@ -4783,7 +4783,7 @@ tier_items:
       - "NEW min_length write-time validator-type handler added to the validator registry; title min-length enforced at the portal (a short title is rejected); the false ops.yaml:53 'min 10 chars' claim corrected; the validator is exclude_before-gated like the other write_time tests so the ~889 existing short-title rows are grandfathered (updates to them do not retro-fail)"
       - "write-time validator registry (_load_write_time_validators) repointed to the Annotated SSOT, OR explicitly designated the last ops.yaml runtime reader with T1.6 as retirement owner -- no silent ops.yaml/Annotated enforcement drift"
       - "get_rec_write_guidance() sources semantics from the Annotated SSOT / Class A contract, not ops.yaml (Decision 66 Tier A preserved)"
-      - "config/lambda/ducklake/field_semantics.yaml marks risk + automatable as derived; no role:input mismatch remains for portal-overridden fields"
+      - "In docs/contracts/ops_recommendations.yaml, risk + automatable derivation blocks are updated to realized: true; the T2.33 generator (scripts/schema_to_field_semantics.py) then emits role: derived for these fields in field_semantics.yaml -- no direct field_semantics.yaml edit is required (T2.33 generator owns the projection)"
       - "If a ducklake_writer/reader artifact changes: per-Lambda build + deploy + smoke-test (V3 per Decision 79)"
     related_candidate_decisions: [CD.12, CD.33]
     related_decisions: [44, 65, 66, 73, 79, 84]
@@ -4829,7 +4829,7 @@ tier_items:
       - "string labels derived in the `current` projection (CASE); no consumer reads a stored string priority"
       - "additive-then-subtractive verified: int column added + dual-derived + readers flipped BEFORE the string column is dropped; the drop lands last"
       - "all readers/producers migrated in lockstep: batch.py PRIORITY_ORDER RE-BASED from 0-indexed to the 1-4 contract + execute_recommendation.py import, ducklake_reader verbs, writer gate, the LIVE production file_rec calls in validate.py (_file_budget_breach_rec/_file_budget_bypass_rec, lines ~1409-1410/1446-1447 -- these are producers, NOT test fixtures), DQ; rg finds no string-priority literal or comparison left in production OR test code"
-      - "config/lambda/ducklake/field_semantics.yaml priority sql_type updated VARCHAR -> integer (the column-type contract follows the table change; T2.29 fixes role, this item fixes sql_type)"
+      - "In docs/contracts/ops_recommendations.yaml, priority iceberg_type is updated to the int Iceberg type; the T2.33 generator (scripts/schema_to_field_semantics.py) then emits the correct sql_type for priority in field_semantics.yaml -- no direct field_semantics.yaml edit is required (T2.33 generator owns the projection; supersedes T2.30 direct-edit intent)"
       - "int VALUE derived for ALL rows incl. Decision 64 bootstrap rows (exclude_before 2026-05-01) -- else COALESCE/ORDER BY breaks on history; the _contract_version STAMP is the only thing withheld from bootstrap rows (value derived, version not re-stamped); reads COALESCE"
       - "history immutable + `current` deterministically rebuildable from history post-migration (Decision 81 cl.8)"
       - "Per-Lambda build + deploy + smoke-test for ducklake_writer + ducklake_reader (V3 per Decision 79)"
@@ -4869,7 +4869,7 @@ tier_items:
       - src/schemas/rec.py
     exit_criteria:
       - "START GATE 1: T2.28 (closed-boundary named-verb reads + writer keyspace) is COMPLETE before this item edits the ducklake_reader current-projection label derivation -- co-editing shared reader verbs with in-progress T2.28 is disallowed"
-      - "config/lambda/ducklake/field_semantics.yaml effort sql_type updated VARCHAR -> integer (column-type contract follows the table change)"
+      - "In docs/contracts/ops_recommendations.yaml, effort iceberg_type is updated to the int Iceberg type; the T2.33 generator (scripts/schema_to_field_semantics.py) then emits the correct sql_type for effort in field_semantics.yaml -- no direct field_semantics.yaml edit is required (T2.33 generator owns the projection; supersedes T2.31 direct-edit intent)"
       - "START GATE 2: rec-2113 catalog-DR pg_restore restore drill GREEN against production-shaped data BEFORE the in-place column-type migration runs (Decision 81 cl.7 / Decision 84 I-1); rollback path documented and tested"
       - "effort LOC weights DEFINED in config/agent/executor/capabilities.yaml (they did not exist before this item); _EFFORT_SCALE in ops_data_portal reconciled to read them, not a hardcoded dict"
       - "effort stored as a LOC-weighted integer on the DuckLake ops_recommendations table; t-shirt labels derived in the `current` projection from integer thresholds"
@@ -4916,7 +4916,7 @@ tier_items:
       - "ops_recommendations passes its own exemplar gate"
       - "Reusable machine-parseable table-onboarding checklist/template exists; a future operational table can follow it without re-deriving the pattern (AGENTS.md Agent-First norm; not a human-readable companion doc)"
       - "End-to-end causal-chain verifier covers ops_recommendations (PRODUCE->TRANSPORT->PERSIST->QUERY->ASSERT), referencing docs/INTENT-verification-system.md (Decision 57); coordinate with T3.1/T3.2 rather than re-deriving the stages"
-      - "KNOWN GAP documented: DuckLake DDL-generation-from-contract follow-on (T0.13 is Iceberg-only)"
+      - "KNOWN GAP closed: DuckLake schema-as-code generation from contract was implemented by T2.33 (scripts/schema_to_field_semantics.py); field_semantics.yaml is now a GENERATED projection of the Class A contract, not a hand-maintained file"
     related_candidate_decisions: [CD.33]
     related_decisions: [57, 63, 84]
     effort: M
@@ -4970,7 +4970,8 @@ tier_items:
     related_decisions: [66, 84, 86]
     effort: M
     strategic: false
-    status: not_started
+    status: in_progress
+    progress_note: "2026-06-22: Generator + drift gate + ContractGovernance.merge_key + iceberg->sql_type mapping + subset-aware slices shipped (exit criteria 1-4, 6 pass); V3 Lambda build+deploy+smoke-test pending after merge (criterion 7); T2.29/#7/T2.30/T2.31 re-pointed in roadmap (criterion 5 staged)"
 
   # ----- T3: Trust loop closure -----
   - id: T3.1
