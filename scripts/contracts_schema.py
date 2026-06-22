@@ -115,6 +115,7 @@ class ContractGovernance(BaseModel):
     dedup_view: str | None = None
     write_path: str | None = None
     id_allocator: str | None = None
+    merge_key: str | None = None
     auth_type: str | None = None
     principal_classes: list[str] | None = None
     admin_only_features: list[str] | None = None

@@ -1,302 +1,432 @@
-# DuckLake SCD2 Field Semantics Contract (T2.17 / CD.33)
-#
-# Machine-readable map of every SCD2-envelope field.
-# Consumed by:
-#   - ducklake_runtime.py  schema_gate()           (rejects unknown/mis-typed fields)
-#   - ducklake_runtime.py  _derive_fields()         (mints derived values once, outside OCC-retry)
-#   - ducklake_runtime.py  create_scd2_tables()     (DDL column list + partition transforms)
-#   - tests/test_ducklake_runtime.py                (one assertion per derived field)
-#
-# Smoke tables: ducklake_smoke_history (append source-of-truth) +
-#               ducklake_smoke_current (Type-1 write-through projection).
-# META_SCHEMA: ducklake_smoke  (relocated off the production `ducklake_ops` catalog -- rec-2099 fix;
-#              smoke can never again pin a DATA_PATH on the production meta-schema)
-# DATA_PATH:   s3://agent-platform-data-lake/ducklake-neon-smoke/
-#
-# Field roles:
-#   input   - value supplied by the caller; validated for presence and type but not derived
-#   derived - value computed deterministically by the runtime; caller MUST NOT supply it
-#
-# Derivation timing rule (CD.33 clause 2):
-#   Every derived field is minted ONCE, OUTSIDE the OCC-retry loop.
-#   On retry, the already-minted value is reused unchanged.
-#   Violation = double-stamp risk (ULID collision / timestamp drift).
+# GENERATED -- DO NOT EDIT (scripts/schema_to_field_semantics.py)
+# Source of truth: docs/contracts/ops_recommendations.yaml, docs/contracts/ops_decisions.yaml
+# Non-contract content: config/lambda/ducklake/field_semantics.static.yaml (the sidecar)
+# To update: edit the contract or sidecar, then run: bin/venv-python -m scripts.schema_to_field_semantics
+# Drift gate: bin/venv-python -m scripts.schema_to_field_semantics --check (non-zero on drift)
 
 tables:
   history:
     name: ducklake_smoke_history
     purpose: append source-of-truth; one row per logical write attempt; deduplicated by ULID
-    partition: "day(created_timestamp)"
+    partition: day(created_timestamp)
     partition_timing: ALTER before first write (post-ALTER-only semantics, CD.33 M-5)
-    inlining: "ducklake_default_data_inlining_row_limit = 0 (smoke issue #921)"
-
+    inlining: 'ducklake_default_data_inlining_row_limit = 0 (smoke issue #921)'
   current:
     name: ducklake_smoke_current
     purpose: Type-1 write-through projection; one row per rec_id (latest version only)
-    partition: "bucket(8, rec_id)"
+    partition: bucket(8, rec_id)
     partition_timing: ALTER before first write
-    inlining: "ducklake_default_data_inlining_row_limit = 0"
-
+    inlining: ducklake_default_data_inlining_row_limit = 0
 fields:
   ulid:
     role: derived
     sql_type: VARCHAR
     nullable: false
-    derivation: >
-      Monotonic ULID minted once at op-start via python-ulid, OUTSIDE the OCC-retry loop.
-      Reused unchanged on every retry iteration.
-      Serves as the logical PK of the history table and the idempotency key:
-      MERGE INTO history ON ulid = source.ulid / WHEN NOT MATCHED THEN INSERT.
+    derivation: 'Monotonic ULID minted once at op-start via python-ulid, OUTSIDE the OCC-retry loop. Reused unchanged on every
+      retry iteration. Serves as the logical PK of the history table and the idempotency key: MERGE INTO history ON ulid =
+      source.ulid / WHEN NOT MATCHED THEN INSERT.
+
+      '
     key_role: history logical PK; idempotency dedup key in the MERGE-on-ULID append
     partition_role: none
-    verified_by: >
-      VP idempotency probe: same op retried N times -> identical ULID in every attempt ->
-      MERGE deduplicates to exactly 1 history row.
+    verified_by: 'VP idempotency probe: same op retried N times -> identical ULID in every attempt -> MERGE deduplicates to
+      exactly 1 history row.
 
+      '
   rec_id:
     role: input
     sql_type: VARCHAR
     nullable: false
     derivation: null
-    description: >
-      Natural key supplied by the caller (e.g. a DynamoDB-allocated recommendation ID).
-      Validated present and non-empty by the schema gate.
-      For new records: must not already exist in the current projection (schema gate validates).
+    description: 'Natural key supplied by the caller (e.g. a DynamoDB-allocated recommendation ID). Validated present and
+      non-empty by the schema gate. For new records: must not already exist in the current projection (schema gate validates).
       For updates: must already exist in current (schema gate validates).
+
+      '
     key_role: natural key; MERGE key for current write-through projection
     partition_role: bucket(8, rec_id) on ducklake_smoke_current
-    verified_by: >
-      VP current-uniqueness: same rec_id written twice -> exactly 1 current row,
-      exactly 2 history rows.
+    verified_by: 'VP current-uniqueness: same rec_id written twice -> exactly 1 current row, exactly 2 history rows.
 
+      '
   created_timestamp:
     role: derived
     sql_type: TIMESTAMP WITH TIME ZONE
     nullable: false
-    derivation: >
-      High-precision now() minted ONCE at op-start, OUTSIDE the OCC-retry loop.
-      On INSERT (new record): written as the creation time.
-      On UPDATE (existing record): the EXISTING value from current is CARRIED UNCHANGED --
-      it is NEVER re-stamped. This preserves the original insert time across all future versions.
+    derivation: 'High-precision now() minted ONCE at op-start, OUTSIDE the OCC-retry loop. On INSERT (new record): written
+      as the creation time. On UPDATE (existing record): the EXISTING value from current is CARRIED UNCHANGED -- it is NEVER
+      re-stamped. This preserves the original insert time across all future versions.
+
+      '
     key_role: none (non-key)
     partition_role: day(created_timestamp) on ducklake_smoke_history
-    verified_by: >
-      VP partition probe: update to an existing rec_id -> history row retains the ORIGINAL
-      created_timestamp -> both history rows land in the SAME day-partition ->
-      date-filter prunes correctly.
+    verified_by: 'VP partition probe: update to an existing rec_id -> history row retains the ORIGINAL created_timestamp ->
+      both history rows land in the SAME day-partition -> date-filter prunes correctly.
 
+      '
   last_updated_timestamp:
     role: derived
     sql_type: TIMESTAMP WITH TIME ZONE
     nullable: false
-    derivation: >
-      High-precision now() minted ONCE at op-start, OUTSIDE the OCC-retry loop.
-      Stable across all retry iterations of the SAME write attempt.
-      Used for SCD2 ordering / tiebreak (together with ulid) to select the latest version.
+    derivation: 'High-precision now() minted ONCE at op-start, OUTSIDE the OCC-retry loop. Stable across all retry iterations
+      of the SAME write attempt. Used for SCD2 ordering / tiebreak (together with ulid) to select the latest version.
+
+      '
     key_role: SCD2 ordering key (tiebreak by ulid when timestamps collide)
     partition_role: none
-    verified_by: >
-      VP: two retries of the same write -> same last_updated_timestamp in both attempts ->
-      latest-per-rec_id selection in current is deterministic.
+    verified_by: 'VP: two retries of the same write -> same last_updated_timestamp in both attempts -> latest-per-rec_id selection
+      in current is deterministic.
 
+      '
   payload:
     role: input
     sql_type: VARCHAR
     nullable: true
     derivation: null
-    description: >
-      Opaque business field stand-in (smoke table only; real ops_* fields are T2.19).
-      Optional -- may be null. Validated by the schema gate: unknown fields (not in this
-      contract) raise SchemaGateError; mis-typed fields raise SchemaGateError.
+    description: 'Opaque business field stand-in (smoke table only; real ops_* fields are T2.19). Optional -- may be null.
+      Validated by the schema gate: unknown fields (not in this contract) raise SchemaGateError; mis-typed fields raise SchemaGateError.
+
+      '
     key_role: none
     partition_role: none
-    verified_by: >
-      VP schema gate: a write with an unknown field key raises SchemaGateError;
-      a write with a mis-typed payload raises SchemaGateError.
+    verified_by: 'VP schema gate: a write with an unknown field key raises SchemaGateError; a write with a mis-typed payload
+      raises SchemaGateError.
 
-# ---------------------------------------------------------------------------
-# Derivation timing summary (CD.33 clause 2 enforcement)
-# ---------------------------------------------------------------------------
+      '
 derivation_timing:
   mint_outside_retry_loop:
-    - ulid               # monotonic ULID, reused on retry
-    - last_updated_timestamp  # stable timestamp, reused on retry
+  - ulid
+  - last_updated_timestamp
   mint_on_first_insert_carry_on_update:
-    - created_timestamp  # minted at op-start; for updates, carried from existing current row
+  - created_timestamp
   input_fields:
-    - rec_id
-    - payload
-
-# ---------------------------------------------------------------------------
-# Partition transforms (applied via ALTER ... SET PARTITIONED BY BEFORE first write)
-# ---------------------------------------------------------------------------
+  - rec_id
+  - payload
 partition_transforms:
-  history: "day(created_timestamp)"
-  current: "bucket(8, rec_id)"
-
-# ---------------------------------------------------------------------------
-# Connection settings applied before first write
-# ---------------------------------------------------------------------------
+  history: day(created_timestamp)
+  current: bucket(8, rec_id)
 connection_settings:
   ducklake_default_data_inlining_row_limit: 0
-  autoinstall_known_extensions: false  # Lambda baked-extension posture
-  autoload_known_extensions: false     # Lambda baked-extension posture
-  custom_extension_repository: ""      # fail-closed: no network INSTALL at runtime
-
-# ===========================================================================
-# Production ops_* SCD2 schemas (T2.19 / Decision 81 / CD.33).
-# ===========================================================================
-# Per-table contract for the FIVE governance tables. The same schema_gate +
-# DDL + MERGE generator that the smoke `fields` map drives is now driven
-# per-table by these entries (src/common/ducklake_runtime.resolve_table_spec).
-#
-# Every table reproduces the SCD2 envelope:
-#   - ulid                   derived  history logical PK + idempotency dedup key
-#   - created_timestamp      derived  minted on insert, CARRIED unchanged on update
-#   - last_updated_timestamp derived  SCD2 ordering key (minted once per write)
-#   - <merge_key>            input    natural key; MERGE key of the `current` projection
-#   - <business columns>     input    caller-supplied, schema-gated
-#
-# `status: live`     -> exercised by the cutover. THIS SLICE migrates ONLY ops_recommendations
-#                      (recs-first, via file_rec/update_rec). ops_decisions is schema-ready but
-#                      DEFERRED to its own migration (its source of truth is DECISIONS.md, so it
-#                      rebuilds rather than migrates) and STAYS on the Iceberg/Athena path.
-# `status: dormant` -> schema-ready, NOT live-exercised. The executor write paths
-#                      (ops_priority_queue, ops_execution_plans) are paused per CD.17
-#                      and route through the generalized writer when the executor
-#                      resumes; ops_session_log is not provisioned in the personal
-#                      account (sync_ops 2026-05-28 note). Merge key is a placeholder
-#                      for the resume work (ops_priority_queue current-state is the
-#                      Decision-70 latest-queue_run correlated set, not a per-row MERGE).
-#
-# Column types are sourced from the authoritative in-repo contracts -- NOT inferred:
-#   ops_recommendations -> scripts/executor/jsonl_store.Recommendation + ops.yaml
-#   ops_decisions       -> scripts/executor/jsonl_store.Decision + ops.yaml
-#   array/int/bool coercions cross-checked against scripts/sync_ops._coerce_ops_*_row.
-# Derived ulid/created_timestamp/last_updated_timestamp are NOT supplied by the
-# caller (the portal projects them out); the runtime mints them once (CD.33 cl.2).
-
+  autoinstall_known_extensions: false
+  autoload_known_extensions: false
+  custom_extension_repository: ''
 ops_tables:
   ops_recommendations:
     status: live
     merge_key: id
-    entity_id_prefix: "rec-"   # canonical id shape
-    id_keyspace: writer        # file_ops allocates; write_ops advances the counter (Decision 84 I-2)
+    entity_id_prefix: rec-
+    id_keyspace: writer
     history_table: ops_recommendations_history
     current_table: ops_recommendations_current
     partition:
-      history: "day(created_timestamp)"
-      current: "bucket(8, id)"
+      history: day(created_timestamp)
+      current: bucket(8, id)
     columns:
-      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
-      id: {role: input, sql_type: VARCHAR, nullable: false}
-      title: {role: input, sql_type: VARCHAR, nullable: true}
-      source: {role: input, sql_type: VARCHAR, nullable: true}
-      effort: {role: input, sql_type: VARCHAR, nullable: true}
-      priority: {role: input, sql_type: VARCHAR, nullable: true}
-      status: {role: input, sql_type: VARCHAR, nullable: false}
-      automatable: {role: input, sql_type: BOOLEAN, nullable: true}
-      risk: {role: input, sql_type: VARCHAR, nullable: true}
-      file: {role: input, sql_type: VARCHAR, nullable: true}
-      context: {role: input, sql_type: VARCHAR, nullable: true}
-      acceptance: {role: input, sql_type: VARCHAR, nullable: true}
-      verification: {role: input, sql_type: VARCHAR, nullable: true}
-      verification_tier: {role: input, sql_type: VARCHAR, nullable: true}
-      dependencies: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      tags: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      resolution: {role: input, sql_type: VARCHAR, nullable: true}
-      execution_result: {role: input, sql_type: VARCHAR, nullable: true}
-      execution_date: {role: input, sql_type: VARCHAR, nullable: true}
-      execution_branch: {role: input, sql_type: VARCHAR, nullable: true}
-      execution_pr_url: {role: input, sql_type: VARCHAR, nullable: true}
-      execution_steps: {role: input, sql_type: BIGINT, nullable: true}
-      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
-      _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
-    migration_columns:  # additive ALTER TABLE migrations (post-initial-deploy; reconcile_table_columns applies these)
+      ulid:
+        role: derived
+        sql_type: VARCHAR
+        nullable: false
+      id:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      title:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      source:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      effort:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      priority:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      status:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      automatable:
+        role: input
+        sql_type: BOOLEAN
+        nullable: true
+      risk:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      file:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      context:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      acceptance:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      verification:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      verification_tier:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      dependencies:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      tags:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      resolution:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      execution_result:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      execution_date:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      execution_branch:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      execution_pr_url:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      execution_steps:
+        role: input
+        sql_type: BIGINT
+        nullable: true
+      created_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      last_updated_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      context_v2_json:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      _contract_version:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+    migration_columns:
       history:
-        context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
-        _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
+        context_v2_json:
+          role: input
+          sql_type: VARCHAR
+          nullable: true
+        _contract_version:
+          role: input
+          sql_type: VARCHAR
+          nullable: true
       current:
-        context_v2_json: {role: input, sql_type: VARCHAR, nullable: true}
-        _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
-
+        context_v2_json:
+          role: input
+          sql_type: VARCHAR
+          nullable: true
+        _contract_version:
+          role: input
+          sql_type: VARCHAR
+          nullable: true
   ops_decisions:
     status: live
     merge_key: id
-    entity_id_prefix: "dec-"   # canonical id shape
-    id_keyspace: caller        # ids follow DECISIONS.md numbering; file_ops REJECTED (Decision 84 I-2 exception)
+    entity_id_prefix: dec-
+    id_keyspace: caller
     history_table: ops_decisions_history
     current_table: ops_decisions_current
     partition:
-      history: "day(created_timestamp)"
-      current: "bucket(8, id)"
+      history: day(created_timestamp)
+      current: bucket(8, id)
     columns:
-      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
-      id: {role: input, sql_type: VARCHAR, nullable: false}
-      title: {role: input, sql_type: VARCHAR, nullable: false}
-      status: {role: input, sql_type: VARCHAR, nullable: false}
-      problem: {role: input, sql_type: VARCHAR, nullable: true}
-      decision_text: {role: input, sql_type: VARCHAR, nullable: true}
-      context: {role: input, sql_type: VARCHAR, nullable: true}
-      decided_date: {role: input, sql_type: VARCHAR, nullable: true}
-      related_decisions: {role: input, sql_type: "BIGINT[]", nullable: true}
-      related_decisions_v2: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      decision_id: {role: input, sql_type: BIGINT, nullable: true}
-      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
-
+      ulid:
+        role: derived
+        sql_type: VARCHAR
+        nullable: false
+      id:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      title:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      status:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      problem:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      decision_text:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      context:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      decided_date:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      related_decisions:
+        role: input
+        sql_type: BIGINT[]
+        nullable: true
+      related_decisions_v2:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      decision_id:
+        role: input
+        sql_type: BIGINT
+        nullable: true
+      created_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      last_updated_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      _contract_version:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
   ops_priority_queue:
-    status: dormant  # executor paused (CD.17); current-state is the Decision-70 latest-queue_run set
+    status: dormant
     merge_key: rec_id
     history_table: ops_priority_queue_history
     current_table: ops_priority_queue_current
     partition:
-      history: "day(created_timestamp)"
-      current: "bucket(8, rec_id)"
+      history: day(created_timestamp)
+      current: bucket(8, rec_id)
     columns:
-      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
-      rec_id: {role: input, sql_type: VARCHAR, nullable: false}
-      queue_run_id: {role: input, sql_type: VARCHAR, nullable: true}
-      rank: {role: input, sql_type: BIGINT, nullable: true}
-      mode: {role: input, sql_type: VARCHAR, nullable: true}
-      compound_with: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      gates: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-
+      ulid:
+        role: derived
+        sql_type: VARCHAR
+        nullable: false
+      rec_id:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      queue_run_id:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      rank:
+        role: input
+        sql_type: BIGINT
+        nullable: true
+      mode:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      compound_with:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      gates:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      created_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      last_updated_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
   ops_session_log:
-    status: dormant  # not provisioned in the personal account (sync_ops 2026-05-28 migration note)
+    status: dormant
     merge_key: session_id
     history_table: ops_session_log_history
     current_table: ops_session_log_current
     partition:
-      history: "day(created_timestamp)"
-      current: "bucket(8, session_id)"
+      history: day(created_timestamp)
+      current: bucket(8, session_id)
     columns:
-      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
-      session_id: {role: input, sql_type: VARCHAR, nullable: false}
-      summary: {role: input, sql_type: VARCHAR, nullable: true}
-      recs_attempted: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      recs_closed: {role: input, sql_type: "VARCHAR[]", nullable: true}
-      duration_minutes: {role: input, sql_type: BIGINT, nullable: true}
-      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-
+      ulid:
+        role: derived
+        sql_type: VARCHAR
+        nullable: false
+      session_id:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      summary:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      recs_attempted:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      recs_closed:
+        role: input
+        sql_type: VARCHAR[]
+        nullable: true
+      duration_minutes:
+        role: input
+        sql_type: BIGINT
+        nullable: true
+      created_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      last_updated_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
   ops_execution_plans:
-    status: dormant  # executor paused (CD.17); not provisioned in the personal account
+    status: dormant
     merge_key: rec_id
     history_table: ops_execution_plans_history
     current_table: ops_execution_plans_current
     partition:
-      history: "day(created_timestamp)"
-      current: "bucket(8, rec_id)"
+      history: day(created_timestamp)
+      current: bucket(8, rec_id)
     columns:
-      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
-      rec_id: {role: input, sql_type: VARCHAR, nullable: false}
-      plan: {role: input, sql_type: VARCHAR, nullable: true}
-      status: {role: input, sql_type: VARCHAR, nullable: true}
-      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
-      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      ulid:
+        role: derived
+        sql_type: VARCHAR
+        nullable: false
+      rec_id:
+        role: input
+        sql_type: VARCHAR
+        nullable: false
+      plan:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      status:
+        role: input
+        sql_type: VARCHAR
+        nullable: true
+      created_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
+      last_updated_timestamp:
+        role: derived
+        sql_type: TIMESTAMP WITH TIME ZONE
+        nullable: false
