@@ -2,6 +2,49 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 94: Correct Decision 92 point 3 -- github_ci_apply OIDC trust must also trust the environment sub (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-22
+**Warehouse ID:** dec-094 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 92 point 3 ratified the CD.35 Wave 3 / T2.22 security model with the clause "The privileged
+role OIDC trust stays pinned to refs/heads/main," on the stated premise that a GitHub Environment's
+required-reviewer gate does NOT change the OIDC token's sub claim. The live VP7-VP11 end-to-end test
+(2026-06-22) disproved that premise. When a job declares `environment: tf-gated-apply`, GitHub
+OVERRIDES the OIDC sub to `repo:OWNER/REPO:environment:tf-gated-apply` (the environment claim REPLACES
+the ref claim). With trust pinned to `refs/heads/main` only, the `gated-apply` job could never assume
+`github_ci_apply` -- it failed `sts:AssumeRoleWithWebIdentity` (AccessDenied) on every run. The
+T2.22 gated-apply path was non-functional as merged; all static gates (validate, terraform-validate,
+unit tests, code review) passed and only live verification caught it.
+
+**Decision:**
+Correct Decision 92 point 3. `github_ci_apply`'s OIDC trust `sub` condition is a two-value
+exact-match list, trusting BOTH:
+- `repo:OWNER/REPO:ref:refs/heads/main` -- the routine auto-apply path (apply-sandbox job, no
+  job-level environment), and
+- `repo:OWNER/REPO:environment:tf-gated-apply` -- the gated-apply job (whose declared environment
+  overrides the sub).
+
+This is SAFE and does not weaken the security model: a token bearing
+`sub=...:environment:tf-gated-apply` can ONLY be minted by a job that declares that environment, and
+such a job cannot begin until the Environment's required reviewer approves. The environment sub is
+therefore itself approval-gated -- belt-and-braces with the guard's fail-closed routing. The
+Environment-gates-EXECUTION model of Decision 92 is unchanged; what is corrected is the false claim
+that the sub stays `refs/heads/main`. `agent/*` and `pull/*` remain unable to assume the role.
+
+The trust change is an IAM/trust change and was admin-applied locally (the gated CD path it fixes
+could not apply it), then confirmed by a no-op merge (PR #222). Re-running VP7-VP11 with a throwaway
+IAM tag then proved the gated path applies end-to-end: routed green -> reviewer approval -> assume-role
+success -> saved plan.bin applied verbatim (no re-plan) -> convergence record green with plan_sha.
+
+Secondary correction (VP10): the gated-apply always-run red-on-failure convergence write depends on
+the same OIDC apply-role creds; a failure AT OR BEFORE the credentials step cannot write the red
+record. The backstop is ci-rca, which triggers on the terraform-apply-sandbox workflow_run failure
+conclusion independent of the record -- so a creds-stage failure still files a source=ci_rca rec and
+is not silently masked. Documented at the record_write step; no code change required.
+
 ## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status (Decided)
 
 **Status:** Decided
@@ -79,6 +122,10 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
    DIRECTION for Waves 2-5, INTENT 5.4 + 5.6):** routine (guard-PASS, non-IAM) changes ride the
    record-backed pipeline; high-blast changes (IAM/trust/destroy) route to a GitHub Environment whose
    required reviewer gates JOB EXECUTION. The privileged role OIDC trust stays pinned to refs/heads/main.
+   [CORRECTED by Decision 94 (2026-06-22): the trust clause here is wrong. A job declaring
+   environment: tf-gated-apply gets sub=repo:OWNER/REPO:environment:tf-gated-apply, so github_ci_apply
+   must ALSO trust the environment sub (proven by VP9). The Environment-gates-EXECUTION model is
+   unchanged; the environment sub is approval-gated and safe. See Decision 94.]
 
 4. **Rejected guard-self-grant exception + privilege-tiering (INTENT 5.8, Wave 4):** the CI/CD role's
    own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant

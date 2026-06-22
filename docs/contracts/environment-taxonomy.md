@@ -38,16 +38,21 @@ from re-conflating.
 The platform split is mock-vs-real at ONE code version, not version-skew tiers. The same code path
 runs in each environment; only the externals (mocked vs real) and the apply gate differ.
 
-**Sandbox gated-apply path (CD.35 Wave 3 / T2.22 / Decision 92):** When the deterministic guard
-exits 2 (IAM/trust/destroy diff), the `apply-sandbox` job sets `routed=true` and exits green
-(routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`, `environment:
-tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On approval, it
-applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU) and writes
-the convergence record green/red via the T2.20 always-run write. The Environment is the
-authorization boundary; the OIDC sub stays pinned to `refs/heads/main` (not an environment claim).
-This gates the apply JOB, NOT a PR status check (adding it to required checks would wedge
-autonomous fix-merges, Decision 83). IAM changes beyond `github_ci_apply`'s current scope remain
-admin-gated until T2.23 (bootstrap root + authority budget).
+**Sandbox gated-apply path (CD.35 Wave 3 / T2.22 / Decision 92, trust corrected by Decision 94):**
+When the deterministic guard exits 2 (IAM/trust/destroy diff), the `apply-sandbox` job sets
+`routed=true` and exits green (routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`,
+`environment: tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On
+approval, it applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU)
+and writes the convergence record green/red via the T2.20 always-run write. The Environment is the
+authorization boundary -- the required reviewer gates JOB EXECUTION. Because the `gated-apply` job
+declares `environment: tf-gated-apply`, GitHub sets its OIDC sub to
+`repo:OWNER/REPO:environment:tf-gated-apply` (the env claim REPLACES the ref claim), so
+`github_ci_apply`'s trust lists BOTH `refs/heads/main` (routine path) and the environment sub
+(gated path). Trusting the environment sub is safe: it can only be minted by an approval-gated job
+(Decision 94 corrects the original "sub stays refs/heads/main" claim, which VP9 disproved). This
+gates the apply JOB, NOT a PR status check (adding it to required checks would wedge autonomous
+fix-merges, Decision 83). IAM changes beyond `github_ci_apply`'s current scope remain admin-gated
+until T2.23 (bootstrap root + authority budget).
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 
