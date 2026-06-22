@@ -1,0 +1,308 @@
+schema_version: 1
+slug: "terraform-cicd-bootstrap-root"
+intent: >-
+  Break the github_ci_apply self-grant bootstrap (CD.35 Wave 4 / T2.23) by moving the CD apply
+  role's own IAM into a new admin-applied terraform/bootstrap/ root and defining the authority
+  budget (permissions boundary + propagation condition keys), so the self-improving platform's
+  CI/CD pipeline can never grant itself privileges through the pipeline it gates.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-cicd-bootstrap-root.yaml
+phase: >-
+  Platform tier_item T2.23 (CD.35 Wave 4, ratified Decision 92); depends_on T2.22 (complete
+  2026-06-22). Predecessors T2.20/T2.21/T2.22 shipped. Guard-narrowing that CONSUMES the budget
+  is the downstream T2.25, not this plan.
+scope:
+  - file: terraform/bootstrap/main.tf
+    action: Create
+    purpose: >-
+      New Terraform root: terraform block (required_version >= 1.10, aws ~> 5.0), S3 backend keyed
+      to the dedicated bootstrap state bucket (use_lockfile native locking), aws provider on
+      var.aws_profile (default agent_platform_admin) + default_tags. Models terraform/github/main.tf.
+  - file: terraform/bootstrap/variables.tf
+    action: Create
+    purpose: >-
+      Root variables: account_id (12-digit validation, NO default -- never a committed literal),
+      aws_region (default eu-west-2), aws_profile (default agent_platform_admin), owner_email.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Create
+    purpose: >-
+      Migrated aws_iam_role.github_ci_apply (trust via literal OIDC provider ARN; preserves BOTH
+      refs/heads/main AND environment:tf-gated-apply subs per Decision 94) + aws_iam_role_policy
+      with rec-2079 consolidation, self-grant removal, rec-2305 style fix, and iam:PermissionsBoundary
+      propagation condition keys; plus aws_iam_policy.github_ci_apply_boundary (the authority budget)
+      attached as permissions_boundary. import{} blocks adopt the live role+policy without recreate.
+  - file: terraform/bootstrap/README.md
+    action: Create
+    purpose: >-
+      NEVER-auto-apply banner + one-time provisioning runbook (create dedicated state bucket; init;
+      import; verify plan shows no replace/destroy; apply boundary) + the state-migration ordering
+      (state rm from personal AFTER bootstrap adopts, BEFORE the oidc.tf removal auto-applies) +
+      ongoing manual apply runbook. Strictly operational (Decision 86). Models terraform/github/README.md.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Remove aws_iam_role.github_ci_apply + aws_iam_role_policy.github_ci_apply (migrated to
+      bootstrap); leave a pointer comment. The OIDC provider + branch/pr/plan roles STAY here.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add "terraform/bootstrap" to _TERRAFORM_ROOTS so the terraform-validate CI required check runs
+      init -backend=false + validate + fmt -check on the new root (creds-free).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Update run_terraform_creds_free() root-set assertions for the new root; keep the explicit
+      roots=("terraform",) single-root cases intact.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Document the two-root privilege tier (personal = pipeline-applied; bootstrap = admin-applied
+      CI/CD-own-IAM + authority budget); update the "Out-of-band IAM grants" + convergence-anchor
+      sections to retire the "full privilege-tiering lands at Wave 4 / T2.23" forward-reference.
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Axis A: add the bootstrap-tier cell (CI/CD role own IAM + authority budget, admin-applied,
+      out-of-band); update the "remain admin-gated until T2.23" sentence (budget now exists; in-budget
+      auto-apply pending T2.25 guard narrowing).
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Update the "Broader IAM changes beyond github_ci_apply's existing scope remain admin-gated until
+      T2.23" sentinel to reflect Wave 4 landed (budget defined; guard consumption pending T2.25).
+bundled_recommendations:
+  - rec-2079
+  - rec-2305
+infrastructure_dependencies:
+  - >-
+    Dedicated S3 bootstrap state bucket (agent-platform-bootstrap-tfstate, eu-west-2) provisioned
+    OUT-OF-BAND by a one-time agent_platform_admin action (create-bucket + versioning + SSE +
+    public-access-block). It is the bootstrap backend, so it is NOT a Terraform-managed resource.
+    github_ci_apply must have ZERO grant on it (verified post-deploy via simulate-principal-policy).
+  - >-
+    terraform/bootstrap/ is applied MANUALLY under agent_platform_admin (PlatformAdmin, iam:*),
+    NEVER added to any auto-apply workflow. It does not match terraform-apply-sandbox.yml's
+    terraform/personal/** path filter; the README reaffirms NEVER-auto-apply (terraform/github/ model).
+  - >-
+    One-time state migration: terraform import (or import{} blocks) adopt aws_iam_role.github_ci_apply
+    + aws_iam_role_policy.github_ci_apply into bootstrap state, then `terraform state rm` removes them
+    from personal state. NO terraform destroy -- this is the live role the CD pipeline assumes. The
+    bootstrap plan MUST show no replace/destroy before apply; the personal config removal merges only
+    AFTER the state rm so the personal auto-apply sees no diff (no destroy).
+  - >-
+    IAM permissions boundary + iam:PermissionsBoundary propagation condition keys are applied by the
+    admin tier; the boundary MUST be a superset of github_ci_apply's effective data-plane permissions
+    (boundary-too-tight silently caps the pipeline). Both directions verified via simulate-principal-policy.
+  - >-
+    Decision 94 (VP9 regression guard): the migrated trust MUST keep both refs/heads/main and
+    environment:tf-gated-apply subs, or the Wave-3 gated-apply path breaks.
+  - >-
+    scripts/terraform_apply_guard.py is UNCHANGED (Decision 77 still fail-closes all IAM). In-budget
+    auto-apply consumption of the boundary is T2.25, not this plan.
+acceptance_criteria:
+  - >-
+    A new terraform/bootstrap/ root exists (own backend on the dedicated state bucket + own provider),
+    passes `terraform validate` and `terraform fmt -check`, and is registered in scripts/validate.py
+    _TERRAFORM_ROOTS (terraform-validate CI covers it).
+  - >-
+    aws_iam_role.github_ci_apply + its inline policy are removed from terraform/personal/oidc.tf and
+    defined in terraform/bootstrap/; terraform/personal/ still validates with no dangling reference.
+  - >-
+    The migrated trust policy preserves BOTH refs/heads/main AND environment:tf-gated-apply subs
+    (Decision 94 / VP9 regression guarded).
+  - >-
+    rec-2079 absorbed: github_ci_apply's migrated policy has a single consolidated IAM read statement
+    (no separate IAMPlatformRolesRead Sid in the apply policy). rec-2305 absorbed: the migrated
+    SecretsManagerInferenceCredentialsRead statement matches the adjacent SecretsManager precedents' style.
+  - >-
+    The apply role's own ARN is removed from the IAM-write resource set; post-deploy,
+    simulate-principal-policy DENIES github_ci_apply writing its own role policy (self-grant broken).
+  - >-
+    github_ci_apply carries a bootstrap-defined permissions boundary and its iam:CreateRole /
+    PutRolePolicy / AttachRolePolicy are condition-keyed on iam:PermissionsBoundary; post-deploy, an
+    unbounded role-create is DENIED, a boundary-carrying role-create and an in-budget data-plane action
+    are ALLOWED.
+  - >-
+    The authority-budget definitions (boundary policy + condition keys) live ONLY in terraform/bootstrap/
+    (pipeline-unwritable: dedicated state bucket the pipeline cannot touch + no pipeline IAM write on the
+    boundary policy); terraform/bootstrap is excluded from the auto-apply path filter; the guard is unchanged.
+  - >-
+    terraform/CLAUDE.md, docs/contracts/environment-taxonomy.md, and the AGENTS.md "until T2.23" sentinel
+    are updated to reflect the landed two-root privilege tier.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Bootstrap root is syntactically valid and formatted (creds-free; no backend).
+    command: >-
+      terraform -chdir=terraform/bootstrap init -backend=false -input=false -no-color &&
+      terraform -chdir=terraform/bootstrap validate -no-color &&
+      terraform -chdir=terraform/bootstrap fmt -check -no-color
+    expected: "init + validate report Success; fmt -check exits 0 (no diff)."
+    fix_if: "validate errors (bad reference/HCL) or fmt prints filenames -- fix and re-run."
+  - step: 2
+    phase: pre-deploy
+    action: terraform/personal/ still validates after the role+policy removal (no dangling reference).
+    command: >-
+      terraform -chdir=terraform/personal init -backend=false -input=false -no-color &&
+      terraform -chdir=terraform/personal validate -no-color
+    expected: "validate reports Success -- nothing in personal references the removed github_ci_apply resources."
+    fix_if: "validate errors on an unresolved aws_iam_role.github_ci_apply reference -- locate and remove/relink it."
+  - step: 3
+    phase: pre-deploy
+    action: The new root is registered for CI terraform-validate and the validate.py tests pass.
+    command: >-
+      grep -q '"terraform/bootstrap"' scripts/validate.py &&
+      bin/venv-python -m pytest tests/test_validate.py -q
+    expected: "_TERRAFORM_ROOTS contains terraform/bootstrap and the test suite passes."
+    fix_if: "grep fails (not registered) or a root-set assertion fails -- update _TERRAFORM_ROOTS and the test."
+  - step: 4
+    phase: pre-deploy
+    action: rec-2079 absorbed -- the apply policy has no separate IAMPlatformRolesRead Sid (consolidated).
+    command: "! grep -q 'IAMPlatformRolesRead' terraform/bootstrap/github_ci_apply.tf"
+    expected: "Exit 0 -- the apply policy's IAM reads are a single consolidated statement (github_ci_plan's own Sid in personal is out of rec-2079 scope)."
+    fix_if: "A separate IAMPlatformRolesRead Sid still exists in the apply policy -- merge it into the consolidated read statement."
+  - step: 5
+    phase: pre-deploy
+    action: rec-2305 absorbed -- migrated SecretsManagerInferenceCredentialsRead present in bootstrap with precedent style.
+    command: >-
+      grep -q 'SecretsManagerInferenceCredentialsRead' terraform/bootstrap/github_ci_apply.tf &&
+      ! grep -q 'SecretsManagerInferenceCredentialsRead' terraform/personal/oidc.tf
+    expected: "The statement now lives in bootstrap (style-normalized) and no longer in personal/oidc.tf."
+    fix_if: "Statement missing from bootstrap or still in oidc.tf -- complete the migration + style fix."
+  - step: 6
+    phase: pre-deploy
+    action: Decision 94 trust preserved -- both subs present in the migrated trust policy.
+    command: >-
+      grep -q 'refs/heads/main' terraform/bootstrap/github_ci_apply.tf &&
+      grep -q 'environment:tf-gated-apply' terraform/bootstrap/github_ci_apply.tf
+    expected: "Both subs present -- routine and gated-apply paths both assumable."
+    fix_if: "Either sub missing -- restore the two-value exact-match list (VP9 regression otherwise)."
+  - step: 7
+    phase: pre-deploy
+    action: Boundary-propagation condition key present on the pipeline's role-mutation actions.
+    command: "grep -q 'PermissionsBoundary' terraform/bootstrap/github_ci_apply.tf"
+    expected: "iam:CreateRole/PutRolePolicy/AttachRolePolicy carry an iam:PermissionsBoundary condition referencing the boundary ARN."
+    fix_if: "No PermissionsBoundary condition -- add the propagation condition keys (EC4)."
+  - step: 8
+    phase: pre-deploy
+    action: Bootstrap stays out of the auto-apply path and the guard is unchanged.
+    command: >-
+      ! grep -q 'terraform/bootstrap' .github/workflows/terraform-apply-sandbox.yml &&
+      git fetch origin main --quiet && git diff --quiet origin/main -- scripts/terraform_apply_guard.py
+    expected: "terraform/bootstrap absent from the apply workflow path filter; guard byte-identical to main."
+    fix_if: "bootstrap appears in the workflow (remove it) or the guard diff is non-empty (revert -- narrowing is T2.25)."
+  - step: 9
+    phase: post-deploy
+    action: "[BLOCKED until one-time admin apply] Dedicated bootstrap state bucket exists and the pipeline cannot write it."
+    command: >-
+      aws s3api head-bucket --bucket agent-platform-bootstrap-tfstate --profile agent_platform_admin &&
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply
+      --action-names s3:PutObject --resource-arns 'arn:aws:s3:::agent-platform-bootstrap-tfstate/*'
+      --profile agent_platform_admin --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "Bucket exists; simulate returns implicitDeny/explicitDeny -- the pipeline has zero write on bootstrap state."
+    fix_if: "head-bucket fails (provision it) or simulate returns allowed (a bucket-wide grant leaks -- fence it)."
+  - step: 10
+    phase: post-deploy
+    action: "[BLOCKED until one-time admin apply] github_ci_apply carries the bootstrap-defined permissions boundary."
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
+      --query 'Role.PermissionsBoundary.PermissionsBoundaryArn' --output text
+    expected: "Returns the boundary policy ARN (not None) -- the boundary is attached."
+    fix_if: "Returns None -- the permissions_boundary attach did not apply; re-run the admin apply."
+  - step: 11
+    phase: post-deploy
+    action: "[BLOCKED until one-time admin apply] EC4 -- unbounded role-create denied; bounded create + data-plane action allowed."
+    command: >-
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      A=arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply &&
+      echo "unbounded:" && aws iam simulate-principal-policy --policy-source-arn $A --action-names iam:CreateRole
+      --resource-arns "arn:aws:iam::$ACCT:role/zzz-unbounded-probe" --profile agent_platform_admin
+      --query 'EvaluationResults[0].EvalDecision' --output text &&
+      echo "dataplane:" && aws iam simulate-principal-policy --policy-source-arn $A --action-names s3:PutObject
+      --resource-arns 'arn:aws:s3:::agent-platform-data-lake/tfstate/personal/x' --profile agent_platform_admin
+      --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "unbounded: denied (no iam:PermissionsBoundary context); dataplane: allowed (boundary is a superset -- pipeline not capped)."
+    fix_if: "unbounded=allowed (condition key missing/wrong) or dataplane=denied (boundary too tight) -- fix the boundary/condition and re-apply."
+  - step: 12
+    phase: post-deploy
+    action: "[BLOCKED until one-time admin apply] Self-grant broken -- the apply role cannot write its own policy."
+    command: >-
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      A=arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply &&
+      aws iam simulate-principal-policy --policy-source-arn $A --action-names iam:PutRolePolicy
+      --resource-arns $A --profile agent_platform_admin --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "denied -- github_ci_apply can no longer PutRolePolicy on itself (self-grant cycle broken)."
+    fix_if: "allowed -- the apply role's own ARN is still in an IAM-write resource set; remove it and re-apply."
+  - step: 13
+    phase: post-deploy
+    action: "[BLOCKED until migration merges + a personal auto-apply runs] EC1 -- migration left the live role intact; personal pipeline green."
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'Role.RoleName' --output text &&
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c "import sys,json;print(json.load(sys.stdin)['status'])"
+    expected: "Role name returned (NOT destroyed by the personal apply); convergence status green."
+    fix_if: "get-role NotFound (a destroy slipped through -- re-import from git) or status red (RCA the apply failure, Decision 55)."
+  - step: 14
+    phase: post-deploy
+    action: "[BLOCKED until merge] rec-2079 + rec-2305 closed via the Resolves: trailer (rec-autoclose)."
+    command: >-
+      bin/venv-python -m scripts.sync_ops sync >/dev/null 2>&1;
+      for r in rec-2079 rec-2305; do grep "\"id\": \"$r\"" logs/.recommendations-log.jsonl | grep -q '"status": "closed"' && echo "$r closed" || echo "$r OPEN"; done
+    expected: "Both print 'closed'."
+    fix_if: "Either prints 'OPEN' -- confirm the squash-merge body carried 'Resolves: rec-2079, rec-2305'; else close via ops_data_portal --update-rec."
+constraints:
+  - "No rescue agents or workaround loops (Decision 55); apply failures alarm + file recs, nothing auto-remediates."
+  - "The bootstrap root is NEVER auto-applied (Decision 77 / terraform/github/ precedent); apply is a human-gated agent_platform_admin action (Decision 35)."
+  - "Migration uses terraform import + state rm ONLY -- NO terraform destroy of github_ci_apply (the live CD apply role). The bootstrap plan must show no replace/destroy before apply."
+  - "Preserve github_ci_apply's two-value OIDC trust list during migration: refs/heads/main AND environment:tf-gated-apply (Decision 94 / VP9)."
+  - "The permissions boundary MUST be a superset of github_ci_apply's effective data-plane permissions; prove via simulate-principal-policy that legitimate actions remain allowed (boundary-too-tight silently breaks the pipeline)."
+  - "Never commit the account_id literal; the bootstrap root sources account_id via -var at apply (gitignored tfvars), like terraform/github/ (PLAN-public-migration Step 11b)."
+  - "Do NOT modify scripts/terraform_apply_guard.py -- guard-narrowing/in-budget consumption is T2.25."
+  - "Single-account sandbox only (Decision 77 clause 5; Decision 24 multi-account NOT revived)."
+  - "terraform/bootstrap/README.md stays strictly operational (runbook) -- not architectural-deliberation prose (Decision 86)."
+  - "Wrap any filemd5()/file() on optional artifacts in try() (terraform/CLAUDE.md) -- N/A unless the bootstrap root adds such a call."
+context:
+  - "T2.23 / CD.35 (Decision 92) Wave 4. depends_on T2.22 (complete 2026-06-22). T2.20/T2.21/T2.22 all shipped (PRs #142/#179/#185/#203/#212/#223/#225)."
+  - "The self-grant: github_ci_apply currently holds iam:PutRolePolicy on its own ARN (IAMRoleReconcile Sid, terraform/personal/oidc.tf:536-553, its own ARN at :551). Moving its IAM to an admin-applied root breaks the cycle."
+  - "The role is self-contained: only aws_iam_role_policy.github_ci_apply references aws_iam_role.github_ci_apply (oidc.tf:375); the neon_ducklake_catalog.tf hits are runbook COMMENTS. github_ci_plan's IAMCIRolesRead reads the apply role via a LITERAL ARN (cross-root read is fine). Clean migration."
+  - "github_ci_apply's IAM statements use LITERAL ARNs built from var.account_id (not resource references), so the policy moves to a separate root with no cross-root data dependency. The trust must switch its OIDC provider reference from aws_iam_openid_connect_provider.github_actions.arn to the literal provider ARN."
+  - "The OIDC provider + branch/pr/plan roles STAY in terraform/personal/. The migrated apply policy keeps OIDCProviderReconcile + branch/pr reconcile (literal ARNs) so the pipeline can still apply personal."
+  - "Convergence-record IAM enforcement is preserved: the apply-side ConvergenceRecordWrite Allow moves to bootstrap; the branch-role DenyConvergenceRecordWrite + PR-role read-only stay in personal."
+  - "Decision-scout gate verdict FLAGS_FOUND: Decision 86 [NOTE] -- the bootstrap README is an operational runbook colocated with its root (like terraform/github/README.md), outside the docs/ intent-doc-freeze guard; resolution = proceed, keep it operational. CITE: 92, 94, 77, 35, 83/CD.20, 55, 67/79, 70."
+  - "Branch was 0 commits behind origin/main at planning time (main_freshness ok); no Scope-file overlap with main_files_changed_since_branch. ci_rca_unresolved_recs empty -- no hard block."
+  - "rec-2025 (requested by the human to bundle) does not exist in the warehouse (sequence runs rec-2024, rec-2026); interpreted as a digit-transposition typo for rec-2305 -- the optional cleanup proposed during planning, in the same github_ci_apply policy block -- and bundled as such. Flag if misread."
+  - "rec-2305 stored acceptance is pinned to terraform/personal/oidc.tf, but the statement MOVES to bootstrap; closure (VP5) verifies the normalized statement in terraform/bootstrap/."
+  - "rec-2079 stored acceptance (! grep IAMPlatformRolesRead terraform/personal/oidc.tf) is stale: github_ci_plan (added by T2.21 AFTER rec-2079 was filed) has its own IAMPlatformRolesRead Sid in personal that is OUT of rec-2079 scope. Closure (VP4) verifies the consolidation in the apply policy only."
+  - "Authority-budget design note: the LIVE permissions boundary policy (HCL in terraform/bootstrap/) IS the in-budget definition / 'guard policy table'; no separate prose artifact is created (agent-first, anti-drift). T2.25's guard derives the in-budget classification from it."
+  - "Post-deploy VP (steps 9-14) is BLOCKED pending the one-time human-gated admin apply + state migration -- the same V3 pattern as T2.20/T2.21/T2.22 closeouts."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/zen-shannon-cspcx2)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "DECISIONS.md scanned via the decision-scout gate (FLAGS_FOUND: Decision 86 NOTE -> proceed)."
+  - "All files in scope located and readable; terraform/personal/oidc.tf + terraform/github/ pattern reviewed."
+  - "Acceptance criteria understood and verifiable."
+  - "Decision 94 two-value trust preservation noted as a hard migration constraint (VP6)."
+  - "Migration ordering (import to bootstrap -> state rm from personal -> merge oidc.tf removal) understood; NO destroy."
+execution_steps:
+  - "Create terraform/bootstrap/main.tf -- terraform block (required_version >= 1.10, aws ~> 5.0), S3 backend (bucket=agent-platform-bootstrap-tfstate, key=terraform.tfstate, region=eu-west-2, encrypt=true, use_lockfile=true), aws provider on var.aws_profile + default_tags. Model terraform/github/main.tf."
+  - "Create terraform/bootstrap/variables.tf -- account_id (12-digit regex validation, no default), aws_region (default eu-west-2), aws_profile (default agent_platform_admin), owner_email."
+  - "Create terraform/bootstrap/github_ci_apply.tf -- (a) aws_iam_role.github_ci_apply: trust referencing the LITERAL OIDC provider ARN, preserving BOTH refs/heads/main AND environment:tf-gated-apply subs (Decision 94), and permissions_boundary = aws_iam_policy.github_ci_apply_boundary.arn; (b) aws_iam_role_policy.github_ci_apply: the full migrated policy, with the IAM read-quartet Sids consolidated (rec-2079), the apply role's OWN ARN removed from the IAM-write resource set (self-grant break), SecretsManagerInferenceCredentialsRead style-normalized to the adjacent precedents (rec-2305), and iam:CreateRole/AttachRolePolicy/PutRolePolicy carrying iam:PermissionsBoundary propagation condition keys; (c) aws_iam_policy.github_ci_apply_boundary: the authority budget -- permissive Allow on the benign data-plane services github_ci_apply uses (athena/glue/s3/dynamodb/lambda/ssm/events/sns/cloudwatch/secretsmanager/logs) plus Deny statements blocking IAM escalation (CreateRole/PutRolePolicy/AttachRolePolicy without the boundary condition) and boundary self-modification (Delete*PermissionsBoundary, editing the boundary policy); (d) import{} blocks for the role + inline policy so the first admin apply adopts the live resources without recreate."
+  - "Create terraform/bootstrap/README.md -- NEVER-auto-apply banner; one-time provisioning runbook (create the dedicated state bucket with versioning+SSE+public-access-block; terraform init; verify import plan shows no replace/destroy; apply); the state-migration ordering and ongoing manual apply runbook (-var account_id from gitignored tfvars). Operational only (Decision 86)."
+  - "Modify terraform/personal/oidc.tf -- remove aws_iam_role.github_ci_apply + aws_iam_role_policy.github_ci_apply; leave a one-line pointer comment that they migrated to terraform/bootstrap/ (Wave 4 / T2.23). Confirm no remaining personal reference resolves to the removed resources."
+  - "Modify scripts/validate.py -- add \"terraform/bootstrap\" to _TERRAFORM_ROOTS."
+  - "Modify tests/test_validate.py -- update the run_terraform_creds_free() root-set assertion(s) for the added root; preserve the explicit roots=(\"terraform\",) single-root tests."
+  - "Modify terraform/CLAUDE.md -- document the two-root privilege tier and bootstrap apply posture; retire the convergence-anchor note's 'full privilege-tiering ... lands at Wave 4 / T2.23' forward-reference (it has landed); point the github_ci_apply policy description at terraform/bootstrap/."
+  - "Modify docs/contracts/environment-taxonomy.md -- Axis A: add the bootstrap-tier cell (CI/CD role own IAM + authority budget, admin-applied, out-of-band); reword the 'remain admin-gated until T2.23' sentence (budget exists; in-budget auto-apply pending T2.25 guard narrowing)."
+  - "Modify AGENTS.md -- update the 'Broader IAM changes beyond github_ci_apply's existing scope remain admin-gated until T2.23' sentinel to reflect Wave 4 landed (budget defined; guard consumption pending T2.25)."
+  - "Execute the Verification Plan -- run each pre-deploy step (1-8); loop until green. Present the bootstrap-root terraform plan + the personal oidc.tf-removal plan to the human; the bootstrap apply + state migration are human-gated one-time admin actions (Decision 35/77). Run post-deploy steps (9-14) after the admin apply. On unrecoverable V3 failure, STOP and RCA (Decision 55) -- do not patch around it."
+  - "Report: what was migrated, the boundary + condition-key design, the simulate-principal-policy results (both directions), rec-2079/rec-2305 closure, and any post-deploy steps still blocked on the admin apply."
+work_areas: []
+rollback: >-
+  The live role is never destroyed (import + state rm only), so recovery is to re-import
+  aws_iam_role.github_ci_apply + its policy back into terraform/personal state and restore the
+  oidc.tf blocks from git (the running role is untouched throughout the migration). The dedicated
+  state bucket and the boundary policy are additive: the boundary can be detached (remove
+  permissions_boundary on the role, re-apply the bootstrap root under agent_platform_admin) without
+  affecting the pipeline's data-plane function. Bootstrap state and the personal pipeline are fully
+  decoupled, so a bootstrap rollback never touches terraform/personal/ convergence.
