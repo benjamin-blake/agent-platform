@@ -171,15 +171,11 @@ def model_to_iceberg_ddl(
     model_field_names = set(model.model_fields.keys())
 
     if partition_col not in model_field_names:
-        raise UnknownPartitionColumn(
-            f"Partition column '{partition_col}' not found in {model.__name__}.model_fields"
-        )
+        raise UnknownPartitionColumn(f"Partition column '{partition_col}' not found in {model.__name__}.model_fields")
 
     if deployed_columns is not None:
         dq_deleted_names = {
-            name
-            for name, fi in model.model_fields.items()
-            if any(isinstance(m, DqDeleted) for m in fi.metadata)
+            name for name, fi in model.model_fields.items() if any(isinstance(m, DqDeleted) for m in fi.metadata)
         }
         for col in deployed_columns:
             if col not in model_field_names and col not in dq_deleted_names:
@@ -233,9 +229,7 @@ def emit_drop(
         raise KeyError(f"Field '{field}' not found in {model.__name__}.model_fields")
     fi = model.model_fields[field]
     if not any(isinstance(m, DqDeleted) for m in fi.metadata):
-        raise ValueError(
-            f"Field '{field}' is not marked DqDeleted; --emit-drop is only valid for retired fields"
-        )
+        raise ValueError(f"Field '{field}' is not marked DqDeleted; --emit-drop is only valid for retired fields")
     return f"ALTER TABLE {database}.{table} DROP COLUMN {field}"
 
 
