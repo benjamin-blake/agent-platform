@@ -1537,8 +1537,9 @@ candidate_decisions:
           -- github_ci_pr is athena/iceberg-scoped and cannot read tfstate); apply-the-saved-plan at merge
           (terraform serial-staleness fails closed; stale ⇒ STOP, never silent re-plan).
       (3) High-blast changes (IAM/trust/destroy -- the guard fail-closed set) route to a gated CD apply via a
-          GitHub Environment whose required reviewer gates JOB EXECUTION; the privileged role OIDC trust stays
-          pinned to refs/heads/main (an environment: claim in the OIDC sub is NOT an authorization boundary).
+          GitHub Environment whose required reviewer gates JOB EXECUTION; the privileged role OIDC trust lists
+          BOTH refs/heads/main AND the environment:tf-gated-apply sub (Decision 94 / VP9: declaring the
+          environment overrides the OIDC sub, and the environment sub is approval-gated and safe).
           Eliminates the manual/laptop apply.
       (4) Privilege-tiering: the CI/CD role own IAM moves to a separate terraform/bootstrap/ root applied
           out-of-band, breaking the self-grant cycle (absorbs rec-2079).
@@ -1584,7 +1585,7 @@ candidate_decisions:
       - "Each of T2.20-T2.25 is a standalone IMPLEMENTATION plan (Decision 67 STRATEGIC suspension); none authored STRATEGIC."
       - "Ratified at Wave 1 as Decision 92 (2026-06-19) via the DECISIONS.md-edit + --backfill-decisions-md path, superseding this candidate's pending_log_decision_lambda clause (Decision 84 + Decision 90/91 precedent)."
       - "The Environment reviewer gate is an authorization boundary, not a routine quality gate: post-T2.25 only out-of-budget / trust-policy / destroy changes route to it (in-budget IAM auto-passes under the bootstrap-defined permissions boundary + guard budget). Environment escalation through the future-state platform promotion train is NOT a substitute (it verifies behavior, not authority); subagent review at the gate is advisory, never the lock. (Amended 2026-06-10; detail points 6-9.)"
-    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (OIDC sub pinned to refs/heads/main); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
+    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (github_ci_apply OIDC trust lists refs/heads/main AND environment:tf-gated-apply per Decision 94/VP9); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -4443,10 +4444,12 @@ tier_items:
     intent: |
       Route the guard's fail-closed set (IAM/trust/destroy) to a job declaring a tf-gated-apply GitHub
       Environment with a required reviewer that gates JOB EXECUTION (the job does not start until a human
-      approves). The privileged apply role's OIDC trust stays pinned to refs/heads/main -- an environment:
-      claim in the OIDC sub is NOT an authorization boundary (a known GitHub footgun); the Environment, not the
-      token, gates. Retire the manual/laptop branch-first apply. No job-level environment: precedent exists, so
-      prototype one first. Standalone IMPLEMENTATION plan. V3.
+      approves). The Environment, not the token, is the authorization boundary. [CORRECTED per Decision 94
+      after VP9: the privileged apply role's OIDC trust must trust BOTH refs/heads/main AND the
+      environment:tf-gated-apply sub -- declaring environment: tf-gated-apply makes GitHub override the OIDC
+      sub to the environment claim, so a refs/heads/main-only trust rejects the gated job. The environment
+      sub is approval-gated and safe.] Retire the manual/laptop branch-first apply. No job-level environment:
+      precedent exists, so prototype one first. Standalone IMPLEMENTATION plan. V3.
       [Amended 2026-06-10 per CD.35 detail points 6-9]: the gate's contract is authorization-boundary,
       exception-path. During Waves 3-4 (authority budget not yet defined) it interim-handles the WHOLE
       fail-closed set; after T2.25's budget narrowing it fires ONLY for out-of-budget / trust-policy / destroy
@@ -4457,7 +4460,7 @@ tier_items:
       - terraform/github/environments.tf    # tf-gated-apply Environment resource (github provider)
       - terraform/github/variables.tf    # gated_apply_reviewer_user_ids variable
       - terraform/github/README.md    # runbook: how to pass reviewer var; never-auto-apply reaffirmed
-      - terraform/personal/oidc.tf    # comment-only: trust STAYS refs/heads/main; Environment is the gate
+      - terraform/personal/oidc.tf    # github_ci_apply trust: add environment:tf-gated-apply sub (Decision 94 / VP9 fix)
       - .github/workflows/terraform-apply-sandbox.yml    # route fail-closed plans to the environment-gated job
       - .github/workflows/tf-gated-apply-prototype.yml    # inert gate smoke-test / de-risk prototype
       - AGENTS.md    # Safety: gated-CD-apply replaces manual branch-first for fail-closed subset
@@ -4467,16 +4470,27 @@ tier_items:
     exit_criteria:
       - "An IAM/destroy change auto-routes to the tf-gated-apply Environment and blocks until a reviewer approves, then applies in CD (never from a laptop)"
       - "A non-gated workflow that merely declares environment: tf-gated-apply still cannot bypass the reviewer (verified)"
-      - "The privileged apply role is assumable only from the gated job context; OIDC trust pinned to refs/heads/main"
+      - "The privileged apply role is assumable from the gated job context; OIDC trust lists refs/heads/main AND environment:tf-gated-apply (Decision 94)"
     related_candidate_decisions: [CD.35]
+    related_decisions: [94]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
-    status: in_progress
+    status: complete
+    completed_at: "2026-06-22"
     progress_note: >-
-      2026-06-21: code shipped -- environments.tf, variables.tf, README.md, oidc.tf (comment),
+      2026-06-21: code shipped (PR #212) -- environments.tf, variables.tf, README.md, oidc.tf,
       terraform-apply-sandbox.yml (guard exit-2 routing + gated-apply job), tf-gated-apply-prototype.yml,
-      AGENTS.md, environment-taxonomy.md, terraform/CLAUDE.md, implement SKILL.md all updated; pending
-      V3 post-deploy steps 5-11 (human-gated local terraform/github apply + end-to-end verification).
+      AGENTS.md, environment-taxonomy.md, terraform/CLAUDE.md, implement SKILL.md.
+      2026-06-22: V3 post-deploy VP5-VP11 executed. VP5 (tf-gated-apply Environment) admin-applied +
+      API-verified (required_reviewers prevent_self_review=false, branch policy protected_branches).
+      VP6 prototype job entered waiting (gate confirmed). VP7-VP11 end-to-end found a BLOCKING defect
+      (VP9): the gated-apply job could not assume github_ci_apply because declaring
+      environment: tf-gated-apply overrides the OIDC sub to the environment claim, which the
+      refs/heads/main-only trust rejected. Fixed per Decision 94 (PR #222: trust lists both subs;
+      admin-applied, no-op merge). Re-ran VP7-VP11 (PRs #223/#225): routed green -> reviewer approval
+      -> assume-role success -> saved plan.bin applied verbatim (no re-plan) -> convergence record green
+      with plan_sha (two successful gated applies, apply + revert). VP8 record-untouched-while-pending
+      and VP10 ci-rca-on-failure wiring confirmed. All exit criteria met.
   - id: T2.23
     tier: T2
     name: "Terraform CI/CD: privilege-tiering / bootstrap root for the CI role's own IAM (CD.35 Wave 4)"
