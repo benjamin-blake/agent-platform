@@ -179,13 +179,6 @@ resource "aws_iam_role" "github_ci_pr" {
   name        = "agent-platform-github-ci-pr"
   description = "GitHub Actions CI (read-only): PR context via OIDC"
 
-  # TEMPORARY VP7-VP11 test marker (CD.35 Wave 3 gated-apply end-to-end verification).
-  # A tag-only update to an IAM role triggers the guard's exit-2 fail-closed set, routing
-  # this change to the tf-gated-apply gated CD apply. Reverted immediately after the test.
-  tags = {
-    vp_gated_apply_test = "2026-06-22"
-  }
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
