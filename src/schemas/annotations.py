@@ -1,10 +1,9 @@
 """DQ-as-Annotated-Pydantic marker vocabulary (T0.12, CD.12).
 
-Exactly 7 marker classes are defined here: DqNotNull, DqUnique, DqAcceptedValues,
-DqRelationship, DqRecency, DqRowCount, DqDeleted.
-
-CD.12 ceiling: this vocabulary is closed. Adding an 8th non-DqDeleted marker requires
-a new candidate decision. The test suite enforces the count via introspection.
+Field-level DQ markers (closed at 7, CD.12 ceiling):
+  DqNotNull, DqUnique, DqAcceptedValues, DqRelationship, DqRecency, DqRowCount, DqDeleted.
+Adding an 8th non-DqDeleted marker requires a new candidate decision.
+The test suite enforces the count via introspection.
 
 Marker design: frozen dataclasses (hashable, comparable, repr-informative).
 Use inside typing.Annotated to attach DQ intent to field types:
@@ -13,13 +12,17 @@ Use inside typing.Annotated to attach DQ intent to field types:
 
 Out-of-vocabulary YAML checks (expression, path_syntax, acceptance_lint) have no
 Annotated equivalents by design -- they live in handler code (ops_data_portal.py).
+
+Class-level schema decorators (separate namespace, not counted as DQ markers):
+  migrating(target)  -- coexistence migration window
+  partition_by(spec) -- Iceberg PARTITIONED BY spec (T0.13, CD.9)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Literal
+from typing import Callable, Literal
 
 
 @dataclass(frozen=True)
@@ -97,3 +100,19 @@ def migrating(target: str) -> MigratingMarker:
     divergence.
     """
     return MigratingMarker(target)
+
+
+def partition_by(spec: str) -> Callable[[type], type]:
+    """Return a class decorator that sets cls.__partition_by__ = spec.
+
+    Use as a class decorator on Pydantic models to declare the Iceberg PARTITIONED BY
+    transform spec (e.g. 'day(last_updated_timestamp)'). Required on every Iceberg model
+    per CD.9. This is a class-level schema decorator, not a DQ marker -- the closed 7-marker
+    DQ vocabulary (CD.12) is unaffected.
+    """
+
+    def _decorator(cls: type) -> type:
+        cls.__partition_by__ = spec  # type: ignore[attr-defined]
+        return cls
+
+    return _decorator

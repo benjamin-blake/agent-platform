@@ -14,6 +14,7 @@ from src.schemas.annotations import (
     DqRowCount,
     DqUnique,
     migrating,
+    partition_by,
 )
 
 
@@ -79,3 +80,12 @@ def test_migrating_marker_is_expired_past() -> None:
 def test_migrating_marker_is_not_expired_future() -> None:
     m = migrating(target="9999-12-31")
     assert m.is_expired() is False
+
+
+def test_partition_by_decorator_sets_attr() -> None:
+    @partition_by("day(last_updated_timestamp)")
+    class _Dummy:
+        pass
+
+    assert hasattr(_Dummy, "__partition_by__")
+    assert _Dummy.__partition_by__ == "day(last_updated_timestamp)"
