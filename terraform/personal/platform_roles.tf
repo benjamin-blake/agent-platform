@@ -179,6 +179,20 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           aws_secretsmanager_secret.anthropic_api_key.arn,
         ]
       },
+      {
+        # Broker-credential read for T2.14 / credential-routing contract: the PlatformDev runtime
+        # resolves Alpaca paper + live API keys via scripts/broker_secrets.py::resolve(), which
+        # calls GetSecretValue on the secret_name returned by the routing-key lookup.
+        # ARN-scoped to exactly the two broker secret ARNs (no wildcard) -- mirrors InferenceCredentialsRead.
+        # MANUAL admin-apply required (IAM change, Decision 77 guard fail-closes). # pragma: allowlist secret
+        Sid    = "BrokerCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          aws_secretsmanager_secret.alpaca_paper.arn,
+          aws_secretsmanager_secret.alpaca_live.arn,
+        ]
+      },
     ]
   })
 }
