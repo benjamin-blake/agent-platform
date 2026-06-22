@@ -1,0 +1,188 @@
+schema_version: 1
+slug: "ducklake-append-only-mode"
+intent: >-
+  Add a generic append-only / event-journal write mode to the DuckLake-on-Neon ops runtime. Today every
+  ops table is SCD2 (a _history table plus a _current MERGE-on-merge-key write-through projection); there is
+  no insert-only model anywhere in the codebase. This plan adds a per-table `write_mode: scd2 | append_only`
+  where rows are immutable and append-only: the writer writes ONLY the history table (reusing the existing
+  idempotent MERGE-on-ULID append) and skips the current projection entirely. This is the platform-generic
+  kernel that the (deferred, product-owned) reconciliation use-case exposed: it is reusable by the future
+  ops_reconciliations and ops_trade_events tables (PRODUCT, D.lake.4 / E.env.8) and the telemetry tables,
+  with ZERO trading-domain schema authored here. Toward the North Star, an immutable event substrate is the
+  audit-grade write primitive the self-improving control loop needs for events that must never be mutated.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-append-only-mode.yaml
+phase: >-
+  PLATFORM tier T1.14, RE-SCOPED this session away from its product-entangled framing ("Reconciliation
+  Lambda + ops_reconciliations Class A contract") to the platform-generic append-only write mode it exposed.
+  The reconciliation table + Lambda are handed back to PRODUCT (D.lake.4 ops_reconciliations, E.env.8
+  reconciliation Lambda) as future CONSUMERS of this capability. Maps to next_eligible T1.14 (re-scoped).
+scope:
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      Add a per-table `write_mode: scd2 | append_only` key (default scd2 -- absent means scd2, so all five
+      existing tables are unchanged). Document the two modes + the append-only invariant in the header
+      alongside the CD.33 derivation rules. Register a generic append-only smoke/event table (zero trading
+      content; unique-per-row merge_key) so the V3 smoke-test can exercise the mode without any product schema.
+  - file: src/common/ducklake_scd2_schema.py
+    action: Modify
+    purpose: >-
+      Add `write_mode: str = "scd2"` to ScdTableSpec and make `current_table: str | None` (append-only tables
+      have no current). resolve_table_spec reads write_mode from the ops_tables entry. Add a guard that
+      rejects the append_only + update (require_exists) combination at the schema seam. The existing
+      _build_merge_history_sql is reused unchanged for append-only; _build_merge_current_sql /
+      _build_select_existing_created_sql are simply not invoked on the append-only path.
+  - file: src/common/ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Branch the three write-side functions on spec.write_mode. write_scd2: when append_only, skip the
+      current-projection existing-lookup (line ~610) and the current MERGE (line ~621); created_ts =
+      created_override or identity.timestamp (events are immutable, never carried); loud-fail if
+      require_exists=True. create_scd2_tables: create + partition ONLY the history table. reconcile_table_columns:
+      introspect / ALTER ONLY the history table.
+  - file: tests/test_ducklake_scd2_schema.py
+    action: Modify
+    purpose: >-
+      Unit tests for the pure schema layer: an append_only spec resolves with current_table None and
+      write_mode "append_only"; the SCD2 path still resolves both tables; append_only + require_exists is
+      rejected at the guard.
+  - file: tests/test_ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Runtime tests: an append-only write produces exactly one history row and creates no current table;
+      a retry with the same WriteIdentity de-duplicates to one history row (ULID idempotency); a second
+      distinct write appends a second history row (no collapse, since the event merge_key is unique);
+      append_only + require_exists loud-fails. Plus an SCD2 regression test proving the history+current
+      path is byte-for-byte unchanged.
+  - file: tests/test_ducklake_writer_handler.py
+    action: Modify
+    purpose: >-
+      Handler-level test that an append-only write routed through the writer action path succeeds and writes
+      history only -- the dispatch is unchanged (write_scd2 owns the branch), so this guards the deployed
+      package surface that the V3 smoke exercises.
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Add an append-only probe gate to the V3 smoke driver: write one event to the generic append-only
+      smoke/event table through the deployed writer, then read it back via the ATTACHED Neon catalog (assert
+      one history row, no current table), alongside the existing SCD2 read-your-write gate. The driver is not
+      a Lambda asset, so this adds no deploy target.
+  - file: docs/contracts/storage-substrate.yaml
+    action: Modify
+    purpose: >-
+      Document append-only as a machine-parseable substrate property (write_mode) for the index, recording
+      the invariant: history is the table, there is no current projection, reads use the history path, rows
+      are write-once. Per Decision 86 the semantics live in config/contracts, not a prose doc.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-scope T1.14 title / intent / exit_criteria to "DuckLake append-only (event-journal) write mode";
+      REMOVE the "absorbs GAP-reconciliation-lambda from ROADMAP-PRODUCT" claim; record the DuckLake substrate
+      and that append-only is the platform enabler the product reconciliation/trade-event tables consume.
+  - file: docs/ROADMAP-PRODUCT.yaml
+    action: Modify
+    purpose: >-
+      Re-home the reconciliation data contract + Lambda to PRODUCT ownership (D.lake.4 ops_reconciliations,
+      E.env.8 reconciliation Lambda) as CONSUMERS of the platform append-only mode; restore the concern
+      separation that T1.14 had crossed. Guardrail (Decision 93): the dependency points product -> platform,
+      never platform -> deferred product item.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    agent-platform-ducklake-writer Lambda (manifest status: active) + the Neon DuckLake catalog, reachable via
+    the agent_platform assume-role profile -- required for the V3 deploy + post-deploy smoke gate.
+acceptance_criteria:
+  - "field_semantics.yaml supports a per-table `write_mode` (default scd2); an append_only entry is schema-valid with no current_table, and all five existing SCD2 tables resolve identically to today (write_mode defaults to scd2)."
+  - "write_scd2 on an append_only table writes exactly one history row, creates/touches no current table, and is ULID-idempotent: a retry with the same WriteIdentity yields one history row; a second distinct event yields a second history row (no latest-per-key collapse)."
+  - "create_scd2_tables on an append_only table creates and partitions only the history table; reconcile_table_columns introspects/ALTERs only history."
+  - "append_only + require_exists=True (the update path) loud-fails (Decision 55); append-only rows have no update/close lifecycle (Decision 70)."
+  - "The SCD2 path (ops_recommendations / ops_decisions) is provably unchanged: the regression unit test passes and the smoke read-your-write SCD2 gate is green."
+  - "Decision 79 V3: the affected DuckLake artifacts (writer + any artifact bundling the changed field_semantics.yaml / ducklake_runtime.py / ducklake_scd2_schema.py shared assets) are rebuilt, deployed, and smoke-tested; the smoke exercises an append-only write+read on the generic smoke table AND an SCD2 write."
+  - "ducklake_reader is behaviorally unchanged (no new verb; append-only reads use the existing history path) but is resynced if it bundles the shared assets -- no reader logic edit."
+  - "Append-only tables (no current projection) do not break table-iterating consumers: the maintenance compaction/GC sweep, sync_ops pull, and the validate.py drift checks either skip the generic smoke/event table or tolerate write_mode without assuming a current table."
+  - "ROADMAP-PLATFORM T1.14 re-scoped to the append-only mode (no reconciliation absorption); reconciliation re-homed to ROADMAP-PRODUCT D.lake.4 / E.env.8; both roadmaps validate against their Pydantic schemas."
+  - "Full presubmit (bin/venv-python -m scripts.validate) passes, including the plan-document, contract-drift, and roadmap schema gates."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Pure schema-layer + runtime + handler unit tests pass (append-only write-once, ULID-idempotent, current skipped, append_only+update loud-fail, SCD2 regression intact).
+    command: "bin/venv-python -m pytest tests/test_ducklake_scd2_schema.py tests/test_ducklake_runtime.py tests/test_ducklake_writer_handler.py -q"
+    expected: "All tests pass; the new append-only tests and the SCD2 regression test are green."
+    fix_if: "A failure in the append-only tests means the write_scd2 / create_scd2_tables / reconcile_table_columns branch is wrong; a failure in the SCD2 regression means the branch leaked into the default path -- isolate the append_only guard so the scd2 path is untouched."
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the changed files are Lambda-packaged and identify the affected DuckLake artifacts (Decision 79).
+    command: "bin/venv-python -m scripts.lambda_manifest --list-patterns"
+    expected: "field_semantics.yaml, src/common/ducklake_runtime.py and src/common/ducklake_scd2_schema.py appear among the Lambda file patterns, confirming a writer (and any shared-asset reader) rebuild is required."
+    fix_if: "If a changed file is absent from the patterns, the manifest asset list is stale -- reconcile src/lambdas/ducklake_writer/manifest.yaml before deploying."
+  - step: 3
+    phase: pre-deploy
+    action: Platform roadmap validates after the T1.14 re-scope.
+    command: "bin/venv-python -m scripts.platform_roadmap"
+    expected: "Prints PASS: docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema."
+    fix_if: "A schema/unknown-key error indicates a malformed T1.14 edit; fix the offending key. A cross-roadmap resolution error indicates a dangling reconciliation reference -- ensure the consumer link resolves to a real PRODUCT item."
+  - step: 4
+    phase: pre-deploy
+    action: Full presubmit passes (plan-document, contract-drift CD.25, product+platform roadmap, lint/format, unit tests).
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit code 0; all gates PASS."
+    fix_if: "Address the specific gate that fails; do not relax a gate to pass (Decision 55)."
+  - step: 5
+    phase: deploy
+    action: Build + deploy the affected DuckLake Lambda artifacts (Decision 79 per-Lambda gating; --ducklake-only scopes the deploy to the DuckLake functions and leaves data-pipeline/ops-compaction untouched).
+    command: "bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform"
+    expected: "The DuckLake artifacts build under the size limit, upload to S3, and the function code updates succeed for the writer (and reader, which shares the field_semantics + ducklake_runtime assets)."
+    fix_if: "A size-limit rejection means an asset bloated the bundle -- inspect with --list-bundle ducklake_writer. A deploy auth error means the agent_platform assume-role chain lapsed -- re-verify with aws sts get-caller-identity --profile agent_platform."
+  - step: 6
+    phase: post-deploy
+    action: Smoke-test the DEPLOYED writer -- append-only write+read on the generic smoke/event table AND an SCD2 read-your-write, against the live Neon catalog.
+    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --attach"
+    expected: "All Lambda gates pass, including the new append-only probe (one history row written + read back, no current table) and the existing SCD2 read-your-write gate."
+    fix_if: "An append-only gate failure is a stop-and-RCA signal (Decision 55) -- do NOT relax the gate. An SCD2 gate regression means the append_only branch leaked into the default path; revert the deploy (rollback) and re-isolate the branch before redeploying."
+constraints:
+  - "V3: ducklake_writer is an active Lambda artifact; per Decision 79 the plan MUST build + deploy + smoke-test it. No code lands without the deploy + smoke gate."
+  - "ZERO trading-domain schema is authored. The smoke/event table is generic platform scaffolding (no broker/position/fill columns). ops_reconciliations and ops_trade_events are PRODUCT-owned consumers, authored in a later PRODUCT plan."
+  - "append-only is additive and backward-compatible: write_mode defaults to scd2, so the five existing tables (ops_recommendations/decisions/priority_queue/session_log/execution_plans) are byte-for-byte unchanged. No data migration."
+  - "ducklake_reader logic is NOT edited. Append-only reads use the existing history read path; a latest-per-key reader verb is an explicit deferred follow-on (unneeded -- an event journal's merge_key is unique per row). The reader is only redeployed insofar as it bundles the shared field_semantics / runtime assets."
+  - "append-only rows are write-once: no update, no close, no SCD2 effective-dating. append_only + require_exists loud-fails (Decision 55). This is a documented exception to the CD.33 history+current invariant, not a violation."
+  - "Writer boundary preserved (Decision 84): writes transit ducklake_writer (I-2 writer-owned id allocation works mode-agnostically); reads stay inside the structural/named read boundary (I-3). No caller SQL crosses the boundary; no re-stage from any local read cache."
+  - "STRATEGIC plan-type is frozen (AGENTS.md / Decision 67); this is a single larger IMPLEMENTATION plan, which the suspended >5-file / >8-step complexity heuristic explicitly permits."
+  - "Roadmap edits (T1.14 re-scope + reconciliation re-home) are the sole-exception roadmap-authoring permitted in a planning session; the implementation itself is performed in /implement, not here."
+context:
+  - "WHY re-scoped: T1.14 sat in ROADMAP-PLATFORM but its content (broker positions/fills vs expected cache state, discrepancy detail, 30-min trading-session cadence) is trading-execution PRODUCT data -- it is specified in ROADMAP-PRODUCT.yaml as D.lake.4 (ops_reconciliations, owning_layer: execution) and E.env.8 (reconciliation Lambda). T1.14's intent reached across the line via 'absorbs GAP-reconciliation-lambda'. The human directed: separate concerns, keep the platform session to the generic substrate the use-case exposed. The genuinely-platform kernel is the append-only write mode (the runtime has no insert-only model); the SCD2-only assumption is what the reconciliation event journal could not fit."
+  - "Design confirmed against the code (not inferred): write_scd2 (ducklake_runtime.py:549-653) builds history+current MERGE SQL at :594-595 and executes both at :620-621 with a current-table existing-lookup at :610. Append-only skips :610 + :621 and reuses _build_merge_history_sql (the MERGE-on-ULID idempotent append, ducklake_scd2_schema.py:213) unchanged. create_scd2_tables (:454-481) creates both tables; append-only creates only history. reconcile_table_columns (:484-529) introspects both; append-only introspects only history. NAMED_READS (ducklake_scd2_schema.py:285-377) all target the current projection {tbl}; append-only registers none and is read via history."
+  - "There is NO existing per-table mode/strategy/write_mode/append concept in field_semantics.yaml (the ops_priority_queue `mode` key is a business COLUMN, not a write strategy). write_mode is a new, additive cross-cutting key."
+  - "Decision-scout: the formal subagent gate could not complete this session (the subagent returned a Claude.ai monthly spend-limit error, an infra condition, not a content verdict). An inline decision scan was performed against the same decision set and is recorded below; re-run the formal decision-scout once the limit is lifted, before /implement commits code. The PRIOR scout pass on the (now-superseded) contract-ratification framing returned NO_FLAGS."
+  - "Inline decision scan (CITE): Decision 81 / CD.33 (this EXTENDS the DuckLake SCD2 runtime; append-only is a documented exception to history+current and the cl.8/D-5 referential gate is N/A since there are no updates); Decision 84 (writer-boundary writes I-2, structural/named reads I-3, no re-stage-from-cache); Decision 79 (per-Lambda V3 build/deploy/smoke for the active writer); Decision 48 (V3 tier -- active-Lambda deploy in scope); Decision 93 (re-homing reconciliation to the deferred D.lake.4 is safe -- dependency points product -> platform, never platform -> deferred); Decision 86 (write_mode semantics live in field_semantics / storage-substrate config, not a prose doc); Decision 70 + Decision 55 (write-once lifecycle, loud-fail on update attempt). No hard contradictions surfaced."
+  - "Deploy honesty (Decision 79 affected-artifact hygiene): field_semantics.yaml and the two src/common modules are SHARED assets the reader also bundles/imports, so the reader is an affected artifact resynced on deploy even though its behavior is unchanged. --ducklake-only deploys writer+reader+maintenance+catalog-dr; the latter two are no-op rebuilds from unchanged source. Confirm the exact affected set with compute_affected_artifacts(changed_files) during /implement."
+  - "Latent consumers (NOT authored here): ops_reconciliations (PRODUCT D.lake.4), ops_trade_events (PRODUCT D.lake.4), and the seven telemetry_* tables -- each is an event stream that wants insert-only semantics. This plan is the enabling substrate; each consumer is its own later plan."
+  - "Inline plan-critique findings folded in (the formal plan-critique subagent gate is deferred -- same spend limit as the scout): (a) the smoke read-back is a DIRECT attached-catalog query in the driver, not a reader-Lambda call, which is what lets 'no reader change' hold for v1; a consumer-facing append-only read verb (latest-per-key or history-scan) is an explicit deferred follow-on. (b) RISK to check in /implement: code that iterates ops_table_names() assuming a current table (maintenance compaction/GC, sync_ops pull, validate drift) must tolerate an append-only table -- prefer keeping the generic smoke/event table out of the live SCD2 iteration via status gating or a dedicated smoke path. (c) On the T1.14 re-scope, verify no other tier_item depends_on T1.14 for reconciliation, and revisit whether the CD.16 deploy-gate annotation still applies now that the deploy is a normal writer redeploy, not a reconciliation deploy."
+  - "Spend-limit operational note: this session is running against a Claude.ai monthly spend limit (it stopped the scout subagent). The plan-critique gate (also a subagent) may not run until the limit is raised; if so, perform the critique inline or defer it to a follow-up before /implement."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/laughing-davinci-6stmvt)."
+  - "docs/PROJECT_CONTEXT.md read for AWS profile + writer/reader boundary context."
+  - "Decision alignment via inline scan (formal decision-scout deferred -- spend limit; re-run before code commit)."
+  - "All nine scope files located, readable, and (for the YAML surfaces) schema-valid before edit."
+  - "Affected DuckLake artifacts computed via scripts.lambda_manifest (--list-patterns / compute_affected_artifacts) before the deploy step."
+  - "agent_platform assume-role chain verified reachable for the deploy + smoke gates (session-start hook OK this session)."
+execution_steps:
+  - "Extend the pure schema layer (src/common/ducklake_scd2_schema.py): add `write_mode: str = \"scd2\"` to ScdTableSpec, make `current_table: str | None = None`, have resolve_table_spec read `spec.get(\"write_mode\", \"scd2\")`, and add a guard that rejects append_only + require_exists. Do not touch _build_merge_history_sql (reused as-is)."
+  - "Branch write_scd2 (src/common/ducklake_runtime.py): when spec.write_mode == 'append_only', skip the current-table existing-lookup and the current MERGE; set created_ts = created_override or identity.timestamp; loud-fail if require_exists is True. Leave the SCD2 path byte-for-byte unchanged."
+  - "Branch create_scd2_tables and reconcile_table_columns (src/common/ducklake_runtime.py): for append_only, create/partition and introspect/ALTER ONLY the history table; never reference current_table."
+  - "Register a generic append-only smoke/event table in config/lambda/ducklake/field_semantics.yaml (write_mode: append_only, unique-per-row merge_key, minimal non-trading columns) and document the two write modes + the append-only invariant in the header."
+  - "Add unit tests: test_ducklake_scd2_schema.py (append_only spec resolves, current_table None, guard rejects update); test_ducklake_runtime.py (one history row, no current, ULID-idempotent retry, second event appends, append_only+require_exists loud-fails, SCD2 regression); test_ducklake_writer_handler.py (append-only write through the writer action)."
+  - "Add the append-only probe gate to scripts/ducklake_neon_smoke_test.py: write one event to the generic append-only smoke/event table and read it back via the attached Neon catalog (assert one history row, no current), beside the existing SCD2 read-your-write gate."
+  - "Document the append-only substrate property + invariant in docs/contracts/storage-substrate.yaml (machine-parseable, Decision 86)."
+  - "Re-ground the roadmaps: re-scope docs/ROADMAP-PLATFORM.yaml T1.14 to the append-only mode and drop the reconciliation absorption; re-home reconciliation to docs/ROADMAP-PRODUCT.yaml D.lake.4 / E.env.8 as consumers (Decision 93 dependency direction)."
+  - "Run the pre-deploy verification (unit tests, lambda_manifest patterns, platform_roadmap, full presubmit); fix to green."
+  - "Compute the affected DuckLake artifacts (scripts.lambda_manifest), then build + deploy via build_lambda --ducklake-only --deploy --profile agent_platform (Decision 79)."
+  - "Run the post-deploy smoke (ducklake_neon_smoke_test --attach) covering the append-only probe + the SCD2 read-your-write gate; a failure is stop-and-RCA (Decision 55)."
+rollback: >-
+  Code/config/test edits and the two roadmap edits revert as a single git revert (the append-only path is
+  additive and no existing table sets write_mode: append_only, so reverting cannot affect any SCD2 table or
+  its data). Because the deploy is in-scope, a rollback after step 5 also redeploys the previous green
+  DuckLake package (bin/venv-python -m scripts.build_lambda --ducklake-only --deploy from the prior commit)
+  to restore the deployed writer/reader artifacts. The generic smoke/event table, if created, is throwaway
+  platform scaffolding and can be dropped via the maintenance force-recreate guard.
