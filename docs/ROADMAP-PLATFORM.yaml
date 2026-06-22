@@ -4006,8 +4006,11 @@ tier_items:
     depends_on: [T2.1]
     files_in_scope:
       - terraform/personal/secrets_manager_brokers.tf    # path corrected from terraform/secrets_manager_brokers.tf -- work-root retired per CD.21; terraform/personal/ is the applied module
+      - terraform/personal/platform_roles.tf
+      - terraform/personal/oidc.tf
       - docs/contracts/credential-routing.yaml
       - scripts/broker_secrets.py
+      - scripts/validate.py
     exit_criteria:
       - "Secrets Manager entries for Alpaca live + paper provisioned via Terraform"
       - "credential-routing.yaml ratified at contract_version: 1"
@@ -4022,16 +4025,14 @@ tier_items:
       Phase 1 (Class C contract) complete 2026-06-21: docs/contracts/credential-routing.yaml
       ratified at contract_version 1 via the Step 10 multi-perspective critique
       (PLAN-broker-credential-routing). Satisfies exit criteria 2 (contract ratified) and 4
-      (Step 10 converges). REMAINING (codegen follow-on -- a named IMPLEMENTATION plan that
-      consumes the ratified contract per CD.25 pre-codegen ordering): exit criterion 1 (Secrets
-      Manager envelopes for Alpaca paper + live provisioned via
-      terraform/personal/secrets_manager_brokers.tf, values out-of-band per Decision 37,
-      ARN-scoped IAM read added to platform_roles.tf -- the IAM statement fail-closes the apply
-      guard so that plan is human-gated) and exit criterion 3 (scripts/broker_secrets.py resolves
-      credentials by routing key; no direct env-var fallback). Vocabulary re-grounded (Decision
-      77): broker paper / live are product-phase / account-type selectors, not platform
-      environments. NOTE: final T2.14 completion is additionally gated on CD.25 ratification
-      (this item is bootstrap_completion_exempt: false), independent of the codegen follow-on.
+      (Step 10 converges). Phase 2 (codegen, PLAN-broker-credential-codegen, 2026-06-22):
+      exit criterion 1 pending admin apply (secrets_manager_brokers.tf defines both secret
+      envelopes; platform_roles.tf BrokerCredentialsRead + oidc.tf
+      SecretsManagerBrokerCredentialsRead added, IAM changes require agent_platform_admin
+      apply). Exit criterion 3 delivered: scripts/broker_secrets.py resolves by routing key;
+      validate.py validate_broker_env_reads guard rejects direct broker-API-key env reads in
+      src/ and scripts/. Completion remains gated on CD.25 ratification
+      (bootstrap_completion_exempt: false) AND admin apply of the IAM changes.
 
   - id: T2.15
     tier: T2

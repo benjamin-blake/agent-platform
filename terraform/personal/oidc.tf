@@ -670,6 +670,23 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # Broker credential envelopes (Alpaca paper + live) -- plan + apply time refresh-read so the
+        # apply role can DescribeSecret and GetSecretValue these during the provider refresh walk for
+        # secrets_manager_brokers.tf (T2.14). Mirrors SecretsManagerInferenceCredentialsRead.
+        # Wildcard suffix on the ARN suffix (AWS appends a random 6-char suffix; no-suffix form
+        # matches only the exact name which breaks after the first rotation). Read-only -- the apply
+        # role never writes broker secret VALUES (Decision 37 out-of-band; values set by human via
+        # put-secret-value). Closes the iterative-discovery gap for the new broker secret resources
+        # (rec-2302 root cause: CI plan refresh fails AccessDenied on any new secret until a
+        # matching Describe*/Get* grant is added ahead of the first plan run).
+        Sid    = "SecretsManagerBrokerCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-*",
+        ]
+      },
+      {
         # Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
         # logs:Describe*/List* on * closes the iterative-discovery anti-pattern for CloudWatch Logs
         # refresh reads. Resource: "*" required (logs:DescribeLogGroups has no resource-level scoping).
@@ -1166,6 +1183,18 @@ resource "aws_iam_role_policy" "github_ci_plan" {
         Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-anthropic-api-key-*",
+        ]
+      },
+      {
+        # Broker credential envelopes (Alpaca paper + live) -- plan-time refresh-read so the
+        # speculative-plan job can DescribeSecret these during the provider refresh walk for
+        # secrets_manager_brokers.tf (T2.14). Mirrors github_ci_apply's
+        # SecretsManagerBrokerCredentialsRead. Read-only; values are out-of-band (Decision 37).
+        Sid    = "SecretsManagerBrokerCredentialsRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-*",
         ]
       }
     ]
