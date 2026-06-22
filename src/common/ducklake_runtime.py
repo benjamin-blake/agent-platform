@@ -925,6 +925,12 @@ def read_current(
     against the wrong column returned a silent false zero). `limit` bounds the row count.
     """
     spec = resolve_table_spec(table)
+    if spec.current_table is None:
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} is append_only: read_current is not supported "
+            "(write_mode=append_only has no current write-through projection; "
+            "read from the history table via read_history() instead)"
+        )
     cols = ", ".join(c for c, _ in spec.ordered_columns)
     sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table}"
     filter_value = key if key is not None else rec_id
@@ -1018,6 +1024,11 @@ def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[A
     """
     assert_read_only_sql(sql)
     spec = resolve_table_spec(table)
+    if spec.current_table is None:
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} is append_only: query_current is not supported "
+            "(write_mode=append_only has no current write-through projection)"
+        )
     final_sql = sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}")
     cursor = con.execute(final_sql, list(params)) if params else con.execute(final_sql)
     col_names = [desc[0] for desc in cursor.description]

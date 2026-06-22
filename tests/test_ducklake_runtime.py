@@ -1264,3 +1264,86 @@ def test_create_scd2_tables_append_only_force_recreate_single_drop():
     assert len(drops) == 1
     assert "ops_smoke_events_history" in drops[0]
     assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+
+
+# H1: read_current / query_current guard for append_only tables
+
+
+def test_read_current_append_only_raises():
+    """read_current loud-fails for append_only tables (no current write-through projection, Decision 55)."""
+    con = FakeCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="append_only"):
+        rt.read_current(con, table="ops_smoke_events")
+
+
+def test_query_current_append_only_raises():
+    """query_current loud-fails for append_only tables (no current write-through projection)."""
+    con = FakeCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="append_only"):
+        rt.query_current(con, table="ops_smoke_events", sql="SELECT {tbl}.ulid FROM {tbl}")
+
+
+# H2: ULID idempotency + second distinct event append
+
+
+def test_write_scd2_append_only_ulid_idempotency():
+    """Retrying write_scd2 with the same WriteIdentity produces identical ULID in both MERGEs.
+    DuckLake MERGE-on-ULID (WHEN NOT MATCHED only) makes the second MERGE a no-op -- one row."""
+    fixed_identity = rt.mint_write_identity(now=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    con1, con2 = FakeCon(), FakeCon()
+    rt.write_scd2(
+        con1,
+        {"event_id": "ev-idem", "event_type": "t"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+        identity=fixed_identity,
+    )
+    rt.write_scd2(
+        con2,
+        {"event_id": "ev-idem", "event_type": "t"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+        identity=fixed_identity,
+    )
+
+    def _merge_ulid(con: FakeCon) -> str | None:
+        for sql, params in con.executed:
+            if sql.startswith("MERGE INTO") and "ops_smoke_events_history" in sql:
+                return params[0] if params else None  # ulid is ordered first in _write_params
+        return None
+
+    assert _merge_ulid(con1) == _merge_ulid(con2) == fixed_identity.ulid
+
+
+def test_write_scd2_append_only_second_distinct_event_appends():
+    """Two distinct event_ids each generate a separate history MERGE; neither collapses into the other."""
+    con = FakeCon()
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-first", "event_type": "a"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-second", "event_type": "b"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    history_merges = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO") and "_history" in sql]
+    current_merges = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO") and "_current" in sql]
+    assert len(history_merges) == 2, f"expected 2 history MERGEs; got {len(history_merges)}"
+    assert len(current_merges) == 0, "append_only: no current write-through MERGE"
+
+
+# H3: reconcile_table_columns skips current table for append_only
+
+
+def test_reconcile_table_columns_append_only_history_only():
+    """reconcile_table_columns for append_only tables issues ALTER TABLE only on history; added_current is empty."""
+    con = FakeCon()
+    result = rt.reconcile_table_columns(con, table="ops_smoke_events")
+    alters = [sql for sql, _ in con.executed if sql.startswith("ALTER TABLE") and "ADD COLUMN" in sql]
+    assert all("_history" in sql for sql in alters), f"All ALTERs must target history table; got: {alters}"
+    assert not any("_current" in sql for sql in alters), "No ALTER should target a current table"
+    assert result["added_current"] == [], "added_current must be empty for append_only tables"

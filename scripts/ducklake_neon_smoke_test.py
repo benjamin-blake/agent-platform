@@ -963,14 +963,16 @@ def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> N
 def lambda_append_only(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """T1.14 VP gate: append-only write mode -- fully Lambda-mediated (no direct Neon egress required).
 
-    Three assertions, all via SigV4 invocations to the writer Lambda:
+    Four assertions (writer + reader Lambda; no direct Neon port-5432 egress needed from CC-web):
     1. create_ops_tables reports tables=[history, None] -- no current_table in the ScdTableSpec.
     2. write_ops on ops_smoke_events succeeds (ok=True, ulid minted) -- history MERGE fired.
+    2b. read_ops_history confirms one history row written (plan acceptance: 'one history row read back').
     3. update_ops returns AppendOnlyUpdateError (5xx) -- write-once enforcement (Decision 70).
     """
     import uuid  # noqa: PLC0415
 
     writer_url = _function_url("writer")
+    reader_url = _function_url("reader")
     table = "ops_smoke_events"
 
     # Assertion 1: create_ops_tables reports tables=[history, None] (no current projection).
@@ -995,6 +997,21 @@ def lambda_append_only(*, profile: str | None = None, region: str = "eu-west-2")
     if not write_body.get("ok") or not write_body.get("ulid"):
         raise SmokeTestFailure(f"LAMBDA_APPEND_ONLY FAIL (assert 2): write_ops returned ok=False or no ulid: {write_body}")
 
+    # Assertion 2b: read_ops_history confirms exactly one row in ops_smoke_events_history (plan: 'one history row read back').
+    read_body = _ok_json(
+        _sigv4_invoke(
+            reader_url,
+            {"action": "read_ops_history", "table": table, "key": event_id},
+            profile=profile,
+            region=region,
+        )
+    )
+    if read_body.get("row_count", 0) != 1:
+        raise SmokeTestFailure(
+            f"LAMBDA_APPEND_ONLY FAIL (assert 2b read-back): expected row_count=1 in "
+            f"ops_smoke_events_history for event_id={event_id!r}, got: {read_body}"
+        )
+
     # Assertion 3: update_ops loud-fails with AppendOnlyUpdateError (write-once, Decision 70).
     guard_resp = _sigv4_invoke(
         writer_url,
@@ -1010,7 +1027,7 @@ def lambda_append_only(*, profile: str | None = None, region: str = "eu-west-2")
 
     print(
         f"LAMBDA_APPEND_ONLY OK no_current_table=true write_ops=ok ulid={write_body.get('ulid')!r} "
-        f"append_only_guard=raised event_id={event_id}"
+        f"read_back=1_row append_only_guard=raised event_id={event_id}"
     )
 
 
