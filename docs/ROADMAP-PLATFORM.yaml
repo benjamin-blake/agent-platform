@@ -3965,24 +3965,38 @@ tier_items:
       INFRASTRUCTURE + Class C contract. Stand up the Secrets Manager surface in
       the personal account for broker credentials (Alpaca live + paper, plus
       future brokers). Land docs/contracts/credential-routing.yaml as the Class C
-      cross-system invariant governing which secret key maps to which broker /
-      environment / Lambda. Absorbs GAP-broker-secrets-manager from
+      cross-system invariant governing which secret maps to which broker /
+      account-type / Lambda. Absorbs GAP-broker-secrets-manager from
       ROADMAP-PRODUCT.yaml; PRODUCT layer items L3.exec.4/5 depend on this.
     depends_on: [T2.1]
     files_in_scope:
-      - terraform/secrets_manager_brokers.tf
+      - terraform/personal/secrets_manager_brokers.tf    # path corrected from terraform/secrets_manager_brokers.tf -- work-root retired per CD.21; terraform/personal/ is the applied module
       - docs/contracts/credential-routing.yaml
       - scripts/broker_secrets.py
     exit_criteria:
       - "Secrets Manager entries for Alpaca live + paper provisioned via Terraform"
       - "credential-routing.yaml ratified at contract_version: 1"
-      - "Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks"
+      - "Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks, enforced by a scripts/validate.py CI guard that rejects direct broker-API-key env reads in src/ and scripts/"
       - "Step 10 multi-perspective critique converges"
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
-    status: not_started
+    status: in_progress
+    progress_note: |
+      Phase 1 (Class C contract) complete 2026-06-21: docs/contracts/credential-routing.yaml
+      ratified at contract_version 1 via the Step 10 multi-perspective critique
+      (PLAN-broker-credential-routing). Satisfies exit criteria 2 (contract ratified) and 4
+      (Step 10 converges). REMAINING (codegen follow-on -- a named IMPLEMENTATION plan that
+      consumes the ratified contract per CD.25 pre-codegen ordering): exit criterion 1 (Secrets
+      Manager envelopes for Alpaca paper + live provisioned via
+      terraform/personal/secrets_manager_brokers.tf, values out-of-band per Decision 37,
+      ARN-scoped IAM read added to platform_roles.tf -- the IAM statement fail-closes the apply
+      guard so that plan is human-gated) and exit criterion 3 (scripts/broker_secrets.py resolves
+      credentials by routing key; no direct env-var fallback). Vocabulary re-grounded (Decision
+      77): broker paper / live are product-phase / account-type selectors, not platform
+      environments. NOTE: final T2.14 completion is additionally gated on CD.25 ratification
+      (this item is bootstrap_completion_exempt: false), independent of the codegen follow-on.
 
   - id: T2.15
     tier: T2
