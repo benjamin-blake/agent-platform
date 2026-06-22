@@ -792,12 +792,13 @@ def test_create_scd2_tables_ops_ddl_has_real_types(monkeypatch):
     assert any("bucket(8, id)" in s for s in alters)
 
 
-def test_ops_table_names_lists_all_five():
+def test_ops_table_names_lists_all_six():
     names = rt.ops_table_names()
     assert "ops_recommendations" in names
     assert "ops_decisions" in names
     assert "ops_priority_queue" in names
-    assert len(names) == 5
+    assert "ops_smoke_events" in names
+    assert len(names) == 6
 
 
 def test_read_current_ops_table_projects_and_filters():
@@ -1176,3 +1177,90 @@ def test_read_current_binds_named_column():
     sql, params = con.executed[0]
     assert "WHERE status = ?" in sql
     assert params == ["open"]
+
+
+# ---------------------------------------------------------------------------
+# append_only write mode -- runtime-layer tests
+# ---------------------------------------------------------------------------
+
+_APPEND_ONLY_RT_SEMANTICS: dict = {
+    "fields": {
+        "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+        "rec_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+        "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+        "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+    },
+    "ops_tables": {
+        "ops_smoke_events": {
+            "write_mode": "append_only",
+            "status": "smoke",
+            "merge_key": "event_id",
+            "history_table": "ops_smoke_events_history",
+            "partition": {"history": "day(created_timestamp)"},
+            "columns": {
+                "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+                "event_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+                "event_type": {"role": "input", "sql_type": "VARCHAR", "nullable": True},
+                "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+                "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+            },
+        }
+    },
+}
+
+
+def test_write_scd2_append_only_skips_current_merge():
+    """append_only write issues history MERGE only; no current write-through MERGE or SELECT existing."""
+    con = FakeCon()
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-001", "event_type": "smoke"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    sql_stmts = [sql for sql, _ in con.executed]
+    assert any("ops_smoke_events_history" in s and s.startswith("MERGE INTO") for s in sql_stmts)
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+    # No SELECT created_timestamp (no existing-row lookup on append_only path)
+    assert not any(s.startswith("SELECT created_timestamp") for s in sql_stmts)
+
+
+def test_write_scd2_append_only_require_exists_raises():
+    """write_scd2 with require_exists=True on an append_only table raises AppendOnlyUpdateError before SQL."""
+    con = FakeCon()
+    with pytest.raises(rt.AppendOnlyUpdateError, match="append_only"):
+        rt.write_scd2(
+            con,
+            {"event_id": "ev-002", "event_type": "smoke"},
+            table="ops_smoke_events",
+            semantics=_APPEND_ONLY_RT_SEMANTICS,
+            require_exists=True,
+        )
+    # Guard fires before any catalog work
+    executed_sql = [sql for sql, _ in con.executed]
+    assert not any(s.startswith("BEGIN") for s in executed_sql)
+
+
+def test_create_scd2_tables_append_only_single_table():
+    """create_scd2_tables for an append_only table creates only the history table."""
+    con = FakeCon()
+    rt.create_scd2_tables(con, table="ops_smoke_events")
+    sql_stmts = [sql for sql, _ in con.executed]
+    creates = [s for s in sql_stmts if s.startswith("CREATE TABLE")]
+    alters = [s for s in sql_stmts if "SET PARTITIONED BY" in s]
+    assert len(creates) == 1
+    assert "ops_smoke_events_history" in creates[0]
+    assert len(alters) == 1
+    assert "ops_smoke_events_history" in alters[0]
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+
+
+def test_create_scd2_tables_append_only_force_recreate_single_drop():
+    """force_recreate on an append_only table drops only the history table."""
+    con = FakeCon()
+    rt.create_scd2_tables(con, table="ops_smoke_events", force_recreate=True)
+    sql_stmts = [sql for sql, _ in con.executed]
+    drops = [s for s in sql_stmts if s.startswith("DROP TABLE")]
+    assert len(drops) == 1
+    assert "ops_smoke_events_history" in drops[0]
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)

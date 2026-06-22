@@ -3506,37 +3506,55 @@ tier_items:
 
   - id: T1.14
     tier: T1
-    name: Reconciliation Lambda + ops_reconciliations Class A contract (gated on CD.16)
+    name: DuckLake append-only (event-journal) write mode
     intent: |
-      IMPLEMENTATION + ratification. Reconciliation Lambda that compares broker
-      positions/fills against the platform's expected state and emits a typed
-      ops_reconciliations record per cycle. Lands the corresponding Class A
-      contract (ops_reconciliations.yaml) under the CD.25 ritual and the
-      Class B Lambda verb contract under T1.12. Gated on CD.16 ratification
-      because deploy is in-scope. Absorbs GAP-reconciliation-lambda from
-      ROADMAP-PRODUCT.yaml; the PRODUCT consumer is E.env.8 (consumer list
-      corrected 2026-06-09, audit F-023/E-002: L3.exec.4/5 actually depend on
-      sibling T2.14, and L3.exec.6 on neither -- the prior claim conflated the
-      two absorbers' consumers).
-    depends_on: [T0.6, T0.12.5]
+      IMPLEMENTATION. Add a generic append-only / event-journal write mode to the
+      DuckLake-on-Neon ops runtime. Per-table write_mode: scd2 | append_only in
+      field_semantics.yaml; append_only tables write ONLY the history table (ULID-
+      idempotent MERGE-on-ULID append) and skip the current write-through projection
+      entirely (ScdTableSpec.current_table=None). AppendOnlyUpdateError (Decision 70
+      write-once lifecycle) loud-fails require_exists=True before any catalog work.
+      New ops_smoke_events table exercises the kernel. Supersedes the prior
+      Reconciliation Lambda scope (re-scoped 2026-06-22; reconciliation deferred to
+      a successor item once the append-only kernel is proven). The product dependency
+      chain (GAP-reconciliation-lambda / E.env.8 / D.lake.4) retains its own
+      ROADMAP-PRODUCT.yaml entries noting the platform dependency on this item.
+    depends_on: [T0.6]
     decision_required_before:
       - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
     files_in_scope:
-      - docs/contracts/ops_reconciliations.yaml
-      - docs/contracts/lambda-reconciliation.yaml
-      - src/lambdas/reconciliation/handler.py
-      - src/lambdas/reconciliation/manifest.yaml    # CD.24 per-Lambda manifest (zip packaging; vestigial Dockerfile entry removed 2026-06-09 per audit F-008/D-002)
-      - terraform/personal/lambda_reconciliation.tf    # active module is terraform/personal/
+      - src/common/ducklake_scd2_schema.py
+      - src/common/ducklake_runtime.py
+      - config/lambda/ducklake/field_semantics.static.yaml    # sidecar (T2.33): ops_smoke_events authored under smoke_ops_tables
+      - config/lambda/ducklake/field_semantics.yaml    # GENERATED (T2.33) -- regenerated via the generator, never hand-edited
+      - scripts/schema_to_field_semantics.py    # generator: smoke_ops_tables splice (post-T2.33 integration)
+      - tests/test_schema_to_field_semantics.py    # generator splice test
+      - src/lambdas/ducklake_writer/handler.py
+      - tests/test_ducklake_scd2_schema.py
+      - tests/test_ducklake_runtime.py
+      - tests/test_ducklake_writer_handler.py
+      - scripts/ducklake_neon_smoke_test.py
+      - docs/contracts/storage-substrate.yaml
+      - docs/ROADMAP-PLATFORM.yaml
+      - docs/ROADMAP-PRODUCT.yaml
     exit_criteria:
-      - "ops_reconciliations.yaml + lambda-reconciliation.yaml both ratified at contract_version: 1"
-      - "Lambda handler validates broker state vs platform state; emits typed records via portal"
-      - "Lambda deploys per the post-CD.16 per-Lambda flow; smoke-tested in personal account"
-      - "Step 10 multi-perspective critique converges"
-    related_candidate_decisions: [CD.25, CD.16]
-    effort: M
+      # T2.33 landed first: field_semantics.yaml is GENERATED. ops_smoke_events is authored in the
+      # sidecar (smoke_ops_tables) and projected into the generated file; the drift gate enforces match.
+      - "ops_smoke_events append_only entry authored in config/lambda/ducklake/field_semantics.static.yaml (smoke_ops_tables); the generator projects it into config/lambda/ducklake/field_semantics.yaml and the drift gate (bin/venv-python -m scripts.schema_to_field_semantics --check) passes"
+      - "grep 'AppendOnlyUpdateError' src/common/ducklake_scd2_schema.py returns class definition"
+      - "grep 'check_append_only_guard' src/common/ducklake_runtime.py returns call-site usage in write_scd2"
+      - "pytest tests/test_ducklake_scd2_schema.py tests/test_ducklake_runtime.py tests/test_ducklake_writer_handler.py exits 0"
+      - "ducklake_writer Lambda built, deployed, and smoke-tested via --lambda-append-only gate (V3 per Decision 79)"
+    related_candidate_decisions: [CD.16]
+    effort: S
     strategic: false
     bootstrap_completion_exempt: false
-    status: not_started
+    status: in_progress
+    progress_note: >-
+      2026-06-22: schema layer (AppendOnlyUpdateError, ScdTableSpec.write_mode, check_append_only_guard),
+      runtime layer (create_scd2_tables / reconcile_table_columns / write_scd2 branching),
+      field_semantics.yaml ops_smoke_events entry, all unit tests, storage-substrate.yaml entry landed.
+      V3 Lambda build + deploy + smoke-test pending.
 
   - id: T1.15
     tier: T1

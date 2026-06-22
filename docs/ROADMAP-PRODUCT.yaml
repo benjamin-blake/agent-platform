@@ -3532,9 +3532,13 @@ tier_items:
       Per PIVOT Part A tables-to-add. ops_trade_events = append-only
       journal of every state change. ops_reconciliations = every
       broker-vs-cache snapshot. Both Class A.
+      Platform dependency: PLATFORM:T1.14 (DuckLake append-only write mode) is the
+      prerequisite kernel -- ops_trade_events adopts append_only write_mode; the
+      product schema lands after the platform kernel is proven via ops_smoke_events.
     depends_on: []
     cross_roadmap_depends_on:
       - PLATFORM:T0.13
+      - PLATFORM:T1.14
       - PLATFORM:T2.4
       - PLATFORM:CD.9
       - PLATFORM:CD.25
@@ -3927,6 +3931,10 @@ tier_items:
       via ops portal.
       DEFERRED: build_lambda.py --deploy + run_scheduled_agent.py --smoke-test
       (pending Decision 67 reversal)
+      Platform dependency: PLATFORM:T1.14 (DuckLake append-only write mode) is the
+      prerequisite kernel; the reconciliation Lambda writes append-only event records
+      and must wait for the platform kernel to be proven and deployed (direction:
+      product depends on platform, not vice versa -- Decision 93).
     depends_on: []
     cross_roadmap_depends_on:
       - PLATFORM:T0.6
@@ -4569,7 +4577,10 @@ known_platform_gaps:
     description: Broker credentials in AWS Secrets Manager with rotation.
     intended_platform_tier_item: T2.14
   - id: GAP-reconciliation-lambda
-    description: Daily broker-vs-cache reconciliation Lambda.
+    description: >-
+      Daily broker-vs-cache reconciliation Lambda. PLATFORM:T1.14 (DuckLake append-only write mode)
+      is the prerequisite kernel; the reconciliation Lambda is a consumer of the kernel, not its
+      implementation. Gap remains open pending T1.14 completion and a successor reconciliation item.
     intended_platform_tier_item: T1.14
   - id: GAP-class-b-product-lambdas
     description: Class-B Lambda packaging for product-tier handlers. Absorbed by INTENT v4's T1.12 Class B ratification wave.
