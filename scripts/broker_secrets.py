@@ -222,12 +222,17 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"NoBrokerCredentials: phase={result.product_phase!r} -- {result.reason}")
         return 0
 
-    print(f"secret_name: {result}")
+    # result is the resolved Secrets Manager secret_name -- a non-sensitive resource
+    # identifier, but it is read from a "secret_name"-keyed mapping that CodeQL
+    # classifies as sensitive (py/clear-text-logging). Emit only a resolution
+    # confirmation and, under --fetch, a field count -- never the name, keys, or
+    # values -- so the CLI leaks no secret-classified data. A mis-resolution still
+    # surfaces: --fetch against a wrong name fails GetSecretValue.
+    print(f"resolved OK: broker={args.broker!r} phase={args.phase!r}")
 
     if args.fetch:
-        secret_data = _fetch_secret(result)
-        print(f"secret_value keys: {list(secret_data.keys())}")
-        print(json.dumps(secret_data, indent=2))
+        field_count = len(_fetch_secret(result))
+        print(f"fetch OK: GetSecretValue returned {field_count} field(s)")
 
     return 0
 

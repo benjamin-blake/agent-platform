@@ -262,13 +262,15 @@ class TestFetchSecret:
 class TestCliMain:
     """_main() prints the correct output and returns 0 for all CLI paths."""
 
-    def test_mapped_phase_prints_secret_name_and_returns_0(
+    def test_mapped_phase_prints_resolution_and_returns_0(
         self, patch_load: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
         exit_code = _main(["--broker", "alpaca", "--phase", "paper"])
         assert exit_code == 0
         captured = capsys.readouterr()
-        assert _PAPER_SECRET in captured.out
+        assert "resolved OK" in captured.out
+        # Security: the resolved secret_name must not be echoed (CodeQL clear-text-logging).
+        assert _PAPER_SECRET not in captured.out
 
     def test_unmapped_phase_prints_sentinel_and_returns_0(
         self, patch_load: MagicMock, capsys: pytest.CaptureFixture[str]
@@ -286,4 +288,8 @@ class TestCliMain:
         assert exit_code == 0
         mock_fetch.assert_called_once_with(_PAPER_SECRET)
         captured = capsys.readouterr()
-        assert "api_key" in captured.out
+        # Proves the grant works via a non-sensitive field count -- no keys or values logged.
+        assert "fetch OK" in captured.out
+        assert "2 field(s)" in captured.out
+        assert "api_key" not in captured.out
+        assert "PLACEHOLDER" not in captured.out
