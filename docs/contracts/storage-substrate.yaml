@@ -14,8 +14,8 @@
 #   ops_decisions       -> docs/contracts/ops_decisions.yaml (T0.12.5)
 #
 version: 1
-updated_at: "2026-06-20"
-updated_by: "PLAN-ratify-ops-class-a-contracts (T0.12.5)"
+updated_at: "2026-06-22"
+updated_by: "PLAN-ducklake-append-only-mode (T1.14)"
 
 tables:
   # ---------------------------------------------------------------------------
@@ -31,6 +31,20 @@ tables:
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_priority_queue
     read_engine_ref: docs/contracts/read-engine.yaml
     graduation_blocker: CD.17 reversal + executor resume
+
+  # ---------------------------------------------------------------------------
+  # DuckLake append-only tables (event-journal write mode, T1.14)
+  # ---------------------------------------------------------------------------
+  ops_smoke_events:
+    substrate: DuckLake-on-Neon
+    status: smoke
+    write_mode: append_only
+    write_mode_invariant: "history table only; no current write-through projection (ScdTableSpec.current_table=None)"
+    write_boundary: ducklake_writer Lambda (action_write_ops) -- append events only; require_exists=True illegal
+    read_boundary: direct DuckDB ATTACH (ops_smoke_events_history) -- no reader Lambda verb for current
+    merge_key: event_id
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_smoke_events
+    note: platform-generic append_only kernel proof (T1.14); no current_table in ScdTableSpec
 
   # ---------------------------------------------------------------------------
   # Iceberg/Athena tables pending T2.26 disposition

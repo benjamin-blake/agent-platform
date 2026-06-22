@@ -960,6 +960,77 @@ def connect_probe(*, profile: str | None = None, region: str = "eu-west-2") -> N
     )
 
 
+def lambda_append_only(*, profile: str | None = None, region: str = "eu-west-2") -> None:
+    """T1.14 VP gate: append-only write mode -- fully Lambda-mediated (no direct Neon egress required).
+
+    Four assertions (writer + reader Lambda; no direct Neon port-5432 egress needed from CC-web):
+    1. create_ops_tables reports tables=[history, None] -- no current_table in the ScdTableSpec.
+    2. write_ops on ops_smoke_events succeeds (ok=True, ulid minted) -- history MERGE fired.
+    2b. read_ops_history confirms one history row written (plan acceptance: 'one history row read back').
+    3. update_ops returns AppendOnlyUpdateError (5xx) -- write-once enforcement (Decision 70).
+    """
+    import uuid  # noqa: PLC0415
+
+    writer_url = _function_url("writer")
+    reader_url = _function_url("reader")
+    table = "ops_smoke_events"
+
+    # Assertion 1: create_ops_tables reports tables=[history, None] (no current projection).
+    create_resp = _sigv4_invoke(writer_url, {"action": "create_ops_tables", "table": table}, profile=profile, region=region)
+    create_body = create_resp.json()
+    tables_list = create_body.get("tables", [])
+    if not create_body.get("ok") or len(tables_list) < 2 or tables_list[1] is not None:
+        raise SmokeTestFailure(
+            f"LAMBDA_APPEND_ONLY FAIL (assert 1): expected tables=[history, null], got: {tables_list}. body={create_body}"
+        )
+
+    # Assertion 2: write_ops succeeds on append_only table (history MERGE fired, ULID minted).
+    event_id = f"test-ao-{uuid.uuid4().hex[:12]}"
+    write_body = _ok_json(
+        _sigv4_invoke(
+            writer_url,
+            {"action": "write_ops", "table": table, "record": {"event_id": event_id, "event_type": "smoke"}},
+            profile=profile,
+            region=region,
+        )
+    )
+    if not write_body.get("ok") or not write_body.get("ulid"):
+        raise SmokeTestFailure(f"LAMBDA_APPEND_ONLY FAIL (assert 2): write_ops returned ok=False or no ulid: {write_body}")
+
+    # Assertion 2b: read_ops_history confirms exactly one row in ops_smoke_events_history (plan: 'one history row read back').
+    read_body = _ok_json(
+        _sigv4_invoke(
+            reader_url,
+            {"action": "read_ops_history", "table": table, "key": event_id},
+            profile=profile,
+            region=region,
+        )
+    )
+    if read_body.get("row_count", 0) != 1:
+        raise SmokeTestFailure(
+            f"LAMBDA_APPEND_ONLY FAIL (assert 2b read-back): expected row_count=1 in "
+            f"ops_smoke_events_history for event_id={event_id!r}, got: {read_body}"
+        )
+
+    # Assertion 3: update_ops loud-fails with AppendOnlyUpdateError (write-once, Decision 70).
+    guard_resp = _sigv4_invoke(
+        writer_url,
+        {"action": "update_ops", "table": table, "record": {"event_id": event_id, "event_type": "update-attempt"}},
+        profile=profile,
+        region=region,
+    )
+    guard_body = guard_resp.json()
+    if guard_body.get("ok") is not False or "append_only" not in guard_body.get("error", ""):
+        raise SmokeTestFailure(
+            f"LAMBDA_APPEND_ONLY FAIL (assert 3): update_ops should fail with append_only guard: {guard_body}"
+        )
+
+    print(
+        f"LAMBDA_APPEND_ONLY OK no_current_table=true write_ops=ok ulid={write_body.get('ulid')!r} "
+        f"read_back=1_row append_only_guard=raised event_id={event_id}"
+    )
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -978,6 +1049,7 @@ _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_catalog_dr": lambda_catalog_dr,
     "lambda_maintenance_hot_merge": lambda_maintenance_hot_merge,
     "connect_probe": connect_probe,
+    "lambda_append_only": lambda_append_only,
 }
 
 
@@ -1072,6 +1144,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         dest="migrate_ops_recs_columns",
         help="[post-deploy] T1.13 VP8: reconcile_columns SERVER-SIDE via maintenance Lambda; "
         "assert context_v2_json present on history+current (idempotent)",
+    )
+    group.add_argument(
+        "--lambda-append-only",
+        action="store_true",
+        help="[post-deploy] T1.14 VP gate: write_ops on ops_smoke_events (append_only), "
+        "assert 1 history row + no current projection",
     )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")

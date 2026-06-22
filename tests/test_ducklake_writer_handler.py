@@ -847,3 +847,23 @@ def test_action_file_ops_rejects_caller_keyspace_table(monkeypatch):
     monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
     with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
         h.action_file_ops({"table": "ops_decisions", "record": {"title": "t", "status": "open"}}, FakeCon())
+
+
+def test_action_write_ops_append_only_table(monkeypatch):
+    """write_ops on ops_smoke_events (append_only) routes through write_scd2 without error."""
+    captured = {}
+
+    def _write(con, record, *, table, **kw):  # noqa: ARG001
+        captured["table"] = table
+        captured["record"] = record
+        return _result(ulid="01AO", rec_id="test-ao-event-1")
+
+    monkeypatch.setattr(rt, "write_scd2", _write)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_write_ops(
+        {"table": "ops_smoke_events", "record": {"event_id": "test-ao-event-1", "event_type": "smoke"}},
+        FakeCon(),
+    )
+    assert out["ok"] is True
+    assert out["table"] == "ops_smoke_events"
+    assert captured["table"] == "ops_smoke_events"

@@ -48,6 +48,9 @@ _GENERATED_HEADER = """\
 
 _CONTRACT_TABLE_IDS = ("ops_recommendations", "ops_decisions")
 _DORMANT_TABLE_IDS = ("ops_priority_queue", "ops_session_log", "ops_execution_plans")
+# Append-only smoke tables (T1.14): no Class A contract, no current projection
+# (write_mode: append_only -> current_table absent); spliced verbatim from the sidecar.
+_SMOKE_TABLE_IDS = ("ops_smoke_events",)
 
 _ICEBERG_TO_SQL: dict[str, str] = {
     "string": "VARCHAR",
@@ -198,6 +201,11 @@ def generate(*, include_prose: bool = False) -> dict[str, Any]:
     for table_id in _DORMANT_TABLE_IDS:
         if table_id in dormant:
             ops_tables[table_id] = dormant[table_id]
+
+    smoke = sidecar.get("smoke_ops_tables", {})
+    for table_id in _SMOKE_TABLE_IDS:
+        if table_id in smoke:
+            ops_tables[table_id] = smoke[table_id]
 
     doc["ops_tables"] = ops_tables
     return doc

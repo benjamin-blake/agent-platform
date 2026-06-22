@@ -49,6 +49,7 @@ from src.common.ducklake_scd2_schema import (
     NAMED_READS_VERSION,  # noqa: F401 -- re-exported for the reader handler response envelope
     SMOKE_CURRENT_TABLE,  # noqa: F401 -- re-exported for backward compat
     SMOKE_HISTORY_TABLE,  # noqa: F401 -- re-exported for backward compat
+    AppendOnlyUpdateError,  # noqa: F401 -- re-exported for clients catching write-once violations
     DuckLakeRuntimeError,
     NamedRead,  # noqa: F401 -- re-exported for tests/clients introspecting the registry
     ReferentialError,
@@ -64,6 +65,7 @@ from src.common.ducklake_scd2_schema import (
     _load_field_semantics_cached,  # noqa: F401 -- re-exported for backward compat
     _order_columns,  # noqa: F401 -- re-exported for backward compat
     _write_params,
+    check_append_only_guard,
     load_field_semantics,
     ops_table_names,  # noqa: F401 -- re-exported for backward compat
     resolve_table_spec,
@@ -465,9 +467,16 @@ def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bo
     """
     spec = resolve_table_spec(table)
     history = f"{CATALOG_ALIAS}.{spec.history_table}"
-    current = f"{CATALOG_ALIAS}.{spec.current_table}"
     columns = _column_ddl(spec)
 
+    if spec.write_mode == "append_only":
+        if force_recreate:
+            con.execute(f"DROP TABLE IF EXISTS {history}")
+        con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({columns})")
+        con.execute(f"ALTER TABLE {history} SET PARTITIONED BY ({spec.partition_history})")
+        return
+
+    current = f"{CATALOG_ALIAS}.{spec.current_table}"
     if force_recreate:
         con.execute(f"DROP TABLE IF EXISTS {history}")
         con.execute(f"DROP TABLE IF EXISTS {current}")
@@ -498,7 +507,6 @@ def reconcile_table_columns(con: Any, *, table: str) -> dict[str, list[str]]:
     """
     spec = resolve_table_spec(table)
     history_fq = f"{CATALOG_ALIAS}.{spec.history_table}"
-    current_fq = f"{CATALOG_ALIAS}.{spec.current_table}"
 
     def _physical_columns(table_fq: str) -> set[str]:
         rows = con.execute(
@@ -515,7 +523,12 @@ def reconcile_table_columns(con: Any, *, table: str) -> dict[str, list[str]]:
     added_history: list[str] = []
     added_current: list[str] = []
 
-    for table_fq, added_list in [(history_fq, added_history), (current_fq, added_current)]:
+    tables_to_reconcile: list[tuple[str, list[str]]] = [(history_fq, added_history)]
+    if spec.write_mode != "append_only":
+        current_fq = f"{CATALOG_ALIAS}.{spec.current_table}"
+        tables_to_reconcile.append((current_fq, added_current))
+
+    for table_fq, added_list in tables_to_reconcile:
         existing = _physical_columns(table_fq)
         for col_name, col_spec in spec.fields.items():
             if col_name in existing:
@@ -591,9 +604,10 @@ def write_scd2(
     schema_gate(record, semantics, table=table)  # loud-fail before any catalog work
 
     spec = resolve_table_spec(table, semantics)
+    check_append_only_guard(spec, require_exists)  # loud-fail before any catalog work (Decision 70)
     merge_history_sql = _build_merge_history_sql(spec)
-    merge_current_sql = _build_merge_current_sql(spec)
-    select_existing_sql = _build_select_existing_created_sql(spec)
+    merge_current_sql = None if spec.write_mode == "append_only" else _build_merge_current_sql(spec)
+    select_existing_sql = None if spec.write_mode == "append_only" else _build_select_existing_created_sql(spec)
 
     identity = identity if identity is not None else mint_write_identity()
     key = record[spec.merge_key]
@@ -607,24 +621,28 @@ def write_scd2(
         attempt += 1
         try:
             con.execute("BEGIN TRANSACTION")
-            existing = con.execute(select_existing_sql, [key]).fetchall()
-            if require_exists and not existing:
-                raise ReferentialError(
-                    f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
-                    "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
+            if spec.write_mode == "append_only":
+                created_ts = created_override if created_override is not None else identity.timestamp
+            else:
+                existing = con.execute(select_existing_sql, [key]).fetchall()
+                if require_exists and not existing:
+                    raise ReferentialError(
+                        f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
+                        "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
+                    )
+                created_ts = (
+                    existing[0][0] if existing else (created_override if created_override is not None else identity.timestamp)
                 )
-            created_ts = (
-                existing[0][0] if existing else (created_override if created_override is not None else identity.timestamp)
-            )
             params = _write_params(spec, record, identity, created_ts)
             con.execute(merge_history_sql, params)
-            con.execute(merge_current_sql, params)
+            if merge_current_sql is not None:
+                con.execute(merge_current_sql, params)
             _advance_entity_counter(con, spec, key)
             con.execute("COMMIT")
             break
-        except ReferentialError:
+        except (ReferentialError, AppendOnlyUpdateError):
             _safe_rollback(con)
-            raise  # referential failure is terminal, never retried
+            raise  # terminal failures, never retried
         except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
             _safe_rollback(con)
             if is_occ_collision(exc):
@@ -907,6 +925,12 @@ def read_current(
     against the wrong column returned a silent false zero). `limit` bounds the row count.
     """
     spec = resolve_table_spec(table)
+    if spec.current_table is None:
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} is append_only: read_current is not supported "
+            "(write_mode=append_only has no current write-through projection; "
+            "read from the history table via read_history() instead)"
+        )
     cols = ", ".join(c for c, _ in spec.ordered_columns)
     sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table}"
     filter_value = key if key is not None else rec_id
@@ -1000,6 +1024,11 @@ def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[A
     """
     assert_read_only_sql(sql)
     spec = resolve_table_spec(table)
+    if spec.current_table is None:
+        raise DuckLakeRuntimeError(
+            f"table {spec.table!r} is append_only: query_current is not supported "
+            "(write_mode=append_only has no current write-through projection)"
+        )
     final_sql = sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}")
     cursor = con.execute(final_sql, list(params)) if params else con.execute(final_sql)
     col_names = [desc[0] for desc in cursor.description]

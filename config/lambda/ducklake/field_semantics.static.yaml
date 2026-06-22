@@ -1,11 +1,13 @@
 # Sidecar for the field_semantics.yaml generator (scripts/schema_to_field_semantics.py).
 # Machine-parseable config data (Decision 86 compliant -- not a prose-architecture doc).
 #
-# Contains three kinds of non-contract content spliced into the generated output:
+# Contains four kinds of non-contract content spliced into the generated output:
 #   1. smoke section (tables/fields/derivation_timing/partition_transforms/connection_settings)
 #   2. dormant ops_tables (ops_priority_queue, ops_session_log, ops_execution_plans) --
 #      no Class A contract yet; included verbatim in the generated ops_tables block
-#   3. contract_table_ops: per-table operational keys for contract-backed tables that are NOT
+#   3. smoke_ops_tables (ops_smoke_events) -- append-only kernel proof (T1.14); no Class A
+#      contract, no current projection (write_mode: append_only); included verbatim
+#   4. contract_table_ops: per-table operational keys for contract-backed tables that are NOT
 #      derivable from the contract itself (status/entity_id_prefix/id_keyspace/migration_columns)
 #
 # Editable home for all non-contract config.
@@ -180,6 +182,28 @@ dormant_ops_tables:
       rec_id: {role: input, sql_type: VARCHAR, nullable: false}
       plan: {role: input, sql_type: VARCHAR, nullable: true}
       status: {role: input, sql_type: VARCHAR, nullable: true}
+      created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+      last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
+
+# ---------------------------------------------------------------------------
+# Smoke ops_* tables (append-only kernel proof, T1.14)
+# No Class A contract; write_mode: append_only -> history table only, no current
+# projection (ScdTableSpec.current_table=None). Included verbatim in generator output.
+# ---------------------------------------------------------------------------
+smoke_ops_tables:
+  ops_smoke_events:
+    write_mode: append_only
+    status: smoke
+    merge_key: event_id
+    history_table: ops_smoke_events_history
+    partition:
+      history: "day(created_timestamp)"
+    columns:
+      ulid: {role: derived, sql_type: VARCHAR, nullable: false}
+      event_id: {role: input, sql_type: VARCHAR, nullable: false}
+      event_type: {role: input, sql_type: VARCHAR, nullable: true}
+      payload: {role: input, sql_type: VARCHAR, nullable: true}
+      _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
       created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
       last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
 

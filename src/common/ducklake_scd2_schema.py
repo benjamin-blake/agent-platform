@@ -69,6 +69,14 @@ class ReferentialError(DuckLakeRuntimeError):
     """
 
 
+class AppendOnlyUpdateError(DuckLakeRuntimeError):
+    """Raised when require_exists=True is passed for an append_only table (Decision 70 / write-once lifecycle).
+
+    Append-only tables are write-once; the update path is illegal. Record state changes as new events
+    with a distinct merge_key.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Write identity and result dataclasses (minted by runtime, schema contract)
 # ---------------------------------------------------------------------------
@@ -137,7 +145,7 @@ class ScdTableSpec:
 
     table: str | None  # None = smoke
     history_table: str
-    current_table: str
+    current_table: str | None  # None for append_only tables (no write-through projection)
     merge_key: str
     fields: dict[str, Any]  # column name -> {role, sql_type, nullable}; the schema-gate contract
     ordered_columns: tuple[tuple[str, str], ...]  # (name, sql_type) in physical (DDL/INSERT) order
@@ -145,6 +153,7 @@ class ScdTableSpec:
     partition_current: str
     entity_id_prefix: str | None = None  # canonical id shape <prefix>NNN (None = no canonical keyspace)
     id_keyspace: str = "caller"  # "writer" => file_ops allocates + write_ops advances the counter (Decision 84 I-2)
+    write_mode: str = "scd2"  # "scd2" | "append_only"; append_only skips the current write-through projection
 
 
 def _order_columns(fields: dict[str, Any], merge_key: str) -> tuple[tuple[str, str], ...]:
@@ -181,10 +190,11 @@ def resolve_table_spec(table: str | None = None, semantics: dict[str, Any] | Non
     merge_key = spec["merge_key"]
     fields = spec["columns"]
     part = spec.get("partition", {})
+    write_mode = spec.get("write_mode", "scd2")
     return ScdTableSpec(
         table=table,
         history_table=spec["history_table"],
-        current_table=spec["current_table"],
+        current_table=spec.get("current_table") if write_mode == "scd2" else None,
         merge_key=merge_key,
         fields=fields,
         ordered_columns=_order_columns(fields, merge_key),
@@ -192,7 +202,21 @@ def resolve_table_spec(table: str | None = None, semantics: dict[str, Any] | Non
         partition_current=part.get("current", f"bucket(8, {merge_key})"),
         entity_id_prefix=spec.get("entity_id_prefix"),
         id_keyspace=spec.get("id_keyspace", "caller"),
+        write_mode=write_mode,
     )
+
+
+def check_append_only_guard(spec: ScdTableSpec, require_exists: bool) -> None:
+    """Loud-fail when an update (require_exists=True) targets an append_only table (Decision 70).
+
+    Append-only tables are write-once; require_exists=True implies an intent to update an existing
+    record, which is illegal. Record state changes as new events with a distinct merge_key.
+    """
+    if spec.write_mode == "append_only" and require_exists:
+        raise AppendOnlyUpdateError(
+            f"table {spec.table!r} is append_only: require_exists=True is illegal "
+            "(Decision 70 / write-once lifecycle). Record state changes as new events with a new merge_key."
+        )
 
 
 def ops_table_names(semantics: dict[str, Any] | None = None) -> tuple[str, ...]:

@@ -137,10 +137,10 @@ verification_plan:
     fix_if: "A size-limit rejection means an asset bloated the bundle -- inspect with --list-bundle ducklake_writer. A deploy auth error means the agent_platform assume-role chain lapsed -- re-verify with aws sts get-caller-identity --profile agent_platform."
   - step: 6
     phase: post-deploy
-    action: Smoke-test the DEPLOYED writer -- append-only write+read on the generic smoke/event table AND an SCD2 read-your-write, against the live Neon catalog.
-    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --attach"
-    expected: "All Lambda gates pass, including the new append-only probe (one history row written + read back, no current table) and the existing SCD2 read-your-write gate."
-    fix_if: "An append-only gate failure is a stop-and-RCA signal (Decision 55) -- do NOT relax the gate. An SCD2 gate regression means the append_only branch leaked into the default path; revert the deploy (rollback) and re-isolate the branch before redeploying."
+    action: Smoke-test the DEPLOYED writer+reader -- append-only write+read on the generic smoke/event table via Lambda-mediated gates (no direct Neon port-5432 egress required from CC-web).
+    command: "bin/venv-python scripts/ducklake_neon_smoke_test.py --lambda-append-only --profile agent_platform"
+    expected: "LAMBDA_APPEND_ONLY OK: assert-1 no_current_table=true, assert-2 write_ops=ok (ulid minted), assert-2b read_back=1_row (ops_smoke_events_history), assert-3 append_only_guard=raised. Note: --attach dispatches a TLS probe only; the append-only kernel gate runs via --lambda-append-only."
+    fix_if: "An append-only gate failure is a stop-and-RCA signal (Decision 55) -- do NOT relax the gate. An assert-2b read-back failure means the writer Lambda wrote successfully but the row is not visible in the reader -- investigate DuckLake ATTACH propagation or reader Lambda bundle staleness."
 constraints:
   - "V3: ducklake_writer is an active Lambda artifact; per Decision 79 the plan MUST build + deploy + smoke-test it. No code lands without the deploy + smoke gate."
   - "ZERO trading-domain schema is authored. The smoke/event table is generic platform scaffolding (no broker/position/fill columns). ops_reconciliations and ops_trade_events are PRODUCT-owned consumers, authored in a later PRODUCT plan."

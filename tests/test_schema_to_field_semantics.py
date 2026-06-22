@@ -232,6 +232,18 @@ class TestGenerateIntegration:
         for key in ("tables", "fields", "derivation_timing", "partition_transforms", "connection_settings"):
             assert key in doc, f"smoke section key {key!r} missing"
 
+    def test_smoke_ops_tables_spliced_append_only(self) -> None:
+        """ops_smoke_events is spliced verbatim from smoke_ops_tables: append_only, no current_table (T1.14)."""
+        doc = generate()
+        assert "ops_smoke_events" in doc["ops_tables"], "ops_smoke_events should be spliced into ops_tables"
+        entry = doc["ops_tables"]["ops_smoke_events"]
+        assert entry["write_mode"] == "append_only"
+        assert entry["status"] == "smoke"
+        assert entry["merge_key"] == "event_id"
+        assert entry["history_table"] == "ops_smoke_events_history"
+        assert "current_table" not in entry, "append_only tables must not carry a current projection"
+        assert "current" not in entry["partition"], "append_only tables have history-only partitioning"
+
     def test_mechanical_slice_has_no_prose(self) -> None:
         doc = generate(include_prose=False)
         for tbl_entry in doc["ops_tables"].values():
@@ -257,7 +269,10 @@ class TestGenerateIntegration:
         assert cols["dependencies"]["sql_type"] == "VARCHAR[]"
 
     def test_full_document_data_equivalence_vs_origin_main(self) -> None:
-        """Keystone safety gate: regenerated data must equal pre-change file on origin/main."""
+        """Keystone safety gate: regenerated data must equal pre-change file on origin/main,
+        modulo the single intentional T1.14 addition (ops_smoke_events). Removing that one
+        table from the generated output must leave the document byte-equivalent to origin/main --
+        proving the append-only splice perturbs no existing table/field/structure."""
         import subprocess
 
         result = subprocess.run(
@@ -272,10 +287,14 @@ class TestGenerateIntegration:
             pytest.skip("origin/main not available; skipping data-equivalence gate")
         prior = yaml.safe_load(result.stdout)
         generated = yaml.safe_load(_emit_yaml(generate(include_prose=False)))
+        # T1.14 intentionally adds ops_smoke_events; strip it before the equivalence check.
+        assert "ops_smoke_events" in generated["ops_tables"], "ops_smoke_events must be present post-T1.14"
+        assert "ops_smoke_events" not in prior.get("ops_tables", {}), "origin/main predates the ops_smoke_events addition"
+        generated["ops_tables"].pop("ops_smoke_events")
         assert prior == generated, (
-            "Generated field_semantics.yaml data differs from origin/main -- "
-            "the generator or sidecar changed semantics (role/sql_type/nullable/structure). "
-            "VP step 3 FAIL: STOP and reconcile."
+            "Generated field_semantics.yaml data differs from origin/main beyond the ops_smoke_events "
+            "addition -- the generator or sidecar changed semantics (role/sql_type/nullable/structure) "
+            "of an existing table. VP step 3 FAIL: STOP and reconcile."
         )
 
 

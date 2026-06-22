@@ -283,6 +283,7 @@ def test_py_type_map_covers_ops_types():
 def test_exception_hierarchy():
     assert issubclass(schema.SchemaGateError, schema.DuckLakeRuntimeError)
     assert issubclass(schema.ReferentialError, schema.DuckLakeRuntimeError)
+    assert issubclass(schema.AppendOnlyUpdateError, schema.DuckLakeRuntimeError)
     assert issubclass(schema.DuckLakeRuntimeError, RuntimeError)
 
 
@@ -384,3 +385,68 @@ def test_ops_merge_current_sql_byte_identical_via_reexport():
     sql_from_schema = schema._build_merge_current_sql(spec)
     sql_from_runtime = rt._build_merge_current_sql(spec)
     assert sql_from_schema == sql_from_runtime
+
+
+# ---------------------------------------------------------------------------
+# append_only write mode -- schema-layer tests
+# ---------------------------------------------------------------------------
+
+_APPEND_ONLY_SEMANTICS: dict = {
+    "fields": {
+        "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+        "rec_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+        "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+        "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+    },
+    "ops_tables": {
+        "ops_smoke_events": {
+            "write_mode": "append_only",
+            "status": "smoke",
+            "merge_key": "event_id",
+            "history_table": "ops_smoke_events_history",
+            "partition": {"history": "day(created_timestamp)"},
+            "columns": {
+                "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+                "event_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+                "event_type": {"role": "input", "sql_type": "VARCHAR", "nullable": True},
+                "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+                "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+            },
+        }
+    },
+}
+
+
+def test_resolve_table_spec_append_only_current_table_none():
+    """append_only spec resolves with current_table=None and write_mode='append_only'."""
+    spec = schema.resolve_table_spec("ops_smoke_events", _APPEND_ONLY_SEMANTICS)
+    assert spec.write_mode == "append_only"
+    assert spec.current_table is None
+    assert spec.history_table == "ops_smoke_events_history"
+    assert spec.merge_key == "event_id"
+
+
+def test_check_append_only_guard_raises_on_require_exists():
+    """check_append_only_guard raises AppendOnlyUpdateError for append_only + require_exists=True."""
+    spec = schema.resolve_table_spec("ops_smoke_events", _APPEND_ONLY_SEMANTICS)
+    with pytest.raises(schema.AppendOnlyUpdateError, match="append_only"):
+        schema.check_append_only_guard(spec, require_exists=True)
+
+
+def test_check_append_only_guard_noop_for_scd2():
+    """check_append_only_guard is a no-op for scd2 tables even with require_exists=True."""
+    spec = schema.resolve_table_spec(None, _SEMANTICS)
+    assert spec.write_mode == "scd2"
+    schema.check_append_only_guard(spec, require_exists=True)  # no raise
+
+
+def test_check_append_only_guard_noop_when_require_exists_false():
+    """check_append_only_guard is a no-op for append_only + require_exists=False."""
+    spec = schema.resolve_table_spec("ops_smoke_events", _APPEND_ONLY_SEMANTICS)
+    schema.check_append_only_guard(spec, require_exists=False)  # no raise
+
+
+def test_ops_smoke_events_in_real_ops_table_names():
+    """ops_smoke_events appears in ops_table_names() once added to field_semantics.yaml."""
+    names = schema.ops_table_names()
+    assert "ops_smoke_events" in names
