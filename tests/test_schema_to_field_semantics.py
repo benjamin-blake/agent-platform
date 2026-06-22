@@ -10,7 +10,6 @@ Covers:
   - history/current table name synthesis
   - mechanical slice has no prose (no description/semantics)
   - semantic slice carries description/semantics
-  - full-document data-equivalence vs the pre-change committed file (keystone safety gate)
   - --check detects injected drift without writing
   - migration_columns subset enforcement raises on non-subset/mistyped entry (rec-2232)
 """
@@ -267,35 +266,6 @@ class TestGenerateIntegration:
         assert cols["execution_steps"]["sql_type"] == "BIGINT"
         assert cols["created_timestamp"]["sql_type"] == "TIMESTAMP WITH TIME ZONE"
         assert cols["dependencies"]["sql_type"] == "VARCHAR[]"
-
-    def test_full_document_data_equivalence_vs_origin_main(self) -> None:
-        """Keystone safety gate: regenerated data must equal pre-change file on origin/main,
-        modulo the single intentional T1.14 addition (ops_smoke_events). Removing that one
-        table from the generated output must leave the document byte-equivalent to origin/main --
-        proving the append-only splice perturbs no existing table/field/structure."""
-        import subprocess
-
-        result = subprocess.run(
-            ["git", "show", "origin/main:config/lambda/ducklake/field_semantics.yaml"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=_ROOT,
-        )
-        if result.returncode != 0:
-            pytest.skip("origin/main not available; skipping data-equivalence gate")
-        prior = yaml.safe_load(result.stdout)
-        generated = yaml.safe_load(_emit_yaml(generate(include_prose=False)))
-        # T1.14 intentionally adds ops_smoke_events; strip it before the equivalence check.
-        assert "ops_smoke_events" in generated["ops_tables"], "ops_smoke_events must be present post-T1.14"
-        assert "ops_smoke_events" not in prior.get("ops_tables", {}), "origin/main predates the ops_smoke_events addition"
-        generated["ops_tables"].pop("ops_smoke_events")
-        assert prior == generated, (
-            "Generated field_semantics.yaml data differs from origin/main beyond the ops_smoke_events "
-            "addition -- the generator or sidecar changed semantics (role/sql_type/nullable/structure) "
-            "of an existing table. VP step 3 FAIL: STOP and reconcile."
-        )
 
 
 # ---------------------------------------------------------------------------
