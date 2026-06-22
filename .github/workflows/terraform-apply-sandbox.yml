@@ -888,6 +888,16 @@ jobs:
         # A workflow_dispatch ack run also queues behind this job (same group). This is an implicit
         # serialization invariant, not an explicit read-then-refuse gate -- accepted design tradeoff
         # for the gated path where the concurrency group provides the safety guarantee.
+        #
+        # Red-write dependency (VP10, 2026-06-22): this step writes the red record using the SAME
+        # OIDC apply-role creds configured in the "Configure AWS credentials" step. If the failure
+        # occurs AT OR BEFORE that creds step (e.g. the OIDC trust regresses, as VP9 first found),
+        # this step cannot reach S3 ("Unable to locate credentials") and the record stays at its
+        # prior value rather than going red. The backstop for that pre-creds window is ci-rca:
+        # ci-rca.yml triggers on the terraform-apply-sandbox workflow_run conclusion == failure
+        # (independent of the record), so a creds-stage gated-apply failure still files a rec and is
+        # NOT silently masked. Failures AT the apply stage (creds already configured) DO red the
+        # record here as intended.
         if: always()
         env:
           SHA: ${{ github.sha }}

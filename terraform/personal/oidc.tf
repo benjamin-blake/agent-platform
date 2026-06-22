@@ -325,20 +325,22 @@ resource "aws_iam_role" "github_ci_apply" {
   name        = "agent-platform-github-ci-apply"
   description = "GitHub Actions sandbox auto-apply (Decision 77): refs/heads/main ONLY via OIDC"
 
-  # CD.35 Wave 3 / T2.22 note (comment only -- no resource change):
-  # The tf-gated-apply GitHub Environment (terraform/github/environments.tf) gates the
-  # post-merge apply JOB for the guard fail-closed set (IAM/trust/destroy diffs). The
-  # Environment is the authorization boundary, NOT an "environment:" claim in the OIDC sub --
-  # a GitHub environment claim in the sub is NOT an authorization boundary (the job's
-  # environment: key just names the deployment environment; the trust condition would need to
-  # match it explicitly, and the GitHub-documented footgun is that a required_reviewer Environment
-  # does not change the token's sub claim). Trust STAYS pinned exactly to refs/heads/main.
-  # Any job on main can mint a token with this sub -- but only a job declaring
-  # environment: tf-gated-apply (with its required reviewer gate) reaches the gated-apply
-  # apply path. The routine auto-apply path (guard PASS, no gated job) also assumes this role.
-  # The residual workflow-self-edit concern (a workflow file could in principle route around the
-  # gate by adding environment: tf-gated-apply) is Wave 4 / T2.23 (bootstrap root + authority
-  # budget). Not closed here.
+  # CD.35 Wave 3 / T2.22 (Decision 92, CORRECTED post-VP9):
+  # This role is assumed by TWO apply paths in terraform-apply-sandbox.yml:
+  #   1. Routine auto-apply (apply-sandbox job, guard PASS): no job-level environment, so GitHub
+  #      mints sub = repo:OWNER/REPO:ref:refs/heads/main.
+  #   2. Gated apply (gated-apply job, guard fail-closed set: IAM/trust/destroy): the job declares
+  #      environment: tf-gated-apply, and GitHub then OVERRIDES the sub to
+  #      repo:OWNER/REPO:environment:tf-gated-apply (the env claim REPLACES the ref claim in sub).
+  # The original Decision 92 note asserted the env claim does NOT change the sub and pinned trust
+  # to refs/heads/main only. VP9 (live end-to-end test, 2026-06-22) proved that false: the gated
+  # job could never assume this role (sts:AssumeRoleWithWebIdentity AccessDenied) because its sub
+  # is the environment sub, which the refs/heads/main-only trust rejected. The sub list below now
+  # trusts BOTH. This is SAFE: a token with sub = ...:environment:tf-gated-apply can only be minted
+  # by a job declaring that environment, and such a job cannot start until the Environment's
+  # required reviewer approves -- so the environment sub is itself approval-gated (belt-and-braces
+  # with the guard routing). The residual workflow-self-edit concern (a workflow file editing the
+  # guard routing) remains Wave 4 / T2.23 (bootstrap root + authority budget); unchanged here.
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -352,10 +354,15 @@ resource "aws_iam_role" "github_ci_apply" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            # Trust is pinned to the exact main ref -- NOT a StringLike wildcard. agent/* and
-            # pull/* cannot assume this role; only a merge to main can trigger auto-apply.
-            # This trust condition is UNCHANGED by CD.35 Wave 3 (see note above).
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+            # Exact-match list (StringEquals with an array = OR of exact values; NOT a wildcard).
+            # agent/* and pull/* still cannot assume this role.
+            #   - refs/heads/main          : the routine auto-apply path (no job environment).
+            #   - environment:tf-gated-apply: the gated-apply job (GitHub overrides sub to the env
+            #     claim when a job declares environment:; approval-gated by the required reviewer).
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${local.github_repo}:ref:refs/heads/main",
+              "repo:${local.github_repo}:environment:tf-gated-apply"
+            ]
           }
         }
       }
