@@ -16,6 +16,7 @@ from scripts.schema_to_iceberg import (
     MissingPartitionSpec,
     UnknownPartitionColumn,
     UnsupportedFieldType,
+    _partition_column,
     emit_drop,
     iceberg_type,
     main,
@@ -206,3 +207,47 @@ def test_main_emit_drop() -> None:
     output = buf.getvalue()
     assert "DROP COLUMN" in output
     assert "retired_col" in output
+
+
+@pytest.mark.parametrize(
+    "spec, expected",
+    [
+        ("day(ts)", "ts"),
+        ("hour(ts)", "ts"),
+        ("bucket(16, symbol)", "symbol"),
+        ("truncate(10, name)", "name"),
+        ("event_date", "event_date"),
+        ("bucket(16,  symbol )", "symbol"),
+    ],
+)
+def test_partition_column_extraction(spec: str, expected: str) -> None:
+    assert _partition_column(spec) == expected
+
+
+def test_two_arg_bucket_partition() -> None:
+    @partition_by("bucket(16, symbol)")
+    class _BucketModel(BaseModel):
+        symbol: str
+        price: float
+
+    ddl = model_to_iceberg_ddl(_BucketModel, "t", database="db", location="s3://x/")
+    assert "PARTITIONED BY (bucket(16, symbol))" in ddl
+
+
+def test_two_arg_truncate_partition() -> None:
+    @partition_by("truncate(10, name)")
+    class _TruncateModel(BaseModel):
+        name: str
+        value: int
+
+    ddl = model_to_iceberg_ddl(_TruncateModel, "t", database="db", location="s3://x/")
+    assert "PARTITIONED BY (truncate(10, name))" in ddl
+
+
+def test_two_arg_partition_unknown_column() -> None:
+    @partition_by("bucket(16, missing)")
+    class _MissingColModel(BaseModel):
+        symbol: str
+
+    with pytest.raises(UnknownPartitionColumn, match="missing"):
+        model_to_iceberg_ddl(_MissingColModel, "t", database="db", location="s3://x/")

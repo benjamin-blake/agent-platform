@@ -83,9 +83,17 @@ def iceberg_type(annotation: Any) -> str:
 
 
 def _partition_column(spec: str) -> str:
-    """Extract the bare column name from a partition spec like 'day(col)' or 'col'."""
-    m = re.match(r"^\w+\((\w+)\)$", spec.strip())
-    return m.group(1) if m else spec.strip()
+    """Extract the partition column name from a transform spec.
+
+    Handles single-arg transforms (day(col) -> col), two-arg transforms
+    (bucket(N, col) / truncate(W, col) -> col, the last argument), and bare
+    columns (col -> col).
+    """
+    m = re.match(r"^\w+\((.*)\)$", spec.strip())
+    if not m:
+        return spec.strip()
+    args = [a.strip() for a in m.group(1).split(",")]
+    return args[-1]
 
 
 def model_to_iceberg_schema(model: type[BaseModel]) -> Any:

@@ -48,9 +48,9 @@ authoritative gate.
 the `gated-apply` job in `terraform-apply-sandbox.yml` takes over. After the merge, the job blocks on
 the `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
 the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
-`workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec. Broader IAM changes
-beyond `github_ci_apply`'s current scope (e.g. creating a brand-new IAM role) remain AccessDenied and
-admin-gated until T2.23 (bootstrap root + authority budget).
+`workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec. The bootstrap root
+(CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget in `terraform/bootstrap/`;
+in-budget IAM auto-apply (guard-consumption) is pending T2.25.
 
 **Concurrency tradeoff (correct-by-design):** a gated-apply job pending human approval holds the
 `terraform-apply-sandbox` concurrency group (`cancel-in-progress: false`), so later auto-applies queue
@@ -134,8 +134,8 @@ The server-side anti-masking anchor. All four pieces live in `terraform-apply-sa
   `github_ci_branch` (ci-rca / `agent/*` CI keep read, never write/delete the record), and the PR role's
   read-only `S3ReadConvergenceRecord`. This is the integrity anchor -- a commit status alone is spoofable.
   (The residual admin / `platform_breakglass` write path is not yet IAM-fenced; full privilege-tiering --
-  the pipeline's own IAM to a bootstrap root -- lands at Wave 4 / T2.23. "Unbypassable" is scoped to
-  merge-path CI actors, per CD.35 5.5d.)
+  the pipeline's own IAM to a bootstrap root -- landed at Wave 4 / T2.23 (`terraform/bootstrap/`).
+  "Unbypassable" is scoped to merge-path CI actors, per CD.35 5.5d.)
 - **Red-record refusal = the SOLE hard block.** The apply job's read-precondition refuses (emits the
   distinguishable marker `CONVERGENCE_RED`, exits non-zero, and does **NOT** overwrite the record) when the
   record is red. Unbypassable by any merge-path actor. An **absent** record = first-apply-allowed

@@ -681,6 +681,60 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
 }
 
 # ---------------------------------------------------------------------------
+# Bootstrap state backend (PLAN-terraform-cicd-bootstrap-root / T2.23): PlatformAdmin provisions and
+# uses the terraform/bootstrap root's S3 state backend. The bucket (agent-platform-bootstrap-tfstate)
+# is created out-of-band by the documented runbook (terraform/bootstrap/README.md) and is NOT a
+# Terraform resource in any root -- codifying it would be circular (the bootstrap root's own state
+# lives in it). This is the admin provisioning path; it does NOT weaken the bootstrap isolation, which
+# fences the github_ci_apply CI role (the pipeline) out of bootstrap state. PlatformAdmin is the admin
+# tier. Scoped to the one bucket; no provider refresh-read set (the bucket is not Terraform-managed).
+# Provenance: applied out-of-band under agent_platform_admin (terraform -target) during the T2.23
+# bootstrap provisioning ahead of this PR's merge; the merge-time CD apply reconciles it to a no-op.
+# ---------------------------------------------------------------------------
+resource "aws_iam_role_policy" "platform_admin_bootstrap_state" {
+  name = "BootstrapStateProvisioning"
+  role = aws_iam_role.platform_admin.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # One-time CLI provisioning (CreateBucket + versioning/SSE/public-access-block) and the
+        # backend's bucket-level reads (ListBucket for state discovery). Get* variants cover
+        # idempotent re-runs + post-provision verification. Scoped to the bootstrap bucket ARN only.
+        Sid    = "BootstrapStateBucketManage"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:PutBucketVersioning",
+          "s3:GetBucketVersioning",
+          "s3:PutEncryptionConfiguration",
+          "s3:GetEncryptionConfiguration",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPublicAccessBlock",
+        ]
+        Resource = ["arn:aws:s3:::agent-platform-bootstrap-tfstate"]
+      },
+      {
+        # Terraform S3 backend object IO: the state object + the use_lockfile=true native lock object
+        # (terraform.tfstate.tflock). Get/Put/Delete cover read, write, and lock acquire/release.
+        # Scoped to objects under the bootstrap bucket only.
+        Sid    = "BootstrapStateObjectIO"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+        ]
+        Resource = ["arn:aws:s3:::agent-platform-bootstrap-tfstate/*"]
+      },
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
 # DuckLake break-glass (CD.33 O-1 / Decision 81): an EXPLICIT, auditable PlatformAdmin grant to
 # attach the DuckLake catalog read-only for inspect/repair -- the Neon DSN secret + S3 read on the
 # ducklake-* data prefixes. AdminOps (secretsmanager GetSecretValue *) and PlatformDataLakeProvisioning

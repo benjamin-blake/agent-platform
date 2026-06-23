@@ -68,8 +68,9 @@ serves `day()` pruning), docs/contracts/session-id.yaml, docs/contracts/telemetr
 **Problem:**
 Two temporal defects sit in the draft telemetry design. (1) `trade_date` -- a market-data partition
 concept -- leaked into telemetry scaffolding, where it has no meaning: a telemetry session is not scoped
-to a trading day. (2) T2.4 (partition-everything) prescribes `day(last_updated_timestamp)` for
-"ops/telemetry" jointly, conflating two different table shapes: ops_recommendations / ops_decisions are
+to a trading day. (2) the original T2.4 (partition-everything) framing prescribed
+`day(last_updated_timestamp)` for "ops/telemetry" jointly, conflating two different table shapes:
+ops_recommendations / ops_decisions are
 SCD2 tables whose `last_updated_timestamp` is the mutation-envelope partition basis, whereas telemetry is
 insert-once EVENT data with no SCD2 envelope. Partitioning telemetry by `last_updated_timestamp` is wrong
 twice over -- the column is an ops-SCD2 concept, and event data should partition by event time, not
@@ -93,15 +94,23 @@ mutation time. Timestamp typing (tz-awareness, UTC) is also unspecified.
    created_at, per-observation times) is stored UTC, tz-aware. Naive or local-time timestamps are
    rejected at the boundary.
 
-**T2.4 alignment:**
-T2.4's partition rule is corrected to distinguish the two shapes: `day(last_updated_timestamp)` for the
-ops SCD2 tables; `day(started_at)` (event time, UTC) for telemetry; `day(trade_date)` for market data.
-The roadmap edit lands with this decision (T2.4 intent + note updated to cite Decision 96).
+**Realization -- T2.33 / DuckLake, not T2.4:**
+T2.4 (the Iceberg partition sweep) was CLOSED on 2026-06-23 (PR #239) and re-grounded to the 3 live
+personal-account ops Iceberg tables, explicitly moving ops/telemetry to DuckLake-on-Neon (Decision 78/84)
+and DuckLake partition-as-code to T2.33 (ALTER-conditional per Decision 81). Telemetry is therefore not in
+the Iceberg sweep's scope: this standard (`day(started_at)` UTC for telemetry) is realized when telemetry
+is rebuilt on its DuckLake substrate via T2.33's partition-as-code, ALTER-conditional per Decision 81 and
+not warranted below the row/file-count threshold. No T2.4 edit is made; T2.4's closeout already separates
+the ops-SCD2 (`day(last_updated_timestamp)`) basis from the telemetry event-time basis, corroborating this
+decision.
 
 **Related:** Decision 95 (the tables this partitions), Decision 97 (boundary-minted event timestamps),
 CD.9 (partition-everything -- this supplies the telemetry column choice CD.9 left per-table), T2.4
-(partition-everything sweep -- aligned here), Decision 84 (ops SCD2 `last_updated_timestamp` envelope --
-the concept kept distinct from telemetry), docs/contracts/telemetry-lexicon.yaml.
+(Iceberg partition sweep, CLOSED 2026-06-23 / PR #239 -- telemetry moved to DuckLake / T2.33, not this
+sweep), T2.33 (DuckLake partition-as-code -- the telemetry realization path), Decision 81 (CD.9
+ALTER-partitioning mechanism), Decision 78 (DuckLake adoption), Decision 84 (ops SCD2
+`last_updated_timestamp` envelope -- the concept kept distinct from telemetry),
+docs/contracts/telemetry-lexicon.yaml.
 
 ---
 

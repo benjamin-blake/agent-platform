@@ -536,6 +536,7 @@ class TestCD25SchemaAmendments:
             # ratify post-hoc via the ops portal vehicle. Exemption ends when the gating
             # CD ratifies (CD.5/CD.8+CD.15/CD.20/CD.34 respectively).
             "T0.10",
+            "T2.4",
             "T2.5",
             "T2.12",
             "T2.16b",

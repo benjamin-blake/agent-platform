@@ -3410,49 +3410,68 @@ tier_items:
 
   - id: T1.12
     tier: T1
-    name: Ratify Class B Lambda verb contracts (gated on CD.16 ratification)
+    name: Ratify Class B Lambda verb contracts (DuckLake writer/reader/maintenance; completion gated on CD.25)
     intent: |
-      REPORT-ONLY parent placeholder. [Deferral EXPIRED 2026-06-03: CD.16 ratified
-      via Decision 79 (dec-1086), so the original "DEFERRED until CD.16 ratifies"
-      condition is satisfied -- audit F-009/B-009; the item is now gated only by its
-      depends_on. Historical rationale: Class B ratifications under the old blanket
-      Lambda-deploy freeze would have produced contracts that never transition out
-      of provisional_v0 (no traffic = no signal).] Decomposes into per-Lambda atomic REPORT-ONLY plans
-      authoring lambda-log-rec.yaml, lambda-log-decision.yaml, lambda-query.yaml,
-      lambda-update-rec.yaml, lambda-list-tools.yaml, lambda-maintenance.yaml
-      (the maintenance contract now describes ducklake_maintenance per T2.18 --
-      T1.4 is reserved) at status: provisional_v0 with staggered re-ratification
-      triggers per INTENT Part 6B. Absorbs GAP-class-b-product-lambdas from
-      ROADMAP-PRODUCT.yaml.
+      REPORT-ONLY. Author the Class B "Lambda verb" contracts at status: provisional_v0 under the
+      CD.25 pre-codegen contract ratification ritual. [CD.16 gate SATISFIED 2026-06-03: ratified via
+      Decision 79 (dec-1086), so per-Lambda deploy gating is in force and the v0-provisional clock can
+      start.] RE-GROUNDED 2026-06-22 (6 -> 3) from the superseded six-Lambda model onto the
+      consolidated DuckLake boundary: CD.10's six-Lambda enumeration is illustrative not canonical
+      (audit F-008); CD.33 / Decision 81 / Decision 91 ratified the writer/reader/maintenance split +
+      closed boundary. The deploy unit (what CD.16 gates) is the Lambda, so the contracts are
+      per-Lambda: three contracts (ducklake_writer.yaml, ducklake_reader.yaml,
+      ducklake_maintenance.yaml) document the real verb surface (writer: file_ops / update_ops /
+      write_ops / create_ops_tables; reader: read_ops_current / read_ops_history / named_read /
+      query_ops; maintenance: merge / gc / hot_merge + operational catalog_reinit / restore_drill /
+      merge_ops / catalog_stats / reconcile_columns; the breaker_probe test action is out of contract
+      scope). The old "log-rec / log-decision
+      / update-rec" semantic operations are table-parameterized writer verbs, not separate Lambdas;
+      "list-tools" is the reader's named_read registry, not a separate Lambda. Absorbs
+      GAP-class-b-product-lambdas from ROADMAP-PRODUCT.yaml. COMPLETION gated on CD.25 ratification
+      (T1.12 is bootstrap_completion_exempt: false); authoring is allowed now (started).
     depends_on: [T-1.12, T0.12.5, T0.12.7]
     decision_required_before:
       - "CD.16 ratifies (Lambda-deploy per-Lambda gating in force) [SATISFIED 2026-06-03: CD.16 ratified via Decision 79, dec-1086]"
-    files_in_scope: []
+      - "CD.25 ratifies (pre-codegen contract ritual) gates COMPLETION, not authoring; T1.12 is bootstrap_completion_exempt: false [PENDING as of 2026-06-22]"
+    files_in_scope:
+      - docs/contracts/ducklake_writer.yaml
+      - docs/contracts/ducklake_reader.yaml
+      - docs/contracts/ducklake_maintenance.yaml
     decomposition_hints:
       split_by: per_lambda
       atomic_plans:
-        - "Ratify lambda-log-rec.yaml (provisional_v0; trigger 500 invocations OR 60 days)"
-        - "Ratify lambda-log-decision.yaml (provisional_v0; trigger 200 invocations OR 90 days)"
-        - "Ratify lambda-query.yaml (provisional_v0; trigger 2000 invocations OR 60 days)"
-        - "Ratify lambda-update-rec.yaml (provisional_v0; trigger 500 invocations OR 90 days)"
-        - "Ratify lambda-list-tools.yaml (provisional_v0; trigger 500 invocations OR 120 days)"
-        - "Ratify lambda-maintenance.yaml (provisional_v0; trigger 90 days only)"
+        - "Ratify ducklake_writer.yaml (provisional_v0; trigger 500 production invocations OR 60 days)"
+        - "Ratify ducklake_reader.yaml (provisional_v0; trigger 2000 production invocations OR 60 days)"
+        - "Ratify ducklake_maintenance.yaml (provisional_v0; trigger 90 days only)"
       rationale: |
-        Each Lambda has distinct verb semantics; per-Lambda atomic plans give each
-        contract its own Step 10 critique. Triggers staggered per INTENT Part 6B.
-        Round-3 M2: atomic decomposition children inherit the parent's
-        bootstrap_completion_exempt status automatically. T1.12's parent is
-        bootstrap_completion_exempt: false, so children inherit false -- they
-        ratify post-CD.16 under the normal flow, not under bootstrap.
+        RE-GROUNDED 2026-06-22 (6 -> 3): the canonical deploy units are the three DuckLake Lambdas
+        (CD.10 F-008 / CD.33 / Decision 81 / Decision 91), not the six legacy verb-Lambdas. The deploy
+        unit (what CD.16 gates) is the Lambda; each contract's verbs: map captures the semantic
+        operations within it. The three contracts were authored together in one REPORT-ONLY plan
+        (PLAN-ratify-class-b-lambda-verb-contracts) with one Step 10 multi-perspective critique covering
+        all three deliverables -- the same grouping the Class C wave (T0.12.7) used. Triggers re-mapped
+        from the per-verb Part 6B stagger onto the three Lambdas (writer = hottest write path; reader =
+        hottest read path; maintenance = scheduled/low-volume, days-only). T1.12 is
+        bootstrap_completion_exempt: false, so completion ratifies post-CD.16 under the normal flow.
     exit_criteria:
-      - "All six Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0"
-      - "Each carries explicit re_ratification trigger per INTENT Part 6B stagger"
-      - "Each atomic plan independently converges on Step 10 critique"
+      - "All three DuckLake Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0 (ducklake_writer, ducklake_reader, ducklake_maintenance)"
+      - "Each carries an explicit re_ratification_trigger.first_of per the re-mapped Part 6B stagger, parseable by scripts/contracts_enforcement.evaluate_provisional_trigger"
+      - "Each contract's verbs: map matches the live handler dispatch surface; the CD.25 contract-drift gate passes"
+      - "The Step 10 multi-perspective critique converged on the three contract deliverables"
+      - "COMPLETION gate: flips in_progress -> complete only when CD.25 ratifies (T1.12 is bootstrap_completion_exempt: false)"
     related_candidate_decisions: [CD.25, CD.10, CD.11, CD.16]
     effort: L
     strategic: true
     bootstrap_completion_exempt: false
-    status: not_started
+    status: in_progress
+    progress_note: >-
+      2026-06-22: authored the three re-grounded Class B contracts (docs/contracts/ducklake_writer.yaml,
+      ducklake_reader.yaml, ducklake_maintenance.yaml) at provisional_v0 via
+      PLAN-ratify-class-b-lambda-verb-contracts; CD.25 contract-drift gate + loader validation pass.
+      Re-grounded the decomposition 6 -> 3 onto the canonical DuckLake boundary (CD.10 F-008 / CD.33 /
+      Decision 81 / Decision 91). Status held at in_progress (NOT complete): completion is gated on
+      CD.25 ratification (bootstrap_completion_exempt: false). Remaining for complete: CD.25 ratifies
+      via the ops portal, then flip to complete.
 
   - id: T1.13
     tier: T1
@@ -3701,26 +3720,58 @@ tier_items:
   - id: T2.4
     tier: T2
     name: Partition-everything sweep
-    intent: Apply CD.9 uniform rule. Every Iceberg table in personal account is partitioned (day(last_updated_timestamp) for ops SCD2 tables; day(started_at) UTC for telemetry event-time tables per Decision 96; day(trade_date) for market data; per-table choice for new tables). New tables inherit a partitioned template.
+    intent: >-
+      [Original framing: Apply CD.9 uniform rule -- every Iceberg table in personal account partitioned;
+      new tables inherit a partitioned template.] Realized state (2026-06-23): CD.9 partitioning rule is
+      in force. The 3 live personal-account Iceberg ops tables (ops_recommendations, ops_decisions,
+      ops_priority_queue) are PARTITIONED BY (day(last_updated_timestamp)) via T2.1. The generator
+      (scripts/schema_to_iceberg.py) raises MissingPartitionSpec on @partition_by-less models (T0.13)
+      and emits PARTITIONED BY verbatim; two-arg transform handling (bucket/truncate) corrected by
+      rec-2314. Ops/telemetry tables migrated to DuckLake-on-Neon (Decision 78/84); DuckLake
+      partition-as-code is T2.33's domain and ALTER-conditional per Decision 81. The work-account
+      iceberg_tables.tf is retained-but-not-applied (CD.21); its 4 base tables are not live.
     depends_on: [T2.1, T0.13]    # T0.13 added 2026-06-09 (audit F-012): exit criterion 2 extends scripts/schema_to_iceberg.py, which T0.13 CREATES -- without the edge this item computed eligible while its producer was unbuilt
     files_in_scope:
       - terraform/iceberg_tables.tf
       - scripts/schema_to_iceberg.py    # add partition-by clause emission (created by T0.13)
     exit_criteria:
-      - "Every iceberg_tables.tf table has a PARTITIONED BY clause"
-      - "scripts/schema_to_iceberg.py emits partition clause from a class-level annotation on Pydantic schema (e.g. @partition_by('day(last_updated_timestamp)'))"
-      - "New-table template (e.g. cookiecutter or scaffold) includes partition declaration"
+      - >-
+        Live personal-account Iceberg ops tables (ops_recommendations, ops_decisions,
+        ops_priority_queue) are PARTITIONED BY (day(last_updated_timestamp)) per T2.1
+        (terraform/personal/main.tf). The work-account iceberg_tables.tf is
+        retained-but-not-applied (CD.21); its 4 base tables are not live.
+      - >-
+        scripts/schema_to_iceberg.py raises MissingPartitionSpec for models lacking
+        @partition_by (T0.13 generation-time enforcement); emits PARTITIONED BY verbatim;
+        _partition_column() correctly extracts the column from single-arg (day(col)),
+        two-arg (bucket(N,col), truncate(W,col)), and bare (col) specs (rec-2314 fix).
+        Generation-time enforcement supersedes a literal cookiecutter/scaffold.
+      - >-
+        DuckLake partition-as-code is owned by T2.33; ALTER ... SET PARTITIONED BY is
+        row/file-count-conditional per Decision 81 (CD.9 amendment) -- not warranted at
+        current ops-table sizes. ops_session_log/ops_execution_plans (Athena-Iceberg,
+        pending T2.26) are out of T2.4's scope.
     related_candidate_decisions: [CD.9, CD.31]
     note: |
-      Under proposed DuckLake adoption (CD.31), ops-table partitioning uses ALTER TABLE ... SET PARTITIONED
-      BY (not CREATE TABLE DDL). The Iceberg partition sweep for all other tables is otherwise unchanged.
-      Telemetry partition basis corrected 2026-06-23 (Decision 96): telemetry is insert-once event data and
-      partitions on day(started_at) UTC (event time), NOT day(last_updated_timestamp) -- the latter is the
-      ops-SCD2 mutation envelope and does not apply to telemetry. trade_date is market-data only; telemetry
-      carries no trade_date.
+      bootstrap_completion_exempt: gating CD.9 is state: pending, but its partitioning substance is
+      ratified via Decision 78 (= CD.31, DuckLake adoption) and Decision 81 (CD.9 ALTER-partitioning
+      mechanism); the bootstrap allowance permits completion while the candidate id remains pending,
+      matching the T2.5/T0.13 precedent. DuckLake partition-as-code posture: ALTER ... SET PARTITIONED
+      BY is row/file-count-conditional per Decision 81; not warranted at current ops-table sizes.
+      T2.33 owns the DuckLake partition-as-code domain going forward.
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-23"
+    bootstrap_completion_exempt: true
+    progress_note: >-
+      2026-06-23: Criterion adjudication -- (1) T2.1 delivered live partitioned personal-account Iceberg
+      ops tables (PARTITIONED BY day(last_updated_timestamp)); work-account iceberg_tables.tf
+      retained-but-not-applied per CD.21. (2) T0.13 created the @partition_by enforcement in
+      scripts/schema_to_iceberg.py; rec-2314 fixed the two-arg transform bug in _partition_column()
+      (bucket/truncate now correctly extract the last arg). (3) DuckLake ALTER-conditional partitioning
+      posture ratified via Decision 81; T2.33 owns DuckLake partition-as-code. All exit criteria
+      satisfied; bootstrap_completion_exempt=true (CD.9 pending, substance ratified via Decision 78/81).
   - id: T2.5
     tier: T2
     name: DuckDB swap on read paths
@@ -3767,7 +3818,8 @@ tier_items:
     related_candidate_decisions: [CD.3]
     effort: S
     strategic: false
-    status: not_started
+    status: deferred_post_mvp
+    progress_note: "Parked post-MVP (Decision 93): T2.6 is the platform execution substrate (scripts/local_pysr_runner.py + pysr_staleness_alarm.py) for PRODUCT formula discovery (src/lab/pysr_factory.py, owned by ROADMAP-PRODUCT.yaml) -- not on the platform autonomous-loop critical path. No live platform item depends_on it (0 fan-out); gated by CD.3 (compute node, state pending). Reactivate -> not_started when product formula-discovery work begins."
   - id: T2.7
     tier: T2
     name: Retire Athena _current views in personal account
@@ -4563,7 +4615,8 @@ tier_items:
     related_candidate_decisions: [CD.35]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
-    status: not_started
+    status: in_progress
+    progress_note: "2026-06-23: PLAN-terraform-cicd-bootstrap-root.yaml shipped: terraform/bootstrap/ root (main.tf, variables.tf, github_ci_apply.tf with import{} blocks, README.md runbook), github_ci_apply role+policy removed from terraform/personal/oidc.tf (pointer comment), bootstrap added to validate.py _TERRAFORM_ROOTS + test assertion, Axis A taxonomy + AGENTS.md + terraform/CLAUDE.md T2.23 sentinels updated. Criteria 2 (rec-2079 absorbed: IAMRolesRead consolidates IAMCIPlanRoleRead+IAMPlatformRolesRead+read portion of IAMRoleReconcile) and 5 (bootstrap excluded from apply-sandbox path filter by design) PASS. Criteria 1/3/4 BLOCKED pending one-time admin apply (bootstrap state bucket + terraform import + state rm from personal) -- VP9-14 are human-gated post-deploy steps."
   - id: T2.24
     tier: T2
     name: "Terraform CI/CD: scheduled drift detection (alarm-only) (CD.35 Wave 5)"
