@@ -688,6 +688,8 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
 # lives in it). This is the admin provisioning path; it does NOT weaken the bootstrap isolation, which
 # fences the github_ci_apply CI role (the pipeline) out of bootstrap state. PlatformAdmin is the admin
 # tier. Scoped to the one bucket; no provider refresh-read set (the bucket is not Terraform-managed).
+# Provenance: applied out-of-band under agent_platform_admin (terraform -target) during the T2.23
+# bootstrap provisioning ahead of this PR's merge; the merge-time CD apply reconciles it to a no-op.
 # ---------------------------------------------------------------------------
 resource "aws_iam_role_policy" "platform_admin_bootstrap_state" {
   name = "BootstrapStateProvisioning"
