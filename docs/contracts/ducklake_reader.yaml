@@ -46,6 +46,12 @@ contract:
       payload shapes are validated against real agent traffic before ratification. The reader is the
       hottest ops path (every preflight sync + every rec/decision read), so a high invocation
       threshold reaches signal quickly.
+    surfacing_note: >-
+      Trigger surfacing is DORMANT until the session-preflight metrics provider is wired (subset-f):
+      session_preflight._scan_provisional_contracts currently passes no metrics, so
+      evaluate_provisional_trigger receives metrics=None and never fires. The thresholds below are the
+      authored intent, not yet a live alarm; the production_invocations clock may already be past
+      threshold (reader has been live since 2026-06-08/09) but will not surface until the provider lands.
     re_ratification_trigger:
       first_of:
         - "production_invocations >= 2000"
@@ -59,10 +65,10 @@ verbs:
       field-semantics contract, rec-2170); `key`/`id` is the legacy merge-key-equality form.
     response_codes:
       200: "rows returned; body {ok, table, rows, row_count}"
-      400: "unknown action (dispatcher)"
       500: "DuckLakeRuntimeError (unknown/missing table; malformed filter) / VersionMismatchError"
     typed_errors:
-      runtime: "unknown table, malformed filter (must carry BOTH column and value), or runtime loud-fail (500)"
+      filter_validation: "malformed filter (must carry BOTH column and value) -- rejected loudly rather than degrading to an unfiltered full-table read, rec-2170 (DuckLakeRuntimeError -> 500)"
+      runtime: "unknown/missing table or runtime loud-fail (500)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
   read_ops_history:
     payload_schema_ref: >-
@@ -70,10 +76,9 @@ verbs:
       (SCD2) rows for an ops_* table, optionally filtered to one merge key.
     response_codes:
       200: "rows returned; body {ok, table, rows, row_count}"
-      400: "unknown action (dispatcher)"
       500: "DuckLakeRuntimeError (unknown/missing table) / VersionMismatchError"
     typed_errors:
-      runtime: "unknown table or runtime loud-fail (500)"
+      runtime: "unknown/missing table or runtime loud-fail (500)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
   named_read:
     payload_schema_ref: >-
@@ -82,7 +87,6 @@ verbs:
       values. No caller SQL crosses the boundary on this path (Decision 84 I-3).
     response_codes:
       200: "rows returned; body {ok, verb, registry_version, rows, row_count}"
-      400: "unknown action (dispatcher)"
       500: "DuckLakeRuntimeError (empty/unknown verb; non-object params) / VersionMismatchError"
     typed_errors:
       runtime: "missing/unknown verb, or params not an object (500)"
@@ -90,21 +94,23 @@ verbs:
   query_ops:
     payload_schema_ref: >-
       event envelope {action: "query_ops", table, sql, params?: []}. Caller-supplied read-only
-      SELECT over an ops_* current projection (internal predicate-pushdown read paths); `sql` uses
-      the {tbl} placeholder for the table. Only the current projection is reachable.
+      SELECT/WITH (single-statement; assert_read_only_sql-enforced). `sql` may use the {tbl}
+      placeholder (substituted to the table's current projection), but the FROM target is
+      caller-controlled -- _history and other ops_* tables ARE reachable (e.g. the DQ runner reads
+      _history via this verb). The boundary is "read-only SELECT + the S3-read-only IAM role", NOT
+      "current projection only".
     response_codes:
       200: "rows returned; body {ok, table, rows, row_count}"
-      400: "unknown action (dispatcher)"
-      500: "DuckLakeRuntimeError (unknown/missing table; empty sql) / VersionMismatchError"
+      500: "DuckLakeRuntimeError (unknown/missing table; empty/non-SELECT/multi-statement sql) / VersionMismatchError"
     typed_errors:
-      runtime: "unknown table or empty sql (500)"
+      runtime: "unknown/missing table, or sql that is empty / not a single read-only SELECT|WITH (500)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
 audit_invariants:
   - "Closed boundary: the read role is S3 GetObject only; a write attempt is denied at IAM/S3 (no write path through the reader; write_probe gate)."
   - "named_read executes ONLY pre-established registry SQL keyed by verb name; no caller SQL crosses the boundary on this path (Decision 84 I-3)."
-  - "query_ops accepts a caller-supplied SELECT for internal predicate-pushdown read paths; only the current projection is reachable and the S3-read-only role bounds the blast radius."
+  - "query_ops accepts a caller-supplied read-only SELECT/WITH (single-statement; assert_read_only_sql-enforced) for internal predicate-pushdown read paths. The FROM target is caller-controlled -- _history and other ops_* tables ARE reachable (e.g. the DQ runner reads _history via this verb); the boundary is read-only-SELECT + the S3-read-only IAM role, NOT current-projection-only."
   - "read_ops_current rejects a malformed `filter` (must carry BOTH column and value) loudly rather than degrading to an unfiltered full-table read (rec-2170 hardening)."
-  - "An unknown `action` returns 400 with the sorted action allow-list; reads are idempotent and a dead Neon session is transparently reconnected once."
+  - "An unknown `action` returns 400 with the sorted action allow-list (dispatcher-level; not a per-verb outcome). Reads are idempotent and a dead Neon session is transparently reconnected once."
   - "KNOWN GAP: the current_state single-key filter path has an open correctness rec (rec-2170) where a non-merge-key equality filter can bind against the merge key. The verb semantics here document the intended contract; the fix is a code amendment, not a contract change."
 amendment_log: []
 previous_versions: []

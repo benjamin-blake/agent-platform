@@ -34,6 +34,9 @@ contract:
       AWS_IAM SigV4-signed Function URL; write-scoped IAM role (DuckLake Parquet PutObject + Neon
       catalog credential). Two recognized principals (CD.10 retained allow-list): PlatformDev
       (default; file_ops / update_ops / write_ops) and PlatformAdmin (create_ops_tables admin path).
+      The admin boundary is enforced by IAM-role scoping / credential possession + the
+      create_ops_tables confirm_force_recreate guard -- the handler does NOT perform an in-code
+      assumed-role ARN check; principal separation lives at the IAM layer.
     principal_classes:
       - PlatformDev
       - PlatformAdmin
@@ -58,6 +61,11 @@ contract:
       Class B contracts start provisional_v0 (INTENT Part 6A/6B): the verb set, error taxonomy, and
       payload shapes are validated against real agent traffic before ratification. The writer has
       served live ops_* traffic since the T2.19 recs cutover (2026-06-08/09), so the clock is real.
+    surfacing_note: >-
+      Trigger surfacing is DORMANT until the session-preflight metrics provider is wired (subset-f):
+      session_preflight._scan_provisional_contracts currently passes no metrics, so
+      evaluate_provisional_trigger receives metrics=None and never fires. The thresholds below are the
+      authored intent, not yet a live alarm.
     re_ratification_trigger:
       first_of:
         - "production_invocations >= 500"

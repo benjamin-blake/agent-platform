@@ -43,7 +43,7 @@ acceptance_criteria:
   - All three Class B contract YAMLs exist at contract_version 1, status provisional_v0, class B, each with a non-empty verbs mapping and NO fields key (Class B shape per scripts/contracts_schema.py).
   - Each contract loads cleanly via scripts.contracts.load_contract (schema-valid ContractDocument) and resolve_refs is a clean no-op (Class B has no fields).
   - Each contract re_ratification_trigger.first_of parses via scripts.contracts_enforcement.evaluate_provisional_trigger (fires at high metrics, unfired with no metrics) using the closed LHS vocabulary -- writer 500 inv/60d, reader 2000 inv/60d, maintenance 90d only.
-  - Each contract verbs mapping matches the live handler dispatch surface (writer 4 production verbs subset of _ACTIONS; reader 4 production verbs subset of _ACTIONS; maintenance 9 verbs == _ACTIONS) with per-verb response_codes + typed_errors from the handler's real status mapping.
+  - Each contract verbs mapping is a subset of the live handler dispatch surface (writer 4 + reader 4 + maintenance 8 documented verbs, each in the live _ACTIONS; smoke/diagnostic probes -- writer/reader probes and maintenance breaker_probe -- are excluded as instrumentation) with per-verb response_codes + typed_errors from the handler's real status mapping.
   - The validate.py CD.25 contract-drift gate passes over docs/contracts/ with 9 ritual contracts and no drift; the Decision 86 intent-doc-freeze gate passes (machine-parseable YAML, no new prose doc).
   - T1.12 is re-grounded coherently 6 -> 3 (intent + exit_criteria + decomposition_hints + name + files_in_scope) and the roadmap still loads (scripts.platform_roadmap.load); T1.12 status is in_progress, NOT complete.
   - The Step 10 multi-perspective critique converged on the three contract deliverables.
@@ -55,7 +55,7 @@ verification_plan:
       bin/venv-python - <<'PY'
       from scripts.contracts import load_contract, resolve_refs
       import pathlib
-      exp = {"ducklake_writer": 4, "ducklake_reader": 4, "ducklake_maintenance": 9}
+      exp = {"ducklake_writer": 4, "ducklake_reader": 4, "ducklake_maintenance": 8}
       src = pathlib.Path("docs/contracts")
       for name, n in exp.items():
           d = load_contract(src / f"{name}.yaml")
@@ -104,12 +104,14 @@ verification_plan:
           assert documented <= live, (cname, documented - live)
           assert set(load_contract(src / f"{cname}.yaml").verbs) == documented, cname
           print("OK", cname, "verbs subset of live handler dispatch")
+      doc_maint = {"merge", "gc", "hot_merge", "catalog_reinit", "restore_drill", "merge_ops", "catalog_stats", "reconcile_columns"}
       live_m = set(importlib.import_module("src.lambdas.ducklake_maintenance.handler")._ACTIONS)
-      assert set(load_contract(src / "ducklake_maintenance.yaml").verbs) == live_m, "maintenance"
-      print("OK ducklake_maintenance verbs == live handler dispatch")
+      assert doc_maint <= live_m, ("maintenance", doc_maint - live_m)
+      assert set(load_contract(src / "ducklake_maintenance.yaml").verbs) == doc_maint, "maintenance"
+      print("OK ducklake_maintenance verbs subset of live handler dispatch (breaker_probe excluded as instrumentation)")
       PY
-    expected: Four "OK ..." lines and exit 0 -- every documented verb exists in the live handler _ACTIONS map.
-    fix_if: An AssertionError naming a verb in the contract but not the handler (or vice versa for maintenance) -- the contract drifted from the deployed surface; correct the verbs mapping.
+    expected: Three "OK ..." lines and exit 0 -- every documented verb exists in the live handler _ACTIONS map.
+    fix_if: An AssertionError naming a verb in the contract but not the handler -- the contract drifted from the deployed surface; correct the verbs mapping.
   - step: 4
     phase: pre-deploy
     action: Run the CD.25 contract-drift gate + the Decision 86 intent-doc-freeze gate (and the rest of the fast tier) over the working tree.
@@ -145,7 +147,7 @@ constraints:
   - "REPORT-ONLY: the deliverable is the three Class B contracts. No Lambda code, Pydantic, or field_semantics.yaml changes -- the contracts DESCRIBE the deployed surface, they do not modify it."
   - "Author strictly against the shipped scripts/contracts_schema.py + scripts/contracts.py loader, NOT the INTENT 3D/3E worked examples (their shapes can fail extra=forbid)."
   - "Class B contracts carry a non-empty verbs mapping and MUST NOT carry a fields key (ContractDocument model_validator)."
-  - "No Lambda build/deploy/smoke-test: docs/ is not Lambda-packaged; compute_affected_artifacts flags no DuckLake Lambda artifact (CD.16 / Decision 79). The ROADMAP edit is roadmap-bookkeeping, not a data-pipeline code change."
+  - "No Lambda build/deploy/smoke-test warranted. compute_affected_artifacts flags the ACTIVE data-pipeline artifact (docs/ROADMAP-PLATFORM.yaml is a data-pipeline ASSET, manifest line 44), NOT any DuckLake Lambda. The flagged file is inert embedded documentation (no handler logic changed), so per the spirit of CD.16 / Decision 79 the deploy exemption is justified by the asset being non-code -- not by a false 'no artifact flagged' claim. (Bundling a roadmap YAML into a Lambda zip is itself questionable; out of scope here, candidate rec.)"
   - "Do NOT flip T1.12 to complete: CD.25 is pending and T1.12 is bootstrap_completion_exempt: false (completion is CD.25-gated)."
   - "re_ratification_trigger.first_of must use the closed LHS vocabulary {production_invocations, days_since_first_production_invocation} with '>=' so scripts/session_preflight.py surfaces the trigger when it fires."
   - "No rescue agents or workaround loops (Decision 55)."
@@ -156,7 +158,7 @@ context:
   - "Dependencies T-1.12 / T0.12.5 / T0.12.7 are all complete (the contracts.py machinery + Class A + Class C precedents). PLAN-class-c-cross-system-invariants is the structural template: REPORT-ONLY, V1, loader-based VP, one Step 10 critique over the whole class wave, roadmap status flip after convergence."
   - "Open recs rec-2158 (add delete_ops verb) and rec-2170 (reader filter binds against merge key) are Lambda CODE recs, not contract-authoring, so bundled_recommendations is empty. They are recorded as KNOWN GAPs in the writer/reader contracts; the future code changes land as contract amendments via the provisional_v0 re-ratification path -- the concrete illustration of why Class B starts provisional (INTENT Part 6A)."
   - "Closure obligation: this plan is additive (three new contracts) plus a roadmap re-grounding; it neither resolves a rec nor Deletes/cuts-over a live surface (the six legacy contracts were never created), so the closure obligation is exempt. VP step 4's drift gate is the stale-reference sweep that confirms only the three ritual Class B contracts exist."
-  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no scope-file overlap with recent main changes."
+  - "Branch was 0 commits behind origin/main at session preflight, but origin/main has since advanced (e.g. Decision 93 parked T2.6 -> deferred_post_mvp). The T1.12 edit MUST be rebased onto origin/main before merge (Step 11) and VP4-VP5 re-run so the merge does not revert newer roadmap state (T2.6); no scope-file conflict expected (this edit touches only the T1.12 block)."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/focused-dirac-wy3a0p).
   - docs/PROJECT_CONTEXT.md and the INTENT-pre-codegen-contract-ratification.md Part 3D / Part 6 sections read.
