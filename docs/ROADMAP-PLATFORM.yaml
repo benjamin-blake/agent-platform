@@ -2835,38 +2835,51 @@ tier_items:
 
   - id: T0.12.6
     tier: T0
-    name: Ratify Class A telemetry table contracts (greenfield; decomposed)
+    name: Ratify Class A telemetry table contracts (canonical trace/observation model; decomposed)
     intent: |
-      REPORT-ONLY parent placeholder. This item is the placeholder for a DECOMPOSED
-      set of atomic per-table REPORT-ONLY plans (one per telemetry table), per the
-      AGENTS.md freeze override. Greenfield treatment -- current telemetry
-      implementation is a draft, not a contract. Outputs feed both the
-      personal-account substrate and T3 verifier work.
+      REPORT-ONLY parent placeholder. Decomposed into atomic REPORT-ONLY plans, per the AGENTS.md
+      freeze override. Greenfield treatment -- current telemetry implementation is a draft, not a
+      contract. Re-scoped 2026-06-23 by Decision 95 to the canonical session-rooted trace/observation
+      model: FOUR table contracts (not the seven draft tables) plus two new Class C identity keys,
+      ratified against docs/contracts/telemetry-lexicon.yaml and Decisions 95/96/97
+      (model / temporal / identity). Outputs feed both the personal-account substrate and T3 verifier work.
     depends_on: [T-1.12, T0.12, T0.12.7]
     files_in_scope: []
     decomposition_hints:
       split_by: per_table
       atomic_plans:
-        - "Ratify telemetry_sessions.yaml"
-        - "Ratify telemetry_phases.yaml"
-        - "Ratify telemetry_steps.yaml"
-        - "Ratify telemetry_process_events.yaml"
-        - "Ratify telemetry_model_calls.yaml"
-        - "Ratify telemetry_transcripts.yaml"
-        - "Ratify telemetry_agent_invocations.yaml"
+        - "Ratify telemetry_sessions.yaml (trace root; PK session_id; parent_session_id; project_id forward-declared)"
+        - "Ratify telemetry_observations.yaml (unified node; PK observation_id; FK session_id + parent_observation_id; observation_type discriminator collapsing phases/steps/process_events/model_calls)"
+        - "Ratify telemetry_transcripts.yaml (large-payload sidecar; FK observation_id + session_id)"
+        - "Ratify telemetry_agents.yaml (agent dimension; replaces rootless telemetry_agent_invocations)"
+        - "Author observation-id.yaml + parent-observation-id.yaml (Class C ULID keys, contract_version 1)"
+        - "Amend session-id.yaml additively (prose_improvement: four-table model; governance_note_add: ULID target) -- semantic_break false, per Decision 95"
       rationale: |
-        Each table has distinct field semantics. Bundling produces shallow
-        ratification. Atomic plans give each table a dedicated Step 10
-        multi-perspective critique.
+        Decision 95 collapses the seven draft tables (phases/steps/process_events/model_calls ->
+        observation_type on one telemetry_observations table; agent_invocations -> rooted
+        telemetry_agents) to four. Each remaining table has distinct field semantics; bundling produces
+        shallow ratification. Atomic plans give each a dedicated Step 10 critique. The two new Class C
+        keys and the additive session-id.yaml amendment ride here because they are coupled to the new
+        Class A contracts (the drift gate validates the set together).
+      ratified_against:
+        - docs/contracts/telemetry-lexicon.yaml
+        - "Decision 95 (model)"
+        - "Decision 96 (temporal/partition)"
+        - "Decision 97 (identity/determinism)"
     exit_criteria:
-      - "All seven telemetry_*.yaml contracts exist at contract_version: 1, status: ratified"
+      - "Four telemetry_*.yaml contracts exist at contract_version: 1, status: ratified (telemetry_sessions, telemetry_observations, telemetry_transcripts, telemetry_agents)"
+      - "observation-id.yaml + parent-observation-id.yaml Class C contracts exist at contract_version: 1, status: ratified"
+      - "session-id.yaml amended additively (semantic_break: false) to the four-table model + ULID target, via prose_improvement + governance_note_add amendment_log entries (Decision 95)"
       - "Cross-contract join entries land in docs/contracts/_joins.yaml"
+      - "All contracts ratify against the telemetry-lexicon.yaml vocabulary and Decisions 95/96/97"
       - "Each atomic plan independently converges on Step 10 critique"
     related_candidate_decisions: [CD.25]
+    related_decisions: [95, 96, 97]
     effort: L
     strategic: true
     bootstrap_completion_exempt: true
     status: not_started
+    note: "Re-scoped 2026-06-23 by Decision 95: seven draft tables -> four canonical (trace/observation model); +2 Class C ULID key contracts (observation-id, parent-observation-id); +additive session-id.yaml amendment. Vocabulary anchored to docs/contracts/telemetry-lexicon.yaml."
 
   - id: T0.12.7
     tier: T0
@@ -3688,7 +3701,7 @@ tier_items:
   - id: T2.4
     tier: T2
     name: Partition-everything sweep
-    intent: Apply CD.9 uniform rule. Every Iceberg table in personal account is partitioned (day(last_updated_timestamp) for ops/telemetry; day(trade_date) for market data; per-table choice for new tables). New tables inherit a partitioned template.
+    intent: Apply CD.9 uniform rule. Every Iceberg table in personal account is partitioned (day(last_updated_timestamp) for ops SCD2 tables; day(started_at) UTC for telemetry event-time tables per Decision 96; day(trade_date) for market data; per-table choice for new tables). New tables inherit a partitioned template.
     depends_on: [T2.1, T0.13]    # T0.13 added 2026-06-09 (audit F-012): exit criterion 2 extends scripts/schema_to_iceberg.py, which T0.13 CREATES -- without the edge this item computed eligible while its producer was unbuilt
     files_in_scope:
       - terraform/iceberg_tables.tf
@@ -3701,6 +3714,10 @@ tier_items:
     note: |
       Under proposed DuckLake adoption (CD.31), ops-table partitioning uses ALTER TABLE ... SET PARTITIONED
       BY (not CREATE TABLE DDL). The Iceberg partition sweep for all other tables is otherwise unchanged.
+      Telemetry partition basis corrected 2026-06-23 (Decision 96): telemetry is insert-once event data and
+      partitions on day(started_at) UTC (event time), NOT day(last_updated_timestamp) -- the latter is the
+      ops-SCD2 mutation envelope and does not apply to telemetry. trade_date is market-data only; telemetry
+      carries no trade_date.
     effort: M
     strategic: false
     status: not_started

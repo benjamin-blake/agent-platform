@@ -1,0 +1,126 @@
+---
+# Telemetry canonical lexicon -- the single vocabulary the telemetry trace/observation model
+# ratifies against. Free-form (non-ritual) registry: no top-level `contract:` / `class:`, so the
+# CD.25 drift gate (scripts/contracts.py::load_all_contracts; scripts/validate.py::validate_contract_drift)
+# skips it, per the read-engine.yaml / storage-substrate.yaml precedent.
+#
+# Authority boundary:
+#   - Canonical TERMS + the model shape live HERE.
+#   - Per-field DQ checks live in config/agent/data_quality/telemetry.yaml.
+#   - Per-field contract semantics live in the Class A telemetry_*.yaml contracts (authored at T0.12.6).
+# Ratified by Decision 95 (model), Decision 96 (temporal/partition), Decision 97 (identity/determinism).
+
+version: 1
+last_updated: "2026-06-23"
+decisions_cited: [Decision-95, Decision-96, Decision-97, Decision-67, Decision-84, CD.25, CD.9]
+
+lexicon:
+  model:
+    name: session-rooted trace/observation model
+    shape: OpenTelemetry / Langfuse trace tree
+    canonical_tables: [telemetry_sessions, telemetry_observations, telemetry_transcripts, telemetry_agents]
+    root_invariant: >-
+      Every telemetry row is reachable from a telemetry_sessions row; there are no rootless entities.
+    collapses:
+      # The seven draft tables -> four canonical (Decision 95).
+      telemetry_phases: telemetry_observations (observation_type=phase)
+      telemetry_steps: telemetry_observations (observation_type=step)
+      telemetry_process_events: telemetry_observations (observation_type=process_event)
+      telemetry_model_calls: telemetry_observations (observation_type=model_call)
+      telemetry_agent_invocations: telemetry_agents (rooted dimension + linked observations/sub-sessions)
+
+  terms:
+    - term: session
+      aka: [trace, run]
+      definition: >-
+        The root container of one telemetry trace. One row in telemetry_sessions, keyed by session_id.
+        The unit every other telemetry row roots to.
+      see_also: [session_id, parent_session_id, telemetry_sessions]
+
+    - term: trace
+      definition: >-
+        The connected tree of a session and all its observations and linked sub-sessions. "Trace" is the
+        shape; "session" is the root row.
+      see_also: [session, observation]
+
+    - term: observation
+      replaces: [phase, step, process_event, model_call]
+      definition: >-
+        A single timed node in a session's trace tree. One row in telemetry_observations, keyed by
+        observation_id, rooted by session_id, nested by parent_observation_id. The four draft event tables
+        are NOT separate tables -- they are values of observation_type.
+      see_also: [observation_type, observation_id, parent_observation_id, telemetry_observations]
+
+    - term: observation_type
+      definition: >-
+        The discriminator column on telemetry_observations that distinguishes node kinds
+        (phase | step | process_event | model_call | ...). Replaces the draft's four sibling event tables.
+        Accepted-value set ratified per-table at T0.12.6.
+      see_also: [observation]
+
+    - term: transcript
+      definition: >-
+        A large text payload (prompt / response / full transcript) stored in telemetry_transcripts, linked
+        by FK to its observation_id (and session_id). Kept OUT of telemetry_observations so the node table
+        stays small and hot.
+      see_also: [transcript_id, telemetry_transcripts, observation]
+
+    - term: agent
+      replaces: [agent_invocation]
+      definition: >-
+        The agent dimension (agent_type, model, version) a session / observation belongs to, in
+        telemetry_agents, joined by session_id / observation_id. Replaces the rootless
+        telemetry_agent_invocations: agent identity is a rooted dimension; agent WORK is captured as
+        observations / linked sub-sessions.
+      see_also: [telemetry_agents, session, observation]
+
+    - term: root unification
+      definition: >-
+        The invariant that every telemetry entity roots at a session. Cross-agent linkage uses
+        parent_session_id (sub-agent session -> spawning session); in-session structure uses
+        parent_observation_id. Together they form one connected trace tree per top-level run.
+      see_also: [session, parent_session_id, parent_observation_id]
+
+    - term: span
+      status: NOT_USED
+      definition: >-
+        Deliberately not part of this vocabulary. The OpenTelemetry "span" concept is expressed here as an
+        observation. Use "observation", never "span", in telemetry contracts and prompts.
+      see_also: [observation]
+
+  identity:
+    # Decision 97: ULID keys, minted once at the boundary, propagated as FKs, never re-derived downstream.
+    scheme: ULID (Crockford base32)
+    keys:
+      session_id:
+        format_target: ULID
+        format_live: UUID4    # grandfathered; flips when telemetry.py::open_session mints ULID
+        contract: docs/contracts/session-id.yaml    # Class C (ratified T0.12.7; additively amended at T0.12.6)
+      observation_id:
+        format: ULID
+        contract: docs/contracts/observation-id.yaml    # Class C; authored at T0.12.6
+      parent_observation_id:
+        format: ULID
+        references: observation_id
+        contract: docs/contracts/parent-observation-id.yaml    # Class C; authored at T0.12.6
+      transcript_id:
+        format: ULID
+      parent_session_id:
+        format_target: ULID
+        format_live: UUID4    # tracks session_id realization
+        references: session_id
+    rule: >-
+      Minted once at the boundary (open_session / open_observation), propagated to children as FKs, never
+      re-derived downstream (Decision 97 clauses 2-3; mirrors CD.33 clause 2 / Decision 82 for ducklake_writer).
+
+  temporal:
+    # Decision 96: telemetry is insert-once event data; partition by event time, not mutation time.
+    event_time_column: started_at
+    partition:
+      telemetry_sessions: day(started_at)    # UTC
+      telemetry_observations: day(started_at)    # UTC
+      telemetry_transcripts: day(created_at)    # UTC
+      telemetry_agents: day(started_at)    # UTC, or none if realized as a pure dimension (settled at T0.12.6)
+    timestamps: timezone-aware UTC, ISO-8601; naive / local rejected at the boundary
+    excluded: trade_date    # market-data concept; absent from telemetry
+    not_applicable: last_updated_timestamp    # ops-SCD2 mutation envelope; telemetry is insert-once
