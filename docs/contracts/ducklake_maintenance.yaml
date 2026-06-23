@@ -4,8 +4,9 @@
 # (platform tier_item T1.12, Class B wave). CD.16 ratified (dec-1086); the Lambda is deployed (T2.18).
 #
 # This is the maintenance contract the T1.12 roadmap intent already re-grounded onto ducklake_maintenance
-# (per T2.18). It is NOT a public Function-URL agent surface: every action is either EventBridge-scheduled
-# or human-invoked over 443 via `aws lambda invoke`. Documented here so the closed-boundary maintenance
+# (per T2.18). It is NOT a public AGENT surface: every verb is either EventBridge-scheduled or
+# human-invoked over 443 via `aws lambda invoke` (an AWS_IAM Function URL exists for smoke-gate invokes
+# but no scheduled/operational verb depends on it). Documented here so the closed-boundary maintenance
 # verb surface carries the same ratified-contract guarantees as the writer/reader. CD.33 / Decision 81 /
 # Decision 91 ratified the writer/reader/maintenance split.
 #
@@ -31,17 +32,19 @@ contract:
     (analogous to the writer/reader probes), NOT an operational verb, and is out of contract scope.
   governance:
     auth_type: >-
-      NOT a public Function URL / agent surface. SCHEDULED actions are EventBridge-triggered (merge
-      daily 04:00 UTC -> smoke; gc weekly 05:00 UTC Sun -> smoke; hot_merge cron(0 */6) -> smoke;
-      merge_ops cron(30 */6) -> PRODUCTION ducklake_ops). OPERATIONAL actions (catalog_reinit,
-      restore_drill, catalog_stats, reconcile_columns) are human-invoked over 443 via `aws lambda
-      invoke` (AWS_IAM). Singleton: reserved_concurrent_executions=1 (Decision 81 cl.6).
+      NOT a public agent surface (an AWS_IAM Function URL exists for smoke-gate invokes, terraform
+      line 192, but no scheduled or operational verb depends on it). SCHEDULED actions are
+      EventBridge-triggered (merge daily 04:00 UTC -> smoke; gc weekly 05:00 UTC Sun -> smoke;
+      hot_merge cron(0 */6 * * ? *) -> smoke; merge_ops cron(30 */6 * * ? *) -> PRODUCTION
+      ducklake_ops). OPERATIONAL actions (catalog_reinit, restore_drill, catalog_stats,
+      reconcile_columns) are human-invoked over 443 via `aws lambda invoke` (AWS_IAM). Singleton:
+      reserved_concurrent_executions=1 (Decision 81 cl.6).
     principal_classes:
       - "events.amazonaws.com (EventBridge service principal; scheduled merge / gc / hot_merge -> smoke, merge_ops -> production)"
       - "PlatformAdmin (human-invoked operational actions: catalog_reinit / restore_drill / catalog_stats / reconcile_columns)"
     admin_only_features:
       - "Human-invoked operational actions are PlatformAdmin-only by invocation path (aws lambda invoke), not by an in-handler ARN check; the boundary is IAM-role scoping."
-      - "catalog_reinit: the ONLY DESTRUCTIVE + IRREVERSIBLE action (meta-schema drop+reinit); requires confirm=<meta_schema> and an explicit s3:// data_path (no production default)."
+      - "catalog_reinit: the only CATALOG-STRUCTURE destructive action (meta-schema drop + reinit, IRREVERSIBLE); requires confirm=<meta_schema> and an explicit s3:// data_path (no production default). NB: gc is separately DATA-FILE destructive (see audit_invariants)."
       - "restore_drill: DR gate on an isolated scratch meta-schema (production-safe; non-destructive to live catalogs)."
       - "reconcile_columns: ALTER TABLE ADD COLUMN only (never DROP); non-destructive; requires explicit data_path + meta_schema."
       - "catalog_stats: read-only catalog-metadata footprint (psycopg2 metadata read; ATTACH-free; requires explicit meta_schema)."
@@ -97,7 +100,7 @@ verbs:
       version_mismatch: "DuckDB/extension version mismatch (500)"
   hot_merge:
     payload_schema_ref: >-
-      event envelope {action: "hot_merge", force_recreate_tables?}. SCHEDULED (EventBridge cron(0 */6),
+      event envelope {action: "hot_merge", force_recreate_tables?}. SCHEDULED (EventBridge cron(0 */6 * * ? *),
       smoke catalog). Higher-frequency merge-only cadence (merge_adjacent_files) over the HOT table
       scope; no expiry, no deletion (T2.18 FP-B / CD.34).
     response_codes:
@@ -110,7 +113,7 @@ verbs:
   merge_ops:
     payload_schema_ref: >-
       event envelope {action: "merge_ops", data_path (s3://), meta_schema}. SCHEDULED (EventBridge
-      cron(30 */6) against PRODUCTION ducklake_ops, params supplied by the EventBridge target) AND
+      cron(30 */6 * * ? *) against PRODUCTION ducklake_ops, params supplied by the EventBridge target) AND
       human-invokable. Non-destructive merge over ALL live ops_* SCD2 table pairs in the production
       catalog (discovered via information_schema). No expire/cleanup/orphan.
     response_codes:
@@ -168,7 +171,7 @@ audit_invariants:
   - "No LLM / agent invocation anywhere in this path (CD.33 cl.5 / Decision 81 cl.6)."
   - "Scheduled merge/gc/hot_merge operate on the SMOKE catalog (ducklake_smoke); merge_ops is ALSO EventBridge-scheduled (every 6h) but targets the PRODUCTION catalog (ducklake_ops) with data_path+meta_schema supplied by the EventBridge target. The human-invoked operational actions (catalog_reinit/restore_drill/catalog_stats/reconcile_columns) target production via explicit params and refuse no-arg invokes."
   - "GC is circuit-breaker guarded (file-fraction + byte-budget); a trip raises DuckLakeMaintenanceError, emits MaintenanceBreakerTrip=1, and deletes nothing. The forced-threshold breaker_probe action (out of contract scope) exists to prove this guard."
-  - "catalog_reinit is the only DESTRUCTIVE action and requires an explicit confirm=<meta_schema> token (Decision 84 destructive-action guard)."
+  - "Two destructive paths exist: catalog_reinit is CATALOG-STRUCTURE destructive (meta-schema drop + reinit; confirm=<meta_schema>-guarded; IRREVERSIBLE), and gc is DATA-FILE destructive (snapshot expiry + orphan-file deletion on the happy path), guarded by the circuit-breaker, not a confirm token."
   - "An unknown `action` returns 400 with the sorted action allow-list (dispatcher-level; not a per-verb outcome)."
 amendment_log: []
 previous_versions: []

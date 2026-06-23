@@ -136,7 +136,7 @@ verbs:
       confirm_force_recreate?}; admin provisioning verb (creates the SCD2 history+current pair with
       partition transforms; force_recreate is destructive and confirm-guarded).
     response_codes:
-      200: "tables created; body {ok, table, tables: [history, current], force_recreate, counter_seed}"
+      200: "tables created; body {ok, table, tables: [history, current], force_recreate, counter_seed (nullable; non-null only for writer-keyspace tables)}"
       400: "WriterActionError: unknown table, or force_recreate without confirm_force_recreate=<table>"
       500: "DuckLakeRuntimeError / VersionMismatchError"
     typed_errors:
@@ -150,6 +150,6 @@ audit_invariants:
   - "An unknown `action` returns 400 with the sorted action allow-list (no silent no-op)."
   - "_contract_version is stamped on every record at write time (default '1' when absent), per CD.25."
   - "KNOWN GAP: no delete_ops verb yet (rec-2158); postmortem DELETE cannot transit the closed boundary. A future delete_ops verb is a field_add amendment to this contract."
-  - "write_ops/update_ops against a write_mode: append_only ops table raise AppendOnlyUpdateError (a DuckLakeRuntimeError subclass) -> 500 (Decision 70 write-once lifecycle). The production scd2 ops tables are not append_only, so this is a latent path today (e.g. ops_smoke_events)."
+  - "update_ops against a write_mode: append_only ops table raises AppendOnlyUpdateError (a DuckLakeRuntimeError subclass) -> 500 (require_exists=True; Decision 70 write-once). write_ops (require_exists=False) and file_ops do NOT raise -- write_ops performs a bare history append with no current-projection MERGE. The production scd2 ops tables are not append_only, so this is a latent path today (e.g. ops_smoke_events)."
 amendment_log: []
 previous_versions: []
