@@ -31,6 +31,7 @@ from re-conflating.
 
 | environment | money real? | code vs infra | apply gating | account |
 |-------------|-------------|---------------|--------------|---------|
+| bootstrap | N/A (CI/CD own IAM + authority budget) | `terraform/bootstrap/` only | admin-only (`agent_platform_admin`), NEVER auto-apply, out-of-band from CD pipeline (CD.35 Wave 4 / T2.23) | current personal account |
 | sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 77); fail-closed set (IAM/trust/destroy) routes to gated-apply job requiring tf-gated-apply Environment reviewer approval (CD.35 Wave 3 / T2.22) | current personal account |
 | SIT | no (system-integration, mocked capital) | same code path | manual apply after review | future dedicated account (not yet stood up) |
 | PROD | yes (real capital) | same code path | manual apply + second approver | future dedicated account (not yet stood up) |
@@ -51,8 +52,9 @@ declares `environment: tf-gated-apply`, GitHub sets its OIDC sub to
 (gated path). Trusting the environment sub is safe: it can only be minted by an approval-gated job
 (Decision 94 corrects the original "sub stays refs/heads/main" claim, which VP9 disproved). This
 gates the apply JOB, NOT a PR status check (adding it to required checks would wedge autonomous
-fix-merges, Decision 83). IAM changes beyond `github_ci_apply`'s current scope remain admin-gated
-until T2.23 (bootstrap root + authority budget).
+fix-merges, Decision 83). The bootstrap root (CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget
+(permissions boundary + propagation condition keys) in `terraform/bootstrap/`; in-budget IAM
+auto-apply (guard-consumption) is pending T2.25.
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 

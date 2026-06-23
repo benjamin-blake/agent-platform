@@ -2803,7 +2803,8 @@ _TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not 
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
 # terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
-_TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github")
+# terraform/bootstrap/ is the CI/CD bootstrap root (admin-only, NEVER auto-apply -- CD.35 Wave 4 / T2.23).
+_TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github", "terraform/bootstrap")
 
 
 def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> bool:

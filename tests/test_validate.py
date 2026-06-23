@@ -523,7 +523,7 @@ class TestRunTerraformChecks:
         assert failed == []
 
     def test_creds_free_covers_both_roots(self) -> None:
-        """run_terraform_creds_free() runs init -backend=false + validate + fmt for BOTH roots, no plan."""
+        """run_terraform_creds_free() runs init -backend=false + validate + fmt for ALL roots, no plan."""
         calls: list[list] = []
 
         def mock_run(cmd: list, **kwargs: object) -> MagicMock:
@@ -545,6 +545,7 @@ class TestRunTerraformChecks:
         flat = [tok for cmd in calls for tok in cmd]
         assert "-chdir=terraform" in chdirs
         assert "-chdir=terraform/personal" in chdirs
+        assert "-chdir=terraform/bootstrap" in chdirs
         assert any("-backend=false" in cmd for cmd in calls)  # creds-free init
         assert all("plan" not in cmd for cmd in calls)  # no creds-needing plan here
         assert "init" in flat and "validate" in flat and "fmt" in flat
