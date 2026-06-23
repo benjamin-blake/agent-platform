@@ -62,9 +62,9 @@ terraform -chdir=terraform/bootstrap init
 Create a gitignored tfvars file (NEVER commit this file):
 
 ```bash
-# terraform/bootstrap/terraform.bootstrap.tfvars  (gitignored)
-account_id  = "707578707169"
-owner_email = "benjaminblake94@gmail.com"
+# terraform/bootstrap/terraform.bootstrap.tfvars  (gitignored -- NEVER commit real values)
+account_id  = "<12-digit-account-id>"  # aws sts get-caller-identity --query Account --output text --profile agent_platform_admin
+owner_email = "<owner-email>"
 ```
 
 ### 4. Verify the import plan -- STOP if plan shows replace or destroy
