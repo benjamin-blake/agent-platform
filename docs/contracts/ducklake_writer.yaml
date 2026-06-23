@@ -42,8 +42,10 @@ contract:
       - PlatformAdmin
     admin_only_features:
       - >-
-        create_ops_tables with force_recreate_tables=true DROPs the production table pair and
-        requires the confirm_force_recreate=<table> destructive-action guard (Decision 84).
+        create_ops_tables with force_recreate_tables=true DROPs the production table pair. The guard is
+        a DESTRUCTIVE-ACTION confirm token (confirm_force_recreate=<table>), NOT an in-handler principal
+        check -- any holder of the write-scoped role (incl. PlatformDev) who supplies the token can
+        force-recreate; the admin boundary is IAM-role scoping, not handler-enforced (Decision 84).
     write_path: >-
       ducklake_writer Lambda -> DuckLake-on-Neon SCD2 (history append via MERGE-on-ULID + current
       write-through projection); schema-gated, bounded-OCC retried, inlining disabled.
@@ -65,7 +67,9 @@ contract:
       Trigger surfacing is DORMANT until the session-preflight metrics provider is wired (subset-f):
       session_preflight._scan_provisional_contracts currently passes no metrics, so
       evaluate_provisional_trigger receives metrics=None and never fires. The thresholds below are the
-      authored intent, not yet a live alarm.
+      authored intent, not yet a live alarm. NB: the re_ratification_trigger.first_of format is NOT
+      schema-validated (provisional_v0 is dict[str, Any]); any amendment must hand-verify each condition
+      parses via scripts/contracts_enforcement._parse_condition.
     re_ratification_trigger:
       first_of:
         - "production_invocations >= 500"
@@ -81,15 +85,15 @@ verbs:
     response_codes:
       200: "record created; body {ok, table, ulid, key (allocated id), occ_retries, commit_ms}"
       400: "WriterActionError: unknown/missing table, or malformed idempotency_ulid"
-      422: "SchemaGateError: record carries a field outside the table schema gate"
+      422: "SchemaGateError: field outside the table schema gate, OR caller supplied the writer-allocated merge key (file_ops allocates it)"
       503: "OCCRetryExhaustedError: optimistic-concurrency retry budget exhausted (retryable)"
       500: "DuckLakeRuntimeError / VersionMismatchError: runtime or extension-version loud-fail"
     typed_errors:
       action: "unknown table or invalid idempotency_ulid (400)"
-      schema_gate: "field outside the table schema gate (422)"
+      schema_gate: "field outside the table schema gate, or caller supplied the writer-allocated merge key (422)"
       occ_exhausted: "OCC retry budget exhausted; safe to retry (503)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
-      runtime: "unclassified runtime loud-fail (500)"
+      runtime: "runtime loud-fail, incl. file_ops against an ops table with no writer-owned keyspace (today only ops_recommendations is file_ops-eligible) (500)"
   update_ops:
     payload_schema_ref: >-
       event envelope {action: "update_ops", table, record}; `record` is the FULL merged row
@@ -146,5 +150,6 @@ audit_invariants:
   - "An unknown `action` returns 400 with the sorted action allow-list (no silent no-op)."
   - "_contract_version is stamped on every record at write time (default '1' when absent), per CD.25."
   - "KNOWN GAP: no delete_ops verb yet (rec-2158); postmortem DELETE cannot transit the closed boundary. A future delete_ops verb is a field_add amendment to this contract."
+  - "write_ops/update_ops against a write_mode: append_only ops table raise AppendOnlyUpdateError (a DuckLakeRuntimeError subclass) -> 500 (Decision 70 write-once lifecycle). The production scd2 ops tables are not append_only, so this is a latent path today (e.g. ops_smoke_events)."
 amendment_log: []
 previous_versions: []

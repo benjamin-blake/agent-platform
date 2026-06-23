@@ -52,6 +52,9 @@ contract:
       evaluate_provisional_trigger receives metrics=None and never fires. The thresholds below are the
       authored intent, not yet a live alarm; the production_invocations clock may already be past
       threshold (reader has been live since 2026-06-08/09) but will not surface until the provider lands.
+      NB: the re_ratification_trigger.first_of format is NOT schema-validated (provisional_v0 is
+      dict[str, Any]); any amendment must hand-verify each condition parses via
+      scripts/contracts_enforcement._parse_condition (closed LHS vocabulary, ">=", int).
     re_ratification_trigger:
       first_of:
         - "production_invocations >= 2000"
@@ -108,7 +111,7 @@ verbs:
 audit_invariants:
   - "Closed boundary: the read role is S3 GetObject only; a write attempt is denied at IAM/S3 (no write path through the reader; write_probe gate)."
   - "named_read executes ONLY pre-established registry SQL keyed by verb name; no caller SQL crosses the boundary on this path (Decision 84 I-3)."
-  - "query_ops accepts a caller-supplied read-only SELECT/WITH (single-statement; assert_read_only_sql-enforced) for internal predicate-pushdown read paths. The FROM target is caller-controlled -- _history and other ops_* tables ARE reachable (e.g. the DQ runner reads _history via this verb); the boundary is read-only-SELECT + the S3-read-only IAM role, NOT current-projection-only."
+  - "query_ops accepts a caller-supplied read-only SELECT/WITH (single-statement; assert_read_only_sql-enforced) for internal predicate-pushdown read paths. The FROM target is caller-controlled -- _history and other ops_* tables ARE reachable (e.g. the DQ runner reads _history via this verb); the boundary is read-only-SELECT + the S3-read-only IAM role, NOT current-projection-only. NB: the reader/runtime handler docstrings that state 'only the current projection is reachable' are STALE and inaccurate -- do NOT 'fix' the code to match that comment; doing so would break the DQ runner's _history reads and violate this contract."
   - "read_ops_current rejects a malformed `filter` (must carry BOTH column and value) loudly rather than degrading to an unfiltered full-table read (rec-2170 hardening)."
   - "An unknown `action` returns 400 with the sorted action allow-list (dispatcher-level; not a per-verb outcome). Reads are idempotent and a dead Neon session is transparently reconnected once."
   - "KNOWN GAP: the current_state single-key filter path has an open correctness rec (rec-2170) where a non-merge-key equality filter can bind against the merge key. The verb semantics here document the intended contract; the fix is a code amendment, not a contract change."
