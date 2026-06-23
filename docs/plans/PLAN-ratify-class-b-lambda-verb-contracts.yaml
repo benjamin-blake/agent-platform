@@ -1,0 +1,180 @@
+schema_version: 1
+slug: "ratify-class-b-lambda-verb-contracts"
+intent: >-
+  Author the Class B "Lambda verb" contracts for platform tier_item T1.12 at provisional_v0,
+  re-grounded onto the canonical DuckLake writer/reader/maintenance boundary, so codegen plans and
+  agents consume a ratified-shape verb contract instead of re-deriving Lambda semantics from handler
+  code -- the public-surface keystone of the CD.25 pre-codegen contract ritual that keeps the agent
+  platform's own tooling surface self-describing and drift-checked.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-ratify-class-b-lambda-verb-contracts.yaml
+phase: >-
+  Platform tier T1 (tier_item T1.12; depends_on T-1.12 / T0.12.5 / T0.12.7 all complete); product
+  Phase 1 Core Infrastructure. CD.16 ratification gate SATISFIED (dec-1086); completion gated on CD.25.
+scope:
+  - file: docs/contracts/ducklake_writer.yaml
+    action: Create
+    purpose: >-
+      Class B verb contract for the ducklake_writer Lambda (SOLE ops_* write authority): verbs
+      file_ops / update_ops / write_ops / create_ops_tables; provisional_v0; trigger 500 inv OR 60 days.
+  - file: docs/contracts/ducklake_reader.yaml
+    action: Create
+    purpose: >-
+      Class B verb contract for the ducklake_reader Lambda (SOLE ops_* read authority): verbs
+      read_ops_current / read_ops_history / named_read / query_ops; provisional_v0; trigger 2000 inv OR 60 days.
+  - file: docs/contracts/ducklake_maintenance.yaml
+    action: Create
+    purpose: >-
+      Class B verb contract for the ducklake_maintenance singleton Lambda (scheduled merge/gc/hot_merge
+      + operational catalog/DR verbs); provisional_v0; trigger 90 days only.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T1.12 (intent / exit_criteria / decomposition_hints / name / files_in_scope) from the
+      superseded six-Lambda model to the three DuckLake Lambdas, and flip status not_started ->
+      in_progress (NOT complete: completion is CD.25-gated; T1.12 bootstrap_completion_exempt: false).
+  - file: docs/plans/PLAN-ratify-class-b-lambda-verb-contracts.yaml
+    action: Create
+    purpose: This planning artefact.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - All three Class B contract YAMLs exist at contract_version 1, status provisional_v0, class B, each with a non-empty verbs mapping and NO fields key (Class B shape per scripts/contracts_schema.py).
+  - Each contract loads cleanly via scripts.contracts.load_contract (schema-valid ContractDocument) and resolve_refs is a clean no-op (Class B has no fields).
+  - Each contract re_ratification_trigger.first_of parses via scripts.contracts_enforcement.evaluate_provisional_trigger (fires at high metrics, unfired with no metrics) using the closed LHS vocabulary -- writer 500 inv/60d, reader 2000 inv/60d, maintenance 90d only.
+  - Each contract verbs mapping is a subset of the live handler dispatch surface (writer 4 + reader 4 + maintenance 8 documented verbs, each in the live _ACTIONS; smoke/diagnostic probes -- writer/reader probes and maintenance breaker_probe -- are excluded as instrumentation) with per-verb response_codes + typed_errors from the handler's real status mapping.
+  - The validate.py CD.25 contract-drift gate passes over docs/contracts/ with 9 ritual contracts and no drift; the Decision 86 intent-doc-freeze gate passes (machine-parseable YAML, no new prose doc).
+  - T1.12 is re-grounded coherently 6 -> 3 (intent + exit_criteria + decomposition_hints + name + files_in_scope) and the roadmap still loads (scripts.platform_roadmap.load); T1.12 status is in_progress, NOT complete.
+  - The Step 10 multi-perspective critique converged on the three contract deliverables.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Load each Class B contract through the real loader; assert class B, version 1, provisional_v0, non-empty verbs, no fields, and resolve_refs is a clean no-op.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract, resolve_refs
+      import pathlib
+      exp = {"ducklake_writer": 4, "ducklake_reader": 4, "ducklake_maintenance": 8}
+      src = pathlib.Path("docs/contracts")
+      for name, n in exp.items():
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "B" and d.contract.contract_version == 1
+          assert d.contract.status.value == "provisional_v0" and d.fields is None
+          assert d.verbs and len(d.verbs) == n
+          assert resolve_refs(d, src) == {}
+          print("OK", name, len(d.verbs), "verbs")
+      PY
+    expected: Three "OK <name> <n> verbs" lines and exit 0.
+    fix_if: An AssertionError or ContractValidationError -- the contract violates the Class B shape (fields present, wrong status/version/class, empty verbs) or is not schema-valid.
+  - step: 2
+    phase: pre-deploy
+    action: Assert each contract provisional_v0 re_ratification_trigger fires at high metrics and stays unfired with no metrics (the preflight-hook contract).
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      from scripts.contracts_enforcement import evaluate_provisional_trigger
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      hi = {"production_invocations": 10**9, "days_since_first_production_invocation": 10**9}
+      for name in ("ducklake_writer", "ducklake_reader", "ducklake_maintenance"):
+          d = load_contract(src / f"{name}.yaml")
+          assert evaluate_provisional_trigger(d, {})[0] is False
+          met, cond = evaluate_provisional_trigger(d, hi)
+          assert met is True and cond
+          print("OK", name, "->", cond)
+      PY
+    expected: Three "OK <name> -> <condition>" lines and exit 0.
+    fix_if: A trigger that fires with empty metrics (bad first_of vocabulary) or never fires (malformed condition) -- fix re_ratification_trigger.first_of to the "production_invocations >= N" / "days_since_first_production_invocation >= N" form.
+  - step: 3
+    phase: pre-deploy
+    action: Assert each contract verb set matches the live handler dispatch table (no drift between the contract and the deployed surface).
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      import pathlib, importlib
+      src = pathlib.Path("docs/contracts")
+      doc_writer = {"file_ops", "update_ops", "write_ops", "create_ops_tables"}
+      doc_reader = {"read_ops_current", "read_ops_history", "named_read", "query_ops"}
+      for mod_name, cname, documented in [
+          ("src.lambdas.ducklake_writer.handler", "ducklake_writer", doc_writer),
+          ("src.lambdas.ducklake_reader.handler", "ducklake_reader", doc_reader),
+      ]:
+          live = set(importlib.import_module(mod_name)._ACTIONS)
+          assert documented <= live, (cname, documented - live)
+          assert set(load_contract(src / f"{cname}.yaml").verbs) == documented, cname
+          print("OK", cname, "verbs subset of live handler dispatch")
+      doc_maint = {"merge", "gc", "hot_merge", "catalog_reinit", "restore_drill", "merge_ops", "catalog_stats", "reconcile_columns"}
+      live_m = set(importlib.import_module("src.lambdas.ducklake_maintenance.handler")._ACTIONS)
+      assert doc_maint <= live_m, ("maintenance", doc_maint - live_m)
+      assert set(load_contract(src / "ducklake_maintenance.yaml").verbs) == doc_maint, "maintenance"
+      print("OK ducklake_maintenance verbs subset of live handler dispatch (breaker_probe excluded as instrumentation)")
+      PY
+    expected: Three "OK ..." lines and exit 0 -- every documented verb exists in the live handler _ACTIONS map.
+    fix_if: An AssertionError naming a verb in the contract but not the handler -- the contract drifted from the deployed surface; correct the verbs mapping.
+  - step: 4
+    phase: pre-deploy
+    action: Run the CD.25 contract-drift gate + the Decision 86 intent-doc-freeze gate (and the rest of the fast tier) over the working tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; the Contract drift gate (CD.25) section prints PASS with 9 ritual contracts and no drift, and the Intent doc freeze gate passes.
+    fix_if: Any "Contract drift" failure line (cat-1 / structural / cat-2..8) or an intent-doc-freeze violation -- fix the offending contract and re-run.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the roadmap still loads after the T1.12 re-grounding and that T1.12 is in_progress (NOT complete) with the 6 -> 3 decomposition coherent.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      d = load("docs/ROADMAP-PLATFORM.yaml")
+      it = next(i for i in d.tier_items if i.id == "T1.12")
+      assert it.status == "in_progress", it.status
+      assert len(it.decomposition_hints["atomic_plans"]) == 3
+      assert it.files_in_scope == [
+          "docs/contracts/ducklake_writer.yaml",
+          "docs/contracts/ducklake_reader.yaml",
+          "docs/contracts/ducklake_maintenance.yaml",
+      ]
+      print("ROADMAP_LOADS", len(d.tier_items), "items; T1.12 in_progress; 3 atomic plans")
+      PY
+    expected: Prints a ROADMAP_LOADS line and exits 0 (no Pydantic ValidationError; T1.12 in_progress; 3 atomic plans).
+    fix_if: A Pydantic ValidationError (unknown TierItem key / bad status enum) -- correct the field. A status of complete -- revert to in_progress (CD.25 gates completion).
+  - step: 6
+    phase: pre-deploy
+    action: Validate this plan artefact against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ratify-class-b-lambda-verb-contracts.yaml
+    expected: "PASS: docs/plans/PLAN-ratify-class-b-lambda-verb-contracts.yaml validates against PlanDocument schema."
+    fix_if: A "FAIL:" line naming the schema violation -- correct the plan field and re-run.
+constraints:
+  - "REPORT-ONLY: the deliverable is the three Class B contracts. No Lambda code, Pydantic, or field_semantics.yaml changes -- the contracts DESCRIBE the deployed surface, they do not modify it."
+  - "Author strictly against the shipped scripts/contracts_schema.py + scripts/contracts.py loader, NOT the INTENT 3D/3E worked examples (their shapes can fail extra=forbid)."
+  - "Class B contracts carry a non-empty verbs mapping and MUST NOT carry a fields key (ContractDocument model_validator)."
+  - "No Lambda build/deploy/smoke-test warranted. compute_affected_artifacts flags the ACTIVE data-pipeline artifact (docs/ROADMAP-PLATFORM.yaml is a data-pipeline ASSET, manifest line 44), NOT any DuckLake Lambda. The flagged file is inert embedded documentation (no handler logic changed), so per the spirit of CD.16 / Decision 79 the deploy exemption is justified by the asset being non-code -- not by a false 'no artifact flagged' claim. (Bundling a roadmap YAML into a Lambda zip is itself questionable; out of scope here, candidate rec.)"
+  - "Do NOT flip T1.12 to complete: CD.25 is pending and T1.12 is bootstrap_completion_exempt: false (completion is CD.25-gated)."
+  - "re_ratification_trigger.first_of must use the closed LHS vocabulary {production_invocations, days_since_first_production_invocation} with '>=' so scripts/session_preflight.py surfaces the trigger when it fires."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "CD.16 ratification gate (the named task) is SATISFIED: state ratified, filed_via ops_decisions:dec-1086 (Decision 79, 2026-06-03). T1.12 deferral expired."
+  - "Decision scout verdict NO_FLAGS. CITE: CD.16 (gate), CD.25 (ritual + completion gate), Decision 91 + CD.33/Decision 81 + CD.10 F-008 (6 -> 3 supersession authority), Decision 84 (live verb surface; file_ops id allocation; named-verb read boundary), Decision 86 (contracts are the endorsed machine-parseable home). Two NOTEs honoured: keep T1.12 in_progress not complete; re-ground intent/exit_criteria/decomposition_hints together."
+  - "Re-grounding (Tier Item Freshness Gate stale-reference): the six legacy contract names (lambda-log-rec/log-decision/query/update-rec/list-tools/maintenance) describe the dead six-Lambda model. The deployed surface is three DuckLake Lambdas (all manifest status: active, serving live ops_* traffic since the T2.19 recs cutover 2026-06-08/09). log-rec/log-decision/update-rec are table-parameterized writer verbs; list-tools is the reader named_read registry."
+  - "Dependencies T-1.12 / T0.12.5 / T0.12.7 are all complete (the contracts.py machinery + Class A + Class C precedents). PLAN-class-c-cross-system-invariants is the structural template: REPORT-ONLY, V1, loader-based VP, one Step 10 critique over the whole class wave, roadmap status flip after convergence."
+  - "Open recs rec-2158 (add delete_ops verb) and rec-2170 (reader filter binds against merge key) are Lambda CODE recs, not contract-authoring, so bundled_recommendations is empty. They are recorded as KNOWN GAPs in the writer/reader contracts; the future code changes land as contract amendments via the provisional_v0 re-ratification path -- the concrete illustration of why Class B starts provisional (INTENT Part 6A)."
+  - "Closure obligation: this plan is additive (three new contracts) plus a roadmap re-grounding; it neither resolves a rec nor Deletes/cuts-over a live surface (the six legacy contracts were never created), so the closure obligation is exempt. VP step 4's drift gate is the stale-reference sweep that confirms only the three ritual Class B contracts exist."
+  - "Branch was 0 commits behind origin/main at session preflight, but origin/main has since advanced (merge-base 2d3f1f1; +478944c parked T2.6 -> deferred_post_mvp; +74d73ed/#235 created docs/plans/PLAN-terraform-cicd-bootstrap-root.yaml). The T1.12 edit MUST be rebased onto origin/main before merge (Step 11) and VP4-VP5 re-run so the merge does NOT (a) revert T2.6's newer deferred_post_mvp state nor (b) delete the unrelated PLAN-terraform-cicd-bootstrap-root.yaml -- verify both survive the rebase. No scope-file content conflict expected (this edit touches only the T1.12 block + three new contract files)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/focused-dirac-wy3a0p).
+  - docs/PROJECT_CONTEXT.md and the INTENT-pre-codegen-contract-ratification.md Part 3D / Part 6 sections read.
+  - scripts/contracts_schema.py + scripts/contracts.py + scripts/contracts_enforcement.py read; deliverables authored against them.
+  - The three DuckLake handler dispatch tables read (writer/reader/maintenance _ACTIONS); verb surfaces grounded in live code.
+  - All scope files located and readable; the three contracts already load + validate + drift-gate-pass in-session.
+  - Acceptance criteria understood and verifiable via the real loader + the CD.25 drift gate + the live handler dispatch comparison.
+execution_steps:
+  - "Author the three Class B contract YAMLs (done in this REPORT-ONLY session): docs/contracts/ducklake_writer.yaml, ducklake_reader.yaml, ducklake_maintenance.yaml."
+  - "Re-ground T1.12 in docs/ROADMAP-PLATFORM.yaml (6 -> 3 intent/exit_criteria/decomposition_hints/name/files_in_scope) and flip status not_started -> in_progress with progress_note (done)."
+  - "Execute the Verification Plan -- run each step; loop until all pass."
+  - "Run the Step 9 plan-critique gate (fresh-context subagent) and the Step 10 multi-perspective report critique (>=2 parallel subagents) on the three contract deliverables; iterate to convergence."
+  - "After Step 10 converges: merge to main. Do NOT flip T1.12 to complete (CD.25 gates completion)."
+  - "Report: contracts authored, verification results, critique convergence, roadmap re-grounding, and the CD.25 completion-gate follow-on."
+rollback: >-
+  The deliverables are three additive new contract files plus a roadmap re-grounding edit. Rollback =
+  delete the three docs/contracts/ducklake_*.yaml and revert the T1.12 roadmap block to status
+  not_started with the six-Lambda decomposition. No runtime consumer reads these contracts yet
+  (codegen consumers are T0.7a/b/c et al.), so removal is side-effect-free.
