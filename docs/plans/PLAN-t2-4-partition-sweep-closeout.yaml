@@ -1,0 +1,294 @@
+schema_version: 1
+slug: "t2-4-partition-sweep-closeout"
+intent: >-
+  Close out platform tier item T2.4 (Partition-everything sweep) by re-grounding its stale
+  Iceberg-everything framing to the ratified DuckLake reality and landing its one genuine residual
+  fix (rec-2314). The CD.9 uniform-partitioning rule is realized: the live personal-account Iceberg
+  ops tables are partitioned (T2.1) and the Pydantic->Iceberg generator enforces @partition_by at
+  creation time (T0.13); ops/telemetry have since migrated off Iceberg to DuckLake (Decision 78/84).
+  Fixing the generator's two-argument partition-transform bug and re-grounding the roadmap item keep
+  the platform's schema-as-code correct and the roadmap an honest reflection of reality, in service
+  of the self-improving North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-t2-4-partition-sweep-closeout.yaml
+phase: >-
+  Platform tier T2.4 (Partition-everything sweep, depends_on [T2.1, T0.13] -- both complete). A
+  residual generator fix (rec-2314) plus a roadmap-bookkeeping closeout/re-grounding. No
+  product-roadmap phase. Executor remains frozen (Decision 67); this is a /plan -> /implement
+  IMPLEMENTATION plan, not a STRATEGIC decomposition.
+scope:
+  - file: scripts/schema_to_iceberg.py
+    action: Modify
+    purpose: >-
+      Fix rec-2314. Rewrite _partition_column() so it extracts the LAST comma-separated argument
+      inside the parens -- handling single-arg transforms (day(col)), two-arg transforms
+      (bucket(N,col), truncate(W,col)), and bare columns (col). The current regex
+      `^\w+\((\w+)\)$` matches only single-arg/bare forms, so a two-arg spec falls through to
+      `return spec.strip()` and the downstream membership check compares the whole spec against the
+      model fields, raising a spurious UnknownPartitionColumn. DDL emission is unchanged --
+      model_to_iceberg_ddl already emits partition_spec verbatim in PARTITIONED BY (...); the helper
+      is used only for the column-existence validation.
+  - file: tests/test_schema_to_iceberg.py
+    action: Modify
+    purpose: >-
+      Add coverage for the previously-untested two-arg path: import _partition_column into the
+      existing single import block and add a parametrized extraction test (day/hour single-arg,
+      bucket/truncate two-arg, bare column, whitespace variant); add model_to_iceberg_ddl
+      end-to-end tests for a bucket(N,col) and a truncate(W,col) @partition_by asserting no raise
+      and the verbatim emitted PARTITIONED BY clause; add a regression test that a two-arg transform
+      referencing an absent column still raises UnknownPartitionColumn. Keeps 100% coverage on the
+      modified helper per tests/CLAUDE.md.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap-bookkeeping closeout of T2.4: flip status not_started -> complete, add completed_at and
+      bootstrap_completion_exempt: true, re-ground intent + exit_criteria to the DuckLake reality, and
+      append a progress_note plus a closure note. Only T2.4's
+      status/completed_at/bootstrap_completion_exempt/intent/exit_criteria/note/progress_note are
+      touched; depends_on, files_in_scope, related_candidate_decisions, effort, and every other
+      tier_item are unchanged.
+bundled_recommendations:
+  - "rec-2314"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    _partition_column() extracts the partition column from two-argument transforms:
+    bucket(16, symbol) -> symbol and truncate(10, name) -> name, while preserving single-arg
+    (day(ts) -> ts) and bare (event_date -> event_date) behaviour.
+  - >-
+    model_to_iceberg_ddl() emits a two-arg partition spec verbatim and does NOT raise
+    UnknownPartitionColumn when the referenced column exists: a model with
+    @partition_by('bucket(16, symbol)') and a `symbol` field yields DDL containing
+    'PARTITIONED BY (bucket(16, symbol))'.
+  - >-
+    A two-arg transform that references a column absent from the model still raises
+    UnknownPartitionColumn (partition validation is not weakened).
+  - >-
+    scripts/schema_to_iceberg.py retains 100% per-file test coverage on the modified
+    _partition_column code path:
+    `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/schema_to_iceberg.py`.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T2.4 has status: complete, a completed_at date,
+    bootstrap_completion_exempt: true, re-grounded intent + exit_criteria, and a progress_note
+    recording the criterion adjudication (T2.1 live partitioned tables; T0.13 + rec-2314 generator
+    enforcement; work-account iceberg_tables.tf retained-but-not-applied per CD.21; DuckLake
+    partition-as-code -> T2.33, ALTER-conditional per Decision 81).
+  - >-
+    The roadmap YAML still parses and T2.4's depends_on/files_in_scope/related_candidate_decisions/
+    effort and every other tier_item are unchanged (only T2.4's
+    status/completed_at/bootstrap_completion_exempt/intent/exit_criteria/note/progress_note differ
+    from the pre-edit block).
+  - >-
+    The plan validates against the PlanDocument schema:
+    `bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-4-partition-sweep-closeout.yaml`.
+  - >-
+    Full generator + annotations suites pass and presubmit is green:
+    `bin/venv-python -m pytest tests/test_schema_to_iceberg.py tests/test_annotations.py -q && bin/venv-python -m scripts.validate`.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Two-arg transforms extract + emit correctly with no spurious raise; whole generator suite green.
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py -q"
+    expected: >-
+      All tests pass, including the new parametrized _partition_column extraction, the end-to-end
+      bucket(N,col)/truncate(W,col) emission tests, and the absent-column regression. Exit 0.
+    fix_if: >-
+      A two-arg case fails. If UnknownPartitionColumn is raised for an existing column,
+      _partition_column is still not returning the last argument -- re-check the
+      `^\w+\((.*)\)$` match + comma-split. If an emitted-DDL assertion fails, model_to_iceberg_ddl
+      was wrongly altered (it must emit partition_spec verbatim; only the helper changes).
+  - step: 2
+    phase: pre-deploy
+    action: No regression in single-arg/bare partitioning, the golden DDL byte-match, or annotation handling.
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py tests/test_annotations.py -q"
+    expected: >-
+      Both suites pass. The golden byte-match (test_golden_byte_match_api/cli), the bare-column and
+      single-arg partition tests, and the annotations suite are all green. Exit 0.
+    fix_if: >-
+      The golden byte-match fails -- the _partition_column change leaked into DDL output; revert any
+      emission change so the partition_spec is still emitted verbatim. An annotations failure means
+      @partition_by/DqNotNull handling regressed -- re-check the edit was confined to the helper.
+  - step: 3
+    phase: pre-deploy
+    action: 100% per-file coverage on the modified generator file.
+    command: "bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/schema_to_iceberg.py"
+    expected: >-
+      Reports scripts/schema_to_iceberg.py has a test file and 100% line coverage. Exit 0.
+    fix_if: >-
+      Coverage < 100% -- a branch of the rewritten _partition_column is unexercised (likely the
+      bare-column no-match branch or the multi-arg split). Add the missing parametrized case to
+      tests/test_schema_to_iceberg.py.
+  - step: 4
+    phase: pre-deploy
+    action: T2.4 is re-grounded and closed with every closeout element present in its block.
+    command: "B=$(awk '/^  - id: T2.4$/,/^  - id: T2.5$/' docs/ROADMAP-PLATFORM.yaml); echo \"$B\" | grep -q 'status: complete' && echo \"$B\" | grep -q 'completed_at' && echo \"$B\" | grep -q 'bootstrap_completion_exempt: true' && echo \"$B\" | grep -q 'T2.1' && echo \"$B\" | grep -q 'rec-2314' && echo \"$B\" | grep -q 'CD.21' && echo \"$B\" | grep -q 'T2.33' && echo CLOSEOUT_OK"
+    expected: >-
+      Prints CLOSEOUT_OK -- the T2.4 block carries status: complete, completed_at,
+      bootstrap_completion_exempt: true, and the re-grounding references (T2.1 live partitioned
+      tables, rec-2314 generator fix, work-account file not-applied per CD.21, DuckLake
+      partition-as-code -> T2.33).
+    fix_if: >-
+      CLOSEOUT_OK is not printed -- a closeout field or progress_note reference is missing from the
+      T2.4 block. Add the missing status/completed_at/bootstrap flag or the missing reference
+      (T2.1, rec-2314, CD.21, or T2.33).
+  - step: 5
+    phase: pre-deploy
+    action: Plan is schema-valid and the full presubmit suite is green.
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-4-partition-sweep-closeout.yaml && bin/venv-python -m scripts.validate"
+    expected: >-
+      plan_document reports PASS (schema-valid, slug/path consistent); validate exits 0 (ruff
+      lint/format, prompt-compliance, plan-doc, test-coverage, roadmap YAML parse, and the full test
+      suite all green).
+    fix_if: >-
+      plan_document FAILs -- fix the offending plan field (schema or slug/path mismatch). validate
+      fails -- fix the reported lint/format/coverage/test issue or the roadmap YAML breakage.
+  - step: 6
+    phase: post-deploy
+    action: rec-2314 is closed after the merge trailer fires rec-autoclose and the cache is synced.
+    command: "bin/venv-python -m scripts.sync_ops sync && grep '\"id\": \"rec-2314\"' logs/.recommendations-log.jsonl | grep -q '\"status\": \"closed\"' && echo REC_CLOSED"
+    expected: >-
+      Prints REC_CLOSED -- post-merge, the `Resolves: rec-2314` squash-merge trailer drove
+      rec-autoclose; sync rebuilt the local cache from the warehouse and rec-2314 now reads
+      status: closed.
+    fix_if: >-
+      REC_CLOSED is not printed -- the squash-merge body lacked the `Resolves: rec-2314` trailer, or
+      rec-autoclose has not run yet. Verify the trailer in the merge commit; if needed close manually
+      via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2314 --status closed --resolution "..."`.
+constraints:
+  - Only the 3 files in Scope may be modified.
+  - >-
+    Do NOT change DDL emission behaviour. model_to_iceberg_ddl already emits partition_spec verbatim
+    in PARTITIONED BY (...); the fix is confined to the _partition_column validation helper. The
+    golden byte-match tests (test_golden_byte_match_api/cli) must still pass unchanged.
+  - >-
+    Do NOT weaken partition validation: a transform referencing a column absent from the model must
+    still raise UnknownPartitionColumn (single- or two-arg).
+  - >-
+    The roadmap edit is bookkeeping/closeout only: change T2.4
+    status/completed_at/bootstrap_completion_exempt/intent/exit_criteria/note/progress_note. Do NOT
+    alter depends_on, files_in_scope, related_candidate_decisions, effort, or any other tier_item.
+  - >-
+    Do NOT touch terraform/iceberg_tables.tf or terraform/personal/main.tf. The work-account file is
+    retained-but-not-applied (CD.21); the personal-account tables are already partitioned (T2.1).
+    Neither is in scope -- the residual work is the generator helper plus the roadmap closeout only.
+  - >-
+    No new docs/ files (Decision 86): the closeout lives entirely in the existing
+    ROADMAP-PLATFORM.yaml tier_item; do NOT create a companion note or design doc.
+  - Plan artefact is YAML, never .md (Decision 76 cl.3 / CD.22 / T1.11).
+  - >-
+    No rescue agents or workaround loops (Decision 55). On any unrecoverable failure, stop and run
+    RCA rather than patching around it.
+  - >-
+    tests/CLAUDE.md: no `pytest -k` selectors and no `python -c` one-liners in acceptance commands;
+    consolidate the new test imports into the existing single import block (ruff format silently
+    drops symbols from a second same-module import block).
+context:
+  - >-
+    rec-2314 ("_partition_column() regex silently mishandles bucket/truncate two-argument partition
+    specs"; source code-review, priority Medium, effort XS, status open) is the sole genuine residual
+    of T2.4. Current helper: `re.match(r"^\w+\((\w+)\)$", spec.strip())`. For bucket(N,col)/
+    truncate(W,col) it does not match and falls through to `return spec.strip()`, so the membership
+    check compares the whole spec against the model fields and raises a spurious
+    UnknownPartitionColumn. Fix: extract the last comma-separated argument inside the parens.
+  - >-
+    Realized partitioning state (verified this session): terraform/personal/main.tf creates exactly
+    3 live Iceberg ops tables (ops_recommendations, ops_decisions, ops_priority_queue), all
+    PARTITIONED BY (day(last_updated_timestamp)) -- delivered by T2.1 (status complete).
+  - >-
+    The scope-named terraform/iceberg_tables.tf is the WORK-ACCOUNT module; per terraform/CLAUDE.md
+    the work-account .tf files are "retained per CD.21 but no longer applied." It contains 4
+    unpartitioned base tables (formula_lineage, trading_performance, ab_test_results,
+    backtest_results) -- not live, out of the sweep. (Its *_current entries are views, not tables.)
+  - >-
+    T0.13 (status complete) created scripts/schema_to_iceberg.py and its @partition_by enforcement:
+    model_to_iceberg_ddl raises MissingPartitionSpec when a model lacks the decorator. That IS the
+    "new tables inherit a partitioned template" mechanism -- generation-time enforcement supersedes a
+    literal cookiecutter/scaffold, satisfying the original third exit criterion.
+  - >-
+    Ops/telemetry tables migrated off Iceberg to DuckLake-on-Neon (Decision 78 = ratified CD.31;
+    Decision 84 = sole ops backend). Under DuckLake, partition-as-code is T2.33's domain and
+    ALTER ... SET PARTITIONED BY is row/file-count-conditional per Decision 81 (the CD.9 amendment) --
+    not warranted at current ops-table sizes. ops_session_log/ops_execution_plans (Athena-Iceberg,
+    pending T2.26) are out of T2.4's scope.
+  - >-
+    Decision-scout verdict NO_FLAGS (fresh-context gate). CITE: Decision 78 (ratified CD.31 --
+    DuckLake adoption), Decision 84 (DuckLake sole ops backend; Iceberg ops estate retired),
+    Decision 81 (CD.9 ALTER-partitioning mechanism), Decision 48 (V2 tier classification), Decision
+    70 (rec closure via lifecycle status). RELATED: candidate ids CD.9 (state pending; substance
+    ratified via 78/81) and CD.31 (= Decision 78); Decision 90 (four-tier workflow; this is an
+    IMPLEMENTATION plan, executor frozen per Decision 67). Two NOTE flags, both satisfied: Decision
+    86 (no new docs/ file -- closeout stays in ROADMAP-PLATFORM.yaml) and Decision 79 (the code/test
+    files are not Lambda-packaged; compute_affected_artifacts for the scope set returns only
+    {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]} because the roadmap is a read-only BUNDLED ASSET of
+    that Lambda -- a docs/bookkeeping change with no runtime effect, so no V3 build/deploy/smoke-test
+    is warranted and V2 holds).
+  - >-
+    bootstrap_completion_exempt: true under scope (c), matching the T2.5/T0.13 precedent: gating CD.9
+    is state: pending, but its partitioning substance is ratified via Decision 78 and Decision 81;
+    the bootstrap allowance permits completion while the candidate id remains pending.
+  - >-
+    Verification Tier V2 (Decision 48): pure-Python generator, no external integration, no Lambda
+    CODE artifact (the only affected artifact is data-pipeline via the read-only ROADMAP-PLATFORM.yaml
+    asset, which carries no runtime effect). Tests exercise the real _partition_column +
+    model_to_iceberg_ddl code paths.
+  - >-
+    Branch claude/cool-hypatia-nyh18v, fast-forwarded to origin/main at planning time (was 2 behind:
+    the T2.6 Decision-93 parking + an unrelated plan; neither touches the scope files). T2.4 baseline
+    is status: not_started on current main (NOT deferred_post_mvp -- Decision 93 parked
+    T2.6/T2.8/T2.9/T2.11a/T2.11b, not T2.4). No rebase outstanding.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness branch claude/cool-hypatia-nyh18v)
+  - Relevant decisions surfaced via decision-scout (78, 84, 81, 48, 70; candidate CD.9/CD.31; NOTE 86/79) -- verdict NO_FLAGS
+  - All 3 files in scope located and readable
+  - rec-2314 confirmed open in the cache; bundled for Resolves-trailer closure
+  - Live partitioning state verified (personal-account 3 ops tables partitioned; work-account file not applied)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/schema_to_iceberg.py -- rewrite _partition_column(spec): strip the spec; match
+    `^\w+\((.*)\)$`; on no match (bare column) return the stripped spec; otherwise split the captured
+    argument list on ',', strip each element, and return the LAST one (the column). Update the
+    docstring to state it handles single-arg transforms, two-arg transforms (column is the last
+    argument), and bare columns. Leave model_to_iceberg_ddl and every other function unchanged
+    (partition_spec is still emitted verbatim).
+  - >-
+    tests/test_schema_to_iceberg.py -- add `_partition_column` to the EXISTING single import block
+    from scripts.schema_to_iceberg (do not open a second same-module import block). Add: (a) a
+    parametrized _partition_column test covering day(ts)->ts, hour(ts)->ts, bucket(16, symbol)->symbol,
+    truncate(10, name)->name, bare event_date->event_date, and a whitespace variant
+    'bucket(16,  symbol )'->symbol; (b) test_two_arg_bucket_partition -- a @partition_by('bucket(16,
+    symbol)') model with a `symbol` field; assert no raise and "PARTITIONED BY (bucket(16, symbol))"
+    in the DDL; (c) test_two_arg_truncate_partition -- analogous for truncate(10, name); (d)
+    test_two_arg_partition_unknown_column -- @partition_by('bucket(16, missing)') with no such field
+    raises UnknownPartitionColumn (match="missing").
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T2.4 -- (a) flip `status: not_started` to `status: complete`; (b) add
+    `completed_at: "2026-06-23"` and `bootstrap_completion_exempt: true`; (c) re-ground `intent` to the
+    realized state (CD.9 rule realized: T2.1 partitioned the live ops tables; T0.13 + rec-2314 give
+    generator @partition_by enforcement; ops/telemetry migrated to DuckLake per Decision 78/84),
+    preserving the original framing as a bracketed historical clause; (d) re-ground the 3
+    `exit_criteria` to: live personal-account Iceberg tables partitioned via T2.1 with the
+    work-account iceberg_tables.tf retained-but-not-applied (CD.21); the generator emits PARTITIONED
+    BY from @partition_by and raises MissingPartitionSpec otherwise (T0.13), two-arg transforms fixed
+    (rec-2314); generation-time enforcement supersedes a literal scaffold; (e) append a
+    `progress_note` dated 2026-06-23 recording the criterion-by-criterion adjudication and the
+    rec-2314 fix; (f) replace the existing `note` with a closure note explaining
+    bootstrap_completion_exempt (CD.9 pending, substance ratified via Decision 78/81) and the DuckLake
+    ALTER-conditional partitioning posture (T2.33 owns DuckLake partition-as-code). Touch nothing else
+    in the block.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pre-deploy steps pass. On any
+    unrecoverable failure, stop and perform RCA rather than patching around it (Decision 55).
+  - >-
+    Commit on branch claude/cool-hypatia-nyh18v; open the PR ready-for-review; the squash-merge body
+    carries the `Resolves: rec-2314` trailer so rec-autoclose closes the rec. After merge, run VP
+    step 6 to confirm closure.
+  - "Report: the _partition_column rewrite, the tests added, the T2.4 closeout fields/intent/criteria/note written, and the verification-step results."
+work_areas: []
+rollback: >-
+  Revert the 3-file diff (git revert the squash-merge commit, or `git checkout -- <files>` pre-merge).
+  The generator change is a pure-function fix with no DDL-output change (golden byte-match unchanged)
+  and no runtime/deploy/infra/data effect; the roadmap edit is bookkeeping. Rollback restores the
+  prior _partition_column regex and T2.4 status: not_started -- a clean no-op beyond reopening
+  rec-2314 (re-file or reopen via the ops portal if reverted).
