@@ -2,6 +2,230 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 97: Telemetry identity + determinism standard -- ULID keys, boundary-minting, no downstream re-derivation (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-097 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The draft telemetry pipeline has no canonical identity or determinism standard. session_id is a random
+UUID4 (`str(uuid.uuid4())`), which is unsortable and gives no time-ordering for partition pruning or
+ORDER BY; the draft child event tables (phases / steps / process_events / model_calls) have no ratified
+primary-key scheme at all. Nothing states WHERE an id or an event timestamp is minted, so a child row
+could re-derive its own id or `now()` timestamp instead of receiving them from its parent -- the same
+non-determinism / FK-mismatch class that CD.33 / Decision 82 already closed for ducklake_writer (mint
+ULID + `now()` ONCE, outside the OCC-retry loop). Telemetry needs the same rule settled before per-table
+contracts are ratified, or each table re-invents it inconsistently.
+
+**Decision:**
+1. **ULID for all telemetry identity keys.** Every telemetry primary key -- session_id (target, see
+   clause 4), observation_id, parent_observation_id (a reference to an observation_id), transcript_id,
+   and any telemetry_agents key -- is a Crockford-base32 ULID. ULIDs are lexicographically sortable and
+   time-ordered (k-sortable), so `day()`-partition pruning and natural chronological ORDER BY fall out of
+   the key itself. This aligns telemetry with the ops-table identity convention already live in the
+   warehouse (the `ulid` SCD2 envelope field on ops_recommendations / ops_decisions, Decision 84).
+
+2. **Boundary-minting (mint-once).** Identity keys and event timestamps are minted exactly ONCE, at the
+   boundary call that opens the entity (`open_session` / `open_observation`), and never re-derived
+   downstream. A retried or resumed write reuses the already-minted id and timestamp. This restates
+   CD.33 clause 2 / Decision 82 (D-2) for the telemetry path.
+
+3. **Boundary-injection (propagate, never re-derive).** Child rows receive session_id (and
+   parent_observation_id) from their parent as foreign keys; a child never re-mints a correlation key it
+   did not originate. This generalises the propagation rule already in session-id.yaml ("created in the
+   parent session and propagated to child telemetry rows as a foreign key") to the whole trace tree.
+
+4. **session_id realization.** ULID is the ratified TARGET format for session_id. Existing UUID4 session
+   ids are grandfathered: the format flips when the boundary-minting code
+   (`scripts/executor/telemetry.py::open_session`) is migrated to mint ULIDs. session-id.yaml records
+   ULID as the canonical target via an additive governance note (Decision 95); the live format stays
+   UUID4 until that code lands. The flip is a downstream code-migration concern, not part of this
+   REPORT-ONLY decision.
+
+**Rationale:**
+UUID4 was never chosen for telemetry -- it is the default `str(uuid.uuid4())` the draft happened to emit.
+ULID costs nothing extra to mint, removes the need for a separate ordering column, and makes keys
+partition-prune-friendly. Folding the determinism rule in now, before per-table ratification, stops four
+observation sub-types from each re-deriving mint / propagation semantics (the shallow-ratification
+anti-pattern T0.12.6's decomposition exists to avoid).
+
+**Related:** Decision 95 (the trace/observation model these keys identify; session-id.yaml additive
+amendment), Decision 96 (temporal standard -- the event timestamps minted under clause 2), Decision 84
+(ULID SCD2 envelope on ops tables -- the identity convention extended here), Decision 82 / CD.33 clause 2
+(mint-once-outside-retry precedent for ducklake_writer), CD.9 (partition-everything -- ULID time-ordering
+serves `day()` pruning), docs/contracts/session-id.yaml, docs/contracts/telemetry-lexicon.yaml, T0.12.6
+(per-table contracts author these keys).
+
+---
+
+## Decision 96: Telemetry temporal + partition standard -- event-time day(started_at) UTC, no trade_date (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-096 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Two temporal defects sit in the draft telemetry design. (1) `trade_date` -- a market-data partition
+concept -- leaked into telemetry scaffolding, where it has no meaning: a telemetry session is not scoped
+to a trading day. (2) the original T2.4 (partition-everything) framing prescribed
+`day(last_updated_timestamp)` for "ops/telemetry" jointly, conflating two different table shapes:
+ops_recommendations / ops_decisions are
+SCD2 tables whose `last_updated_timestamp` is the mutation-envelope partition basis, whereas telemetry is
+insert-once EVENT data with no SCD2 envelope. Partitioning telemetry by `last_updated_timestamp` is wrong
+twice over -- the column is an ops-SCD2 concept, and event data should partition by event time, not
+mutation time. Timestamp typing (tz-awareness, UTC) is also unspecified.
+
+**Decision:**
+1. **Telemetry is event-time data.** Each telemetry table partitions by `day()` of its OWN event-time
+   column in UTC -- the session / observation start. Canonical: telemetry_sessions -> `day(started_at)`;
+   telemetry_observations -> `day(started_at)`; telemetry_transcripts -> `day(created_at)`;
+   telemetry_agents -> `day(started_at)` (or none if realized as a pure dimension; settled at T0.12.6).
+   `started_at` is the canonical telemetry event-time column.
+
+2. **No trade_date in telemetry.** `trade_date` is a market-data concept and is absent from every
+   telemetry contract. Any draft carrying it drops it.
+
+3. **last_updated_timestamp is an ops-SCD2 concept, not telemetry.** Telemetry rows are insert-once; they
+   carry no SCD2 mutation envelope and do not partition on `last_updated_timestamp`. A correction to a
+   telemetry row is a new append governed by Decision 97's mint-once rule, not an SCD2 update.
+
+4. **Timestamps are timezone-aware UTC, ISO-8601.** Every telemetry timestamp (started_at, ended_at,
+   created_at, per-observation times) is stored UTC, tz-aware. Naive or local-time timestamps are
+   rejected at the boundary.
+
+**Realization -- T2.33 / DuckLake, not T2.4:**
+T2.4 (the Iceberg partition sweep) was CLOSED on 2026-06-23 (PR #239) and re-grounded to the 3 live
+personal-account ops Iceberg tables, explicitly moving ops/telemetry to DuckLake-on-Neon (Decision 78/84)
+and DuckLake partition-as-code to T2.33 (ALTER-conditional per Decision 81). Telemetry is therefore not in
+the Iceberg sweep's scope: this standard (`day(started_at)` UTC for telemetry) is realized when telemetry
+is rebuilt on its DuckLake substrate via T2.33's partition-as-code, ALTER-conditional per Decision 81 and
+not warranted below the row/file-count threshold. No T2.4 edit is made; T2.4's closeout already separates
+the ops-SCD2 (`day(last_updated_timestamp)`) basis from the telemetry event-time basis, corroborating this
+decision.
+
+**Related:** Decision 95 (the tables this partitions), Decision 97 (boundary-minted event timestamps),
+CD.9 (partition-everything -- this supplies the telemetry column choice CD.9 left per-table), T2.4
+(Iceberg partition sweep, CLOSED 2026-06-23 / PR #239 -- telemetry moved to DuckLake / T2.33, not this
+sweep), T2.33 (DuckLake partition-as-code -- the telemetry realization path), Decision 81 (CD.9
+ALTER-partitioning mechanism), Decision 78 (DuckLake adoption), Decision 84 (ops SCD2
+`last_updated_timestamp` envelope -- the concept kept distinct from telemetry),
+docs/contracts/telemetry-lexicon.yaml.
+
+---
+
+## Decision 95: Canonical telemetry trace/observation model -- 4 tables, root unification, canonical lexicon (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-095 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The draft telemetry pipeline (the seven `telemetry_*` tables T0.12.6 was scoped to ratify) is a star
+schema that grew by accretion, not design, with three structural defects:
+- **Rootless agent invocations.** telemetry_agent_invocations carries no session_id, so sub-agent work
+  does not join the session star schema at all -- observability that cannot be correlated to the run that
+  produced it.
+- **Four sibling event tables with one shape.** telemetry_phases, telemetry_steps,
+  telemetry_process_events, and telemetry_model_calls are all "a timed thing that happened during a
+  session" -- the same node shape with different attributes. Four sibling tables force four near-duplicate
+  contracts, four sets of joins, and shallow ratification (the failure mode T0.12.6's per-table
+  decomposition was meant to avoid, revealed here as a modelling problem, not a plan-granularity problem).
+- **No canonical vocabulary.** "phase", "step", "event", "span", "trace", "invocation" are used loosely
+  and inconsistently across the draft, prompts, and DQ scaffolding, with nothing authoritative to anchor
+  the per-table contracts to.
+
+Ratifying seven contracts over this draft would ratify the accretion. The model must be settled first.
+
+**Decision:**
+Adopt a session-rooted trace/observation model (the OpenTelemetry / Langfuse shape) and collapse the
+seven draft tables to FOUR canonical tables:
+
+1. **telemetry_sessions** -- the trace ROOT. One row per session; PK session_id. Root-unification anchor:
+   every telemetry row traces back to a session. A spawned sub-agent gets its own session linked to its
+   parent via `parent_session_id` (nullable), so agent work is rooted, not orphaned. Carries project_id
+   as a forward-declared field (realized at T2.17, per the project-id.yaml Class C pattern).
+
+2. **telemetry_observations** -- the unified node table. One row per observation (a timed node in the
+   session's trace tree); PK observation_id; FK session_id (root); FK parent_observation_id (nullable
+   self-reference, building the tree). An `observation_type` discriminator
+   (phase | step | process_event | model_call | ...) absorbs the four collapsed sibling tables. This is
+   the core unification: one node table with a type column and a parent pointer, not four sibling tables.
+
+3. **telemetry_transcripts** -- large-payload sidecar. Prompt / response / transcript blobs, linked by FK
+   to observation_id (and session_id), kept OUT of telemetry_observations so the node table stays small
+   and hot. One row per blob.
+
+4. **telemetry_agents** -- the agent dimension. Identifies WHICH agent (agent_type, model, version) a
+   session / observation belongs to, joined by session_id / observation_id. Replaces
+   telemetry_agent_invocations: agent identity becomes a rooted dimension, and the agent's WORK is
+   captured as observations / linked sub-sessions, resolving the rootless-invocation defect.
+
+**Root unification rule:**
+Every telemetry row is reachable from a telemetry_sessions row. There are no rootless telemetry entities.
+Cross-agent linkage uses `parent_session_id` (sub-agent session -> spawning session); in-session
+structure uses `parent_observation_id` (observation -> parent observation). The two pointers together
+form one connected trace tree per top-level run.
+
+**Collapse rule:**
+telemetry_phases, telemetry_steps, telemetry_process_events, telemetry_model_calls are NOT separate
+tables. They are values of `telemetry_observations.observation_type`. The discriminator's accepted-value
+set is ratified per-table at T0.12.6.
+
+**Canonical lexicon:**
+The canonical vocabulary (session / trace, observation, observation_type, transcript, root unification,
+parent_observation_id, and the deliberately-unused "span") is promoted now to
+docs/contracts/telemetry-lexicon.yaml -- a free-form (non-ritual) vocabulary registry the CD.25 drift
+gate skips (no top-level `contract:` / `class:`, per the read-engine.yaml / storage-substrate.yaml
+precedent). The lexicon is term-level only: per-field DQ checks live in
+config/agent/data_quality/telemetry.yaml and per-field contract semantics in the Class A contracts. It
+exists so every downstream telemetry contract, prompt, and agent ratifies against ONE vocabulary.
+
+**session-id.yaml amendment (recorded; executed at T0.12.6):**
+session-id.yaml (Class C, ratified at T0.12.7) is amended ADDITIVELY -- semantic_break: false -- when the
+new contracts land: a `prose_improvement` entry updates its stale six-table star-schema description to the
+four-table model, and a `governance_note_add` entry records ULID as the canonical target for session_id
+(Decision 97). No format flip and no field change occur in the amendment; the closed CD.25 change_class
+vocabulary (INTENT Part 4 Invariant 3) carries no breaking-format class precisely because such a change is
+forward-declared, not applied in place. The edit is coupled to the new Class A contracts and is therefore
+part of the re-scoped T0.12.6, not this REPORT-ONLY decision.
+
+**Decision 67 reversal-predicate restatement:**
+Decision 67's STRATEGIC-clause reversal condition names the draft tables telemetry_process_events,
+telemetry_model_calls, telemetry_phases, telemetry_steps -- which this decision collapses into
+telemetry_observations. Left unamended, the predicate would name tables the canonical model deletes and
+become unsatisfiable. It is restated to track the canonical model: "telemetry_sessions,
+telemetry_observations, telemetry_transcripts (and telemetry_agents) confirmed operational end-to-end with
+passing data quality checks, AND executor re-enabled per CD.17 / T4.2." The four named draft tables are
+replaced by telemetry_observations; telemetry_sessions is retained; telemetry_transcripts /
+telemetry_agents are added. The AND-executor-re-enabled clause and the CD.17 / T4.2 gate are unchanged.
+Decision 67's reversal-condition text gets an inline pointer to this restatement.
+
+**T0.12.6 re-scope:**
+T0.12.6 (Ratify Class A telemetry table contracts) is re-scoped in this plan from seven per-table plans
+to: four table contracts (telemetry_sessions, telemetry_observations, telemetry_transcripts,
+telemetry_agents), two new Class C key contracts (observation-id.yaml, parent-observation-id.yaml at
+contract_version: 1), and the additive session-id.yaml amendment above. decomposition_hints, exit_criteria,
+name, and intent are updated; related_decisions records this decision. The roadmap edit lands with this
+decision.
+
+**Scope:**
+REPORT-ONLY. No code or runtime behaviour changes. Deliverables are this decision (95-97), the
+platform-roadmap edits (T0.12.6 re-scope, T2.4 alignment), and the canonical lexicon. The new Class A /
+Class C contracts and the session-id.yaml amendment are authored later under the re-scoped T0.12.6; this
+decision settles the model they ratify to.
+
+**Related:** Decision 96 (telemetry temporal / partition standard), Decision 97 (telemetry identity +
+determinism -- ULID, boundary-minting), Decision 67 (STRATEGIC-clause reversal predicate restated here
+against the canonical model), CD.25 (pre-codegen contract ratification ritual -- the model these contracts
+ratify under), Decision 84 (DuckLake substrate; ULID envelope; backfill-from-DECISIONS.md path), Decision
+86 (rationale-to-decisions, model-to-tier_items, no new prose-architecture doc -- the lexicon is a
+machine-parseable registry, not prose), T0.12.6 (re-scoped here), T0.12.7 (session-id.yaml / project-id.yaml
+Class C precedents), T2.17 (project_id realization), docs/contracts/session-id.yaml,
+docs/contracts/telemetry-lexicon.yaml, docs/ROADMAP-PLATFORM.yaml.
+
+---
+
 ## Decision 94: Correct Decision 92 point 3 -- github_ci_apply OIDC trust must also trust the environment sub (Decided)
 
 **Status:** Decided
@@ -1244,6 +1468,12 @@ The blanket DEFERRED marker is no longer acceptable in lieu of active per-Lambda
 **Reversal condition:** Telemetry Athena tables (`telemetry_sessions`, `telemetry_process_events`,
 `telemetry_model_calls`, `telemetry_phases`, `telemetry_steps`) confirmed operational end-to-end
 with passing data quality checks AND executor re-enabled per CD.17 / T4.2.
+
+[RESTATED by Decision 95 (2026-06-23): the draft tables telemetry_process_events / telemetry_model_calls /
+telemetry_phases / telemetry_steps collapse into the unified telemetry_observations table; the reversal
+condition now tracks the canonical four-table model -- telemetry_sessions, telemetry_observations,
+telemetry_transcripts (and telemetry_agents) operational with passing DQ checks AND executor re-enabled per
+CD.17 / T4.2. The executor-re-enabled clause and the CD.17 / T4.2 gate are unchanged. See Decision 95.]
 
 **Effect on planning (STRATEGIC clause only):**
 - STRATEGIC plans are blocked. All plans must be IMPLEMENTATION type.
