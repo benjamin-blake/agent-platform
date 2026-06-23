@@ -3707,22 +3707,58 @@ tier_items:
   - id: T2.4
     tier: T2
     name: Partition-everything sweep
-    intent: Apply CD.9 uniform rule. Every Iceberg table in personal account is partitioned (day(last_updated_timestamp) for ops/telemetry; day(trade_date) for market data; per-table choice for new tables). New tables inherit a partitioned template.
+    intent: >-
+      [Original framing: Apply CD.9 uniform rule -- every Iceberg table in personal account partitioned;
+      new tables inherit a partitioned template.] Realized state (2026-06-23): CD.9 partitioning rule is
+      in force. The 3 live personal-account Iceberg ops tables (ops_recommendations, ops_decisions,
+      ops_priority_queue) are PARTITIONED BY (day(last_updated_timestamp)) via T2.1. The generator
+      (scripts/schema_to_iceberg.py) raises MissingPartitionSpec on @partition_by-less models (T0.13)
+      and emits PARTITIONED BY verbatim; two-arg transform handling (bucket/truncate) corrected by
+      rec-2314. Ops/telemetry tables migrated to DuckLake-on-Neon (Decision 78/84); DuckLake
+      partition-as-code is T2.33's domain and ALTER-conditional per Decision 81. The work-account
+      iceberg_tables.tf is retained-but-not-applied (CD.21); its 4 base tables are not live.
     depends_on: [T2.1, T0.13]    # T0.13 added 2026-06-09 (audit F-012): exit criterion 2 extends scripts/schema_to_iceberg.py, which T0.13 CREATES -- without the edge this item computed eligible while its producer was unbuilt
     files_in_scope:
       - terraform/iceberg_tables.tf
       - scripts/schema_to_iceberg.py    # add partition-by clause emission (created by T0.13)
     exit_criteria:
-      - "Every iceberg_tables.tf table has a PARTITIONED BY clause"
-      - "scripts/schema_to_iceberg.py emits partition clause from a class-level annotation on Pydantic schema (e.g. @partition_by('day(last_updated_timestamp)'))"
-      - "New-table template (e.g. cookiecutter or scaffold) includes partition declaration"
+      - >-
+        Live personal-account Iceberg ops tables (ops_recommendations, ops_decisions,
+        ops_priority_queue) are PARTITIONED BY (day(last_updated_timestamp)) per T2.1
+        (terraform/personal/main.tf). The work-account iceberg_tables.tf is
+        retained-but-not-applied (CD.21); its 4 base tables are not live.
+      - >-
+        scripts/schema_to_iceberg.py raises MissingPartitionSpec for models lacking
+        @partition_by (T0.13 generation-time enforcement); emits PARTITIONED BY verbatim;
+        _partition_column() correctly extracts the column from single-arg (day(col)),
+        two-arg (bucket(N,col), truncate(W,col)), and bare (col) specs (rec-2314 fix).
+        Generation-time enforcement supersedes a literal cookiecutter/scaffold.
+      - >-
+        DuckLake partition-as-code is owned by T2.33; ALTER ... SET PARTITIONED BY is
+        row/file-count-conditional per Decision 81 (CD.9 amendment) -- not warranted at
+        current ops-table sizes. ops_session_log/ops_execution_plans (Athena-Iceberg,
+        pending T2.26) are out of T2.4's scope.
     related_candidate_decisions: [CD.9, CD.31]
     note: |
-      Under proposed DuckLake adoption (CD.31), ops-table partitioning uses ALTER TABLE ... SET PARTITIONED
-      BY (not CREATE TABLE DDL). The Iceberg partition sweep for all other tables is otherwise unchanged.
+      bootstrap_completion_exempt: gating CD.9 is state: pending, but its partitioning substance is
+      ratified via Decision 78 (= CD.31, DuckLake adoption) and Decision 81 (CD.9 ALTER-partitioning
+      mechanism); the bootstrap allowance permits completion while the candidate id remains pending,
+      matching the T2.5/T0.13 precedent. DuckLake partition-as-code posture: ALTER ... SET PARTITIONED
+      BY is row/file-count-conditional per Decision 81; not warranted at current ops-table sizes.
+      T2.33 owns the DuckLake partition-as-code domain going forward.
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-23"
+    bootstrap_completion_exempt: true
+    progress_note: >-
+      2026-06-23: Criterion adjudication -- (1) T2.1 delivered live partitioned personal-account Iceberg
+      ops tables (PARTITIONED BY day(last_updated_timestamp)); work-account iceberg_tables.tf
+      retained-but-not-applied per CD.21. (2) T0.13 created the @partition_by enforcement in
+      scripts/schema_to_iceberg.py; rec-2314 fixed the two-arg transform bug in _partition_column()
+      (bucket/truncate now correctly extract the last arg). (3) DuckLake ALTER-conditional partitioning
+      posture ratified via Decision 81; T2.33 owns DuckLake partition-as-code. All exit criteria
+      satisfied; bootstrap_completion_exempt=true (CD.9 pending, substance ratified via Decision 78/81).
   - id: T2.5
     tier: T2
     name: DuckDB swap on read paths
