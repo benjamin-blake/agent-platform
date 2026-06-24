@@ -122,6 +122,61 @@ SAME reviewed plan.bin is applied -- not a re-plan.
 **Role creation is guard-BLOCKED**:
 - `github_ci_plan` is a new IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). It lands via `agent_platform_admin` apply BEFORE the first PR that exercises the speculative-plan job. The job's `continue-on-error` on the assume-role step covers the bootstrap window.
 
+### Alarm-only scheduled drift detection (CD.35 Wave 5 / T2.24)
+
+Closes the last convergence gap: an hourly scheduled workflow (`terraform-drift.yml`) detects
+out-of-band infra drift without auto-applying.
+
+**Cron cadence:** `17 * * * *` (hourly, offset off the top of the hour).
+
+**Exit-code semantics:**
+- `0` -- no change; cycle is clean, no action.
+- `2` -- drift (changes detected); see "Drift signal" below.
+- `1` -- error; if stderr matches `"Error acquiring the state lock"` it is a lock-held skip
+  (an in-flight apply holds the native S3 lock -> exit 0, no alarm, no rec, record untouched).
+  Any other `exit 1` is a genuine error: the run fails loudly; no rec is filed and no red flip
+  occurs (drift != error).
+
+**Native-lock coexistence:** the drift plan runs `-lock=true -lock-timeout=120s`. The
+`github_ci_drift` role has `s3:PutObject + s3:DeleteObject` scoped to the EXACT lock object key
+`tfstate/personal/sandbox/terraform.tfstate.tflock` (terraform's conditional-put acquire + delete
+release), and NO write on the state object `terraform.tfstate` itself. Serialisation with apply
+is via the native S3 lock only -- there is no shared GHA concurrency group between
+`terraform-drift` and `terraform-apply-sandbox`.
+
+**Drift signal (ec=2):** on a green->red transition:
+1. Merge-write the convergence record red (preserves all existing fields; adds `drift_detected_at`,
+   `drift_run_url`, `drift_reason`).
+2. File a rec directly via the ops portal: `source=tf_drift`, `priority=High`.
+
+**Dedup -- one red = one signal:** if the record is already red (from a prior drift cycle OR a
+failed apply), the workflow logs "already red; not re-alarming" and exits 0. No duplicate rec is
+filed. The already-red state folds all concurrent or subsequent drift signals into one open rec
+until the apply-dispatch unlatch clears it.
+
+**Drift NEVER writes the record green.** Green is written solely by a converged apply
+(`terraform-apply-sandbox`), so a clean drift cycle can never mask a prior apply-failure red.
+The convergence writer set is now `{github_ci_apply (Wave 1), github_ci_drift (Wave 5)}`.
+
+**Recovery -- dispatch-ack unlatch:** resolve the drift by running `terraform-apply-sandbox`
+via `workflow_dispatch` (naming the red commit or the open rec id in `acknowledge_red_commit`).
+A successful apply writes green; close the `tf_drift` rec via the `Resolves:` trailer or
+`update_rec` portal call.
+
+**github_ci_drift IAM (least-privilege):** tfstate READ + scoped `.tflock` PutObject/DeleteObject +
+`convergence/personal/*` GetObject/PutObject + ducklake-WRITER InvokeFunction/InvokeFunctionUrl
+(NOT the reader; Decision 84 closed boundary) + same refresh-time read surface as
+`github_ci_plan`. No state-object write, no tfplan, no resource mutation, no IAM write.
+
+**Role creation is guard-BLOCKED:** `github_ci_drift` is a new IAM role -- the guard exits 2
+(IAM_SENSITIVE_TYPES). It lands via the human-gated apply path (tf-gated-apply GitHub Environment
+or `agent_platform_admin`) BEFORE the first scheduled drift run. The workflow carries
+`continue-on-error` on the assume-role step to cover the bootstrap window.
+
+**Drift recs vs ci-rca recs:** drift recs use `source=tf_drift` and are filed DIRECTLY via the
+ops portal (no ci-rca agent). ci-rca's model is log-RCA over a FAILED CI run; drift is a
+state-vs-code delta from a SUCCESSFUL plan (ec=2) and has no failure log to RCA (Decision 72/92).
+
 ### Convergence anchor (CD.35 / T2.20 Wave 1)
 
 The server-side anti-masking anchor. All four pieces live in `terraform-apply-sandbox.yml` + `oidc.tf`:
@@ -129,8 +184,9 @@ The server-side anti-masking anchor. All four pieces live in `terraform-apply-sa
 - **Durable record:** `s3://agent-platform-data-lake/convergence/personal/sandbox.json`
   (`{status, commit_sha, run_id, run_url, timestamp, plan_sha}`; `plan_sha` is null until Wave 2 saved
   plans). Its OWN S3 prefix, **outside `tfstate/`**, so the read-only PR role reads it without ever seeing
-  tfstate. Write-IAM is **apply-identity-only among the CI roles** -- enforced in `oidc.tf` by
-  `ConvergenceRecordWrite` on `github_ci_apply` (the writer), the explicit `DenyConvergenceRecordWrite` on
+  tfstate. Write-IAM is the **sanctioned writer set {github_ci_apply, github_ci_drift} among the CI
+  roles** -- enforced in `oidc.tf` / `terraform/bootstrap/github_ci_apply.tf` by `ConvergenceRecordWrite`
+  on each writer (apply: Wave 1; drift: Wave 5 / T2.24), the explicit `DenyConvergenceRecordWrite` on
   `github_ci_branch` (ci-rca / `agent/*` CI keep read, never write/delete the record), and the PR role's
   read-only `S3ReadConvergenceRecord`. This is the integrity anchor -- a commit status alone is spoofable.
   (The residual admin / `platform_breakglass` write path is not yet IAM-fenced; full privilege-tiering --

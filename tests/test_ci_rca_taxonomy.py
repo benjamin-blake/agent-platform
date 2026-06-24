@@ -131,4 +131,4 @@ class TestEnumerateWorkflowNames:
     def test_real_workflows_dir(self):
         names = enumerate_workflow_names()
         assert "CI" in names
-        assert len(names) == 10
+        assert len(names) == 11

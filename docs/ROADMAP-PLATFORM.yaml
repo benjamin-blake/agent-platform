@@ -4746,22 +4746,34 @@ tier_items:
       On drift: flip the convergence record red and file a rec DIRECTLY via the ops portal (drift is a
       state-vs-code delta, not a CI-log failure that fits ci-rca's log-RCA model). Alarm only -- never
       auto-apply (Decision 55). Standalone IMPLEMENTATION plan. V3.
-      [Amended 2026-06-10 per T2.20 amendment (c)]: the drift identity writes the record via the shared
-      record-writer policy (joining the apply identity); the record lives in its own S3 prefix, not under
-      tfstate/. A drift-flipped red record clears via the same dispatch-ack path as an apply failure.
+      [Amended 2026-06-10 per T2.20 amendment (c)]: the drift identity writes the record via its own
+      inline ConvergenceRecordWrite grant (joining the apply identity as a sanctioned writer); the record
+      lives in its own S3 prefix, not under tfstate/. A drift-flipped red record clears via the same
+      dispatch-ack path as an apply failure.
     depends_on: [T2.20]
     files_in_scope:
       - .github/workflows/terraform-drift.yml    # new -- scheduled plan with explicit exit-code handling
-      - scripts/ops_data_portal.py    # invoked to file the drift rec directly
+      - terraform/personal/oidc.tf    # new github_ci_drift OIDC role + policy (least-privilege)
+      - config/agent/data_quality/source_registry.yaml    # tf_drift canonical source registration
       - terraform/CLAUDE.md    # document drift detection (alarm-only)
+      - terraform/bootstrap/github_ci_apply.tf    # comment-only: convergence writer-set accuracy fix
+      # scripts/ops_data_portal.py is INVOKED by the workflow (not modified); source=tf_drift is a
+      # runtime CLI arg validated against source_registry.yaml, NOT a hardcoded literal added to portal.
     exit_criteria:
-      - "An out-of-band console change is detected within one cron cycle and filed as a rec via the ops portal"
+      - "An out-of-band console change is detected within one cron cycle and filed as a rec via the ops portal with source=tf_drift"
       - "A held state lock skips the cycle without alarming (lock-acquisition-failure distinguished from a genuine error and from drift)"
-      - "Drift never triggers an auto-apply (alarm-only; Decision 55)"
+      - "Drift never triggers an auto-apply (alarm-only; Decision 55) -- verified structurally (no apply in workflow) and at IAM layer (github_ci_drift has no state-object write)"
     related_candidate_decisions: [CD.35]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-24"
+    progress_note: >-
+      Wave 5 complete: terraform-drift.yml (alarm-only, cron 17 * * * * + dispatch), github_ci_drift
+      OIDC role (least-privilege: tfstate read + scoped .tflock write + convergence read+write +
+      ducklake-writer invoke), tf_drift source registration, terraform/CLAUDE.md drift docs,
+      github_ci_apply.tf comment-only writer-set accuracy fix. Post-deploy steps (VP6-11) pending
+      human-gated apply of github_ci_drift. PLAN-terraform-cicd-drift-detection 2026-06-24.
   - id: T2.25
     tier: T2
     name: "Terraform CI/CD: convention synchronization + guard narrowing + confirm CD.35 ratification (Wave X)"

@@ -100,10 +100,13 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # CD.35 / T2.20 convergence record (the server-side anti-masking anchor). Among the CI roles
-        # the apply identity is the ONLY writer of the durable convergence record -- the integrity
-        # anchor the design rests on (a commit status alone is spoofable). Enforced at the IAM layer:
-        # this grant + the explicit DenyConvergenceRecordWrite on github_ci_branch + the PR role's
-        # read-only S3ReadConvergenceRecord = apply-identity-alone writes among CI roles.
+        # the apply identity is A writer of the durable convergence record -- the integrity anchor the
+        # design rests on (a commit status alone is spoofable). The T2.24 drift identity
+        # github_ci_drift joins the sanctioned writer set at Wave 5 (its own inline
+        # ConvergenceRecordWrite in terraform/personal/oidc.tf). Enforced at the IAM layer:
+        # this grant + the drift identity's grant + the explicit DenyConvergenceRecordWrite on
+        # github_ci_branch + the PR role's read-only S3ReadConvergenceRecord = the two-member
+        # {apply, drift} writer set among CI roles.
         Sid    = "ConvergenceRecordWrite"
         Effect = "Allow"
         Action = [
