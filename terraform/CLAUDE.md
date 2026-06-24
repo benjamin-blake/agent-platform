@@ -168,10 +168,23 @@ A successful apply writes green; close the `tf_drift` rec via the `Resolves:` tr
 (NOT the reader; Decision 84 closed boundary) + same refresh-time read surface as
 `github_ci_plan`. No state-object write, no tfplan, no resource mutation, no IAM write.
 
-**Role creation is guard-BLOCKED:** `github_ci_drift` is a new IAM role -- the guard exits 2
-(IAM_SENSITIVE_TYPES). It lands via the human-gated apply path (tf-gated-apply GitHub Environment
-or `agent_platform_admin`) BEFORE the first scheduled drift run. The workflow carries
-`continue-on-error` on the assume-role step to cover the bootstrap window.
+**Role creation is guard-BLOCKED (admin-create path -- Decision 98):** `github_ci_drift` is a new
+IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). The T2.23 authority budget (IAMRoleCreateBounded)
+scopes in-budget CreateRole to branch+pr only, so the gated-apply pipeline CANNOT mint a new peer CI
+role. The ONLY working create path for `github_ci_drift` is `agent_platform_admin` (-target apply of
+`terraform/personal/oidc.tf`). Procedure:
+(1) Probe whether `github_ci_plan`'s `IAMCIRolesRead` already includes the drift ARN:
+    `aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name agent-platform-github-ci-plan --profile agent_platform_admin | python3 -c "import sys,json,urllib.parse; d=json.load(sys.stdin); s=next(x for x in json.loads(urllib.parse.unquote(d['PolicyDocument']))['Statement'] if x.get('Sid')=='IAMCIRolesRead'); print('PRESENT' if any('drift' in r for r in s['Resource']) else 'ABSENT')"`
+(2) Always include `aws_iam_role.github_ci_drift` and `aws_iam_role_policy.github_ci_drift`; include
+    `-target=aws_iam_role_policy.github_ci_plan` ONLY if the probe returned ABSENT (the failed
+    apply may have landed it; a PRESENT result means a no-op target is harmless but not required).
+(3) Present the plan to the human (Decision 77), apply under `agent_platform_admin`.
+(4) Add the drift ARN to `IAMRolesRead` in `terraform/bootstrap/github_ci_apply.tf`
+    (read-only refresh grant; does NOT widen the IAM-WRITE budget) and admin-apply that root
+    separately.
+(5) Verify global convergence (untargeted `terraform plan -detailed-exitcode` exits 0) BEFORE
+    dispatching the acknowledge-and-retry.
+The workflow carries `continue-on-error` on the assume-role step to cover the bootstrap window.
 
 **Drift recs vs ci-rca recs:** drift recs use `source=tf_drift` and are filed DIRECTLY via the
 ops portal (no ci-rca agent). ci-rca's model is log-RCA over a FAILED CI run; drift is a

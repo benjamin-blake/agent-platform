@@ -213,10 +213,14 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       },
       {
         # Consolidated IAM read-quartet for all roles terraform/personal references during plan:
-        # branch, pr, plan, platform, ducklake roles. Separated from write actions (IAMRoleReconcile,
-        # IAMRoleCreateBounded, IAMRoleWriteBounded) to keep the write-scope auditable.
-        # Literal ARNs per the refresh-read convention (no cross-root dependency edges).
+        # branch, pr, plan, drift, platform, ducklake roles. Separated from write actions
+        # (IAMRoleReconcile, IAMRoleCreateBounded, IAMRoleWriteBounded) to keep the write-scope
+        # auditable. Literal ARNs per the refresh-read convention (no cross-root dependency edges).
         # rec-2079: IAMCIPlanRoleRead + IAMPlatformRolesRead merged here; no separate Sid for each.
+        # Decision 98 (GAP 3 fix): drift added as READ-ONLY refresh grant; the IAM-WRITE budget
+        # (IAMRoleWriteBounded / IAMRoleCreateBounded) is unchanged -- in-budget role-create remains
+        # gated to T2.25. New peer CI roles are admin-provisioned in terraform/personal and added
+        # here as read-only grants; the pipeline does not mint them.
         Sid    = "IAMRolesRead"
         Effect = "Allow"
         Action = [
@@ -229,6 +233,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
