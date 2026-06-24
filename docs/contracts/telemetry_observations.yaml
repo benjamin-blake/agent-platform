@@ -178,8 +178,8 @@ fields:
     description: "Disposition of the node where applicable: running | success | failed (phase/step). NULL for kinds without an outcome (process_event, model_call)."
     semantics: >-
       Collapse mapping: telemetry_phases.outcome / telemetry_steps.outcome -> outcome. process_event and
-      model_call have no lifecycle outcome (their disposition is severity / exit_code in metadata). Open
-      set; enforcement deferred to telemetry.yaml at Phase 4.
+      model_call have no lifecycle outcome (their disposition is the promoted severity / exit_code
+      columns). Open set; enforcement deferred to telemetry.yaml at Phase 4.
     populated_by: telemetry.py at observation open (running) / close (terminal).
     dq_intent:
       not_null:
@@ -191,8 +191,8 @@ fields:
     description: "Severity/level for kinds that carry one: info | warning | error | critical (process_event). NULL otherwise."
     semantics: >-
       Collapse mapping: telemetry_process_events.severity -> severity (the Langfuse `level` concept).
-      The process_event tier (decision | rework | exception | anomaly) lands in metadata.tier and drives
-      the telemetry_sessions roll-ups (rework_count / exception_count). Open set; enforcement deferred.
+      The process_event tier (decision | rework | exception | anomaly) is the PROMOTED tier column and
+      drives the telemetry_sessions roll-ups (rework_count / exception_count). Open set; enforcement deferred.
     populated_by: telemetry.py emit_process_event.
     dq_intent:
       not_null:
@@ -331,10 +331,12 @@ fields:
       The collapse's attribute bag -- the type-specific keys NOT promoted to a typed column. By
       observation_type it carries: STEP -> target_file, action, acceptance_command,
       acceptance_duration_seconds, diff_stat, lines_added, lines_removed, model_escalated_from,
-      prompt_hash, total_steps; PHASE -> max_attempts, revision_count, blocking_findings_count,
+      prompt_hash, total_steps (per-step planned count, distinct from the typed
+      telemetry_sessions.steps_total roll-up); PHASE -> max_attempts, revision_count, blocking_findings_count,
       plan_steps_json (the existing draft JSON folds in here), metadata_json; PROCESS_EVENT ->
       description, root_cause, resolution, rec_filed, detected_by; MODEL_CALL -> purpose_detail,
-      copilot_session_id, invocation_id, prompt_hash, error. The high-value analytic fields are PROMOTED
+      copilot_session_id, prompt_hash, error (invocation_id is NOT a metadata key -- subsumed by the
+      observation_id -> telemetry_agents join). The high-value analytic fields are PROMOTED
       to typed columns (provider, tier, acceptance_passed, exit_code, time_lost_seconds) and are NOT in
       this bag, so T3 verifiers (T3.1 depends on T0.12.6) get typed predicate pushdown. NOTE:
       telemetry_steps.transcript_path is NOT a metadata key -- the step's transcript export becomes a
@@ -381,7 +383,10 @@ governance_notes: >-
   (what the Phase 4 DDL declares); `dq_intent.not_null.enforced` is the CURRENT DQ posture (false
   everywhere now -- enforcement lands in config/agent/data_quality/telemetry.yaml at Phase 4). A
   `nullable: false` field with `enforced: false` means "required in the target schema, not yet
-  DQ-enforced", NOT a contradiction. Decision 96: insert-once event data, partition day(started_at) UTC,
+  DQ-enforced", NOT a contradiction. Conversely a PK/FK $ref'd from a Class C baseline keeps
+  `nullable: true` (the loosest baseline) at the column axis with `not_null.enforced: true` at the DQ
+  axis; the Phase 4 DDL generator must emit NOT NULL from the DQ axis for such keys, not read `nullable`
+  literally. Decision 96: insert-once event data, partition day(started_at) UTC,
   no last_updated_timestamp, tz-aware UTC. Decision 97: ULID identity minted once, parent pointer
   propagated never re-derived. No merge_key (insert-once). dq_INTENT only here; ENFORCEMENT (including
   the closed observation_type accepted set and per-type required-field validators) lands in
