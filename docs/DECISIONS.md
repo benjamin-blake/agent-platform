@@ -2,6 +2,52 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 98: Provisioning model for convergence-writer and peer CI roles -- admin-create in terraform/personal, read-only bootstrap IAMRolesRead grant (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-24
+**Warehouse ID:** dec-098 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The post-merge gated-apply for PR #250 (CD.35 Wave 5 / T2.24) failed with an explicit deny on
+`iam:CreateRole` for `agent-platform-github-ci-drift`. The deny originates from the T2.23 authority
+budget (`agent-platform-github-ci-apply-boundary`): `IAMRoleCreateBounded` conditions
+`iam:CreateRole` on a `iam:PermissionsBoundary` propagation constraint scoped to branch+pr roles,
+implicitly denying creation of any new peer CI role (e.g. drift). The same apply also failed
+`iam:PutRolePolicy` on `github_ci_plan`, leaving both the drift role and the github_ci_plan
+IAMCIRolesRead drift-ARN addition unapplied to AWS.
+
+Additionally, `IAMRolesRead` in `terraform/bootstrap/github_ci_apply.tf` did not include the drift
+role ARN, meaning every future `github_ci_apply` pipeline plan would fail AccessDenied on
+`iam:GetRole/GetRolePolicy` when refreshing the now-in-state drift role (GAP 3).
+
+**Decision:**
+1. New peer CI roles (convergence-writer + any future equivalent) are admin-provisioned in
+   `terraform/personal/` via `agent_platform_admin` with `-target` apply -- NOT minted by the
+   pipeline (`github_ci_apply`). This is the same pattern used for branch/pr/plan roles.
+2. After admin-create, the new role's ARN is added to `IAMRolesRead` in
+   `terraform/bootstrap/github_ci_apply.tf` as a read-only refresh grant
+   (`iam:GetRole/GetRolePolicy/ListRolePolicies/ListAttachedRolePolicies` only). This grant does
+   NOT widen the IAM-WRITE budget (`IAMRoleWriteBounded` / `IAMRoleCreateBounded` unchanged).
+3. In-budget IAM auto-apply (the pipeline minting roles under the permissions boundary) remains
+   gated to T2.25 and is out of scope here.
+4. Procedure: (a) present `terraform plan` to the human (Decision 77); (b) admin-apply; (c) verify
+   global convergence (`terraform plan -detailed-exitcode` exits 0) BEFORE any dispatch-ack; (d)
+   add the ARN to `IAMRolesRead` in the bootstrap root and admin-apply that root separately.
+
+**Rationale:**
+- Path B (widen pipeline to mint roles) is premature T2.25 work and couples the drift role to the
+  apply boundary -- rejected (Decision 55 / 72 RCA-first, no inline hot-patch).
+- Path C (re-home to bootstrap root) is more churn with no architectural benefit -- rejected.
+- The branch/pr/plan roles were all admin-created and all appear in `IAMRolesRead`. Adding drift
+  follows the same precedent (Decision 94 pattern).
+
+**Related:** Decision 92 (authority budget), Decision 94 (github_ci_apply OIDC trust correction --
+same admin-create pattern), Decision 55/72 (no inline hot-patch / no autonomous workaround), T2.23
+(bootstrap authority budget), T2.24 (drift role this applies to), T2.25 (in-budget IAM auto-apply).
+
+---
+
 ## Decision 97: Telemetry identity + determinism standard -- ULID keys, boundary-minting, no downstream re-derivation (Decided)
 
 **Status:** Decided
