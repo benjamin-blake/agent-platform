@@ -80,6 +80,7 @@ def get_priority_queue_key() -> str:
     """Return the canonical priority-queue S3 key, sourced from log-storage.yaml or in-code fallback."""
     return _load_log_storage_registry()["priority_queue_key"]
 
+
 _ops_writer_instance = None
 
 
