@@ -7,8 +7,13 @@ from pathlib import Path
 import pytest
 
 from scripts.platform_roadmap import compute_state_dict
+from scripts.session_preflight import _slim_roadmap_state
 
 _LIVE_YAML = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
+_LIVE_PRODUCT_YAML = Path(__file__).parent.parent / "docs" / "ROADMAP-PRODUCT.yaml"
+
+# Keys present only in the full (/orient) projection, never in slim (/plan).
+_FULL_ONLY_KEYS = ("in_progress", "blocked", "active_tier", "blocked_on_cd", "gate_evaluations")
 
 
 @pytest.mark.skipif(not _LIVE_YAML.exists(), reason="live ROADMAP-PLATFORM.yaml not present")
@@ -52,3 +57,85 @@ class TestLiveRoadmapState:
         strategic_ids = {i["id"] for i in result["strategic_pending"]}
         overlap = next_ids & strategic_ids
         assert not overlap, f"items in both next_eligible and strategic_pending: {overlap}"
+
+
+@pytest.mark.skipif(not _LIVE_YAML.exists(), reason="live ROADMAP-PLATFORM.yaml not present")
+class TestRoadmapDetailProjection:
+    """T-1.20: _slim_roadmap_state slim (/plan) vs full (/orient) projection split."""
+
+    def _full_state(self) -> dict:
+        return compute_state_dict(_LIVE_YAML)
+
+    def test_slim_omits_full_only_keys(self) -> None:
+        slim = _slim_roadmap_state(self._full_state(), full=False)
+        for key in _FULL_ONLY_KEYS:
+            assert key not in slim, f"slim projection must not carry '{key}'"
+
+    def test_slim_default_matches_explicit_false(self) -> None:
+        state = self._full_state()
+        assert _slim_roadmap_state(state) == _slim_roadmap_state(state, full=False)
+
+    def test_slim_keeps_next_eligible_and_strategic(self) -> None:
+        slim = _slim_roadmap_state(self._full_state(), full=False)
+        assert set(slim.keys()) == {"next_eligible", "strategic_pending"}
+
+    def test_full_includes_all_full_only_keys(self) -> None:
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        for key in _FULL_ONLY_KEYS:
+            assert key in full, f"full projection must carry '{key}'"
+
+    def test_full_includes_next_eligible_and_strategic(self) -> None:
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        assert "next_eligible" in full
+        assert "strategic_pending" in full
+
+    def test_full_gate_evaluations_carried(self) -> None:
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        gate_ids = {g["id"] for g in full["gate_evaluations"]}
+        assert {"G.1", "G.8", "G.9", "G.10"}.issubset(gate_ids)
+
+    def test_full_blocked_on_cd_carried(self) -> None:
+        # Non-empty invariant rather than a specific item id: the live roadmap always has
+        # not_started eligible items gated by a pending CD, and anchoring on a concrete id
+        # would be perturbed by this plan's own tier-item bookkeeping.
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        assert isinstance(full["blocked_on_cd"], list)
+        assert full["blocked_on_cd"], "full projection must carry the live blocked_on_cd entries"
+
+    def test_next_eligible_carries_user_action_required_slim(self) -> None:
+        slim = _slim_roadmap_state(self._full_state(), full=False)
+        for item in slim["next_eligible"]:
+            assert "user_action_required" in item, f"slim next_eligible item missing key: {item}"
+
+    def test_next_eligible_carries_user_action_required_full(self) -> None:
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        for item in full["next_eligible"]:
+            assert "user_action_required" in item, f"full next_eligible item missing key: {item}"
+
+
+@pytest.mark.skipif(not _LIVE_PRODUCT_YAML.exists(), reason="live ROADMAP-PRODUCT.yaml not present")
+class TestProductRoadmapProjectionUnchanged:
+    """T-1.20 / Decision 93: product roadmap (no candidate_decisions/cross_tier_gates) is
+    unaffected by the new projection. _slim_roadmap_state uses .get() defaults so the
+    platform-only keys never crash and never appear spuriously."""
+
+    def _product_state(self) -> dict:
+        from scripts import product_roadmap as product_roadmap_module
+
+        return product_roadmap_module.compute_state_dict(_LIVE_PRODUCT_YAML, platform_yaml_path=_LIVE_YAML)
+
+    def test_product_slim_only_two_keys(self) -> None:
+        slim = _slim_roadmap_state(self._product_state(), full=False)
+        assert set(slim.keys()) == {"next_eligible", "strategic_pending"}
+
+    def test_product_full_defaults_empty_platform_keys(self) -> None:
+        # product roadmap has no blocked_on_cd / gate_evaluations -> .get() defaults to [].
+        full = _slim_roadmap_state(self._product_state(), full=True)
+        assert full["blocked_on_cd"] == []
+        assert full["gate_evaluations"] == []
+
+    def test_product_full_does_not_crash(self) -> None:
+        # Regression guard: full projection over a state dict lacking the platform-only
+        # keys must not raise (Decision 93 .get() defaults).
+        full = _slim_roadmap_state(self._product_state(), full=True)
+        assert "next_eligible" in full

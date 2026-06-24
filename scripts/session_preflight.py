@@ -1531,7 +1531,7 @@ def _get_latest_decision_ts(cache_rows: object = _READER_SENTINEL) -> str | None
     return str(ts) if ts else None
 
 
-def main() -> int:
+def main(roadmap_detail: str = "slim") -> int:
     session_start = datetime.now(timezone.utc).isoformat()
 
     sync_copilot_instructions()
@@ -1716,7 +1716,7 @@ def main() -> int:
         "telemetry_health": telemetry_health,
         "data_quality": check_data_quality_coverage(),
         "context": context,
-        "platform_roadmap": _slim_roadmap_state(platform_roadmap_state),
+        "platform_roadmap": _slim_roadmap_state(platform_roadmap_state, full=(roadmap_detail == "full")),
         "product_roadmap": _slim_roadmap_state(product_roadmap_state),
         "session_start": session_start,
     }
@@ -1742,15 +1742,26 @@ def main() -> int:
     return 0 if venv_ok else 1
 
 
-def _slim_roadmap_state(state: dict) -> dict:
-    """Keep only the actionable subsets the workflows actually consume.
+def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
+    """Return actionable roadmap subsets for session workflows.
 
-    The full state from compute_state_dict() includes in_progress, blocked,
-    active_tier/layer, and consumer maps -- ~8k tokens combined across both
-    roadmaps. Workflows only branch on next_eligible and strategic_pending.
-    Dropping the rest is recoverable: call platform_roadmap.compute_state_dict()
-    or product_roadmap.compute_state_dict() directly if a session needs detail.
+    slim (full=False, default -- used by /plan): next_eligible + strategic_pending only.
+    Keeps the planning agent's payload lean; blocked_on_cd and gate_evaluations are absent.
+
+    full (full=True -- used by /orient): entire computed state including in_progress, blocked,
+    active_tier, blocked_on_cd, and gate_evaluations. Uses .get() defaults so product_roadmap
+    (no candidate_decisions / cross_tier_gates) is unaffected (Decision 93).
     """
+    if full:
+        return {
+            "next_eligible": state.get("next_eligible", []),
+            "strategic_pending": state.get("strategic_pending", []),
+            "in_progress": state.get("in_progress", []),
+            "blocked": state.get("blocked", []),
+            "active_tier": state.get("active_tier"),
+            "blocked_on_cd": state.get("blocked_on_cd", []),
+            "gate_evaluations": state.get("gate_evaluations", []),
+        }
     return {
         "next_eligible": state.get("next_eligible", []),
         "strategic_pending": state.get("strategic_pending", []),
@@ -1864,6 +1875,17 @@ if __name__ == "__main__":
         default="",
         help="Branch name for telemetry (used with --open-session; defaults to current git branch)",
     )
+    parser.add_argument(
+        "--roadmap-detail",
+        choices=["slim", "full"],
+        default="slim",
+        dest="roadmap_detail",
+        help=(
+            "Roadmap projection depth written to platform_roadmap in the preflight report. "
+            "'slim' (default, used by /plan): next_eligible + strategic_pending only. "
+            "'full' (used by /orient): adds in_progress, blocked, active_tier, blocked_on_cd, gate_evaluations."
+        ),
+    )
     args = parser.parse_args()
 
     if args.health:
@@ -1887,4 +1909,4 @@ if __name__ == "__main__":
         print(sid)
         sys.exit(0)
 
-    sys.exit(main())
+    sys.exit(main(roadmap_detail=args.roadmap_detail))

@@ -24,11 +24,15 @@ Status flips remain the verification-earned closing step owned by `/implement` t
 | Input | Source | Load method |
 |---|---|---|
 | CI-RCA recs | `logs/.preflight-report.json` (`ci_rca_unresolved_recs`, `ci_rca_likely_resolved_recs`, alerts) | Read preflight cache |
-| Eligible / in_progress items | `logs/.preflight-report.json` (`platform_roadmap.next_eligible`, `strategic_pending`, `recent_main_commits`) | Read preflight cache |
+| Eligible / in_progress items | `logs/.preflight-report.json` (`platform_roadmap.next_eligible`, `in_progress`, `strategic_pending`) | Read preflight cache |
+| Blocked-on-CD annotations | `logs/.preflight-report.json` (`platform_roadmap.blocked_on_cd`) | Read preflight cache |
+| Gate evaluations | `logs/.preflight-report.json` (`platform_roadmap.gate_evaluations`) | Read preflight cache |
 | Roadmap detail | `docs/ROADMAP-PLATFORM.yaml` | Read file |
 | Recent main activity | `git log --oneline -10 origin/main` | Bash |
 
 **Read-from-preflight-cache constraint (Decision 88 egress budget; Decision 84 closed boundary):** `/orient` reads the preflight cache -- it must NOT trigger a fresh warehouse reader fan-out. Do not call `bin/venv-python -m scripts.platform_roadmap` or any DuckLake reader verb during orient. The preflight script is the only path that may refresh `logs/.preflight-report.json`.
+
+**Full-projection requirement:** `/orient` requires the full preflight projection (`--roadmap-detail full`). If `platform_roadmap.gate_evaluations` is absent from the cached report, re-run preflight with `--roadmap-detail full` before proceeding (the orient command handles this check in Step 1).
 
 ## Status-Trusted-Never-Inferred Rule
 
@@ -50,16 +54,25 @@ The orient deliverable is a structured chat reply with four sections, in order:
 
 ### 1. Status Digest
 
-Compact table of tier_items currently `in_progress` or eligible (`not_started` with all depends_on satisfied). Source: `next_eligible` from preflight cache + direct scan of `docs/ROADMAP-PLATFORM.yaml` for `in_progress` items.
+Compact table of tier_items currently `in_progress` or eligible (`not_started` with all depends_on satisfied). Source: `platform_roadmap.next_eligible` and `platform_roadmap.in_progress` from preflight cache.
 
 ```
 | Tier Item | Status | Phase | Notes |
 |---|---|---|---|
 | T-X.Y: <name> | in_progress | <phase> | |
-| T-X.Y: <name> | eligible | <phase> | gated by CD.NN [if applicable] |
+| T-X.Y: <name> | eligible | <phase> | gated by CD.NN (related) [if in blocked_on_cd] |
 ```
 
+**Blocked-on-CD annotation**: for each item in `platform_roadmap.blocked_on_cd`, add a "gated by CD.NN" note in the Notes column including the relationship type (`gates`, `related`, or `decision_required_before`) and whether the item carries `bootstrap_completion_exempt: true` (in which case it may start/complete despite the pending CD). An item can be eligible-to-start while still annotated as gated-by-CD; the annotation informs planning, it is not a hard block on eligibility.
+
 Omit items with status `complete`, `reserved`, or blocked (depends_on not satisfied).
+
+**Gate-evaluation summary** (below the status table): one line per cross-tier gate from `platform_roadmap.gate_evaluations`:
+```
+Cross-tier gates: G.1 pass | G.8 fail | G.9 fail | G.10 fail
+  G.8 deferred reason: <reason> [only shown when verdict is deferred]
+```
+Deferred gates include the reason string so the operator understands which runtime field is unresolved.
 
 ### 2. CI-RCA Triage
 
