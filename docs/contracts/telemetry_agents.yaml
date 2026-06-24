@@ -285,8 +285,8 @@ governance:
   write_path: >-
     LIVE (draft, dead): src/data/handlers/agent_telemetry.py::open_invocation/close_invocation ->
     OpsWriter.emit('telemetry_agent_invocations') -> S3 staging -> Iceberg (unmigrated). TARGET
-    (Phase 4): the rooted agent writer (carrying session_id) on the DuckLake telemetry substrate
-    (T2.33). Insert-once; no SCD2 merge.
+    (Phase 4, post-T2.26): the rooted agent writer (carrying session_id) on the DuckLake telemetry
+    substrate. Insert-once; no SCD2 merge.
 governance_notes: >-
   Decision 95 cl.4: telemetry_agents replaces the ROOTLESS telemetry_agent_invocations -- the canonical
   addition is session_id (+ optional observation_id), rooting every agent row to its session. Collapse
@@ -299,8 +299,11 @@ governance_notes: >-
   chosen to root the work metrics losslessly (a scheduled-agent invocation is a timed event). Decision
   96: insert-once, partition day(started_at) UTC, tz-aware UTC, no last_updated_timestamp. Decision 97:
   ULID-target identity, boundary-minted, FKs propagated. No merge_key (insert-once). dq_INTENT only;
-  ENFORCEMENT lands in config/agent/data_quality/telemetry.yaml at Phase 4. REPORT-ONLY: documented, not
-  implemented. KNOWN GAP: rec-2173 (preflight telemetry health) and the broader Phase 4 re-provisioning
-  are CODE follow-ons, not this contract.
+  ENFORCEMENT lands in config/agent/data_quality/telemetry.yaml at Phase 4. NULLABILITY AXES: `nullable`
+  is the TARGET-SCHEMA column constraint (Phase 4 DDL); `dq_intent.not_null.enforced` is the CURRENT DQ
+  posture (false everywhere now). A `nullable: false` + `enforced: false` field is "required in the target
+  schema, not yet DQ-enforced", NOT a contradiction. REPORT-ONLY: documented, not implemented. KNOWN GAP:
+  rec-2173 (preflight telemetry health) and the broader Phase 4 re-provisioning are CODE follow-ons, not
+  this contract.
 amendment_log: []
 previous_versions: []

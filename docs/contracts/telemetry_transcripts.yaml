@@ -179,7 +179,7 @@ governance:
   partition_by: "day(created_at)"
   write_path: >-
     LIVE (draft, dead): telemetry.py::emit_transcript -> OpsWriter.emit('telemetry_transcripts') -> S3
-    staging -> Iceberg (unmigrated). TARGET (Phase 4): the DuckLake telemetry writer boundary (T2.33).
+    staging -> Iceberg (unmigrated). TARGET (Phase 4, post-T2.26): the DuckLake telemetry writer boundary.
     Insert-once; no SCD2 merge.
 governance_notes: >-
   COLLAPSE / RE-ROOTING (Decision 95 cl.3): the draft links blobs by phase_id / step_id /
@@ -190,7 +190,9 @@ governance_notes: >-
   local_path / s3_key" (write-time validator at Phase 4, not a column not-null). Decision 96: insert-once
   event data, partition day(created_at) UTC, tz-aware UTC, no last_updated_timestamp. Decision 97: ULID
   identity minted once, FKs propagated. No merge_key (insert-once). dq_INTENT only; ENFORCEMENT lands in
-  config/agent/data_quality/telemetry.yaml at the Phase 4 rebuild. REPORT-ONLY: documented, not
-  implemented.
+  config/agent/data_quality/telemetry.yaml at the Phase 4 rebuild. NULLABILITY AXES: `nullable` is the
+  TARGET-SCHEMA column constraint (Phase 4 DDL); `dq_intent.not_null.enforced` is the CURRENT DQ posture
+  (false everywhere now). A `nullable: false` + `enforced: false` field is "required in the target schema,
+  not yet DQ-enforced", NOT a contradiction. REPORT-ONLY: documented, not implemented.
 amendment_log: []
 previous_versions: []

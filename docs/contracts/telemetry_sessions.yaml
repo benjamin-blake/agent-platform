@@ -35,7 +35,8 @@ contract:
       No generated artifact yet. Unlike the ops Class A contracts (which project_to
       config/lambda/ducklake/field_semantics.yaml), telemetry is not on DuckLake; there is NO telemetry
       field_semantics.yaml. This contract IS the authoritative telemetry field-semantic source until the
-      Phase 4 rebuild lands a generator (T2.33). The live draft schema is scripts/telemetry_schemas.py.
+      Phase 4 rebuild (post-T2.26) lands a generator, applying the DuckLake schema-as-code mechanism
+      T2.33 established for the ops tables. The live draft schema is scripts/telemetry_schemas.py.
 fields:
   session_id:
     $ref: session-id.yaml#/contract/fields/session_id
@@ -387,7 +388,7 @@ governance:
   write_path: >-
     LIVE (draft, dead): telemetry.py::open_session/close_session -> OpsWriter.emit('telemetry_sessions')
     -> S3 staging -> Iceberg (Athena, unmigrated since 2026-05-28). TARGET (Phase 4): the DuckLake
-    telemetry writer boundary (T2.33). Insert-once; no SCD2 merge.
+    telemetry writer boundary (Phase 4, post-T2.26). Insert-once; no SCD2 merge.
 governance_notes: >-
   Decision 95: telemetry_sessions is the trace ROOT; root-unification means no rootless telemetry
   entities. Decision 96: insert-once EVENT data -- partition day(started_at) UTC, no trade_date, no
@@ -396,6 +397,15 @@ governance_notes: >-
   recorded here; per-field DQ ENFORCEMENT lands in config/agent/data_quality/telemetry.yaml at the
   Phase 4 rebuild (the lexicon authority boundary). Live-vs-target skew (UUID4->ULID; trade_date->
   day(started_at); 7 draft tables -> 4 canonical) is documented, NOT implemented (REPORT-ONLY).
+  ROLL-UP RECONCILIATION: process_event_count / rework_count / exception_count are denormalised tallies
+  of telemetry_observations rows with observation_type=process_event (rework_count = tier=rework;
+  exception_count = tier=exception, via the promoted telemetry_observations.tier column).
+  telemetry_observations is AUTHORITATIVE on disagreement; a DQ relationships/expression check reconciles
+  them at the Phase 4 rebuild. The "running"->terminal close appends a SECOND session row (Decision 97
+  mint-once reuses session_id); the terminal row carries the final tallies.
+  NULLABILITY AXES: `nullable` is the TARGET-SCHEMA column constraint (Phase 4 DDL); `dq_intent.not_null.
+  enforced` is the CURRENT DQ posture (false everywhere now). A `nullable: false` + `enforced: false`
+  field is "required in the target schema, not yet DQ-enforced", NOT a contradiction.
   KNOWN GAPS (open recs, future CODE work, not this contract): rec-275 (failure-path step telemetry),
   rec-2173 (preflight telemetry health re-enable), rec-014 (merge telemetry modules).
 amendment_log: []
