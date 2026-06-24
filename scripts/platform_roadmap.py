@@ -73,7 +73,8 @@ def _tokenize(rule: str) -> list[_Token]:
             value = value[1:-1]
         elif kind == "NAME" and value in ("and", "or", "not"):
             kind = "KEYWORD"
-        assert kind is not None
+        if kind is None:
+            raise ValueError(f"_tokenize: regex matched but lastgroup is None for {m.group()!r}")
         tokens.append(_Token(kind, value))
     tokens.append(_Token("EOF", ""))
     return tokens
@@ -214,8 +215,8 @@ class GateRuleEvaluator:
 
     def _eval_field_cmp(self, field_path: str, rhs: str) -> tuple[_Verdict, str]:
         item_id, field = self._resolve_field_path(field_path)
-        if item_id is None or field is None:
-            return "deferred", f"{field_path}: cannot resolve to a known item id"
+        if item_id is None or field is None or field == "":
+            return "deferred", f"{field_path}: cannot resolve to a known item id and field"
         item = self._state._by_id.get(item_id)
         if item is None:
             return "deferred", f"{field_path}: item {item_id!r} not found"
