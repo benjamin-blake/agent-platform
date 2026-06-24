@@ -56,9 +56,9 @@ verification_plan:
     fix_if: A failure means the loader, fallback, or anti-drift assertion is wrong; fix the loader or align the YAML to the fallback constants.
   - step: 2
     phase: pre-deploy
-    action: Confirm s3_log_store actually reads the committed YAML (not just the fallback) and the routing matches the YAML file content.
-    command: bin/venv-python -c "import yaml,scripts.s3_log_store as s; y=yaml.safe_load(open('docs/contracts/log-storage.yaml'))['routing']; assert s.get_ops_table_routing()==y['ops_table_routing'], (s.get_ops_table_routing(),y['ops_table_routing']); assert s.get_priority_queue_key()==y['priority_queue_key']; print('reads-yaml OK')"
-    expected: Prints "reads-yaml OK" (the module returns the YAML-sourced values).
+    action: Confirm the YAML carries the required top-level keys and exit-criterion fields, and that s3_log_store actually reads the committed YAML (not just the fallback).
+    command: bin/venv-python -c "import yaml,scripts.s3_log_store as s; d=yaml.safe_load(open('docs/contracts/log-storage.yaml')); assert {'version','contract_version','status','patterns','priority_queue','routing'} <= set(d), set(d); assert d['contract_version']==1 and d['status']=='ratified'; y=d['routing']; assert s.get_ops_table_routing()==y['ops_table_routing'], (s.get_ops_table_routing(),y['ops_table_routing']); assert s.get_priority_queue_key()==y['priority_queue_key']; print('reads-yaml+keys OK')"
+    expected: Prints "reads-yaml+keys OK" (required keys present, contract_version 1 / status ratified, and the module returns the YAML-sourced routing).
     fix_if: Mismatch or exception means the loader is not reading the YAML or the accessor names differ; fix the accessor/loader.
   - step: 3
     phase: pre-deploy
@@ -146,11 +146,12 @@ context:
     SESSION_LOG_ARCHIVE, and the INTENT conversion notes -- none are live code/config. Deletion is code-safe.
   - >-
     Embedded log-storage.yaml design spec (the /implement agent creates the file verbatim from this, setting
-    converted_at to the implementation date; do NOT overwrite last_verified):
+    ratified_at to the implementation date and PRESERVING last_verified as 2026-05-06):
     version 1 AND contract_version 1 (carry BOTH -- top-level "version" matches the non-ritual precedent
     storage-substrate/read-engine/telemetry-lexicon; "contract_version" satisfies the T-1.15 exit-criterion
-    literal "contract_version: 1, status: ratified"); status ratified; last_verified "2026-05-06" (preserve
-    the audited date from the .md -- do not re-stamp freshness); converted_at <impl date>;
+    literal "contract_version: 1, status: ratified"); status ratified; ratified_at <impl date>;
+    ratified_via "PLAN-t115-log-storage-yaml (T-1.15)"; last_verified "2026-05-06" (preserve the audited
+    date from the .md -- this is the storage-pattern audit date, NOT the ratification date; do not re-stamp it);
     decisions_cited [Decision-45, Decision-50, Decision-55, Decision-84, CD.25];
     note "routing governs ONLY the s3_log_store write-routing sentinels; the ops_session_log/ops_execution_plans
     write-through and the priority-queue write-through are death-dated -- repoint/retire at T2.26 (Decision 84)";
@@ -171,9 +172,10 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     Create docs/contracts/log-storage.yaml from the embedded design spec in context. Keep it NON-ritual:
-    top-level contract_version/status/ratified_at/last_verified/decisions_cited metadata plus patterns,
-    priority_queue, routing, verified_against. No contract block with a class field. Set ratified_at and
-    last_verified to the implementation date.
+    top-level version + contract_version + status + ratified_at + ratified_via + last_verified + note +
+    decisions_cited metadata plus patterns, priority_queue, routing (with routing.note), verified_against.
+    No contract block with a class field. Set ratified_at to the implementation date; PRESERVE last_verified
+    as 2026-05-06 (the storage-pattern audit date -- do NOT re-stamp it to the implementation date).
   - >-
     Modify scripts/s3_log_store.py: define module-level FALLBACK_OPS_TABLE_ROUTING (= the current
     _OPS_TABLE_ROUTING value) and FALLBACK_PRIORITY_QUEUE_KEY (= the current _OPS_PRIORITY_QUEUE_KEY value),
