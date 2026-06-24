@@ -1,0 +1,205 @@
+schema_version: 1
+slug: "claude-p-transient-retry"
+intent: >-
+  Fix open Critical CI-RCA rec-2335 by giving every `claude -p` CI invocation a bounded
+  retry on transient Claude API 5xx, so a single server-side fault can no longer fail-closed
+  the sandbox terraform auto-apply gate, while preserving fail-closed semantics for
+  substantive verdicts. Hardens the agent-native CI/CD pipeline the platform self-improves on.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-claude-p-transient-retry.yaml
+phase: >-
+  Phase 1 platform CI/CD hardening (CD.35 sandbox auto-apply pipeline, Decision 92). Resolves
+  ci_rca rec-2335. Not a roadmap tier_item -- ci_rca soft-warn exception category.
+scope:
+  - file: scripts/ci/claude_p_retry.sh
+    action: Create
+    purpose: >-
+      Verdict-agnostic wrapper around `claude -p`: bounded transient-5xx retry (max 3 attempts,
+      exponential backoff 2^attempt, backoff base overridable via env for tests), replays any
+      stdin on each attempt, passes all args through, writes combined output to a caller-named
+      file. Retries ONLY on transient Claude-API signatures; returns claude's last exit code
+      otherwise so each caller keeps its own verdict/marker semantics.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Route the "Subagent plan review" step's `claude -p` call (currently single-shot at
+      lines 349-358) through scripts/ci/claude_p_retry.sh. Keep the existing PROCEED-required
+      grep and the fail-closed `exit 1` on absence of PROCEED, so a substantive REVISE or an
+      exhausted-retry transient still blocks apply (Decision 77, Decision 55).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Route the RCA agent `claude -p` invocation (line 227, stdin-piped, --output-format json)
+      through scripts/ci/claude_p_retry.sh so transient 5xx no longer silently drops an RCA run.
+      The existing `|| true` and deterministic marker check are preserved unchanged.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add an enforcement check: every `claude -p` invocation under .github/workflows/*.yml must
+      route through scripts/ci/claude_p_retry.sh. Single source of truth for CI checks
+      (Decision 73) -- the guard lives in validate.py, not as a standalone ci.yml gate, so future
+      `claude -p` additions cannot regress to no-retry.
+  - file: tests/test_ci_claude_p_retry.py
+    action: Create
+    purpose: >-
+      Unit-test the wrapper with a stub `claude` on PATH and the new validate.py enforcement
+      check. Proves the three safety properties of the wrapper plus the regression guard.
+bundled_recommendations:
+  - rec-2335
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/ci/claude_p_retry.sh exists, is executable, and wraps `claude -p` with a bounded
+    retry loop keyed on transient Claude-API signatures (HTTP 500/502/503, "API Error: 5",
+    "Internal server error", "overloaded").
+  - >-
+    The "Subagent plan review" step in .github/workflows/terraform-apply-sandbox.yml invokes
+    scripts/ci/claude_p_retry.sh (no raw single-shot `claude -p`), and still fails closed
+    (exit 1) when PROCEED is absent.
+  - >-
+    The RCA `claude -p` invocation in .github/workflows/ci-rca.yml routes through
+    scripts/ci/claude_p_retry.sh.
+  - >-
+    scripts/validate.py fails if any `claude -p` under .github/workflows/*.yml is not routed
+    through scripts/ci/claude_p_retry.sh.
+  - >-
+    With a stub `claude` that emits a transient 5xx on attempt 1 then PROCEED on attempt 2, the
+    wrapper retries and the output file ends with PROCEED (exit 0).
+  - >-
+    With a stub `claude` that emits a substantive REVISE (no transient signature), the wrapper
+    returns after exactly one attempt -- a REVISE is never retried away (Decision 55 anti-masking).
+  - >-
+    With a stub `claude` that always emits a transient 5xx, the wrapper attempts exactly 3 times
+    then returns non-zero, leaving the error text in the output file (caller fails closed).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: New wrapper unit tests pass (transient-then-PROCEED, never-retry-REVISE, persistent-5xx exhaustion).
+    command: "bin/venv-python -m pytest tests/test_ci_claude_p_retry.py -v"
+    expected: All tests pass; the never-retry-REVISE and 3-attempt-exhaustion assertions are green.
+    fix_if: >-
+      A test fails -- e.g. the wrapper retried a REVISE (transient signature matched too broadly),
+      or did not attempt exactly 3 times on persistent 5xx, or the backoff env override was ignored.
+  - step: 2
+    phase: pre-deploy
+    action: validate.py enforcement check rejects an unwrapped `claude -p` and accepts the wrapped form.
+    command: "bin/venv-python -m pytest tests/test_ci_claude_p_retry.py -v -k enforcement"
+    expected: The enforcement test passes -- a fixture workflow with raw `claude -p` is flagged; the wrapped form is not.
+    fix_if: The check greps too loosely (false positive on a comment) or misses a raw invocation (false negative).
+  - step: 3
+    phase: pre-deploy
+    action: Full presubmit passes, including the new validate.py enforcement check over the real workflows.
+    command: "bin/venv-python -m scripts.validate"
+    expected: >-
+      Presubmit is green; the new check confirms both terraform-apply-sandbox.yml and ci-rca.yml
+      route their `claude -p` calls through the wrapper.
+    fix_if: >-
+      The enforcement check fails on a real workflow -- a `claude -p` call was missed during the
+      edit, or lint/format/yaml errors were introduced in the workflow files.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the apply-sandbox fail-closed path is intact (PROCEED still required after wrapping).
+    command: "grep -n -A2 'claude_p_retry.sh' .github/workflows/terraform-apply-sandbox.yml | grep -q 'review.txt' && grep -n 'grep -qx \"PROCEED\" review.txt' .github/workflows/terraform-apply-sandbox.yml"
+    expected: The wrapper writes review.txt and the PROCEED-required fail-closed grep is still present.
+    fix_if: The PROCEED grep was dropped or the wrapper output file no longer feeds the verdict check.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm rec-2335 closes after merge (trailer-driven autoclose verification post-sync).
+    command: "bin/venv-python -m scripts.sync_ops pull && grep -q '\"id\": \"rec-2335\"' logs/.recommendations-log.jsonl && grep -A30 '\"id\": \"rec-2335\"' logs/.recommendations-log.jsonl | grep -m1 '\"status\"'"
+    expected: After merge with the Resolves trailer, rec-2335 status reads "closed" (run post-merge).
+    fix_if: Status still "open" -- the Resolves trailer was omitted from the squash-merge body; close manually via ops_data_portal --update-rec.
+constraints:
+  - >-
+    Decision 77 (fail-closed): the sandbox auto-apply gate must keep applying ONLY on guard
+    success() and a PROCEED verdict. Wrapping the call must not weaken fail-closed -- persistent
+    transient failure after retries and any substantive REVISE both still block apply.
+  - >-
+    Decision 55 (anti-masking): retry is sanctioned deterministic recovery ONLY for transient
+    infra faults. The wrapper must NEVER retry a substantive REVISE/non-transient output -- that
+    would mask a real verdict. The transient-signature match must exclude verdict tokens.
+  - >-
+    Decision 73 / Decision 80: validate.py is the single source of truth for CI checks. The
+    enforcement guard goes into validate.py FIRST; do not add a standalone check to ci.yml.
+  - "Decision 84 I-4: bounded transient-5xx retry is a licensed pattern in this codebase."
+  - >-
+    Only modify files listed in scope. The wrapper is a workflow utility, NOT a Lambda artifact
+    (scripts/ci/ is not Lambda-packaged, Decision 79) -- no build/deploy/smoke-test step.
+  - No rescue agents or workaround loops (Decision 55) -- this is a bounded deterministic retry, not an LLM-judgement recovery.
+context:
+  - >-
+    rec-2335 (Critical, source=ci_rca): run 28033632660 failed at "apply-sandbox / Subagent plan
+    review" on "API Error: 500 Internal server error"; the single-shot `claude -p` wrote the error
+    text to review.txt, so the PROCEED grep failed-closed the whole auto-apply on a transient fault.
+  - >-
+    Precedent: terraform-init in the SAME workflow (lines 238-264) already does bounded transient
+    retry, mirrored by validate.py _terraform_init_with_retry / _TRANSIENT_INIT_SIGNATURES
+    (validate.py:2799-2835) -- per rec-2237. Claude-API transient signatures DIFFER from the
+    terraform-registry ones, so the wrapper defines its own signature set.
+  - >-
+    Two workflows invoke `claude -p`: terraform-apply-sandbox.yml (1, PROCEED/REVISE verdict) and
+    ci-rca.yml (1 real call at line 227, stdin-piped JSON; the other match at line 75 is a
+    `command -v claude` presence check, not an invocation). Both real calls are wrapped.
+  - >-
+    Decision-scout gate verdict FLAGS_FOUND (1 NOTE, Decision 73). Resolution adopted: enforcement
+    check lives in validate.py, not ci.yml. Cite Decisions 77, 55, 84 (I-4), 92; process pointer
+    Decision 72 (Resolves trailer). No BLOCK.
+  - >-
+    Branch at planning time: 0 commits behind origin/main; no scope-file overlap with recent main
+    changes. Recent main touched validate.py (T2.23, #237) but not the claude -p / retry surfaces.
+  - >-
+    Post-deploy caveat: the real transient-5xx-during-live-apply path cannot be force-triggered in
+    a session; pre-deploy verification stubs `claude` to exercise every retry branch deterministically.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-recommendations-plan-hr6gek)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scoped via decision-scout gate (Decisions 77, 55, 73, 84, 92 surfaced)
+  - All files in scope located and readable (terraform-apply-sandbox.yml:332-358, ci-rca.yml:227, validate.py:2799-2835)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/ci/claude_p_retry.sh -- a verdict-agnostic wrapper. Contract:
+    `claude_p_retry.sh <output_file> -- <claude args...>`. Read stdin once into a variable; on each
+    of up to 3 attempts run `claude -p "$@"` (replaying stdin) capturing stdout+stderr to the output
+    file. Define transient signatures: HTTP "500"/"502"/"503", "API Error: 5", "Internal server
+    error", "overloaded". After each attempt: if claude exited 0, stop (success). Else if the output
+    matches a transient signature AND there are attempts left, sleep base*2^attempt
+    (base from CLAUDE_P_RETRY_BACKOFF_BASE, default a few seconds; tests set base=0) and retry.
+    Else stop and return claude's last exit code. Never inspect or branch on PROCEED/REVISE -- the
+    caller owns verdict semantics. Make it executable (chmod +x) and keep it Linux/bash, ASCII-only.
+  - >-
+    Modify .github/workflows/terraform-apply-sandbox.yml "Subagent plan review" step: replace the
+    single-shot `claude -p ... > review.txt 2>&1 || true` (lines 349-353) with
+    `scripts/ci/claude_p_retry.sh review.txt -- --output-format text --max-turns 10 "<same prompt>" || true`.
+    Leave `cat review.txt` and the `grep -qx "PROCEED" review.txt` / `exit 1` fail-closed block
+    UNCHANGED. Confirm relative path resolution given working-directory ${{ env.WORKDIR }} (use a
+    repo-root-relative path, e.g. ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh).
+  - >-
+    Modify .github/workflows/ci-rca.yml (line ~227): replace
+    `printf '%s' "$PROMPT" | claude -p --output-format json --max-turns 30 --allowedTools "..." > /tmp/ci-rca-output.json 2> /tmp/ci-rca-stderr.log || true`
+    with the equivalent piped through scripts/ci/claude_p_retry.sh, preserving --output-format json,
+    --max-turns 30, --allowedTools, the stdin prompt, the output redirection, and the trailing
+    `|| true`. The deterministic marker/dedup check below it stays unchanged.
+  - >-
+    Modify scripts/validate.py: add a check function (and register it in the presubmit suite, NOT
+    in ci.yml) that scans .github/workflows/*.yml; for each line containing an actual `claude -p`
+    invocation (exclude comments and `command -v claude`), assert the same logical command routes
+    through scripts/ci/claude_p_retry.sh. Append a descriptive failure to the `failed` list on
+    violation. Add a short comment noting parity with the wrapper, mirroring the
+    _TRANSIENT_INIT_SIGNATURES parity comment.
+  - >-
+    Create tests/test_ci_claude_p_retry.py with a fixture that puts a stub `claude` on PATH
+    (a small script whose behaviour is driven by an attempt-counter file and env vars) and sets
+    CLAUDE_P_RETRY_BACKOFF_BASE=0. Tests: (a) transient-5xx on attempt 1 then PROCEED on attempt 2
+    -> output ends with PROCEED, exit 0, 2 attempts; (b) substantive REVISE output -> exactly 1
+    attempt (never retried); (c) persistent 5xx -> exactly 3 attempts, non-zero exit, error text
+    in output; (d) enforcement check flags a fixture workflow containing raw `claude -p` and passes
+    the wrapped form.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. On an unrecoverable V3 failure,
+    stop and RCA (Decision 55); do not add a workaround loop.
+  - 'Report: what was implemented, verification results, and confirmation that fail-closed semantics are preserved.'
+work_areas: []
+rollback: >-
+  Revert the five-file change set. The wrapper is additive and the workflow edits are local to two
+  run blocks; reverting restores the prior single-shot behaviour with no state migration.
