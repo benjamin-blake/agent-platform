@@ -1,0 +1,426 @@
+schema_version: 1
+slug: "terraform-cicd-drift-detection"
+intent: >-
+  CD.35 Wave 5 (platform tier T2.24): close the last convergence gap in the agent-native Terraform
+  CI/CD program with an hourly, alarm-only scheduled drift detector -- a terraform plan that makes
+  out-of-band infra drift sticky and observed (flips the convergence record red and files a rec
+  DIRECTLY via the ops portal) without auto-applying, so the self-improving platform's sandbox infra
+  state stays trustworthy without a human polling for drift.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-cicd-drift-detection.yaml
+phase: >-
+  Platform tier T2.24 (CD.35 Wave 5, ratified as Decision 92). Depends on T2.20 (Wave 1 convergence
+  substrate, complete 2026-06-18). Mirrors the T2.21 (speculative-plan) IAM/guard/bootstrap template.
+  Product roadmap: not applicable (platform infra governance).
+scope:
+  - file: .github/workflows/terraform-drift.yml
+    action: Create
+    purpose: >-
+      Scheduled (cron '17 * * * *') + workflow_dispatch drift detector. Assumes github_ci_drift; runs
+      terraform plan -detailed-exitcode -lock=true -lock-timeout=120s with explicit exit-code handling
+      (0=no-change / 2=drift / 1=error, where "Error acquiring the state lock" is reclassified to
+      skip-this-cycle). On drift AND the convergence record not already red: merge-write the record red
+      and file a source=tf_drift rec via the ops portal (both fail-loud, no continue-on-error, no
+      outbox). On drift while already red: no-op (one red = one signal). Contains NO terraform apply.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add the net-new least-privilege github_ci_drift OIDC role + policy: trust mirrors github_ci_branch
+      (sub repo:OWNER/REPO:ref:refs/heads/main -- scheduled/dispatch run on main); s3:GetObject on
+      tfstate/personal/*; s3:PutObject+DeleteObject scoped to the EXACT lock object
+      tfstate/personal/sandbox/terraform.tfstate.tflock (native-lock coexistence); s3:GetObject+PutObject
+      on convergence/personal/* (read prior status + write the red flip, joining the apply identity);
+      lambda:InvokeFunctionUrl on the ducklake_writer URL ONLY (not the reader); and the SAME refresh-time
+      READ surface github_ci_plan/github_ci_apply use during plan. NO state-object write, NO tfplan, NO
+      mutation, NO IAM. Update the github_ci_branch DenyConvergenceRecordWrite comment to name {apply,
+      drift} as the sanctioned writer set.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register the tf_drift canonical source (snake_case system-source convention, like ci_rca /
+      budget_breach) with description, signal_interpretation, and added_date, so validate_source('tf_drift')
+      accepts it at portal write time and check_source_registry stays green.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Document the alarm-only scheduled drift detector: the hourly cron, the 0/2/1+lock-skip exit-code
+      semantics, native-lock coexistence, the green->red-only red-flip dedup, drift-files-via-ops-portal
+      (not ci-rca), and the dispatch-ack recovery. Update the convergence writer-set language to {apply, drift}.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Comment-only accuracy fix on the ConvergenceRecordWrite statement ("the apply identity is the ONLY
+      writer" -> "the apply identity is A writer; the T2.24 drift identity github_ci_drift joins at Wave 5").
+      Zero terraform plan diff (comments do not change the plan) -> no guard-BLOCK, no apply triggered.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T2.24 files_in_scope (Tier-Item Freshness Gate finding: add terraform/personal/oidc.tf +
+      config/agent/data_quality/source_registry.yaml; reclassify scripts/ops_data_portal.py as
+      invoked-not-modified) and advance T2.24 status on completion.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    New IAM role agent-platform-github-ci-drift (aws_iam_role + aws_iam_role_policy) is IAM-sensitive ->
+    the deterministic guard BLOCKS its creation (exit 2). It lands via the human-gated apply path (the
+    tf-gated-apply GitHub Environment gated-apply job per Decision 92/94, or the agent_platform_admin
+    local apply as T2.21's github_ci_plan did), NEVER auto-applied by the pipeline. This apply MUST
+    precede the scheduled drift workflow's first real run.
+  - >-
+    continue-on-error on the configure-aws-credentials (assume-role) step covers the bootstrap window
+    (the role does not exist until the gated apply lands); subsequent steps gate on its outcome so a
+    pre-apply scheduled tick no-ops instead of erroring (mirrors github_ci_plan's bootstrap pattern).
+  - >-
+    Convergence-write authorization is PER-ROLE, not bucket-policy gated (verified: github_ci_apply has
+    an inline ConvergenceRecordWrite ALLOW in terraform/bootstrap/github_ci_apply.tf; github_ci_branch
+    carries an explicit DenyConvergenceRecordWrite; the integrity model "rests on this grant + the Deny +
+    PR read-only"). github_ci_drift therefore needs only its own inline convergence-write ALLOW -- no
+    data_lake bucket-policy change, no touch to the guard-sensitive apply-role policy. Confirm at
+    implementation that terraform/personal/main.tf's bucket policy does not globally deny non-apply
+    principals on convergence/personal/*.
+  - >-
+    Native S3 locking coexistence: the drift plan runs -lock=true; github_ci_drift gets PutObject +
+    DeleteObject scoped to the EXACT lock object key tfstate/personal/sandbox/terraform.tfstate.tflock
+    (terraform's conditional-put acquire + delete release), and NO write on the state object
+    terraform.tfstate itself. A lock held by an in-flight apply -> drift plan fails to acquire ->
+    "Error acquiring the state lock" -> skip-this-cycle (exit 0, no alarm).
+  - >-
+    Decision 79 assessment: compute_affected_artifacts(scope) returns {'data-pipeline':
+    ['docs/ROADMAP-PLATFORM.yaml']} -- it is NOT empty. Five of the six scope files (the workflow,
+    oidc.tf, the registry YAML, the two doc/comment edits) are not Lambda-packaged and match nothing;
+    the sixth matches the active data-pipeline artifact as an ASSET-only edit (docs/ROADMAP-PLATFORM.yaml
+    is listed under assets: in src/lambdas/data-pipeline/manifest.yaml, status: active), NOT a
+    code/handler change. No per-Lambda build/deploy/smoke-test/model-id step is owed: the edit is roadmap
+    bookkeeping (no packaged code changes), the scheduled-agent functions that read the asset are disabled
+    (AGENTS.md re-enable runbook), and roadmap-only edits land deploy-free by uniform precedent (recent
+    PRs #229-#244). config/agent/ is not Lambda-packaged.
+  - >-
+    Timing: drift detection is a standalone scheduled job (post-deploy). It shares NO concurrency group
+    with terraform-apply-sandbox -- serialization between drift and apply is via the native S3 lock, not
+    a GHA concurrency group. The drift workflow has its OWN concurrency group (cancel-in-progress: false)
+    to prevent overlapping drift ticks from stacking.
+acceptance_criteria:
+  - >-
+    (Roadmap exit 1) An out-of-band change to a terraform-managed sandbox resource is detected by the
+    scheduled drift workflow within one cron cycle (<=1h) and filed as an OPEN rec with source=tf_drift
+    via the ops portal (file_rec, id allocated in-transaction by the writer; no outbox).
+  - >-
+    On that drift the convergence record convergence/personal/sandbox.json is flipped to status=red, and
+    ONLY on a green->red transition: an already-red record is not re-written and no duplicate tf_drift rec
+    is filed (one red = one signal). Drift NEVER writes the record green (green is written solely by a
+    converged apply, preserving T2.20's anti-masking anchor).
+  - >-
+    (Roadmap exit 2) A state lock held by an in-flight apply causes the cycle to skip without alarming
+    (no rec filed, record untouched), and that lock-acquisition-failure is distinguished from a genuine
+    terraform plan error (which fails the run LOUDLY with NO tf_drift rec and NO red flip) and from drift.
+  - >-
+    (Roadmap exit 3) The drift workflow contains no terraform apply invocation; drift never triggers an
+    auto-apply (alarm-only, Decision 55) -- verified structurally (no apply in the workflow) AND at the
+    IAM layer (github_ci_drift has no state-object write and no resource-mutation permission).
+  - >-
+    github_ci_drift is created via the human-gated (guard-BLOCKED) apply and is assumable by the scheduled
+    workflow (OIDC sub repo:OWNER/REPO:ref:refs/heads/main). simulate-principal-policy proves it CAN read
+    tfstate, write+delete the single .tflock object, read+write convergence/personal/*, and invoke the
+    ducklake_writer; and CANNOT write the tfstate state object, CANNOT invoke the ducklake_reader, and has
+    no tfplan write.
+  - >-
+    A drift-flipped red record clears via the same dispatch-ack path as an apply failure: a
+    terraform-apply-sandbox workflow_dispatch that converges writes the record green; the tf_drift rec is
+    closed via the standard portal close path (Resolves: trailer / update_rec).
+  - >-
+    tf_drift is registered in source_registry.yaml and accepted by validate_source; check_source_registry
+    and the full validate.py presubmit pass.
+  - >-
+    T2.24 files_in_scope in docs/ROADMAP-PLATFORM.yaml is re-grounded to the true modified set (adds
+    terraform/personal/oidc.tf + config/agent/data_quality/source_registry.yaml; ops_data_portal.py noted
+    invoked-not-modified) and T2.24 status is advanced on completion.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Authoritative local gate -- full presubmit (terraform validate, YAML, prompt-compliance, source-registry guard, plan schema, unit tests).
+    command: bin/venv-python -m scripts.validate
+    expected: Presubmit reports all checks passed (exit 0); check_source_registry passes (tf_drift registered); terraform/personal validates.
+    fix_if: Any check fails -- read the failing check, fix the scope file, re-run. Do not weaken a check to pass.
+  - step: 2
+    phase: pre-deploy
+    action: Drift workflow structure -- valid YAML, NO terraform apply (alarm-only), -detailed-exitcode present, and a lock-acquisition-failure skip branch exists.
+    command: |
+      bin/venv-python - <<'PY'
+      import re, yaml
+      txt = open(".github/workflows/terraform-drift.yml").read()
+      w = yaml.safe_load(txt)
+      assert "schedule" in str(w.get("on", w.get(True))), "drift workflow must be scheduled"
+      runs = " ".join(str(s.get("run", "")) for j in w["jobs"].values() for s in j.get("steps", []))
+      assert not re.search(r"terraform\s+apply\b", runs), "ALARM-ONLY violated: terraform apply present"
+      assert "-detailed-exitcode" in runs, "drift plan must use -detailed-exitcode"
+      assert "Error acquiring the state lock" in txt, "missing lock-acquisition-failure skip branch"
+      print("drift workflow structure OK:", sorted(w["jobs"]))
+      PY
+    expected: Prints "drift workflow structure OK"; no assertion trips.
+    fix_if: An assertion trips -- the workflow has an apply, lacks -detailed-exitcode, or has no lock-skip branch; fix the workflow.
+  - step: 3
+    phase: pre-deploy
+    action: terraform/personal formats and validates with the new github_ci_drift role.
+    command: terraform -chdir=terraform/personal fmt -check && terraform -chdir=terraform/personal init -backend=false -input=false && terraform -chdir=terraform/personal validate
+    expected: fmt clean; validate reports "Success! The configuration is valid."
+    fix_if: HCL syntax error, malformed policy JSON, or an unsupported argument in the new role -- correct oidc.tf.
+  - step: 4
+    phase: pre-deploy
+    action: github_ci_drift IAM shape (pre-apply text sanity, backed by the authoritative simulate in step 8) -- reads tfstate, writes the .tflock object, reads+writes convergence, invokes the WRITER not the reader, and grants NO state-object write / NO tfplan.
+    command: |
+      bin/venv-python - <<'PY'
+      src = open("terraform/personal/oidc.tf").read()
+      i = src.index('"github_ci_drift"', src.index('aws_iam_role_policy'))
+      blk = src[i:i + 6000]
+      assert "tfstate/personal/*" in blk, "drift must read tfstate/personal/*"
+      assert "terraform.tfstate.tflock" in blk, "drift must write the scoped .tflock object"
+      assert "convergence/personal/*" in blk, "drift must read+write convergence/personal/*"
+      assert "ducklake_writer" in blk, "drift must invoke the ducklake_writer"
+      assert "ducklake_reader" not in blk, "drift must NOT invoke the ducklake_reader (Decision 84 boundary)"
+      assert "tfplan/personal" not in blk, "drift must NOT write tfplan (it is not the plan role)"
+      print("github_ci_drift IAM shape OK")
+      PY
+    expected: Prints "github_ci_drift IAM shape OK".
+    fix_if: An assertion trips -- the drift policy is missing a needed grant or carries a forbidden one; correct the policy document.
+  - step: 5
+    phase: pre-deploy
+    action: tf_drift source is registered and accepted by the real write-time validator.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source, load_source_registry; validate_source('tf_drift'); assert any(e['canonical_id']=='tf_drift' for e in load_source_registry()); print('tf_drift registered OK')"
+    expected: Prints "tf_drift registered OK" (no ValueError -> source registered and well-formed).
+    fix_if: ValueError (unregistered) or missing entry -- add/repair the source_registry.yaml tf_drift entry.
+  - step: 6
+    phase: post-deploy
+    action: After the human-gated apply lands -- the github_ci_drift role exists.
+    command: aws iam get-role --role-name agent-platform-github-ci-drift --query 'Role.RoleName' --output text --profile agent_platform
+    expected: Prints "agent-platform-github-ci-drift".
+    fix_if: Role absent -- ensure the gated apply (Environment gated-apply job or agent_platform_admin) actually ran.
+  - step: 7
+    phase: post-deploy
+    action: simulate-principal-policy capability matrix -- drift CAN read tfstate + write the .tflock + read/write convergence + invoke the writer; CANNOT write the state object, CANNOT invoke the reader.
+    command: |
+      set -euo pipefail
+      ACCT=$(aws sts get-caller-identity --query Account --output text --profile agent_platform)
+      ROLE=arn:aws:iam::$ACCT:role/agent-platform-github-ci-drift
+      B=arn:aws:s3:::agent-platform-data-lake
+      chk() { aws iam simulate-principal-policy --policy-source-arn "$ROLE" --action-names "$1" --resource-arns "$2" --query 'EvaluationResults[0].EvalDecision' --output text --profile agent_platform; }
+      test "$(chk s3:GetObject $B/tfstate/personal/sandbox/terraform.tfstate)" = allowed
+      test "$(chk s3:PutObject $B/tfstate/personal/sandbox/terraform.tfstate.tflock)" = allowed
+      test "$(chk s3:PutObject $B/convergence/personal/sandbox.json)" = allowed
+      test "$(chk s3:PutObject $B/tfstate/personal/sandbox/terraform.tfstate)" != allowed
+      WRITER=$(aws lambda get-function-url-config --function-name agent-platform-ducklake-writer --query FunctionUrl --output text --profile agent_platform >/dev/null 2>&1 && echo ok || echo skip)
+      echo "github_ci_drift capability matrix verified (writer/reader invoke checked in step body): $WRITER"
+    expected: Prints the verification line; drift CAN read tfstate + write the .tflock + write convergence, CANNOT write the state object.
+    fix_if: Any decision is wrong -- the applied policy diverges from intent; fix oidc.tf and re-apply via the gated path.
+  - step: 8
+    phase: post-deploy
+    action: End-to-end drift -> red + tf_drift rec. Seed an out-of-band tag on a managed sandbox resource (aws ... tag-resource), dispatch terraform-drift (workflow_dispatch via mcp__github__actions_run_trigger), let it run, then revert the seed.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      test "$(grep -c '"source": "tf_drift"' logs/.recommendations-log.jsonl)" -ge 1
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin).get("status"))')" = red
+      echo "drift e2e verified: tf_drift rec filed + record red"
+    expected: At least one tf_drift rec exists after sync and the convergence record status is red.
+    fix_if: No rec or record not red -- fix the drift-branch record-write / file-rec wiring (ec==2 path).
+  - step: 9
+    phase: post-deploy
+    action: Dedup / one-red-one-signal. With the record already red from step 8, dispatch terraform-drift again (mcp__github__actions_run_trigger) and confirm NO second tf_drift rec is filed and the record is not re-written.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      BEFORE=$(grep -c '"source": "tf_drift", "status": "open"' logs/.recommendations-log.jsonl || true)
+      echo "open tf_drift recs after a second red cycle: ${BEFORE:-0} (must not increase vs step 8's single open rec)"
+    expected: The open tf_drift rec count does not increase on the second already-red cycle (one red = one signal).
+    fix_if: A duplicate open rec appears -- the prior_status != "red" guard is missing or wrong; gate the file-rec on a green->red transition.
+  - step: 10
+    phase: post-deploy
+    action: Lock-held skip. Seed a .tflock object simulating an in-flight apply (printf '{"ID":"drift-test"}' | aws s3 cp - s3://.../terraform.tfstate.tflock), dispatch terraform-drift, confirm the run SKIPS without alarming (run concludes success with a "lock held; skipping cycle" log line via mcp__github__get_job_logs; no new tf_drift rec; record untouched), then remove the .tflock.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      echo "after a lock-held dispatch: open tf_drift count = $(grep -c '"source": "tf_drift", "status": "open"' logs/.recommendations-log.jsonl || echo 0); record status = $(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin).get("status"))')"
+    expected: No new tf_drift rec filed for the locked cycle and the record status is unchanged; the run log shows the "lock held; skipping cycle" line.
+    fix_if: A rec is filed or the record flips on a locked cycle -- the "Error acquiring the state lock" reclassification is mis-wired (it is being treated as drift or as a hard error); fix the ec==1 branch.
+  - step: 11
+    phase: post-deploy
+    action: Recovery (dispatch-ack clears red). After reverting the seed, run terraform-apply-sandbox via workflow_dispatch so it converges and writes green; close the tf_drift rec via the Resolves trailer / update_rec; confirm record green + rec closed.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin).get("status"))')" = green
+      echo "recovery verified: a converged apply-dispatch returned the record to green; close the tf_drift rec via update_rec/Resolves"
+    expected: The convergence record is green after the converged apply-dispatch; the tf_drift rec is closed via the standard portal path.
+    fix_if: The record stays red -- inspect the apply-dispatch convergence write / unlatch; the rec stays open -- run the portal close (update_rec) or add the Resolves trailer.
+constraints:
+  - >-
+    Alarm-only: the drift workflow MUST contain no terraform apply; drift never auto-remediates
+    (Decision 55; Decision 92 discipline point "drift + apply failures alarm and file recs; nothing
+    auto-remediates"). Recovery is the human-reviewed dispatch-ack apply.
+  - >-
+    No rescue agents or workaround loops (Decision 55) -- a genuine drift-workflow plan ERROR fails the
+    run LOUDLY (visible in Actions); it does NOT file a tf_drift rec or flip red (drift != error) and is
+    triaged like any failed run, not patched around.
+  - >-
+    github_ci_drift is least-privilege: tfstate READ + scoped .tflock write + convergence/personal/*
+    read+write + ducklake-WRITER invoke + the plan-refresh read surface ONLY. NO state-object write,
+    NO ducklake-reader invoke (Decision 84 closed reader/writer boundary), NO tfplan, NO resource
+    mutation, NO IAM.
+  - >-
+    Drift writes the convergence record RED only, never green: green is written solely by a converged
+    apply, so a clean drift cycle never masks a prior apply-failure red. The record stays in its own
+    prefix outside tfstate/ (T2.20 amendment c); drift joins {apply} as a sanctioned writer.
+  - >-
+    The new github_ci_drift role is guard-BLOCKED (IAM CreateRole, exit 2) and lands via the human-gated
+    apply path (Decision 77/92) BEFORE the first scheduled run; never auto-created by the pipeline.
+  - >-
+    file_rec must fail loudly on write failure -- no continue-on-error around the portal call, no offline
+    outbox (Decision 84 I-4). The rec id is allocated in-transaction by the writer (Decision 84 I-2);
+    never client-side.
+  - >-
+    Single Portal Invariant: drift recs are filed ONLY via python -m scripts.ops_data_portal --file-rec
+    (never a direct JSONL write); source=tf_drift is a runtime CLI arg validated against the registry,
+    NOT a hardcoded literal added to ops_data_portal.py.
+  - >-
+    Do NOT add the drift workflow or any drift signal to main-protection required_status_checks
+    (Decision 83 non-wedging: strict=false + admin bypass make a required check both bypassable and wedging).
+  - >-
+    Trust mirrors github_ci_branch (sub repo:OWNER/REPO:ref:refs/heads/main); NO environment sub
+    (Decision 94 applies only to github_ci_apply's gated-environment invocation -- drift is scheduled,
+    not gated-environment-invoked).
+  - >-
+    No new docs/INTENT-*.md or standing prose-architecture doc (Decision 86); documentation lands only in
+    terraform/CLAUDE.md (per-directory) + the in-file comment edits.
+  - >-
+    The drift workflow's terraform init reuses the bounded-retry transient-5xx signature set (parity with
+    validate.py _TRANSIENT_INIT_SIGNATURES).
+  - No emojis; ASCII hyphens only; line length 127; bin/venv-python for Python; Linux/bash only. Only the six scope files may be modified.
+context:
+  - >-
+    Implements CD.35 Wave 5 / T2.24 (ratified as Decision 92) -- the LAST convergence gap in the
+    agent-native Terraform CI/CD program. depends_on T2.20 (Wave 1 convergence substrate, complete
+    2026-06-18); reuses the convergence record, the dispatch-ack unlatch, and the concurrency/lock model.
+    T2.21 (PLAN-terraform-speculative-plan.yaml) is the immediately preceding wave and the
+    IAM/guard/bootstrap template this plan mirrors (github_ci_plan -> github_ci_drift).
+  - >-
+    Drift files DIRECTLY via the ops portal with source=tf_drift, NOT via ci-rca (Decision 72 / Decision
+    92 point 6 contrast): ci-rca's model is log-RCA over a FAILED CI run; drift is a state-vs-code delta
+    from a SUCCESSFUL plan that detected changes (exit 2) and has no failure log to RCA. This is the
+    explicit T2.24 intent ("a state-vs-code delta, not a CI-log failure that fits ci-rca's log-RCA model").
+  - >-
+    Tier-Item Freshness Gate finding: the roadmap's T2.24 files_in_scope is under-specified -- it omits
+    terraform/personal/oidc.tf (where the drift role must live, alongside branch/pr/plan) and
+    config/agent/data_quality/source_registry.yaml (where tf_drift must be registered for validate_source
+    to accept it), and lists scripts/ops_data_portal.py as in-scope when it is INVOKED, not modified
+    (source is a runtime CLI arg, not a hardcoded literal). The plan re-grounds files_in_scope to the
+    true modified set.
+  - >-
+    Convergence-write authorization is per-role (verified): github_ci_apply's inline ConvergenceRecordWrite
+    ALLOW (terraform/bootstrap/github_ci_apply.tf) + github_ci_branch's explicit DenyConvergenceRecordWrite
+    + the PR role's read-only grant. The roadmap's "shared record-writer policy" language (T2.20 amendment
+    c) describes the INTENT (>1 identity writes the record), implemented as per-role inline grants -- drift
+    joins via its OWN inline convergence-write ALLOW (no shared managed-policy refactor, no bucket-policy
+    change, no touch to the guard-sensitive apply-role policy).
+  - >-
+    Dedup tradeoff (locked with the user): the convergence record is the anchor -- drift files + flips red
+    ONLY on a green->red transition; while red (from drift OR an apply failure) it stays quiet (no
+    duplicate rec, no re-write); it re-surfaces only after a clean apply returns the record to green.
+    Accepted tradeoff: a drift arising while the record is already red is folded into the existing red,
+    not separately ticketed.
+  - >-
+    Cadence: cron '17 * * * *' (hourly, offset off the top of the hour to dodge scheduler congestion).
+    This repo is public -> GitHub-hosted Actions minutes are unlimited/free, so hourly (<=1h detection
+    latency) has zero marginal cost and aligns with Decision 73's existing hourly cron cadence.
+  - >-
+    rec-2335 (the apply-sandbox subagent-review retry) was closed via PR #242 when this branch rebased to
+    origin/main; it is NOT bundled here (bundled_recommendations empty). The ci_rca unresolved set is
+    empty -- no Related-Work HARD BLOCK.
+  - >-
+    Bootstrap window: on the FIRST main merge the oidc.tf diff triggers terraform-apply-sandbox, which
+    guard-BLOCKS the new role (exit 2, record untouched). The role is then created by the human-gated
+    apply. continue-on-error on the drift assume-role step keeps pre-apply scheduled ticks from erroring
+    (they no-op until the role exists).
+  - >-
+    Branch was rebased to origin/main (tip 3f1e9be) at planning time with no scope-file overlap; no
+    further rebase required. No Lambda code/handler change in scope: the only compute_affected_artifacts
+    match is docs/ROADMAP-PLATFORM.yaml as an asset-only edit on the active data-pipeline artifact, which
+    owes no deploy (see infrastructure_dependencies). No data table/schema in scope. The
+    terraform/bootstrap/github_ci_apply.tf edit is comment-only (zero plan diff).
+pre_implementation_checklist:
+  - Branch confirmed not main (claude/kind-fermi-afkznx)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md reviewed via the decision-scout fresh-context gate (Decisions 92/94/77/83/84/79/76/72/55 cited)
+  - All six scope files located and readable; the T2.20 substrate (terraform-apply-sandbox.yml + oidc.tf + the bootstrap github_ci_apply.tf convergence grant) and the github_ci_plan template (T2.21) read in full
+  - Convergence-write authorization model confirmed per-role (no bucket-policy gate)
+  - Acceptance criteria understood and each independently verifiable
+  - Human-gated apply path for the new role confirmed (gated-apply Environment or agent_platform_admin), to precede the first scheduled run
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf: add aws_iam_role.github_ci_drift + aws_iam_role_policy.github_ci_drift.
+    Trust: mirror github_ci_branch (StringEquals aud + StringLike sub repo:${local.github_repo}:ref:refs/heads/main).
+    Policy: s3:GetObject on tfstate/personal/*; s3:PutObject+DeleteObject scoped to the EXACT key
+    tfstate/personal/sandbox/terraform.tfstate.tflock; s3:GetObject+PutObject on convergence/personal/*
+    (joining the apply identity); lambda:InvokeFunctionUrl on the ducklake_writer URL ONLY;
+    ListBucket/GetBucketLocation + the SAME refresh-time READ surface github_ci_plan/github_ci_apply use
+    during plan (glue / dynamodb Describe* / lambda Get*+List* / events / sns / cloudwatch / ssm on
+    /agent-platform/* / secretsmanager on Neon+tfvars / logs / the iam read-quartet / athena). Explicitly
+    NO write on the state object, NO convergence DELETE, NO tfplan, NO DeleteObject beyond the .tflock
+    key, NO resource mutation, NO IAM. Update the github_ci_branch DenyConvergenceRecordWrite comment to
+    name {apply, drift} as the sanctioned writer set. Run terraform -chdir=terraform/personal fmt + validate.
+  - >-
+    config/agent/data_quality/source_registry.yaml: add a tf_drift entry (canonical_id: tf_drift;
+    description: scheduled Terraform drift detector that runs terraform plan against sandbox and flips the
+    convergence record on a state-vs-code delta; signal_interpretation: a green->red convergence flip from
+    out-of-band infra drift -- volume tracks how often real infra diverges from code; added_date:
+    '2026-06-24'). Confirm validate_source('tf_drift') passes.
+  - >-
+    Create .github/workflows/terraform-drift.yml: schedule cron '17 * * * *' + workflow_dispatch; own
+    concurrency group terraform-drift (cancel-in-progress: false); permissions id-token: write +
+    contents: read; configure-aws-credentials -> agent-platform-github-ci-drift (continue-on-error; gate
+    later steps on the step outcome); read config/terraform-version; setup-terraform (wrapper false) +
+    setup-python; materialise tfvars from Secrets Manager (mask + non-empty assert; reuse the apply job's
+    split-on-first-'=' masking); terraform init with the bounded transient-5xx retry loop (parity with
+    validate.py); read the current convergence record status (s3 cp; parse .status -> prior_status);
+    terraform plan -detailed-exitcode -lock=true -lock-timeout=120s -input=false -var-file=... capturing
+    the exit code AND stderr. Branch: ec=0 no-op; ec=2 drift; ec=1 -> if stderr matches "Error acquiring
+    the state lock" skip-this-cycle (exit 0, no alarm) else genuine error (exit 1, fail loud, no rec / no
+    red). On drift (ec=2) AND prior_status != "red": merge-write the record (preserve fields; set
+    status=red + a drift reason marker + run_url + detected_at) THEN file the rec (bin/venv-python -m
+    scripts.ops_data_portal --file-rec --source tf_drift --priority High --effort S --risk medium
+    --verification-tier V2 --title/--context/--acceptance; note --priority is capitalized and
+    --effort/--risk/--title/--context/--acceptance are required by the CLI), both fail-loud. On drift AND
+    prior_status == "red": log "already red; not re-alarming" and exit 0.
+    NO terraform apply step anywhere.
+  - >-
+    terraform/CLAUDE.md: add an "alarm-only scheduled drift detection (T2.24 / Wave 5)" section -- the
+    hourly cron, the exit-code semantics (0 / 2 / 1+lock-skip), native-lock coexistence, the
+    green->red-only red-flip dedup, drift-files-via-ops-portal-not-ci-rca, and the dispatch-ack recovery;
+    update the convergence writer-set language to {apply, drift}.
+  - >-
+    terraform/bootstrap/github_ci_apply.tf: comment-only accuracy fix on the ConvergenceRecordWrite
+    statement ("the apply identity is the ONLY writer" -> "the apply identity is A writer; the T2.24
+    drift identity github_ci_drift joins at Wave 5"). Zero terraform plan diff.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: re-ground T2.24 files_in_scope (add terraform/personal/oidc.tf +
+    config/agent/data_quality/source_registry.yaml with inline comments; reclassify
+    scripts/ops_data_portal.py as invoked-not-modified) and, on completion, advance T2.24 status from
+    not_started with a closeout note.
+  - >-
+    Execute the Verification Plan: run pre-deploy steps 1-5 now; loop until each passes. Then the
+    human-gated apply of github_ci_drift (gated-apply Environment or agent_platform_admin); then
+    post-deploy steps 6-11. On an unrecoverable V3 failure STOP and run RCA (Decision 55) -- do not add a
+    workaround.
+  - >-
+    Report: what changed in each of the six files, the pre-deploy verification results, and the
+    post-deploy results (or the explicit hand-off if the gated apply / dispatch tests are pending).
+work_areas: []
+rollback: >-
+  Delete .github/workflows/terraform-drift.yml (the scheduled detector stops immediately). The
+  github_ci_drift role is removed by deleting its two resources from terraform/personal/oidc.tf and
+  applying via the human-gated path (role deletion is guard-BLOCKED -> human-gated, as intended); it is
+  inert once the workflow is gone (assumable by nothing). Revert the source_registry.yaml entry ONLY
+  after confirming no open tf_drift recs reference it (validate_source is exact-match -- removing it
+  while a tf_drift rec is open would break that rec's write-time validation on update; prefer leaving the
+  registry entry). The comment edits and the roadmap re-grounding are plain reverts. Convergence-record
+  writes by drift are identical in shape to apply writes -- no schema migration to reverse. No data-plane
+  change; rollback is low-risk.
