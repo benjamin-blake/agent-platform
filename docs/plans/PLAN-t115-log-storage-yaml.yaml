@@ -39,11 +39,11 @@ infrastructure_dependencies:
     Lambda artifacts data-pipeline + ops-compaction (both status: active) bundle scripts/s3_log_store.py;
     CD.16/Decision 79 per-Lambda gating applies (build + bundle-completeness + stage). Function-code
     deploy + smoke-test is VACUOUS: neither function is provisioned in the personal account
-    (UpdateFunctionCode -> ResourceNotFoundException; roadmap line ~3633 precedent, rec-2164 owns the
+    (UpdateFunctionCode -> ResourceNotFoundException; roadmap line ~3658 precedent, rec-2164 owns the
     provisioning-vs-docs discrepancy). Dispatcher smoke-test stays deferred to T4.3.
 acceptance_criteria:
   - docs/contracts/log-storage.yaml exists with contract_version 1 and status ratified, carrying the three storage patterns, the priority-queue semantics, and a machine-consumed routing block.
-  - scripts/s3_log_store.py reads the routing map and priority-queue key from log-storage.yaml at runtime, with identical hardcoded fallbacks when the YAML is unavailable; module import performs no I/O and never raises.
+  - scripts/s3_log_store.py reads the routing map and priority-queue key from log-storage.yaml where docs/contracts/ is present (local/CI), and falls through to identical hardcoded fallbacks where it is absent (both active Lambda bundles); module import performs no I/O and never raises.
   - The YAML-derived routing equals the in-code fallback constants (anti-drift), proven by a unit test.
   - docs/contracts/log-storage.md is deleted and no live (non-historical-plan, non-audit-snapshot) surface references it.
   - Full validate.py passes locally (contract-drift gate scans the new non-ritual file without failing), and the affected Lambda zips build clean with s3_log_store.py present.
@@ -81,7 +81,7 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: Stale-reference sweep -- the deleted contract has no live code/config/contract references (historical PLAN-*.md, audit-reports, CHANGELOG, SESSION_LOG, and the INTENT conversion notes are allowed).
-    command: bash -lc 'test ! -e docs/contracts/log-storage.md && ! grep -rn "log-storage\.md" --include=*.py --include=*.yml docs/contracts scripts src config .github 2>/dev/null | grep -v ROADMAP; echo "sweep exit=$?"'
+    command: bash -lc 'test ! -e docs/contracts/log-storage.md && ! grep -rn "log-storage\.md" --include=*.py --include=*.yml --include=*.yaml --include=*.md --include=*.toml --include=*.cfg --include=*.json docs/contracts scripts src config .github 2>/dev/null; echo "sweep exit=$?"'
     expected: log-storage.md is gone and no live .py/.yml or contracts/scripts/src/config/.github surface references it (exit 0 / empty match set).
     fix_if: A live reference exists; update or remove it before deleting, or re-point it to the YAML.
   - step: 7
@@ -99,7 +99,7 @@ verification_plan:
   - step: 9
     phase: post-deploy
     action: Function-code deploy + smoke-test (VACUOUS by provisioning state) -- record, do not block. Neither dispatcher/findings-processor/ops-compaction function is provisioned in the personal account.
-    command: echo "VACUOUS deploy -- data-pipeline + ops-compaction functions not provisioned (UpdateFunctionCode returns ResourceNotFoundException); build+stage from step 8 satisfies CD.16/Decision 79; dispatcher smoke-test deferred to T4.3 (roadmap ~L3633, rec-2164)"
+    command: echo "VACUOUS deploy -- data-pipeline + ops-compaction functions not provisioned (UpdateFunctionCode returns ResourceNotFoundException); build+stage from step 8 satisfies CD.16/Decision 79; dispatcher smoke-test deferred to T4.3 (roadmap ~L3658, rec-2164)"
     expected: Documented vacuous-deploy rationale; no live function update attempted.
     fix_if: If a function IS later provisioned, run scripts.build_lambda --deploy for that artifact and a real smoke-test (not in scope now).
 constraints:
@@ -126,8 +126,16 @@ context:
   - >-
     Honest value note: the machine-consumed routing here governs ops_session_log/ops_execution_plans
     (dormant, pending T2.26) and the legacy priority-queue write-through. The wiring is partly ceremonial;
-    the durable value is structured patterns + drift elimination + series uniformity + CD.25 pre-codegen
-    ratification.
+    the durable value is structured patterns + drift elimination (for the s3_log_store routing surface) +
+    series uniformity + CD.25 pre-codegen ratification.
+  - >-
+    Runtime-read reality (adversarial critique): the YAML is NEVER read at Lambda runtime. Neither manifest
+    ships docs/contracts/ as an asset (data-pipeline ships ROADMAP + config; ops-compaction ships config only),
+    and ops-compaction does not even attach a PyYAML-bearing layer. So in BOTH active Lambdas the loader falls
+    through to the in-code defaults -- the fallback IS the production path, and the anti-drift test (YAML ==
+    FALLBACK_*) is the sole guarantor that the dev-read YAML and the cloud-run fallback agree. The YAML's
+    machine-consumption is local/dev/CI only. This is acceptable (behavior is identical) but must not be
+    described as "the Lambda reads the contract".
   - >-
     Plan-type / Step 10: this is IMPLEMENTATION (changes code + tests; CI must be green). The tier_item's
     exit criterion "Step 10 multi-perspective critique converges" is satisfied during planning by running a
@@ -137,16 +145,23 @@ context:
     log-storage.md references across the repo are all historical PLAN-*.md, docs/audit-reports/*, CHANGELOG,
     SESSION_LOG_ARCHIVE, and the INTENT conversion notes -- none are live code/config. Deletion is code-safe.
   - >-
-    Embedded log-storage.yaml design spec (the /implement agent creates the file verbatim from this, adjusting
-    only ratified_at/last_verified to the implementation date):
-    contract_version 1; status ratified; decisions_cited [Decision-45, Decision-50, Decision-55, Decision-84, CD.25];
+    Embedded log-storage.yaml design spec (the /implement agent creates the file verbatim from this, setting
+    converted_at to the implementation date; do NOT overwrite last_verified):
+    version 1 AND contract_version 1 (carry BOTH -- top-level "version" matches the non-ritual precedent
+    storage-substrate/read-engine/telemetry-lexicon; "contract_version" satisfies the T-1.15 exit-criterion
+    literal "contract_version: 1, status: ratified"); status ratified; last_verified "2026-05-06" (preserve
+    the audited date from the .md -- do not re-stamp freshness); converted_at <impl date>;
+    decisions_cited [Decision-45, Decision-50, Decision-55, Decision-84, CD.25];
+    note "routing governs ONLY the s3_log_store write-routing sentinels; the ops_session_log/ops_execution_plans
+    write-through and the priority-queue write-through are death-dated -- repoint/retire at T2.26 (Decision 84)";
     patterns.cloud_produced {id 1, producer Lambda handler, transport S3 (agent-platform-agent-logs), consumer s3_log_store.read_jsonl, examples [scheduled-agent findings, curator findings]};
     patterns.locally_produced {id 2, producer local script, transport "logs/<file>.jsonl -> append_jsonl -> S3", consumer git-tracked local file is source of truth, examples [.recommendations-log.jsonl, .retro-lite-log.jsonl, .session-telemetry.jsonl, .execution-step-telemetry.jsonl, .friction-analysis-log.jsonl, .north-star-log.jsonl]};
     patterns.shared_mutable_planned {id 3, status planned, tracked_by rec-386, transport "log_writer.write(key, entry) -> local + S3 (planned)"};
     priority_queue {canonical_key priority-queue/.priority-queue.jsonl (Decision 45), local_path logs/priority-queue/.priority-queue.jsonl, deprecated_key logs/.priority-queue.jsonl, status_tags {canonical [queued, executing, done], legacy_forbidden [active]}, canonical_producer enqueue_findings()/file_rec (Decision 84), current_state_read priority_queue_current named verb, legacy_producer {status deprecated until Phase 5, note "rec-curator -> findings_processor_handler.py overwrite_jsonl; s3_log_store -> OpsWriter write-through repoints at T2.26 (Decision 84)"}};
     routing.ops_table_routing {".execution-plans.jsonl": ops_execution_plans, ".session-telemetry.jsonl": ops_session_log};
     routing.priority_queue_key priority-queue/.priority-queue.jsonl;
-    verified_against [scripts/s3_log_store.py (read_jsonl/append_jsonl/overwrite_jsonl/get_backend), src/data/handlers/findings_processor_handler.py].
+    routing.note "s3_log_store is the only call site wired to this block; findings_processor_handler.py (own _PRIORITY_QUEUE_KEY literal) and session_preflight.py (PRIORITY_QUEUE_FILE) hold un-wired copies of the queue key -- future-consolidation candidates, out of T-1.15 scope";
+    verified_against [scripts/s3_log_store.py (read_jsonl/append_jsonl/overwrite_jsonl/get_backend), "src/data/handlers/findings_processor_handler.py (own _PRIORITY_QUEUE_KEY literal, un-wired)"].
 pre_implementation_checklist:
   - Branch confirmed not main (harness branch claude/youthful-fermi-jxh0jh).
   - docs/PROJECT_CONTEXT.md read.
@@ -174,7 +189,9 @@ execution_steps:
     Update tests/test_s3_log_store.py: add a TestLogStorageRegistry class covering reads-the-YAML,
     anti-drift (YAML routing == FALLBACK_*), absent-YAML fallback, unparseable-YAML fallback, and
     yaml-import-unavailable fallback; ensure 100% coverage of the new loader/accessor code. Use the
-    file::Class form (no -k selectors). Reset the _LOG_STORAGE_REGISTRY cache between tests.
+    file::Class form (no -k selectors). Reset the _LOG_STORAGE_REGISTRY module cache via an AUTOUSE
+    fixture (not ad-hoc per-test resets) so the cached global cannot leak state across tests / create
+    order-dependent green-red.
   - Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable V3 step (e.g. a real Lambda build failure), stop and RCA per Decision 55; do not patch around it.
   - 'Report: the YAML created, the s3_log_store.py wiring, the .md deletion, test results, validate.py result, Lambda build result, and the vacuous-deploy record.'
 work_areas: []
