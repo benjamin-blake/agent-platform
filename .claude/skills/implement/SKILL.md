@@ -155,8 +155,33 @@ For each identified tier_item, load its `exit_criteria[]` from `docs/ROADMAP-PLA
 - **Executable criteria** (shell one-liners, `grep`, `test -f`, `pytest`, `bin/venv-python -c "..."`) -- run via subprocess; pass if exit code is 0.
 - **Prose criteria** -- fall through to agent judgement with a **conservative bias**: when in doubt about whether a prose criterion is satisfied, do NOT count it as passing. This produces under-counting (false in_progress) rather than over-counting (false complete), which is the safer failure mode. Never auto-flip a prose-gated item to `complete` without explicit evidence in the current session's artefacts.
 
+### closes_criteria flip (T-1.23)
+
+Before evaluating Outcome rules, flip the criterion statuses declared in the plan's
+`closes_criteria` field. This step fires ONLY on a verified VP pass; never on FAIL or BLOCKED.
+
+1. **Read the plan's `closes_criteria` list** (each entry `"<item-id>:<crit-id>"`). If the list is
+   empty or absent, skip this step.
+2. **For each ref**, locate the named criterion in `docs/ROADMAP-PLATFORM.yaml`:
+   - Set `status: met`
+   - Set `met_by: <plan-slug>` (the current plan's slug, e.g. `exit-criteria-ledger-orient-followon`)
+3. **Stage these criterion flips** in the same YAML edit as the subsequent Outcome rules (single
+   staged edit). The criterion flips happen BEFORE the whole-item Outcome rules run -- so that the
+   Outcome rules read the updated `criterion.status == met` values (not a fresh prose re-adjudication).
+4. **Only declared criteria flip.** Never flip criteria not named in `closes_criteria`. Never infer
+   `met` from prose, file existence, or commit activity (Status-Trusted-Never-Inferred / T2.20).
+5. **All-criteria-met after the flip?** An item whose ALL criteria are now `status: met` (or `rehomed`)
+   QUALIFIES for the completion gate -- do NOT auto-flip it to `status: complete`. Surface it to the
+   operator: "All criteria on <item-id> are now met or rehomed -- QUALIFIES for status: complete via
+   the bookkeeping Outcome rules (manual confirmation required, per Status-Trusted-Never-Inferred)."
+   The operator then confirms, and the Outcome rules stage `status: complete`.
+
 ### Outcome rules
 - **All criteria pass** -> stage `status: complete` + `completed_at: "<today ISO date>"` in `docs/ROADMAP-PLATFORM.yaml`.
+  For `in_progress` items with a structured ledger: "all criteria pass" means every ExitCriterion has
+  `status: met` or `status: rehomed` after applying the closes_criteria flip above. Prose re-adjudication
+  on the updated statuses confirms; do NOT re-adjudicate the raw criterion text if the status already
+  reads `met`.
 - **Strict subset pass (>=1 but not all)** -> stage `status: in_progress` + `progress_note: "<one-line description of what shipped this session>"`. If the item already has a `progress_note`, append a dated bullet (e.g., `"- 2026-05-20: shipped criteria 1, 3"`) rather than overwriting.
 - **Zero criteria pass** -> no YAML change.
 

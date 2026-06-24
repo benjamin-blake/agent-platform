@@ -11,10 +11,13 @@ import yaml
 
 from scripts.platform_roadmap import (
     _GATE_HELPERS,
+    ExitCriterion,
     GateRuleEvaluator,
     GateRuleParser,
     PlatformRoadmapState,
     RoadmapDocument,
+    TierItem,
+    compute_followon_state,
     compute_state_dict,
     load,
 )
@@ -1019,3 +1022,218 @@ class TestLiveGateEvaluations:
                 assert key in entry, f"blocked_on_cd entry {entry.get('id')} missing key '{key}'"
             assert isinstance(entry["blocking_cds"], list)
             assert isinstance(entry["relationships"], dict)
+
+
+# ---------------------------------------------------------------------------
+# TestExitCriterionNormalizer -- T-1.23
+# ---------------------------------------------------------------------------
+
+
+class TestExitCriterionNormalizer:
+    """Bare strings normalize to ExitCriterion(status='open'); structured dicts pass through."""
+
+    def test_bare_string_becomes_exit_criterion(self) -> None:
+        item = TierItem(id="X", tier="T0", name="t", exit_criteria=["do something"])
+        assert len(item.exit_criteria) == 1
+        assert isinstance(item.exit_criteria[0], ExitCriterion)
+        assert item.exit_criteria[0].id == "c1"
+        assert item.exit_criteria[0].text == "do something"
+        assert item.exit_criteria[0].status == "open"
+        assert item.exit_criteria[0].met_by is None
+
+    def test_multiple_bare_strings_get_sequential_ids(self) -> None:
+        item = TierItem(id="X", tier="T0", name="t", exit_criteria=["a", "b", "c"])
+        ids = [c.id for c in item.exit_criteria]
+        assert ids == ["c1", "c2", "c3"]
+
+    def test_structured_dict_passes_through(self) -> None:
+        item = TierItem(
+            id="X",
+            tier="T0",
+            name="t",
+            exit_criteria=[{"id": "c1", "text": "done", "status": "open"}],
+        )
+        assert isinstance(item.exit_criteria[0], ExitCriterion)
+        assert item.exit_criteria[0].id == "c1"
+        assert item.exit_criteria[0].text == "done"
+
+    def test_empty_exit_criteria(self) -> None:
+        item = TierItem(id="X", tier="T0", name="t", exit_criteria=[])
+        assert item.exit_criteria == []
+
+    def test_exit_criterion_model_status_enum(self) -> None:
+        for s in ("open", "met", "rehomed"):
+            ec = ExitCriterion(id="c1", text="x", status=s, met_by="something" if s != "open" else None)
+            assert ec.status == s
+
+    def test_exit_criterion_rejects_unknown_field(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ExitCriterion(id="c1", text="x", bogus_field="y")  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# TestExitCriteriaIntegrity -- model_validator checks (g) and (h)
+# ---------------------------------------------------------------------------
+
+
+class TestExitCriteriaIntegrity:
+    """met/rehomed without met_by -> ValueError; rehomed met_by to unknown item -> ValueError."""
+
+    def _doc_with_items(self, *items: dict) -> dict:
+        d = copy.deepcopy(_BASE_DOC)
+        d["tier_items"] = list(items)
+        return d
+
+    def test_met_criterion_requires_met_by(self) -> None:
+        from pydantic import ValidationError
+
+        item = _item("A")
+        item["exit_criteria"] = [{"id": "c1", "text": "x", "status": "met"}]
+        with pytest.raises(ValidationError, match="met_by"):
+            RoadmapDocument.model_validate(self._doc_with_items(item))
+
+    def test_rehomed_criterion_requires_met_by(self) -> None:
+        from pydantic import ValidationError
+
+        item = _item("A")
+        item["exit_criteria"] = [{"id": "c1", "text": "x", "status": "rehomed"}]
+        with pytest.raises(ValidationError, match="met_by"):
+            RoadmapDocument.model_validate(self._doc_with_items(item))
+
+    def test_rehomed_met_by_must_resolve_to_known_item(self) -> None:
+        from pydantic import ValidationError
+
+        item = _item("A")
+        item["exit_criteria"] = [{"id": "c1", "text": "x", "status": "rehomed", "met_by": "Z.99"}]
+        with pytest.raises(ValidationError, match="does not resolve to a known tier_item id"):
+            RoadmapDocument.model_validate(self._doc_with_items(item))
+
+    def test_rehomed_met_by_valid_item_passes(self) -> None:
+        item_a = _item("A")
+        item_a["exit_criteria"] = [{"id": "c1", "text": "x", "status": "rehomed", "met_by": "B"}]
+        item_b = _item("B")
+        doc = RoadmapDocument.model_validate(self._doc_with_items(item_a, item_b))
+        assert doc.tier_items[0].exit_criteria[0].status == "rehomed"
+        assert doc.tier_items[0].exit_criteria[0].met_by == "B"
+
+    def test_met_with_valid_met_by_passes(self) -> None:
+        item = _item("A")
+        item["exit_criteria"] = [{"id": "c1", "text": "x", "status": "met", "met_by": "some-plan-slug"}]
+        doc = RoadmapDocument.model_validate(self._doc_with_items(item))
+        assert doc.tier_items[0].exit_criteria[0].status == "met"
+
+
+# ---------------------------------------------------------------------------
+# TestComputeFollowonState -- T-1.23
+# ---------------------------------------------------------------------------
+
+
+class TestComputeFollowonState:
+    """compute_followon_state: in-flight plan vs no plan; live-items-only scoping."""
+
+    def _make_doc(self, items: list[dict]) -> RoadmapDocument:
+        d = copy.deepcopy(_BASE_DOC)
+        d["tier_items"] = items
+        return RoadmapDocument.model_validate(d)
+
+    def _in_progress_item(self, item_id: str, criteria: list[dict]) -> dict:
+        item = _item(item_id, status="in_progress")
+        item["exit_criteria"] = criteria
+        return item
+
+    def test_no_plan_needs_followon(self, tmp_path: Path) -> None:
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["open_criteria_count"] == 1
+        assert result["A"]["all_plans_actioned"] is True
+        assert result["A"]["needs_followon_plan"] is True
+
+    def test_in_flight_plan_suppresses_followon(self, tmp_path: Path) -> None:
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        plan_data = {
+            "schema_version": 1,
+            "slug": "test-plan",
+            "intent": "test",
+            "plan_type": "IMPLEMENTATION",
+            "verification_tier": "V1",
+            "plan_path": "docs/plans/PLAN-test-plan.yaml",
+            "phase": "T0",
+            "scope": [{"file": "f.py", "action": "Modify", "purpose": "p"}],
+            "acceptance_criteria": ["ac"],
+            "verification_plan": [
+                {"step": 1, "phase": "pre-deploy", "action": "a", "command": "echo x", "expected": "x", "fix_if": "f"}
+            ],
+            "execution_steps": ["step 1"],
+            "closes_criteria": ["A:c1"],
+        }
+        plan_file = tmp_path / "PLAN-test-plan.yaml"
+        plan_file.write_text(__import__("yaml").dump(plan_data))
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["open_criteria_count"] == 1
+        assert result["A"]["all_plans_actioned"] is False
+        assert result["A"]["needs_followon_plan"] is False
+
+    def test_zero_open_criteria_no_followon_needed(self, tmp_path: Path) -> None:
+        doc = self._make_doc(
+            [
+                self._in_progress_item(
+                    "A",
+                    [
+                        {"id": "c1", "text": "x", "status": "met", "met_by": "some-plan"},
+                        {"id": "c2", "text": "y", "status": "rehomed", "met_by": "B"},
+                    ],
+                ),
+                _item("B"),
+            ]
+        )
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["open_criteria_count"] == 0
+        assert result["A"]["needs_followon_plan"] is False
+
+    def test_deferred_post_mvp_excluded(self, tmp_path: Path) -> None:
+        deferred = _item("D", status="deferred_post_mvp")
+        deferred["exit_criteria"] = [{"id": "c1", "text": "x", "status": "open"}]
+        doc = self._make_doc([_item("A", status="not_started"), deferred])
+        result = compute_followon_state(doc, tmp_path)
+        assert "D" not in result, "deferred_post_mvp items must not appear in followon state"
+
+    def test_not_started_excluded(self, tmp_path: Path) -> None:
+        doc = self._make_doc([_item("A", status="not_started")])
+        result = compute_followon_state(doc, tmp_path)
+        assert "A" not in result, "not_started items must not appear in followon state"
+
+    def test_malformed_plan_skipped(self, tmp_path: Path) -> None:
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        (tmp_path / "PLAN-bad.yaml").write_text("invalid: [yaml: {content")
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["needs_followon_plan"] is True
+
+    def test_plan_closes_different_item_does_not_suppress(self, tmp_path: Path) -> None:
+        doc = self._make_doc(
+            [
+                self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}]),
+                self._in_progress_item("B", [{"id": "c1", "text": "y", "status": "open"}]),
+            ]
+        )
+        plan_data = {
+            "schema_version": 1,
+            "slug": "only-b",
+            "intent": "x",
+            "plan_type": "IMPLEMENTATION",
+            "verification_tier": "V1",
+            "plan_path": "docs/plans/PLAN-only-b.yaml",
+            "phase": "T0",
+            "scope": [{"file": "f.py", "action": "Modify", "purpose": "p"}],
+            "acceptance_criteria": ["ac"],
+            "verification_plan": [
+                {"step": 1, "phase": "pre-deploy", "action": "a", "command": "echo x", "expected": "x", "fix_if": "f"}
+            ],
+            "execution_steps": ["step 1"],
+            "closes_criteria": ["B:c1"],
+        }
+        (tmp_path / "PLAN-only-b.yaml").write_text(__import__("yaml").dump(plan_data))
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["needs_followon_plan"] is True, "A's criterion not covered by the B plan"
+        assert result["B"]["needs_followon_plan"] is False, "B's criterion is covered"

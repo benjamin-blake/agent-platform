@@ -60,6 +60,45 @@ Together these form a three-layer health picture:
 
 If pipeline health is critical (no sessions in 7 days), the plan should prioritise pipeline fixes before adding new features. If quality coverage is zero, any plan touching data write paths should include adding YAML checks. If the last DQ run failed, the plan should note which tables are affected.
 
+## Follow-on /plan mode (in_progress items with open criteria)
+
+When intent targets an `in_progress` tier_item (one with open criteria remaining), `/plan`
+operates in **follow-on mode**. This is the common case -- most items take N follow-on plans.
+
+### Trigger
+- `/orient` emits a follow-on `/plan <item-id>: follow-on -- <name>` prompt for any in_progress
+  item where `needs_followon_plan` is True (open criteria AND no in-flight plan covers them).
+- The human selects one of these prompts, or names an in_progress item directly.
+
+### Follow-on /plan protocol
+1. **Load state.** Read the item's `exit_criteria[]` from `docs/ROADMAP-PLATFORM.yaml`; identify
+   which criteria have `status: open`. Load any prior PLAN-*.yaml files that reference this item
+   (via their `closes_criteria` field or the item id in their Phase/Context) and the item's
+   `progress_note` to understand what has already shipped.
+2. **Scope the NEXT slice only.** Plan the minimum work to close one or more open criteria -- do
+   NOT re-plan work already met/rehomed. The plan's scope, acceptance criteria, and VP steps are
+   constrained to what is needed to flip the chosen open criteria.
+3. **Declare closes_criteria.** The plan document MUST include a `closes_criteria:` field listing
+   each item-criterion the plan commits to close on a verified VP pass, in `<item-id>:<crit-id>`
+   format (e.g. `T-1.23:c2`). The plan's acceptance_criteria should 1:1 map onto the chosen open
+   criteria -- each AC corresponds to a closes_criteria ref.
+4. **Cross-reference the Freshness Gate.** Before committing, run the Tier Item Freshness Gate
+   (below) on the parent item: check if any open criterion is already satisfied by recent work
+   (silent-completion check). If so, propose a criterion status flip to `met` as a roadmap
+   bookkeeping step before scoping the next slice.
+
+### Status-Trusted-Never-Inferred constraint
+`/plan` NEVER flips criterion statuses or item status during planning. Criterion flips happen only
+in `/implement`'s bookkeeping walk, on a verified VP pass, for explicitly declared closes_criteria.
+See T2.20 lesson. Never infer `met` from prose, file existence, or commit activity.
+
+### closes_criteria field format
+Each entry is a string `"<item-id>:<crit-id>"` matching exactly one ExitCriterion in the roadmap:
+- `item-id` must be a real tier_item id in the roadmap.
+- `crit-id` must be an id within that item's exit_criteria (e.g. `c1`, `c2`, ...).
+- `validate.py` enforces referential integrity: a closes_criteria ref to a nonexistent
+  item:criterion fails CI (check (iii) in validate_platform_roadmap).
+
 ## Platform Roadmap Eligibility (Workflow Step 2)
 
 Broad orientation -- surfacing `next_eligible`, `strategic_pending`, the eligibility summary, the soft-warn exception category list, and ci-rca triage -- is the responsibility of `/orient`. Run `/orient` before `/plan` to choose what to work on; `/plan` assumes a specific item (or ci-rca rec) has already been selected. The orient skill (`.claude/skills/orient/SKILL.md`) holds the full eligibility display and triage rules.

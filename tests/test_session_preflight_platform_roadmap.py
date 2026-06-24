@@ -139,3 +139,50 @@ class TestProductRoadmapProjectionUnchanged:
         # keys must not raise (Decision 93 .get() defaults).
         full = _slim_roadmap_state(self._product_state(), full=True)
         assert "next_eligible" in full
+
+
+@pytest.mark.skipif(not _LIVE_YAML.exists(), reason="live ROADMAP-PLATFORM.yaml not present")
+class TestFollowonFieldsInPreflight:
+    """T-1.23: in_progress entries carry open_criteria_count/all_plans_actioned/needs_followon_plan."""
+
+    def _full_state(self) -> dict:
+        from scripts.platform_roadmap import compute_state_dict
+
+        return compute_state_dict(_LIVE_YAML)
+
+    def test_in_progress_entries_carry_followon_fields(self) -> None:
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("in_progress", []):
+            assert "open_criteria_count" in entry, f"missing open_criteria_count: {entry['id']}"
+            assert "all_plans_actioned" in entry, f"missing all_plans_actioned: {entry['id']}"
+            assert "needs_followon_plan" in entry, f"missing needs_followon_plan: {entry['id']}"
+
+    def test_open_criteria_count_is_non_negative_int(self) -> None:
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("in_progress", []):
+            count = entry["open_criteria_count"]
+            assert isinstance(count, int) and count >= 0, f"invalid open_criteria_count for {entry['id']}: {count}"
+
+    def test_followon_fields_are_correct_types(self) -> None:
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("in_progress", []):
+            assert isinstance(entry["all_plans_actioned"], bool), f"all_plans_actioned not bool: {entry['id']}"
+            assert isinstance(entry["needs_followon_plan"], bool), f"needs_followon_plan not bool: {entry['id']}"
+
+    def test_needs_followon_implies_has_open_criteria(self) -> None:
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("in_progress", []):
+            if entry["needs_followon_plan"]:
+                assert entry["open_criteria_count"] > 0, (
+                    f"needs_followon_plan=True but open_criteria_count=0 for {entry['id']}"
+                )
+
+    def test_next_eligible_does_not_carry_followon_fields(self) -> None:
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("next_eligible", []):
+            assert "open_criteria_count" not in entry, f"next_eligible must not carry followon fields: {entry['id']}"

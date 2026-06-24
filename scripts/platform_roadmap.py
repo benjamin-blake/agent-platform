@@ -323,6 +323,14 @@ class DocumentMeta(BaseModel):
         raise ValueError(f"Invalid filed_via '{v}'. Must be 'pending_log_decision_lambda' or 'ops_decisions:dec-<NNN>'")
 
 
+class ExitCriterion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    text: str
+    status: Literal["open", "met", "rehomed"] = "open"
+    met_by: str | None = None
+
+
 class TierItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -331,11 +339,25 @@ class TierItem(BaseModel):
     intent: str = ""
     depends_on: list[str] = Field(default_factory=list)
     files_in_scope: list[str] = Field(default_factory=list)
-    exit_criteria: list[str] = Field(default_factory=list)
+    exit_criteria: list[ExitCriterion] = Field(default_factory=list)
     related_candidate_decisions: list[str] = Field(default_factory=list)
     related_intents: list[str] | None = None
     related_decisions: list[int] | None = None
     effort: Literal["XS", "S", "M", "L", "XL"] = "S"
+
+    @field_validator("exit_criteria", mode="before")
+    @classmethod
+    def _normalize_exit_criteria(cls, v: Any) -> list[Any]:
+        if not isinstance(v, list):
+            return v
+        result: list[Any] = []
+        for i, item in enumerate(v):
+            if isinstance(item, str):
+                result.append({"id": f"c{i + 1}", "text": item, "status": "open", "met_by": None})
+            else:
+                result.append(item)
+        return result
+
     strategic: bool = False
     status: Literal["not_started", "in_progress", "complete", "reserved", "deferred_post_mvp"] = "not_started"
     completed_at: str | None = None
@@ -513,6 +535,23 @@ class RoadmapDocument(BaseModel):
                                 f"'{dep}' which is deferred_post_mvp -- no live item may depend on a parked item"
                             )
 
+        # (g) met/rehomed criteria require a non-empty met_by
+        for item in self.tier_items:
+            for crit in item.exit_criteria:
+                if crit.status in {"met", "rehomed"} and not crit.met_by:
+                    raise ValueError(
+                        f"tier_item '{item.id}' criterion '{crit.id}': status='{crit.status}' requires a non-empty met_by"
+                    )
+
+        # (h) rehomed criterion's met_by must resolve to a known tier_item id
+        for item in self.tier_items:
+            for crit in item.exit_criteria:
+                if crit.status == "rehomed" and crit.met_by and crit.met_by not in item_ids:
+                    raise ValueError(
+                        f"tier_item '{item.id}' criterion '{crit.id}': "
+                        f"rehomed met_by='{crit.met_by}' does not resolve to a known tier_item id"
+                    )
+
         return self
 
 
@@ -532,6 +571,54 @@ def load(path: str | Path) -> RoadmapDocument:
     with Path(path).open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     return RoadmapDocument.model_validate(data)
+
+
+def compute_followon_state(doc: RoadmapDocument, plans_dir: Path) -> dict[str, dict[str, Any]]:
+    """Compute follow-on planning state for in_progress items (Decision 93: in_progress only).
+
+    Returns dict keyed by item_id with:
+      - open_criteria_count: int
+      - all_plans_actioned: bool (no in-flight plan targets an open criterion of this item)
+      - needs_followon_plan: bool (True iff open_criteria_count > 0 AND all_plans_actioned)
+    """
+    in_progress = [i for i in doc.tier_items if i.status == "in_progress"]
+
+    open_criteria: dict[str, set[str]] = {}
+    for item in in_progress:
+        open_criteria[item.id] = {c.id for c in item.exit_criteria if c.status == "open"}
+
+    covered_by_plan: dict[str, set[str]] = {item.id: set() for item in in_progress}
+    if plans_dir.is_dir():
+        for plan_file in sorted(plans_dir.glob("PLAN-*.yaml")):
+            try:
+                with plan_file.open(encoding="utf-8") as fh:
+                    plan_data = yaml.safe_load(fh)
+                if not isinstance(plan_data, dict):
+                    continue
+                closes = plan_data.get("closes_criteria") or []
+                if not isinstance(closes, list):
+                    continue
+                for ref in closes:
+                    if not isinstance(ref, str) or ":" not in ref:
+                        continue
+                    item_id, crit_id = ref.split(":", 1)
+                    if item_id in covered_by_plan:
+                        covered_by_plan[item_id].add(crit_id)
+            except Exception:  # noqa: BLE001
+                continue
+
+    result: dict[str, dict[str, Any]] = {}
+    for item in in_progress:
+        open_set = open_criteria[item.id]
+        open_count = len(open_set)
+        has_in_flight = bool(open_set & covered_by_plan[item.id])
+        all_actioned = not has_in_flight
+        result[item.id] = {
+            "open_criteria_count": open_count,
+            "all_plans_actioned": all_actioned,
+            "needs_followon_plan": open_count > 0 and all_actioned,
+        }
+    return result
 
 
 class PlatformRoadmapState:
@@ -670,10 +757,22 @@ class PlatformRoadmapState:
 
         return result
 
-    def to_preflight_dict(self) -> dict[str, Any]:
+    def to_preflight_dict(self, plans_dir: Path | None = None) -> dict[str, Any]:
+        if plans_dir is None:
+            plans_dir = Path("docs/plans")
+        followon = compute_followon_state(self._doc, plans_dir)
+
+        def _in_progress_dict(item: TierItem) -> dict[str, Any]:
+            d = _item_dict(item)
+            state = followon.get(item.id, {})
+            d["open_criteria_count"] = state.get("open_criteria_count", 0)
+            d["all_plans_actioned"] = state.get("all_plans_actioned", True)
+            d["needs_followon_plan"] = state.get("needs_followon_plan", False)
+            return d
+
         return {
             "next_eligible": [_item_dict(i) for i in self.eligible_items() if not i.strategic],
-            "in_progress": [_item_dict(i) for i in self.in_progress_items()],
+            "in_progress": [_in_progress_dict(i) for i in self.in_progress_items()],
             "blocked": [{**_item_dict(i), "blocked_on": self._blocked_on(i)} for i in self.compute_blocked()],
             "strategic_pending": [_item_dict(i) for i in self.strategic_pending_items()],
             "deferred_post_mvp": [_item_dict(i) for i in self.deferred_post_mvp_items()],
@@ -705,8 +804,9 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "gate_evaluations": [],
         }
 
+    plans_dir = Path(yaml_path).parent / "plans"
     state = PlatformRoadmapState(doc)
-    result = state.to_preflight_dict()
+    result = state.to_preflight_dict(plans_dir=plans_dir)
 
     if latest_decision_ts is not None:
         try:
