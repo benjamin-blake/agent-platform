@@ -2343,6 +2343,45 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
     print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
 
 
+def _check_claude_p_raw_invocations(workflows_root: Path) -> list[str]:
+    """Return violation strings for unwrapped `claude -p` lines in CI workflow files.
+
+    Skips blank lines, YAML/shell comments (leading #), `command -v claude` presence
+    checks, and `claude --version` calls. Parity with _TRANSIENT_CLAUDE_SIGNATURES.
+    """
+    violations = []
+    for wf_path in sorted(workflows_root.glob("*.yml")):
+        try:
+            lines = wf_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "command -v claude" in line or "claude --version" in line:
+                continue
+            if "claude -p" in line and "claude_p_retry.sh" not in line:
+                violations.append(f"{wf_path.name}:{lineno}: unwrapped `claude -p` invocation")
+    return violations
+
+
+def validate_claude_p_retry_wrapper(failed: list[str]) -> None:
+    """Enforce that every `claude -p` invocation in CI workflows routes through scripts/ci/claude_p_retry.sh.
+
+    Parity with _TRANSIENT_CLAUDE_SIGNATURES (this file) and scripts/ci/claude_p_retry.sh.
+    Decision 73: validate.py is the single source of truth for CI checks. Decision 92.
+    """
+    print("\n=== claude -p retry wrapper enforcement ===")
+    violations = _check_claude_p_raw_invocations(ROOT / ".github" / "workflows")
+    if violations:
+        for v in violations:
+            print(f"  FAIL: {v}")
+            failed.append(f"claude_p_retry wrapper: {v}")
+    else:
+        print("  PASS: all claude -p invocations route through scripts/ci/claude_p_retry.sh")
+
+
 _UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
 
 
@@ -2764,6 +2803,7 @@ def run_python_checks(failed: list[str]) -> None:
     validate_invariants(failed)
     validate_ci_rca_trigger(failed)
     validate_ci_workflow_guards(failed)
+    validate_claude_p_retry_wrapper(failed)
     validate_sloc_limits(failed)
     check_source_registry(failed)
     validate_platform_roadmap(failed)
@@ -2799,6 +2839,10 @@ def run_python_checks(failed: list[str]) -> None:
 # Transient registry.terraform.io 5xx signatures; used by _terraform_init_with_retry and
 # by the bounded retry loop in .github/workflows/terraform-apply-sandbox.yml (parity required).
 _TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not query provider registry", "failed after ")
+
+# Transient Claude API error signatures; parity with _is_transient() in scripts/ci/claude_p_retry.sh.
+# Distinct from _TRANSIENT_INIT_SIGNATURES (terraform registry 5xx). Decision 73, Decision 92.
+_TRANSIENT_CLAUDE_SIGNATURES: tuple[str, ...] = ("500", "502", "503", "API Error: 5", "Internal server error", "overloaded")
 
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
@@ -3263,6 +3307,8 @@ def main() -> None:
         validate_field_semantics_drift(failed)
         # CI-RCA taxonomy coverage in --pre: pure file-glob + YAML parse (sub-100ms), Decision 60.
         validate_ci_rca_taxonomy(failed)
+        # claude -p retry wrapper enforcement in --pre: O(lines) workflow scan, Decision 73, Decision 92.
+        validate_claude_p_retry_wrapper(failed)
 
         elapsed = time.monotonic() - _t0
 

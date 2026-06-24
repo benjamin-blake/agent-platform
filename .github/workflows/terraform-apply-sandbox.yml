@@ -346,11 +346,10 @@ jobs:
           if ! command -v claude &> /dev/null; then
             sudo npm install -g @anthropic-ai/claude-code@2.1.148 --omit=dev --omit=optional && sudo npm cache clean --force
           fi
-          claude -p \
+          ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review.txt -- \
             --output-format text \
             --max-turns 10 \
-            "Review the terraform plan in plan.json for the sandbox auto-apply pipeline. It has already passed the deterministic guard (no destroy, no IAM/trust change). Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not." \
-            > review.txt 2>&1 || true
+            "Review the terraform plan in plan.json for the sandbox auto-apply pipeline. It has already passed the deterministic guard (no destroy, no IAM/trust change). Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not." || true
           cat review.txt
           if ! grep -qx "PROCEED" review.txt; then
             echo "Subagent did not return PROCEED; failing closed." >&2
