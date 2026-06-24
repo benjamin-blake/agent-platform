@@ -573,18 +573,15 @@ def load(path: str | Path) -> RoadmapDocument:
     return RoadmapDocument.model_validate(data)
 
 
-_LIVE_STATUSES: frozenset[str] = frozenset({"not_started", "in_progress"})
-
-
 def compute_followon_state(doc: RoadmapDocument, plans_dir: Path) -> dict[str, dict[str, Any]]:
-    """Compute follow-on planning state for in_progress items (live items only, Decision 93).
+    """Compute follow-on planning state for in_progress items (Decision 93: in_progress only).
 
     Returns dict keyed by item_id with:
       - open_criteria_count: int
       - all_plans_actioned: bool (no in-flight plan targets an open criterion of this item)
       - needs_followon_plan: bool (True iff open_criteria_count > 0 AND all_plans_actioned)
     """
-    in_progress = [i for i in doc.tier_items if i.status == "in_progress" and i.status in _LIVE_STATUSES]
+    in_progress = [i for i in doc.tier_items if i.status == "in_progress"]
 
     open_criteria: dict[str, set[str]] = {}
     for item in in_progress:

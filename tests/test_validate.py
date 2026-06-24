@@ -3839,3 +3839,52 @@ class TestPlatformRoadmapCriteriaIntegrity:
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" not in failed
         assert "Platform roadmap schema validation" not in failed
+
+    def test_diff_touched_item_with_bare_string_criterion_fails(self, tmp_path: Path) -> None:
+        """Check (ii): a tier_item appearing in the git diff that retains a bare-string criterion -> failure.
+
+        The Pydantic normalizer converts bare strings at load time, but check (ii) reads the raw YAML
+        to detect whether the on-disk representation still has unstructured criteria on touched items.
+        """
+        self._setup_dirs(
+            tmp_path,
+            # Bare-string criterion: Pydantic normalizes it but the raw YAML still has a string.
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - criterion that was never converted to ExitCriterion format\n",
+        )
+        # Simulate a git diff that names T0.1 as a modified tier_item.
+        mock_diff = "+  - id: T0.1\n+    status: in_progress\n"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
+        ):
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_diff_touched_item_with_structured_criteria_passes(self, tmp_path: Path) -> None:
+        """Check (ii): a tier_item in the diff with fully-structured criteria -> pass (no failure)."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: structured criterion\n"
+            "        status: open\n",
+        )
+        mock_diff = "+  - id: T0.1\n"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
+        ):
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed
