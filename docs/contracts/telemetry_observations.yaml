@@ -1,0 +1,396 @@
+---
+# Class A data contract for telemetry_observations -- the UNIFIED node table of the canonical
+# session-rooted trace/observation model (Decision 95 clause 2).
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.6).
+#
+# THE CORE UNIFICATION: telemetry_phases + telemetry_steps + telemetry_process_events +
+# telemetry_model_calls are NOT four sibling tables -- they are values of observation_type on this one
+# node table (Decision 95 collapse rule). One node table with a discriminator + a parent pointer,
+# OpenTelemetry/Langfuse-shaped (the lexicon's canonical shape).
+#
+# GREENFIELD (Decision 95): TARGET-STATE spec; the canonical observation_id/parent_observation_id/
+# observation_type columns do NOT exist in the draft (the draft has four tables with per-table UUID4
+# ids and ad-hoc phase_id/step_id FK nesting). Field semantics are grounded in the four draft
+# dataclasses (scripts/telemetry_schemas.py); the COLLAPSE MAPPING (governance_notes, below) records
+# where every draft column lands so none is silently dropped. Dead path pending Phase 4 (Decision 84).
+contract:
+  id: telemetry_observations
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-24"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-ratify-class-a-telemetry-contracts merge to main (T0.12.6)"
+  description: >-
+    Class A schema contract for telemetry_observations: one row per OBSERVATION -- a timed node in a
+    session's trace tree. PK observation_id (ULID); FK session_id (the trace root); FK
+    parent_observation_id (nullable self-reference building the tree). An observation_type discriminator
+    (phase | step | process_event | model_call) absorbs the four collapsed draft sibling tables
+    (Decision 95). Insert-once event data: partition day(started_at) UTC, no trade_date, no SCD2 envelope
+    (Decision 96). ULID identity, boundary-minted once, propagated (Decision 97). Cross-cutting
+    attributes (name, timing, model, tokens, outcome, severity) are promoted to typed columns; the
+    type-specific long tail lives in the metadata JSON bag (the Langfuse `metadata` shape), keeping the
+    node table small and hot while large blobs go to telemetry_transcripts.
+  projects_to:
+    note: >-
+      No generated artifact yet (telemetry is not on DuckLake; no telemetry field_semantics.yaml). This
+      contract is the authoritative field-semantic source until the Phase 4 rebuild lands a generator.
+      The draft sources are TelemetryPhases / TelemetrySteps / TelemetryProcessEvents / TelemetryModelCalls
+      in scripts/telemetry_schemas.py.
+fields:
+  observation_id:
+    $ref: observation-id.yaml#/contract/fields/observation_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      PRIMARY KEY: tightened to not_null enforced:true over the observation-id.yaml loosest baseline
+      (Invariant 5). ULID (Decision 97), minted once at open_observation. Replaces the draft's four
+      per-table ids (phase_id / step_id / event_id / call_id).
+    joins:
+      - observation_id_join_observations_to_transcripts
+      - observation_id_join_observations_to_agents
+  session_id:
+    $ref: session-id.yaml#/contract/fields/session_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      FOREIGN KEY to telemetry_sessions.session_id (the trace root). Tightened to not_null enforced:true
+      (Invariant 5): every observation roots to a session -- there are no rootless observations
+      (Decision 95 root-unification). Propagated from the parent, never re-derived (Decision 97 cl.3).
+    joins:
+      - session_id_join_telemetry_sessions_to_observations
+  parent_observation_id:
+    $ref: parent-observation-id.yaml#/contract/fields/parent_observation_id
+    governance_notes_local: >-
+      FOREIGN KEY self-reference building the in-session tree: a step's parent is its phase; a model_call's
+      parent is its step. NULL = a root observation directly under the session. Stays nullable (root
+      observations have no parent). Replaces the draft's ad-hoc FK nesting (steps.phase_id,
+      model_calls.step_id, process_events.phase_id/step_id).
+    joins:
+      - parent_observation_id_join_observations_self_tree
+  observation_type:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      The node-kind discriminator that collapses the four draft sibling tables: phase | step |
+      process_event | model_call (Decision 95 collapse rule). The accepted-value set is ratified HERE
+      per the lexicon's observation_type term.
+    semantics: >-
+      Required discriminator. Maps draft tables to values: telemetry_phases -> phase, telemetry_steps ->
+      step, telemetry_process_events -> process_event, telemetry_model_calls -> model_call. The set is
+      OPEN to additive extension (accepted_values_extend) for new node kinds, never silently narrowed.
+      "span" is deliberately NOT a value (lexicon: use "observation"). DQ ENFORCEMENT of the accepted
+      set lands in config/agent/data_quality/telemetry.yaml at Phase 4; the contract carries the intent.
+    populated_by: >-
+      telemetry.py boundary (Phase 4): open_observation(observation_type=...). In the draft, the value is
+      implicit in WHICH table was written; the collapse makes it an explicit column.
+    dq_intent:
+      not_null:
+        enforced: false
+      accepted_values:
+        values: [phase, step, process_event, model_call]
+        enforced: false
+        note: Decision 95 collapse set; open to accepted_values_extend, never silent narrowing.
+  name:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Human-readable label for the node, unified across kinds: the phase name (phase), the step title
+      (step), the model purpose (model_call), the event category (process_event).
+    semantics: >-
+      Collapse mapping: telemetry_phases.phase / telemetry_steps.title / telemetry_model_calls.purpose /
+      telemetry_process_events.category -> name. The primary grouping label within an observation_type.
+      Nullable at the baseline (not every draft kind guaranteed a label); a per-type write-time validator
+      may require it post-Phase-4.
+    populated_by: telemetry.py open_observation.
+    dq_intent:
+      not_null:
+        enforced: false
+  sequence:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Ordinal position of the node among its siblings under the same parent (0/1-based).
+    semantics: >-
+      Collapse mapping: telemetry_phases.phase_order / telemetry_steps.step_number -> sequence. Gives
+      deterministic sibling ordering independent of ULID time-order (usually identical, but explicit).
+      Null for kinds without an intrinsic order (process_event, model_call).
+    populated_by: telemetry.py open_observation.
+    dq_intent:
+      not_null:
+        enforced: false
+  started_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC tz-aware ISO-8601 timestamp the observation began. The event-time column and PARTITION BASIS
+      for telemetry_observations: day(started_at) (Decision 96 cl.1).
+    semantics: >-
+      Event-time, minted ONCE at open_observation (Decision 97 cl.2), never re-derived; naive/local
+      rejected (Decision 96 cl.4). Collapse mapping: telemetry_phases.started_at /
+      telemetry_steps.started_at -> started_at directly; the instantaneous kinds'
+      telemetry_process_events.timestamp / telemetry_model_calls.timestamp -> started_at (the single
+      event-time column). NOT last_updated_timestamp (insert-once, Decision 96 cl.3).
+    populated_by: telemetry.py open_observation / emit_* boundary.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: tz-aware UTC now() minted ONCE at the open_observation/emit boundary; never re-derived (Decision 97)
+      inputs: []
+      realized: false
+  ended_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: true
+    description: UTC tz-aware timestamp the observation ended. NULL for instantaneous nodes (process_event, model_call point-in-time) and for in-flight nodes.
+    semantics: >-
+      Collapse mapping: telemetry_phases.ended_at / telemetry_steps.ended_at -> ended_at; the
+      instantaneous kinds (process_event, model_call) have no end and leave it NULL. tz-aware UTC.
+    populated_by: telemetry.py close of the observation.
+    dq_intent:
+      not_null:
+        enforced: false
+  duration_seconds:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Wall-clock duration of the observation in seconds. NULL for instantaneous/in-flight nodes.
+    semantics: >-
+      Collapse mapping: telemetry_phases.duration_seconds / telemetry_steps.duration_seconds /
+      telemetry_model_calls.duration_seconds -> duration_seconds. bigint (integer-promotion safety).
+    populated_by: telemetry.py at observation close.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: int((ended_at - started_at).total_seconds()) when the node closes; null if instantaneous
+      inputs: [started_at, ended_at]
+      realized: false
+  outcome:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "Disposition of the node where applicable: running | success | failed (phase/step). NULL for kinds without an outcome (process_event, model_call)."
+    semantics: >-
+      Collapse mapping: telemetry_phases.outcome / telemetry_steps.outcome -> outcome. process_event and
+      model_call have no lifecycle outcome (their disposition is the promoted severity / exit_code
+      columns). Open set; enforcement deferred to telemetry.yaml at Phase 4.
+    populated_by: telemetry.py at observation open (running) / close (terminal).
+    dq_intent:
+      not_null:
+        enforced: false
+  severity:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "Severity/level for kinds that carry one: info | warning | error | critical (process_event). NULL otherwise."
+    semantics: >-
+      Collapse mapping: telemetry_process_events.severity -> severity (the Langfuse `level` concept).
+      The process_event tier (decision | rework | exception | anomaly) is the PROMOTED tier column and
+      drives the telemetry_sessions roll-ups (rework_count / exception_count). Open set; enforcement deferred.
+    populated_by: telemetry.py emit_process_event.
+    dq_intent:
+      not_null:
+        enforced: false
+  model:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The model that produced this node, where applicable (e.g. claude-opus-4-8).
+    semantics: >-
+      Collapse mapping: telemetry_phases.model_used / telemetry_steps.model_used /
+      telemetry_model_calls.model -> model. Per-node model attribution; the session headline is
+      telemetry_sessions.model_primary and the agent dimension is telemetry_agents.model.
+    populated_by: telemetry.py open_observation / emit_model_call.
+    dq_intent:
+      not_null:
+        enforced: false
+  tokens_input:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Input/prompt tokens attributed to this node. NULL where not applicable.
+    semantics: >-
+      Collapse mapping: telemetry_phases.tokens_input / telemetry_steps.tokens_input /
+      telemetry_model_calls.tokens_input -> tokens_input. bigint. The Langfuse `usage` concept.
+    populated_by: telemetry.py emit_model_call / phase-step roll-up.
+    dq_intent:
+      not_null:
+        enforced: false
+  tokens_output:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Output/completion tokens attributed to this node. NULL where not applicable.
+    semantics: Collapse mapping of telemetry_*.tokens_output -> tokens_output. bigint.
+    populated_by: telemetry.py emit_model_call / phase-step roll-up.
+    dq_intent:
+      not_null:
+        enforced: false
+  attempt:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Attempt/retry counter for this node (1-based; >1 on retry). NULL where not applicable.
+    semantics: >-
+      Collapse mapping: telemetry_phases.attempt_number / telemetry_steps.retry_count -> attempt.
+      max_attempts (phases) is retained in metadata. A key rework signal.
+    populated_by: telemetry.py open_observation.
+    dq_intent:
+      not_null:
+        enforced: false
+  provider:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "Inference provider for a model_call node: copilot_cli | copilot_sdk | github_models. NULL for non-model_call kinds."
+    semantics: >-
+      Collapse mapping: telemetry_model_calls.provider -> provider. PROMOTED to a typed column (mirroring
+      telemetry_agents.provider) so model-attribution analytics get typed access instead of JSON extraction.
+      Open set; enforcement deferred to telemetry.yaml at the Phase 4 rebuild.
+    populated_by: scripts/executor/telemetry.py::emit_model_call.
+    dq_intent:
+      not_null:
+        enforced: false
+  tier:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "Process-event tier: decision | rework | exception | anomaly. NULL for non-process_event kinds."
+    semantics: >-
+      Collapse mapping: telemetry_process_events.tier -> tier. PROMOTED (not buried in metadata) because it
+      is the discriminator that drives the telemetry_sessions roll-ups (rework_count from tier=rework;
+      exception_count from tier=exception) -- typed access is required for that reconciliation. Open set;
+      enforcement deferred.
+    populated_by: scripts/executor/telemetry.py::emit_process_event.
+    dq_intent:
+      not_null:
+        enforced: false
+  acceptance_passed:
+    type: bool
+    iceberg_type: boolean
+    nullable: true
+    description: Whether a step's acceptance check passed. NULL for non-step kinds (or steps with no acceptance).
+    semantics: >-
+      Collapse mapping: telemetry_steps.acceptance_passed -> acceptance_passed. PROMOTED to a typed boolean
+      (a first-class self-improvement / T3-verifier signal) rather than buried in the metadata JSON.
+    populated_by: scripts/executor/telemetry.py::emit_step.
+    dq_intent:
+      not_null:
+        enforced: false
+  exit_code:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Process exit code for a model_call node. NULL for non-model_call kinds.
+    semantics: >-
+      Collapse mapping: telemetry_model_calls.exit_code -> exit_code. PROMOTED (typed bigint) for model-call
+      success/failure analytics.
+    populated_by: scripts/executor/telemetry.py::emit_model_call.
+    dq_intent:
+      not_null:
+        enforced: false
+  time_lost_seconds:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Seconds lost to a process_event (rework / exception cost). NULL for non-process_event kinds.
+    semantics: >-
+      Collapse mapping: telemetry_process_events.time_lost_seconds -> time_lost_seconds. PROMOTED (typed
+      bigint) for friction-cost analytics (the self-improvement loop's time-lost signal).
+    populated_by: scripts/executor/telemetry.py::emit_process_event.
+    dq_intent:
+      not_null:
+        enforced: false
+  rec_id:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Recommendation id this observation relates to (e.g. rec-2335). NULL when not applicable.
+    semantics: >-
+      Collapse mapping: telemetry_process_events.rec_id (and the rec linkage on model_calls/transcripts)
+      -> rec_id. Optional cross-reference to ops_recommendations.id; correlates an observation to the rec
+      it addressed or filed.
+    populated_by: telemetry.py emit_process_event / emit_model_call.
+    dq_intent:
+      not_null:
+        enforced: false
+  metadata:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      JSON object holding the type-specific attribute long-tail not promoted to a typed column (the
+      Langfuse `metadata` map). Stored as a JSON string for schema stability across observation_types.
+    semantics: >-
+      The collapse's attribute bag -- the type-specific keys NOT promoted to a typed column. By
+      observation_type it carries: STEP -> target_file, action, acceptance_command,
+      acceptance_duration_seconds, diff_stat, lines_added, lines_removed, model_escalated_from,
+      prompt_hash, total_steps (per-step planned count, distinct from the typed
+      telemetry_sessions.steps_total roll-up); PHASE -> max_attempts, revision_count, blocking_findings_count,
+      plan_steps_json (the existing draft JSON folds in here), metadata_json; PROCESS_EVENT ->
+      description, root_cause, resolution, rec_filed, detected_by; MODEL_CALL -> purpose_detail,
+      copilot_session_id, prompt_hash, error (invocation_id is NOT a metadata key -- subsumed by the
+      observation_id -> telemetry_agents join). The high-value analytic fields are PROMOTED
+      to typed columns (provider, tier, acceptance_passed, exit_code, time_lost_seconds) and are NOT in
+      this bag, so T3 verifiers (T3.1 depends on T0.12.6) get typed predicate pushdown. NOTE:
+      telemetry_steps.transcript_path is NOT a metadata key -- the step's transcript export becomes a
+      telemetry_transcripts row reached via the observation_id join (subsumed, like model_calls.invocation_id).
+    populated_by: telemetry.py emit_* (serialised JSON of the type-specific kwargs).
+    dq_intent:
+      not_null:
+        enforced: false
+  ingested_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: UTC tz-aware warehouse-ingestion (append) timestamp; distinct from event-time started_at.
+    semantics: >-
+      Operational append marker (writer-injected; default_factory in the draft). NOT the partition basis
+      (started_at is) and NOT an SCD2 last_updated_timestamp (telemetry is insert-once).
+    populated_by: the telemetry write path (OpsWriter today; the Phase 4 DuckLake writer tomorrow).
+    dq_intent:
+      not_null:
+        enforced: false
+governance:
+  table_class: event
+  partition_by: "day(started_at)"
+  write_path: >-
+    LIVE (draft, dead): telemetry.py::open_phase/close_phase/emit_step/emit_process_event/emit_model_call
+    -> OpsWriter.emit(<one of four draft tables>) -> S3 staging -> Iceberg (unmigrated). TARGET
+    (Phase 4, post-T2.26): a single open_observation/emit boundary writing telemetry_observations on the
+    DuckLake telemetry substrate, applying the schema/partition-as-code mechanism T2.33 established for the
+    ops tables (Decision 96). Insert-once; no SCD2 merge.
+governance_notes: >-
+  COLLAPSE MAPPING (Decision 95 cl.2) -- the authoritative record that no draft column is silently
+  dropped. Draft id -> observation_id: phase_id / step_id / event_id / call_id. Draft nesting ->
+  parent_observation_id: steps.phase_id, model_calls.step_id, process_events.phase_id/step_id. Promoted
+  typed columns: phase/title/category/purpose -> name; phase_order/step_number -> sequence;
+  started_at|timestamp -> started_at; ended_at -> ended_at; duration_seconds -> duration_seconds;
+  outcome -> outcome; severity -> severity; model_used|model -> model; tokens_input/output -> tokens_*;
+  attempt_number/retry_count -> attempt; rec_id -> rec_id; provider -> provider; tier -> tier;
+  acceptance_passed -> acceptance_passed; exit_code -> exit_code; time_lost_seconds -> time_lost_seconds.
+  SUBSUMED by joins (not columns here): model_calls.invocation_id -> telemetry_agents via observation_id;
+  steps.transcript_path -> telemetry_transcripts via observation_id (the step's transcript export becomes
+  a telemetry_transcripts row). Everything else -> metadata JSON (enumerated in the metadata field
+  semantics), including steps.prompt_hash and model_calls.prompt_hash. DROPPED: trade_date (Decision 96
+  cl.2, every draft table). NULLABILITY AXES: a field's `nullable` is the TARGET-SCHEMA column constraint
+  (what the Phase 4 DDL declares); `dq_intent.not_null.enforced` is the CURRENT DQ posture (false
+  everywhere now -- enforcement lands in config/agent/data_quality/telemetry.yaml at Phase 4). A
+  `nullable: false` field with `enforced: false` means "required in the target schema, not yet
+  DQ-enforced", NOT a contradiction. Conversely a PK/FK $ref'd from a Class C baseline keeps
+  `nullable: true` (the loosest baseline) at the column axis with `not_null.enforced: true` at the DQ
+  axis; the Phase 4 DDL generator must emit NOT NULL from the DQ axis for such keys, not read `nullable`
+  literally. Decision 96: insert-once event data, partition day(started_at) UTC,
+  no last_updated_timestamp, tz-aware UTC. Decision 97: ULID identity minted once, parent pointer
+  propagated never re-derived. No merge_key (insert-once). dq_INTENT only here; ENFORCEMENT (including
+  the closed observation_type accepted set and per-type required-field validators) lands in
+  config/agent/data_quality/telemetry.yaml at the Phase 4 rebuild. REPORT-ONLY: the unification is
+  documented, NOT implemented (the draft's four tables still exist until Phase 4 retires them).
+amendment_log: []
+previous_versions: []

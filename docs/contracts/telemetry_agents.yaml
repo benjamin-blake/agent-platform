@@ -1,0 +1,309 @@
+---
+# Class A data contract for telemetry_agents -- the agent DIMENSION of the canonical session-rooted
+# trace/observation model (Decision 95 clause 4).
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.6).
+#
+# Replaces the ROOTLESS telemetry_agent_invocations (the draft's standalone fact table with no
+# session_id -- the observability defect Decision 95 names). Here agent identity (agent_type, model,
+# version) is a ROOTED dimension: every agent row carries session_id, so sub-agent work joins the
+# session star schema. GREENFIELD TARGET-STATE grounded in the draft TelemetryAgentInvocations
+# dataclass; dead path pending Phase 4 (Decision 84).
+#
+# REALIZATION CHOICE (Decision 96 cl.1 left this open -- "telemetry_agents -> day(started_at), or none
+# if realized as a pure dimension; settled at T0.12.6"): ratified as a ROOTED EVENT TABLE partitioned
+# by day(started_at), NOT a pure dimension. Rationale: a scheduled-agent invocation is genuinely a timed
+# event with run-level outcome + work metrics (findings_count, recs_created, queue_entries_written); an
+# event table grounds every draft column losslessly while still serving as the agent-identity surface.
+# The pure-dimension alternative would orphan those work metrics (telemetry_sessions has no home for
+# them); rejected for that reason. (Step 10 critique may revisit.)
+contract:
+  id: telemetry_agents
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-24"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-ratify-class-a-telemetry-contracts merge to main (T0.12.6)"
+  description: >-
+    Class A schema contract for telemetry_agents: the rooted agent dimension/run surface. Identifies
+    WHICH agent (agent_type, model, provider, version) ran, rooted to the session it belongs to
+    (session_id) and optionally to a specific node (observation_id). Replaces the rootless
+    telemetry_agent_invocations (Decision 95 cl.4): agent identity is rooted, and the agent's WORK is the
+    observations / linked sub-sessions that share its session_id. Insert-once event data: partition
+    day(started_at) UTC, no trade_date, no SCD2 envelope (Decision 96). ULID-target identity (Decision 97).
+  projects_to:
+    note: >-
+      No generated artifact yet (telemetry not on DuckLake; no telemetry field_semantics.yaml). Draft
+      source: scripts/telemetry_schemas.py::TelemetryAgentInvocations (+ the emitter
+      src/data/handlers/agent_telemetry.py).
+fields:
+  agent_type:
+    $ref: source-lineage.yaml#/contract/fields/registry_key
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      The agent-identity DIMENSION KEY: a canonical lineage key from
+      config/agent/data_quality/source_registry.yaml (Decision 66), the SAME registry
+      ops_recommendations.source draws from. Tightened to not_null enforced:true (Invariant 5): an agent
+      row must identify its agent. Collapse mapping: draft telemetry_agent_invocations.agent_name ->
+      agent_type (kebab-case canonical_id; e.g. doc-freshness, code-smell). Registry membership is
+      validated at write time (validate_source); new agent types register BEFORE first use.
+    joins:
+      - lineage_join_source_to_agent_type
+  session_id:
+    $ref: session-id.yaml#/contract/fields/session_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      FOREIGN KEY to telemetry_sessions.session_id -- the fix for the rootless-invocation defect
+      (Decision 95 cl.4). Tightened to not_null enforced:true (Invariant 5): every agent row is rooted.
+      A scheduled-agent invocation gets its own session (workflow=scheduled-agent) and this agent row
+      shares that session_id, so the agent's observations join it. NOTE: the draft
+      telemetry_agent_invocations has NO session_id at all -- this column is the canonical addition.
+    joins:
+      - session_id_join_telemetry_sessions_to_agents
+  observation_id:
+    $ref: observation-id.yaml#/contract/fields/observation_id
+    governance_notes_local: >-
+      Optional FK to telemetry_observations.observation_id when the agent row annotates a SPECIFIC node
+      (e.g. a sub-agent spawned by one observation) rather than the whole session. Nullable: a
+      session-scoped agent row carries no observation_id (loosest baseline preserved, not tightened).
+    joins:
+      - observation_id_join_observations_to_agents
+  agent_name:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Optional human-facing display label for the agent instance, when it differs from the canonical
+      agent_type (e.g. a friendly name). Usually redundant with agent_type.
+    semantics: >-
+      The draft REQUIRED agent_name maps to the canonical agent_type ($ref above); this column is
+      retained as an OPTIONAL display alias only, so agent_type stays the single authoritative key. Null
+      when identical to agent_type.
+    populated_by: src/data/handlers/agent_telemetry.py::open_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  model:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The model the agent ran on (e.g. claude-haiku-4-5, gemini-3-pro-preview).
+    semantics: "Collapse mapping: draft model_used -> model. A dimension attribute (Decision 95 cl.4)."
+    populated_by: agent_telemetry.py::open_invocation / record_model_call.
+    dq_intent:
+      not_null:
+        enforced: false
+  provider:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "The inference provider: copilot_sdk | github_models | anthropic_max (draft enum)."
+    semantics: >-
+      Dimension attribute. Open set grounded in the draft trigger/provider enums; closed accepted_values
+      ratified into telemetry.yaml at Phase 4.
+    populated_by: agent_telemetry.py::open_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  version:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Agent/model version string for the dimension (Decision 95 cl.4 names agent_type, model, version).
+    semantics: >-
+      FORWARD-DECLARED dimension attribute: NOT in the draft TelemetryAgentInvocations. Added because
+      Decision 95 cl.4 names version as a dimension attribute; populated when the Phase 4 rebuild records
+      agent/model versioning. Nullable until then.
+    populated_by: FUTURE (Phase 4) -- agent dimension writer.
+    dq_intent:
+      not_null:
+        enforced: false
+  trigger:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: "How the agent run was triggered: eventbridge | manual | smoke_test | cron_workflow (draft enum)."
+    semantics: >-
+      Run-provenance attribute. Draft REQUIRED; relaxed to nullable at the baseline (an
+      interactively-rooted agent row may not have a discrete trigger). Open set; enforcement deferred.
+    populated_by: agent_telemetry.py::open_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  started_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC tz-aware ISO-8601 timestamp the agent run began. Event-time column and PARTITION BASIS:
+      day(started_at) (Decision 96 cl.1, event-table realization chosen here).
+    semantics: >-
+      Event-time, minted once at open_invocation (Decision 97 cl.2), never re-derived; tz-aware UTC,
+      naive/local rejected (Decision 96 cl.4). Draft REQUIRED_FIELD. NOT last_updated_timestamp.
+    populated_by: agent_telemetry.py::open_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: tz-aware UTC now() minted ONCE at the open_invocation boundary; never re-derived (Decision 97)
+      inputs: []
+      realized: false
+  ended_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: true
+    description: UTC tz-aware timestamp the agent run ended. NULL while running.
+    semantics: Set at close_invocation. tz-aware UTC. Not a partition basis (started_at is).
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  duration_seconds:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Wall-clock agent-run duration in seconds. NULL while running.
+    semantics: Derived at close. bigint (integer-promotion safety).
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: int((ended_at - started_at).total_seconds()) at close_invocation
+      inputs: [started_at, ended_at]
+      realized: false
+  outcome:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: "Terminal disposition of the agent run: success | failed | timeout | throttled (draft enum)."
+    semantics: >-
+      Required lifecycle field (draft REQUIRED_FIELD). Open set; closed accepted_values ratified into
+      telemetry.yaml at Phase 4.
+    populated_by: agent_telemetry.py::open_invocation / close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  tokens_input:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Input tokens consumed across the agent run.
+    semantics: Optional usage metric. bigint.
+    populated_by: agent_telemetry.py::record_model_call / close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  tokens_output:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Output tokens produced across the agent run.
+    semantics: Optional usage metric. bigint.
+    populated_by: agent_telemetry.py::record_model_call / close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  findings_count:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Number of findings the agent produced in the run.
+    semantics: >-
+      Agent-run WORK metric (a scheduled-agent output). Retained on the rooted event table (the
+      event-table realization choice); the pure-dimension alternative would have no home for it. bigint.
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  recs_created:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Number of recommendations the agent filed in the run.
+    semantics: Agent-run WORK metric; cross-references ops_recommendations rows filed with this agent's source. bigint.
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  queue_entries_written:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Number of priority-queue entries the agent wrote in the run.
+    semantics: Agent-run WORK metric (rec-curator-style producers). bigint.
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  error:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Error message when outcome is failed/timeout/throttled. NULL on success.
+    semantics: Optional failure diagnostic for the agent run.
+    populated_by: agent_telemetry.py::close_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  lambda_request_id:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: AWS Lambda request id of the invocation, when the agent ran as a Lambda. NULL otherwise.
+    semantics: Run provenance (CloudWatch correlation). Null for non-Lambda runs.
+    populated_by: agent_telemetry.py::open_invocation (from the Lambda context).
+    dq_intent:
+      not_null:
+        enforced: false
+  workflow_run_id:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: GitHub Actions workflow run id, when the agent ran from CI. NULL otherwise.
+    semantics: Run provenance (GitHub Actions correlation). Null for non-CI runs.
+    populated_by: agent_telemetry.py::open_invocation.
+    dq_intent:
+      not_null:
+        enforced: false
+  ingested_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: UTC tz-aware warehouse-ingestion (append) timestamp; distinct from event-time started_at.
+    semantics: Operational append marker (writer-injected). NOT the partition basis (started_at is); NOT SCD2.
+    populated_by: the telemetry write path (OpsWriter today; the Phase 4 DuckLake writer tomorrow).
+    dq_intent:
+      not_null:
+        enforced: false
+governance:
+  table_class: event
+  partition_by: "day(started_at)"
+  write_path: >-
+    LIVE (draft, dead): src/data/handlers/agent_telemetry.py::open_invocation/close_invocation ->
+    OpsWriter.emit('telemetry_agent_invocations') -> S3 staging -> Iceberg (unmigrated). TARGET
+    (Phase 4, post-T2.26): the rooted agent writer (carrying session_id) on the DuckLake telemetry
+    substrate. Insert-once; no SCD2 merge.
+governance_notes: >-
+  Decision 95 cl.4: telemetry_agents replaces the ROOTLESS telemetry_agent_invocations -- the canonical
+  addition is session_id (+ optional observation_id), rooting every agent row to its session. Collapse
+  mapping: agent_name -> agent_type ($ref source-lineage; agent_name retained as optional display alias);
+  model_used -> model; all run/work fields (started_at, ended_at, duration_seconds, outcome, trigger,
+  provider, tokens_*, findings_count, recs_created, queue_entries_written, error, lambda_request_id,
+  workflow_run_id) carry over; version ADDED (Decision 95 cl.4 dimension attribute, forward-declared);
+  session_id + observation_id ADDED (rooting). DROPPED: trade_date (Decision 96 cl.2). REALIZATION:
+  event table (day(started_at)), not pure dimension -- the choice Decision 96 cl.1 deferred to T0.12.6;
+  chosen to root the work metrics losslessly (a scheduled-agent invocation is a timed event). Decision
+  96: insert-once, partition day(started_at) UTC, tz-aware UTC, no last_updated_timestamp. Decision 97:
+  ULID-target identity, boundary-minted, FKs propagated. No merge_key (insert-once). dq_INTENT only;
+  ENFORCEMENT lands in config/agent/data_quality/telemetry.yaml at Phase 4. NULLABILITY AXES: `nullable`
+  is the TARGET-SCHEMA column constraint (Phase 4 DDL); `dq_intent.not_null.enforced` is the CURRENT DQ
+  posture (false everywhere now). A `nullable: false` + `enforced: false` field is "required in the target
+  schema, not yet DQ-enforced", NOT a contradiction. REPORT-ONLY: documented, not implemented. KNOWN GAP:
+  rec-2173 (preflight telemetry health) and the broader Phase 4 re-provisioning are CODE follow-ons, not
+  this contract.
+amendment_log: []
+previous_versions: []
