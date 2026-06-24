@@ -1,0 +1,87 @@
+---
+# Cross-contract join registry for the ritual contracts.
+# Free-form (non-ritual) registry: NO top-level `contract:` / `class:`, so the CD.25 drift gate
+# (scripts/contracts.py::load_all_contracts; scripts/validate.py::validate_contract_drift) SKIPS it,
+# per the telemetry-lexicon.yaml / read-engine.yaml / storage-substrate.yaml precedent.
+#
+# Purpose: the per-field `joins:` lists inside Class A/C contracts name join ids; this file is the
+# single place those named joins are DEFINED (key, endpoints, cardinality). Forward-declared by
+# session-id.yaml and source-lineage.yaml (T0.12.7); LANDED by T0.12.6 now that the referenced
+# telemetry Class A contracts ratify (INTENT Part 5 incremental-landing rule).
+#
+# These are LOGICAL joins (analytic FK relationships), not engine-enforced constraints: telemetry is
+# insert-once event data with no engine PK/FK (Decision 96 / Decision 81); referential integrity is a
+# write-time + DQ-relationships concern realized at the Phase 4 rebuild, not a database constraint.
+version: 1
+last_updated: "2026-06-24"
+landed_by: "PLAN-ratify-class-a-telemetry-contracts (T0.12.6)"
+decisions_cited: [Decision-95, Decision-96, Decision-97, Decision-66, CD.25]
+
+joins:
+  # --- session_id: the trace-root joins (telemetry_sessions 1:N children) ---
+  session_id_join_telemetry_sessions_to_observations:
+    key: session_id
+    from: telemetry_sessions.session_id
+    to: telemetry_observations.session_id
+    cardinality: one_to_many
+    description: >-
+      Every observation roots to its session (Decision 95 root-unification). The primary trace join:
+      reconstruct a session's trace tree by joining observations on session_id.
+  session_id_join_telemetry_sessions_to_transcripts:
+    key: session_id
+    from: telemetry_sessions.session_id
+    to: telemetry_transcripts.session_id
+    cardinality: one_to_many
+    description: All transcript blobs emitted within a session, joined on session_id.
+  session_id_join_telemetry_sessions_to_agents:
+    key: session_id
+    from: telemetry_sessions.session_id
+    to: telemetry_agents.session_id
+    cardinality: one_to_many
+    description: >-
+      The agent dimension rows belonging to a session, joined on session_id -- the fix for the
+      rootless telemetry_agent_invocations (Decision 95 cl.4).
+  parent_session_id_join_sessions_self_spawn:
+    key: parent_session_id
+    from: telemetry_sessions.parent_session_id
+    to: telemetry_sessions.session_id
+    cardinality: many_to_one
+    description: >-
+      Cross-agent linkage: a sub-agent session points to its spawning session via parent_session_id
+      (NULL for top-level runs). Self-join building the cross-session half of the trace tree.
+
+  # --- observation_id: the node joins ---
+  observation_id_join_observations_to_transcripts:
+    key: observation_id
+    from: telemetry_observations.observation_id
+    to: telemetry_transcripts.observation_id
+    cardinality: one_to_many
+    description: A node's large-payload blobs (prompt/response/transcript), joined on observation_id.
+  observation_id_join_observations_to_agents:
+    key: observation_id
+    from: telemetry_observations.observation_id
+    to: telemetry_agents.observation_id
+    cardinality: one_to_many
+    description: >-
+      Node-scoped agent rows (e.g. a sub-agent spawned by a specific observation), joined on
+      observation_id. Optional FK -- session-scoped agent rows carry no observation_id.
+  parent_observation_id_join_observations_self_tree:
+    key: parent_observation_id
+    from: telemetry_observations.parent_observation_id
+    to: telemetry_observations.observation_id
+    cardinality: many_to_one
+    description: >-
+      In-session structure: a node points to its enclosing node via parent_observation_id (NULL for a
+      root observation). Self-join building the in-session half of the trace tree.
+
+  # --- registry_key: cross-system lineage (source-lineage.yaml) ---
+  lineage_join_source_to_agent_type:
+    key: registry_key
+    from: ops_recommendations.source
+    to: telemetry_agents.agent_type
+    cardinality: many_to_many
+    description: >-
+      Both ops_recommendations.source and telemetry_agents.agent_type draw from the single canonical
+      source_registry (Decision 66). The lineage join correlating which agent type filed which
+      recommendation with that agent's telemetry. Forward-declared by source-lineage.yaml (T0.12.7);
+      now resolvable since both endpoints exist (ops_recommendations T0.12.5; telemetry_agents T0.12.6).

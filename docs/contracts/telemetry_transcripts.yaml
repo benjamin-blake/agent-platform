@@ -1,0 +1,196 @@
+---
+# Class A data contract for telemetry_transcripts -- the large-payload SIDECAR of the canonical
+# session-rooted trace/observation model (Decision 95 clause 3).
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.6).
+#
+# Prompt / response / transcript blobs live HERE, linked by FK to their owning observation (and
+# session), kept OUT of telemetry_observations so the node table stays small and hot. One row per blob.
+# GREENFIELD TARGET-STATE grounded in the draft TelemetryTranscripts dataclass; dead path pending
+# Phase 4 (Decision 84). Live-vs-target skew: draft `timestamp` -> canonical created_at (Decision 96
+# partition basis); draft phase_id/step_id/invocation_id FKs -> the single observation_id (Decision 95);
+# draft transcript_id UUID4 -> ULID target (Decision 97); trade_date DROPPED.
+contract:
+  id: telemetry_transcripts
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-24"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-ratify-class-a-telemetry-contracts merge to main (T0.12.6)"
+  description: >-
+    Class A schema contract for telemetry_transcripts: one row per large text payload (prompt, response,
+    or full transcript) produced by an observation. PK transcript_id (ULID); FK observation_id (the
+    owning node) + session_id (the trace root). A metadata-and-pointer row -- the blob bytes live at
+    local_path / s3_key, not inline -- so telemetry_observations stays hot (Decision 95 cl.3). Insert-once
+    event data: partition day(created_at) UTC, no trade_date, no SCD2 envelope (Decision 96).
+  projects_to:
+    note: >-
+      No generated artifact yet (telemetry not on DuckLake; no telemetry field_semantics.yaml). Draft
+      source: scripts/telemetry_schemas.py::TelemetryTranscripts.
+fields:
+  transcript_id:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: ULID string identifying one transcript blob row. Primary key of telemetry_transcripts.
+    semantics: >-
+      Format: Crockford-base32 ULID (Decision 97), minted once at the emit_transcript boundary, never
+      re-derived. Table-local PK (not a cross-system key, so defined inline -- no Class C contract). Live
+      format is UUID4 (str(uuid.uuid4())), grandfathered until the Phase 4 rebuild mints ULIDs.
+    populated_by: telemetry.py::emit_transcript -- minted once at blob registration.
+    write_time_validation: PK-required; ULID format generator-guaranteed at the boundary.
+    dq_intent:
+      not_null:
+        enforced: true
+  observation_id:
+    $ref: observation-id.yaml#/contract/fields/observation_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      FOREIGN KEY to telemetry_observations.observation_id (the node that produced this blob). Tightened
+      to not_null enforced:true (Invariant 5): every transcript owns a node (Decision 95 cl.3). Replaces
+      the draft's phase_id/step_id/invocation_id -- the canonical model roots a transcript at one
+      observation, not at an ad-hoc mix of phase/step/invocation FKs.
+    joins:
+      - observation_id_join_observations_to_transcripts
+  session_id:
+    $ref: session-id.yaml#/contract/fields/session_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      FOREIGN KEY to telemetry_sessions.session_id (the trace root). Tightened to not_null enforced:true
+      (Invariant 5): a transcript is rooted (root-unification, Decision 95). Propagated from the owning
+      observation, never re-derived (Decision 97 cl.3).
+    joins:
+      - session_id_join_telemetry_sessions_to_transcripts
+  created_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC tz-aware ISO-8601 timestamp the transcript was created. The event-time column and PARTITION
+      BASIS for telemetry_transcripts: day(created_at) (Decision 96 cl.1 -- the one telemetry table that
+      partitions on created_at, not started_at, because a blob is created at a point in time).
+    semantics: >-
+      Collapse mapping: draft TelemetryTranscripts.timestamp -> created_at (renamed to the canonical
+      event-time term). Minted once at emit_transcript (Decision 97 cl.2); tz-aware UTC, naive/local
+      rejected (Decision 96 cl.4). NOT last_updated_timestamp (insert-once).
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: tz-aware UTC now() minted ONCE at the emit_transcript boundary; never re-derived (Decision 97)
+      inputs: []
+      realized: false
+  purpose:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: "What the blob is: prompt | response | transcript (the full session/agent transcript)."
+    semantics: >-
+      Required kind discriminator for the blob. Draft REQUIRED_FIELD. Open set; closed accepted_values
+      ratified into telemetry.yaml at Phase 4.
+    populated_by: telemetry.py::emit_transcript(purpose=...).
+    dq_intent:
+      not_null:
+        enforced: false
+  local_path:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Filesystem path to the blob on the writing host. Draft REQUIRED; relaxed to nullable because the durable copy is s3_key.
+    semantics: >-
+      Where the blob was written locally (ephemeral on Claude-Code-web containers). The DURABLE pointer
+      is s3_key; local_path is best-effort provenance. Draft marks it REQUIRED, but in the canonical model
+      at least one of {local_path, s3_key} must be present -- a write-time validator (Phase 4), not a
+      column not-null, since either pointer satisfies it.
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+  s3_key:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: S3 key of the durable blob copy (agent-platform-data-lake). NULL until/if uploaded.
+    semantics: >-
+      The durable blob location. Pairs with local_path (at least one required, enforced at write time
+      post-Phase-4). Null when the blob was not uploaded (local-only run).
+    populated_by: telemetry.py::emit_transcript / the S3 log store.
+    dq_intent:
+      not_null:
+        enforced: false
+  size_bytes:
+    type: int
+    iceberg_type: bigint
+    nullable: false
+    description: Size of the blob in bytes. Draft REQUIRED_FIELD.
+    semantics: >-
+      Required payload size; used to budget transcript storage and to spot anomalous (empty / huge)
+      blobs. bigint (integer-promotion safety; matches TELEMETRY_TABLE_DTYPES).
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+  token_count:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Token count of the blob, when computed. NULL if not tokenised.
+    semantics: Optional; the blob's token size (distinct from a model call's usage). bigint.
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+  model:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The model associated with the blob (e.g. the model that produced the response).
+    semantics: "Collapse mapping: draft TelemetryTranscripts.model_used -> model (canonical column name)."
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+  rec_id:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Recommendation id the blob relates to (e.g. rec-2335). NULL when not applicable.
+    semantics: Optional cross-reference to ops_recommendations.id.
+    populated_by: telemetry.py::emit_transcript.
+    dq_intent:
+      not_null:
+        enforced: false
+  ingested_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: UTC tz-aware warehouse-ingestion (append) timestamp; distinct from event-time created_at.
+    semantics: Operational append marker (writer-injected). NOT the partition basis (created_at is); NOT SCD2.
+    populated_by: the telemetry write path (OpsWriter today; the Phase 4 DuckLake writer tomorrow).
+    dq_intent:
+      not_null:
+        enforced: false
+governance:
+  table_class: event
+  partition_by: "day(created_at)"
+  write_path: >-
+    LIVE (draft, dead): telemetry.py::emit_transcript -> OpsWriter.emit('telemetry_transcripts') -> S3
+    staging -> Iceberg (unmigrated). TARGET (Phase 4): the DuckLake telemetry writer boundary (T2.33).
+    Insert-once; no SCD2 merge.
+governance_notes: >-
+  COLLAPSE / RE-ROOTING (Decision 95 cl.3): the draft links blobs by phase_id / step_id /
+  invocation_id; the canonical model re-roots them onto a single observation_id (+ session_id), so a
+  transcript always hangs off exactly one node. Column renames to canonical terms: timestamp ->
+  created_at; model_used -> model. DROPPED: trade_date (Decision 96 cl.2). local_path relaxed from draft
+  REQUIRED to nullable because s3_key is the durable pointer; the canonical invariant is "at least one of
+  local_path / s3_key" (write-time validator at Phase 4, not a column not-null). Decision 96: insert-once
+  event data, partition day(created_at) UTC, tz-aware UTC, no last_updated_timestamp. Decision 97: ULID
+  identity minted once, FKs propagated. No merge_key (insert-once). dq_INTENT only; ENFORCEMENT lands in
+  config/agent/data_quality/telemetry.yaml at the Phase 4 rebuild. REPORT-ONLY: documented, not
+  implemented.
+amendment_log: []
+previous_versions: []

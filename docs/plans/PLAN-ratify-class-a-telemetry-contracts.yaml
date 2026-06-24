@@ -1,0 +1,303 @@
+schema_version: 1
+slug: "ratify-class-a-telemetry-contracts"
+intent: >-
+  Author the Class A "data schema" contracts for the four canonical telemetry tables of the
+  session-rooted trace/observation model (telemetry_sessions, telemetry_observations,
+  telemetry_transcripts, telemetry_agents), plus the two new Class C ULID identity keys and an
+  additive amendment to session-id, so future telemetry codegen (the Phase 4 DuckLake rebuild) and
+  the T3 verifier work consume a ratified-shape contract instead of re-deriving telemetry semantics
+  from draft handler code -- the observability keystone of the CD.25 pre-codegen contract ritual that
+  keeps the agent platform's self-improvement loop measurable and drift-checked.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-ratify-class-a-telemetry-contracts.yaml
+phase: >-
+  Platform tier T0 (tier_item T0.12.6; depends_on T-1.12 / T0.12 / T0.12.7 all complete); product
+  Phase 1 Core Infrastructure. CD.25 ritual; completion permitted via bootstrap_completion_exempt: true
+  (CD.25 still pending), exactly as T0.12.5 and T0.12.7 closed.
+scope:
+  - file: docs/contracts/telemetry_sessions.yaml
+    action: Create
+    purpose: >-
+      Class A contract for the trace ROOT table (Decision 95 cl.1): PK session_id ($ref session-id,
+      tightened not-null); parent_session_id ($ref session-id, nullable sub-agent linkage); project_id
+      ($ref project-id, forward-declared per T2.17); event-time started_at partition basis (Decision 96);
+      ULID target identity (Decision 97). Grounded in TelemetrySessions (scripts/telemetry_schemas.py),
+      trade_date dropped.
+  - file: docs/contracts/telemetry_observations.yaml
+    action: Create
+    purpose: >-
+      Class A contract for the unified node table (Decision 95 cl.2): PK observation_id ($ref
+      observation-id); FK session_id ($ref session-id, tightened not-null) + parent_observation_id
+      ($ref parent-observation-id); observation_type discriminator with accepted_values
+      {phase, step, process_event, model_call} (Decision 95 collapse rule). Absorbs the four draft
+      sibling tables; collapse mapping recorded so no draft column is silently dropped.
+  - file: docs/contracts/telemetry_transcripts.yaml
+    action: Create
+    purpose: >-
+      Class A contract for the large-payload sidecar (Decision 95 cl.3): PK transcript_id (ULID); FK
+      observation_id ($ref observation-id) + session_id ($ref session-id); partition day(created_at)
+      (Decision 96). Grounded in TelemetryTranscripts.
+  - file: docs/contracts/telemetry_agents.yaml
+    action: Create
+    purpose: >-
+      Class A contract for the agent dimension (Decision 95 cl.4): agent_type ($ref source-lineage
+      registry_key); rooted by session_id ($ref session-id) / observation_id ($ref observation-id).
+      Replaces the rootless telemetry_agent_invocations; grounded in TelemetryAgentInvocations.
+  - file: docs/contracts/observation-id.yaml
+    action: Create
+    purpose: >-
+      Class C ULID identity key for telemetry_observations.observation_id (Decision 97). contract_version
+      1, status ratified, ULID format_target (no live format -- the column does not exist in the draft).
+  - file: docs/contracts/parent-observation-id.yaml
+    action: Create
+    purpose: >-
+      Class C ULID self-reference key for telemetry_observations.parent_observation_id (Decision 97),
+      references observation_id. contract_version 1, status ratified, ULID format_target, nullable
+      (null = root observation).
+  - file: docs/contracts/session-id.yaml
+    action: Modify
+    purpose: >-
+      Additive amendment (Decision 95 / Decision 97 cl.4): prose_improvement re-grounds the stale
+      six-table star-schema description to the four-table model; governance_note_add records ULID as the
+      canonical target for session_id (UUID4 grandfathered until open_session migrates). semantic_break
+      false; no contract_version bump; no field change; no format flip.
+  - file: docs/contracts/_joins.yaml
+    action: Create
+    purpose: >-
+      Net-new free-form cross-contract join registry (non-ritual; no contract: block, so the CD.25 drift
+      gate skips it, per the telemetry-lexicon / read-engine precedent). Records the telemetry FK joins
+      (session_id root joins; observation_id node joins; lineage_join_source_to_agent_type) the Class C
+      contracts forward-declared.
+  - file: docs/contracts/storage-substrate.yaml
+    action: Modify
+    purpose: >-
+      Re-ground the stale telemetry_tables index (it lists 7 wrong names -- telemetry_trades /
+      feature_vectors / etc. -- matching neither the DDL nor the dataclasses) to the canonical 4-table
+      model, point the contract_plan at the now-authored Class A contracts, and record the draft
+      7-table substrate as superseded-by-the-canonical-model (Tier Item Freshness stale-reference).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground tier_item T0.12.6 (files_in_scope [] -> the authored files; decomposition coherence) and
+      flip status not_started -> complete with a progress_note AFTER Step 10 convergence + merge
+      (bootstrap_completion_exempt: true; CD.25 pending but completion permitted via the exemption).
+  - file: docs/plans/PLAN-ratify-class-a-telemetry-contracts.yaml
+    action: Create
+    purpose: This planning artefact.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The four telemetry_*.yaml Class A contracts exist at contract_version 1, status ratified, each with a non-empty fields mapping and NO verbs key (Class A shape per scripts/contracts_schema.py), loading cleanly via scripts.contracts.load_contract.
+  - observation-id.yaml + parent-observation-id.yaml Class C contracts exist at contract_version 1, status ratified, declaring ULID as the identity format_target (Decision 97); parent-observation-id references observation_id and is nullable.
+  - "Every cross-system field in the Class A contracts is a $ref into a Class C contract (session-id, observation-id, parent-observation-id, project-id, source-lineage) and resolve_refs is a clean single-hop resolution with no dangling ref and no loosening override (Invariant 5)."
+  - session-id.yaml is amended additively (semantic_break false, contract_version unchanged at 1) with exactly one prose_improvement and one governance_note_add amendment_log entry; its description references the four-table model (telemetry_observations) and no longer the collapsed draft tables (telemetry_phases/_steps/_process_events/_model_calls).
+  - "observation_type accepted_values are exactly {phase, step, process_event, model_call} (Decision 95 collapse rule); no telemetry contract carries a trade_date field; partition basis is day(started_at) for sessions/observations/agents and day(created_at) for transcripts (Decision 96)."
+  - docs/contracts/_joins.yaml exists, is valid YAML, records the telemetry cross-contract joins, and is SKIPPED by the ritual loader (scripts.contracts.load_all_contracts does not include it) so it does not perturb the CD.25 drift gate.
+  - storage-substrate.yaml telemetry index is re-grounded from the 7 stale table names to the canonical 4-table model and still parses as valid YAML.
+  - "The validate.py CD.25 contract-drift gate passes with 15 ritual contracts (9 prior + 4 Class A + 2 Class C) and no drift; the Decision 86 intent-doc-freeze gate passes (machine-parseable YAML, no new prose doc)."
+  - "compute_affected_artifacts over the CONTRACT scope files returns {} (no Lambda artifact); the only flagged artifact is the active data-pipeline via docs/ROADMAP-PLATFORM.yaml, bundled as an INERT asset (embedded documentation, no handler logic) -- no build/deploy/smoke-test warranted (V1), mirroring the Class B precedent and the Decision 79 spirit."
+  - T0.12.6 is re-grounded coherently in docs/ROADMAP-PLATFORM.yaml (files_in_scope populated; status complete with progress_note) and the roadmap still loads (scripts.platform_roadmap.load).
+  - The Step 10 multi-perspective critique converges on the six contract deliverables + the _joins registry.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Load each new contract through the real loader; assert Class A shape (fields, no verbs) for the four telemetry tables and Class C shape for the two new keys, all at contract_version 1 / status ratified.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      class_a = ["telemetry_sessions", "telemetry_observations", "telemetry_transcripts", "telemetry_agents"]
+      class_c = ["observation-id", "parent-observation-id"]
+      for name in class_a:
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "A" and d.contract.contract_version == 1, name
+          assert d.contract.status.value == "ratified", name
+          assert d.fields and d.verbs is None, name
+          print("OK A", name, len(d.fields), "fields")
+      for name in class_c:
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "C" and d.contract.contract_version == 1, name
+          assert d.contract.status.value == "ratified" and d.verbs is None, name
+          assert d.fields, name
+          print("OK C", name)
+      PY
+    expected: Four "OK A <name> <n> fields" lines and two "OK C <name>" lines; exit 0.
+    fix_if: An AssertionError or ContractValidationError -- a contract violates its class shape (verbs present, wrong status/version/class, empty fields) or is not schema-valid against contracts_schema.py.
+  - step: 2
+    phase: pre-deploy
+    action: Resolve every $ref in the four Class A contracts against the on-disk Class C targets; assert single-hop clean resolution (no dangling ref, no loosening override) and that the declared cross-system fields actually resolve.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract, resolve_refs
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      expect = {
+          "telemetry_sessions": {"session_id", "parent_session_id", "project_id"},
+          "telemetry_observations": {"observation_id", "session_id", "parent_observation_id"},
+          "telemetry_transcripts": {"transcript_id", "observation_id", "session_id"} - {"transcript_id"},
+          "telemetry_agents": {"agent_type", "session_id"},
+      }
+      for name, refs in expect.items():
+          d = load_contract(src / f"{name}.yaml")
+          resolved = resolve_refs(d, src)
+          assert refs <= set(resolved), (name, refs - set(resolved))
+          print("OK resolve", name, "->", sorted(refs))
+      PY
+    expected: Four "OK resolve <name> -> [...]" lines; exit 0 -- every declared $ref field resolves single-hop.
+    fix_if: A ContractValidationError (dangling $ref target file/field, chained ref, or a *_local override that loosens) or a KeyError -- correct the $ref pointer or the local override so it tightens-or-matches the Class C baseline.
+  - step: 3
+    phase: pre-deploy
+    action: Assert the session-id.yaml amendment is additive and correct -- contract_version unchanged at 1, exactly one prose_improvement + one governance_note_add entry, semantic_break false, and the description re-grounded to the four-table model.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      import pathlib
+      d = load_contract(pathlib.Path("docs/contracts/session-id.yaml"))
+      assert d.contract.contract_version == 1, d.contract.contract_version
+      log = d.fields["session_id"].amendment_log
+      classes = sorted(e.change_class.value for e in log)
+      assert classes == ["governance_note_add", "prose_improvement"], classes
+      assert all(e.semantic_break is False for e in log), "semantic_break must be False"
+      blob = (d.fields["session_id"].description or "") + (d.fields["session_id"].semantics or "")
+      assert "telemetry_observations" in blob, "description not re-grounded to four-table model"
+      assert "telemetry_phases" not in blob and "telemetry_steps" not in blob, "stale collapsed-table names remain"
+      print("OK session-id additive amendment:", classes)
+      PY
+    expected: >-
+      Prints "OK session-id additive amendment: ['governance_note_add', 'prose_improvement']"; exit 0.
+    fix_if: An AssertionError -- the amendment bumped the version, used the wrong change_class, set semantic_break true, or left stale collapsed-table names; correct the amendment_log / description.
+  - step: 4
+    phase: pre-deploy
+    action: Assert the Decision 95 collapse + Decision 96 temporal invariants are encoded -- observation_type accepted_values are exactly the four collapsed kinds, and no telemetry contract carries a trade_date field.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      import pathlib
+      src = pathlib.Path("docs/contracts")
+      obs = load_contract(src / "telemetry_observations.yaml")
+      av = obs.fields["observation_type"].dq_intent["accepted_values"]["values"]
+      assert sorted(av) == ["model_call", "phase", "process_event", "step"], av
+      for name in ("telemetry_sessions", "telemetry_observations", "telemetry_transcripts", "telemetry_agents"):
+          d = load_contract(src / f"{name}.yaml")
+          assert "trade_date" not in (d.fields or {}), (name, "trade_date must be absent (Decision 96)")
+      print("OK collapse+temporal invariants:", sorted(av))
+      PY
+    expected: >-
+      Prints "OK collapse+temporal invariants: ['model_call', 'phase', 'process_event', 'step']"; exit 0.
+    fix_if: An AssertionError -- the observation_type accepted_values drifted from the Decision 95 collapse set, or a contract still carries trade_date; correct the field.
+  - step: 5
+    phase: pre-deploy
+    action: Assert _joins.yaml exists and is valid YAML, and that the ritual loader correctly SKIPS it (non-ritual free-form registry) so it does not enter the CD.25 drift surface; assert the 6 new ritual contracts ARE loaded (total 15).
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_all_contracts
+      import pathlib, yaml
+      src = pathlib.Path("docs/contracts")
+      joins = yaml.safe_load((src / "_joins.yaml").read_text())
+      assert isinstance(joins, dict) and "contract" not in joins, "_joins.yaml must be non-ritual (no contract: block)"
+      all_c = load_all_contracts(src)
+      assert "_joins" not in all_c, "_joins.yaml must be skipped by the ritual loader"
+      new = {"telemetry_sessions", "telemetry_observations", "telemetry_transcripts", "telemetry_agents", "observation-id", "parent-observation-id"}
+      assert new <= set(all_c), new - set(all_c)
+      assert len(all_c) == 15, len(all_c)
+      print("OK _joins skipped; ritual contracts:", len(all_c))
+      PY
+    expected: >-
+      Prints "OK _joins skipped; ritual contracts: 15"; exit 0.
+    fix_if: An AssertionError -- _joins.yaml accidentally carries a top-level contract mapping (would be parsed as ritual), or the count is not 15 (a new contract failed to load, or main added/removed a ritual contract -- rebase and re-run).
+  - step: 6
+    phase: pre-deploy
+    action: Run the CD.25 contract-drift gate + the Decision 86 intent-doc-freeze gate (and the rest of the fast tier) over the working tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; the Contract drift gate (CD.25) section prints PASS with 15 ritual contracts and no drift, and the Intent doc freeze gate passes (no new prose doc).
+    fix_if: Any "Contract drift" failure (structural / cat-1..8) or an intent-doc-freeze violation -- fix the offending contract and re-run.
+  - step: 7
+    phase: pre-deploy
+    action: Honour the Decision 79 gate -- prove the CONTRACT files affect NO Lambda artifact, and that the only flagged artifact is the active data-pipeline via the inert ROADMAP-PLATFORM.yaml asset (no handler logic), justifying the V1 / no-deploy tier.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.lambda_manifest import compute_affected_artifacts
+      contract_files = [
+          "docs/contracts/telemetry_sessions.yaml", "docs/contracts/telemetry_observations.yaml",
+          "docs/contracts/telemetry_transcripts.yaml", "docs/contracts/telemetry_agents.yaml",
+          "docs/contracts/observation-id.yaml", "docs/contracts/parent-observation-id.yaml",
+          "docs/contracts/session-id.yaml", "docs/contracts/_joins.yaml",
+          "docs/contracts/storage-substrate.yaml",
+      ]
+      assert compute_affected_artifacts(contract_files) == {}, "contract files must affect no Lambda artifact"
+      roadmap = compute_affected_artifacts(["docs/ROADMAP-PLATFORM.yaml"])
+      assert set(roadmap) <= {"data-pipeline"}, roadmap
+      print("OK contracts affect no artifact; roadmap flags only data-pipeline (inert asset):", roadmap)
+      PY
+    expected: >-
+      Prints "OK contracts affect no artifact; roadmap flags only data-pipeline (inert asset): {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}"; exit 0.
+    fix_if: A non-empty contract-files result -- a contract path entered a Lambda manifest (would force V3). A roadmap result naming an artifact other than data-pipeline -- re-examine the no-deploy exemption.
+  - step: 8
+    phase: pre-deploy
+    action: Confirm the roadmap still loads after the T0.12.6 re-grounding and that T0.12.6 is status complete with files_in_scope populated.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      d = load("docs/ROADMAP-PLATFORM.yaml")
+      it = next(i for i in d.tier_items if i.id == "T0.12.6")
+      assert it.status == "complete", it.status
+      assert "docs/contracts/telemetry_observations.yaml" in it.files_in_scope, it.files_in_scope
+      print("ROADMAP_LOADS", len(d.tier_items), "items; T0.12.6 complete;", len(it.files_in_scope), "files_in_scope")
+      PY
+    expected: A ROADMAP_LOADS line; exit 0 (no Pydantic ValidationError; T0.12.6 complete; files_in_scope populated).
+    fix_if: A Pydantic ValidationError (unknown TierItem key / bad status enum) -- correct the field. A status other than complete -- set complete only AFTER Step 10 convergence.
+  - step: 9
+    phase: pre-deploy
+    action: Validate this plan artefact against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ratify-class-a-telemetry-contracts.yaml
+    expected: "PASS: docs/plans/PLAN-ratify-class-a-telemetry-contracts.yaml validates against PlanDocument schema."
+    fix_if: A "FAIL:" line naming the schema violation -- correct the plan field and re-run.
+constraints:
+  - "REPORT-ONLY: deliverables are contract YAMLs only. NO code, Pydantic, scripts/executor/telemetry.py, terraform DDL, or config/agent/data_quality/telemetry.yaml changes. The contracts DESCRIBE the canonical target model; they do NOT implement the UUID4->ULID flip (Decision 97 cl.4) nor the trade_date->day(started_at) repartition (Decision 96) -- both are downstream Phase 4 / T2.33 / open_session code-migration concerns."
+  - "Author strictly against the shipped scripts/contracts_schema.py + scripts/contracts.py loader, NOT the superseded INTENT-pre-codegen-contract-ratification.md worked examples (their amendment_log `change:` key + shapes fail extra=forbid)."
+  - "Class A contracts carry a non-empty fields mapping and MUST NOT carry verbs; Class C carry fields and MUST NOT carry verbs (ContractDocument model_validator)."
+  - "Cross-system fields use $ref into Class C contracts (session-id, observation-id, parent-observation-id, project-id, source-lineage); a $ref field carries only additive *_local overrides and they must TIGHTEN, never loosen (Invariant 5)."
+  - "session-id.yaml amendment is additive ONLY: semantic_break false, no contract_version bump, no field/format change; exactly one prose_improvement + one governance_note_add entry (Decision 95 / Decision 97 cl.4)."
+  - "observation_type accepted-value set ratified here is exactly {phase, step, process_event, model_call} (Decision 95 collapse rule); the discriminator absorbs the four draft sibling tables."
+  - "No trade_date in any telemetry contract (Decision 96 cl.2); partition basis day(started_at) for sessions/observations/agents, day(created_at) for transcripts; timestamps tz-aware UTC ISO-8601; no last_updated_timestamp (telemetry is insert-once, not SCD2)."
+  - "Greenfield grounding: telemetry_observations records the collapse mapping (which TelemetryPhases/Steps/ProcessEvents/ModelCalls column maps to which canonical field or into the metadata bag) so no draft column is silently dropped; live-vs-target skew (UUID4/trade_date/7-table) documented in-contract, mirroring the T0.12.5 contract-vs-live skew pattern."
+  - "No Lambda build/deploy/smoke-test (V1): the contract files affect NO artifact (compute_affected_artifacts == {}); the active data-pipeline artifact is flagged ONLY because docs/ROADMAP-PLATFORM.yaml is bundled into its zip as an INERT asset (embedded documentation, no handler logic changed), so per the CD.16 / Decision 79 spirit the deploy exemption holds -- identical to the Class B precedent. (Bundling a roadmap YAML into a Lambda zip is itself questionable; candidate rec, out of scope.) Telemetry tables are Iceberg not DuckLake; config/agent is not Lambda-packaged."
+  - "ci-rca HARD BLOCK deferral: rec-2335 (apply-sandbox subagent plan review has no retry on transient Claude API 5xx, .github/workflows/terraform-apply-sandbox.yml) is UNRELATED to this work (different file, decision, and failure category) and is being addressed in parallel by a separate agent (bounded retry on `claude -p` invocations). Deferred per this logged rationale; bundled_recommendations empty."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Flip T0.12.6 to complete ONLY after Step 10 convergence + merge (bootstrap_completion_exempt: true; CD.25 pending, completion permitted via the exemption, per the T0.12.5 / T0.12.7 precedent)."
+context:
+  - "Decision scout verdict FLAGS_FOUND (one NOTE). CITE: Decision 95 (canonical 4-table model + session-id amendment authority), Decision 96 (temporal/partition: day(started_at), no trade_date), Decision 97 (ULID identity, boundary-minting, no re-derivation), Decision 86 (contracts are the machine-parseable home; intent-doc-freeze; the lexicon/registry are not prose), Decision 84 (DuckLake sole ops backend; telemetry is the dead/not-yet-migrated path -> V1 no-deploy), Decision 67 (STRATEGIC-clause RETAINED -> author REPORT-ONLY, not STRATEGIC; reversal predicate restated to the canonical tables by Decision 95). Lineage mentions: Decision 81 / Decision 82 / CD.33 (mint-once-outside-retry precedent), CD.9 (partition-everything). NOTE honoured: VP step 7 adds the compute_affected_artifacts evidence for the V1 tier."
+  - "Greenfield treatment (Decision 95): the canonical 4-table model exists ONLY as spec (docs/contracts/telemetry-lexicon.yaml). The LIVE implementation is the 7-table draft -- DDL in terraform/iceberg_tables.tf (local.create_telemetry_table_queries) + dataclasses in scripts/telemetry_schemas.py (UUID4 ids via str(uuid.uuid4()), trade_date partition, REQUIRED_FIELDS = the de-facto not_null intent). Contracts are TARGET-STATE grounded in the draft."
+  - "Collapse mapping (Decision 95 cl.2): telemetry_phases + telemetry_steps + telemetry_process_events + telemetry_model_calls -> telemetry_observations rows discriminated by observation_type; telemetry_agent_invocations -> telemetry_agents (rooted dimension). telemetry_sessions and telemetry_transcripts carry over (re-rooted onto observation_id). The four draft sibling tables are NOT preserved as tables."
+  - "Telemetry is a DEAD path pending DuckLake consolidation Phase 4 (Decision 84; docs/INTENT-ducklake-consolidation.md): the Athena tables were never migrated to the personal account (2026-05-28); config/agent/data_quality/telemetry.yaml is empty (tables: {}); there is NO telemetry field_semantics.yaml -- so these Class A contracts BECOME the authoritative telemetry field-semantic source. Realization of the standards is T2.33 (partition-as-code) + the open_session ULID migration; per-field DQ checks land in telemetry.yaml when telemetry re-provisions (NOT this plan)."
+  - "Precedent / template: PLAN-ratify-class-b-lambda-verb-contracts (#238, T1.12) and PLAN-class-c-cross-system-invariants (T0.12.7) -- both REPORT-ONLY, V1, loader-based VP, ONE Step 10 multi-perspective critique over the whole class wave, roadmap status flip after convergence. Single-wave scope confirmed by the human (the roadmap decomposition_hints suggested per-table atomic plans, but the four tables are one coupled model -- shared ULID keys, FK tree, a shared _joins.yaml that needs all tables present -- and the established pattern is one critique over the wave)."
+  - "_joins.yaml is NET-NEW. The loader (scripts/contracts.py) models joins only as field-level `joins:` lists; load_all_contracts/the CD.25 drift gate skip files without a top-level contract: + class: (read-engine.yaml / storage-substrate.yaml / telemetry-lexicon.yaml precedent). _joins.yaml is therefore a free-form registry. It lands the join entries that session-id.yaml (session_id_join_telemetry_sessions_to_phases -> ..._to_observations) and source-lineage.yaml (lineage_join_source_to_agent_type) forward-declared, now that the telemetry contracts ratify."
+  - "storage-substrate.yaml telemetry_tables index lists 7 STALE names (telemetry_trades / telemetry_feature_vectors / telemetry_formula_discoveries / telemetry_performance_metrics / telemetry_data_quality / telemetry_agent_runs / telemetry_model_updates) that match NEITHER the DDL nor the dataclasses -- the file itself admits it is a placeholder until T0.12.6. Re-grounded here to the canonical 4-table model (Tier Item Freshness stale-reference check)."
+  - "Branch was 0 commits behind origin/main at preflight. Rebase onto origin/main before merge (Step 11) and re-run the VP so the ritual-contract count (15) and drift gate are evaluated against current main; if main has added/removed a ritual contract since, adjust VP step 5's expected count accordingly."
+  - "Closure obligation: this plan is ADDITIVE (6 new contracts + _joins.yaml) plus two re-groundings (session-id additive amendment, storage-substrate index) and a roadmap closeout. It neither resolves a recommendation nor Deletes/cuts-over a live surface (no telemetry contracts existed previously; the 7 draft TABLES are not deleted by this plan -- they retire when telemetry rebuilds on DuckLake at Phase 4). VP step 6's drift gate is the stale-reference sweep confirming only the 15 ritual contracts exist and _joins.yaml is correctly skipped."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/focused-bell-5onhvu).
+  - docs/PROJECT_CONTEXT.md, docs/contracts/telemetry-lexicon.yaml, and Decisions 95/96/97 read.
+  - scripts/contracts_schema.py + scripts/contracts.py loader read; deliverables authored against them (not the INTENT worked examples).
+  - The live draft schema read (terraform/iceberg_tables.tf telemetry DDL + scripts/telemetry_schemas.py dataclasses + REQUIRED_FIELDS); canonical field semantics grounded in it.
+  - The Class C precedents read (session-id.yaml, project-id.yaml, source-lineage.yaml) and the Class A precedent (ops_decisions.yaml).
+  - All scope files located and readable; the six new contracts already load + validate + drift-gate-pass in-session; _joins.yaml correctly skipped.
+  - Acceptance criteria understood and verifiable via the real loader + resolve_refs + the CD.25 drift gate + compute_affected_artifacts.
+execution_steps:
+  - "Author the four Class A telemetry contracts (done in this REPORT-ONLY session): docs/contracts/telemetry_sessions.yaml, telemetry_observations.yaml, telemetry_transcripts.yaml, telemetry_agents.yaml -- grounded in the 7-table draft, describing the canonical 4-table model, $ref into the Class C keys, trade_date dropped, ULID target documented."
+  - "Author observation-id.yaml + parent-observation-id.yaml (Class C ULID keys, contract_version 1, status ratified); additively amend session-id.yaml (one prose_improvement + one governance_note_add, semantic_break false, no version bump)."
+  - "Create docs/contracts/_joins.yaml (free-form telemetry cross-contract join registry); re-ground docs/contracts/storage-substrate.yaml telemetry index to the 4-table model."
+  - "Re-ground T0.12.6 in docs/ROADMAP-PLATFORM.yaml (files_in_scope + decomposition coherence); flip status not_started -> complete with a progress_note (done only after Step 10 convergence)."
+  - "Execute the Verification Plan -- run each step; loop until all pass."
+  - "Run the Step 9 plan-critique gate (fresh-context subagent) and the Step 10 multi-perspective report critique (>=2 parallel subagents) over the six contract deliverables + the _joins registry; iterate to convergence."
+  - "After Step 10 converges: rebase onto origin/main, re-run the VP, merge to main, and flip T0.12.6 to complete."
+  - "Report: contracts authored, verification results, critique convergence, roadmap closeout, and the CD.25 completion-gate follow-on."
+work_areas: []
+rollback: >-
+  The deliverables are six additive new contract files + a net-new _joins.yaml, plus two re-grounding
+  edits (session-id.yaml additive amendment, storage-substrate.yaml telemetry index) and a roadmap
+  closeout. Rollback = delete the six new contracts + _joins.yaml and revert the session-id /
+  storage-substrate / ROADMAP-PLATFORM edits. No runtime consumer reads these contracts yet (telemetry
+  codegen is future-state Phase 4), so removal is side-effect-free.
