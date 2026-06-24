@@ -66,10 +66,11 @@ acceptance_criteria:
     state == "pending"; the live roadmap surfaces T-1.20 with blocking_cds containing CD.13.
   - >-
     gate_evaluations[] is present with {id, name, verdict, reason} for every cross_tier_gate;
-    static-helper gates G.1/G.9/G.10 evaluate to pass or fail via Kleene tri-state, and G.8
-    (T3.2.latest_run.verdict) plus any item_field_eq usage evaluate to "deferred" with a
-    reason naming the unresolved runtime path -- never a fabricated pass. No eval()/exec() is
-    used anywhere in the evaluator.
+    G.1/G.9/G.10 carry no runtime-aggregate operand and resolve to pass or fail (never
+    deferred) via Kleene short-circuit; G.8 (T3.2.latest_run.verdict) and any item_field_eq
+    usage resolve to "deferred" only when the unresolved operand drives the result (with T3.2
+    not_started, G.8 short-circuits to fail) and NEVER to a fabricated pass, with a reason
+    naming the unresolved runtime path. No eval()/exec() is used anywhere in the evaluator.
   - >-
     bin/venv-python -m scripts.session_preflight --roadmap-detail full writes a platform_roadmap
     projection containing in_progress, blocked, active_tier, blocked_on_cd, and gate_evaluations;
@@ -88,9 +89,10 @@ acceptance_criteria:
     promised-but-unimplemented in either direction; docs/ROADMAP-PLATFORM.yaml still validates
     against the RoadmapDocument schema.
   - >-
-    Unit tests cover each static helper (true and false), deferred propagation, all three
-    blocked_on_cd sources plus the exempt annotation, user_action_required surfacing, and the
-    slim-vs-full selection; pytest is green.
+    Unit tests cover each static helper (true and false), Kleene short-circuit (false AND
+    deferred -> false), all three blocked_on_cd sources plus the exempt annotation,
+    user_action_required surfacing, longest-prefix field resolution under a strict-prefix id
+    collision, and the slim-vs-full selection; pytest is green.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -106,10 +108,18 @@ verification_plan:
       s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); g={x['id']:x for x in s['gate_evaluations']};
       assert {'G.1','G.8','G.9','G.10'} <= set(g), sorted(g);
       assert g['G.8']['verdict'] in {'fail','deferred'} and g['G.8']['verdict'] != 'pass', g['G.8'];
+      assert g['G.9']['verdict'] in {'pass','fail'} and g['G.10']['verdict'] in {'pass','fail'}, (g['G.9'], g['G.10']);
       assert all(x['verdict'] in {'pass','fail','deferred'} for x in g.values());
       print('GATES OK', {k: v['verdict'] for k, v in g.items()})"
-    expected: Prints all four gate verdicts; G.8 is fail-or-deferred (never pass); every gate carries a valid verdict.
-    fix_if: KeyError means gate_evaluations is missing/misnamed; a G.8 == pass means the deferred path leaked a fabricated pass -- fix the Kleene/deferred handling.
+    expected: >-
+      Prints all four gate verdicts; G.8 is fail-or-deferred (never pass); G.9/G.10 resolve
+      pass-or-fail and are NEVER deferred (they carry no runtime-aggregate operand); every gate
+      carries a valid verdict.
+    fix_if: >-
+      KeyError means gate_evaluations is missing/misnamed; G.8 == pass means the deferred path
+      leaked a fabricated pass; a deferred verdict on G.9 or G.10 means the Kleene short-circuit
+      is wrong (false AND deferred must collapse to false, not poison to deferred) -- fix the
+      tri-state and/or/not handling.
   - step: 3
     phase: pre-deploy
     action: Confirm broad blocked-on-CD semantics against the live roadmap (T-1.20 -> pending CD.13 via related_candidate_decisions).
@@ -173,18 +183,38 @@ context:
     invocation's bulk payload unchanged; the one stale-slim-cache risk is closed by the
     orient Step 1 gate_evaluations marker check.
   - >-
-    Gate semantics- Kleene tri-state (true/false/deferred). status is the only statically
-    resolvable field; any other field path (latest_run.verdict, uptime_days, ...) and
-    item_field_eq resolve to "deferred". and/or/not propagate deferred per three-valued
-    logic; a gate is "pass"/"fail" only when fully resolvable, else "deferred". Field paths
-    resolve by longest-known-tier_item-id prefix (so T3.2.latest_run.verdict -> item T3.2 +
-    field latest_run.verdict). G.8 can therefore be fail or deferred but never pass.
+    Gate semantics- three-valued (Kleene) logic with PROPER SHORT-CIRCUIT, not deferred-
+    poisoning- false AND x = false and true OR x = true even when x is deferred; the verdict
+    is "deferred" only when it genuinely depends on an unresolved operand. status is the only
+    statically resolvable field; any other field path (latest_run.verdict, uptime_days, ...)
+    and item_field_eq resolve to "deferred". Consequently G.1/G.9/G.10 carry NO runtime-
+    aggregate operand and ALWAYS resolve pass or fail (never deferred); only G.8
+    (T3.2.latest_run.verdict) can be deferred, and only when T3.2 is complete -- with T3.2
+    not_started its first conjunct is false so G.8 short-circuits to fail. Field paths resolve
+    by longest-known-tier_item-id prefix (T3.2.latest_run.verdict -> item T3.2 + field
+    latest_run.verdict), matched against the LIVE id set, so strict-prefix id collisions
+    (e.g. T0.12 vs T0.12.5) must pick the longest id that actually exists.
   - >-
     Scope expanded beyond T-1.20's originally-listed 4 files to add .claude/commands/orient.md,
     .claude/skills/orient/SKILL.md, and tests/test_session_preflight_platform_roadmap.py, so
     the newly-computed state is actually consumed by /orient- shipping the computation without
     a consumer would re-create the exact F-010 computed-but-unconsumed gap. T-1.20's
     files_in_scope is updated to match the realized scope.
+  - >-
+    Lambda assessment (Decision 79 per-Lambda gating)- compute_affected_artifacts() over this
+    scope returns {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]} because the roadmap is listed
+    under the data-pipeline artifact's assets: (src/lambdas/data-pipeline/manifest.yaml:44),
+    and that artifact is status: active (line 52). Build/deploy/smoke-test is DEFERRED (no
+    deploy step) on these grounds- (1) the roadmap is a bundled DOC asset, not runtime-imported
+    code -- no handler in the artifact imports or evaluates ROADMAP-PLATFORM.yaml at runtime;
+    (2) the scheduled-agent dispatcher is disabled (SCHEDULED_AGENTS_ENABLED=false,
+    terraform/scheduled_agents.tf:220; EventBridge rule DISABLED per the AGENTS.md re-enable
+    runbook), so no live consumer reads a bundled copy; (3) the source edits in scope
+    (platform_roadmap.py, session_preflight.py) are NOT in the artifact's includes: and do not
+    repackage it. The consumers of this change (session_preflight + /orient) read the working-
+    tree roadmap directly, not the Lambda bundle. Deploying a disabled artifact for an asset-
+    only text re-grounding would be churn with no behavioral effect; re-enable follows the
+    AGENTS.md runbook if/when the dispatcher is turned back on.
   - >-
     rec-2335 (ci-rca HARD BLOCK, source_file .github/workflows/terraform-apply-sandbox.yml)
     deferral- it fails all three Related-Work conditions against this plan (different file,
@@ -205,9 +235,12 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     scripts/platform_roadmap.py- add GateRuleEvaluator (no eval/exec; tokenizer +
-    recursive-descent; Kleene tri-state; longest-known-id-prefix field resolution; status =
+    recursive-descent; Kleene short-circuit; longest-known-id-prefix field resolution; status =
     static, other field paths + item_field_eq = deferred; static helpers tier_complete /
-    all_in_tier_with_status / grace_period_elapsed). Add PlatformRoadmapState.evaluate_gates()
+    all_in_tier_with_status / grace_period_elapsed). Share the existing _GATE_HELPERS arity
+    table and helper-name set between the validator's GateRuleParser and the new evaluator so
+    the grammar cannot drift between parse-validate and evaluate. Add
+    PlatformRoadmapState.evaluate_gates()
     -> list[{id,name,verdict,reason}] and blocked_on_cd() -> list[{id,name,blocking_cds,
     relationships,bootstrap_completion_exempt}] over eligible_items() using the three broad
     sources filtered to state == "pending". Add user_action_required to the per-item dict.
@@ -241,13 +274,19 @@ execution_steps:
     change.
   - >-
     tests/test_platform_roadmap.py and tests/test_session_preflight_platform_roadmap.py- add
-    the unit + integration coverage enumerated in the acceptance criteria (synthetic fixtures
-    for precise pass/fail/deferred and blocked_on_cd sources; live-YAML anchors for G.8-never-
-    pass, all-four-gates-carry-a-verdict, T-1.20->CD.13, and slim-vs-full).
+    the unit + integration coverage enumerated in the acceptance criteria. Synthetic fixtures-
+    precise pass/fail/deferred (including a gate whose false first conjunct short-circuits a
+    deferred second operand to FALSE, pinning Kleene short-circuit); all three blocked_on_cd
+    sources + the exempt annotation; and longest-prefix field resolution under a strict-prefix
+    id collision (ids T9.1 and T9.1.2 both present -> T9.1.status resolves to item T9.1 field
+    status). Live-YAML anchors- G.8 never pass, G.9 and G.10 non-deferred (pass or fail), all
+    four gates carry a verdict, T-1.20->CD.13 in blocked_on_cd, and slim-vs-full selection.
   - Execute the Verification Plan- run each step; loop until all pass; on an unrecoverable failure stop and RCA (Decision 55).
   - "Report- what was implemented, the gate verdicts and blocked_on_cd surfaced, and verification results."
 work_areas: []
 rollback: >-
-  Revert the branch commits. The change is pure computation + instruction/text edits with no
-  migrations, no external-system writes, and no Terraform/Lambda; reverting fully restores the
-  prior slim-only behavior.
+  Revert the branch commits. The change is pure Python computation + instruction/text edits
+  with no migrations, no Terraform, and no external-system writes. It touches no Lambda runtime
+  code; the only Lambda linkage is that docs/ROADMAP-PLATFORM.yaml is a bundled doc ASSET of
+  the data-pipeline artifact (see the Lambda assessment in context) -- reverting fully restores
+  the prior slim-only behavior with no deploy to undo.
