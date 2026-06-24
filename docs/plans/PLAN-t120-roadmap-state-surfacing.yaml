@@ -1,0 +1,292 @@
+schema_version: 1
+slug: "t120-roadmap-state-surfacing"
+intent: >-
+  Close the 2026-06-09 audit gap F-010 by making the roadmap's preflight surfacing
+  trustworthy: implement blocked-on-CD computation and cross-tier-gate evaluation, route
+  the full state to the read-only /orient decision surface, and keep the /plan preflight
+  slim -- a more reliable agent control loop for the self-improving platform.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-t120-roadmap-state-surfacing.yaml
+phase: >-
+  Platform tier T-1.20 (Preflight roadmap-state contract reconciliation). Roadmap-harness
+  foundation; no product-phase dependency.
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add a no-eval GateRuleEvaluator (tokenizer + recursive-descent, Kleene tri-state),
+      PlatformRoadmapState.evaluate_gates() and blocked_on_cd(); thread user_action_required
+      through the per-item dict; extend to_preflight_dict() and the compute_state_dict error
+      branch with blocked_on_cd[] and gate_evaluations[].
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Add --roadmap-detail {slim,full} (default slim) and a full= parameter on
+      _slim_roadmap_state so the default (/plan) projection is the slim
+      next_eligible+strategic_pending and the full (/orient) projection carries the bulk
+      state plus blocked_on_cd + gate_evaluations.
+  - file: .claude/commands/orient.md
+    action: Modify
+    purpose: >-
+      Step 1 refreshes the preflight cache with --roadmap-detail full (force-refresh when
+      the cache lacks the gate_evaluations marker); Step 2 reads blocked_on_cd +
+      gate_evaluations from the cache. Respects the orient cache-read constraint.
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Surface blocked_on_cd (the Status Digest "gated by CD.NN" annotation) and a gate-
+      evaluation summary in the read-only chat deliverable. Stays write-nothing.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground the agent_instructions consumer-contract text (blocked-on-CD + gate-eval
+      "not yet implemented" lines) and the T-1.4 exit-criterion parenthetical so the
+      documented contract matches the shipped design; update T-1.20 files_in_scope to the
+      realized scope. Documentation/contract text only -- no roadmap status/data change.
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Unit tests for each static helper, deferred propagation, blocked_on_cd (all three
+      sources + bootstrap-exempt annotation), user_action_required, and slim-vs-full;
+      plus live-YAML anchors.
+  - file: tests/test_session_preflight_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Integration tests that the --roadmap-detail flag selects slim vs full and that the
+      product roadmap is unaffected (.get() defaults).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    compute_state_dict()/to_preflight_dict() output includes blocked_on_cd[] where each
+    entry is {id, name, blocking_cds[], relationships{cd_id: related|gates|decision_required_before},
+    bootstrap_completion_exempt} for eligible-by-deps items whose related_candidate_decisions,
+    a candidate_decision.gates ref, or the item's decision_required_before names a CD with
+    state == "pending"; the live roadmap surfaces T-1.20 with blocking_cds containing CD.13.
+  - >-
+    gate_evaluations[] is present with {id, name, verdict, reason} for every cross_tier_gate;
+    G.1/G.9/G.10 carry no runtime-aggregate operand and resolve to pass or fail (never
+    deferred) via Kleene short-circuit; G.8 (T3.2.latest_run.verdict) and any item_field_eq
+    usage resolve to "deferred" only when the unresolved operand drives the result (with T3.2
+    not_started, G.8 short-circuits to fail) and NEVER to a fabricated pass, with a reason
+    naming the unresolved runtime path. No eval()/exec() is used anywhere in the evaluator.
+  - >-
+    bin/venv-python -m scripts.session_preflight --roadmap-detail full writes a platform_roadmap
+    projection containing in_progress, blocked, active_tier, blocked_on_cd, and gate_evaluations;
+    the default (no flag, used by /plan) writes only next_eligible + strategic_pending with NO
+    blocked_on_cd / gate_evaluations key. The product_roadmap projection is unchanged in both modes.
+  - >-
+    next_eligible entries carry a user_action_required field (true where the tier_item sets it,
+    else null) in both the slim and full projections.
+  - >-
+    .claude/commands/orient.md invokes --roadmap-detail full and force-refreshes when the cached
+    platform_roadmap lacks gate_evaluations; .claude/skills/orient/SKILL.md surfaces blocked_on_cd
+    and the gate-evaluation summary in the deliverable, and orient still writes nothing.
+  - >-
+    The agent_instructions text (the blocked-on-CD and gate-evaluation "not yet implemented"
+    lines) and the T-1.4 exit-criterion parenthetical are re-grounded so no preflight key is
+    promised-but-unimplemented in either direction; docs/ROADMAP-PLATFORM.yaml still validates
+    against the RoadmapDocument schema.
+  - >-
+    Unit tests cover each static helper (true and false), Kleene short-circuit (false AND
+    deferred -> false), all three blocked_on_cd sources plus the exempt annotation,
+    user_action_required surfacing, longest-prefix field resolution under a strict-prefix id
+    collision, and the slim-vs-full selection; pytest is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Run the unit + integration suites for the changed modules (exercises real code paths).
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py tests/test_session_preflight_platform_roadmap.py -q
+    expected: All tests pass, including the new helper, deferred-propagation, blocked_on_cd, user_action_required, and slim/full cases.
+    fix_if: A failure points at the offending case; fix the evaluator/projection until green. Do not weaken assertions to pass.
+  - step: 2
+    phase: pre-deploy
+    action: Evaluate the live gates through the real evaluator (deterministic, no credentials needed).
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict;
+      s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); g={x['id']:x for x in s['gate_evaluations']};
+      assert {'G.1','G.8','G.9','G.10'} <= set(g), sorted(g);
+      assert g['G.8']['verdict'] in {'fail','deferred'} and g['G.8']['verdict'] != 'pass', g['G.8'];
+      assert g['G.9']['verdict'] in {'pass','fail'} and g['G.10']['verdict'] in {'pass','fail'}, (g['G.9'], g['G.10']);
+      assert all(x['verdict'] in {'pass','fail','deferred'} for x in g.values());
+      print('GATES OK', {k: v['verdict'] for k, v in g.items()})"
+    expected: >-
+      Prints all four gate verdicts; G.8 is fail-or-deferred (never pass); G.9/G.10 resolve
+      pass-or-fail and are NEVER deferred (they carry no runtime-aggregate operand); every gate
+      carries a valid verdict.
+    fix_if: >-
+      KeyError means gate_evaluations is missing/misnamed; G.8 == pass means the deferred path
+      leaked a fabricated pass; a deferred verdict on G.9 or G.10 means the Kleene short-circuit
+      is wrong (false AND deferred must collapse to false, not poison to deferred) -- fix the
+      tri-state and/or/not handling.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm broad blocked-on-CD semantics against the live roadmap (T-1.20 -> pending CD.13 via related_candidate_decisions).
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict;
+      s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); b={x['id']:x for x in s['blocked_on_cd']};
+      assert 'T-1.20' in b, sorted(b); assert 'CD.13' in b['T-1.20']['blocking_cds'], b['T-1.20'];
+      assert 'bootstrap_completion_exempt' in b['T-1.20']; print('BLOCKED_ON_CD OK', b['T-1.20'])"
+    expected: T-1.20 appears with CD.13 in blocking_cds and a bootstrap_completion_exempt annotation.
+    fix_if: T-1.20 absent means the related_candidate_decisions source is not wired; a missing CD.13 means the pending-state filter is wrong.
+  - step: 4
+    phase: pre-deploy
+    action: Verify the slim/full projection split and user_action_required threading.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict;
+      from scripts.session_preflight import _slim_roadmap_state; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'));
+      slim=_slim_roadmap_state(s); full=_slim_roadmap_state(s, full=True);
+      assert 'blocked_on_cd' not in slim and 'gate_evaluations' not in slim, sorted(slim);
+      assert {'blocked_on_cd','gate_evaluations','in_progress','blocked','active_tier'} <= set(full), sorted(full);
+      assert all('user_action_required' in e for e in slim['next_eligible']); print('PROJECTION OK')"
+    expected: Slim omits the bulk keys but next_eligible entries carry user_action_required; full includes blocked_on_cd, gate_evaluations, in_progress, blocked, active_tier.
+    fix_if: A bulk key in slim means the full= default leaked; a missing key in full means the full branch dropped it.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the roadmap still validates and run the full local presubmit (schema + lint + prompt-compliance for the orient command/skill edits).
+    command: bin/venv-python -m scripts.platform_roadmap docs/ROADMAP-PLATFORM.yaml && bin/venv-python -m scripts.validate
+    expected: Roadmap prints PASS; validate.py reports success across schema, lint/format, prompt-compliance, and pytest.
+    fix_if: A validate.py failure names the failing check; fix it. CI (the authoritative gate) mirrors this suite.
+constraints:
+  - No eval()/exec() anywhere in the gate evaluator -- hand-written tokenizer + recursive-descent over the documented mini-grammar (AGENTS.md Safety).
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure, stop and RCA rather than patching around it.
+  - Only modify files listed in scope; out-of-scope bugs become recommendations via scripts.ops_data_portal, not inline fixes (AGENTS.md).
+  - Decision 88 (egress budget) + Decision 84 (closed reader boundary)- /orient must NOT call scripts.platform_roadmap or any DuckLake reader verb; the full state reaches orient ONLY through the preflight cache, refreshed by session_preflight (the sanctioned writer of logs/.preflight-report.json).
+  - Decision 86 - no new standing prose-architecture docs; edit existing YAML/skill/command surfaces only (this plan creates no new file).
+  - The /plan preflight stays slim by human architectural decision- blocked_on_cd and gate_evaluations are full/orient-only; the planning agent's per-item gating-decision adjudication remains the Tier Item Freshness Gate (T-1.21), unchanged by this plan.
+  - Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens; invoke bin/venv-python (never bare python). Never raise during module import- defer validation to explicit calls.
+context:
+  - >-
+    Closes audit finding F-010 (2026-06-09): agent_instructions promised blocked-on-CD
+    surfacing and binding cross-tier gates, but PlatformRoadmapState never read
+    candidate_decisions, no consumer evaluated cross_tier_gates[].rule (validator checks
+    grammar only- G.8's latest_run.verdict aggregation was never built), and the slim
+    projection dropped in_progress/blocked/active_tier plus user_action_required.
+  - >-
+    Decision Scout verdict- NO_FLAGS. Decisions this plan must reference- Decision 88
+    (egress budget, orient cache-read), Decision 84 (closed boundary), Decision 86 (no new
+    prose docs), Decision 90 (four-tier /orient->/plan->/implement routing). Related-
+    Decision 55 (loud failure / no workaround loops), Decision 72 (orient CI-RCA surfacing),
+    Decision 93 (.get()-default load-path safety so the product roadmap is unaffected).
+  - >-
+    CD.13 is a pending candidate_decision (state- pending), title "ROADMAP-PLATFORM.yaml is
+    the agent-first documentation exemplar"; it gates T-1.2/T-1.3/T-1.4/T-1.5, not T-1.20's
+    completion. T-1.20 lists it under related_candidate_decisions, so broad blocked_on_cd
+    surfaces T-1.20 with relationship "related" (not "gates"); the annotation keeps orient
+    from over-claiming.
+  - >-
+    Consumer split (human architectural decision)- /orient gets the FULL state plus broad
+    blocked_on_cd and gate verdicts; /plan stays slim with no blocked_on_cd. Mechanism is a
+    session_preflight breadth flag (--roadmap-detail full), chosen over a second cache file
+    because both workflows already run their own preflight and the flag keeps the planning
+    invocation's bulk payload unchanged; the one stale-slim-cache risk is closed by the
+    orient Step 1 gate_evaluations marker check.
+  - >-
+    Gate semantics- three-valued (Kleene) logic with PROPER SHORT-CIRCUIT, not deferred-
+    poisoning- false AND x = false and true OR x = true even when x is deferred; the verdict
+    is "deferred" only when it genuinely depends on an unresolved operand. status is the only
+    statically resolvable field; any other field path (latest_run.verdict, uptime_days, ...)
+    and item_field_eq resolve to "deferred". Consequently G.1/G.9/G.10 carry NO runtime-
+    aggregate operand and ALWAYS resolve pass or fail (never deferred); only G.8
+    (T3.2.latest_run.verdict) can be deferred, and only when T3.2 is complete -- with T3.2
+    not_started its first conjunct is false so G.8 short-circuits to fail. Field paths resolve
+    by longest-known-tier_item-id prefix (T3.2.latest_run.verdict -> item T3.2 + field
+    latest_run.verdict), matched against the LIVE id set, so strict-prefix id collisions
+    (e.g. T0.12 vs T0.12.5) must pick the longest id that actually exists.
+  - >-
+    Scope expanded beyond T-1.20's originally-listed 4 files to add .claude/commands/orient.md,
+    .claude/skills/orient/SKILL.md, and tests/test_session_preflight_platform_roadmap.py, so
+    the newly-computed state is actually consumed by /orient- shipping the computation without
+    a consumer would re-create the exact F-010 computed-but-unconsumed gap. T-1.20's
+    files_in_scope is updated to match the realized scope.
+  - >-
+    Lambda assessment (Decision 79 per-Lambda gating)- compute_affected_artifacts() over this
+    scope returns {data-pipeline: [docs/ROADMAP-PLATFORM.yaml]} because the roadmap is listed
+    under the data-pipeline artifact's assets: (src/lambdas/data-pipeline/manifest.yaml:44),
+    and that artifact is status: active (line 52). Build/deploy/smoke-test is DEFERRED (no
+    deploy step) on these grounds- (1) the roadmap is a bundled DOC asset, not runtime-imported
+    code -- no handler in the artifact imports or evaluates ROADMAP-PLATFORM.yaml at runtime;
+    (2) the scheduled-agent dispatcher is disabled (SCHEDULED_AGENTS_ENABLED=false,
+    terraform/scheduled_agents.tf:220; EventBridge rule DISABLED per the AGENTS.md re-enable
+    runbook), so no live consumer reads a bundled copy; (3) the source edits in scope
+    (platform_roadmap.py, session_preflight.py) are NOT in the artifact's includes: and do not
+    repackage it. The consumers of this change (session_preflight + /orient) read the working-
+    tree roadmap directly, not the Lambda bundle. Deploying a disabled artifact for an asset-
+    only text re-grounding would be churn with no behavioral effect; re-enable follows the
+    AGENTS.md runbook if/when the dispatcher is turned back on.
+  - >-
+    rec-2335 (ci-rca HARD BLOCK, source_file .github/workflows/terraform-apply-sandbox.yml)
+    deferral- it fails all three Related-Work conditions against this plan (different file,
+    no shared Decision Record, different failure category- terraform/CD transient vs Python
+    roadmap surfacing). It is actively owned by a separate agent under
+    docs/plans/PLAN-claude-p-transient-retry.yaml (not present on this branch), so this plan
+    does not touch it. Deferral logged here per the planning skill's Related-Work check.
+  - >-
+    T5.2/G.10 (30-day grace before account teardown) is the canonical manual-gate case the
+    Tier Item Freshness Gate cites; this plan automates gate verdicts for /orient but the
+    planning per-item manual gate check is intentionally retained.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/blissful-wright-or8gje)
+  - docs/PROJECT_CONTEXT.md read for the file-router and recommendation-schema context
+  - DECISIONS.md alignment confirmed via the decision-scout gate (NO_FLAGS; cite 88/84/86/90)
+  - All seven scope files located and readable; live gate rules (G.1/G.8/G.9/G.10) and CD states confirmed
+  - Acceptance criteria understood and each maps to a verification_plan step
+execution_steps:
+  - >-
+    scripts/platform_roadmap.py- add GateRuleEvaluator (no eval/exec; tokenizer +
+    recursive-descent; Kleene short-circuit; longest-known-id-prefix field resolution; status =
+    static, other field paths + item_field_eq = deferred; static helpers tier_complete /
+    all_in_tier_with_status / grace_period_elapsed). Share the existing _GATE_HELPERS arity
+    table and helper-name set between the validator's GateRuleParser and the new evaluator so
+    the grammar cannot drift between parse-validate and evaluate. Add
+    PlatformRoadmapState.evaluate_gates()
+    -> list[{id,name,verdict,reason}] and blocked_on_cd() -> list[{id,name,blocking_cds,
+    relationships,bootstrap_completion_exempt}] over eligible_items() using the three broad
+    sources filtered to state == "pending". Add user_action_required to the per-item dict.
+    Extend to_preflight_dict() with blocked_on_cd + gate_evaluations, and add both keys
+    (empty lists) to the compute_state_dict error branch.
+  - >-
+    scripts/session_preflight.py- add argparse --roadmap-detail {slim,full} (default slim);
+    give _slim_roadmap_state a full=False parameter (full returns the entire state dict
+    incl. in_progress/blocked/active_tier/blocked_on_cd/gate_evaluations; slim returns
+    next_eligible (with user_action_required) + strategic_pending). Thread the flag so only
+    the platform_roadmap projection honors full; product_roadmap stays slim. Use .get()
+    defaults so the product roadmap (no candidate_decisions/cross_tier_gates) is unaffected.
+  - >-
+    .claude/commands/orient.md- change Step 1 to run
+    bin/venv-python -m scripts.session_preflight --roadmap-detail full and to force a
+    refresh when the cached platform_roadmap lacks gate_evaluations; extend Step 2's input
+    list with blocked_on_cd and gate_evaluations. Keep the no-direct-platform_roadmap-call
+    constraint text intact.
+  - >-
+    .claude/skills/orient/SKILL.md- add blocked_on_cd to the Status Digest (the "gated by
+    CD.NN" annotation, with relationship + exempt nuance) and a concise gate-evaluation
+    summary (pass/fail/deferred with the deferred reason). Keep the read-only / write-nothing
+    contract.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml- re-ground agent_instructions (the blocked-on-CD "NOT yet
+    implemented" lines and the gate "no runtime consumer evaluates" lines) and the T-1.4
+    exit-criterion parenthetical "full-state surfacing + blocked-on-CD lands in T-1.20" so
+    the text states the shipped behavior (gate eval implemented; blocked-on-CD + full state
+    in the full/orient projection; slim planning projection ratified; item_field_eq runtime-
+    deferred). Update T-1.20 files_in_scope to the realized seven-file scope. No status/data
+    change.
+  - >-
+    tests/test_platform_roadmap.py and tests/test_session_preflight_platform_roadmap.py- add
+    the unit + integration coverage enumerated in the acceptance criteria. Synthetic fixtures-
+    precise pass/fail/deferred (including a gate whose false first conjunct short-circuits a
+    deferred second operand to FALSE, pinning Kleene short-circuit); all three blocked_on_cd
+    sources + the exempt annotation; and longest-prefix field resolution under a strict-prefix
+    id collision (ids T9.1 and T9.1.2 both present -> T9.1.status resolves to item T9.1 field
+    status). Live-YAML anchors- G.8 never pass, G.9 and G.10 non-deferred (pass or fail), all
+    four gates carry a verdict, T-1.20->CD.13 in blocked_on_cd, and slim-vs-full selection.
+  - Execute the Verification Plan- run each step; loop until all pass; on an unrecoverable failure stop and RCA (Decision 55).
+  - "Report- what was implemented, the gate verdicts and blocked_on_cd surfaced, and verification results."
+work_areas: []
+rollback: >-
+  Revert the branch commits. The change is pure Python computation + instruction/text edits
+  with no migrations, no Terraform, and no external-system writes. It touches no Lambda runtime
+  code; the only Lambda linkage is that docs/ROADMAP-PLATFORM.yaml is a bundled doc ASSET of
+  the data-pipeline artifact (see the Lambda assessment in context) -- reverting fully restores
+  the prior slim-only behavior with no deploy to undo.
