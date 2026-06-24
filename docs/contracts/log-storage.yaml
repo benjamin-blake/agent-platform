@@ -1,0 +1,78 @@
+# Non-ritual registry YAML. NOT a Class A/B/C ritual contract (no contract: block with a class field).
+# The CD.25 drift gate skips files that lack a contract: mapping with a class: field.
+#
+# Purpose: machine-readable registry of JSONL log-storage patterns and the routing block
+# consumed by scripts/s3_log_store.py. Supersedes the prose boundary contract (Decision 86).
+version: 1
+contract_version: 1
+status: ratified
+ratified_at: "2026-06-24"
+ratified_via: "PLAN-t115-log-storage-yaml (T-1.15)"
+last_verified: "2026-05-06"
+decisions_cited:
+  - Decision-45
+  - Decision-50
+  - Decision-55
+  - Decision-84
+  - CD.25
+note: >-
+  routing governs ONLY the s3_log_store write-routing sentinels; the ops_session_log/ops_execution_plans
+  write-through and the priority-queue write-through are death-dated -- repoint/retire at T2.26 (Decision 84)
+
+patterns:
+  cloud_produced:
+    id: 1
+    producer: Lambda handler
+    transport: "S3 (agent-platform-agent-logs)"
+    consumer: s3_log_store.read_jsonl
+    examples:
+      - scheduled-agent findings
+      - curator findings
+  locally_produced:
+    id: 2
+    producer: local script
+    transport: "logs/<file>.jsonl -> append_jsonl -> S3"
+    consumer: git-tracked local file is source of truth
+    examples:
+      - .recommendations-log.jsonl
+      - .retro-lite-log.jsonl
+      - .session-telemetry.jsonl
+      - .execution-step-telemetry.jsonl
+      - .friction-analysis-log.jsonl
+      - .north-star-log.jsonl
+  shared_mutable_planned:
+    id: 3
+    status: planned
+    tracked_by: rec-386
+    transport: "log_writer.write(key, entry) -> local + S3 (planned)"
+
+priority_queue:
+  canonical_key: "priority-queue/.priority-queue.jsonl"
+  local_path: "logs/priority-queue/.priority-queue.jsonl"
+  deprecated_key: "logs/.priority-queue.jsonl"
+  status_tags:
+    canonical:
+      - queued
+      - executing
+      - done
+    legacy_forbidden:
+      - active
+  canonical_producer: "enqueue_findings()/file_rec (Decision 84)"
+  current_state_read: priority_queue_current named verb
+  legacy_producer:
+    status: "deprecated until Phase 5"
+    note: "rec-curator -> findings_processor_handler.py overwrite_jsonl; s3_log_store -> OpsWriter write-through repoints at T2.26 (Decision 84)"
+
+routing:
+  ops_table_routing:
+    ".execution-plans.jsonl": ops_execution_plans
+    ".session-telemetry.jsonl": ops_session_log
+  priority_queue_key: "priority-queue/.priority-queue.jsonl"
+  note: >-
+    s3_log_store is the only call site wired to this block; findings_processor_handler.py
+    (own _PRIORITY_QUEUE_KEY literal) and session_preflight.py (PRIORITY_QUEUE_FILE) hold
+    un-wired copies of the queue key -- future-consolidation candidates, out of T-1.15 scope
+
+verified_against:
+  - "scripts/s3_log_store.py (read_jsonl/append_jsonl/overwrite_jsonl/get_backend)"
+  - "src/data/handlers/findings_processor_handler.py (own _PRIORITY_QUEUE_KEY literal, un-wired)"

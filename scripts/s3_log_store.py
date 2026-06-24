@@ -37,6 +37,49 @@ _OPS_TABLE_ROUTING: dict[str, str] = {
 }
 _OPS_PRIORITY_QUEUE_KEY = "priority-queue/.priority-queue.jsonl"
 
+# Fallback constants -- identical to the routing values above and equal to the
+# docs/contracts/log-storage.yaml routing block (anti-drift, T-1.15).
+FALLBACK_OPS_TABLE_ROUTING: dict[str, str] = _OPS_TABLE_ROUTING
+FALLBACK_PRIORITY_QUEUE_KEY: str = _OPS_PRIORITY_QUEUE_KEY
+
+# Lazy YAML registry (T-1.15): loaded on first accessor call, never at import.
+_LOG_STORAGE_CONTRACT_PATH = _REPO_ROOT / "docs/contracts/log-storage.yaml"
+_LOG_STORAGE_REGISTRY: dict | None = None
+
+
+def _load_log_storage_registry() -> dict:
+    """Load and cache the routing block from log-storage.yaml; fall back to constants on any error."""
+    global _LOG_STORAGE_REGISTRY  # noqa: PLW0603
+    if _LOG_STORAGE_REGISTRY is not None:
+        return _LOG_STORAGE_REGISTRY
+    try:
+        import yaml  # noqa: PLC0415
+
+        with open(_LOG_STORAGE_CONTRACT_PATH, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+        routing = doc["routing"]
+        result: dict = {
+            "ops_table_routing": routing["ops_table_routing"],
+            "priority_queue_key": routing["priority_queue_key"],
+        }
+    except Exception:  # noqa: BLE001
+        result = {
+            "ops_table_routing": FALLBACK_OPS_TABLE_ROUTING,
+            "priority_queue_key": FALLBACK_PRIORITY_QUEUE_KEY,
+        }
+    _LOG_STORAGE_REGISTRY = result
+    return _LOG_STORAGE_REGISTRY
+
+
+def get_ops_table_routing() -> dict[str, str]:
+    """Return the OpsWriter table routing map, sourced from log-storage.yaml or in-code fallback."""
+    return _load_log_storage_registry()["ops_table_routing"]
+
+
+def get_priority_queue_key() -> str:
+    """Return the canonical priority-queue S3 key, sourced from log-storage.yaml or in-code fallback."""
+    return _load_log_storage_registry()["priority_queue_key"]
+
 _ops_writer_instance = None
 
 
@@ -162,7 +205,7 @@ def append_jsonl(key: str, entry: dict) -> bool:
 
     # OpsWriter write-through (best-effort, never propagates failure)
     if result:
-        table = _OPS_TABLE_ROUTING.get(key)
+        table = get_ops_table_routing().get(key)
         if table:
             try:
                 ops = _get_ops_writer()
@@ -236,7 +279,7 @@ def overwrite_jsonl(key: str, entries: list[dict]) -> bool:
         result = _overwrite_jsonl_local(key, entries)
 
     # OpsWriter write-through for priority queue (best-effort, never propagates failure)
-    if result and key == _OPS_PRIORITY_QUEUE_KEY and entries:
+    if result and key == get_priority_queue_key() and entries:
         import uuid as _uuid  # noqa: PLC0415
 
         queue_run_id = str(_uuid.uuid4())
