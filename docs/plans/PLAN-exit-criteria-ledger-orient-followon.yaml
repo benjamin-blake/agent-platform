@@ -1,0 +1,504 @@
+schema_version: 1
+slug: exit-criteria-ledger-orient-followon
+intent: >-
+  Make a tier_item's in_progress state resolvable instead of three-way ambiguous by giving each
+  exit_criteria entry a machine-readable status, then teaching /orient, /plan, and /implement to
+  drive follow-on planning off open criteria -- so the roadmap harness deterministically routes an
+  item that needs its NEXT plan to /plan (not a wrong /implement-resume), advancing the self-improving
+  platform's North Star of deterministic, low-friction agent orchestration.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-exit-criteria-ledger-orient-followon.yaml
+phase: >-
+  Platform tier T-1 (roadmap harness). New tier_item T-1.23 -- extends T-1.20 (preflight roadmap-state
+  surfacing, just landed) and is the lightweight near-term stand-in for T4.5/Decision 87
+  (ops_plans/ops_plan_revisions warehouse entities, gated on the CD.17 executor freeze).
+
+scope:
+  # ---- Phase A (skill-only, ship-fast; merged as its own PR before Phase B) ----
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Phase A. Emit follow-on /plan prompts for in_progress items ranked fewest-open-criteria-first;
+      add a per-item open-criteria count to the Status Digest (inferred from prose in Phase A,
+      read from preflight cache in Phase B); drop the /implement-resume default, suggesting /implement
+      only when a genuinely un-actioned (mid-implementing) plan exists.
+  - file: .claude/commands/orient.md
+    action: Modify
+    purpose: >-
+      Phase A. Load in_progress items and (Phase B) the new followon-state fields from the preflight
+      cache; document the follow-on-prompt and open-criteria-count deliverable additions.
+  # ---- Phase B (durable, deterministic) ----
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Phase B. Add the ExitCriterion Pydantic model; widen TierItem.exit_criteria to
+      list[str | ExitCriterion] with a normalizer (bare string -> status=open, met_by=None); add
+      referential integrity in the RoadmapDocument model_validator (met/rehomed requires met_by;
+      rehomed met_by must resolve to a known item id); add compute_followon_state(doc, plans_dir)
+      and surface open_criteria/all_plans_actioned/needs_followon_plan in to_preflight_dict for
+      in_progress (live) items only.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Phase B. Thread the new followon-state fields from compute_state_dict into
+      logs/.preflight-report.json (platform_roadmap.in_progress entries gain open_criteria_count,
+      all_plans_actioned, needs_followon_plan). Reads only on-disk files (roadmap YAML + docs/plans/);
+      no warehouse fan-out (Decision 88).
+  - file: scripts/plan_document.py
+    action: Modify
+    purpose: >-
+      Phase B. Add an additive optional closes_criteria: list[str] field to PlanDocument (each entry
+      a criterion ref "<item-id>:cN"). No schema_version bump -- additive optional field is
+      backward-compatible under extra="forbid" (Decision 85).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Phase B. Extend validate_platform_roadmap with criteria-status integrity assertions: met_by
+      resolves to a real docs/plans/PLAN-<slug>.yaml OR a 40-hex commit OR (rehomed) a real item id;
+      a git-diff-touched tier_item may not retain bare-string criteria; every plan closes_criteria
+      ref resolves to a real item:criterion in the roadmap.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Phase B. Add a follow-on /plan mode: when intent targets an in_progress item with open criteria,
+      load the open criteria + prior plans + progress_note, scope ONLY the next slice, and declare
+      which item-criteria the plan closes via closes_criteria (mapping to its acceptance_criteria).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Phase B. Extend the T-1.10 tier_item bookkeeping walk: on VP pass, flip each declared
+      closes_criteria criterion open->met (met_by=<plan-slug>) in the staged YAML edit. Only declared
+      criteria flip; all-criteria-met items QUALIFY for the completion gate but are never auto-flipped
+      (Status-Trusted-Never-Inferred / T2.20).
+  - file: docs/contracts/exit-criteria-ledger.yaml
+    action: Create
+    purpose: >-
+      Phase B. Machine-parseable field semantics for the ExitCriterion object and the plan
+      closes_criteria field (Decision 86 routing: field semantics -> contract). Draft is in this
+      plan's context for review.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Phase B. Add tier_item T-1.23 and candidate_decision CD.39 (draft in context); backfill the
+      13 in_progress items' exit_criteria from bare strings to ExitCriterion objects, seeding
+      met/rehomed only where the progress_note unambiguously attests it (conservative bias; else open).
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Phase B. Unit tests for the ExitCriterion normalizer, the model_validator integrity rules, and
+      compute_followon_state (in-flight-plan vs no-plan -> needs_followon_plan; live-items-only scope).
+  - file: tests/test_session_preflight_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Phase B. Tests that the preflight cache surfaces open_criteria_count/all_plans_actioned/
+      needs_followon_plan on in_progress entries.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: >-
+      Phase B. Tests that PlanDocument accepts closes_criteria, defaults it to [], and still rejects
+      unknown keys (extra="forbid").
+
+bundled_recommendations: []
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  # Phase A
+  - .claude/skills/orient/SKILL.md emits follow-on /plan prompts for in_progress items ranked
+    fewest-open-criteria-first, shows an open-criteria count in the Status Digest, and no longer
+    defaults in_progress items to "/implement-resume" (only suggests /implement when a mid-implementing
+    un-actioned plan exists).
+  - .claude/commands/orient.md documents loading in_progress + followon-state inputs and the new
+    follow-on-prompt / open-criteria-count deliverable additions.
+  # Phase B - schema + ledger
+  - TierItem.exit_criteria accepts both bare strings (normalized to status=open) and ExitCriterion
+    objects {id, text, status in [open,met,rehomed], met_by}; the RoadmapDocument model_validator
+    rejects a met/rehomed criterion with no met_by and a rehomed met_by that names no known item.
+  - All 13 in_progress tier_items carry fully-structured ExitCriterion objects after backfill; status
+    is met/rehomed only where the progress_note unambiguously attests it, else open.
+  - PlanDocument accepts an optional closes_criteria field (list[str], default []) and still rejects
+    unknown keys.
+  # Phase B - deterministic signal
+  - compute_followon_state(doc, plans_dir) returns, per in_progress item, open_criteria,
+    all_plans_actioned, and needs_followon_plan, computed from on-disk files only; needs_followon_plan
+    is True iff open_criteria>0 AND no docs/plans/PLAN-*.yaml closes_criteria names a still-open
+    criterion of that item; the computation is scoped to live items and excludes
+    deferred_post_mvp/reserved (Decision 93).
+  - logs/.preflight-report.json platform_roadmap.in_progress entries carry open_criteria_count,
+    all_plans_actioned, and needs_followon_plan.
+  # Phase B - workflow + enforcement
+  - The planning skill documents follow-on /plan mode (scope the next slice; declare closes_criteria);
+    the implement skill flips declared closes_criteria open->met (met_by=<plan-slug>) in the bookkeeping
+    walk on VP pass, never auto-flipping undeclared/prose criteria.
+  - validate.py fails when a touched tier_item keeps bare-string criteria, when a met/rehomed met_by
+    does not resolve to a real plan/commit/item, or when a plan closes_criteria ref does not resolve
+    to a real item:criterion.
+  - docs/contracts/exit-criteria-ledger.yaml exists with field semantics for ExitCriterion and
+    closes_criteria, carries no top-level prose-architecture shape (passes the intent-doc-freeze guard),
+    and the full validate.py presubmit passes.
+
+verification_plan:
+  # ---------- Phase A ----------
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the orient skill emits follow-on prompts ranked by open criteria and dropped the
+      /implement-resume default.
+    command: >-
+      grep -qiE "follow-on|fewest-open-criteria|open[- ]criteria count" .claude/skills/orient/SKILL.md
+      && ! grep -qiE "resume via /implement|/implement[- ]resume|default.*\/implement" .claude/skills/orient/SKILL.md
+      && echo PHASE_A_SKILL_OK
+    expected: Prints PHASE_A_SKILL_OK (follow-on language present, implement-resume default absent).
+    fix_if: >-
+      Missing follow-on/ranking language, or the /implement-resume default still present as the
+      in_progress recommendation.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the orient command documents the new in_progress + followon-state inputs.
+    command: >-
+      grep -qiE "in_progress" .claude/commands/orient.md
+      && grep -qiE "follow-on|needs_followon_plan|open[- ]criteria" .claude/commands/orient.md
+      && echo PHASE_A_CMD_OK
+    expected: Prints PHASE_A_CMD_OK.
+    fix_if: The command file does not load/describe in_progress follow-on inputs.
+  # ---------- Phase B: schema + ledger ----------
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Load the roadmap through the (modified) schema and assert every in_progress item has structured
+      criteria with a valid status enum; assert bare strings still normalize to status=open.
+    command: >-
+      bin/venv-python -c "from scripts.platform_roadmap import load;
+      d=load('docs/ROADMAP-PLATFORM.yaml');
+      ip=[i for i in d.tier_items if i.status=='in_progress'];
+      assert len(ip)==13, f'expected 13 in_progress, got {len(ip)}';
+      bad=[(i.id,c) for i in ip for c in i.exit_criteria if isinstance(c,str)];
+      assert not bad, f'unstructured criteria on in_progress items: {bad}';
+      print('LEDGER_BACKFILL_OK', sum(len(i.exit_criteria) for i in ip), 'criteria')"
+    expected: Prints LEDGER_BACKFILL_OK and a criteria count; no assertion error.
+    fix_if: An in_progress item still carries a bare-string criterion, or the count of in_progress items changed.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the model_validator rejects a met criterion with no met_by and a rehomed met_by naming
+      an unknown item (negative test via an in-memory doc).
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -k "criterion or exit_criteria or met_by" -q
+    expected: Tests pass; the integrity negative cases assert ValueError is raised.
+    fix_if: The validator accepts a met-without-met_by or an unresolvable rehomed met_by.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm PlanDocument accepts closes_criteria, defaults to [], and still forbids unknown keys.
+    command: bin/venv-python -m pytest tests/test_plan_document.py -k "closes_criteria or extra or forbid" -q
+    expected: Tests pass.
+    fix_if: closes_criteria rejected, wrong default, or extra="forbid" weakened.
+  # ---------- Phase B: deterministic signal ----------
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Exercise compute_followon_state on a fixture: an in_progress item with one open criterion and
+      (a) no plan -> needs_followon_plan True; (b) a docs/plans plan whose closes_criteria names that
+      open criterion -> needs_followon_plan False (mid-implementing). Assert deferred_post_mvp/reserved
+      items are excluded.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -k "followon" -q
+    expected: Tests pass for both branches and the live-items-only scoping.
+    fix_if: needs_followon_plan ignores in-flight plans, or includes non-live items.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run preflight and confirm the cache surfaces the new fields on in_progress entries.
+    command: >-
+      bin/venv-python -m scripts.session_preflight --roadmap-detail full >/dev/null 2>&1;
+      bin/venv-python -c "import json;
+      r=json.load(open('logs/.preflight-report.json'));
+      ip=r['platform_roadmap']['in_progress'];
+      assert ip, 'no in_progress entries';
+      k={'open_criteria_count','all_plans_actioned','needs_followon_plan'};
+      missing=[i['id'] for i in ip if not k.issubset(i)];
+      assert not missing, f'entries missing followon fields: {missing}';
+      print('PREFLIGHT_FOLLOWON_OK', len(ip), 'in_progress entries')"
+    expected: Prints PREFLIGHT_FOLLOWON_OK; every in_progress entry carries all three fields.
+    fix_if: Any in_progress entry lacks open_criteria_count/all_plans_actioned/needs_followon_plan.
+  - step: 8
+    phase: pre-deploy
+    action: Confirm preflight-surfacing unit tests pass.
+    command: bin/venv-python -m pytest tests/test_session_preflight_platform_roadmap.py -q
+    expected: Tests pass.
+    fix_if: Preflight projection does not thread the followon fields.
+  # ---------- Phase B: enforcement + full gate ----------
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm validate.py catches an integrity violation: temporarily point a met criterion's met_by
+      at a non-existent plan slug, run the roadmap validator, assert non-zero, then restore.
+    command: >-
+      cp docs/ROADMAP-PLATFORM.yaml /tmp/roadmap.bak;
+      bin/venv-python -c "import re,io;
+      p='docs/ROADMAP-PLATFORM.yaml'; s=open(p).read();
+      s2=s.replace('met_by:','met_by: PLAN-this-slug-does-not-exist #',1);
+      open(p,'w').write(s2)";
+      bin/venv-python -m scripts.validate --check platform_roadmap; rc=$?;
+      cp /tmp/roadmap.bak docs/ROADMAP-PLATFORM.yaml;
+      test $rc -ne 0 && echo VALIDATE_CATCHES_BAD_MET_BY
+    expected: Prints VALIDATE_CATCHES_BAD_MET_BY (validator exits non-zero on the dangling met_by); file restored.
+    fix_if: >-
+      validate.py passes with a dangling met_by. (If --check is not a supported flag, substitute the
+      equivalent single-validator invocation; the assertion is that the integrity check fails closed.)
+  - step: 10
+    phase: pre-deploy
+    action: Run the full presubmit gate to confirm no regressions across both phases.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 (credential-dependent verifiers may SKIP per Decision 57; no FAIL).
+    fix_if: Any check fails -- diagnose and fix before opening either PR.
+
+constraints:
+  - IMPLEMENTATION plan only -- the Decision 67 / CD.17 STRATEGIC-plan freeze is in effect; the
+    >5-file/>8-step complexity heuristic is suspended during the freeze (AGENTS.md Temporary
+    Operational Constraints). Authored as ONE larger IMPLEMENTATION plan with two execution phases.
+  - Decision 86 routing -- rationale -> candidate decision CD.39 (in the roadmap), field semantics ->
+    docs/contracts/exit-criteria-ledger.yaml, the work -> tier_item T-1.23. No new standing
+    prose-architecture doc under docs/; the new contract must carry no top-level prose-architecture
+    shape (intent-doc-freeze guard).
+  - Decision 88 / Decision 84 -- followon-state computation reads on-disk files only (roadmap YAML +
+    docs/plans/); NO warehouse reader fan-out. /orient continues to read the preflight cache only.
+  - Status-Trusted-Never-Inferred (T2.20 lesson) -- /implement flips ONLY criteria a plan explicitly
+    declares in closes_criteria, and only on a verified VP pass; never infer met from prose, file
+    existence, or commit activity. An all-criteria-met item QUALIFIES for the completion gate; it is
+    never auto-flipped.
+  - Decision 85 -- closes_criteria is an additive optional PlanDocument field; PlanDocument keeps
+    extra="forbid" and schema_version=1 (additive optional fields are backward-compatible).
+  - Decision 80 / single-source-of-truth -- every new check lands in validate.py (and/or the
+    platform_roadmap model_validator that validate.py invokes), never ci.yml first.
+  - Single Portal Invariant -- this plan does NOT write logs/.recommendations-log.jsonl or
+    logs/.decisions-index.jsonl directly; CD.39 is authored as a candidate_decision in the roadmap
+    YAML (ratification is a later, separate step), not via the decisions index.
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable VP failure, stop and RCA.
+
+context:
+  - >-
+    Problem (verified): a tier_item's exit_criteria is a bare list[str] with no per-criterion status,
+    plus a free-text progress_note. So in_progress conflates three states -- (1) mid-implementing a
+    plan, (2) last plan actioned, needs the NEXT follow-on plan (the common case), (3) blocked
+    downstream. /orient ranks in_progress #1 ("momentum") but emits actionable /plan prompts only for
+    not_started items, and defaults in_progress to a wrong "/implement-resume". This plan makes the
+    state machine deterministic.
+  - >-
+    Decisions this plan cites (from the Step 6a decision-scout CITE list): 86 (artefact routing),
+    90 (four-tier /orient->/plan->/implement workflow), 88 (Neon egress budget / cache-only reads),
+    87 (T4.5/T4.6 plan-warehouse entities; ledger is the near-term projection stand-in), 67/CD.17
+    (STRATEGIC freeze -> IMPLEMENTATION only), 85 (PlanDocument schema; additive optional field),
+    80 (validate.py single source of truth). RELATED: 59 (deterministic signals), 70 (lifecycle-state
+    closure mirrors open|met|rehomed), 84 (ledger is git-authoritative, not an ops_* warehouse table,
+    so warehouse-SoT does not yet apply), 93 (live-item-only scoping -- exclude deferred_post_mvp/
+    reserved from followon computation), 75 (frame-lock-aware forward-compatible deferral).
+  - >-
+    OPEN QUESTION RESOLUTIONS (carried from /plan Step 6):
+    (1) Ledger home = roadmap YAML now; T4.5 (ops_plans/ops_plan_revisions) is the eventual home but
+    is not_started and gated on CD.17, and the ledger is collocated with exit_criteria which already
+    live in the git-authoritative roadmap. met_by (plan-slug) is forward-compatible as a future
+    ops_plans FK.
+    (2) needs_followon_plan is deterministic with NO new plan registry: /plan merges PLAN-{slug}.yaml
+    to main before /implement runs, so a merged-but-unimplemented plan is observable on disk. A plan's
+    new closes_criteria field + a criterion's met_by form the bidirectional link; an "in-flight plan"
+    is one whose closes_criteria names a still-open criterion. ops_execution_plans (the executor's
+    Athena table) is not git-plan-aware and is NOT reused.
+    (3) /implement flips status via the existing T-1.10 bookkeeping walk, restricted to the plan's
+    declared closes_criteria, on VP pass, with met_by=<plan-slug>. validate.py enforces met_by
+    referential integrity + no-bare-strings-on-touched-items + closes_criteria resolution.
+    (4) Backfill = structured-with-conservative-seeding: Pydantic normalizes bare strings to open so
+    the ~103 untouched not_started items migrate lazily on-touch (no big-bang over 116 items); the 13
+    in_progress items convert now, seeding met/rehomed only where the progress_note unambiguously
+    attests it (e.g. T2.19 "criterion re-homed to T2.26"), else open.
+    (5) Decomposition = new tier_item T-1.23 in the T-1 roadmap-harness tier; one PLAN with two
+    execution phases (operator choice), Phase A merged as its own PR before Phase B.
+  - >-
+    DOGFOODING NOTE: T-1.20 is itself status=in_progress with a progress_note attesting all 5 criteria
+    met -- a textbook completion-gate candidate. The Phase A /orient rework will surface it as
+    closest-to-done; the Phase B ledger + bookkeeping will let a follow-on session close it cleanly.
+    This work is self-applying (mirrors the T-1.10 self-application invariant).
+  - >-
+    CI-RCA DEFERRAL RATIONALE (HARD BLOCK rec-2346): the open ci-rca rec rec-2346
+    ("github_ci_apply boundary blocks CreateRole/PutRolePolicy for CD.35 Wave 5", file
+    terraform/personal/oidc.tf) shares no file, Decision Record, or failure category with this
+    roadmap-harness/skill work (it is an IAM permissions-boundary issue in the Terraform CI/CD bootstrap
+    root). Planning this item does not touch its surface and does not satisfy any Related-Work
+    condition; the block is deferred per the planning skill's Related-Work Check with this logged
+    rationale. rec-2346 must still be resolved on its own track (T2.23/CD.35 Wave 5).
+  - >-
+    LAMBDA/V2 JUSTIFICATION: compute_affected_artifacts() reports docs/ROADMAP-PLATFORM.yaml is bundled
+    into the data-pipeline.zip artifact (status: active) as a static ASSET (manifest assets:, not a
+    handler include). No data-pipeline handler reads exit_criteria or roadmap state at runtime (verified
+    by grep over src/lambdas/data-pipeline/). This change edits roadmap PLANNING metadata only, with no
+    behavioral change to the deployed artifact; established precedent is that roadmap-only / bookkeeping
+    commits (e.g. T-1.20, every /implement bookkeeping commit) do NOT redeploy data-pipeline. Tier is
+    therefore V2, not V3 -- no per-Lambda build/deploy/smoke-test step is required for this artifact.
+  - >-
+    CANDIDATE DECISION DRAFT -- CD.39 (to add under candidate_decisions in docs/ROADMAP-PLATFORM.yaml;
+    state: pending; this plan authors the candidate, it does not ratify it):
+    id: CD.39
+    title: "Exit-criteria ledger -- per-criterion status makes in_progress resolvable; follow-on
+    planning is the in_progress default"
+    detail: |
+      A tier_item is almost never completed by one plan; items take N follow-on plans. The roadmap
+      tracked only item status + prose exit_criteria + a free-text progress_note, so in_progress
+      conflated mid-implementing / needs-next-plan / blocked, and the harness had no deterministic
+      "what's left" signal. This decision promotes each exit_criteria entry to a structured object
+      {id, text, status: open|met|rehomed, met_by} -- "remaining work" becomes the set of open
+      criteria (deterministic, Decision 59). The harness reads it as follows: /orient ranks in_progress
+      items fewest-open-criteria-first and emits follow-on /plan prompts (not /implement-resume) for
+      items whose authored plans are all actioned; /plan gains a follow-on mode that scopes only the
+      next slice and declares the criteria it will close (closes_criteria); /implement flips those
+      declared criteria open->met on a verified VP pass, and an all-criteria-met item QUALIFIES for the
+      completion gate but is NEVER auto-flipped (Status-Trusted-Never-Inferred / T2.20). The ledger lives
+      in the git-authoritative roadmap YAML now as the lightweight near-term stand-in for T4.5/Decision
+      87 (ops_plans/ops_plan_revisions warehouse entities, gated on CD.17); met_by is forward-compatible
+      as a future ops_plans foreign key. Enforcement (validate.py): met/rehomed criteria carry a met_by
+      that resolves to a real plan/commit/item; a touched tier_item may not retain bare-string criteria;
+      plan closes_criteria refs resolve to real item criteria.
+      filed_via: pending_log_decision_lambda
+    gates: []
+    state: pending
+  - >-
+    TIER ITEM DRAFT -- T-1.23 (to add under tier_items in docs/ROADMAP-PLATFORM.yaml):
+    id: T-1.23
+    tier: T-1
+    name: "Exit-criteria ledger + /orient follow-on planning for multi-plan in_progress items"
+    intent: "Promote exit_criteria to {id,text,status,met_by}; surface per-item open-criteria and
+    needs_followon_plan in preflight; rework /orient (follow-on prompts, fewest-open-criteria-first),
+    /plan (follow-on mode + closes_criteria), /implement (flip declared criteria); enforce ledger
+    integrity in validate.py."
+    depends_on: [T-1.20]
+    related_candidate_decisions: [CD.39]
+    files_in_scope: [the scope list of this plan]
+    effort: L
+    status: not_started
+    exit_criteria (authored as ExitCriterion objects, all status: open at creation):
+      - c1 (Phase A): /orient emits follow-on /plan prompts for in_progress items ranked
+        fewest-open-criteria-first, shows an open-criteria count, and drops the /implement-resume default.
+      - c2: exit_criteria accepts str|ExitCriterion with a normalizer; the model_validator enforces
+        met/rehomed-requires-met_by and rehomed-met_by-resolves.
+      - c3: compute_followon_state surfaces open_criteria/all_plans_actioned/needs_followon_plan
+        (live items only) into the preflight cache, on-disk-only.
+      - c4: /plan follow-on mode + PlanDocument.closes_criteria; /implement flips declared criteria
+        open->met on VP pass without auto-inferring.
+      - c5: validate.py asserts criteria-status integrity (met_by resolution, no bare strings on
+        touched items, closes_criteria resolution); docs/contracts/exit-criteria-ledger.yaml exists.
+  - >-
+    CONTRACT DRAFT -- docs/contracts/exit-criteria-ledger.yaml (machine-parseable field semantics;
+    follows the docs/contracts/*.yaml shape; NO top-level prose-architecture section). Sketch:
+      contract:
+        id: exit-criteria-ledger
+        class: B            # roadmap-harness internal contract (not a cross-system Class C invariant)
+        contract_version: 1
+        status: ratified
+        description: >-
+          Per-criterion status ledger on roadmap tier_items, plus the plan->criterion linkage field.
+          Makes in_progress resolvable: remaining work == open criteria (Decision 59).
+      fields:
+        exit_criteria_item:
+          id: { type: str, semantics: "stable within the tier_item; full ref is '<item-id>:<id>' e.g. 'T2.19:c3'" }
+          text: { type: str, semantics: "the criterion prose (was the bare string before this ledger)" }
+          status:
+            type: "enum[open|met|rehomed]"
+            semantics: >-
+              open = remaining work. met = closed by an actioned plan/commit. rehomed = scope moved to
+              another tier_item (met_by names the receiving item id). Default open. Bare-string criteria
+              normalize to status=open at load.
+            populated_by: "/implement bookkeeping walk flips open->met for plan.closes_criteria on VP pass."
+            write_time_validation: >-
+              met/rehomed REQUIRE met_by. Never inferred from prose/file-existence/commit-activity
+              (Status-Trusted-Never-Inferred / T2.20). Touched tier_items may not retain bare strings.
+          met_by:
+            type: "str | null"
+            semantics: >-
+              For met: a plan-slug (docs/plans/PLAN-<slug>.yaml) or a 40-hex commit sha. For rehomed:
+              the receiving tier_item id. Forward-compatible as a future ops_plans FK (T4.5/Decision 87).
+        plan_closes_criteria:
+          type: "list[str]"
+          semantics: >-
+            On PlanDocument. Each entry '<item-id>:<criterion-id>' the plan will close. /implement flips
+            exactly these open->met on VP pass. validate.py asserts each ref resolves to a real
+            item:criterion. Default [] (a plan that closes no item criteria, e.g. a not_started item's
+            first plan, omits it).
+      governance_notes: >-
+        Ledger is git-authoritative (roadmap YAML), NOT an ops_* warehouse table (Decision 84 SoT does
+        not apply yet). T4.5 is the eventual warehouse home; this is the Decision 87 projection-until-T4.x
+        stand-in.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/exit-criteria-ledger-followon-1khq7t)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the Step 6a decision-scout subagent (NO_FLAGS; CITE list captured)
+  - All files in scope located and readable; data-pipeline asset-packaging of the roadmap understood (V2)
+  - Acceptance criteria understood and verifiable; rec-2346 deferral rationale logged in Context
+
+execution_steps:
+  # ===== PHASE A (skill-only; ship as its own PR, merged before Phase B begins) =====
+  - "Phase A / .claude/skills/orient/SKILL.md: in the Deliverable Shape, (a) add an open-criteria count
+    column to the Status Digest for in_progress items (Phase A: inferred from exit_criteria +
+    progress_note prose; Phase B will read open_criteria_count from the preflight cache); (b) in Ranked
+    What-to-Work-On and the /plan-Prompts section, emit follow-on /plan prompts for in_progress items
+    ranked fewest-open-criteria-first (closest-to-done), alongside the existing eligible-item prompts;
+    (c) replace the /implement-resume default for in_progress with: suggest /implement ONLY when a
+    genuinely un-actioned (mid-implementing) plan exists, otherwise recommend a follow-on /plan. Keep
+    the read-only contract and Status-Trusted-Never-Inferred rule intact."
+  - "Phase A / .claude/commands/orient.md: in Step 2 Load Inputs, document reading platform_roadmap.in_progress
+    and (Phase B) the per-item open_criteria_count/all_plans_actioned/needs_followon_plan fields from the
+    preflight cache; reflect the new follow-on-prompt and open-criteria-count deliverable additions in Step 3."
+  - "Phase A commit + PR: run VP steps 1-2, then commit (feat(exit-criteria-ledger): /orient follow-on
+    planning for in_progress items - Phase A), open a PR via GitHub MCP, wait for the fast --pre tier
+    event-driven (subscribe_pr_activity; end turn), squash-merge on green. Phase A is now independently shipped."
+  # ===== PHASE B (schema + signal + workflow + enforcement) =====
+  - "Phase B / scripts/platform_roadmap.py: add class ExitCriterion(BaseModel, extra='forbid') with
+    id:str, text:str, status:Literal['open','met','rehomed']='open', met_by:str|None=None. Widen
+    TierItem.exit_criteria to list[str | ExitCriterion]; add a field_validator that normalizes each bare
+    str to ExitCriterion(id=auto 'cN', text=str, status='open'). In RoadmapDocument._validate_graph add:
+    (g) every met/rehomed criterion has a non-empty met_by; (h) a rehomed criterion's met_by resolves to
+    a known tier_item id. Add compute_followon_state(doc, plans_dir: Path) -> dict[item_id, {open_criteria:int,
+    all_plans_actioned:bool, needs_followon_plan:bool}] scanning docs/plans/PLAN-*.yaml closes_criteria
+    (best-effort YAML read; ignore malformed plans). Extend PlatformRoadmapState/to_preflight_dict so
+    in_progress entries carry open_criteria_count/all_plans_actioned/needs_followon_plan; scope strictly to
+    live items (status in not_started/in_progress) and exclude deferred_post_mvp/reserved (Decision 93)."
+  - "Phase B / scripts/plan_document.py: add closes_criteria: list[str] = Field(default_factory=list) to
+    PlanDocument (keep extra='forbid', schema_version=1). Optionally add a light format check that each
+    entry matches '<id>:<crit>' shape (resolution against the roadmap is validate.py's job, not here)."
+  - "Phase B / docs/contracts/exit-criteria-ledger.yaml: create the contract from the CONTRACT DRAFT in
+    context (machine-parseable; no top-level prose-architecture section, so it passes the intent-doc-freeze guard)."
+  - "Phase B / docs/ROADMAP-PLATFORM.yaml: add candidate_decision CD.39 (from draft) and tier_item T-1.23
+    (from draft, exit_criteria as ExitCriterion objects, all status: open, files_in_scope = this plan's
+    scope). Backfill the 13 in_progress items: convert each exit_criteria string to an ExitCriterion
+    object (id cN, text=original string), seeding status=met or rehomed (+met_by) ONLY where the item's
+    progress_note unambiguously attests it (conservative bias -- when ambiguous, leave open; never seed
+    met without an attested plan-slug/commit; for rehomed use the receiving item id, e.g. T2.19's
+    re-homed criterion -> met_by: T2.26). Preserve original wording in text verbatim."
+  - "Phase B / scripts/validate.py: extend validate_platform_roadmap with the criteria-status integrity
+    assertions -- (i) met/rehomed met_by resolves to docs/plans/PLAN-<slug>.yaml OR a 40-hex commit OR
+    (rehomed) a real tier_item id; (ii) any tier_item present in the git diff (compare against origin/main)
+    must have fully-structured criteria (no bare strings); (iii) every PLAN-*.yaml closes_criteria ref
+    resolves to a real item:criterion. Keep the schema check in the full tier; the fast structural pieces
+    may run where validate_platform_roadmap is already wired. Never add to ci.yml without validate.py (Decision 80)."
+  - "Phase B / .claude/skills/planning/SKILL.md: add a 'Follow-on /plan mode' subsection -- when intent
+    targets an in_progress item with open criteria, load its open criteria + prior plans + progress_note,
+    scope ONLY the next slice, and require the plan to declare closes_criteria mapping its acceptance_criteria
+    to the item criteria it will close. Cross-reference the Tier Item Freshness Gate."
+  - "Phase B / .claude/skills/implement/SKILL.md: extend the Tier_item bookkeeping section -- after VP pass,
+    for each ref in the plan's closes_criteria, stage that roadmap criterion status open->met with
+    met_by=<plan-slug> in the same staged YAML edit (rides the existing parallel-with-code-review state
+    machine). Reinforce: only declared criteria flip; all-criteria-met QUALIFIES for completion but is never
+    auto-flipped; never infer met from prose/files/commits (Status-Trusted-Never-Inferred / T2.20)."
+  - "Phase B / tests: extend tests/test_platform_roadmap.py (ExitCriterion normalizer; met/rehomed integrity
+    negative cases; compute_followon_state in-flight-vs-no-plan and live-items-only), tests/test_plan_document.py
+    (closes_criteria accept/default/extra-forbid), tests/test_session_preflight_platform_roadmap.py (cache
+    surfaces the three followon fields on in_progress entries)."
+  - "Execute Verification Plan -- run each step (3-10); loop until pass. On an unrecoverable failure, stop and RCA (Decision 55)."
+  - "Phase B commit + PR: commit (feat(exit-criteria-ledger): structured criteria + deterministic
+    needs_followon_plan + enforcement - Phase B), open PR via GitHub MCP, subscribe, squash-merge on green.
+    Run the full validate.py locally before opening the PR to avoid a post-merge red main."
+  - "Report: what was implemented per phase, the VP compliance table, and the bookkeeping outcome for T-1.23
+    (and any criteria flipped on T-1.20 if a follow-on session closes it)."
+
+work_areas: []
+rollback: >-
+  Phase A and Phase B merge as separate PRs; either can be reverted independently. Phase B schema is
+  additive and backward-compatible (bare strings still load via the normalizer), so reverting the
+  backfill commit alone restores prior behavior without breaking the loader. The new contract file and
+  CD.39/T-1.23 entries are inert if the consuming code is reverted.
