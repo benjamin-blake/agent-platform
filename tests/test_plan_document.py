@@ -175,3 +175,31 @@ class TestValidateIntegration:
         validate_plan_documents(failed, plans_dir=tmp_path)
         assert failed == []
         assert "no PLAN-*.yaml files to validate" in capsys.readouterr().out
+
+
+class TestClosesCriteria:
+    """T-1.23: closes_criteria is an additive optional field (Decision 85)."""
+
+    def test_closes_criteria_defaults_to_empty_list(self) -> None:
+        doc = PlanDocument.model_validate(_base())
+        assert doc.closes_criteria == []
+
+    def test_closes_criteria_accepts_list_of_strings(self) -> None:
+        d = _mutate(closes_criteria=["T-1.23:c1", "T-1.23:c2"])
+        doc = PlanDocument.model_validate(d)
+        assert doc.closes_criteria == ["T-1.23:c1", "T-1.23:c2"]
+
+    def test_closes_criteria_empty_list_explicit(self) -> None:
+        d = _mutate(closes_criteria=[])
+        doc = PlanDocument.model_validate(d)
+        assert doc.closes_criteria == []
+
+    def test_unknown_field_still_rejected(self) -> None:
+        d = _mutate(some_unknown_field="oops")
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_present_does_not_break_extra_forbid(self) -> None:
+        d = _mutate(closes_criteria=["T0.4:c1"], some_bad="x")
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)

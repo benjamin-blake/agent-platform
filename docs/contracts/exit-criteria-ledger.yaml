@@ -1,0 +1,64 @@
+version: 1
+last_updated: "2026-06-24"
+decisions_cited:
+  - Decision-59
+  - Decision-70
+  - Decision-80
+  - Decision-84
+  - Decision-86
+  - Decision-87
+  - Decision-88
+  - CD.39
+summary: >-
+  Per-criterion status ledger on roadmap tier_items, plus the plan->criterion linkage field.
+  Makes in_progress resolvable: remaining work == the set of open criteria (Decision 59).
+  The ledger is git-authoritative (roadmap YAML), not an ops_* warehouse table.
+
+exit_criterion_object:
+  description: >-
+    Shape of each TierItem.exit_criteria[] entry. Defined in scripts/platform_roadmap.py::ExitCriterion.
+    Bare strings normalize to status=open at load (lazy migration of not_started items).
+  id:
+    type: str
+    semantics: >-
+      Stable within the tier_item; the full cross-item ref is '<item-id>:<id>',
+      e.g. 'T2.19:c3'. Auto-assigned 'cN' when normalizing a bare string.
+  text:
+    type: str
+    semantics: The criterion prose (verbatim from the bare string before this ledger).
+  status:
+    type: "enum: open | met | rehomed"
+    semantics: >-
+      open = remaining work. met = closed by an actioned plan or commit (met_by names the
+      plan-slug or commit sha). rehomed = scope moved to another tier_item (met_by names
+      the receiving item id). Default open.
+    populated_by: >-
+      /implement bookkeeping walk flips open->met for each ref in plan.closes_criteria on
+      a verified VP pass (Status-Trusted-Never-Inferred / T2.20).
+    write_time_validation: >-
+      met/rehomed REQUIRE a non-empty met_by. Never inferred from prose, file existence,
+      or commit activity. validate.py forbids bare strings on git-diff-touched items.
+  met_by:
+    type: "str | null"
+    semantics: >-
+      For met: a plan-slug (docs/plans/PLAN-<slug>.yaml exists) or a 40-hex commit sha.
+      For rehomed: the receiving tier_item id (must resolve to a known item).
+      Forward-compatible as a future ops_plans foreign key (T4.5 / Decision 87).
+
+plan_closes_criteria:
+  description: >-
+    PlanDocument.closes_criteria field (scripts/plan_document.py). Lists which item
+    criteria the plan commits to close on a verified VP pass.
+  type: "list[str]"
+  semantics: >-
+    Each entry '<item-id>:<criterion-id>' (e.g. 'T-1.23:c2') names a criterion the plan
+    will close. /implement flips exactly these open->met on VP pass. validate.py asserts
+    each ref resolves to a real item:criterion in the roadmap. Default [] -- a plan that
+    closes no item criteria (e.g. a not_started item's first plan) omits the field.
+
+governance_notes: >-
+  Ledger is git-authoritative (roadmap YAML), NOT an ops_* warehouse table. The
+  warehouse-SoT invariant (Decision 84) does not apply to this ledger yet; T4.5 is the
+  eventual warehouse home and this is the Decision-87 projection-until-T4.x stand-in.
+  This file is intentionally non-ritual (no contract:/class: block) per the CD.25 gate
+  (validate.py::validate_contract_drift skips files without a top-level contract: key).

@@ -56,6 +56,7 @@ validate_ci_rca_taxonomy = _validate.validate_ci_rca_taxonomy
 validate_verifier_hermeticity = _validate.validate_verifier_hermeticity
 validate_field_semantics_drift = _validate.validate_field_semantics_drift
 validate_broker_env_reads = _validate.validate_broker_env_reads
+validate_platform_roadmap = _validate.validate_platform_roadmap
 
 
 class TestFieldSemanticsDriftGate:
@@ -3706,3 +3707,135 @@ class TestBrokerEnvReadGuard:
         with patch("validate.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert failed == [], f"tests/ must not be scanned, got: {failed}"
+
+
+class TestPlatformRoadmapCriteriaIntegrity:
+    """Tests for validate_platform_roadmap() criteria-status integrity assertions (T-1.23).
+
+    Check (i)  -- met criterion met_by resolves to a real plan file or 40-hex sha.
+    Check (iii) -- every PLAN-*.yaml closes_criteria ref resolves to a real item:criterion.
+    """
+
+    _MINIMAL_ROADMAP = (
+        "document:\n  id: test-roadmap\n  version: 1\n  status: draft\n  filed_via: pending_log_decision_lambda\n"
+    )
+
+    def _setup_dirs(self, tmp_path: Path, roadmap_extra: str = "") -> None:
+        """Write a minimal ROADMAP-PLATFORM.yaml and create docs/plans/ under tmp_path."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+        (docs_dir / "ROADMAP-PLATFORM.yaml").write_text(self._MINIMAL_ROADMAP + roadmap_extra, encoding="utf-8")
+
+    @staticmethod
+    def _no_diff_ctx():
+        """Patch subprocess.run so the git-diff check (ii) sees an empty diff."""
+        return patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=""))
+
+    def test_met_criterion_dangling_met_by_fails(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by names no real plan and is not a 40-hex SHA -> failure."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            "        met_by: nonexistent-plan\n",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_met_criterion_valid_plan_file_passes(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by points to an existing PLAN-*.yaml -> pass."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            "        met_by: real-plan\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-real-plan.yaml").write_text("slug: real-plan\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed
+
+    def test_met_criterion_valid_sha_passes(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by is a 40-hex commit SHA -> pass."""
+        sha = "a" * 40
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            f"        met_by: '{sha}'\n",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+
+    def test_closes_criteria_unknown_item_fails(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria refs a tier_item id absent from the roadmap -> failure."""
+        self._setup_dirs(tmp_path)  # roadmap has no tier_items
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T999.1:c1\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_closes_criteria_unknown_criterion_fails(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria refs a criterion id absent from a known item -> failure."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: criterion 1\n"
+            "        status: open\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c999\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_closes_criteria_valid_ref_passes(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria ref resolves to a real item:criterion -> pass."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: criterion 1\n"
+            "        status: open\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c1\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed

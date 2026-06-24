@@ -1677,6 +1677,32 @@ candidate_decisions:
       - Two-tier TAP-style flow preserved: merge on PR --pre, promote/close only on main full-validate (CI authoritative per the AGENTS.md merge protocol).
       - Verdict-callback failures (stale/duplicate/auth) route to ci-rca (Decision 72 / Decision 55), never silent retry.
 
+  - id: CD.39
+    title: >-
+      Exit-criteria ledger -- per-criterion status makes in_progress resolvable;
+      follow-on planning is the in_progress default
+    detail: |
+      A tier_item is almost never completed by one plan; items take N follow-on plans. The roadmap
+      tracked only item status + prose exit_criteria + a free-text progress_note, so in_progress
+      conflated mid-implementing / needs-next-plan / blocked, and the harness had no deterministic
+      "what's left" signal. This decision promotes each exit_criteria entry to a structured object
+      {id, text, status: open|met|rehomed, met_by} -- "remaining work" becomes the set of open
+      criteria (deterministic, Decision 59). The harness reads it as follows: /orient ranks in_progress
+      items fewest-open-criteria-first and emits follow-on /plan prompts (not /implement-resume) for
+      items whose authored plans are all actioned; /plan gains a follow-on mode that scopes only the
+      next slice and declares the criteria it will close (closes_criteria); /implement flips those
+      declared criteria open->met on a verified VP pass, and an all-criteria-met item QUALIFIES for
+      the completion gate but is NEVER auto-flipped (Status-Trusted-Never-Inferred / T2.20). The
+      ledger lives in the git-authoritative roadmap YAML now as the lightweight near-term stand-in
+      for T4.5/Decision 87 (ops_plans/ops_plan_revisions warehouse entities, gated on CD.17); met_by
+      is forward-compatible as a future ops_plans foreign key. Enforcement (validate.py):
+      met/rehomed criteria carry a met_by that resolves to a real plan/commit/item; a touched
+      tier_item may not retain bare-string criteria; plan closes_criteria refs resolve to real item
+      criteria.
+    gates: []
+    state: pending
+    filed_via: pending_log_decision_lambda
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -2212,9 +2238,15 @@ tier_items:
       - docs/contracts/log-storage.md
       - scripts/s3_log_store.py
     exit_criteria:
-      - "log-storage.yaml exists at contract_version: 1, status: ratified"
-      - "s3_log_store.py reads the YAML; CI green"
-      - "Step 10 multi-perspective critique converges"
+      - id: c1
+        text: "log-storage.yaml exists at contract_version: 1, status: ratified"
+        status: open
+      - id: c2
+        text: s3_log_store.py reads the YAML; CI green
+        status: open
+      - id: c3
+        text: Step 10 multi-perspective critique converges
+        status: open
     related_candidate_decisions: [CD.25]
     effort: S
     strategic: false
@@ -2353,11 +2385,27 @@ tier_items:
       - tests/test_platform_roadmap.py
       - tests/test_session_preflight_platform_roadmap.py
     exit_criteria:
-      - "compute_state_dict output includes blocked_on_cd[] (item id + blocking CD ids) for items eligible-by-deps with pending gating CDs"
-      - "Cross-tier gate rules with static helpers evaluate at preflight; gate verdicts surfaced in the report; item_field_eq documented as runtime-deferred"
-      - "Preflight report keys and the agent_instructions consumer-contract text agree (no promised-but-unimplemented key in either direction)"
-      - "next_eligible entries carry user_action_required when the item sets it"
-      - "Unit tests cover blocked-on-CD computation and gate evaluation"
+      - id: c1
+        text: >-
+          compute_state_dict output includes blocked_on_cd[] (item id + blocking CD ids) for items
+          eligible-by-deps with pending gating CDs
+        status: open
+      - id: c2
+        text: >-
+          Cross-tier gate rules with static helpers evaluate at preflight; gate verdicts surfaced in the
+          report; item_field_eq documented as runtime-deferred
+        status: open
+      - id: c3
+        text: >-
+          Preflight report keys and the agent_instructions consumer-contract text agree (no
+          promised-but-unimplemented key in either direction)
+        status: open
+      - id: c4
+        text: next_eligible entries carry user_action_required when the item sets it
+        status: open
+      - id: c5
+        text: Unit tests cover blocked-on-CD computation and gate evaluation
+        status: open
     related_candidate_decisions: [CD.13]
     effort: S
     strategic: false
@@ -2433,6 +2481,67 @@ tier_items:
     status: complete
     completed_at: "2026-06-09"
     note: "Realized in the 2026-06-09 audit-integration session (same commit as the roadmap reconciliation); zero-context coherence reviews ran per the integration protocol."
+
+  - id: T-1.23
+    tier: T-1
+    name: Exit-criteria ledger + /orient follow-on planning for multi-plan in_progress items
+    intent: >-
+      Promote exit_criteria to {id,text,status,met_by}; surface per-item open-criteria and
+      needs_followon_plan in preflight; rework /orient (follow-on prompts,
+      fewest-open-criteria-first), /plan (follow-on mode + closes_criteria), /implement
+      (flip declared criteria); enforce ledger integrity in validate.py.
+    depends_on: [T-1.20]
+    related_candidate_decisions: [CD.39]
+    files_in_scope:
+      - .claude/skills/orient/SKILL.md
+      - .claude/commands/orient.md
+      - scripts/platform_roadmap.py
+      - scripts/session_preflight.py
+      - scripts/plan_document.py
+      - scripts/validate.py
+      - .claude/skills/planning/SKILL.md
+      - .claude/skills/implement/SKILL.md
+      - docs/contracts/exit-criteria-ledger.yaml
+      - docs/ROADMAP-PLATFORM.yaml
+      - tests/test_platform_roadmap.py
+      - tests/test_session_preflight_platform_roadmap.py
+      - tests/test_plan_document.py
+      - tests/test_validate.py
+    effort: L
+    strategic: false
+    status: complete
+    completed_at: "2026-06-24"
+    exit_criteria:
+      - id: c1
+        text: >-
+          /orient emits follow-on /plan prompts for in_progress items ranked fewest-open-criteria-first,
+          shows an open-criteria count, and drops the /implement-resume default (Phase A landed).
+        status: met
+        met_by: exit-criteria-ledger-orient-followon
+      - id: c2
+        text: >-
+          exit_criteria accepts str|ExitCriterion with a normalizer; the model_validator enforces
+          met/rehomed-requires-met_by and rehomed-met_by-resolves.
+        status: met
+        met_by: exit-criteria-ledger-orient-followon
+      - id: c3
+        text: >-
+          compute_followon_state surfaces open_criteria/all_plans_actioned/needs_followon_plan
+          (live items only) into the preflight cache, on-disk-only reads.
+        status: met
+        met_by: exit-criteria-ledger-orient-followon
+      - id: c4
+        text: >-
+          /plan follow-on mode + PlanDocument.closes_criteria; /implement flips declared criteria
+          open->met on VP pass without auto-inferring.
+        status: met
+        met_by: exit-criteria-ledger-orient-followon
+      - id: c5
+        text: >-
+          validate.py asserts criteria-status integrity (met_by resolution, no bare strings on
+          touched items, closes_criteria resolution); docs/contracts/exit-criteria-ledger.yaml exists.
+        status: met
+        met_by: exit-criteria-ledger-orient-followon
 
   # ----- T0: Bootstrap (surface + account + minimum tooling) -----
   - id: T0.1
@@ -2541,10 +2650,24 @@ tier_items:
       - requirements-dev.txt                           # litellm dev dependency (T4.2 promotes to requirements.txt)
     note: "[Re-grounded 2026-06-20: files_in_scope moved off the retired work-root path (terraform/inference_credentials.tf) per CD.21/audit F-014 and expanded to the IAM grant + smoke-test + dev requirement the exit criteria require. Status remains not_started: CD.28 pending gates completion.]"
     exit_criteria:
-      - "DeepSeek API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM smoke-test call against deepseek/deepseek-chat returns 200"
-      - "Anthropic API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM smoke-test call against anthropic/claude-haiku-4-5 returns 200"
-      - "PlatformDev DailyOps IAM policy extended with secretsmanager:GetSecretValue on the two inference-credential secret ARNs"
-      - "Quarterly rotation cadence calendar-reminded (user_action_required)"
+      - id: c1
+        text: >-
+          DeepSeek API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM
+          smoke-test call against deepseek/deepseek-chat returns 200
+        status: open
+      - id: c2
+        text: >-
+          Anthropic API key provisioned in Secrets Manager (per-environment); value set out-of-band; LiteLLM
+          smoke-test call against anthropic/claude-haiku-4-5 returns 200
+        status: open
+      - id: c3
+        text: >-  # pragma: allowlist secret
+          PlatformDev DailyOps IAM policy extended with secretsmanager:GetSecretValue on the two
+          inference-credential secret ARNs
+        status: open
+      - id: c4
+        text: Quarterly rotation cadence calendar-reminded (user_action_required)
+        status: open
     related_candidate_decisions: [CD.6, CD.28]
     effort: XS
     strategic: false
@@ -3574,11 +3697,29 @@ tier_items:
         hottest read path; maintenance = scheduled/low-volume, days-only). T1.12 is
         bootstrap_completion_exempt: false, so completion ratifies post-CD.16 under the normal flow.
     exit_criteria:
-      - "All three DuckLake Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0 (ducklake_writer, ducklake_reader, ducklake_maintenance)"
-      - "Each carries an explicit re_ratification_trigger.first_of per the re-mapped Part 6B stagger, parseable by scripts/contracts_enforcement.evaluate_provisional_trigger"
-      - "Each contract's verbs: map matches the live handler dispatch surface; the CD.25 contract-drift gate passes"
-      - "The Step 10 multi-perspective critique converged on the three contract deliverables"
-      - "COMPLETION gate: flips in_progress -> complete only when CD.25 ratifies (T1.12 is bootstrap_completion_exempt: false)"
+      - id: c1
+        text: >-
+          All three DuckLake Lambda verb contract YAMLs exist at contract_version: 1, status: provisional_v0
+          (ducklake_writer, ducklake_reader, ducklake_maintenance)
+        status: open
+      - id: c2
+        text: >-
+          Each carries an explicit re_ratification_trigger.first_of per the re-mapped Part 6B stagger,
+          parseable by scripts/contracts_enforcement.evaluate_provisional_trigger
+        status: open
+      - id: c3
+        text: >-
+          Each contract's verbs: map matches the live handler dispatch surface; the CD.25 contract-drift gate
+          passes
+        status: open
+      - id: c4
+        text: The Step 10 multi-perspective critique converged on the three contract deliverables
+        status: open
+      - id: c5
+        text: >-
+          COMPLETION gate: flips in_progress -> complete only when CD.25 ratifies (T1.12 is
+          bootstrap_completion_exempt: false)
+        status: open
     related_candidate_decisions: [CD.25, CD.10, CD.11, CD.16]
     effort: L
     strategic: true
@@ -3623,12 +3764,35 @@ tier_items:
       - scripts/validate.py    # validate_ci_rca_taxonomy coverage check; validate_ci_rca_trigger wired in by PLAN-ci-rca-workflow-correctness
       - tests/test_ci_rca_evidence_ast.py    # new contract test for AST walker
     exit_criteria:
-      - "All six follow-on IMPLEMENTATION plans landed: PLAN-ci-rca-schema-enforcement, PLAN-ci-rca-evidence-script, PLAN-ci-rca-prompt-rewrite, PLAN-ci-rca-evidence-dispute, PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre"
-      - "CI_RCA_STRICT_MODE flipped to strict via Decision Record after Phase 4 back-validation per docs/INTENT-ci-rca-methodology.md Section 6"
-      - "Section 7 observability shows warn-mode rejection rate stable < 5% over 7 days of CI failures"
-      - "rec-859 case study's preventive_action (validate_sloc_limits promoted to --pre tier) operational"
-      - "evidence_bundle SHA-256 verification roundtrips: bundle uploaded to s3://agent-platform-agent-logs/ci-rca-evidence/<sha>.json AND referenced by SHA in source=ci_rca rec context_v2_json field"
-      - "PLAN-ci-rca-workflow-correctness landed: ci-rca.yml rca job if: gates on head_branch==default_branch (main-only trigger); filing detection uses scripts/ci_rca_filing.py FILED: marker (not grep); ci-rca-filter guard wired into scripts/validate.py presubmit tier"
+      - id: c1
+        text: >-
+          All six follow-on IMPLEMENTATION plans landed: PLAN-ci-rca-schema-enforcement,
+          PLAN-ci-rca-evidence-script, PLAN-ci-rca-prompt-rewrite, PLAN-ci-rca-evidence-dispute,
+          PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre
+        status: open
+      - id: c2
+        text: >-
+          CI_RCA_STRICT_MODE flipped to strict via Decision Record after Phase 4 back-validation per
+          docs/INTENT-ci-rca-methodology.md Section 6
+        status: open
+      - id: c3
+        text: Section 7 observability shows warn-mode rejection rate stable < 5% over 7 days of CI failures
+        status: open
+      - id: c4
+        text: "rec-859 case study's preventive_action (validate_sloc_limits promoted to --pre tier) operational"
+        status: open
+      - id: c5
+        text: >-
+          evidence_bundle SHA-256 verification roundtrips: bundle uploaded to
+          s3://agent-platform-agent-logs/ci-rca-evidence/<sha>.json AND referenced by SHA in source=ci_rca rec
+          context_v2_json field
+        status: open
+      - id: c6
+        text: >-
+          PLAN-ci-rca-workflow-correctness landed: ci-rca.yml rca job if: gates on head_branch==default_branch
+          (main-only trigger); filing detection uses scripts/ci_rca_filing.py FILED: marker (not grep);
+          ci-rca-filter guard wired into scripts/validate.py presubmit tier
+        status: open
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
     related_candidate_decisions: []
     effort: L
@@ -4201,10 +4365,21 @@ tier_items:
       - scripts/broker_secrets.py
       - scripts/validate.py
     exit_criteria:
-      - "Secrets Manager entries for Alpaca live + paper provisioned via Terraform"
-      - "credential-routing.yaml ratified at contract_version: 1"
-      - "Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks, enforced by a scripts/validate.py CI guard that rejects direct broker-API-key env reads in src/ and scripts/"
-      - "Step 10 multi-perspective critique converges"
+      - id: c1
+        text: Secrets Manager entries for Alpaca live + paper provisioned via Terraform
+        status: open
+      - id: c2
+        text: "credential-routing.yaml ratified at contract_version: 1"
+        status: open
+      - id: c3
+        text: >-
+          Lambdas resolve broker credentials by routing key from the contract; no direct env-var fallbacks,
+          enforced by a scripts/validate.py CI guard that rejects direct broker-API-key env reads in src/ and
+          scripts/
+        status: open
+      - id: c4
+        text: Step 10 multi-perspective critique converges
+        status: open
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
@@ -4428,15 +4603,58 @@ tier_items:
       - src/lambdas/ducklake_maintenance/    # new -- or extend an existing maintenance Lambda
       - src/lambdas/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
     exit_criteria:
-      - "Inlining DISABLED for ALL tables including telemetry (OQ.11 -> c as amended by CD.34: ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)"
-      - "expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed stable after N maintenance cycles"
-      - "Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62"
-      - "ops_compaction Lambda retired or repurposed"
-      - "Maintenance runs as two deterministic singleton cadences (daily non-destructive merge; separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)"
-      - "Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2 snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB, weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)"
-      - "Catalog DR (CD.34, weekly per Decision 88): a weekly pg_dump of the Neon catalog (single consistent snapshot via --serializable-deferrable / single-txn, engine-version-tagged) to a dedicated versioned, lifecycle-managed S3 bucket; schedule cron(0 3 ? * SUN *); 30-day retention (tunable to 7); a ~8-day freshness alarm (evaluation_periods=192/datapoints_to_alarm=192) pages on a missed weekly dump; on any DuckLake/DuckDB engine bump (OQ.12) re-baseline the retention window (CD.33 O-2 as amended by CD.34/Decision 88). [Realized-differently note: originally daily cron(0 3 * * ? *) with a >25h alarm; lowered to weekly by Decision 88 -- a daily full-catalog pg_dump is storage-negligible but a material METERED-EGRESS line (the free-tier breach), and paid-tier Neon's 7-day PITR covers between-dump recovery.]"
-      - "Telemetry small-file load: disabling telemetry inlining (CD.34) shifts small writes onto compaction; high-write-rate tables get a higher-frequency merge_adjacent_files, and the guarded-GC circuit breaker (>20% files) is co-tuned for the raised dead-file rate so it does not false-positive abort+page (CD.34)"
-      - "Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
+      - id: c1
+        text: >-
+          Inlining DISABLED for ALL tables including telemetry (OQ.11 -> c as amended by CD.34:
+          ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the
+          maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)
+        status: open
+      - id: c2
+        text: >-
+          expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed
+          stable after N maintenance cycles
+        status: open
+      - id: c3
+        text: Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62
+        status: open
+      - id: c4
+        text: ops_compaction Lambda retired or repurposed
+        status: open
+      - id: c5
+        text: >-
+          Maintenance runs as two deterministic singleton cadences (daily non-destructive merge;
+          separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)
+        status: open
+      - id: c6
+        text: >-
+          Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2
+          snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB,
+          weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)
+        status: open
+      - id: c7
+        text: >-
+          Catalog DR (CD.34, weekly per Decision 88): a weekly pg_dump of the Neon catalog (single consistent
+          snapshot via --serializable-deferrable / single-txn, engine-version-tagged) to a dedicated
+          versioned, lifecycle-managed S3 bucket; schedule cron(0 3 ? * SUN *); 30-day retention (tunable to
+          7); a ~8-day freshness alarm (evaluation_periods=192/datapoints_to_alarm=192) pages on a missed
+          weekly dump; on any DuckLake/DuckDB engine bump (OQ.12) re-baseline the retention window (CD.33 O-2
+          as amended by CD.34/Decision 88). [Realized-differently note: originally daily cron(0 3 * * ? *)
+          with a >25h alarm; lowered to weekly by Decision 88 -- a daily full-catalog pg_dump is
+          storage-negligible but a material METERED-EGRESS line (the free-tier breach), and paid-tier Neon's
+          7-day PITR covers between-dump recovery.]
+        status: open
+      - id: c8
+        text: >-
+          Telemetry small-file load: disabling telemetry inlining (CD.34) shifts small writes onto compaction;
+          high-write-rate tables get a higher-frequency merge_adjacent_files, and the guarded-GC circuit
+          breaker (>20% files) is co-tuned for the raised dead-file rate so it does not false-positive
+          abort+page (CD.34)
+        status: open
+      - id: c9
+        text: >-
+          Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3 tier per CD.16; Decision 67
+          Lambda-deploy clause lifted by Decision 79)
+        status: open
     related_candidate_decisions: [CD.31, CD.29, CD.33, CD.34]
     effort: M
     strategic: false
@@ -4504,21 +4722,86 @@ tier_items:
       - src/lambdas/ducklake_writer/    # implement write path
       - src/lambdas/ducklake_reader/    # implement read path
     exit_criteria:
-      - "All ops_recommendations writes go through the DuckLake writer via ops_data_portal; Decision 69 Single-Portal invariant preserved (full-cutover criterion 'ALL ops writes' re-homed to T2.26 per the 2026-06-08 recs-first rescope -- audit F-018)"
-      - "DuckDBIcebergReader replaced by DuckLake reader for the recs operational read paths (deferred tables keep DuckDBIcebergReader until T2.26)"
-      - "SCD2 schema reproduced in DuckLake (current_state field); CDC / time-travel optional extension documented"
-      - "OQ.7 resolved: Athena escape hatch strategy after DuckLake adoption documented + tested"
-      - "OQ.10 resolved: writer-concurrency = bounded application-level OCC retry (backoff+jitter, loud-fail on exhaustion) in ducklake_writer + ducklake_maintenance singleton; reserved-concurrency=1 and SQS FIFO rejected as over-serialising (CD.33 clause 2)"
-      - "Decision 69 Single-Portal invariant verified: no recs write path bypasses ops_data_portal"
-      - "ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)"
-      - "Closed boundary verified for recs: every ops_recommendations read transits ducklake_reader, every write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass reads the Neon catalog credential (Secrets Manager) + S3 (CD.33 clause 6 / OQ.7 / H2 / O-1; CD.34)"
-      - "[OPEN -- added 2026-06-09, audit F-003] sync_ops recs cache-pull/rebuild is backend-gated: on the ducklake backend a DuckLakeReader failure loud-fails (or skips with a warning) instead of silently falling back to the stale Athena ops_recommendations_current view; the Athena fallback is reachable ONLY under OPS_STORAGE_BACKEND=iceberg (designed rollback). Evidence at audit time: scripts/sync_ops.py _pull_single_table and _rebuild_local_cache fell back unconditionally"
-      - "[OPEN -- added 2026-06-09, audit F-004] validate.py carries a recs-topology guard: asserts the 3 OPS_STORAGE_BACKEND default sites are 'ducklake', the recs reader path has no Athena branch, and any recs Athena reference is iceberg-gated -- so a regression re-opening the recs Athena path fails CI"
-      - "Connection-churn / OCC-commit-latency headroom re-validated against production-shaped concurrency at cutover (re-drills the T2.16b churn gate, which proved it on an empty catalog under synthetic burst; CD.34)"
-      - "current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7 / R-4 / C-1)"
-      - "SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)"
-      - "Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)"
-      - "[Re-homed to T2.26 start gate -- audit F-018] Catalog DR restore drill with pg_restore against production-shaped data (rec-2113 HARD GATE before the next ops table migrates; the pgclient layer lacked pg_restore at recs sign-off)"
+      - id: c1
+        text: >-
+          All ops_recommendations writes go through the DuckLake writer via ops_data_portal; Decision 69
+          Single-Portal invariant preserved (full-cutover criterion 'ALL ops writes' re-homed to T2.26 per the
+          2026-06-08 recs-first rescope -- audit F-018)
+        status: open
+      - id: c2
+        text: >-
+          DuckDBIcebergReader replaced by DuckLake reader for the recs operational read paths (deferred tables
+          keep DuckDBIcebergReader until T2.26)
+        status: open
+      - id: c3
+        text: >-
+          SCD2 schema reproduced in DuckLake (current_state field); CDC / time-travel optional extension
+          documented
+        status: open
+      - id: c4
+        text: "OQ.7 resolved: Athena escape hatch strategy after DuckLake adoption documented + tested"
+        status: open
+      - id: c5
+        text: >-
+          OQ.10 resolved: writer-concurrency = bounded application-level OCC retry (backoff+jitter, loud-fail
+          on exhaustion) in ducklake_writer + ducklake_maintenance singleton; reserved-concurrency=1 and SQS
+          FIFO rejected as over-serialising (CD.33 clause 2)
+        status: open
+      - id: c6
+        text: "Decision 69 Single-Portal invariant verified: no recs write path bypasses ops_data_portal"
+        status: open
+      - id: c7
+        text: ducklake_writer owns the schema-enforcement gate; no write path bypasses it (CD.33 clause 4)
+        status: open
+      - id: c8
+        text: >-
+          Closed boundary verified for recs: every ops_recommendations read transits ducklake_reader, every
+          write ducklake_writer; no out-of-band DuckLake access; audited PlatformAdmin break-glass reads the
+          Neon catalog credential (Secrets Manager) + S3 (CD.33 clause 6 / OQ.7 / H2 / O-1; CD.34)
+        status: open
+      - id: c9
+        text: >-
+          [OPEN -- added 2026-06-09, audit F-003] sync_ops recs cache-pull/rebuild is backend-gated: on the
+          ducklake backend a DuckLakeReader failure loud-fails (or skips with a warning) instead of silently
+          falling back to the stale Athena ops_recommendations_current view; the Athena fallback is reachable
+          ONLY under OPS_STORAGE_BACKEND=iceberg (designed rollback). Evidence at audit time:
+          scripts/sync_ops.py _pull_single_table and _rebuild_local_cache fell back unconditionally
+        status: open
+      - id: c10
+        text: >-
+          [OPEN -- added 2026-06-09, audit F-004] validate.py carries a recs-topology guard: asserts the 3
+          OPS_STORAGE_BACKEND default sites are 'ducklake', the recs reader path has no Athena branch, and any
+          recs Athena reference is iceberg-gated -- so a regression re-opening the recs Athena path fails CI
+        status: open
+      - id: c11
+        text: >-
+          Connection-churn / OCC-commit-latency headroom re-validated against production-shaped concurrency at
+          cutover (re-drills the T2.16b churn gate, which proved it on an empty catalog under synthetic burst;
+          CD.34)
+        status: open
+      - id: c12
+        text: >-
+          current write-through projection live: reads hit current; each write is one DuckLake txn (INSERT
+          history + MERGE current from in-hand delta); read-your-write verified in smoke test (CD.33 clause 7
+          / R-4 / C-1)
+        status: open
+      - id: c13
+        text: >-
+          SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness via the current MERGE
+          key on rec_id, and in-transaction update_rec referential existence (CD.33 clause 8 / C-3 / D-5)
+        status: open
+      - id: c14
+        text: >-
+          Per-Lambda build + deploy + smoke-test for ducklake_writer and ducklake_reader (V3 tier per CD.16;
+          Decision 67 Lambda-deploy clause lifted by Decision 79)
+        status: open
+      - id: c15
+        text: >-
+          [Re-homed to T2.26 start gate -- audit F-018] Catalog DR restore drill with pg_restore against
+          production-shaped data (rec-2113 HARD GATE before the next ops table migrates; the pgclient layer
+          lacked pg_restore at recs sign-off)
+        status: rehomed
+        met_by: T2.26
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): executed as a sequence of atomic IMPLEMENTATION plans (recs-first rescope)
@@ -4727,11 +5010,30 @@ tier_items:
       - terraform/CLAUDE.md    # document the two-root privilege tier
       - docs/contracts/environment-taxonomy.md    # the bootstrap tier
     exit_criteria:
-      - "A change to github_ci_apply's own policy applies via the bootstrap tier with NO red push run on the main pipeline (self-grant cycle broken)"
-      - "rec-2079 absorbed: IAMRoleReconcile + IAMPlatformRolesRead consolidated"
-      - "The bootstrap root's state/lock + apply identity are provisioned by a documented one-time admin action, not managed by the pipeline"
-      - "github_ci_apply carries a bootstrap-defined permissions boundary; pipeline iam:CreateRole / iam:PutRolePolicy / iam:AttachRolePolicy are condition-keyed to require that boundary (verified: an unbounded role-create attempt is denied)"
-      - "The authority-budget definitions (permissions boundary + guard policy table) are writable only via the bootstrap tier; a main-pipeline PR touching them cannot self-apply"
+      - id: c1
+        text: >-
+          A change to github_ci_apply's own policy applies via the bootstrap tier with NO red push run on the
+          main pipeline (self-grant cycle broken)
+        status: open
+      - id: c2
+        text: "rec-2079 absorbed: IAMRoleReconcile + IAMPlatformRolesRead consolidated"
+        status: open
+      - id: c3
+        text: >-
+          The bootstrap root's state/lock + apply identity are provisioned by a documented one-time admin
+          action, not managed by the pipeline
+        status: open
+      - id: c4
+        text: >-
+          github_ci_apply carries a bootstrap-defined permissions boundary; pipeline iam:CreateRole /
+          iam:PutRolePolicy / iam:AttachRolePolicy are condition-keyed to require that boundary (verified: an
+          unbounded role-create attempt is denied)
+        status: open
+      - id: c5
+        text: >-
+          The authority-budget definitions (permissions boundary + guard policy table) are writable only via
+          the bootstrap tier; a main-pipeline PR touching them cannot self-apply
+        status: open
     related_candidate_decisions: [CD.35]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): standalone IMPLEMENTATION plan per CD.35 discipline
@@ -4760,9 +5062,21 @@ tier_items:
       # scripts/ops_data_portal.py is INVOKED by the workflow (not modified); source=tf_drift is a
       # runtime CLI arg validated against source_registry.yaml, NOT a hardcoded literal added to portal.
     exit_criteria:
-      - "An out-of-band console change is detected within one cron cycle and filed as a rec via the ops portal with source=tf_drift"
-      - "A held state lock skips the cycle without alarming (lock-acquisition-failure distinguished from a genuine error and from drift)"
-      - "Drift never triggers an auto-apply (alarm-only; Decision 55) -- verified structurally (no apply in workflow) and at IAM layer (github_ci_drift has no state-object write)"
+      - id: c1
+        text: >-
+          An out-of-band console change is detected within one cron cycle and filed as a rec via the ops
+          portal with source=tf_drift
+        status: open
+      - id: c2
+        text: >-
+          A held state lock skips the cycle without alarming (lock-acquisition-failure distinguished from a
+          genuine error and from drift)
+        status: open
+      - id: c3
+        text: >-
+          Drift never triggers an auto-apply (alarm-only; Decision 55) -- verified structurally (no apply in
+          workflow) and at IAM layer (github_ci_drift has no state-object write)
+        status: open
     related_candidate_decisions: [CD.35]
     effort: S
     strategic: false
@@ -4858,13 +5172,35 @@ tier_items:
       - scripts/sync_athena_to_pgvector.py    # deleted (orphan, audit F-037)
       - config/agent/data_quality/ops.yaml
     exit_criteria:
-      - "START GATE: rec-2113 pg_restore drill passes against production-shaped data before the first table migrates"
-      - "All remaining ops tables transit the closed boundary (or are retired per T-1.9); no backend flag exists (Decision 84 I-1)"
-      - "ops_compaction retired (function + schedule removed; manifest status flipped; runbook Section 5 executed); no Iceberg ops write path survives outside the designed rollback"
-      - "Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)"
-      - "scripts/sync_athena_to_pgvector.py deleted; rg returns no references"
-      - "DQ checks for migrated tables run against the DuckLake backend and pass"
-      - "Replacement closure verified per the implement skill's Replacement closure check: old paths dead or designed-rollback-only, no unconditional fallbacks"
+      - id: c1
+        text: >-
+          START GATE: rec-2113 pg_restore drill passes against production-shaped data before the first table
+          migrates
+        status: open
+      - id: c2
+        text: >-
+          All remaining ops tables transit the closed boundary (or are retired per T-1.9); no backend flag
+          exists (Decision 84 I-1)
+        status: open
+      - id: c3
+        text: >-
+          ops_compaction retired (function + schedule removed; manifest status flipped; runbook Section 5
+          executed); no Iceberg ops write path survives outside the designed rollback
+        status: open
+      - id: c4
+        text: Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)
+        status: open
+      - id: c5
+        text: scripts/sync_athena_to_pgvector.py deleted; rg returns no references
+        status: open
+      - id: c6
+        text: DQ checks for migrated tables run against the DuckLake backend and pass
+        status: open
+      - id: c7
+        text: >-
+          Replacement closure verified per the implement skill's Replacement closure check: old paths dead or
+          designed-rollback-only, no unconditional fallbacks
+        status: open
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): decomposed per_table into atomic IMPLEMENTATION plans
@@ -4941,10 +5277,24 @@ tier_items:
       - scripts/session_preflight.py
       - scripts/sync_ops.py
     exit_criteria:
-      - "All application rec/decision/queue reads transit named verbs; rg 'reader.query(' over scripts/ returns only the DQ harness"
-      - "file_rec allocates via the writer (no DynamoDB next_id import in the portal); concurrent file_ops yield distinct ids (live churn probe)"
-      - "No pending-outbox code path remains (drain_pending symbols absent); writer-error alarm applied"
-      - "rec-2170 regression locked: current_state(row_filter=\"status = 'open'\") produces a structural filter and live open-rec counts are non-zero"
+      - id: c1
+        text: >-
+          All application rec/decision/queue reads transit named verbs; rg 'reader.query(' over scripts/
+          returns only the DQ harness
+        status: open
+      - id: c2
+        text: >-
+          file_rec allocates via the writer (no DynamoDB next_id import in the portal); concurrent file_ops
+          yield distinct ids (live churn probe)
+        status: open
+      - id: c3
+        text: No pending-outbox code path remains (drain_pending symbols absent); writer-error alarm applied
+        status: open
+      - id: c4
+        text: >-
+          rec-2170 regression locked: current_state(row_filter="status = 'open'") produces a structural filter
+          and live open-rec counts are non-zero
+        status: open
     related_candidate_decisions: [CD.33]
     related_decisions: [84]
     effort: M
@@ -5359,11 +5709,30 @@ tier_items:
       - scripts/verifiers/    # verifiers authored hermetic from the start
       - scripts/validate.py    # add a hermeticity assertion (randomised test order + network-block in the test env)
     exit_criteria:
-      - "Audit report enumerates every non-hermetic test/verifier (clock, network, order, shared-state dependence) with a disposition (fix or quarantine)"
-      - "Full pytest suite passes under randomised test order (pytest-randomly or equivalent) and with network blocked in the test environment"
-      - "validate.py asserts the network-block + random-order invariant so new non-hermetic tests fail CI"
-      - "Hermeticity recorded as a satisfied precondition for the CD.29 hard-gate consolidation and KG.13 caching"
-      - "Live-reader-dependent DQ checks classified non-hermetic and dispositioned to the scheduled canary (not the blocking gate), per T1.6; only hermetic structural contract checks remain on the gating DQ path"
+      - id: c1
+        text: >-
+          Audit report enumerates every non-hermetic test/verifier (clock, network, order, shared-state
+          dependence) with a disposition (fix or quarantine)
+        status: open
+      - id: c2
+        text: >-
+          Full pytest suite passes under randomised test order (pytest-randomly or equivalent) and with
+          network blocked in the test environment
+        status: open
+      - id: c3
+        text: validate.py asserts the network-block + random-order invariant so new non-hermetic tests fail CI
+        status: open
+      - id: c4
+        text: >-
+          Hermeticity recorded as a satisfied precondition for the CD.29 hard-gate consolidation and KG.13
+          caching
+        status: open
+      - id: c5
+        text: >-
+          Live-reader-dependent DQ checks classified non-hermetic and dispositioned to the scheduled canary
+          (not the blocking gate), per T1.6; only hermetic structural contract checks remain on the gating DQ
+          path
+        status: open
     related_candidate_decisions: [CD.29]
     effort: M
     strategic: false
@@ -6044,11 +6413,24 @@ tier_items:
       - docs/INTENT-multi-product-platform.md
       - scripts/validate.py    # intent-doc-freeze guard (WAVE-0, already wired)
     exit_criteria:
-      - "All 18 docs/INTENT-*.md files deleted (each wave flips disposition_state: done in MANIFEST)"
-      - "Every extracted block landed in a tier_item, Decision, or docs/contracts/*.yaml target"
-      - "docs/intent-migration/MANIFEST.yaml: all documents[] entries at disposition_state: done"
-      - "grep -rn 'INTENT-' --include='*.md' --include='*.py' --include='*.tf' --include='*.yaml' docs/ scripts/ src/ terraform/ tests/ returns only SESSION_LOG_ARCHIVE.md historical mentions and MANIFEST.yaml itself"
-      - "validate.py intent-doc-freeze guard stays wired (WAVE-0 condition: not regressed)"
+      - id: c1
+        text: "All 18 docs/INTENT-*.md files deleted (each wave flips disposition_state: done in MANIFEST)"
+        status: open
+      - id: c2
+        text: Every extracted block landed in a tier_item, Decision, or docs/contracts/*.yaml target
+        status: open
+      - id: c3
+        text: "docs/intent-migration/MANIFEST.yaml: all documents[] entries at disposition_state: done"
+        status: open
+      - id: c4
+        text: >-
+          grep -rn 'INTENT-' --include='*.md' --include='*.py' --include='*.tf' --include='*.yaml' docs/
+          scripts/ src/ terraform/ tests/ returns only SESSION_LOG_ARCHIVE.md historical mentions and
+          MANIFEST.yaml itself
+        status: open
+      - id: c5
+        text: "validate.py intent-doc-freeze guard stays wired (WAVE-0 condition: not regressed)"
+        status: open
     related_candidate_decisions: [CD.14]
     note: "CD.14 superseded by Decision 86; this item now executes the extract-and-retire model from docs/intent-migration/MANIFEST.yaml. WAVE-0 enforcement (validate.py guard + skill/command updates) shipped in PLAN-intent-migration-wave0-enforcement."
     effort: L
