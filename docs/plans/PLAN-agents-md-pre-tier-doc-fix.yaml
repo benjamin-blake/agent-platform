@@ -1,0 +1,227 @@
+schema_version: 1
+slug: "agents-md-pre-tier-doc-fix"
+intent: >-
+  Correct the stale `--pre` validation-tier description in AGENTS.md so the ambient
+  Layer 1 instruction every session loads matches the live Decision 73 behaviour,
+  removing the documentation drift that makes the two-tier (TAP) model look
+  inconsistent to agents and the developer.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-agents-md-pre-tier-doc-fix.yaml
+phase: >-
+  Platform instruction-layer hygiene (AGENTS.md = Layer 1 of
+  docs/contracts/instruction-architecture.md). Ad-hoc documentation-accuracy fix
+  surfaced during a /plan clarification; no tier_item (user-initiated drift
+  correction -- soft-warn exception category: ad_hoc_rec / user_explicit_out_of_scope).
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Rewrite the three Merge-protocol tier-description bullets (currently lines
+      123-125) to describe the Decision 73 diff-aware fast tier accurately:
+      `--pre` runs ruff+mypy on changed files, `pytest --picked` test selection,
+      prompt/static gates under a hard 5-minute budget; the full tier runs
+      post-merge on main. Replace the stale "runs lint/format/prompts only" claim,
+      the misleading "identical to CI" framing, and the pointer to the
+      WAVE-3-retiring INTENT-validation-architecture.md with citations to
+      Decisions 60, 73, and 80.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    AGENTS.md no longer contains the phrase "runs lint/format/prompts only"
+    (the stale pre-Decision-73 `--pre` description).
+  - >-
+    The AGENTS.md Merge-protocol section states that `--pre` runs `pytest --picked`
+    test selection under a 5-minute budget and cites Decision 73, and that test
+    selection is git-diff-based (not Bazel) citing Decision 80.
+  - >-
+    The AGENTS.md Merge-protocol section states the full presubmit tier runs
+    post-merge on `main` (not at PR time) and that PR CI runs the `--pre` tier --
+    matching `.github/workflows/ci.yml`.
+  - >-
+    The Merge-protocol tier bullets no longer point at
+    docs/INTENT-validation-architecture.md (the soon-retired prose doc); rationale
+    is routed to Decision citations per Decision 86.
+  - >-
+    Every factual claim in the new text is confirmed true against the live source
+    of truth (`.github/workflows/ci.yml` and `scripts/validate.py`).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the stale pre-Decision-73 `--pre` description is gone from AGENTS.md.
+    command: "grep -c 'runs lint/format/prompts only' AGENTS.md || true"
+    expected: "Prints 0 (the stale phrase no longer appears)."
+    fix_if: >-
+      Prints 1 or more -- the old bullet text survived; the rewrite did not replace it.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the new text asserts the Decision 73 fast-tier facts (pytest --picked,
+      5-minute budget, Decision 73 citation) and the Decision 80 not-Bazel note.
+    command: "grep -nE 'pytest --picked|5-minute budget|Decision 73|Decision 80' AGENTS.md"
+    expected: >-
+      Matches inside the Merge-protocol section covering all four tokens: the
+      `pytest --picked` mechanism, the 5-minute budget, the Decision 73 citation,
+      and the Decision 80 (not-Bazel) citation.
+    fix_if: >-
+      Any token missing -- the rewrite omitted a required fact or citation.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Accuracy cross-check A: prove the doc's new claim (PR CI runs `--pre`,
+      push-to-main runs the full tier) is true against the live CI workflow.
+    command: "grep -nE 'event_name ==|validate --pre|run: python -m scripts.validate$' .github/workflows/ci.yml"
+    expected: >-
+      Shows the pull_request job invoking `python -m scripts.validate --pre` and the
+      push job invoking `python -m scripts.validate` (no flags) -- confirming the
+      doc's PR=fast / main=full claim is accurate.
+    fix_if: >-
+      CI invokes the tiers differently than the doc states -- correct the doc to
+      match ci.yml (ci.yml is the source of truth), or escalate if ci.yml itself
+      looks wrong.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Accuracy cross-check B: prove the doc's "5-minute budget" claim matches the
+      runtime budget constant in validate.py.
+    command: "grep -n '_FAST_TIER_BUDGET_SECONDS = 300' scripts/validate.py"
+    expected: "Matches -- the fast-tier budget is 300s (5 min), as the new text states."
+    fix_if: >-
+      Constant differs from 300 -- update the doc's stated budget to the real value.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Accuracy cross-check C: prove the doc's "pytest --picked" claim matches the
+      actual `--pre` dispatch in validate.py.
+    command: "grep -n 'picked' scripts/validate.py"
+    expected: >-
+      Shows the `--pre` block invoking pytest with `--picked --mode=branch` -- the
+      mechanism the new text describes.
+    fix_if: >-
+      `--pre` does not run `pytest --picked` -- reconcile the doc with the real
+      mechanism.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the Merge-protocol tier bullets no longer reference the soon-retired
+      INTENT-validation-architecture.md prose doc.
+    command: "grep -n 'INTENT-validation-architecture' AGENTS.md || true"
+    expected: >-
+      Prints nothing (0 matches) -- the rationale pointer now cites Decisions, per
+      Decision 86 routing.
+    fix_if: >-
+      Still references the INTENT doc -- replace the pointer with the Decision 60/73
+      citations.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Validate this PLAN document against the PlanDocument schema (it is enforced by
+      validate.py in both tiers; catch schema errors before commit).
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-agents-md-pre-tier-doc-fix.yaml"
+    expected: "Exit 0 -- the plan document is schema-valid."
+    fix_if: >-
+      Non-zero exit -- fix the reported schema violation (unknown key, missing
+      required field, slug/path mismatch).
+constraints:
+  - >-
+    Only AGENTS.md may be modified. Do NOT edit Decision 60's or Decision 73's body
+    in docs/DECISIONS.md -- decisions are append-only history; Decision 73 already
+    records the amendment.
+  - >-
+    Do NOT edit docs/INTENT-validation-architecture.md -- its full delete+pointer
+    retirement is owned by migration WAVE-3 (docs/intent-migration/MANIFEST.yaml,
+    id validation-architecture). This plan only stops AGENTS.md from pointing at it.
+  - >-
+    Decision 86 intent-doc-freeze: do not create any new docs/INTENT-*.md or
+    standing prose-architecture doc. This is a correction to an existing Layer 1 file.
+  - >-
+    The new text must be factually accurate against ci.yml and validate.py at
+    implementation time -- if either has moved, the doc follows the code, not this plan.
+  - "No emojis, no em-dashes; plain ASCII hyphens only (AGENTS.md code-style rule)."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Root cause: AGENTS.md line 123 describes the ORIGINAL Decision 60 `--pre` tier
+    ("Lint, format, prompt validation ... nothing that runs pytest ... <= 30 seconds").
+    Decision 73 (2026-05-13) superseded that implementation mechanism: `--pre` became
+    diff-aware (ruff/mypy on changed files, `pytest --picked --mode=branch`) with a
+    hard 5-minute budget assertion. The code (scripts/validate.py:53,
+    _FAST_TIER_BUDGET_SECONDS = 300; and the `--pre` dispatch at ~line 3255) and
+    ci.yml (PR job runs `--pre`; push job runs full) implement Decision 73 correctly;
+    only the AGENTS.md prose lagged.
+  - >-
+    The two questions that surfaced this (is running full validate.py correct? how
+    are `--pre` tests selected without Bazel?) are both already answered by the live
+    architecture: we are on the Google TAP model per Decision 73 (optimistic merge,
+    fast `--pre` PR gate, full tier post-merge, ci-rca forward-fix); and `--pre`
+    selects tests via `pytest-picked` git-diff (changed test files only), explicitly
+    chosen over Bazel dependency-closure per Decision 80. The skills are already
+    aligned (implement SKILL line 288 tells agents to run full validate locally
+    before opening a PR). The only defect is the stale AGENTS.md description.
+  - >-
+    Proposed replacement for the three bullets (exact text to apply; implementer must
+    re-confirm accuracy against ci.yml + validate.py per the VP before committing):
+    (1) "**Local `--pre` is advisory only**: `bin/venv-python -m scripts.validate
+    --pre` runs the diff-aware fast tier -- ruff + mypy on changed files,
+    `pytest --picked --mode=branch` (changed test files only; integration-marked
+    tests excluded), prompt checks, and sub-second static gates (CC, SLOC,
+    contract-drift, intent-doc-freeze, field-semantics, CI-RCA taxonomy) -- under a
+    hard 5-minute budget that exits non-zero on breach (Decision 73, superseding
+    Decision 60's original lint-only/30s definition). Test selection is git-diff-based
+    via `pytest-picked`, NOT a Bazel-style dependency closure (Decision 80). Run
+    *locally* it is advisory and does not gate merges; the same `--pre` tier running
+    in PR CI is the authoritative pre-merge gate."
+    (2) "**Full presubmit**: `bin/venv-python -m scripts.validate` (no flags) runs
+    the comprehensive tier -- full pytest, terraform validate, dependency health,
+    prompt-compliance, the DQ runner, and the V3 verification harness (the last two
+    skip with a structured event when AWS credentials are absent, per Decision 57).
+    Per Decision 73 this tier runs post-merge on `main` (NOT at PR time); a failure
+    there spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never
+    auto-revert). Run it locally before opening a PR to avoid a post-merge red `main`."
+    (3) "Two-tier model: fast `--pre` (edit-loop + PR gate) + full presubmit
+    (post-merge `main` + scheduled drift canary). Tiers originated in Decision 60;
+    redefined diff-aware with a runtime budget assertion by Decision 73. `validate.py`
+    remains the single source of truth (next bullet)."
+  - >-
+    Decisions to cite (from decision-scout CITE list): Decision 60 (origin of the
+    two-tier model), Decision 73 (current diff-aware semantics + 5-min budget +
+    forward-fix TAP model), Decision 80 (pytest --picked is changed-test-file
+    selection, not Bazel). Decision 83 is adjacent (branch protection now active) but
+    needs no new citation in the edited bullets.
+  - >-
+    Scope is 1 file, 3 bullets -- well under the complexity heuristic; classified
+    IMPLEMENTATION (V1 docs). No infrastructure, no Lambda, no rec closure, no surface
+    retirement (Closure Obligation exempt). No open ci-rca recs (preflight clean).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Decision 60, 73, 80 reviewed in docs/DECISIONS.md (the three the new text cites)
+  - >-
+    AGENTS.md lines 121-130 (Merge protocol) located and readable; current bullets
+    123-125 confirmed as the edit target
+  - >-
+    ci.yml PR/push validate invocations and validate.py _FAST_TIER_BUDGET_SECONDS
+    re-confirmed so the new text is accurate at implementation time
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify AGENTS.md: replace the three Merge-protocol tier bullets (current lines
+    123-125: "Local `--pre` is advisory only ...", "Full presubmit ...", "Two-tier
+    model ... Decision 60 migration complete per docs/INTENT-validation-architecture.md")
+    with the three corrected bullets in the Context section above. Preserve the
+    surrounding bullets (122 authoritative-gate, 126 single-source-of-truth, 127
+    manual-confirmation, 128 on-CI-failure, 129 web-merge-flow, 130 Resolves-trailer)
+    unchanged. Use bin/venv-python in commands and plain ASCII hyphens.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass. Steps 3-5 are
+    accuracy cross-checks against ci.yml and validate.py; if those sources have moved
+    since planning, the doc text follows the current code (update the bullet, not the
+    code). On unrecoverable failure stop and RCA (Decision 55).
+  - "Report: the final bullet text applied and the verification results for each VP step."
+work_areas: []
+rollback: >-
+  Single-file doc change; revert via `git checkout origin/main -- AGENTS.md` (or
+  revert the squash-merge commit). No runtime or infrastructure impact.
