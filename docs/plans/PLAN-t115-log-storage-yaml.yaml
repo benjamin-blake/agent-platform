@@ -1,0 +1,184 @@
+schema_version: 1
+slug: t115-log-storage-yaml
+intent: >-
+  Convert the prose boundary contract docs/contracts/log-storage.md into a machine-readable
+  docs/contracts/log-storage.yaml and wire scripts/s3_log_store.py to read it, eliminating the
+  prose/code drift surface for JSONL log-storage routing. Advances the CD.25 pre-codegen
+  contract-ratification series (T-1.13..T-1.19) toward an agent-first, drift-proof docs/contracts/.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t115-log-storage-yaml.yaml
+phase: >-
+  PLATFORM tier_item T-1.15 (tier T-1, CD.25 pre-codegen contract ratification). depends_on T-1.12
+  (satisfied). Not on the product roadmap critical path.
+scope:
+  - file: docs/contracts/log-storage.yaml
+    action: Create
+    purpose: >-
+      NON-ritual registry YAML carrying the three storage patterns as structured data, the
+      priority-queue path/status semantics, and a machine-consumed routing block (ops table
+      routing map + priority-queue key) read by s3_log_store.py.
+  - file: docs/contracts/log-storage.md
+    action: Delete
+    purpose: Superseded by the YAML; agent-first repo forbids a prose companion alongside a machine-readable source (Decision 86).
+  - file: scripts/s3_log_store.py
+    action: Modify
+    purpose: >-
+      Add a lazy, cached, import-safe loader that reads log-storage.yaml for the OpsWriter table
+      routing map and priority-queue key, with identical hardcoded fallbacks when the YAML is
+      absent/unparseable/yaml-unavailable (Lambda-runtime safety). Carry the existing routing
+      constants forward UNCHANGED (Decision 84 -- no entrenchment of the legacy write-through).
+  - file: tests/test_s3_log_store.py
+    action: Modify
+    purpose: >-
+      100% coverage of the new loader: reads-the-YAML, anti-drift (YAML routing == in-code
+      fallback), absent-YAML fallback, unparseable-YAML fallback, yaml-import-unavailable fallback.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Lambda artifacts data-pipeline + ops-compaction (both status: active) bundle scripts/s3_log_store.py;
+    CD.16/Decision 79 per-Lambda gating applies (build + bundle-completeness + stage). Function-code
+    deploy + smoke-test is VACUOUS: neither function is provisioned in the personal account
+    (UpdateFunctionCode -> ResourceNotFoundException; roadmap line ~3633 precedent, rec-2164 owns the
+    provisioning-vs-docs discrepancy). Dispatcher smoke-test stays deferred to T4.3.
+acceptance_criteria:
+  - docs/contracts/log-storage.yaml exists with contract_version 1 and status ratified, carrying the three storage patterns, the priority-queue semantics, and a machine-consumed routing block.
+  - scripts/s3_log_store.py reads the routing map and priority-queue key from log-storage.yaml at runtime, with identical hardcoded fallbacks when the YAML is unavailable; module import performs no I/O and never raises.
+  - The YAML-derived routing equals the in-code fallback constants (anti-drift), proven by a unit test.
+  - docs/contracts/log-storage.md is deleted and no live (non-historical-plan, non-audit-snapshot) surface references it.
+  - Full validate.py passes locally (contract-drift gate scans the new non-ritual file without failing), and the affected Lambda zips build clean with s3_log_store.py present.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit tests for s3_log_store exercise the real (un-mocked) YAML load path and all fallbacks.
+    command: bin/venv-python -m pytest tests/test_s3_log_store.py -q
+    expected: All tests pass, including the new loader/anti-drift/fallback tests.
+    fix_if: A failure means the loader, fallback, or anti-drift assertion is wrong; fix the loader or align the YAML to the fallback constants.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm s3_log_store actually reads the committed YAML (not just the fallback) and the routing matches the YAML file content.
+    command: bin/venv-python -c "import yaml,scripts.s3_log_store as s; y=yaml.safe_load(open('docs/contracts/log-storage.yaml'))['routing']; assert s.get_ops_table_routing()==y['ops_table_routing'], (s.get_ops_table_routing(),y['ops_table_routing']); assert s.get_priority_queue_key()==y['priority_queue_key']; print('reads-yaml OK')"
+    expected: Prints "reads-yaml OK" (the module returns the YAML-sourced values).
+    fix_if: Mismatch or exception means the loader is not reading the YAML or the accessor names differ; fix the accessor/loader.
+  - step: 3
+    phase: pre-deploy
+    action: Anti-drift -- the in-code fallback constants equal the YAML routing (so the Lambda fallback can never silently diverge from the contract).
+    command: bin/venv-python -c "import yaml,scripts.s3_log_store as s; y=yaml.safe_load(open('docs/contracts/log-storage.yaml'))['routing']; assert s.FALLBACK_OPS_TABLE_ROUTING==y['ops_table_routing']; assert s.FALLBACK_PRIORITY_QUEUE_KEY==y['priority_queue_key']; print('anti-drift OK')"
+    expected: Prints "anti-drift OK".
+    fix_if: Divergence means the fallback was edited without updating the YAML (or vice versa); reconcile both to a single value.
+  - step: 4
+    phase: pre-deploy
+    action: Absent-YAML fallback -- with the contract file hidden, the module still returns the fallback routing and does not raise.
+    command: bin/venv-python -c "import scripts.s3_log_store as s; s._LOG_STORAGE_REGISTRY=None; orig=s._LOG_STORAGE_CONTRACT_PATH; s._LOG_STORAGE_CONTRACT_PATH=orig.with_name('does-not-exist.yaml'); assert s.get_ops_table_routing()==s.FALLBACK_OPS_TABLE_ROUTING; print('fallback OK')"
+    expected: Prints "fallback OK" (graceful degradation to in-code defaults).
+    fix_if: An exception means the loader does not handle a missing file; wrap the read in a try/except returning the fallback.
+  - step: 5
+    phase: pre-deploy
+    action: Import safety -- importing the module performs no filesystem read at import time (deferred to first accessor call).
+    command: bin/venv-python -c "import scripts.s3_log_store as s; assert s._LOG_STORAGE_REGISTRY is None, 'registry must be lazy, not loaded at import'; print('lazy import OK')"
+    expected: Prints "lazy import OK".
+    fix_if: Registry populated at import means I/O runs at import (violates the no-raise-at-import rule); move the load into the accessor.
+  - step: 6
+    phase: pre-deploy
+    action: Stale-reference sweep -- the deleted contract has no live code/config/contract references (historical PLAN-*.md, audit-reports, CHANGELOG, SESSION_LOG, and the INTENT conversion notes are allowed).
+    command: bash -lc 'test ! -e docs/contracts/log-storage.md && ! grep -rn "log-storage\.md" --include=*.py --include=*.yml docs/contracts scripts src config .github 2>/dev/null | grep -v ROADMAP; echo "sweep exit=$?"'
+    expected: log-storage.md is gone and no live .py/.yml or contracts/scripts/src/config/.github surface references it (exit 0 / empty match set).
+    fix_if: A live reference exists; update or remove it before deleting, or re-point it to the YAML.
+  - step: 7
+    phase: pre-deploy
+    action: Contract-drift gate treats log-storage.yaml as a non-ritual file (no contract block with class) and does NOT fail it; full presubmit passes.
+    command: bin/venv-python -m scripts.validate
+    expected: validate.py exits 0; the "Contract drift gate (CD.25)" section scans the file without a violation.
+    fix_if: A drift-gate failure means the YAML accidentally has a contract block with a class field; keep it non-ritual (top-level metadata only).
+  - step: 8
+    phase: pre-deploy
+    action: Affected Lambda zips build clean with the modified file present (bundle-completeness), proving the s3_log_store.py change packages without import breakage.
+    command: bin/venv-python -m scripts.build_lambda --artifact data-pipeline --artifact ops-compaction
+    expected: Both zips build; scripts/s3_log_store.py is present in each; no packaging/import error.
+    fix_if: Build or bundle-completeness fails; fix the import/packaging regression before merge.
+  - step: 9
+    phase: post-deploy
+    action: Function-code deploy + smoke-test (VACUOUS by provisioning state) -- record, do not block. Neither dispatcher/findings-processor/ops-compaction function is provisioned in the personal account.
+    command: echo "VACUOUS deploy -- data-pipeline + ops-compaction functions not provisioned (UpdateFunctionCode returns ResourceNotFoundException); build+stage from step 8 satisfies CD.16/Decision 79; dispatcher smoke-test deferred to T4.3 (roadmap ~L3633, rec-2164)"
+    expected: Documented vacuous-deploy rationale; no live function update attempted.
+    fix_if: If a function IS later provisioned, run scripts.build_lambda --deploy for that artifact and a real smoke-test (not in scope now).
+constraints:
+  - No rescue agents or workaround loops; on an unrecoverable V3 step, stop and RCA (Decision 55).
+  - Carry the OpsWriter routing constants forward UNCHANGED -- read-substitution only, no new write-through entrenchment (Decision 84; the s3_log_store -> OpsWriter priority-queue path is the legacy flow flagged for repoint at T2.26).
+  - log-storage.yaml MUST stay NON-ritual (top-level version/contract_version/status metadata; no contract block with a class field) so the CD.25 drift gate skips it -- the ritual ContractDocument schema is extra=forbid and cannot hold a pattern/routing registry.
+  - scripts/s3_log_store.py must never raise at import and must defer all I/O to first accessor call (AGENTS.md import-safety rule).
+  - Anti-drift check lives in pytest only -- do NOT add a bespoke check to validate.py (decision-scout Decision 80 NOTE -- keep validate.py a thin CLI over the importable check registry).
+  - Only modify files in the Scope table.
+context:
+  - >-
+    CI-RCA: rec-2335 (apply-sandbox retry on transient Claude API 5xx) was the open HARD BLOCK at
+    session start; it is now CLOSED (auto-closed when PR #242 merged) and this branch is rebased onto
+    that main. No deferral needed -- block cleared before plan commitment.
+  - >-
+    Decisions to cite: Decision 45 (priority-queue canonical key priority-queue/.priority-queue.jsonl);
+    Decision 50 (origin of the OpsWriter write-through routing, superseded by Decision 84 -- cite 84 as
+    the governing authority); Decision 84 (DuckLake sole ops-backend; the s3_log_store -> OpsWriter
+    write-through is the legacy path flagged for repoint at T2.26 -- carry forward unchanged, do not
+    entrench); Decision 55 (no workaround loops; the fallback must be a faithful default, real load
+    errors fail loud); Decision 79 + CD.16 (per-Lambda build/deploy gating); Decision 86 (machine-parseable
+    registries permitted; non-ritual registry YAML precedented by storage-substrate.yaml / read-engine.yaml /
+    telemetry-lexicon.yaml).
+  - >-
+    Honest value note: the machine-consumed routing here governs ops_session_log/ops_execution_plans
+    (dormant, pending T2.26) and the legacy priority-queue write-through. The wiring is partly ceremonial;
+    the durable value is structured patterns + drift elimination + series uniformity + CD.25 pre-codegen
+    ratification.
+  - >-
+    Plan-type / Step 10: this is IMPLEMENTATION (changes code + tests; CI must be green). The tier_item's
+    exit criterion "Step 10 multi-perspective critique converges" is satisfied during planning by running a
+    Step-10-style 2-agent multi-perspective critique on the embedded log-storage.yaml design spec (in
+    addition to the mandatory Step 9 plan-critique). The /implement agent builds the file to that spec.
+  - >-
+    log-storage.md references across the repo are all historical PLAN-*.md, docs/audit-reports/*, CHANGELOG,
+    SESSION_LOG_ARCHIVE, and the INTENT conversion notes -- none are live code/config. Deletion is code-safe.
+  - >-
+    Embedded log-storage.yaml design spec (the /implement agent creates the file verbatim from this, adjusting
+    only ratified_at/last_verified to the implementation date):
+    contract_version 1; status ratified; decisions_cited [Decision-45, Decision-50, Decision-55, Decision-84, CD.25];
+    patterns.cloud_produced {id 1, producer Lambda handler, transport S3 (agent-platform-agent-logs), consumer s3_log_store.read_jsonl, examples [scheduled-agent findings, curator findings]};
+    patterns.locally_produced {id 2, producer local script, transport "logs/<file>.jsonl -> append_jsonl -> S3", consumer git-tracked local file is source of truth, examples [.recommendations-log.jsonl, .retro-lite-log.jsonl, .session-telemetry.jsonl, .execution-step-telemetry.jsonl, .friction-analysis-log.jsonl, .north-star-log.jsonl]};
+    patterns.shared_mutable_planned {id 3, status planned, tracked_by rec-386, transport "log_writer.write(key, entry) -> local + S3 (planned)"};
+    priority_queue {canonical_key priority-queue/.priority-queue.jsonl (Decision 45), local_path logs/priority-queue/.priority-queue.jsonl, deprecated_key logs/.priority-queue.jsonl, status_tags {canonical [queued, executing, done], legacy_forbidden [active]}, canonical_producer enqueue_findings()/file_rec (Decision 84), current_state_read priority_queue_current named verb, legacy_producer {status deprecated until Phase 5, note "rec-curator -> findings_processor_handler.py overwrite_jsonl; s3_log_store -> OpsWriter write-through repoints at T2.26 (Decision 84)"}};
+    routing.ops_table_routing {".execution-plans.jsonl": ops_execution_plans, ".session-telemetry.jsonl": ops_session_log};
+    routing.priority_queue_key priority-queue/.priority-queue.jsonl;
+    verified_against [scripts/s3_log_store.py (read_jsonl/append_jsonl/overwrite_jsonl/get_backend), src/data/handlers/findings_processor_handler.py].
+pre_implementation_checklist:
+  - Branch confirmed not main (harness branch claude/youthful-fermi-jxh0jh).
+  - docs/PROJECT_CONTEXT.md read.
+  - Decisions 45/50/55/84/79 + CD.16/CD.25 understood (carry routing forward unchanged; non-ritual YAML; vacuous deploy).
+  - All scope files located and readable; s3_log_store.py current routing constants identified (_OPS_TABLE_ROUTING, _OPS_PRIORITY_QUEUE_KEY).
+  - Acceptance criteria understood and each maps to a verification_plan step.
+execution_steps:
+  - >-
+    Create docs/contracts/log-storage.yaml from the embedded design spec in context. Keep it NON-ritual:
+    top-level contract_version/status/ratified_at/last_verified/decisions_cited metadata plus patterns,
+    priority_queue, routing, verified_against. No contract block with a class field. Set ratified_at and
+    last_verified to the implementation date.
+  - >-
+    Modify scripts/s3_log_store.py: define module-level FALLBACK_OPS_TABLE_ROUTING (= the current
+    _OPS_TABLE_ROUTING value) and FALLBACK_PRIORITY_QUEUE_KEY (= the current _OPS_PRIORITY_QUEUE_KEY value),
+    a _LOG_STORAGE_CONTRACT_PATH (= _REPO_ROOT/docs/contracts/log-storage.yaml), and a lazy cached
+    _LOG_STORAGE_REGISTRY global (initialised None). Add _load_log_storage_registry() that reads the YAML
+    (lazy import yaml inside the function), returns {ops_table_routing, priority_queue_key} from the routing
+    block, and on ANY failure (FileNotFoundError, yaml error, ImportError, missing keys) returns the
+    fallbacks; cache the result. Expose get_ops_table_routing() and get_priority_queue_key() accessors.
+    Replace internal uses of _OPS_TABLE_ROUTING / _OPS_PRIORITY_QUEUE_KEY (in append_jsonl / overwrite_jsonl)
+    with the accessors. Perform NO I/O at import; never raise at import.
+  - Delete docs/contracts/log-storage.md.
+  - >-
+    Update tests/test_s3_log_store.py: add a TestLogStorageRegistry class covering reads-the-YAML,
+    anti-drift (YAML routing == FALLBACK_*), absent-YAML fallback, unparseable-YAML fallback, and
+    yaml-import-unavailable fallback; ensure 100% coverage of the new loader/accessor code. Use the
+    file::Class form (no -k selectors). Reset the _LOG_STORAGE_REGISTRY cache between tests.
+  - Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable V3 step (e.g. a real Lambda build failure), stop and RCA per Decision 55; do not patch around it.
+  - 'Report: the YAML created, the s3_log_store.py wiring, the .md deletion, test results, validate.py result, Lambda build result, and the vacuous-deploy record.'
+work_areas: []
+rollback: >-
+  Single-commit revert restores docs/contracts/log-storage.md and the prior scripts/s3_log_store.py
+  (hardcoded constants), and removes log-storage.yaml. No data migration, no deployed-function change
+  (deploy is vacuous), so revert is clean.
