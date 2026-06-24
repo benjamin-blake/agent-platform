@@ -1587,6 +1587,89 @@ candidate_decisions:
       - "The Environment reviewer gate is an authorization boundary, not a routine quality gate: post-T2.25 only out-of-budget / trust-policy / destroy changes route to it (in-budget IAM auto-passes under the bootstrap-defined permissions boundary + guard budget). Environment escalation through the future-state platform promotion train is NOT a substitute (it verifies behavior, not authority); subagent review at the gate is advisory, never the lock. (Amended 2026-06-10; detail points 6-9.)"
     enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (github_ci_apply OIDC trust lists refs/heads/main AND environment:tf-gated-apply per Decision 94/VP9); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
 
+  - id: CD.36
+    title: Recommendation relevance is a governed lifecycle state, not an executor judgement
+    detail: |
+      The roadmap has a Tier Item Freshness Gate for tier_items (planning skill, T-1.21) and an
+      implement-side replacement-closure / exit-criteria truth-maintenance rule (T-1.22), but no
+      equivalent governed relevance discipline for operational recommendations. An open rec is not
+      automatically worth doing: neither a human /plan / /implement session nor (post-freeze) the executor
+      may action a rec merely because its status is "open" -- only if its acceptance is still UNSATISFIED
+      against current main. This extends the freshness pattern from tier_items to recommendations.
+      Model (forward intent; nothing implemented under the Decision 67 / CD.17 freeze):
+        - Relevance is a derived verdict over an open rec: relevant | satisfied | superseded | duplicate |
+          contradicted | stale_target | blocked_by_decision | unknown. It is SEPARATE from the rec
+          lifecycle status (open/closed/failed/declined/superseded, Decision 70): a rec can be "open" yet
+          currently "blocked_by_decision", or "satisfied" yet not-yet-closed.
+        - The deterministic probe is the rec's already-required `acceptance` shell-command oracle
+          (scripts/executor/jsonl_store.py; validate.py-enforced). If acceptance now passes on main, the
+          rec is satisfied. No new acceptance machinery is needed -- the oracle already exists on every rec.
+        - Closure requires a CLOSURE PROOF, not an LLM assertion. Deterministic satisfaction (acceptance
+          passes; target symbol present) may close automatically with the proof recorded; any verdict
+          resting on semantic judgement (superseded / contradicted / obsolete) produces a `close_proposed`
+          for human or policy confirmation, never a direct close. This tightens the current
+          Resolves:-trailer auto-close (.github/workflows/rec-autoclose.yml), which is trust-based (closes
+          on a trailer string with zero verification).
+      Decision 84 constraint (binding): relevance / closure-proof state is computed READ-TIME or stored in
+      an explicitly named projection -- it does NOT add Class A columns to ops_recommendations (the
+      ducklake_writer owns the keyspace; reads transit named verbs). Decision 88: any queue-wide relevance
+      surfacing serves the warmed read-cache / a registered named verb, never a per-session warehouse
+      re-fetch.
+    gates: [T3.8, T3.9]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - Relevance verdict and lifecycle status are orthogonal axes; do not collapse them (Decision 70 governs status, this CD governs relevance).
+      - Deterministic closure may auto-close with recorded proof; semantic closure produces close_proposed only (no direct close on LLM judgement).
+      - No new Class A ops_recommendations columns (Decision 84); relevance is read-time or a named projection, and queue-wide surfacing serves the read-cache (Decision 88).
+      - Generalisation seed already exists: session_preflight.py correlate_ci_rca_with_main() computes likely-resolved for ci_rca recs; this CD generalises that engine to all sources (surfacing only, not auto-acting -- Decision 55).
+  - id: CD.37
+    title: Parallel rec execution requires semantic locks, not file locks alone
+    detail: |
+      Forward intent for the future autonomous executor (Step Functions + Durable Lambdas, CD.27); inert
+      under the Decision 67 / CD.17 freeze and the T4.1 concurrency=1 ceiling until the autonomy gates
+      (T4.4) raise concurrency above 1. File-level exclusion is necessary but insufficient for safe parallel
+      rec execution: two recs may touch disjoint files yet conflict semantically (e.g. one edits the
+      ops_recommendations contract while another changes ducklake_writer behaviour for the same field).
+      The control boundary is a SEMANTIC LOCK set derived from a rec's targets -- files, contracts, tables,
+      Lambda artefacts (manifests), named verbs, Terraform roots, validation surfaces, and decision /
+      tier_item references -- as shared-read or exclusive-write. Parallel execution is permitted only when
+      exclusive lock sets are disjoint. The executor owns a LEASE protocol: an in-flight rec holds its
+      exclusive locks until merge, failure, or explicit release (release-on-failure default); lease records
+      live in the governed ops plane (Decision 84 reader/writer boundary), never local files. Post-merge
+      reconciliation (T3.9) re-evaluates open recs whose locks overlap the merged change.
+    gates: [T4.8]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - Semantic locks are the concurrency boundary; file overlap is the floor, not the boundary.
+      - Lease records live in the governed ops plane (Decision 84), never local files; lease failure escalates via the rec/RCA path (Decision 55), never silent retry.
+      - Inert until T4.4 raises executor concurrency above 1 (T4.1 sets concurrency=1 initially).
+  - id: CD.38
+    title: Executor delegates verification execution to GitHub Actions; AWS waits on verdicts
+    detail: |
+      Makes the CD.27 executor topology EXPLICIT on its verification leg and generalises the established
+      Terraform CI/CD authority model (CD.35 / Decision 92) and GitHub-hosted-runner substrate (CD.21)
+      from infrastructure to rec execution. Overturns nothing: CD.27 already says AWS owns orchestration +
+      persona cognition and that Step Functions retries are deterministic-only; this CD specifies the
+      verification leg CD.27 left unstated. The autonomous executor does NOT run validate.py or registered
+      verifiers inside AWS Lambda / Step Functions. AWS owns orchestration (Step Functions) and persona
+      cognition (Durable Lambdas); GitHub Actions owns PR `--pre` validation, main full-validate, the
+      verifier-registry execution (CD.29), and merge truth (remote CI is the authoritative pre-merge gate
+      per the AGENTS.md merge protocol). Step Functions records correlation ids (PR number, check-run id,
+      workflow-run id, rec id, execution id) and WAITS on GitHub Actions verdict callbacks. PR `--pre` PASS
+      permits merge; main full-validate PASS permits promotion / escalation / rec closure; PRE_FAIL /
+      FULL_FAIL routes to ci-rca (Decision 72). Encodes the Google-TAP-style flow and forecloses any future
+      plan reintroducing an "AWS verifier runner". Inert under the Decision 67 / CD.17 freeze.
+    gates: [T4.9]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - Makes CD.27 explicit and extends CD.35 / CD.21 from Terraform to rec execution; overturns nothing.
+      - GitHub Actions is the sole verifier/validation runner; AWS never runs validate.py or verifiers in-cloud.
+      - Two-tier TAP-style flow preserved: merge on PR --pre, promote/close only on main full-validate (CI authoritative per the AGENTS.md merge protocol).
+      - Verdict-callback failures (stale/duplicate/auth) route to ci-rca (Decision 72 / Decision 55), never silent retry.
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -5322,6 +5405,109 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T3.8
+    tier: T3
+    name: Recommendation relevance contract + freshness gate
+    intent: |
+      The recommendation analogue of the Tier Item Freshness Gate (planning skill, T-1.21). Per CD.36,
+      add a governed RELEVANCE verdict over open recs -- relevant | satisfied | superseded | duplicate |
+      contradicted | stale_target | blocked_by_decision | unknown -- evaluated before a rec is planned or
+      (post-freeze) executed, so dead work is not actioned merely because a rec is "open". The deterministic
+      probe is the rec's already-required `acceptance` shell-command oracle (no new acceptance machinery).
+      The likely-resolved correlation engine that already exists for ci_rca recs (session_preflight.py
+      correlate_ci_rca_with_main: commit/file correlation + closed-sibling Jaccard) generalises to all
+      sources as the satisfied / duplicate detector. A rec_relevance.py evaluator runs deterministic-first
+      (acceptance probe, target-existence, decision-contradiction scan) and emits a semantic verdict only as
+      close_proposed, never a direct close -- which also tightens the trust-based Resolves:-trailer
+      auto-close (.github/workflows/rec-autoclose.yml). FREEZE-INDEPENDENT: pays off in the human-driven
+      /plan and /implement flow today (505 open / 273 aging recs at 2026-06-24), which is why it is MVP,
+      not deferred.
+    depends_on: [T0.12.5, T0.12.7]
+    files_in_scope:
+      - scripts/rec_relevance.py    # new -- deterministic-first relevance evaluator
+      - docs/contracts/recommendation-relevance.yaml    # new -- named projection contract (NOT Class A ops_recommendations columns)
+      - scripts/session_preflight.py    # generalise correlate_ci_rca_with_main beyond ci_rca; surface a relevance / likely-resolved triage list from the read-cache
+      - scripts/ops_data_portal.py    # close_proposed lifecycle support (no schema change)
+      - .claude/skills/planning/SKILL.md    # rec-side freshness gate at /plan (analogue of T-1.21)
+      - .claude/skills/implement/SKILL.md    # re-check a bundled rec's relevance before implementing it
+      - scripts/validate.py
+    exit_criteria:
+      - "rec_relevance.py emits a relevance verdict per open rec (relevant | satisfied | superseded | duplicate | contradicted | stale_target | blocked_by_decision | unknown), deterministic-first via the acceptance oracle + target existence + decision-contradiction scan"
+      - "Relevance state is computed read-time OR stored in the named docs/contracts/recommendation-relevance.yaml projection -- NO new Class A ops_recommendations columns (Decision 84); queue surfacing serves the read-cache, not a warehouse re-fetch (Decision 88)"
+      - "Deterministic satisfaction (acceptance passes on main) may auto-close with the proof recorded; every semantically-judged verdict produces close_proposed, never a direct close (CD.36, Decision 70)"
+      - "A rec-side freshness gate exists in the planning skill (analogue of the T-1.21 Tier Item Freshness Gate), and the implement skill re-checks a bundled rec's relevance before implementing it"
+      - "The ci_rca likely-resolved correlation (session_preflight.py) is generalised to all rec sources behind the same engine (surfacing only, not auto-acting -- Decision 55)"
+      - "Unit tests cover each relevance verdict and the deterministic-vs-semantic closure split"
+    related_candidate_decisions: [CD.36, CD.29]
+    effort: M
+    strategic: false
+    status: not_started
+    note: "MVP (not deferred) per operator scoping 2026-06-24: a freeze-INDEPENDENT queue-hygiene capability for the human-driven /plan and /implement flow (505 open / 273 aging recs). Eligible immediately (deps T0.12.5/T0.12.7 complete). No Class A schema change (Decision 84): relevance is read-time or the named recommendation-relevance.yaml projection. Reworked from the GPT5.5 source proposal, which had added Class A columns. START is unblocked now; COMPLETION is gated on CD.36 (state: pending) per the header gates rule -- the landing wave either ratifies CD.36 via the ops portal or adds bootstrap_completion_exempt + a scope-(c) note at completion time (T-1.22 bookkeeping). The CD.29 entry in related_candidate_decisions is incidental (T3.8 reuses the acceptance typed-checks oracle CD.29 governs); CD.29.gates intentionally omits T3.8, same rationale as T3.10."
+  - id: T3.9
+    tier: T3
+    name: Post-merge recommendation reconciliation
+    intent: |
+      The continuous-hygiene complement to the T3.8 relevance gate: the gate prevents STARTING stale work,
+      reconciliation prevents stale work ACCUMULATING after sibling recs land. Per CD.36, after a PR merges
+      and main full-validate passes, re-evaluate open recs whose target overlaps the changed artefacts:
+      deterministically close recs whose `acceptance` now passes (proof recorded), and move semantic
+      supersession / obsolete-target findings to close_proposed with evidence. ci_rca recs are never
+      auto-closed without their specific failure fingerprint resolved (Decision 72). MVP overlap signal is
+      FILE-LEVEL (the rec `file` field intersected with the merge's changed files) -- the cheap signal that
+      exists today; the richer semantic-lock overlap (T4.8) is a post-MVP enhancement, cross-referenced not
+      depended-on, so this item does not block on deferred parallel-execution machinery. Example: rec-A
+      lands a schema change that incidentally satisfies rec-B's acceptance; reconciliation sees rec-B's
+      acceptance now passes and closes it with proof, with no human noticing.
+    depends_on: [T3.8]
+    files_in_scope:
+      - .github/workflows/post-merge-reconcile.yml    # new -- runs after main full-validate PASS
+      - scripts/rec_reconcile.py    # new -- maps the merge's changed files to overlapping open recs, re-runs relevance
+      - scripts/rec_relevance.py    # reused evaluator (T3.8)
+      - scripts/ops_data_portal.py
+    exit_criteria:
+      - "Post-merge reconciliation runs after main full-validate PASS and maps the merge's changed files to overlapping open recs by the rec `file` field (file-level overlap is the MVP signal)"
+      - "Only open recs with overlapping targets are re-checked (not the whole queue); surfacing serves the warmed read-cache / a named verb, never a per-run warehouse re-fetch (Decision 88)"
+      - "Deterministically-satisfied recs are closed with a recorded closure proof; semantic supersession / obsolete findings become close_proposed with evidence (CD.36)"
+      - "ci_rca recs are not auto-closed unless their specific failure fingerprint is resolved (Decision 72)"
+      - "Semantic-lock-based overlap (T4.8) is documented as a post-MVP enhancement to the file-level signal (cross-reference, not a dependency)"
+      - "Unit tests cover overlap mapping, deterministic close, close_proposed, and the ci_rca exclusion"
+    related_candidate_decisions: [CD.36]
+    effort: M
+    strategic: false
+    status: not_started
+    note: "MVP (not deferred) per operator scoping 2026-06-24. Decoupled from T4.8 (semantic locks, deferred_post_mvp): MVP reconciliation uses file-level overlap (the signal available today); semantic-lock overlap is an additive post-MVP enhancement. depends_on T3.8 only -- no live->deferred edge (Decision 93). COMPLETION is gated on CD.36 (pending), same path as T3.8."
+  - id: T3.10
+    tier: T3
+    name: Retire legacy verification projection writes (CD.29 enforcement side)
+    intent: |
+      T0.12.5 ratified the CONTRACT-level absorption of the executor's advisory `verification` projection
+      into the `acceptance` typed-checks structure (CD.29), but recorded an explicit field-shape-early /
+      enforcement-late skew: the executor (scripts/executor/jsonl_store.py, step_runner.py) still writes and
+      reads the standalone `verification` projection, and no tier_item owns the enforcement-side retirement.
+      This item owns it: once the typed-checks kernel (T3.1) and hermeticity (T3.6) land, flip the executor
+      to consume `acceptance[]` typed checks as the sole per-rec check surface, stop writing the standalone
+      `verification` projection for active recs, and migrate / read historical values through a
+      compatibility adapter. Executor machinery files -> automatable: false (Decision 44); lands via
+      /plan -> /implement, never the executor self-modifying.
+    depends_on: [T0.12.5, T3.1, T3.6]
+    files_in_scope:
+      - scripts/executor/jsonl_store.py    # drop the standalone verification projection write for active recs
+      - scripts/executor/step_runner.py    # consume acceptance[] typed checks as the sole per-rec check surface
+      - scripts/executor/acceptance_lint.py
+      - docs/contracts/ops_recommendations.yaml    # record the projection retirement (acceptance typed-checks shape already ratified at T0.12.5)
+      - scripts/validate.py    # reject new references treating verification as canonical
+    exit_criteria:
+      - "No new executor path writes `verification` as a standalone projection for active recs"
+      - "Existing verification values are migrated into acceptance[] typed checks or read through a read-only compatibility adapter"
+      - "validate.py rejects new references that treat `verification` as the canonical per-rec check surface"
+      - "The executor reads acceptance[] typed checks as the sole canonical per-rec check surface"
+      - "Recs touching executor machinery are filed automatable: false (Decision 44); the change lands via /plan -> /implement"
+    related_candidate_decisions: [CD.29]
+    effort: M
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: "Parked deferred_post_mvp (Decision 93) per operator scoping: the enforcement-side tail CD.29 / T0.12.5 deferred (the field-shape-early / enforcement-late skew names no owner). depends_on T0.12.5 (complete) + T3.1 / T3.6 (live) -- deferred->live, allowed. No live item depends_on it. Reactivate -> not_started once T3.1 + T3.6 are complete and the acceptance typed-checks enforcement flip is scheduled. CD.29.gates intentionally omits T3.10 (the typed-checks field-shape already ratified at T0.12.5; T3.10 is enforcement-only and binds CD.29 via related_candidate_decisions)."
+
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
   - id: T4.1
     tier: T4
@@ -5601,6 +5787,138 @@ tier_items:
     effort: M
     strategic: true
     status: not_started
+
+  - id: T4.8
+    tier: T4
+    name: Semantic lock registry + rec execution leases
+    intent: |
+      Per CD.37, the lock model the autonomous executor uses to select recs for parallel execution.
+      Forward intent: inert under the Decision 67 / CD.17 freeze and the T4.1 concurrency=1 ceiling until
+      the autonomy gates (T4.4) raise concurrency above 1. Locks are derived DETERMINISTICALLY from a rec's
+      targets -- files, contracts, tables, Lambda manifests, named verbs, Terraform roots, validation
+      surfaces, decisions, tier_items -- as shared-read or exclusive-write. The scheduler permits parallel
+      execution only when exclusive lock sets are disjoint. A lease protocol holds a rec's exclusive locks
+      until merge / failure / explicit release (release-on-failure default); lease records live in the
+      governed ops plane (Decision 84 reader/writer boundary), never local files. Post-merge reconciliation
+      (T3.9) gains semantic-lock overlap from this item (its MVP form uses file-level overlap).
+    depends_on: [T3.8, T0.12.5, T1.12]
+    files_in_scope:
+      - docs/contracts/recommendation-locks.yaml    # new -- lock-derivation + lease contract
+      - scripts/executor/lock_registry.py    # new
+      - scripts/executor/rec_scheduler.py    # new -- disjoint-exclusive-lock admission
+      - src/lambdas/ducklake_writer/handler.py    # lease records in the governed ops plane
+      - src/lambdas/ducklake_reader/handler.py
+      - scripts/validate.py
+    exit_criteria:
+      - "Each executable rec has deterministically-derived shared / exclusive semantic locks (files, contracts, tables, Lambda manifests, named verbs, Terraform roots, validation surfaces, decisions, tier_items)"
+      - "The scheduler refuses to start a rec while an in-flight execution holds an incompatible exclusive lock"
+      - "Lease records live in the governed ops plane (Decision 84), not local files; release-on-failure is the default"
+      - "Post-merge reconciliation (T3.9) re-checks open recs whose locks overlap the merged rec"
+      - "Unit tests cover compatible, incompatible, expired, failed, and released leases"
+    related_candidate_decisions: [CD.37, CD.27]
+    effort: L
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: "Parked deferred_post_mvp (Decision 93): forward intent for parallel rec execution, inert until T4.4 raises executor concurrency above 1 (T4.1 is concurrency=1). strategic: false per the CD.17 freeze-override (decomposes into atomic IMPLEMENTATION plans when reactivated). Executor machinery -> automatable: false (Decision 44). depends_on T3.8 (MVP/not_started) + T0.12.5 (complete) + T1.12 (live) -- no live->deferred edge. No live item depends_on it. Reactivate with the T4 executor build."
+  - id: T4.9
+    tier: T4
+    name: Executor to GitHub Actions handshake contract
+    intent: |
+      Per CD.38, the callback + correlation protocol between Step Functions rec executions (CD.27) and
+      GitHub Actions validation workflows. Forward intent; inert under the Decision 67 / CD.17 freeze.
+      Makes the CD.27 topology explicit and generalises the CD.35 / CD.21 (GitHub-hosted-runner CI substrate that replaced the EC2 runner) authority model from Terraform
+      to rec execution: GitHub Actions remains the sole verifier / validation runner (PR `--pre`, main
+      full-validate, verifier registry per CD.29); the executor never runs validate.py / verifiers in-cloud.
+      Step Functions records correlation ids (PR number, check-run id, workflow-run id, rec id, execution
+      id) and waits on GitHub Actions verdict callbacks. PR `--pre` PASS permits merge; main full-validate
+      PASS permits promotion / escalation / rec closure; PRE_FAIL / FULL_FAIL routes to ci-rca. Encodes the
+      Google-TAP-style flow (merge on the fast presubmit, escalate/close/promote on full validate) so no
+      future plan reintroduces an "AWS verifier runner".
+    depends_on: [T4.1, T2.20]
+    files_in_scope:
+      - docs/contracts/executor-ci-handshake.yaml    # new
+      - .github/workflows/ci.yml    # callback-emission only (no new CI gate; validate.py unchanged) -- report PR --pre / main full-validate verdicts to the executor callback
+      - .github/workflows/ci-rca.yml
+      - terraform/personal/executor_callbacks.tf    # new
+      - src/lambdas/executor_callback/handler.py    # new
+      - scripts/executor/github_checks.py    # new
+      - scripts/validate.py
+    exit_criteria:
+      - "Contract states GitHub Actions is the only verifier / validation runner for PR --pre and main full-validate; the executor runs neither in AWS"
+      - "Step Functions execution stores correlation ids: PR number, check-run id, workflow-run id, rec id, execution id"
+      - "GitHub Actions reports PR --pre PASS/FAIL and main full-validate PASS/FAIL to the executor callback without exposing raw Step Functions task tokens"
+      - "PRE_PASS permits merge; FULL_PASS permits promotion / closure; PRE_FAIL / FULL_FAIL routes to ci-rca (Decision 72)"
+      - "Unit tests cover callback authentication, duplicate-callback idempotency, stale-callback rejection, and failed-workflow handling"
+    related_candidate_decisions: [CD.38, CD.27, CD.35]
+    effort: L
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: "Parked deferred_post_mvp (Decision 93): forward intent making the CD.27 verification leg explicit; inert under the Decision 67 / CD.17 freeze. strategic: false per the CD.17 freeze-override (decomposes into atomic IMPLEMENTATION plans when reactivated). depends_on T4.1 (live, not_started) + T2.20 (complete) -- deferred->live, allowed. T3.1 dropped from deps (round-1 critique): a runtime consumer of the typed-checks registry, not an authoring prerequisite for the handshake contract. No live item depends_on it. Reactivate with the T4 executor build."
+  - id: T4.10
+    tier: T4
+    name: Durable persona contract registry
+    intent: |
+      Per CD.27, the executor's agent personas run as Lambda Durable Functions (T4.2 lands plan_agent,
+      plan_critic, decision_scout, implement_agent, code_reviewer). This item adds the GOVERNANCE layer
+      T4.2 does not: each persona as a versioned contract (CD.25 ritual) specifying purpose, input_schema,
+      output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and a failure vocabulary
+      -- so "laser-focused persona" is enforceable structure, not prompt-naming convention. Adds the two
+      personas T4.2 does not enumerate: rca (failure analysis) and bookkeeping (state reconciliation). T4.2's
+      persona implementations MUST conform to these contracts (this item is the contract surface T4.2
+      consumes; it does not re-implement the substrate). Forward intent; inert under the Decision 67 / CD.17
+      freeze.
+    depends_on: [T4.1, T1.12]
+    files_in_scope:
+      - docs/contracts/executor-personas.yaml    # new -- registry index
+      - docs/contracts/personas/plan_agent.yaml    # new
+      - docs/contracts/personas/plan_critic.yaml    # new
+      - docs/contracts/personas/decision_scout.yaml    # new
+      - docs/contracts/personas/implement_agent.yaml    # new
+      - docs/contracts/personas/code_reviewer.yaml    # new
+      - docs/contracts/personas/rca.yaml    # new
+      - docs/contracts/personas/bookkeeping.yaml    # new
+      - config/agent/executor/personas.yaml    # new
+      - scripts/validate.py
+    exit_criteria:
+      - "Each executor persona has a contract-versioned YAML contract with input_schema, output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and failure_outputs"
+      - "validate.py rejects persona contracts with missing schemas, unknown tools, or unbounded retry / revision settings"
+      - "plan_agent, plan_critic, decision_scout, implement_agent, code_reviewer, rca, and bookkeeping have non-overlapping authority definitions (matching the CD.27 / T4.2 persona identifiers, plus the net-new rca + bookkeeping)"
+      - "implement_agent is the only persona permitted to produce repo patches; no persona contract permits direct merge, direct rec closure, or direct terraform apply"
+      - "T4.2 persona implementations are required to conform to these contracts (cross-referenced, not duplicated here)"
+    related_candidate_decisions: [CD.27]
+    effort: M
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: "Parked deferred_post_mvp (Decision 93): governance layer over the CD.27 / T4.2 personas; EXTENDS T4.2 (does not duplicate its substrate) and adds the rca + bookkeeping personas. Executor machinery -> automatable: false (Decision 44). depends_on T4.1 + T1.12 (live) -- deferred->live. No live item depends_on it. Reactivate with the T4 executor build (author before / with T4.2 persona implementation)."
+  - id: T4.11
+    tier: T4
+    name: Executor loop-budget + retry policy contract
+    intent: |
+      Per CD.27, Step Functions retries are deterministic-only and LLM-judgement failures escalate via the
+      rec / RCA path (Decision 55); T4.1 sets concurrency=1. This item adds the BOUNDED-BUDGET layer those
+      establish but do not quantify: explicit caps on plan revisions, implementation revisions, review
+      rounds, verification attempts, and total LLM calls per rec, enforced by Step Functions state (not by
+      persona prompt discipline) -- because recursive self-improvement systems fail when they can revise
+      indefinitely. Transport-failure retry (deterministic) is separated from judgement-revision budget;
+      LLM bad-output retry is prohibited except bounded schema-repair within a persona-local budget.
+      Exhausted budgets route to RCA (Decision 55). Forward intent; inert under the Decision 67 / CD.17
+      freeze.
+    depends_on: [T4.1, T4.10]
+    files_in_scope:
+      - docs/contracts/executor-loop-policy.yaml    # new
+      - terraform/personal/executor_state_machine.tf    # new -- Step Functions counters
+      - scripts/validate.py
+    exit_criteria:
+      - "Loop policy defines max plan revisions, implementation revisions, review rounds, verification attempts, and total LLM calls per rec"
+      - "The Step Functions state machine enforces the counters and routes exhausted budgets to RCA (Decision 55)"
+      - "Transport-failure retry (deterministic) is separated from judgement-revision budget"
+      - "LLM bad-output retry is prohibited except bounded schema-repair within a persona-local budget"
+      - "ASL validation (or unit tests) covers exhausted-budget transitions"
+    related_candidate_decisions: [CD.27]
+    effort: M
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: "Parked deferred_post_mvp (Decision 93): bounded-budget layer over the CD.27 / T4.1 retry + concurrency model; EXTENDS T4.1 / T4.2 (does not duplicate concurrency=1 or the deterministic-retry split). Executor machinery -> automatable: false (Decision 44). depends_on T4.1 (live) + T4.10 (deferred) -- no live->deferred edge. No live item depends_on it. Reactivate with the T4 executor build."
 
   # ----- T5: Decommissioning & cleanup -----
   - id: T5.1
