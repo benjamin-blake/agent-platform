@@ -50,10 +50,13 @@ infrastructure_dependencies:
   - >-
     IAM (human-gated, Decision 77): two agent_platform_admin (PlatformAdmin) applies. (a)
     terraform/bootstrap -- in-place update of aws_iam_role_policy.github_ci_apply (IAMRolesRead +1
-    ARN); (b) terraform/personal -- targeted create of aws_iam_role.github_ci_drift +
-    aws_iam_role_policy.github_ci_drift (HCL already present in oidc.tf from PR #250). Both present
-    `terraform plan` to the human BEFORE apply. The bootstrap root is always admin-applied
-    out-of-band (Decision 92 point 4); it is not part of the CD pipeline.
+    ARN); (b) terraform/personal -- targeted apply of aws_iam_role.github_ci_drift +
+    aws_iam_role_policy.github_ci_drift + aws_iam_role_policy.github_ci_plan (all HCL already present in
+    oidc.tf from PR #250; the github_ci_plan policy delta is included because the failed apply never
+    landed it and the pipeline cannot PutRolePolicy on the plan role). A VP12 untargeted convergence
+    gate catches any further unapplied delta. Both present `terraform plan` to the human BEFORE apply.
+    The bootstrap root is always admin-applied out-of-band (Decision 92 point 4); it is not part of the
+    CD pipeline.
   - >-
     The drift role create is run by agent_platform_admin (iam:*), so it does NOT depend on the
     bootstrap IAMRolesRead grant. Ordering: apply bootstrap (a) and create the role (b) BEFORE the
@@ -81,6 +84,13 @@ acceptance_criteria:
   - >-
     simulate-principal-policy for github_ci_apply returns allowed for iam:GetRole/iam:GetRolePolicy on
     the drift ARN and implicitDeny (or explicitDeny) for iam:CreateRole/iam:PutRolePolicy on it.
+  - >-
+    github_ci_plan's live inline policy (get-role-policy) carries the drift ARN in IAMCIRolesRead -- the
+    PR #250 delta the failed apply left unapplied is reconciled.
+  - >-
+    terraform/personal globally converges: an untargeted `terraform plan -detailed-exitcode` exits 0
+    BEFORE any dispatch-ack (no residual code-vs-state delta the dispatch-ack pipeline or a drift tick
+    would re-detect).
   - >-
     The convergence record sandbox.json has status == green at commit d49e26c (or a successor commit
     from the dispatch-ack run).
@@ -113,6 +123,17 @@ verification_plan:
     fix_if: Any write-statement line appears in the diff -- the edit widened the IAM-write surface; revert to a read-only IAMRolesRead change.
   - step: 4
     phase: pre-deploy
+    action: Determine whether github_ci_plan's drift-ARN policy change actually applied to AWS (the failed apply hit AccessDenied on PutRolePolicy github_ci_plan, so it likely did NOT).
+    command: aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name agent-platform-github-ci-plan --profile agent_platform --output json | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); s=[x for x in d['PolicyDocument']['Statement'] if x.get('Sid')=='IAMCIRolesRead'][0]; print('PRESENT' if any('github-ci-drift' in r for r in s['Resource']) else 'ABSENT-needs-admin-reconcile')"
+    expected: >-
+      Most likely "ABSENT-needs-admin-reconcile" (the PR #250 github_ci_plan policy change merged to
+      main but never applied to AWS because the gated apply failed). If ABSENT, the personal -target
+      apply (step 7) MUST include aws_iam_role_policy.github_ci_plan -- otherwise the dispatch-ack
+      pipeline (which canNOT PutRolePolicy on github_ci_plan) re-hits the original AccessDenied and
+      re-REDs the record. If "PRESENT", the change did land; step 7 may drop that target.
+    fix_if: Command errors (NoSuchEntity on github_ci_plan) -- the plan role itself is missing; escalate, the speculative-plan substrate is broken.
+  - step: 5
+    phase: pre-deploy
     action: Present the bootstrap plan; it is an in-place policy update with no destroy and no trust change.
     command: terraform -chdir=terraform/bootstrap plan -out=/tmp/bootstrap.plan && terraform -chdir=terraform/bootstrap show -no-color /tmp/bootstrap.plan
     expected: >-
@@ -121,33 +142,42 @@ verification_plan:
       and shows NO assume_role_policy (trust) change and NO resource destroy. PRESENT to the human
       before apply (Decision 77).
     fix_if: Any destroy, any trust-doc change, or any resource other than the apply inline policy -- STOP and reconcile.
-  - step: 5
+  - step: 6
     phase: post-deploy
     action: After admin applies bootstrap, the live apply-role policy lists the drift ARN in IAMRolesRead.
     command: aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name agent-platform-github-ci-apply --profile agent_platform --output json | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); s=[x for x in d['PolicyDocument']['Statement'] if x.get('Sid')=='IAMRolesRead'][0]; print('drift' if any('github-ci-drift' in r for r in s['Resource']) else 'MISSING')"
     expected: "drift"
     fix_if: Prints MISSING -- the bootstrap apply did not land; re-run the admin apply.
-  - step: 6
-    phase: post-deploy
-    action: Present the personal targeted plan; it creates exactly the drift role + its inline policy.
-    command: terraform -chdir=terraform/personal plan -target=aws_iam_role.github_ci_drift -target=aws_iam_role_policy.github_ci_drift -out=/tmp/drift.plan && terraform -chdir=terraform/personal show -no-color /tmp/drift.plan
-    expected: >-
-      "2 to add, 0 to change, 0 to destroy" -- aws_iam_role.github_ci_drift and
-      aws_iam_role_policy.github_ci_drift only. PRESENT to the human before apply (Decision 77).
-    fix_if: More than 2 resources, any change/destroy, or any non-drift resource -- STOP and narrow the -target set.
   - step: 7
+    phase: post-deploy
+    action: Present the personal targeted plan; it creates the drift role + policy AND reconciles the github_ci_plan policy delta the failed apply left unapplied.
+    command: terraform -chdir=terraform/personal plan -target=aws_iam_role.github_ci_drift -target=aws_iam_role_policy.github_ci_drift -target=aws_iam_role_policy.github_ci_plan -out=/tmp/drift.plan && terraform -chdir=terraform/personal show -no-color /tmp/drift.plan
+    expected: >-
+      "2 to add, 1 to change, 0 to destroy" when step 4 was ABSENT -- adds aws_iam_role.github_ci_drift
+      + aws_iam_role_policy.github_ci_drift and changes aws_iam_role_policy.github_ci_plan (drift ARN
+      into IAMCIRolesRead). If step 4 was PRESENT, expect "2 to add, 0 to change" and the github_ci_plan
+      target is a no-op (drop it). NO destroy, NO trust change. PRESENT to the human before apply
+      (Decision 77).
+    fix_if: Any destroy, any trust-doc change, or any resource beyond the three targets -- STOP and reconcile.
+  - step: 8
     phase: post-deploy
     action: After admin applies the targeted create, the drift role exists in AWS.
     command: aws iam get-role --role-name agent-platform-github-ci-drift --profile agent_platform --output json | bin/venv-python -c "import sys,json; print(json.load(sys.stdin)['Role']['RoleName'])"
     expected: Prints agent-platform-github-ci-drift (NoSuchEntity is gone).
     fix_if: NoSuchEntity -- the targeted apply did not create the role; re-run under agent_platform_admin.
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: The drift role's inline policy carries the sanctioned writer + read surface.
     command: aws iam get-role-policy --role-name agent-platform-github-ci-drift --policy-name agent-platform-github-ci-drift --profile agent_platform --output json | bin/venv-python -c "import sys,json; sids={x.get('Sid') for x in json.load(sys.stdin)['PolicyDocument']['Statement']}; need={'TfstateRead','TfstateNativeLockFile','ConvergenceRecordWrite'}; print('OK' if need<=sids else 'MISSING:'+str(need-sids))"
     expected: "OK"
     fix_if: Prints a MISSING set -- the inline policy did not apply fully; re-apply the role policy resource.
-  - step: 9
+  - step: 10
+    phase: post-deploy
+    action: The github_ci_plan policy now carries the drift ARN live (the reconciliation landed).
+    command: aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name agent-platform-github-ci-plan --profile agent_platform --output json | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); s=[x for x in d['PolicyDocument']['Statement'] if x.get('Sid')=='IAMCIRolesRead'][0]; print('PRESENT' if any('github-ci-drift' in r for r in s['Resource']) else 'STILL-ABSENT')"
+    expected: "PRESENT"
+    fix_if: STILL-ABSENT -- the github_ci_plan target was not applied; re-run the admin apply including -target=aws_iam_role_policy.github_ci_plan.
+  - step: 11
     phase: post-deploy
     action: github_ci_apply can READ the drift role but CANNOT create/write it (Path A keeps write surface minimal).
     command: ACCT=$(aws sts get-caller-identity --profile agent_platform --query Account --output text); aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply --action-names iam:GetRole iam:GetRolePolicy iam:CreateRole iam:PutRolePolicy --resource-arns arn:aws:iam::$ACCT:role/agent-platform-github-ci-drift --profile agent_platform --output json | bin/venv-python -c "import sys,json; print([(e['EvalActionName'], e['EvalDecision']) for e in json.load(sys.stdin)['EvaluationResults']])"
@@ -155,15 +185,26 @@ verification_plan:
       GetRole=allowed, GetRolePolicy=allowed, CreateRole=implicitDeny (or explicitDeny via the
       boundary), PutRolePolicy=implicitDeny (or explicitDeny). The assertion is those four decisions.
     fix_if: CreateRole/PutRolePolicy = allowed (write surface widened), or GetRole = denied (read grant missing).
-  - step: 10
+  - step: 12
+    phase: post-deploy
+    action: terraform/personal GLOBALLY converges before any dispatch-ack (gate -- the same delta the drift tick computes).
+    command: terraform -chdir=terraform/personal plan -lock=false -detailed-exitcode -out=/tmp/converge.plan >/dev/null 2>&1; echo "exit=$?"; terraform -chdir=terraform/personal show -no-color /tmp/converge.plan 2>/dev/null | tail -5
+    expected: >-
+      "exit=0" (no changes; fully converged). This MUST hold BEFORE the dispatch-ack -- otherwise the
+      dispatch-ack pipeline apply (or the next drift tick) hits the residual diff. Run under
+      agent_platform_admin. If exit=2, inspect the remaining diff: any IAM-sensitive resource the
+      pipeline cannot apply (a role policy outside branch+pr, a role create) must be admin -target-applied
+      first (present plan; Decision 77), then re-run this gate until exit=0.
+    fix_if: exit=2 with a residual IAM-sensitive diff -- admin-reconcile it before dispatching; do NOT dispatch on a non-converged personal root.
+  - step: 13
     phase: post-deploy
     action: Dispatch-ack clears red; the convergence record is green at the acknowledged commit.
     command: aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print(d['status'], d['commit_sha'][:7])"
     expected: >-
       Prints "green d49e26c" (or green at the dispatch-ack successor commit). Run AFTER the
       terraform-apply-sandbox workflow_dispatch run reports success.
-    fix_if: status still red -- inspect the dispatch run logs; if it re-failed on CreateRole the role/grant step was skipped or out of order (re-verify steps 5/7 first).
-  - step: 11
+    fix_if: status still red -- inspect the dispatch run logs; if it re-failed on an IAM AccessDenied (CreateRole or PutRolePolicy) the convergence gate (step 12) was not satisfied; re-verify steps 6/8/10/12.
+  - step: 14
     phase: post-deploy
     action: A manual drift tick now assumes the role and converges (no false red, no skip).
     command: bin/venv-python -m scripts.gh_run_status --workflow terraform-drift.yml --latest 2>/dev/null || echo "use GitHub MCP actions_get on the dispatched terraform-drift run id"
@@ -172,13 +213,13 @@ verification_plan:
       (no continue-on-error bypass); the plan step exit code is 0 (converged). Verify via GitHub MCP
       actions_get / get_job_logs on the run.
     fix_if: assume-role still skipped (role/trust mismatch) or run failed for a non-lock reason -- diagnose before closing recs.
-  - step: 12
+  - step: 15
     phase: post-deploy
     action: rec-2346 is closed after the sync.
     command: bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; grep '"rec-2346"' logs/.recommendations-log.jsonl | tail -1 | bin/venv-python -c "import sys,json; print(json.loads(sys.stdin.read())['status'])"
     expected: "closed"
     fix_if: Prints open -- the Resolves trailer did not fire; close manually via ops_data_portal --update-rec rec-2346 --status closed.
-  - step: 13
+  - step: 16
     phase: post-deploy
     action: Roadmap truth restored and Decision 98 synced.
     command: grep -nE 'T2\.24' docs/ROADMAP-PLATFORM.yaml | head; grep -c '## Decision 98' docs/DECISIONS.md
@@ -230,10 +271,21 @@ context:
     Path A matches the branch/pr/plan precedent: those CI roles were ALL admin-created and ALL appear in
     IAMRolesRead.
   - >-
-    Already shipped in PR #250 and live on main: the drift role HCL in terraform/personal/oidc.tf,
-    github_ci_plan's IAMCIRolesRead already extended with the drift ARN (oidc.tf:479), terraform-drift.yml
-    (cron + workflow_dispatch; assume-role step is continue-on-error to cover this bootstrap window), the
-    tf_drift data-quality source, and the ci_rca_taxonomy not_a_gate entry. None of those need changing.
+    Merged to main in PR #250 (HCL is the desired state) but NOT necessarily applied to AWS: the failed
+    gated apply (run 28102910305) hit TWO AccessDenied errors -- iam:CreateRole on github_ci_drift AND
+    iam:PutRolePolicy on github_ci_plan -- so it landed neither. "Merged to main" != "applied to AWS".
+    Consequence: BOTH the drift role create AND the github_ci_plan IAMCIRolesRead drift-ARN addition
+    (oidc.tf:479) are unreconciled code-vs-state deltas. The admin -target apply MUST reconcile BOTH
+    (github_ci_apply -- the pipeline -- cannot PutRolePolicy on github_ci_plan, so a dispatch-ack alone
+    re-hits the same AccessDenied and re-REDs). VP4 probes the live github_ci_plan policy to confirm; VP7
+    broadens the -target set to include aws_iam_role_policy.github_ci_plan; VP12 is a global-convergence
+    gate that must show exit 0 BEFORE any dispatch-ack.
+  - >-
+    No code change needed (HCL already correct on main, verify live-applied during VP12 convergence gate):
+    terraform-drift.yml (cron + workflow_dispatch; assume-role continue-on-error covers this bootstrap
+    window), the tf_drift data-quality source, and the ci_rca_taxonomy not_a_gate entry. If the failed
+    apply left any OTHER terraform/personal delta unapplied (e.g. a github_ci_branch policy/comment change),
+    the VP12 untargeted plan surfaces it and admin reconciles it before dispatch.
   - >-
     Related-Work check (ci_rca_unresolved_recs non-empty -- rec-2346): satisfied by failure-category
     match (terraform apply failure) AND by bundling rec-2346 as the rec this plan resolves. rec-2346's
@@ -270,30 +322,42 @@ execution_steps:
     in-place update to aws_iam_role_policy.github_ci_apply only; no destroy, no trust change). On
     acceptance, `terraform apply`. Verify VP5.
   - >-
-    Under agent_platform_admin, `terraform -chdir=terraform/personal init` then
-    `plan -target=aws_iam_role.github_ci_drift -target=aws_iam_role_policy.github_ci_drift` (VP6).
-    PRESENT to the human (expect: 2 to add). On acceptance, `apply -target=...`. This creates the role +
-    inline policy AND writes them into the shared personal tfstate. Verify VP7-VP9.
+    Probe the live github_ci_plan policy (VP4) to confirm whether the PR #250 drift-ARN delta applied to
+    AWS. Expect ABSENT (the failed apply also denied PutRolePolicy on github_ci_plan). This determines
+    the next -target set.
   - >-
-    ONLY after the role exists and VP5/VP7 pass: dispatch the terraform-apply-sandbox workflow via
+    Under agent_platform_admin, `terraform -chdir=terraform/personal init` then
+    `plan -target=aws_iam_role.github_ci_drift -target=aws_iam_role_policy.github_ci_drift
+    -target=aws_iam_role_policy.github_ci_plan` (VP7; drop the github_ci_plan target only if VP4 showed
+    PRESENT). PRESENT to the human (expect: 2 to add, 1 to change). On acceptance, `apply -target=...`.
+    This creates the drift role + policy, reconciles the github_ci_plan policy, and writes all into the
+    shared personal tfstate. Verify VP8-VP11.
+  - >-
+    GLOBAL CONVERGENCE GATE (VP12): under agent_platform_admin run an UNtargeted
+    `terraform -chdir=terraform/personal plan -lock=false -detailed-exitcode` and require exit 0. If
+    exit 2, inspect the residual diff -- any IAM-sensitive resource the pipeline cannot apply must be
+    admin -target-applied (present plan first, Decision 77), then re-run the gate until exit 0. Do NOT
+    proceed to dispatch on a non-converged personal root.
+  - >-
+    ONLY after VP6/VP8/VP10 pass AND VP12 shows exit 0: dispatch the terraform-apply-sandbox workflow via
     GitHub MCP actions_run_trigger (workflow_dispatch) with
     acknowledge_red_commit=d49e26c774cd975e569ad22f85f4b8dfebd42076. Subscribe/poll the run; on success
-    confirm the convergence record is green (VP10). Do NOT dispatch earlier -- a premature dispatch
-    re-fails on CreateRole and re-writes red.
+    confirm the convergence record is green (VP13). Do NOT dispatch earlier -- a premature or
+    non-converged dispatch re-fails on an IAM AccessDenied and re-writes red.
   - >-
     Dispatch terraform-drift via workflow_dispatch (GitHub MCP); confirm the run succeeds with the
-    assume-role step NOT skipped and the plan exit 0 (VP11).
+    assume-role step NOT skipped and the plan exit 0 (VP14).
   - >-
     Truth-maintenance: edit docs/ROADMAP-PLATFORM.yaml T2.24 status complete -> in_progress with a
-    progress_note (pre-deploy code merged PR #250; role operational after this recovery). Verify VP13.
+    progress_note (pre-deploy code merged PR #250; role operational after this recovery). Verify VP16.
   - >-
     Record Decision 98 in docs/DECISIONS.md (provisioning model for convergence-writer / peer CI roles;
     admin-create + read-only bootstrap IAMRolesRead; pipeline does not mint peer CI roles until T2.25),
-    then `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` to sync ops_decisions. Verify VP13.
+    then `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` to sync ops_decisions. Verify VP16.
   - >-
     Close rec-2346: include `Resolves: rec-2346` in the squash-merge body (rec-autoclose) OR
     `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2346 --status closed --resolution "..."`.
-    Verify VP12. If a source=tf_drift rec appeared, close it the same way.
+    Verify VP15. If a source=tf_drift rec appeared, close it the same way.
   - >-
     Execute the full Verification Plan; loop until pass. On any unrecoverable V3 failure (e.g. the
     dispatch-ack re-fails on CreateRole, or simulate-principal-policy shows the write surface widened),
