@@ -11,9 +11,11 @@ import yaml
 
 from scripts.platform_roadmap import (
     _GATE_HELPERS,
+    GateRuleEvaluator,
     GateRuleParser,
     PlatformRoadmapState,
     RoadmapDocument,
+    compute_state_dict,
     load,
 )
 from scripts.session_preflight import _slim_roadmap_state
@@ -640,3 +642,380 @@ class TestDeferredPostMvp:
         eligible_ids = {i.id for i in state.eligible_items()}
         parked_ids = {"T2.8", "T2.9", "T2.11a", "T2.11b"}
         assert parked_ids.isdisjoint(eligible_ids), f"Parked items found in eligible: {parked_ids & eligible_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for T-1.20 tests
+# ---------------------------------------------------------------------------
+
+
+def _cd(cd_id: str, state: str = "pending", gates: list | None = None) -> dict:
+    return {"id": cd_id, "title": f"Decision {cd_id}", "state": state, "gates": gates or []}
+
+
+def _state_from_doc(doc_dict: dict) -> PlatformRoadmapState:
+    return PlatformRoadmapState(RoadmapDocument.model_validate(doc_dict))
+
+
+# ---------------------------------------------------------------------------
+# TestGateRuleEvaluator -- T-1.20: static helpers, Kleene tri-state, field resolution
+# ---------------------------------------------------------------------------
+
+
+class TestGateRuleEvaluator:
+    def _all_complete_state(self) -> PlatformRoadmapState:
+        doc = _doc(
+            tier_items=[
+                {**_item("T0.1", tier="T0"), "status": "complete"},
+                {**_item("T0.2", tier="T0"), "status": "complete"},
+            ]
+        )
+        return _state_from_doc(doc)
+
+    def _partial_state(self) -> PlatformRoadmapState:
+        doc = _doc(
+            tier_items=[
+                {**_item("T0.1", tier="T0"), "status": "complete"},
+                {**_item("T0.2", tier="T0"), "status": "not_started"},
+            ]
+        )
+        return _state_from_doc(doc)
+
+    def test_tier_complete_pass(self) -> None:
+        ev = GateRuleEvaluator(self._all_complete_state())
+        verdict, reason = ev.evaluate('tier_complete("T0")')
+        assert verdict == "pass"
+        assert "True" in reason
+
+    def test_tier_complete_fail(self) -> None:
+        ev = GateRuleEvaluator(self._partial_state())
+        verdict, _ = ev.evaluate('tier_complete("T0")')
+        assert verdict == "fail"
+
+    def test_all_in_tier_with_status_pass(self) -> None:
+        ev = GateRuleEvaluator(self._all_complete_state())
+        verdict, _ = ev.evaluate('all_in_tier_with_status("T0", "complete")')
+        assert verdict == "pass"
+
+    def test_all_in_tier_with_status_fail(self) -> None:
+        ev = GateRuleEvaluator(self._partial_state())
+        verdict, _ = ev.evaluate('all_in_tier_with_status("T0", "complete")')
+        assert verdict == "fail"
+
+    def test_grace_period_elapsed_pass(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete", "completed_at": "1970-01-01"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T0.1, 30)")
+        assert verdict == "pass"
+        assert ">=" in reason
+
+    def test_grace_period_elapsed_fail_item_incomplete(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T0.1, 30)")
+        assert verdict == "fail"
+        assert "not complete" in reason
+
+    def test_grace_period_elapsed_deferred_no_completed_at(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T0.1, 30)")
+        assert verdict == "deferred"
+        assert "completed_at" in reason
+
+    def test_grace_period_elapsed_fail_too_recent(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete", "completed_at": "2026-06-01"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T0.1, 99999)")
+        assert verdict == "fail"
+        assert ">=" in reason
+
+    def test_kleene_fail_and_deferred_equals_fail(self) -> None:
+        # tier_complete("T0") => fail (T0.2 not_started)
+        # T0.2.latest_run.verdict => deferred (runtime path)
+        # Kleene: fail AND deferred = fail
+        ev = GateRuleEvaluator(self._partial_state())
+        verdict, _ = ev.evaluate('tier_complete("T0") and T0.2.latest_run.verdict == "PASS"')
+        assert verdict == "fail"
+
+    def test_kleene_pass_or_deferred_equals_pass(self) -> None:
+        # tier_complete("T0") => pass (all complete)
+        # T0.1.latest_run.verdict => deferred (runtime path)
+        # Kleene: pass OR deferred = pass
+        ev = GateRuleEvaluator(self._all_complete_state())
+        verdict, _ = ev.evaluate('tier_complete("T0") or T0.1.latest_run.verdict == "PASS"')
+        assert verdict == "pass"
+
+    def test_status_field_cmp_pass(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T0.1.status == "complete"')
+        assert verdict == "pass"
+        assert "complete" in reason
+
+    def test_status_field_cmp_fail(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T0.1.status == "complete"')
+        assert verdict == "fail"
+        assert "not_started" in reason
+
+    def test_runtime_field_path_deferred(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, _ = ev.evaluate('T0.1.latest_run.verdict == "PASS"')
+        assert verdict == "deferred"
+
+    def test_longest_prefix_collision_resolves_correct_item(self) -> None:
+        # T9.1 (complete) and T9.1.2 (not_started) both present.
+        # T9.1.status must resolve to T9.1 (not T9.1.2) via longest-known-id-prefix rule.
+        # _sorted_ids = ["T9.1.2", "T9.1"] (length descending).
+        # "T9.1.status" does NOT start with "T9.1.2." -> falls through to "T9.1." -> match.
+        doc = _doc(
+            tier_items=[
+                {**_item("T9.1"), "status": "complete"},
+                {**_item("T9.1.2"), "status": "not_started", "depends_on": ["T9.1"]},
+            ]
+        )
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T9.1.status == "complete"')
+        assert verdict == "pass", f"expected pass (T9.1 is complete) but got {verdict!r}: {reason}"
+
+    def test_not_inverts_pass_to_fail(self) -> None:
+        ev = GateRuleEvaluator(self._all_complete_state())
+        verdict, _ = ev.evaluate('not tier_complete("T0")')
+        assert verdict == "fail"
+
+    def test_not_inverts_fail_to_pass(self) -> None:
+        ev = GateRuleEvaluator(self._partial_state())
+        verdict, _ = ev.evaluate('not tier_complete("T0")')
+        assert verdict == "pass"
+
+    def test_item_field_eq_always_deferred(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('item_field_eq(T0.1, "latest_run.verdict", "PASS")')
+        assert verdict == "deferred"
+        assert "runtime" in reason.lower() or "deferred" in reason.lower()
+
+    def test_unknown_item_in_field_path_deferred(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, _ = ev.evaluate('T999.1.status == "complete"')
+        assert verdict == "deferred"
+
+
+# ---------------------------------------------------------------------------
+# TestBlockedOnCd -- T-1.20: three sources + exempt annotation
+# ---------------------------------------------------------------------------
+
+
+class TestBlockedOnCd:
+    def test_related_cd_source(self) -> None:
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99"]}],
+            candidate_decisions=[_cd("CD.99")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        r = result[0]
+        assert r["id"] == "T0.1"
+        assert "CD.99" in r["blocking_cds"]
+        assert r["relationships"]["CD.99"] == "related"
+
+    def test_gates_item_ref_source(self) -> None:
+        doc = _doc(
+            tier_items=[_item("T0.1")],
+            candidate_decisions=[_cd("CD.99", gates=["T0.1"])],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        r = result[0]
+        assert r["id"] == "T0.1"
+        assert r["relationships"]["CD.99"] == "gates"
+
+    def test_gates_tier_shortcut_source(self) -> None:
+        doc = _doc(
+            tier_items=[_item("T0.1", tier="T0")],
+            candidate_decisions=[_cd("CD.99", gates=["T0"])],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert any(r["id"] == "T0.1" for r in result)
+        r = next(r for r in result if r["id"] == "T0.1")
+        assert r["relationships"]["CD.99"] == "gates"
+
+    def test_decision_required_before_source(self) -> None:
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "decision_required_before": ["CD.99 must ratify first"]}],
+            candidate_decisions=[_cd("CD.99")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        r = result[0]
+        assert r["id"] == "T0.1"
+        assert r["relationships"]["CD.99"] == "decision_required_before"
+
+    def test_no_pending_cds_empty_result(self) -> None:
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99"]}],
+            candidate_decisions=[_cd("CD.99", state="ratified")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert result == []
+
+    def test_ratified_cd_not_blocking(self) -> None:
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99"]}],
+            candidate_decisions=[_cd("CD.99", state="ratified")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert not any(r["id"] == "T0.1" for r in result)
+
+    def test_bootstrap_completion_exempt_annotation(self) -> None:
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99"], "bootstrap_completion_exempt": True}],
+            candidate_decisions=[_cd("CD.99")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        assert result[0]["bootstrap_completion_exempt"] is True
+
+    def test_non_eligible_item_excluded(self) -> None:
+        # T0.1 blocked by T0.2 (not complete) -> not in eligible_items -> not in blocked_on_cd
+        doc = _doc(
+            tier_items=[
+                {**_item("T0.1", depends_on=["T0.2"]), "related_candidate_decisions": ["CD.99"]},
+                _item("T0.2"),
+            ],
+            candidate_decisions=[_cd("CD.99")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert not any(r["id"] == "T0.1" for r in result)
+
+    def test_first_source_wins(self) -> None:
+        # Item has CD.99 in both related_candidate_decisions (source 1) and cd.gates (source 2).
+        # "related" must win because it is processed first and the guard `if cd_id not in blocking`
+        # prevents overwrite.
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99"]}],
+            candidate_decisions=[_cd("CD.99", gates=["T0.1"])],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        assert result[0]["relationships"]["CD.99"] == "related"
+
+    def test_blocking_cds_sorted(self) -> None:
+        # Multiple pending CDs; blocking_cds[] must be sorted for deterministic output.
+        doc = _doc(
+            tier_items=[{**_item("T0.1"), "related_candidate_decisions": ["CD.99", "CD.13"]}],
+            candidate_decisions=[_cd("CD.99"), _cd("CD.13")],
+        )
+        result = _state_from_doc(doc).blocked_on_cd()
+        assert len(result) == 1
+        assert result[0]["blocking_cds"] == sorted(result[0]["blocking_cds"])
+
+
+# ---------------------------------------------------------------------------
+# TestUserActionRequired -- T-1.20: user_action_required threading
+# ---------------------------------------------------------------------------
+
+
+class TestUserActionRequired:
+    def test_user_action_required_true_in_item_dict(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "user_action_required": True}])
+        state = _state_from_doc(doc)
+        full = state.to_preflight_dict()
+        item = next(i for i in full["next_eligible"] if i["id"] == "T0.1")
+        assert item["user_action_required"] is True
+
+    def test_user_action_required_none_default(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        state = _state_from_doc(doc)
+        full = state.to_preflight_dict()
+        item = next(i for i in full["next_eligible"] if i["id"] == "T0.1")
+        assert item["user_action_required"] is None
+
+    def test_user_action_required_false(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "user_action_required": False}])
+        state = _state_from_doc(doc)
+        full = state.to_preflight_dict()
+        item = next(i for i in full["next_eligible"] if i["id"] == "T0.1")
+        assert item["user_action_required"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestLiveGateEvaluations -- T-1.20 live-YAML anchors
+# ---------------------------------------------------------------------------
+
+_LIVE_ROADMAP = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
+
+
+@pytest.mark.skipif(not _LIVE_ROADMAP.exists(), reason="live ROADMAP-PLATFORM.yaml not present")
+class TestLiveGateEvaluations:
+    def _result(self):  # type: ignore[return]
+        return compute_state_dict(_LIVE_ROADMAP)
+
+    def test_all_four_gates_have_verdict(self) -> None:
+        gates = {g["id"]: g for g in self._result().get("gate_evaluations", [])}
+        for gid in ("G.1", "G.8", "G.9", "G.10"):
+            assert gid in gates, f"gate {gid} missing from gate_evaluations"
+            assert "verdict" in gates[gid], f"gate {gid} missing 'verdict' key"
+            assert gates[gid]["verdict"] in ("pass", "fail", "deferred")
+
+    def test_g1_passes(self) -> None:
+        # T-1.4 and T-1.5 are both complete -> G.1 must pass
+        gates = {g["id"]: g for g in self._result().get("gate_evaluations", [])}
+        g1 = gates.get("G.1")
+        assert g1 is not None
+        assert g1["verdict"] == "pass", f"G.1: T-1.4 and T-1.5 are complete so rule must pass: {g1}"
+
+    def test_g8_fails(self) -> None:
+        # T3.2 is not_started -> first conjunct of G.8 fails -> Kleene AND -> fail
+        gates = {g["id"]: g for g in self._result().get("gate_evaluations", [])}
+        g8 = gates.get("G.8")
+        assert g8 is not None
+        assert g8["verdict"] == "fail", f"G.8: T3.2 not_started so first conjunct must fail: {g8}"
+
+    def test_g9_non_deferred(self) -> None:
+        # T4.2 is not_started -> verdict is fail (not deferred)
+        gates = {g["id"]: g for g in self._result().get("gate_evaluations", [])}
+        g9 = gates.get("G.9")
+        assert g9 is not None
+        assert g9["verdict"] in ("pass", "fail"), f"G.9 verdict must not be deferred: {g9}"
+
+    def test_g10_non_deferred(self) -> None:
+        # T2.1/T2.2/T2.3 statuses are statically resolvable; grace_period_elapsed is computable
+        gates = {g["id"]: g for g in self._result().get("gate_evaluations", [])}
+        g10 = gates.get("G.10")
+        assert g10 is not None
+        assert g10["verdict"] in ("pass", "fail"), f"G.10 verdict must not be deferred: {g10}"
+
+    def test_blocked_on_cd_non_empty(self) -> None:
+        # The live roadmap always carries not_started eligible items gated by a pending CD
+        # (e.g. the T-1 contract-wave items under pending CD.1/CD.25). Anchored on the
+        # invariant rather than a specific id so this plan's own bookkeeping (which may
+        # flip an anchor item out of eligible) does not make the regression test fragile.
+        result = self._result()
+        assert result.get("blocked_on_cd"), "expected at least one blocked-on-CD item on the live roadmap"
+
+    def test_blocked_on_cd_references_only_pending_cds(self) -> None:
+        # Core semantic invariant: blocked_on_cd never surfaces a ratified/non-pending CD.
+        doc = load(_LIVE_ROADMAP)
+        pending = {cd.id for cd in doc.candidate_decisions if cd.state == "pending"}
+        for entry in self._result().get("blocked_on_cd", []):
+            for cd_id in entry["blocking_cds"]:
+                assert cd_id in pending, f"{entry['id']} blocked on non-pending CD {cd_id}"
+
+    def test_blocked_on_cd_relationships_are_valid_types(self) -> None:
+        valid = {"related", "gates", "decision_required_before"}
+        for entry in self._result().get("blocked_on_cd", []):
+            for cd_id, rel in entry["relationships"].items():
+                assert rel in valid, f"{entry['id']} CD {cd_id} has invalid relationship {rel!r}"
+
+    def test_blocked_on_cd_items_have_required_keys(self) -> None:
+        result = self._result()
+        for entry in result.get("blocked_on_cd", []):
+            for key in ("id", "name", "blocking_cds", "relationships", "bootstrap_completion_exempt"):
+                assert key in entry, f"blocked_on_cd entry {entry.get('id')} missing key '{key}'"
+            assert isinstance(entry["blocking_cds"], list)
+            assert isinstance(entry["relationships"], dict)

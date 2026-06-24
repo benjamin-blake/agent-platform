@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
 _OPS_DECISIONS_RE = re.compile(r"^ops_decisions:dec-\d+$")
 _TIER_SHORTCUT_RE = re.compile(r"^T-?\d+$")
+_CD_REF_RE = re.compile(r"\b(CD\.\d+)\b")
 _CANONICAL_TIER_ORDER: list[str] = ["T-1", "T0", "T1", "T2", "T3", "T4", "T5"]
 _INACTIVE_FOR_TIER: frozenset[str] = frozenset({"reserved", "deferred_post_mvp"})
 
@@ -28,6 +29,211 @@ _GATE_HELPERS: dict[str, int] = {
     "grace_period_elapsed": 2,
     "item_field_eq": 3,
 }
+
+# ---------------------------------------------------------------------------
+# Gate-rule evaluator (GateRuleEvaluator) -- T-1.20
+#
+# No eval()/exec(). Tokenizer + recursive-descent over the gate mini-grammar.
+# Three-valued (Kleene) logic with proper short-circuit:
+#   false AND deferred -> false  (not deferred-poisoning)
+#   true  OR  deferred -> true   (not deferred-poisoning)
+# Static fields: only 'status' is resolvable from the YAML. Any other field
+# path (latest_run.verdict, uptime_days, ...) and item_field_eq -> deferred.
+# Field-path resolution: longest-known-tier-item-id prefix (dot-delimited).
+# ---------------------------------------------------------------------------
+
+_EVAL_TOKEN_RE = re.compile(
+    r'(?P<STRING>"[^"]*"|\'[^\']*\')'
+    r"|(?P<NUMBER>\d+)"
+    r"|(?P<OP>==)"
+    r"|(?P<LPAREN>\()"
+    r"|(?P<RPAREN>\))"
+    r"|(?P<COMMA>,)"
+    r"|(?P<NAME>[A-Za-z_][A-Za-z0-9_.\\-]*)"
+    r"|(?P<WS>\s+)"
+)
+
+
+class _Token:
+    __slots__ = ("kind", "value")
+
+    def __init__(self, kind: str, value: str) -> None:
+        self.kind = kind
+        self.value = value
+
+
+def _tokenize(rule: str) -> list[_Token]:
+    tokens: list[_Token] = []
+    for m in _EVAL_TOKEN_RE.finditer(rule):
+        kind = m.lastgroup
+        if kind == "WS":
+            continue
+        value = m.group()
+        if kind == "STRING":
+            value = value[1:-1]
+        elif kind == "NAME" and value in ("and", "or", "not"):
+            kind = "KEYWORD"
+        assert kind is not None
+        tokens.append(_Token(kind, value))
+    tokens.append(_Token("EOF", ""))
+    return tokens
+
+
+_Verdict = str  # "pass" | "fail" | "deferred"
+
+
+class GateRuleEvaluator:
+    """Recursive-descent evaluator for cross-tier gate rule expressions.
+
+    Implements Kleene three-valued logic with proper short-circuit so a false
+    conjunct short-circuits a deferred operand to false (not deferred-poisoning).
+    No eval() or exec() is used anywhere.
+    """
+
+    def __init__(self, state: PlatformRoadmapState) -> None:
+        self._state = state
+        self._sorted_ids: list[str] = sorted(state._by_id.keys(), key=len, reverse=True)
+
+    def evaluate(self, rule: str) -> tuple[_Verdict, str]:
+        tokens = _tokenize(rule)
+        v, r, _ = self._parse_or(tokens, 0)
+        return v, r
+
+    def _parse_or(self, tokens: list[_Token], pos: int) -> tuple[_Verdict, str, int]:
+        v, r, pos = self._parse_and(tokens, pos)
+        while pos < len(tokens) and tokens[pos].kind == "KEYWORD" and tokens[pos].value == "or":
+            pos += 1
+            v2, r2, pos = self._parse_and(tokens, pos)
+            if v == "pass" or v2 == "pass":
+                v, r = "pass", (r if v == "pass" else r2)
+            elif v == "fail" and v2 == "fail":
+                v, r = "fail", f"({r}) or ({r2})"
+            else:
+                v, r = "deferred", (r if v == "deferred" else r2)
+        return v, r, pos
+
+    def _parse_and(self, tokens: list[_Token], pos: int) -> tuple[_Verdict, str, int]:
+        v, r, pos = self._parse_not(tokens, pos)
+        while pos < len(tokens) and tokens[pos].kind == "KEYWORD" and tokens[pos].value == "and":
+            pos += 1
+            v2, r2, pos = self._parse_not(tokens, pos)
+            if v == "fail" or v2 == "fail":
+                v, r = "fail", (r if v == "fail" else r2)
+            elif v == "pass" and v2 == "pass":
+                v, r = "pass", f"({r}) and ({r2})"
+            else:
+                v, r = "deferred", (r if v == "deferred" else r2)
+        return v, r, pos
+
+    def _parse_not(self, tokens: list[_Token], pos: int) -> tuple[_Verdict, str, int]:
+        if pos < len(tokens) and tokens[pos].kind == "KEYWORD" and tokens[pos].value == "not":
+            pos += 1
+            v, r, pos = self._parse_not(tokens, pos)
+            flipped = {"pass": "fail", "fail": "pass", "deferred": "deferred"}
+            return flipped.get(v, "deferred"), f"not ({r})", pos
+        return self._parse_atom(tokens, pos)
+
+    def _parse_atom(self, tokens: list[_Token], pos: int) -> tuple[_Verdict, str, int]:
+        if pos >= len(tokens) or tokens[pos].kind == "EOF":
+            return "fail", "empty expression", pos
+        tok = tokens[pos]
+        if tok.kind == "LPAREN":
+            pos += 1
+            v, r, pos = self._parse_or(tokens, pos)
+            if pos < len(tokens) and tokens[pos].kind == "RPAREN":
+                pos += 1
+            return v, r, pos
+        if tok.kind == "NAME":
+            name = tok.value
+            if pos + 1 < len(tokens) and tokens[pos + 1].kind == "LPAREN":
+                return self._eval_function(tokens, pos)
+            pos += 1
+            if pos < len(tokens) and tokens[pos].kind == "OP":
+                pos += 1
+                if pos < len(tokens) and tokens[pos].kind in ("STRING", "NUMBER"):
+                    rhs = tokens[pos].value
+                    pos += 1
+                    v, r = self._eval_field_cmp(name, rhs)
+                    return v, r, pos
+            return "deferred", f"unresolvable: {name}", pos
+        return "fail", f"unexpected token: {tok.value}", pos + 1
+
+    def _eval_function(self, tokens: list[_Token], pos: int) -> tuple[_Verdict, str, int]:
+        name = tokens[pos].value
+        pos += 2
+        args: list[_Token] = []
+        while pos < len(tokens) and tokens[pos].kind not in ("RPAREN", "EOF"):
+            if tokens[pos].kind == "COMMA":
+                pos += 1
+                continue
+            args.append(tokens[pos])
+            pos += 1
+        if pos < len(tokens) and tokens[pos].kind == "RPAREN":
+            pos += 1
+
+        if name == "tier_complete":
+            tier = args[0].value if args else ""
+            result = self._state.tier_complete(tier)
+            return ("pass" if result else "fail"), f"tier_complete({tier!r}) = {result}", pos
+
+        if name == "all_in_tier_with_status":
+            tier = args[0].value if len(args) > 0 else ""
+            status = args[1].value if len(args) > 1 else ""
+            items = [i for i in self._state._doc.tier_items if i.tier == tier and i.status not in _INACTIVE_FOR_TIER]
+            result = bool(items) and all(i.status == status for i in items)
+            return ("pass" if result else "fail"), f"all_in_tier_with_status({tier!r}, {status!r}) = {result}", pos
+
+        if name == "grace_period_elapsed":
+            item_id = args[0].value if len(args) > 0 else ""
+            try:
+                days = int(args[1].value) if len(args) > 1 else 0
+            except (ValueError, TypeError):
+                return "fail", "grace_period_elapsed: invalid days arg", pos
+            item = self._state._by_id.get(item_id)
+            if item is None:
+                return "fail", f"grace_period_elapsed: item {item_id!r} not found", pos
+            if item.status != "complete":
+                reason = f"grace_period_elapsed({item_id}, {days}): item not complete (status={item.status})"
+                return "fail", reason, pos
+            if not item.completed_at:
+                return "deferred", f"grace_period_elapsed({item_id}, {days}): completed_at unset", pos
+            try:
+                completed = datetime.strptime(str(item.completed_at), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - completed).days
+                result = elapsed >= days
+                reason = f"grace_period_elapsed({item_id}, {days}): {elapsed}d >= {days}d = {result}"
+                return ("pass" if result else "fail"), reason, pos
+            except (ValueError, TypeError):
+                return "deferred", f"grace_period_elapsed({item_id}, {days}): cannot parse completed_at", pos
+
+        if name == "item_field_eq":
+            arg_vals = [a.value for a in args]
+            return "deferred", f"item_field_eq({', '.join(arg_vals)}): runtime field (not statically resolvable)", pos
+
+        return "fail", f"unknown helper: {name}", pos
+
+    def _eval_field_cmp(self, field_path: str, rhs: str) -> tuple[_Verdict, str]:
+        item_id, field = self._resolve_field_path(field_path)
+        if item_id is None or field is None:
+            return "deferred", f"{field_path}: cannot resolve to a known item id"
+        item = self._state._by_id.get(item_id)
+        if item is None:
+            return "deferred", f"{field_path}: item {item_id!r} not found"
+        if field == "status":
+            actual = item.status
+            result = actual == rhs
+            return ("pass" if result else "fail"), f"{field_path} is {actual!r} (expected {rhs!r})"
+        return "deferred", f"{field_path}: field {field!r} is a runtime path (not statically resolvable)"
+
+    def _resolve_field_path(self, path: str) -> tuple[str | None, str | None]:
+        """Resolve a dotted field path to (item_id, field) using longest-known-id prefix."""
+        for known_id in self._sorted_ids:
+            prefix = known_id + "."
+            if path.startswith(prefix):
+                return known_id, path[len(prefix) :]
+            if path == known_id:
+                return known_id, ""
+        return None, None
 
 
 class GateRuleParser:
@@ -310,7 +516,14 @@ class RoadmapDocument(BaseModel):
 
 
 def _item_dict(item: TierItem) -> dict[str, Any]:
-    return {"id": item.id, "tier": item.tier, "name": item.name, "effort": item.effort, "strategic": item.strategic}
+    return {
+        "id": item.id,
+        "tier": item.tier,
+        "name": item.name,
+        "effort": item.effort,
+        "strategic": item.strategic,
+        "user_action_required": item.user_action_required,
+    }
 
 
 def load(path: str | Path) -> RoadmapDocument:
@@ -389,6 +602,73 @@ class PlatformRoadmapState:
     def _blocked_on(self, item: TierItem) -> list[str]:
         return [dep for dep in item.depends_on if not self._dep_satisfied(dep)]
 
+    def evaluate_gates(self) -> list[dict[str, Any]]:
+        """Evaluate all cross_tier_gates and return {id, name, verdict, reason} for each."""
+        evaluator = GateRuleEvaluator(self)
+        result: list[dict[str, Any]] = []
+        for gate in self._doc.cross_tier_gates:
+            verdict, reason = evaluator.evaluate(gate.rule)
+            result.append({"id": gate.id, "name": gate.name, "verdict": verdict, "reason": reason})
+        return result
+
+    def blocked_on_cd(self) -> list[dict[str, Any]]:
+        """Return eligible items that reference a pending candidate_decision.
+
+        Three sources (for each eligible item):
+          1. item.related_candidate_decisions -> relationship 'related'
+          2. cd.gates contains item id or tier shortcut -> relationship 'gates'
+          3. item.decision_required_before entries naming a CD id -> relationship 'decision_required_before'
+
+        blocking_cds[] is sorted; relationships{} maps cd_id to the relationship type (first source wins).
+        """
+        pending_cds: dict[str, Any] = {cd.id: cd for cd in self._doc.candidate_decisions if cd.state == "pending"}
+        if not pending_cds:
+            return []
+
+        cd_gates_index: dict[str, list[str]] = {}
+        for cd_id, cd in pending_cds.items():
+            for ref in cd.gates:
+                cd_gates_index.setdefault(ref, []).append(cd_id)
+
+        result: list[dict[str, Any]] = []
+        for item in self.eligible_items():
+            blocking: dict[str, str] = {}
+
+            for cd_id in item.related_candidate_decisions:
+                if cd_id in pending_cds and cd_id not in blocking:
+                    blocking[cd_id] = "related"
+
+            for ref, cd_ids in cd_gates_index.items():
+                if _TIER_SHORTCUT_RE.match(ref):
+                    match = item.tier == ref
+                else:
+                    match = item.id == ref
+                if match:
+                    for cd_id in cd_ids:
+                        if cd_id not in blocking:
+                            blocking[cd_id] = "gates"
+
+            drb = item.decision_required_before or []
+            drb_entries: list[str] = drb if isinstance(drb, list) else [drb] if isinstance(drb, str) else []
+            for entry in drb_entries:
+                for m in _CD_REF_RE.finditer(str(entry)):
+                    cd_id = m.group(1)
+                    if cd_id in pending_cds and cd_id not in blocking:
+                        blocking[cd_id] = "decision_required_before"
+
+            if blocking:
+                result.append(
+                    {
+                        "id": item.id,
+                        "name": item.name,
+                        "blocking_cds": sorted(blocking.keys()),
+                        "relationships": blocking,
+                        "bootstrap_completion_exempt": item.bootstrap_completion_exempt,
+                    }
+                )
+
+        return result
+
     def to_preflight_dict(self) -> dict[str, Any]:
         return {
             "next_eligible": [_item_dict(i) for i in self.eligible_items() if not i.strategic],
@@ -397,6 +677,8 @@ class PlatformRoadmapState:
             "strategic_pending": [_item_dict(i) for i in self.strategic_pending_items()],
             "deferred_post_mvp": [_item_dict(i) for i in self.deferred_post_mvp_items()],
             "active_tier": self.active_tier(),
+            "blocked_on_cd": self.blocked_on_cd(),
+            "gate_evaluations": self.evaluate_gates(),
         }
 
 
@@ -418,6 +700,8 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "strategic_pending": [],
             "deferred_post_mvp": [],
             "active_tier": None,
+            "blocked_on_cd": [],
+            "gate_evaluations": [],
         }
 
     state = PlatformRoadmapState(doc)

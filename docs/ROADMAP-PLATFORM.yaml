@@ -41,19 +41,26 @@ document:
       .gates in that .gates governs COMPLETION while .decision_required_before
       governs START (or another named state transition). T-1.5 schema enforces
       both fields STRUCTURALLY (helper grammar + arity; prose entries are
-      no-ops). Blocked-on-CD surfacing at preflight is NOT yet implemented --
-      T-1.20 lands it; until then planning sessions check
-      decision_required_before/gates manually per the planning skill's Tier
-      Item Freshness Gate (T-1.21).
-    - Cross-tier gates in cross_tier_gates[] are MUST hold, not advisory --
-      but note no runtime consumer evaluates gate rules yet (the validator
-      checks grammar only; evaluation lands with T-1.20). Until then gates
-      bind by convention and are checked manually at plan time.
-      Gate rule strings are evaluated against a mini-grammar of:
-        - item lookups: T0.1.status, T0.1.uptime_days, T0.1.latest_run.verdict
-        - boolean / comparison operators
-        - named helper functions: thirty_day_grace_elapsed(item),
-          tier_complete(tier_name), all_in_tier_with_status(tier_name, status)
+      no-ops). Blocked-on-CD surfacing is implemented in compute_state_dict /
+      to_preflight_dict (T-1.20): the full/orient preflight projection includes
+      blocked_on_cd[] for eligible items with pending gating CDs (relationship:
+      gates|related|decision_required_before). The slim/plan projection omits
+      blocked_on_cd; planning sessions use the Tier Item Freshness Gate (T-1.21)
+      for per-item gating-decision adjudication.
+    - Cross-tier gates in cross_tier_gates[] are MUST hold, not advisory.
+      Gate rules are evaluated by GateRuleEvaluator (no eval/exec; Kleene
+      tri-state with proper short-circuit: false AND deferred = false, not
+      deferred-poisoning). Gate verdicts (pass|fail|deferred) are surfaced in
+      the full/orient preflight projection under gate_evaluations[]. The slim/plan
+      projection omits gate_evaluations. Static fields: 'status' (resolved from
+      YAML). Runtime fields (latest_run.verdict, uptime_days, and item_field_eq
+      usages) resolve to 'deferred'. The deferred verdict with a non-driving
+      operand short-circuits to pass or fail rather than deferred.
+      Gate rule strings use the mini-grammar:
+        - item field comparisons: T0.1.status == "complete"
+        - helper functions: tier_complete(tier), all_in_tier_with_status(tier, status),
+          grace_period_elapsed(item, days) [static]; item_field_eq(item, field, value) [deferred]
+        - boolean operators: and, or, not (Kleene three-valued)
       Unknown helpers MUST be rejected by the T-1.5 RoadmapDocument schema check.
     - Effort markers (XS/S/M/L/XL) indicate decomposition need, not wall-clock.
       L and XL items are tagged strategic: true and require their own STRATEGIC
@@ -1718,7 +1725,7 @@ tier_items:
     files_in_scope:
       - scripts/session_preflight.py
     exit_criteria:
-      - "logs/.preflight-report.json contains platform_roadmap key with next_eligible[] + strategic_pending[] (the deliberately slim projection per session_preflight._slim_roadmap_state; in_progress/blocked/active_tier are computed by compute_state_dict and recoverable on demand -- criterion amended 2026-06-09, audit F-010, to match the shipped slimming; full-state surfacing + blocked-on-CD lands in T-1.20)"
+      - "logs/.preflight-report.json contains platform_roadmap key with next_eligible[] + strategic_pending[] (the deliberately slim projection per session_preflight._slim_roadmap_state; in_progress/blocked/active_tier are computed by compute_state_dict; full-state surfacing + blocked-on-CD + gate_evaluations implemented in T-1.20 and available via --roadmap-detail full used by /orient)"
       - "Stale-cache detection: if YAML mtime newer than ops_decisions latest decision, surface 'roadmap edits awaiting ratification' note"
       - "Tier-name shortcuts in depends_on resolved per agent_instructions semantics"
     related_candidate_decisions: [CD.13]
@@ -2256,8 +2263,11 @@ tier_items:
     files_in_scope:
       - scripts/platform_roadmap.py
       - scripts/session_preflight.py
+      - .claude/commands/orient.md
+      - .claude/skills/orient/SKILL.md
       - docs/ROADMAP-PLATFORM.yaml    # agent_instructions consumer-contract text kept in lockstep
       - tests/test_platform_roadmap.py
+      - tests/test_session_preflight_platform_roadmap.py
     exit_criteria:
       - "compute_state_dict output includes blocked_on_cd[] (item id + blocking CD ids) for items eligible-by-deps with pending gating CDs"
       - "Cross-tier gate rules with static helpers evaluate at preflight; gate verdicts surfaced in the report; item_field_eq documented as runtime-deferred"
@@ -2267,7 +2277,8 @@ tier_items:
     related_candidate_decisions: [CD.13]
     effort: S
     strategic: false
-    status: not_started
+    status: in_progress
+    progress_note: "2026-06-24: all 5 exit-criteria implemented and verified (GateRuleEvaluator with Kleene tri-state evaluation, blocked_on_cd computation, --roadmap-detail full projection, user_action_required threading, agent_instructions re-grounded, unit + integration tests). Completion stays gated: T-1.20 is non-exempt (bootstrap_completion_exempt: false) in tier T-1, which CD.1 (state: pending, gates: [T-1]) gates; per the Bootstrap COMPLETION exemption clause it sweeps to complete when CD.1 ratifies (at T-1.1 completion)."
 
   - id: T-1.21
     tier: T-1

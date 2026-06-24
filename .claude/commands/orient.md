@@ -11,21 +11,28 @@ model: opus[1m]
 
 ## Step 1: Confirm Preflight Cache
 
-Check whether `logs/.preflight-report.json` exists and is recent. If it is missing or older than 2 hours, run preflight to refresh:
+Check whether `logs/.preflight-report.json` exists, is recent (< 2 hours old), and contains
+a `platform_roadmap.gate_evaluations` key. If any condition fails, run preflight with the
+full projection to refresh:
 
 ```bash
-bin/venv-python -m scripts.session_preflight
+bin/venv-python -m scripts.session_preflight --roadmap-detail full
 ```
 
-`/orient` reads the preflight cache only -- it does NOT trigger a fresh warehouse reader fan-out (Decision 88 egress budget; Decision 84 closed boundary). The preflight script is the only path that may update `logs/.preflight-report.json`.
+`/orient` reads the preflight cache only -- it does NOT trigger a fresh warehouse reader fan-out
+(Decision 88 egress budget; Decision 84 closed boundary). The preflight script is the only path
+that may update `logs/.preflight-report.json`.
 
 Do NOT call `bin/venv-python -m scripts.platform_roadmap` or any DuckLake reader verb during this workflow.
 
 ## Step 2: Load Inputs
 
 Read the following from the preflight cache (`logs/.preflight-report.json`):
-- `platform_roadmap.next_eligible` -- items eligible to start
+- `platform_roadmap.next_eligible` -- items eligible to start (each carries `user_action_required`)
 - `platform_roadmap.strategic_pending` -- items blocked by the executor freeze
+- `platform_roadmap.in_progress` -- items currently in progress
+- `platform_roadmap.blocked_on_cd` -- eligible items with a related pending candidate_decision
+- `platform_roadmap.gate_evaluations` -- cross-tier gate verdicts (pass|fail|deferred)
 - `ci_rca_unresolved_recs` -- HARD BLOCK recs (if any)
 - `ci_rca_likely_resolved_recs` -- SOFT PROMPT recs (if any)
 - `ci_rca_liveness_alert` -- HARD ALERT if non-null
@@ -33,7 +40,6 @@ Read the following from the preflight cache (`logs/.preflight-report.json`):
 - `recent_main_commits` -- last 5 main commits (planning context)
 
 Read `docs/ROADMAP-PLATFORM.yaml` directly for:
-- All `in_progress` tier_items
 - `files_in_scope` lists (for the overlap matrix)
 - `depends_on` chains (for keystone computation)
 
