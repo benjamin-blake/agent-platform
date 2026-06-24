@@ -224,11 +224,10 @@ jobs:
           # trailing positional prompt, leaving claude with no input ("Input must be provided
           # either through stdin or as a prompt argument when using --print").
           PROMPT="Apply the .claude/agents/scheduled/ci-rca.md instructions to failed CI run ${RUN_ID}. The failed log is at /tmp/ci-rca-failed.log.${EVIDENCE_CONTEXT}"
-          printf '%s' "$PROMPT" | claude -p \
+          printf '%s' "$PROMPT" | ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh /tmp/ci-rca-output.json -- \
             --output-format json \
             --max-turns 30 \
-            --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(git log:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" \
-            > /tmp/ci-rca-output.json 2> /tmp/ci-rca-stderr.log || true
+            --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(git log:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" || true
           cat /tmp/ci-rca-output.json
           # Deterministic filing check: the marker/dedup must reflect a real filing, not the
           # || true-masked exit above. The parser exits 1 when no FILED: rec-NNN marker is
