@@ -57,11 +57,13 @@ The orient deliverable is a structured chat reply with four sections, in order:
 Compact table of tier_items currently `in_progress` or eligible (`not_started` with all depends_on satisfied). Source: `platform_roadmap.next_eligible` and `platform_roadmap.in_progress` from preflight cache.
 
 ```
-| Tier Item | Status | Phase | Notes |
-|---|---|---|---|
-| T-X.Y: <name> | in_progress | <phase> | |
-| T-X.Y: <name> | eligible | <phase> | gated by CD.NN (related) [if in blocked_on_cd] |
+| Tier Item | Status | Open Criteria | Phase | Notes |
+|---|---|---|---|---|
+| T-X.Y: <name> | in_progress | N open | <phase> | |
+| T-X.Y: <name> | eligible | -- | <phase> | gated by CD.NN (related) [if in blocked_on_cd] |
 ```
+
+**Open-criteria count for in_progress items**: Phase A (this version) -- infer open-criteria count from the item's `exit_criteria[]` list and `progress_note` prose (exit_criteria entries not mentioned as done in the progress_note count as open; when ambiguous, count as open per the conservative bias). Phase B -- read `open_criteria_count` directly from the preflight cache once it carries the structured ledger. Rank in_progress items fewest-open-criteria-first (closest-to-done) in this column so the operator immediately sees which item needs the least remaining work.
 
 **Blocked-on-CD annotation**: for each item in `platform_roadmap.blocked_on_cd`, add a "gated by CD.NN" note in the Notes column including the relationship type (`gates`, `related`, or `decision_required_before`) and whether the item carries `bootstrap_completion_exempt: true` (in which case it may start/complete despite the pending CD). An item can be eligible-to-start while still annotated as gated-by-CD; the annotation informs planning, it is not a hard block on eligibility.
 
@@ -92,7 +94,9 @@ If HARD BLOCK recs exist, note them prominently at the top of this section. The 
 Prioritized work list from the Status Digest:
 
 1. **CI-RCA first**: HARD BLOCK recs appear as item 0 -- they block other work. For each, suggest a `/plan` prompt to resolve it.
-2. **In_progress before eligible**: items already in progress have momentum and are typically lower activation cost.
+2. **In_progress follow-on planning (ranked fewest-open-criteria-first)**: in_progress items have momentum and are typically the lowest-activation-cost next step. Rank them fewest-open-criteria-first (closest-to-done). For each, determine whether a genuinely un-actioned (mid-implementing) plan exists:
+   - **Mid-implementing** (a PLAN-*.yaml was authored and is in-flight but not yet acted on): suggest `/implement PLAN-{slug}.yaml` for that item.
+   - **All authored plans actioned / no plan yet** (the common case -- the last plan was implemented and the item still has open criteria): emit a follow-on `/plan <item-id>: <item-name>` prompt. This is the default action for in_progress items. Phase A: determine mid-implementing status from docs/plans/ and the progress_note. Phase B: read `needs_followon_plan` directly from the preflight cache.
 3. **Keystone-first within eligible**: items that unblock the largest downstream depends_on fan-out appear before items with fewer downstream dependents. Compute the downstream fan-out from `depends_on` chains in `docs/ROADMAP-PLATFORM.yaml`; a keystone is an item whose completion enables the largest set of currently blocked items.
 4. **Strategic pending**: list separately at the bottom, noted "blocked by executor freeze (CD.17 reversal required)".
 
@@ -118,7 +122,16 @@ If a HARD BLOCK ci-rca rec exists, prepend a zero-th prompt:
 /plan ci-rca: resolve rec-NNNN (<brief title>)
 ```
 
-Then one prompt per eligible item:
+**Follow-on prompts for in_progress items** (ranked fewest-open-criteria-first, before eligible items):
+```
+/plan <item-id>: follow-on -- <item-name> (<N> open criteria remaining)
+```
+Exception: if the item is genuinely mid-implementing (a PLAN-*.yaml with closes_criteria names a still-open criterion of this item, or the progress_note attests a plan was authored but not yet run through `/implement`), suggest the implement action instead:
+```
+/implement docs/plans/PLAN-{slug}.yaml   # mid-implementing: plan exists but is un-actioned
+```
+
+Then one prompt per eligible (not_started) item, ordered keystone-first:
 ```
 /plan <item-id>: <item-name>
 ```
