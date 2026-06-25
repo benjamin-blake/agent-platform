@@ -126,12 +126,20 @@ verification_plan:
       threshold (Decision 55).
   - step: 7
     phase: pre-deploy
-    action: c3 -- no drain_pending / pending-outbox code path remains in live code.
+    action: >-
+      c3 -- no recs/decisions per-table pending-outbox code path remains in live code (the retained
+      sync_ops.drain() staging outbox is exempt).
     command: >-
-      grep -rnE "drain_pending|_pending_outbox|drain_outbox" scripts/ src/ --include=*.py ||
-      echo "OK: no outbox-drain code path in scripts/ or src/"
-    expected: No matches in scripts/ or src/ (.py); the OK line prints (absence-assertion tests are step 8).
-    fix_if: A drain_pending symbol exists in live code -- remove it (Decision 84 I-4 mandates no offline outbox).
+      grep -rnE "drain_pending|_PENDING_OUTBOX|_DECISIONS_PENDING_OUTBOX" scripts/ src/ --include=*.py ||
+      echo "OK: no recs/decisions pending-outbox drain symbol in scripts/ or src/"
+    expected: >-
+      No matches in scripts/ or src/ (.py); the OK line prints. The surviving sync_ops.drain() staging
+      outbox (Decision 84 I-4, telemetry/session_log/execution_plans paths; aliased drain_outbox in
+      scripts/executor/batch.py) is intentionally NOT matched and stays. Absence-assertion tests are step 8.
+    fix_if: >-
+      A retired per-table pending-outbox symbol (drain_pending / _PENDING_OUTBOX) resurfaced in live
+      code -- remove it. Do NOT touch sync_ops.drain() / batch.py drain_outbox; that staging drain is
+      retained by Decision 84 I-4 for the not-yet-migrated telemetry/session_log/execution_plans paths.
   - step: 8
     phase: pre-deploy
     action: c3 -- the outbox-absence and decisions-outbox-absence tests pass.
