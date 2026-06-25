@@ -5300,35 +5300,42 @@ tier_items:
     exit_criteria:
       - id: c1
         text: >-
-          All application rec/decision/queue reads transit named verbs; rg 'reader.query(' over scripts/
-          returns only the DQ harness
-        status: open
+          All application rec/decision/queue reads transit named verbs (ducklake_reader named() or
+          current_state()); rg 'query_ops|reader\.query\(' over scripts/ returns only
+          scripts/data_quality_runner.py (the DQ harness); DQ-harness raw-query_ops -> dq_check
+          verb retirement owned by T1.6 (gate->monitor reshape, Decision 62 amendment / T1.6)
+        status: met
+        met_by: t2-28-closed-boundary-closeout
       - id: c2
         text: >-
           file_rec allocates via the writer (no DynamoDB next_id import in the portal); concurrent file_ops
-          yield distinct ids (live churn probe)
-        status: open
+          yield distinct ids (test_file_scd2_sequential_allocations_are_distinct_and_monotonic locks the
+          counter-row property; live churn probe deferred to DuckDB pin-bump plan -- runtime 1.5.4 vs pinned
+          1.5.3, human-approved 2026-06-25)
+        status: met
+        met_by: t2-28-closed-boundary-closeout
       - id: c3
         text: No pending-outbox code path remains (drain_pending symbols absent); writer-error alarm applied
-        status: open
+        status: met
+        met_by: t2-28-closed-boundary-closeout
       - id: c4
         text: >-
           rec-2170 regression locked: current_state(row_filter="status = 'open'") produces a structural filter
           and live open-rec counts are non-zero
-        status: open
+        status: met
+        met_by: t2-28-closed-boundary-closeout
     related_candidate_decisions: [CD.33]
     related_decisions: [84]
     effort: M
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-06-25"
     progress_note: |
       2026-06-11: implemented + deployed (reader/writer/maintenance V3 build+deploy+smoke).
-      OPEN TAIL: query_ops retirement is gated on a dq_check verb family or caller allowlist
-      (Decision 84 I-3 staging); the write_ops rec-NNN create-guard (require file_ops for
-      canonical recs) deploys AFTER main's clients migrate (additive-then-subtractive
-      protocol); DQ ci-rca recs 2150/2151/2153 diagnosis tracked in-session.
-      OWNER for the dq_check verb family / DQ-harness query_ops retirement: T1.6's gate->monitor
-      reshape (the DQ canary reads via dq_check). This open tail closes when T1.6's near-term phase lands.
+      2026-06-25: c1-c4 met by PLAN-t2-28-closed-boundary-closeout. c1 re-grounded to query_ops probe
+      + T1.6 cross-reference; c2 distinct-id unit test added (live churn gate deferred to DuckDB pin-bump
+      plan); c3 drain_pending absent + alarm in terraform/personal; c4 rec-2170 closed (live open_recs=518).
+      T1.6 owns DQ-harness raw-query_ops -> dq_check retirement (Decision 62 amendment).
 
   - id: T2.29
     tier: T2
