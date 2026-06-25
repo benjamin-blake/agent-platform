@@ -51,7 +51,11 @@ scope:
       duckdb line DERIVED from the SSOT.
   - file: tests/test_sync_ducklake_version.py
     action: Create
-    purpose: 100% coverage of the sync helper -- rewrite produces the expected floor line, --check detects drift, idempotent re-run is a no-op.
+    purpose: >-
+      100% coverage of the sync helper -- rewrite produces the expected floor line, --check detects drift,
+      idempotent re-run is a no-op, and a with-inline-comment requirements line (today's `duckdb>=1.5.3  # ...`
+      carries the patch literal twice in its comment) is rewritten on the version TOKEN ONLY with the trailing
+      comment tolerated (not duplicated or mangled).
   - file: src/common/ducklake_runtime.py
     action: Modify
     purpose: >-
@@ -76,8 +80,10 @@ scope:
       Add a sub-second static gate `ducklake-version-lockstep`: load version.yaml and assert (a)
       requirements.txt duckdb floor == ">=<duckdb_version>" (i.e. sync_ducklake_version --check is clean),
       (b) NO hardcoded duckdb version literal remains in the derive surfaces (src/common/ducklake_runtime.py,
-      scripts/build_lambda.py) -- both must reach the pin only via the loader. Wire it into the static-gate
-      tier so it runs in --pre and full presubmit. validate.py is the single source of truth for CI (AGENTS.md).
+      scripts/build_lambda.py) -- both must reach the pin only via the loader. Register the gate at BOTH
+      validate.py invocation sites -- the --pre fast-tier block (~L3373-3397) AND the full-presubmit block
+      (~L3428-3450); there is no single static-tier insertion point, and missing the --pre site silently drops
+      the gate from the authoritative PR gate. validate.py is the single source of truth for CI (AGENTS.md).
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
@@ -123,7 +129,9 @@ scope:
     action: Modify
     purpose: >-
       Make the layer descriptions DERIVE: add a local `ducklake_version =
-      yamldecode(file("${path.module}/../../config/lambda/ducklake/version.yaml")).duckdb_version` and
+      try(yamldecode(file("${path.module}/../../config/lambda/ducklake/version.yaml")).duckdb_version, "")`
+      -- the file() MUST be wrapped in try() or the validate_terraform_try gate (scripts/validate.py:992-1012)
+      reddens, since it flags ANY bare file()/filemd5() not inside try() regardless of optionality --
       interpolate it into the deps + extensions layer descriptions (lines 46, 55) and the comment (line 39),
       removing the "1.5.3" literal from infra entirely. The description edit is guard-PASS (non-IAM/non-destroy);
       the actual layer-version republish is driven by the source_code_hash of the freshly-built 1.5.4 zips.
@@ -142,9 +150,13 @@ scope:
   - file: src/lambdas/ducklake_catalog_dr/manifest.yaml
     action: Modify
     purpose: >-
-      Add config/lambda/ducklake/version.yaml asset + ducklake_version.py include IF catalog-dr derives the
-      engine tag from the loader (it emits the CD.34 duckdb tag). Confirm the manifest path/includes at
-      implement time; if catalog-dr gets the version another way, document that instead (no silent gap).
+      Add src/common/ducklake_version.py to includes (UNCONDITIONAL: catalog_dr.py does `from
+      ducklake_runtime import PINNED_DUCKDB_VERSION`, which under the lazy __getattr__ resolves via the loader
+      AT IMPORT -- without the include the in-Lambda import raises ModuleNotFoundError) and
+      config/lambda/ducklake/version.yaml to assets (the loader reads it at import via the module-relative
+      parents[2] path that resolves inside the bundle, exactly like field_semantics.yaml). The DR engine tag
+      then follows the SSOT through that import chain. The Decision 79 bundle-completeness gate verifies both
+      the asset and the include are staged.
   - file: src/common/ducklake_spike.py
     action: Modify
     purpose: >-
@@ -292,7 +304,7 @@ verification_plan:
       import scripts.build_lambda as bl
       importlib.reload(bl)
       assert "9.9.9" in bl.DUCKLAKE_EXT_URL_BASE and "v9.9.9" in bl.DUCKLAKE_EXT_S3_PREFIX, (bl.DUCKLAKE_EXT_URL_BASE, bl.DUCKLAKE_EXT_S3_PREFIX)
-      assert f"duckdb==9.9.9" in bl.DUCKLAKE_DEPS, bl.DUCKLAKE_DEPS
+      assert "duckdb==9.9.9" in bl.DUCKLAKE_DEPS, bl.DUCKLAKE_DEPS
       print("OK: one-value override cascaded to runtime pin + build CDN URL + S3 prefix + deps spec")
       PY
     expected: Prints the OK line -- the sentinel 9.9.9 reached pinned_duckdb_version, the CDN URL base, the S3 prefix, and the deps spec.
@@ -380,7 +392,7 @@ verification_plan:
     phase: pre-deploy
     action: Full presubmit (the comprehensive tier the post-merge main runs) is green locally before the PR.
     command: bin/venv-python -m scripts.validate
-    expected: Exit 0 (full pytest, the new gate, terraform validate, plan schema; AWS-gated harness steps skip with a structured event if creds absent).
+    expected: Exit 0 (full pytest, the new ducklake-version-lockstep gate, terraform validate incl. validate_terraform_try -- which the new yamldecode(try(file(...))) local must pass -- plan schema; AWS-gated harness steps skip with a structured event if creds absent).
     fix_if: Any failure -- address it; new files (loader, sync) must be 100% covered (tests/CLAUDE.md).
   - step: 13
     phase: pre-deploy
@@ -537,7 +549,12 @@ context:
     named gating drill); Decision 84 I-4 (a half-deployed writer surfaces loudly via the ducklake_writer_errors
     alarm); CD.34 (catalog-DR engine-tag + retention re-baseline on bump). A re-scout for the SSOT design
     (new config + loader + validate gate) confirms no Decision-86 conflict (version.yaml is machine-readable
-    config, not a prose-architecture doc) -- see the re-scout note appended at plan-critique time.
+    config, not a prose-architecture doc). RE-SCOUT VERDICT NO_FLAGS; supporting precedent Decisions 65
+    (config-as-canonical-authority), 79 (manifest=SSOT / assets[]), 80 (validate.py thin-CLI gate); NO CD.25
+    contract-ratification needed for a plain config asset (no contract:/class: key, so the CD.25 drift gate
+    skips it). PLAN-CRITIQUE VERDICT PROCEED with four folded fixes -- terraform try()-wrap of the yamldecode
+    file(), unconditional catalog-dr ducklake_version.py include, the gate registered at BOTH validate.py
+    invocation sites, and a with-inline-comment case in the sync test.
   - >-
     Out-of-scope but surfaced: rec-2353 (terraform-drift, ci_rca) is unrelated and NOT bundled -- it carries a
     logged Decision-79 / Related-Work deferral rationale here so the open-rec HARD-BLOCK carve-out is satisfied.
@@ -565,6 +582,9 @@ execution_steps:
     Derive the pin: repoint src/common/ducklake_runtime.py (assert_duckdb_version -> pinned_duckdb_version();
     PINNED_DUCKDB_VERSION via module __getattr__; message -> SSOT/runbook; lines 466/499 -> "DuckLake v1.0")
     and scripts/build_lambda.py (PINNED_DUCKDB_VERSION = pinned_duckdb_version(); docstrings/notes -> SSOT ref).
+    Note the benign eager-vs-lazy split: build_lambda binds the constant eagerly at import, runtime exposes it
+    lazily via __getattr__; both reach the same loader value (a build tool, so eager is fine). Optionally factor
+    a shared _load_yaml_cached helper rather than a parallel lru_cache, mirroring _load_field_semantics_cached.
     Run `ruff format` after editing.
   - >-
     requirements sync + gate: create scripts/sync_ducklake_version.py (+ tests/test_sync_ducklake_version.py,
@@ -576,7 +596,8 @@ execution_steps:
   - >-
     Infra/manifests: add version.yaml (asset) + ducklake_version.py (include) to the writer/reader/maintenance
     (+ catalog-dr if it derives the tag) manifests and rephrase their notes version-agnostic; make
-    terraform/personal/ducklake_lambdas.tf descriptions derive via a yamldecode local. Rephrase the residual
+    terraform/personal/ducklake_lambdas.tf descriptions derive via a try()-wrapped yamldecode local (a bare
+    file() reddens validate_terraform_try). Rephrase the residual
     behavioral-note literals (spike.py:65, maintenance.py:29, handler.py:204, smoke_test.py:693).
   - >-
     Docs: update docs/runbooks/ducklake-catalog-operations.md Section 2 to the one-edit + sync + rehearsal
