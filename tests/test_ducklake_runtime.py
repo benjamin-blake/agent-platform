@@ -1125,7 +1125,7 @@ def test_file_scd2_gate_blocks_before_catalog():
 
 
 def test_file_scd2_sequential_allocations_are_distinct_and_monotonic():
-    """c2 distinct-id lock (T2.28): sequential file_scd2 allocations via the counter-row yield distinct, monotonic rec-NNN ids."""
+    """c2 distinct-id lock (T2.28): sequential file_scd2 allocations yield distinct, monotonic rec-NNN ids."""
     con = FileOpsCon(counter_value=2170)
     r1 = rt.file_scd2(con, {"status": "open", "title": "first"}, table="ops_recommendations")
     r2 = rt.file_scd2(con, {"status": "open", "title": "second"}, table="ops_recommendations")
