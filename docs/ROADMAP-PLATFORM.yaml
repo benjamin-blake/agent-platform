@@ -1207,6 +1207,7 @@ candidate_decisions:
       - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda. Decision 62 retired the Session E DQ-freshness routine (cron agent -> EC2 -> commit dq-latest.json -> auto-merge); meta-validation here is GH-Actions-scheduled, advisory, and not a merge gate, so it is not that routine. (Separately, 62's no-separate-routine conclusion for live-reader DQ is being revisited under T1.6 because its cheap-live-DQ-on-the-gate premise is invalidated -- CD.21 / Decision 73; that revisit is orthogonal to meta-validation.)
       - CD.29 changes the platform verification DEFAULT from advisory (the current run_verification behaviour) to required/hard-gate. This is a deliberate semantic change, enforced only after T3.6; no prior numbered Decision is superseded because the advisory behaviour was an executor implementation default, not a ratified decision.
       - Precedence: when the executor's per-rec checks (executor-side) and the CI validation gate including diff-coverage (CI-side) both apply, CI is authoritative per the AGENTS.md merge protocol (remote CI is the authoritative pre-merge gate).
+      - "Gate status: T3.6 (hermeticity) [SATISFIED 2026-06-25: criteria c1-c4 met via PLAN-t3-6-hermeticity-closeout; c5 rehomed to T1.6; authoritative record on the T3.6 tier_item]. Remaining gates T3.1/T3.7/T0.12.5 open. Recording a satisfied gate is bookkeeping about the gating tier_item, NOT ratification of CD.29 -- state remains pending."
 
   - id: CD.30
     title: Diff-line-coverage ratchet supersedes the per-changed-file 100%-coverage gate
@@ -5719,33 +5720,40 @@ tier_items:
         text: >-
           Audit report enumerates every non-hermetic test/verifier (clock, network, order, shared-state
           dependence) with a disposition (fix or quarantine)
-        status: open
+        status: met
+        met_by: t3-6-hermeticity-closeout
       - id: c2
         text: >-
           Full pytest suite passes under randomised test order (pytest-randomly or equivalent) and with
           network blocked in the test environment
-        status: open
+        status: met
+        met_by: t3-6-hermeticity-closeout
       - id: c3
         text: validate.py asserts the network-block + random-order invariant so new non-hermetic tests fail CI
-        status: open
+        status: met
+        met_by: t3-6-hermeticity-closeout
       - id: c4
         text: >-
           Hermeticity recorded as a satisfied precondition for the CD.29 hard-gate consolidation and KG.13
           caching
-        status: open
+        status: met
+        met_by: t3-6-hermeticity-closeout
       - id: c5
         text: >-
           Live-reader-dependent DQ checks classified non-hermetic and dispositioned to the scheduled canary
           (not the blocking gate), per T1.6; only hermetic structural contract checks remain on the gating DQ
           path
-        status: open
+        status: rehomed
+        met_by: T1.6
     related_candidate_decisions: [CD.29]
     effort: M
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-06-25"
     progress_note: |
       - 2026-06-02: pytest-suite half shipped (pytest-randomly + pytest-socket, module-level probes fixed, shared-state contamination fixed, validate.py hermeticity assertion). Verifier-hermeticity portion (scripts/verifiers/ authored hermetic from start) remains open per plan constraint -- not complete until that sub-item ships.
       - 2026-06-18: verifier-hermeticity sub-item shipped (PLAN-verifier-hermeticity): Hermeticity enum + base-Verifier default, NON_HERMETIC_BY_CONSTRUCTION declarations on all 5 non-hermetic verifiers, OutboxHealthVerifier clock injectable, AthenaViewsVerifier tier corrected V1->V3, validate_verifier_hermeticity AST gate wired into run_python_checks. Criteria 1-4 satisfied. Criterion 5 (DQ live-reader->canary) remains open pending T1.6.
+      - 2026-06-25: ledger reconciliation -- c1-c4 evidence re-verified on disk (AUDIT-test-hermeticity.yaml 10 entries, pyproject addopts, validate.py gates + 12 regression tests) and criteria closed via PLAN-t3-6-hermeticity-closeout (met_by=t3-6-hermeticity-closeout); c5 rehomed to T1.6 (DQ live-reader->canary scope preserved in T1.6 exit_criteria verbatim); hermeticity precondition for CD.29/T0.12.5 and KG.13 recorded satisfied.
 
   - id: T3.7
     tier: T3
@@ -6831,6 +6839,8 @@ known_gaps:
       selects by input closure, which only the registry records). Cross-references Decision 73's existing Known
       Gap note that `pytest --picked` may upgrade to pytest-testmon. File a tier_item (T4.4-era) when executor
       concurrency rises.
+
+      T3.6 hermeticity precondition [SATISFIED 2026-06-25: c1-c4 met via PLAN-t3-6-hermeticity-closeout; c5 rehomed to T1.6]; remaining precondition is the T3.1 graduation registry.
 
       Near-term wall-clock wins are DISTINCT from this deferred TIA/caching gap and are available now (no
       executor-scale / hermeticity precondition): the big structural win is T1.6 (live-reader DQ leaves the
