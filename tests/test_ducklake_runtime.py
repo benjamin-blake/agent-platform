@@ -1124,6 +1124,17 @@ def test_file_scd2_gate_blocks_before_catalog():
     assert con.executed == []
 
 
+def test_file_scd2_sequential_allocations_are_distinct_and_monotonic():
+    """c2 distinct-id lock (T2.28): sequential file_scd2 allocations via the counter-row yield distinct, monotonic rec-NNN ids."""
+    con = FileOpsCon(counter_value=2170)
+    r1 = rt.file_scd2(con, {"status": "open", "title": "first"}, table="ops_recommendations")
+    r2 = rt.file_scd2(con, {"status": "open", "title": "second"}, table="ops_recommendations")
+    assert r1.rec_id != r2.rec_id, "sequential allocations must be distinct"
+    n1 = int(r1.rec_id.split("-")[1])
+    n2 = int(r2.rec_id.split("-")[1])
+    assert n2 > n1, f"allocations must be monotonic: {r1.rec_id} then {r2.rec_id}"
+
+
 class NamedReadCon:
     def __init__(self, rows=None, cols=("id",)):
         self.executed: list[tuple[str, list | None]] = []
