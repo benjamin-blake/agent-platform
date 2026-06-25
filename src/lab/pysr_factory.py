@@ -9,7 +9,6 @@ import botocore.exceptions
 import numpy as np
 import pandas as pd
 import sympy
-from pysr import PySRRegressor
 
 try:
     import awswrangler as wr
@@ -25,6 +24,19 @@ from ..common.config import config
 from ..common.database import AthenaClient
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded on first call to discover_formulas -- avoids juliapkg network call at module
+# import time. Keep the name at module level so patch("src.lab.pysr_factory.PySRRegressor")
+# works in tests.
+PySRRegressor: Any = None
+
+
+def _load_pysrregressor() -> None:
+    global PySRRegressor
+    if PySRRegressor is None:
+        from pysr import PySRRegressor as _cls  # noqa: PLC0415
+
+        PySRRegressor = _cls
 
 
 class FormulaFactory:
@@ -131,7 +143,7 @@ class FormulaFactory:
         binary_operators: List[str] = None,
         unary_operators: List[str] = None,
         **kwargs,
-    ) -> PySRRegressor:
+    ) -> Any:
         """
         Discover formulas using PySR symbolic regression.
 
@@ -147,6 +159,7 @@ class FormulaFactory:
         Returns:
             Fitted PySR model
         """
+        _load_pysrregressor()
         if binary_operators is None:
             binary_operators = ["+", "-", "*", "/"]
 
