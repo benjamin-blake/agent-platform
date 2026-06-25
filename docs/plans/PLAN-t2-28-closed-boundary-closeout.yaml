@@ -1,0 +1,325 @@
+schema_version: 1
+slug: t2-28-closed-boundary-closeout
+intent: >-
+  Close out platform tier-item T2.28 (Decision 84 closed-boundary hardening) by verifying and
+  locking its four landed-but-open exit criteria and resolving the still-open Critical rec-2170 --
+  hardening the ops data boundary that the whole self-improving loop reads and writes through.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-28-closed-boundary-closeout.yaml
+phase: >-
+  Platform tier T2 -- tier_item T2.28 (Closed-boundary hardening: named-verb reads + writer-owned rec
+  keyspace, Decision 84). Follow-on closeout of an in_progress item; closes exit criteria c1-c4.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground c1's stale acceptance command (reader.query( -> query_ops/named()) to match the live
+      boundary and cross-reference T1.6 as owner of the DQ-harness raw-query_ops retirement; then, on
+      a verified VP pass, /implement's bookkeeping walk flips c1-c4 status open->met and sets T2.28
+      status complete + completed_at (Status-Trusted-Never-Inferred -- flips never happen in /plan).
+  - file: tests/test_ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Add the c2 distinct-id regression lock: multiple sequential file_ops/file_scd2 allocations
+      through the writer counter-row (FileOpsCon) yield distinct, monotonic rec-NNN ids -- the
+      property concurrent allocation must preserve.
+bundled_recommendations:
+  - rec-2170
+closes_criteria:
+  - T2.28:c1
+  - T2.28:c2
+  - T2.28:c3
+  - T2.28:c4
+infrastructure_dependencies:
+  - >-
+    terraform/personal/ducklake_lambdas.tf :: aws_cloudwatch_metric_alarm.ducklake_writer_errors
+    (c3 dependency; auto-applied sandbox per Decision 77). NOT modified by this plan. Live
+    describe-alarms is IAM-denied to the agent_platform PlatformDev role by design, so c3's alarm
+    verification falls back to structural presence + the terraform convergence-record as the
+    behavioural-equivalent (Decision 92 / CD.35).
+  - >-
+    data-pipeline.zip (status: active) bundles docs/ROADMAP-PLATFORM.yaml as a runtime ASSET, so
+    compute_affected_artifacts flags it. This plan's roadmap edit is asset-data only (no handler/
+    include code path is in scope), the scheduled-agent dispatch is DISABLED (May 2026 runbook), and
+    the roadmap is consumed live-from-repo by CC-web planning -- so no build/deploy/smoke-test is
+    warranted (adjudicated explicitly in VP step 13, not skipped silently). Decision 79.
+acceptance_criteria:
+  - >-
+    c1: every rec/decision/queue read in scripts/ transits a named verb (ducklake_reader named()) or
+    structured current_state(); the ONLY raw query_ops caller is scripts/data_quality_runner.py (the
+    DQ harness); and c1's roadmap acceptance text is re-grounded from the stale "reader.query(" probe
+    to the accurate "query_ops" probe with a cross-reference that the DQ-harness raw-query_ops ->
+    dq_check verb retirement is owned by T1.6.
+  - >-
+    c2: scripts/ops_data_portal.py imports no client-side DynamoDB next_id allocator; a unit test
+    locks that writer counter-row allocations yield distinct rec-NNN ids; and the live churn / OCC
+    gate (ducklake_neon_smoke_test --churn-gate) passes within CD.33's OCC-collision budget.
+  - >-
+    c3: no drain_pending / pending-outbox code path remains in scripts/ or src/ (only tests assert
+    its absence); and the ducklake_writer_errors CloudWatch alarm is present in terraform/personal
+    with its deployment evidenced structurally + by the convergence-record (live describe-alarms is
+    IAM-denied to PlatformDev by design, which the VP records as positive evidence of the constraint).
+  - >-
+    c4: the rec-2170 {column,value} structural-filter regression tests pass; a live open-rec read via
+    the registered open_recs named verb returns a non-zero count; and the Critical rec-2170 is closed
+    via the portal (lifecycle state, Decision 70).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: c1 -- prove no application read in scripts/ uses a raw reader read outside the DQ harness.
+    command: >-
+      grep -rnE "query_ops|reader\.query\(" scripts/ --include=*.py | grep -v "data_quality_runner" ||
+      echo "OK: no raw reader callers in scripts/ outside the DQ harness"
+    expected: >-
+      The only matches are in scripts/data_quality_runner.py (filtered out by grep -v) so the OK line
+      prints; no other scripts/*.py file appears.
+    fix_if: >-
+      A scripts/*.py file other than data_quality_runner.py calls query_ops/reader.query( -- migrate it
+      to a named verb or current_state() before closing c1; do not silently exempt it.
+  - step: 2
+    phase: pre-deploy
+    action: c1 -- confirm rec/decision/queue reads transit named verbs / structured current_state().
+    command: >-
+      grep -nE 'named\("open_recs"\)|named\("priority_queue_current"\)|current_state\(' scripts/session_preflight.py
+      scripts/sync_ops.py scripts/ops_data_portal.py
+    expected: >-
+      Matches in all three files: session_preflight uses named("open_recs"); sync_ops uses
+      named("priority_queue_current") + current_state(); ops_data_portal uses current_state().
+    fix_if: A read path still builds raw SQL -- repoint it to the named-verb / current_state boundary.
+  - step: 3
+    phase: pre-deploy
+    action: c1 -- the re-grounded roadmap is structurally valid (closes_criteria referential integrity).
+    command: bin/venv-python -m scripts.platform_roadmap
+    expected: >-
+      Exit 0; T2.28 c1's acceptance text now names the query_ops probe (not reader.query( ) and
+      references T1.6 as the DQ-harness retirement owner.
+    fix_if: Validator fails -- fix the closes_criteria ref, the re-grounded criterion text, or a YAML error.
+  - step: 4
+    phase: pre-deploy
+    action: c2 -- the portal imports no client-side DynamoDB next_id allocator (allocation is writer-owned).
+    command: >-
+      grep -nE "import.*next_id|dynamodb.*Table|next_rec_id|allocate_next_id" scripts/ops_data_portal.py ||
+      echo "OK: no client-side next_id allocator in the portal (only comments reference DynamoDB)"
+    expected: No allocator import; the OK line prints (the only next_id/DynamoDB mentions are comments).
+    fix_if: The portal imports a client-side allocator -- remove it; ids are minted by the writer (file_ops).
+  - step: 5
+    phase: pre-deploy
+    action: c2 -- the new distinct-id regression lock + the counter-allocation unit tests pass.
+    command: bin/venv-python -m pytest tests/test_ducklake_runtime.py -k "distinct or next_id or allocat or seed or counter" -q
+    expected: All selected tests pass, including the new distinct-id assertion.
+    fix_if: >-
+      A distinct-id test fails -- the counter-row allocation is not monotonic / not distinct; stop and
+      RCA (Decision 55), do not weaken the assertion.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      c2 -- live churn / OCC-collision gate against the direct catalog (writes throwaway churn_probe
+      rows, NOT ops_recommendations).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate --profile agent_platform
+    expected: >-
+      Gate passes within CD.33's OCC budget (collision_rate <= 0.20). If the static-key chain is
+      absent the gate loud-fails / SKIPs -- re-run with the agent_platform chain (verify:
+      aws sts get-caller-identity --profile agent_platform).
+    fix_if: >-
+      Collision rate exceeds budget or the gate raises SmokeTestFailure -- stop and RCA; never relax the
+      threshold (Decision 55).
+  - step: 7
+    phase: pre-deploy
+    action: c3 -- no drain_pending / pending-outbox code path remains in live code.
+    command: >-
+      grep -rnE "drain_pending|_pending_outbox|drain_outbox" scripts/ src/ --include=*.py ||
+      echo "OK: no outbox-drain code path in scripts/ or src/"
+    expected: No matches in scripts/ or src/ (.py); the OK line prints (absence-assertion tests are step 8).
+    fix_if: A drain_pending symbol exists in live code -- remove it (Decision 84 I-4 mandates no offline outbox).
+  - step: 8
+    phase: pre-deploy
+    action: c3 -- the outbox-absence and decisions-outbox-absence tests pass.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py tests/test_session_postflight.py
+      tests/test_ops_data_portal_decisions.py tests/test_session_preflight.py -k "drain_pending or outbox or absent" -q
+    expected: The absence-assertion tests pass (drain_pending / pending outbox symbols stay retired).
+    fix_if: An absence test fails -- a retired symbol resurfaced; remove it rather than updating the test.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      c3 -- writer-error alarm present in terraform (structural) and the IAM constraint that forces the
+      structural fallback is recorded as positive evidence.
+    command: >-
+      grep -nE 'aws_cloudwatch_metric_alarm "ducklake_writer_errors"|alarm_name *= *"ducklake-writer-errors"'
+      terraform/personal/ducklake_lambdas.tf && (aws cloudwatch describe-alarms --alarm-names ducklake-writer-errors
+      --profile agent_platform --region eu-west-2 2>&1 | grep -qE "AccessDenied|MetricAlarms" &&
+      echo "OK: alarm defined in terraform; live-describe is IAM-gated as expected (structural + convergence-record stands)")
+    expected: >-
+      The terraform resource + alarm_name are present AND describe-alarms returns AccessDenied
+      (PlatformDev lacks cloudwatch:DescribeAlarms by design) -- the recorded justification for
+      structural + convergence-record verification (Decision 77 auto-apply; Decision 92 / CD.35).
+    fix_if: >-
+      The alarm resource is absent from terraform -- add it before closing c3. If describe-alarms
+      unexpectedly SUCCEEDS, strengthen to assert StateValue != INSUFFICIENT_DATA as the behavioural proof.
+  - step: 10
+    phase: pre-deploy
+    action: c4 -- rec-2170 {column,value} structural-filter regression tests pass.
+    command: >-
+      bin/venv-python -m pytest tests/test_iceberg_reader.py tests/test_ducklake_reader_handler.py
+      -k "rec_2170 or structural or row_filter or single_key or column" -q
+    expected: Regression tests pass (a non-merge-key row_filter sends ITS column, not the merge key).
+    fix_if: A regression test fails -- the rec-2170 fix regressed; stop and RCA (Decision 55).
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      c4 -- a live open-rec read via the registered open_recs named verb returns a non-zero count
+      (Decision 88 ii: a registered named verb, never ad-hoc query_ops).
+    command: |-
+      bin/venv-python - <<'PY'
+      from src.common.iceberg_reader import DuckLakeReader
+      rows = DuckLakeReader(profile="agent_platform").named("open_recs")
+      n = len(rows or [])
+      assert n > 0, f"open-rec count must be non-zero, got {n}"
+      print("open_recs (live, via named verb):", n)
+      PY
+    expected: Prints a non-zero open_recs count (e.g. ~517) read through the open_recs named verb.
+    fix_if: >-
+      Count is zero with creds present -- the rec-2170 row_filter column-discard bug resurfaced; stop and
+      RCA. If the read raises with creds absent, re-run with the agent_platform chain.
+  - step: 12
+    phase: pre-deploy
+    action: c4 closure obligation -- close rec-2170 via the portal (lifecycle state, Decision 70) and confirm.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2170 --status closed --resolution "Closed by T2.28 closeout: rec-2170 column-value structural-filter fix landed in src/common/iceberg_reader.py; regression locked (VP steps 10-11) and live open-rec count non-zero." && bin/venv-python -m scripts.sync_ops sync && bin/venv-python - <<'PY'
+      import json
+      st = None
+      for line in open("logs/.recommendations-log.jsonl"):
+          r = json.loads(line)
+          if r.get("id") == "rec-2170":
+              st = r.get("status")
+      assert st == "closed", f"rec-2170 must be closed, got {st}"
+      print("rec-2170:", st)
+      PY
+    expected: rec-2170 status == closed in the synced read cache.
+    fix_if: >-
+      Portal update fails on creds -- re-file after restoring the static-key chain (Decision 84 I-4, no
+      outbox). The squash-merge body also carries "Resolves: rec-2170" (rec-autoclose; idempotent if
+      already closed).
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Decision 79 adjudication -- confirm data-pipeline is affected ASSET-ONLY (the roadmap), with no
+      handler/include code path in scope, so build/deploy/smoke is waived (dispatch disabled, live-from-repo).
+    command: |-
+      bin/venv-python - <<'PY'
+      from scripts.lambda_manifest import compute_affected_artifacts
+      aff = compute_affected_artifacts(["docs/ROADMAP-PLATFORM.yaml", "tests/test_ducklake_runtime.py"])
+      print("affected:", aff)
+      dp = set(aff.get("data-pipeline", []))
+      assert dp <= {"docs/ROADMAP-PLATFORM.yaml"}, f"a non-asset code path is affected -- deploy required: {dp}"
+      print("OK: data-pipeline affected ASSET-ONLY (roadmap data); no handler/include code -> no deploy")
+      PY
+    expected: >-
+      data-pipeline is flagged only via docs/ROADMAP-PLATFORM.yaml (the asset); the assertion holds and
+      the OK line prints. tests/test_ducklake_runtime.py maps to no artifact bundle.
+    fix_if: >-
+      The assertion fails because a handler/include path is affected -- then Decision 79 requires a real
+      data-pipeline build + deploy + smoke-test; add those steps before merge.
+  - step: 14
+    phase: pre-deploy
+    action: Advisory pre-merge gate passes on the changed files.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: The diff-aware fast tier passes (ruff + mypy on changed files, picked tests, static gates) under budget.
+    fix_if: A gate fails -- fix the changed file it names; re-run until green before opening the PR.
+constraints:
+  - >-
+    Modify ONLY the two scope files (docs/ROADMAP-PLATFORM.yaml, tests/test_ducklake_runtime.py). The
+    rec-2170 closure is a portal write (update_rec), not a file edit. Out-of-scope bugs become recs.
+  - >-
+    /plan never flips criterion or item status; /implement flips T2.28 c1-c4 open->met and sets the
+    item complete ONLY on a fully verified VP pass (Status-Trusted-Never-Inferred, T2.20 lesson).
+  - >-
+    No rescue agents or workaround loops; a failed live gate (churn, open-rec probe) is a stop-and-RCA
+    signal -- never relax a threshold or patch around it (Decision 55).
+  - >-
+    VP live reads use registered named verbs / current_state(), never ad-hoc query_ops (Decision 88 ii).
+    rec closure is lifecycle-state via the portal, never deletion (Decision 70); writes transit the
+    closed ducklake_writer boundary with no offline outbox (Decision 84 I-4).
+  - >-
+    No Lambda artifact code is changed; the data-pipeline asset mapping is adjudicated as asset-only
+    (VP step 13) -- no build/deploy/smoke (Decision 79). If step 13 fails, add the deploy steps.
+  - Bash / Linux only; bin/venv-python for all Python. No emojis; ASCII hyphens only.
+context:
+  - >-
+    T2.28 implementation landed + deployed 2026-06-11 (reader/writer/maintenance V3 build+deploy+smoke).
+    This is a verification / closeout follow-on, NOT fresh implementation -- the four criteria are met or
+    near-met by landed code and existing tests.
+  - >-
+    Silent-completion adjudication (2026-06-25): c1 met in spirit but its acceptance command is STALE
+    (rg 'reader.query(' scripts/ -> 0 hits; reality is query_ops/named()/current_state()); the only raw
+    query_ops caller is scripts/data_quality_runner.py. c2 writer-owned allocation done + unit-tested
+    (FileOpsCon counter-row, OCC retry, self-seed), gap = an explicit distinct-id lock + the live churn
+    probe. c3 drain_pending absent from live code + the ducklake_writer_errors alarm is in terraform/
+    personal. c4 rec-2170 fix landed (iceberg_reader _parse_single_key_filter), regression tests pass,
+    live open-rec count = 517.
+  - >-
+    c1 disposition (human-approved 2026-06-25): close c1 here by re-grounding. The criterion text already
+    carves out the DQ harness ("returns only the DQ harness"), the sole raw query_ops caller. The
+    DQ-harness raw-query_ops -> dq_check verb retirement is owned by T1.6 (gate->monitor reshape); this
+    plan does NOT perform that retirement and cross-references it (Decision 62 amendment / T1.6).
+  - >-
+    Decision-scout gate verdict FLAGS_FOUND (NOTE-only, no BLOCK). Decisions to cite: 84 (parent --
+    I-2 writer-owned ids, I-3 named-verb reads with query_ops RETAINED for the DQ harness, I-4 no
+    outbox); 81 / CD.33 (closed boundary, OCC retry, current projection -- ratified via Decision 81);
+    79 (per-Lambda deploy gating); 48 (V3 behavioural standard); 70 (rec closure via lifecycle); 88 ii
+    (named-verb reads only); 62 + T1.6 (DQ-harness retirement owner).
+  - >-
+    Decision-scout NOTE 1: c3's structural alarm check deviates from V3's behavioural mandate (Decision
+    48); justified by the cloudwatch:DescribeAlarms IAM denial (by design) + the terraform
+    convergence-record as behavioural-equivalent (Decision 77 auto-apply; Decision 92 / CD.35). NOTE 2:
+    VP live reads must use registered named verbs, honoured in steps 11-12. Scout correction: Decision
+    73 is the two-tier diff-aware CI decision, NOT a "criterion-review suspension" -- not cited as such.
+  - >-
+    Branch was 0 commits behind origin/main at planning time and no scope file overlaps
+    main_files_changed_since_branch (empty) -- no rebase needed. CD.33 is ratified via Decision 81, so
+    completion is not gating-blocked.
+  - >-
+    Related-but-out-of-scope recs (surfaced, not bundled): rec-2156 (priority casing) is owned by T2.29;
+    rec-2158 (delete_ops writer verb) is a new surface. Only rec-2170 is bundled (it IS c4's subject).
+pre_implementation_checklist:
+  - Branch confirmed not on main (git branch --show-current is the harness claude/ branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS consulted via the decision-scout gate (84, 81 / CD.33, 79, 48, 70, 88, 62 / T1.6)
+  - Both scope files located and readable (docs/ROADMAP-PLATFORM.yaml, tests/test_ducklake_runtime.py)
+  - T2.28 exit_criteria c1-c4 loaded; closes_criteria refs (T2.28:c1..c4) verified against the roadmap
+  - Acceptance criteria understood and 1:1 mapped onto closes_criteria c1-c4
+  - >-
+    Decision 79 pre-check run (VP step 13): compute_affected_artifacts over the scope flags data-pipeline
+    ONLY via the docs/ROADMAP-PLATFORM.yaml asset -- no handler/include code path -> asset-only, no deploy
+  - agent_platform static-key chain verified for the live VP steps (aws sts get-caller-identity --profile agent_platform)
+execution_steps:
+  - >-
+    Add the c2 distinct-id regression lock to tests/test_ducklake_runtime.py: drive two (or more)
+    sequential file_ops/file_scd2 allocations through the writer counter-row (FileOpsCon) and assert the
+    allocated rec-NNN ids are distinct and monotonic. Run `ruff check --fix` immediately after editing.
+  - >-
+    Re-ground T2.28 c1 in docs/ROADMAP-PLATFORM.yaml: replace the stale "rg 'reader.query(' over
+    scripts/" acceptance text with the accurate query_ops probe (only scripts/data_quality_runner.py
+    uses raw query_ops; all other rec/decision/queue reads transit named() / current_state()), and add a
+    cross-reference that the DQ-harness raw-query_ops -> dq_check verb retirement is owned by T1.6.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until each passes; on an unrecoverable
+    V3 / live-gate failure stop and RCA (Decision 55), never relax a threshold or patch around it.
+  - >-
+    On a fully verified VP pass, perform the /implement bookkeeping walk in docs/ROADMAP-PLATFORM.yaml:
+    flip T2.28 c1-c4 status open->met (with completed evidence per criterion), and set T2.28 status
+    complete + completed_at + a progress_note citing this plan and the T1.6 cross-reference for the
+    DQ-harness tail. Flips happen here, never in /plan.
+  - >-
+    Close rec-2170 via the portal (update_rec --status closed, Decision 70) per VP step 12, and emit
+    "Resolves: rec-2170" in the squash-merge body (rec-autoclose; idempotent if already closed).
+  - >-
+    Run `bin/venv-python -m scripts.validate --pre` before opening the PR; open the PR and merge via the
+    GitHub MCP event-driven flow (subscribe_pr_activity -> squash-merge) per Decision 76.
+  - 'Report: which criteria flipped, the live churn + open-rec probe results, and rec-2170 closure.'
+rollback: >-
+  Pure closeout -- revert is low-risk. To undo: git revert the roadmap re-grounding + criterion flips
+  and the test addition (restores c1's prior text and drops the distinct-id test); re-open rec-2170 via
+  `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2170 --status open` if it was closed. No
+  deployed artifact changes, so nothing needs redeploying.
