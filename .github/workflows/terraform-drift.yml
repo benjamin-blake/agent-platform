@@ -263,7 +263,7 @@ jobs:
           # Read the existing record to preserve fields; merge-write red + drift markers.
           EXISTING=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "{}")
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          RECORD=$(python3 -c "
+          RECORD=$(EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" python3 -c "
           import json, sys, os
           existing = json.loads(os.environ.get('EXISTING', '{}') or '{}')
           existing['status'] = 'red'
@@ -271,7 +271,7 @@ jobs:
           existing['drift_run_url'] = os.environ['RUN_URL']
           existing['drift_reason'] = 'out-of-band infra drift detected by scheduled terraform plan (T2.24)'
           print(json.dumps(existing))
-          " EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL")
+          ")
 
           printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" \
             --content-type application/json
