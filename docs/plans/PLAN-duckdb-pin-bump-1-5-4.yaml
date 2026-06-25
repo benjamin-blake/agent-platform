@@ -1,0 +1,611 @@
+schema_version: 1
+slug: duckdb-pin-bump-1-5-4
+intent: >-
+  Collapse the DuckLake/DuckDB lockstep version into ONE machine-readable source of truth
+  (config/lambda/ducklake/version.yaml) so the runtime version-assert, the Lambda layer build pin, the
+  requirements floor, the Terraform layer descriptions, and the tests all DERIVE from a single value --
+  eliminating the ~20-surface duplication that is "drift by design". Prove the cascade by performing the
+  pending 1.5.3->1.5.4 bump as a single-value edit, then atomically rebuild + redeploy the four active
+  DuckLake Lambda artifacts so production moves in lockstep. A validate.py drift gate enforces no surface
+  diverges from the SSOT thereafter. This clears the PLAN-t2-28 VP6 block (local venv runs DuckDB 1.5.4
+  while the pin was 1.5.3, so assert_duckdb_version loud-fails on every local DuckLake connection).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-duckdb-pin-bump-1-5-4.yaml
+phase: >-
+  Platform tier T2 -- DuckLake operational lakehouse (T2.17 runtime / T2.18 maintenance+DR). First real
+  exercise of the OQ.12 version-bump policy (clone-rehearsal gate, ratified via Decision 81 clause 9) AND
+  the durable fix that makes every future bump a one-line edit. Fulfils the forward reference left by
+  PLAN-t2-28 VP6, which deferred the local churn / OCC gate to "a dedicated DuckDB pin-bump plan" by name.
+  Does NOT close OQ.12 (standing policy); records that the policy was exercised and now has an enforcement home.
+scope:
+  - file: config/lambda/ducklake/version.yaml
+    action: Create
+    purpose: >-
+      THE single source of truth. Holds duckdb_version: "1.5.4", ducklake_format: "v1.0",
+      extension_platform: "linux_amd64", plus a header comment stating that bumping duckdb_version is the
+      ONLY edit needed and that the ducklake-version-lockstep validate gate enforces coherence. Bundled
+      into the active Lambda zips as an asset (same pattern as field_semantics.yaml). This is the ONE
+      number a future bump changes.
+  - file: src/common/ducklake_version.py
+    action: Create
+    purpose: >-
+      Tiny dependency-light loader (stdlib + pyyaml ONLY -- no duckdb/ulid, so build_lambda can import it
+      without heavy deps). Resolves config/lambda/ducklake/version.yaml via a module-relative path
+      (parents[2]/config/lambda/ducklake/version.yaml) with a DUCKLAKE_VERSION_CONFIG env override (mirrors
+      _field_semantics_path). Exposes pinned_duckdb_version(), extension_platform(), ducklake_format() with
+      a cached load. NEVER raises at import (pure defs); fails loudly (ValueError/FileNotFoundError) only on
+      explicit call if the config is missing/malformed (Decision 55 fail-closed, AGENTS.md no-import-raise).
+  - file: tests/test_ducklake_version.py
+    action: Create
+    purpose: >-
+      100% coverage of the loader: reads the real config, honours the env override (point at a temp yaml),
+      caches, and fails loudly on missing/empty/malformed config. Includes the cascade assertion -- an
+      override to a sentinel version flows through pinned_duckdb_version().
+  - file: scripts/sync_ducklake_version.py
+    action: Create
+    purpose: >-
+      The "one edit" helper: reads version.yaml and rewrites the duckdb floor line in requirements.txt to
+      ">=<duckdb_version>" (idempotent). Supports --check (exit non-zero if requirements drifts from the
+      SSOT, for CI) and the default rewrite mode. Keeps requirements.txt a normal pip file while making its
+      duckdb line DERIVED from the SSOT.
+  - file: tests/test_sync_ducklake_version.py
+    action: Create
+    purpose: 100% coverage of the sync helper -- rewrite produces the expected floor line, --check detects drift, idempotent re-run is a no-op.
+  - file: src/common/ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Replace the hardcoded PINNED_DUCKDB_VERSION = "1.5.3" with derivation from the loader.
+      assert_duckdb_version (line 176, actual != target) keeps its logic UNCHANGED -- it now compares
+      against pinned_duckdb_version() (the SSOT), so the check is not weakened, only its source moves. Expose
+      PINNED_DUCKDB_VERSION via module __getattr__ (PEP 562, lazy) for back-compat callers without
+      introducing import-time I/O or an import-raise. Re-point the VersionMismatchError message (line 179) to
+      name config/lambda/ducklake/version.yaml + the runbook. Rephrase the catalog-FORMAT behavioral notes
+      (lines 466, 499 "DuckLake 1.5.3") to version-agnostic "DuckLake v1.0" (v1.0 semantics, not patch-version).
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Replace PINNED_DUCKDB_VERSION = "1.5.3" (line 38) with `from src.common.ducklake_version import
+      pinned_duckdb_version` and derive it; the CDN URL base, the S3 fallback prefix (ducklake-extensions/
+      v<pin>), and the deps spec (duckdb==<pin>) already auto-derive from the constant. Rephrase the
+      docstrings/notes (lines 11, 73, 299, 307) to reference "the pinned duckdb (config/lambda/ducklake/
+      version.yaml)" rather than a literal -- the extension-platform/wheel notes stay accurate without a version literal.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a sub-second static gate `ducklake-version-lockstep`: load version.yaml and assert (a)
+      requirements.txt duckdb floor == ">=<duckdb_version>" (i.e. sync_ducklake_version --check is clean),
+      (b) NO hardcoded duckdb version literal remains in the derive surfaces (src/common/ducklake_runtime.py,
+      scripts/build_lambda.py) -- both must reach the pin only via the loader. Wire it into the static-gate
+      tier so it runs in --pre and full presubmit. validate.py is the single source of truth for CI (AGENTS.md).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the new ducklake-version-lockstep gate: passes on a coherent tree; fails when requirements drifts
+      from the SSOT and when a raw version literal is reintroduced into a derive surface. (If the gate lives in
+      a different test module, place the test with its sibling gate tests -- confirm at implement time.)
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      The duckdb line becomes DERIVED (synced from the SSOT) -- floor ">=1.5.4" with a comment noting it is
+      generated by scripts/sync_ducklake_version.py from config/lambda/ducklake/version.yaml and enforced by
+      the ducklake-version-lockstep gate. Keeps the FLOOR pattern (not exact pin) per human decision 2026-06-25.
+  - file: tests/test_ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Derive from the SSOT: the match/default fakes (lines 123,124,134,135) and connection fakes
+      (215,260,271) use pinned_duckdb_version() instead of literal "1.5.3" -- so a future bump touches ZERO
+      test files. The mismatch test (127-130) uses a value guaranteed != the pin (e.g. pin + "-mismatch")
+      and keeps match="version mismatch" -- still proves the assert raises, derived not hardcoded.
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Replace the literal assertion (line 402, == "1.5.3") with == pinned_duckdb_version() (derive); the
+      baked-extension S3 path assertion (line 482) builds v{pinned_duckdb_version()} rather than "v1.5.3".
+  - file: tests/test_catalog_dr.py
+    action: Modify
+    purpose: >-
+      Drive the DR key/metadata build+assert (lines 121,122,157,158) from pinned_duckdb_version() (or the
+      config), so the CD.34 engine tag derives from the SSOT rather than a "1.5.3" literal.
+  - file: tests/test_ducklake_reader_handler.py
+    action: Modify
+    purpose: Derive the reader fake __version__ (line 85) and the body version assertion (line 88) from pinned_duckdb_version().
+  - file: tests/test_ducklake_writer_handler.py
+    action: Modify
+    purpose: Derive the writer fake __version__ (line 113) and the body version assertion (line 117) from pinned_duckdb_version().
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Derive all engine-tag fakes/assertions (lines 153,339,340,372,432,442,451 -- duckdb-<pin>) and the
+      in-Lambda gate response fakes/assertions (591,593,710,735,769 -- version=<pin>, "LAMBDA_ATTACH OK
+      version=<pin> source=layer") from pinned_duckdb_version().
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: >-
+      Make the layer descriptions DERIVE: add a local `ducklake_version =
+      yamldecode(file("${path.module}/../../config/lambda/ducklake/version.yaml")).duckdb_version` and
+      interpolate it into the deps + extensions layer descriptions (lines 46, 55) and the comment (line 39),
+      removing the "1.5.3" literal from infra entirely. The description edit is guard-PASS (non-IAM/non-destroy);
+      the actual layer-version republish is driven by the source_code_hash of the freshly-built 1.5.4 zips.
+  - file: src/lambdas/ducklake_writer/manifest.yaml
+    action: Modify
+    purpose: >-
+      Add config/lambda/ducklake/version.yaml to assets and src/common/ducklake_version.py to includes (so
+      the runtime can read the pin in-Lambda). Rephrase the notes (line 26) to version-agnostic "duckdb
+      (pinned via config/lambda/ducklake/version.yaml)" so the description never drifts.
+  - file: src/lambdas/ducklake_reader/manifest.yaml
+    action: Modify
+    purpose: Same as writer -- add the version.yaml asset + ducklake_version.py include; rephrase the line-27 note version-agnostic.
+  - file: src/lambdas/ducklake_maintenance/manifest.yaml
+    action: Modify
+    purpose: Same -- add the version.yaml asset + ducklake_version.py include; rephrase the line-29 note version-agnostic.
+  - file: src/lambdas/ducklake_catalog_dr/manifest.yaml
+    action: Modify
+    purpose: >-
+      Add config/lambda/ducklake/version.yaml asset + ducklake_version.py include IF catalog-dr derives the
+      engine tag from the loader (it emits the CD.34 duckdb tag). Confirm the manifest path/includes at
+      implement time; if catalog-dr gets the version another way, document that instead (no silent gap).
+  - file: src/common/ducklake_spike.py
+    action: Modify
+    purpose: >-
+      Make the pip install-hint (line 65 "duckdb>=1.5.3") derive from the floor / reference the SSOT rather
+      than a literal (e.g. an f-string off pinned_duckdb_version(), or version-agnostic "duckdb (see
+      requirements.txt / config/lambda/ducklake/version.yaml)"), eliminating the stray literal.
+  - file: src/common/ducklake_maintenance.py
+    action: Modify
+    purpose: Rephrase the CALL-signature verification note (line 29 "live DuckDB 1.5.3 / DuckLake v1.0") to version-agnostic "DuckLake v1.0" (the merge primitive is re-exercised by the rehearsal; drop the patch literal).
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: Rephrase the catalog-format note (line 204 "DuckLake (1.5.3) does not auto-create") to version-agnostic "DuckLake v1.0 does not auto-create".
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Rephrase the DR-tag docstring (line 693 "pg16 + duckdb 1.5.3") to reference the derived tag rather
+      than a literal. _engine_tag() already derives from the live duckdb.__version__, so no logic change.
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: >-
+      Update Section 2 (version-bump procedure) to the new one-edit flow: "edit duckdb_version in
+      config/lambda/ducklake/version.yaml, run scripts/sync_ducklake_version, then the clone-rehearsal +
+      atomic redeploy". Re-point the pinned_duckdb_version field (line 36) and the lockstep narrative
+      (lines 57,106,109,288) to reference the SSOT; record the 1.5.3->1.5.4 bump as the worked example.
+      This doc MAY retain "1.5.3" where it names the prior version in the example -- it is OUT of the zero-stray gate.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping: record that the OQ.12 lockstep now has a single-source-of-truth + drift gate and that the
+      clone-rehearsal version-bump policy was exercised (1.5.3->1.5.4). Update live pin statements (lines
+      ~4573,4585,4685,6682,6687) to reference the SSOT/1.5.4; review line ~5314 in context. Does NOT close
+      OQ.12. Status flips (if any) happen only on a verified VP pass in /implement, never in /plan.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a new Decision (allocate the next number by reading the current max -- do NOT hardcode)
+      recording (a) the DuckLake/DuckDB version SSOT + ducklake-version-lockstep enforcement, and (b) the
+      first exercised bump 1.5.3->1.5.4 with the clone-rehearsal evidence (restore-drill clone read on
+      1.5.4, churn within the unchanged CD.33 budgets, --lambda-attach version=1.5.4 source=layer). Runbook
+      Section-2 step-5 obligation. Synced to ops_decisions via the portal (never edit the JSONL cache).
+  - file: docs/plans/PLAN-duckdb-pin-bump-1-5-4.yaml
+    action: Create
+    purpose: This plan.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/ducklake_lambdas.tf :: aws_lambda_layer_version.ducklake_deps and
+    aws_lambda_layer_version.ducklake_extensions REPUBLISH on this bump. Their source_code_hash =
+    try(filemd5(<local zip>), null) resolves to the new 1.5.4 hash ONLY in a context that just built the
+    zips locally (the CC-web session); in CD (fresh clone, no zip) it is null, so the push-to-main
+    auto-apply pipeline cannot republish. Apply mechanism is the interactive human-gated terraform loop
+    terraform/CLAUDE.md retains: build 1.5.4 zips -> `terraform plan` -> PRESENT -> guard exit 0 (description
+    + source_code_hash diff, no IAM/trust/destroy) -> human accepts -> agent runs `terraform apply`. The
+    new yamldecode local adds a read-time file dependency on config/lambda/ducklake/version.yaml -- present
+    in-repo, so the plan resolves; it does NOT change the apply blast class.
+  - >-
+    Four active Lambda artifacts redeploy (Decision 79 per-Lambda V3): ducklake-{writer,reader,maintenance,
+    catalog-dr}. Each zip now additionally bundles config/lambda/ducklake/version.yaml (asset) +
+    src/common/ducklake_version.py (include), so the runtime reads the pin in-Lambda. compute_affected_
+    artifacts over the runtime/build/manifest/version-config scope must enumerate all four (VP step 9).
+  - >-
+    DuckDB CDN egress (https://extensions.duckdb.org/v1.5.4/linux_amd64 for ducklake/httpfs/postgres_scanner)
+    and the v1.5.4 Lambda-platform wheel must be reachable to build the layers. On CDN 403 / egress block,
+    STOP and file a rec (Decision 55) -- never relax the pin or fall back to autoload. Seed
+    s3://agent-platform-data-lake/ducklake-extensions/v1.5.4/ from the fetched binaries for future builds.
+  - >-
+    Scratch Neon DB (restore-drill target) + the agent_platform / agent_platform_admin assume-role chain
+    must be reachable for the clone-rehearsal (VP step 14) and the in-Lambda gates (VP steps 16-19). If
+    unreachable in-session, STOP and file a rec (Decision 55) -- the production redeploy must NOT proceed
+    without the clone read-your-write proof.
+acceptance_criteria:
+  - >-
+    A single source of truth exists: config/lambda/ducklake/version.yaml holds duckdb_version "1.5.4", and
+    src/common/ducklake_runtime.py + scripts/build_lambda.py reach the pin ONLY via the
+    src.common.ducklake_version loader (no hardcoded duckdb version literal in either derive surface).
+  - >-
+    The cascade is proven: overriding the SSOT (DUCKLAKE_VERSION_CONFIG -> a temp version.yaml with a
+    sentinel version) flows through to pinned_duckdb_version(), the runtime assert target, and
+    build_lambda's derived CDN URL / S3 prefix / deps spec -- changing the one value moves every derived
+    surface, with no other edit.
+  - >-
+    requirements.txt is derived and enforced: the duckdb floor == ">=1.5.4" (synced from the SSOT by
+    scripts/sync_ducklake_version.py), and the new validate.py `ducklake-version-lockstep` gate FAILS on any
+    divergence (drifted requirements floor, or a raw version literal reintroduced into a derive surface) and
+    passes on the coherent tree.
+  - >-
+    The bump landed coherently: NO "1.5.3" literal survives under src/, scripts/, tests/, requirements.txt,
+    or terraform/personal/, AND no raw "1.5.4" literal survives in those derive surfaces either (the only
+    1.5.4 literals are config/lambda/ducklake/version.yaml (source) and the synced requirements floor). The
+    version-assert still RAISES on mismatch and now returns "1.5.4"; the local DuckDB 1.5.4 venv passes the
+    assert that previously loud-failed (PLAN-t2-28 VP6 unblocked).
+  - >-
+    Clone-rehearsal (OQ.12 / Decision 81 cl.9) is green BEFORE redeploy: the 1.5.4 deps+extensions layers
+    build from the v1.5.4 CDN; the local churn/OCC gate passes within the UNCHANGED CD.33 / Decision 82
+    budgets (COMMIT_LATENCY_BUDGET_MS=2000, OCC_COLLISION_RATE_BUDGET=0.20); and restore-drill proves a
+    local DuckDB 1.5.4 engine reads a 1.5.3-authored catalog clone (read-your-write OK).
+  - >-
+    All four active DuckLake artifacts rebuild + redeploy atomically to 1.5.4 (bundling the version.yaml
+    asset), and the in-Lambda gates confirm lockstep: --lambda-attach prints "version=1.5.4 source=layer"
+    for writer AND reader; --lambda-churn passes within the unchanged budgets; --lambda-reader returns a
+    healthy 1.5.4 read through the closed boundary (Decision 81); catalog-dr re-baselines its engine tag to
+    "duckdb 1.5.4" (CD.34).
+  - >-
+    A Decision recording the SSOT + the first exercised bump (with clone-rehearsal evidence) is appended to
+    docs/DECISIONS.md and synced to ops_decisions via the portal (runbook Section-2 step-5; Decision 84 sole
+    backend, no direct JSONL edit).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The SSOT exists and holds the target version.
+    command: bin/venv-python -c "import yaml; print(yaml.safe_load(open('config/lambda/ducklake/version.yaml'))['duckdb_version'])"
+    expected: Prints 1.5.4.
+    fix_if: Missing/wrong -- create or correct config/lambda/ducklake/version.yaml.
+  - step: 2
+    phase: pre-deploy
+    action: The loader resolves the pin from the SSOT and the derive surfaces reach it ONLY via the loader.
+    command: |-
+      bin/venv-python - <<'PY'
+      from src.common.ducklake_version import pinned_duckdb_version
+      from src.common.ducklake_runtime import assert_duckdb_version, PINNED_DUCKDB_VERSION
+      import scripts.build_lambda as bl
+      pin = pinned_duckdb_version()
+      assert pin == "1.5.4", pin
+      assert PINNED_DUCKDB_VERSION == pin, ("runtime", PINNED_DUCKDB_VERSION)
+      assert bl.PINNED_DUCKDB_VERSION == pin, ("build", bl.PINNED_DUCKDB_VERSION)
+      print("OK: runtime + build derive the pin from the SSOT:", pin)
+      PY
+    expected: 'Prints "OK: runtime + build derive the pin from the SSOT: 1.5.4".'
+    fix_if: A surface still carries its own literal -- repoint it through src.common.ducklake_version.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      CASCADE PROOF (the headline test of the SSOT) -- overriding the one config value moves every derived
+      surface with no other edit.
+    command: |-
+      bin/venv-python - <<'PY'
+      import os, tempfile, importlib
+      d = tempfile.mkdtemp()
+      p = os.path.join(d, "version.yaml")
+      open(p, "w").write('duckdb_version: "9.9.9"\nducklake_format: "v1.0"\nextension_platform: "linux_amd64"\n')
+      os.environ["DUCKLAKE_VERSION_CONFIG"] = p
+      import src.common.ducklake_version as v
+      importlib.reload(v)
+      assert v.pinned_duckdb_version() == "9.9.9", v.pinned_duckdb_version()
+      import scripts.build_lambda as bl
+      importlib.reload(bl)
+      assert "9.9.9" in bl.DUCKLAKE_EXT_URL_BASE and "v9.9.9" in bl.DUCKLAKE_EXT_S3_PREFIX, (bl.DUCKLAKE_EXT_URL_BASE, bl.DUCKLAKE_EXT_S3_PREFIX)
+      assert f"duckdb==9.9.9" in bl.DUCKLAKE_DEPS, bl.DUCKLAKE_DEPS
+      print("OK: one-value override cascaded to runtime pin + build CDN URL + S3 prefix + deps spec")
+      PY
+    expected: Prints the OK line -- the sentinel 9.9.9 reached pinned_duckdb_version, the CDN URL base, the S3 prefix, and the deps spec.
+    fix_if: A surface did not move -- it is not deriving from the loader; fix it. This is the SSOT's load-bearing guarantee.
+  - step: 4
+    phase: pre-deploy
+    action: requirements.txt is synced from the SSOT (the one-edit promise) and the sync is idempotent.
+    command: bin/venv-python -m scripts.sync_ducklake_version --check && grep -nE '^duckdb>=1\.5\.4' requirements.txt
+    expected: --check exits 0 (no drift) and the floor line reads duckdb>=1.5.4.
+    fix_if: --check reports drift -- run `bin/venv-python -m scripts.sync_ducklake_version` to rewrite the floor, then re-run.
+  - step: 5
+    phase: pre-deploy
+    action: The ducklake-version-lockstep validate gate enforces coherence (passes clean; would fail on divergence).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: The fast tier (incl. the new ducklake-version-lockstep static gate) passes under budget.
+    fix_if: The gate fails -- it names the divergent surface (drifted requirements floor or a reintroduced literal); fix that surface.
+  - step: 6
+    phase: pre-deploy
+    action: Zero-stray completeness -- the OLD pin is fully gone and no raw current-version literal remains in the derive surfaces.
+    command: >-
+      (grep -rnE '1\.5\.3' src/ scripts/ tests/ requirements.txt terraform/personal/ && echo "STRAY 1.5.3" || echo "OK: no 1.5.3 in live code")
+      && (grep -rnE '1\.5\.4' src/ scripts/ tests/ terraform/personal/ && echo "RAW 1.5.4 LITERAL (should derive)" || echo "OK: no raw 1.5.4 literal in derive surfaces")
+    expected: >-
+      Both OK lines print: no "1.5.3" anywhere live, and no raw "1.5.4" literal under src/ scripts/ tests/
+      terraform/ (the only 1.5.4 literals are config/lambda/ducklake/version.yaml + the synced requirements floor).
+    fix_if: >-
+      A 1.5.3 survives -- bump/rephrase it. A raw 1.5.4 literal in a derive surface -- repoint it through the
+      loader (catalog-format notes become version-agnostic "DuckLake v1.0"). docs/ is intentionally out of this gate.
+  - step: 7
+    phase: pre-deploy
+    action: Version-assert enforcement is preserved -- raises on mismatch, returns the SSOT pin.
+    command: bin/venv-python -m pytest tests/test_ducklake_runtime.py
+    expected: >-
+      All pass: the match/default tests assert against pinned_duckdb_version() (derived), and the mismatch
+      test (a value != the pin) still raises VersionMismatchError -- the check is not weakened, only its source moved.
+    fix_if: The mismatch test stops raising -- enforcement was weakened; STOP and RCA (Decision 55), never loosen the assert.
+  - step: 8
+    phase: pre-deploy
+    action: The local DuckDB 1.5.4 venv now passes the derived assert (PLAN-t2-28 VP6 block clears).
+    command: |-
+      bin/venv-python - <<'PY'
+      import duckdb
+      from src.common.ducklake_runtime import assert_duckdb_version
+      from src.common.ducklake_version import pinned_duckdb_version
+      v = assert_duckdb_version(duckdb)
+      assert v == pinned_duckdb_version() == "1.5.4", (duckdb.__version__, v)
+      print("assert_duckdb_version(real duckdb):", v, "-- VP6 block cleared")
+      PY
+    expected: 'Prints "assert_duckdb_version(real duckdb): 1.5.4 -- VP6 block cleared".'
+    fix_if: Raises VersionMismatchError -- the SSOT or the venv duckdb is not 1.5.4; reconcile before proceeding.
+  - step: 9
+    phase: pre-deploy
+    action: Full affected unit suite is green and derives from the SSOT (no hardcoded version in tests).
+    command: >-
+      bin/venv-python -m pytest tests/test_ducklake_version.py tests/test_sync_ducklake_version.py
+      tests/test_ducklake_runtime.py tests/test_build_lambda.py tests/test_catalog_dr.py
+      tests/test_ducklake_reader_handler.py tests/test_ducklake_writer_handler.py tests/test_ducklake_neon_smoke_test.py -q
+    expected: All pass; the new loader + sync tests have 100% coverage.
+    fix_if: A test still hardcodes a version -- derive it from pinned_duckdb_version(); a coverage gap -- add the missing case.
+  - step: 10
+    phase: pre-deploy
+    action: Decision 79 scope -- the change maps to exactly the four active DuckLake artifacts (which now bundle the version asset).
+    command: |-
+      bin/venv-python - <<'PY'
+      from scripts.lambda_manifest import compute_affected_artifacts
+      aff = compute_affected_artifacts([
+          "config/lambda/ducklake/version.yaml", "src/common/ducklake_version.py",
+          "src/common/ducklake_runtime.py", "scripts/build_lambda.py",
+          "src/lambdas/ducklake_maintenance/handler.py",
+      ])
+      keys = set(aff)
+      need = {"ducklake_writer", "ducklake_reader", "ducklake_maintenance", "ducklake_catalog_dr"}
+      assert need <= keys, f"missing affected artifacts: {need - keys} (got {sorted(keys)})"
+      print("OK: affected active DuckLake artifacts:", sorted(keys & need))
+      PY
+    expected: All four are flagged -- the version.yaml asset + ducklake_version.py include map them; justifies the per-Lambda build/deploy/smoke.
+    fix_if: An artifact is missing -- its manifest did not pick up the version asset/include; fix the manifest.
+  - step: 11
+    phase: pre-deploy
+    action: The touched ROADMAP + the new plan are structurally valid.
+    command: bin/venv-python -m scripts.platform_roadmap
+    expected: Exit 0.
+    fix_if: Validator fails -- fix the YAML it names.
+  - step: 12
+    phase: pre-deploy
+    action: Full presubmit (the comprehensive tier the post-merge main runs) is green locally before the PR.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 (full pytest, the new gate, terraform validate, plan schema; AWS-gated harness steps skip with a structured event if creds absent).
+    fix_if: Any failure -- address it; new files (loader, sync) must be 100% covered (tests/CLAUDE.md).
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Clone-rehearsal (1/3) -- build the 1.5.4 deps+extensions+pgclient layers and the four function zips
+      from the v1.5.4 CDN (no --deploy). Egress + wheel-availability proof.
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --profile agent_platform
+    expected: >-
+      All zips/layers build under the 262MB ceiling; the deps layer installs duckdb==1.5.4; the extensions
+      layer contains v1.5.4/linux_amd64 ducklake + httpfs + postgres_scanner; each function zip bundles
+      config/lambda/ducklake/version.yaml + ducklake_version.py.
+    fix_if: >-
+      The 1.5.4 wheel/extension fetch fails (CDN 403 / egress) -- STOP and file a rec (Decision 55); do NOT
+      relax the pin or fall back to autoload. Seed the S3 v1.5.4 fallback before retrying an egress-blocked build.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Clone-rehearsal (2/3 + 3/3) -- the local churn/OCC gate (the deferred PLAN-t2-28 VP6) and restore-drill
+      (a 1.5.4 engine reads a 1.5.3-authored catalog clone, Decision 88 cl.4).
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate --profile agent_platform &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --restore-drill --profile agent_platform
+    expected: >-
+      The churn gate passes within the UNCHANGED CD.33 / Decision 82 budgets (COMMIT_LATENCY_BUDGET_MS=2000,
+      OCC_COLLISION_RATE_BUDGET=0.20); restore-drill prints RESTORE ... OK (clone restores into scratch Neon
+      and a local 1.5.4 engine read-your-writes it).
+    fix_if: >-
+      A budget breach -- STOP and RCA (Decision 55), never loosen the budget or switch the term (Decision 82).
+      A clone read failure on 1.5.4 -- STOP; this BLOCKS the redeploy. Neon/admin unreachable -- STOP and file a rec.
+  - step: 15
+    phase: post-deploy
+    action: >-
+      Atomic production cutover -- deploy the four function codes, then republish the 1.5.4 layer versions via
+      the interactive human-gated terraform loop (the only context with the local filemd5).
+    command: >-
+      bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform &&
+      terraform -chdir=terraform/personal plan -out=/tmp/tf-duckdb.bin &&
+      terraform -chdir=terraform/personal show -json /tmp/tf-duckdb.bin > /tmp/tf-duckdb.json &&
+      bin/venv-python -m scripts.terraform_apply_guard /tmp/tf-duckdb.json
+    expected: >-
+      All four function codes update from the 1.5.4 zips; `terraform plan` shows the two layer-version
+      republishes (new source_code_hash + the yamldecode-derived description) and the four functions
+      repointing, NO IAM/trust/destroy; the guard prints OK and exits 0. PRESENT the plan; on acceptance run
+      `terraform -chdir=terraform/personal apply /tmp/tf-duckdb.bin`.
+    fix_if: >-
+      Guard exits 2 (unexpected IAM/destroy) -- STOP, do not bypass. If a transient leaves code and layer
+      split, the next invocation loud-fails VersionMismatchError -- re-run to converge, never patch the assert.
+  - step: 16
+    phase: post-deploy
+    action: In-Lambda ATTACH lockstep proof -- the DEPLOYED layer is 1.5.4, baked-loaded with autoload off.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-attach --profile agent_platform
+    expected: Prints "LAMBDA_ATTACH OK version=1.5.4 source=layer ..." for the writer AND the reader.
+    fix_if: version != 1.5.4 -- the layer republish did not land; re-apply. source != layer -- baked LOAD failed; STOP and RCA (Decision 55).
+  - step: 17
+    phase: post-deploy
+    action: In-Lambda churn/OCC gate within the unchanged budgets (EC8 / Decision 82).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-churn --profile agent_platform
+    expected: Passes within COMMIT_LATENCY_BUDGET_MS=2000 / OCC_COLLISION_RATE_BUDGET=0.20 -- the bump did not silently re-baseline the gate.
+    fix_if: A budget breach -- STOP and RCA (Decision 55); never loosen the budget or switch the term (Decision 82).
+  - step: 18
+    phase: post-deploy
+    action: In-Lambda reader through the closed boundary returns a healthy 1.5.4 read (Decision 81).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-reader --profile agent_platform
+    expected: The closed reader path returns version 1.5.4 / a healthy read.
+    fix_if: Reader errors or reports != 1.5.4 -- STOP and RCA; the reader artifact did not redeploy coherently.
+  - step: 19
+    phase: post-deploy
+    action: Catalog-DR engine-tag re-baseline (CD.34) -- the deployed catalog-dr emits the 1.5.4 engine tag.
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --restore-drill --profile agent_platform 2>&1 |
+      grep -iE "duckdb[- ]?1\.5\.4" || echo "fallback: structural via test_catalog_dr (tag derives from SSOT) + next scheduled dump re-baselines"
+    expected: >-
+      The DR key/metadata engine tag reads "duckdb 1.5.4". If on-demand catalog-dr invocation is IAM-gated,
+      fall back to the structural proof (test_catalog_dr asserts the tag derives from the SSOT) + the next
+      scheduled dump re-baselines -- recorded here, not skipped silently (mirrors the t2-28 structural fallback).
+    fix_if: The tag still reads 1.5.3 -- catalog-dr did not redeploy; re-deploy. Never hand-edit the tag.
+  - step: 20
+    phase: post-deploy
+    action: File the SSOT + bump Decision and sync to ops_decisions (runbook Section-2 step-5; Decision 84 sole backend).
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m scripts.sync_ops sync
+    expected: The new Decision (SSOT + first exercised bump + rehearsal evidence) is in DECISIONS.md and present in ops_decisions after backfill + sync.
+    fix_if: Sync fails on creds -- re-file after restoring the agent_platform chain (Decision 84 I-4, no outbox). Never edit logs/.decisions-index.jsonl directly.
+constraints:
+  - >-
+    config/lambda/ducklake/version.yaml is the SOLE place a duckdb version literal lives in live code (the
+    synced requirements floor is its only derived literal). Reintroducing a hardcoded version into any derive
+    surface (runtime, build, tests, terraform) is forbidden and is caught by the ducklake-version-lockstep gate.
+  - >-
+    Do NOT weaken the version assert. assert_duckdb_version's logic (actual != target) is untouched -- the
+    target only moves from a literal constant to pinned_duckdb_version(). The mismatch test stays as the
+    proof it still raises. Loosening/deleting/version-genericising the assert is forbidden (Decision 55, OQ.12).
+  - >-
+    src/common/ducklake_version.py imports stdlib + pyyaml ONLY (no duckdb/ulid) and NEVER raises at import
+    (AGENTS.md no-import-raise); it fails loudly only on explicit call (Decision 55 fail-closed). ducklake_runtime
+    exposes PINNED_DUCKDB_VERSION lazily (module __getattr__) so importing it triggers no file I/O.
+  - >-
+    The clone-rehearsal (VP 13-14) GATES the redeploy. If any rehearsal step is blocked (DuckDB-CDN egress,
+    agent_platform_admin, scratch-Neon), STOP and file a rec via the portal (Decision 55) -- do NOT skip to
+    deploy, force a gate, or relax the pin. A half-applied bump never produces a live mismatch: the deployed
+    Lambdas keep running self-consistent 1.5.3 until the atomic redeploy lands.
+  - >-
+    The CD.33 / Decision 82 churn budgets (COMMIT_LATENCY_BUDGET_MS=2000, OCC_COLLISION_RATE_BUDGET=0.20) are
+    UNCHANGED. The churn gates (VP 14, 17) assert the exact budgets; switching the measured term or loosening
+    a threshold is an implicit relaxation and is forbidden (Decision 82).
+  - >-
+    Terraform apply for the layer republish uses the interactive human-gated loop (plan -> guard -> present ->
+    accept -> apply), NOT a session auto-apply and NOT a CD push-apply (filemd5 of the local zip is null in
+    CI). The guard must exit 0 (no IAM/trust/destroy); if it exits 2, STOP (Decision 77 / Decision 92).
+  - >-
+    requirements.txt keeps the FLOOR pattern (duckdb>=<pin>), not an exact pin -- the Lambda layer is the
+    exact-pin surface (derived in build_lambda); the floor only guarantees the extension-capable runtime
+    locally (human decision 2026-06-25). Every new file (loader, sync) ships with a 100%-coverage test
+    (tests/CLAUDE.md). validate.py is the single source of truth for CI -- add the gate there, not only in
+    ci.yml (AGENTS.md). Decisions/recs writes go through the ops portal only; DECISIONS.md is the numbering
+    authority (allocate by reading the current max, never hardcode, never edit the JSONL cache). Bash/Linux
+    only; bin/venv-python for all Python; no emojis; ASCII hyphens.
+context:
+  - >-
+    Root cause / trigger: the local venv runs DuckDB 1.5.4 while the lockstep pin was 1.5.3, so
+    assert_duckdb_version (src/common/ducklake_runtime.py:176) loud-fails on every local DuckLake connection.
+    PLAN-t2-28 VP6 (the c2 churn/OCC gate) was deferred 2026-06-25 to "a dedicated DuckDB pin-bump plan"
+    named PLAN-duckdb-pin-bump-1-5-4 -- THIS plan. The bump clears the block (VP step 8) and runs that churn
+    gate (VP step 14).
+  - >-
+    Architecture decision (human, 2026-06-25): rather than a mechanical 20-surface find-replace, collapse the
+    version into ONE machine-readable SSOT (config/lambda/ducklake/version.yaml) with a shared loader, a
+    requirements sync helper, and a validate.py drift gate, so every future bump is a single-value edit. The
+    1.5.3->1.5.4 bump is folded in as the CASCADE PROOF (VP step 3 overrides the one value and asserts every
+    derived surface follows). This matches the repo's agent-first anti-duplication philosophy (AGENTS.md:
+    collocate semantic definitions with their enforcement; "drift by design" anti-pattern) and gives OQ.12 an
+    on-disk enforcement home for the first time.
+  - >-
+    Feasibility confirmed in planning: the writer manifest already bundles config/lambda/ducklake/
+    field_semantics.yaml as an asset, and ducklake_runtime reads it in-Lambda via a module-relative path with
+    an env override (ducklake_scd2_schema.py:33,114). version.yaml drops into that proven pattern, so the
+    runtime reads the pin at runtime -- which makes the assert STRONGER (it also catches code-zip/layer skew).
+  - >-
+    Scope discovery: the zero-stray grep surfaced four live 1.5.3 references beyond the obvious pin trio --
+    src/common/ducklake_spike.py:65, src/common/ducklake_maintenance.py:29, src/lambdas/ducklake_maintenance/
+    handler.py:204, scripts/ducklake_neon_smoke_test.py:693. config/, docs/contracts/, and bin/ are clean, so
+    the gate's scope (src/ scripts/ tests/ requirements.txt terraform/personal/) is provably complete.
+  - >-
+    Decision-77 mechanism (scout WARN, resolved): the layer-version republish is driven by source_code_hash =
+    filemd5(local zip), null in CD -- so the auto-apply pipeline cannot republish it. The republish uses the
+    interactive human-gated terraform loop terraform/CLAUDE.md retains (not a laptop auto-apply, not a
+    Decision-77 violation). The .tf diff (description via yamldecode + hash) is guard-PASS (no IAM/destroy).
+  - >-
+    Decision-scout (initial design) verdict FLAGS_FOUND (one WARN, resolved). Decisions to CITE: Decision 81
+    clause 9 (ratified authority deferring OQ.12 to the clone-rehearsal default -- OQ.12 is a roadmap
+    open-question, not a numbered DECISIONS.md entry); Decision 79 (per-Lambda build/deploy/smoke for the
+    four active artifacts + the version-asset manifest edits); Decision 82 (EC8 churn budgets unchanged --
+    re-baseline is an implicit relaxation); Decision 55 (loud-fail/stop-and-stage, no relax); Decision 77 +
+    Decision 92 (CD.35) (terraform apply mechanism/guard). RELATED: Decision 88 cl.4 (restore-drill is the
+    named gating drill); Decision 84 I-4 (a half-deployed writer surfaces loudly via the ducklake_writer_errors
+    alarm); CD.34 (catalog-DR engine-tag + retention re-baseline on bump). A re-scout for the SSOT design
+    (new config + loader + validate gate) confirms no Decision-86 conflict (version.yaml is machine-readable
+    config, not a prose-architecture doc) -- see the re-scout note appended at plan-critique time.
+  - >-
+    Out-of-scope but surfaced: rec-2353 (terraform-drift, ci_rca) is unrelated and NOT bundled -- it carries a
+    logged Decision-79 / Related-Work deferral rationale here so the open-rec HARD-BLOCK carve-out is satisfied.
+  - >-
+    Honest framing: this is larger than a patch bump because it lands a refactor (SSOT + loader + sync + gate)
+    plus the bump plus a four-artifact V3 redeploy across the live external catalog. The cascade proof (VP 3)
+    is the durable win; restore-drill (1.5.4 reads the 1.5.3 catalog) is the safety proof; --lambda-attach
+    version=1.5.4 source=layer is the lockstep proof. Mitigation: the refactor lands behind the gate and the
+    rehearsal gates the deploy, so a problem stops the line before production.
+pre_implementation_checklist:
+  - Branch confirmed not on main (git branch --show-current is the harness claude/ branch -- claude/charming-cannon-hewmlg)
+  - docs/PROJECT_CONTEXT.md read (file router, recommendation schema, AWS config)
+  - DECISIONS.md consulted via the decision-scout gate (CITE 81 cl.9, 79, 82, 55, 77/92; RELATED 88 cl.4, 84 I-4, CD.34) + SSOT re-scout (no Decision-86 conflict)
+  - All scope files located/readable; the four extra live 1.5.3 references confirmed; the field_semantics asset+include pattern confirmed as the template for the version asset
+  - docs/runbooks/ducklake-catalog-operations.md Section 2 (clone-rehearsal version-bump procedure) read as the execution spine
+  - Acceptance criteria understood and verifiable; the zero-stray + no-raw-literal gates' scope confirmed complete (config/, contracts/, bin/ clean)
+  - AWS agent_platform static-key chain verified (session-start hook OK); agent_platform_admin / scratch-Neon reachability checked before the rehearsal steps
+execution_steps:
+  - >-
+    SSOT core: create config/lambda/ducklake/version.yaml (duckdb_version "1.5.4", ducklake_format "v1.0",
+    extension_platform "linux_amd64", header comment) and src/common/ducklake_version.py (stdlib + pyyaml
+    loader, module-relative path + DUCKLAKE_VERSION_CONFIG override, cached, no import-raise, fail-loud on
+    explicit call). Add tests/test_ducklake_version.py (100%, incl. the env-override cascade case).
+  - >-
+    Derive the pin: repoint src/common/ducklake_runtime.py (assert_duckdb_version -> pinned_duckdb_version();
+    PINNED_DUCKDB_VERSION via module __getattr__; message -> SSOT/runbook; lines 466/499 -> "DuckLake v1.0")
+    and scripts/build_lambda.py (PINNED_DUCKDB_VERSION = pinned_duckdb_version(); docstrings/notes -> SSOT ref).
+    Run `ruff format` after editing.
+  - >-
+    requirements sync + gate: create scripts/sync_ducklake_version.py (+ tests/test_sync_ducklake_version.py,
+    100%); run it to set requirements.txt duckdb floor ">=1.5.4" with the generated-from-SSOT comment; add the
+    ducklake-version-lockstep static gate to scripts/validate.py (+ its test) and wire it into the static tier.
+  - >-
+    Tests derive: repoint the six affected test files' fakes/tags/paths to pinned_duckdb_version() (mismatch
+    test uses pin + "-mismatch"). Run `ruff check --fix` after editing tests (tests/CLAUDE.md F401 discipline).
+  - >-
+    Infra/manifests: add version.yaml (asset) + ducklake_version.py (include) to the writer/reader/maintenance
+    (+ catalog-dr if it derives the tag) manifests and rephrase their notes version-agnostic; make
+    terraform/personal/ducklake_lambdas.tf descriptions derive via a yamldecode local. Rephrase the residual
+    behavioral-note literals (spike.py:65, maintenance.py:29, handler.py:204, smoke_test.py:693).
+  - >-
+    Docs: update docs/runbooks/ducklake-catalog-operations.md Section 2 to the one-edit + sync + rehearsal
+    flow; record the SSOT + exercised bump in docs/ROADMAP-PLATFORM.yaml (no status flips in /plan).
+  - >-
+    Run the pre-deploy VP (steps 1-12); fix to green -- especially the CASCADE PROOF (step 3) and the
+    zero-stray/no-raw-literal gate (step 6). Then the clone-rehearsal (steps 13-14). If any rehearsal step is
+    blocked, STOP, file a rec (Decision 55), and report -- do NOT proceed to deploy.
+  - >-
+    On a green rehearsal: deploy (step 15) -- build_lambda --ducklake-only --deploy for the four function
+    codes, then the interactive human-gated terraform loop for the layer republish (plan -> guard exit 0 ->
+    PRESENT -> human accepts -> apply). Then the post-deploy in-Lambda gates (steps 16-19).
+  - >-
+    Append the SSOT + bump Decision to docs/DECISIONS.md (allocate the next number by reading the current
+    max; record the cascade + rehearsal evidence), then VP step 20 (--backfill-decisions-md + sync_ops sync).
+  - >-
+    Execute the full Verification Plan in order; loop each step until pass; on an unrecoverable V3 / live-gate
+    failure STOP and RCA (Decision 55) -- never relax a gate, budget, or the assert.
+  - >-
+    Report: the SSOT landed + the cascade proof (one value moved every surface), the zero-stray/no-raw-literal
+    result, the rehearsal evidence (restore-drill OK, churn within budget), the four-artifact deploy +
+    --lambda-attach version=1.5.4 source=layer, the catalog-dr tag re-baseline, the filed Decision id, and
+    that PLAN-t2-28 VP6 is now fulfilled.
+work_areas: []
+rollback: >-
+  The SSOT + bump revert with `git revert` (restores the 1.5.3 value in version.yaml -- which cascades the
+  revert through every derived surface, the inverse of the cascade proof -- plus the synced requirements
+  floor and the derive-surface edits). The deployed artifacts roll back by setting version.yaml back to
+  1.5.3, re-running build_lambda --ducklake-only --deploy + the interactive terraform apply to republish the
+  1.5.3 layer versions -- the deployed Lambdas are self-consistent at whichever pin is live. No catalog data
+  migration is involved (restore-drill proved 1.5.4 reads the 1.5.3-authored catalog, so no on-disk rewrite
+  occurred to undo). The appended Decision is superseded via the portal (lifecycle state, Decision 70), never deleted.
