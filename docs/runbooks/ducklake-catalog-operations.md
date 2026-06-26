@@ -124,6 +124,26 @@ version_bump_surfaces:
   #  no edits needed when version.yaml is the sole change point)
 ```
 
+### Environment constraint (where the rehearsal runs)
+
+The direct-connection smoke gates (`--churn-gate`, `--restore-drill`) open a DuckDB engine ->
+Neon Postgres ATTACH over TCP/5432 from the host running them. **The Claude Code on the web
+(CC-web) container blocks outbound 5432 by design** -- in production only the reader/writer
+Lambdas reach Neon (public TLS, post-de-VPC per T2.17), plus PlatformAdmin break-glass from a
+privileged host. CC-web is neither, so the direct rehearsal **cannot** run there; it is a
+break-glass-class gate that must run from a Neon-reachable privileged environment (a laptop,
+the PySR compute node, or a bastion in eu-west-2 with the `agent_platform`/`agent_platform_admin`
+chain). This is structural, not transient -- do NOT treat a 5432 timeout from CC-web as a flaky
+network error.
+
+> **Tooling gap (follow-up):** step 4 below describes the *correct* design -- rehearse through a
+> Lambda built on the candidate layer pointed at the cloned catalog (`--lambda-*`), which is the
+> only sanctioned Neon path and is runnable from CC-web. The PLAN-duckdb-pin-bump-1-5-4 VP14
+> tooling instead used the direct `--churn-gate`/`--restore-drill` path, which is why that bump's
+> pre-deploy rehearsal stalled on CC-web (rec-2357). Re-homing the pre-deploy rehearsal to a
+> scratch/canary Lambda against scratch Neon is tracked as a follow-up plan; until it lands, run
+> the direct gates from a privileged host per the constraint above.
+
 ### Clone-rehearsal gate (mandatory before any production bump)
 
 1. **Pin candidate.** Edit `duckdb_version` in `config/lambda/ducklake/version.yaml` on a branch.
