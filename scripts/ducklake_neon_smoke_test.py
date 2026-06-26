@@ -1374,9 +1374,13 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
             branch_id = branch_info["branch_id"]
             branch_host = branch_info["host"]
             out["scratch"]["branch_id"] = branch_id
+            # The Neon branch is a COW of the production catalog, which records its own
+            # data_path internally. DuckLake rejects an ATTACH whose data_path argument
+            # does not match the stored value -- pass the production path, not the scratch path.
+            prod_data_path = f"s3://{_bucket}/ducklake/"
             clone_body = _lambda_invoke_cli(
                 maint_fn,
-                {"action": "clone_catalog", "branch_host": branch_host},
+                {"action": "clone_catalog", "branch_host": branch_host, "data_path": prod_data_path},
                 profile=profile,
                 region=region,
             )

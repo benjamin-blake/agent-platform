@@ -908,11 +908,16 @@ def _clone_catalog_branch_patches(*, schemata_rows=None, open_raises=None):
     )
 
 
+_PROD_DATA_PATH = "s3://b/ducklake/"
+
+
 def test_action_clone_catalog_happy_path():
-    """Happy path: branch_host in event, branch DSN built, ATTACH succeeds, returns ok."""
+    """Happy path: branch_host + data_path in event, ATTACH succeeds, returns ok."""
     p = _clone_catalog_branch_patches()
     with p[0], p[1] as open_mock:
-        result = h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+        result = h.action_clone_catalog(
+            {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
+        )
     assert result["ok"] is True
     assert result["cloned"] is True
     assert result["meta_schema"] == "ducklake_ops"
@@ -921,13 +926,16 @@ def test_action_clone_catalog_happy_path():
     assert call_kwargs["dsn"]["host"] == _BRANCH_HOST
     assert call_kwargs["dsn"]["dbname"] == _FULL_DSN["dbname"]
     assert call_kwargs["meta_schema"] == "ducklake_ops"
+    assert call_kwargs["data_path"] == _PROD_DATA_PATH
 
 
 def test_action_clone_catalog_branch_dsn_inherits_prod_credentials():
     """branch_dsn must use prod role/password/dbname with only host substituted."""
     p = _clone_catalog_branch_patches()
     with p[0], p[1] as open_mock:
-        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+        h.action_clone_catalog(
+            {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
+        )
     call_dsn = open_mock.call_args[1]["dsn"]
     assert call_dsn["host"] == _BRANCH_HOST
     assert call_dsn["dbname"] == _FULL_DSN["dbname"]
@@ -939,7 +947,23 @@ def test_action_clone_catalog_missing_branch_host_loud_fails():
     """Missing branch_host in event raises CatalogDrError (Decision 55 loud-fail)."""
     with patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN):
         with pytest.raises(h.catalog_dr.CatalogDrError, match="branch_host is required"):
-            h.action_clone_catalog({"action": "clone_catalog"}, None)
+            h.action_clone_catalog({"action": "clone_catalog", "data_path": _PROD_DATA_PATH}, None)
+
+
+def test_action_clone_catalog_missing_data_path_loud_fails():
+    """Missing data_path in event raises CatalogDrError (Decision 55 loud-fail)."""
+    with patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN):
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="data_path is required"):
+            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+
+
+def test_action_clone_catalog_invalid_data_path_loud_fails():
+    """Non-s3:// data_path raises CatalogDrError (Decision 55 loud-fail)."""
+    with patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN):
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="data_path is required"):
+            h.action_clone_catalog(
+                {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": "/local/path"}, None
+            )
 
 
 def test_action_clone_catalog_empty_schemata_loud_fails():
@@ -947,7 +971,9 @@ def test_action_clone_catalog_empty_schemata_loud_fails():
     p = _clone_catalog_branch_patches(schemata_rows=[])
     with p[0], p[1]:
         with pytest.raises(h.catalog_dr.CatalogDrError, match="empty information_schema.schemata"):
-            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+            h.action_clone_catalog(
+                {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
+            )
 
 
 def test_action_clone_catalog_attach_failure_loud_fails():
@@ -955,7 +981,9 @@ def test_action_clone_catalog_attach_failure_loud_fails():
     p = _clone_catalog_branch_patches(open_raises=h.rt.DuckLakeRuntimeError("ATTACH fail"))
     with p[0], p[1]:
         with pytest.raises(h.rt.DuckLakeRuntimeError, match="ATTACH fail"):
-            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+            h.action_clone_catalog(
+                {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
+            )
 
 
 def test_action_clone_catalog_no_pg_dump_no_pg_restore():
@@ -969,7 +997,9 @@ def test_action_clone_catalog_no_pg_dump_no_pg_restore():
         patch.object(h.catalog_dr, "build_pg_dump_cmd", side_effect=lambda *a, **kw: pg_dump_calls.append(1) or []),
         patch.object(h.catalog_dr, "run_pg_restore", side_effect=lambda *a, **kw: pg_restore_calls.append(1)),
     ):
-        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+        h.action_clone_catalog(
+            {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
+        )
     assert pg_dump_calls == [], "build_pg_dump_cmd must not be called on the clone path (Decision 100)"
     assert pg_restore_calls == [], "run_pg_restore must not be called on the clone path (Decision 100)"
 

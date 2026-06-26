@@ -356,13 +356,21 @@ def action_clone_catalog(event: dict[str, Any], _con: Any) -> dict[str, Any]:
             "a Neon branch and pass its endpoint host (Decision 100 / Decision 55)"
         )
 
+    data_path = event.get("data_path")
+    if not isinstance(data_path, str) or not data_path.startswith("s3://"):
+        raise catalog_dr.CatalogDrError(
+            "clone_catalog: data_path is required in the event (production DuckLake S3 path, "
+            "e.g. s3://<bucket>/ducklake/) -- the Neon branch records the production data_path "
+            "and DuckLake rejects a mismatch; pass the production path, not the scratch path (Decision 55)"
+        )
+
     prod_dsn = rt.fetch_dsn()
     branch_dsn = {**prod_dsn, "host": branch_host}
     meta_schema = "ducklake_ops"
 
     con = rt.open_connection(
         dsn=branch_dsn,
-        data_path=rt.SMOKE_DATA_PATH,
+        data_path=data_path,
         meta_schema=meta_schema,
         extension_directory=EXTENSION_DIRECTORY,
     )
