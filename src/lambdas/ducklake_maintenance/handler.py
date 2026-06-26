@@ -336,6 +336,98 @@ def subprocess_run(cmd: list[str]) -> Any:
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
+def action_clone_catalog(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """OQ.12 canary rehearsal: pg_dump prod meta-schema -> isolated scratch Neon DB -> ATTACH -> RYW.
+
+    Steps: (1) pg_dump ducklake_ops, (2) CREATE scratch DB, (3) pg_restore, (4) ATTACH on candidate
+    engine, (5) SELECT 1 (RYW proof), (6) DROP scratch DB in finally (no residue, Decision 55).
+    Accepts: meta_schema (default "ducklake_ops"), scratch_dbname, scratch_data_path.
+    """
+    import tempfile  # noqa: PLC0415
+
+    import psycopg2  # noqa: PLC0415
+
+    meta_schema = _require_identifier(event.get("meta_schema", "ducklake_ops"))
+    dsn = rt.fetch_dsn()
+
+    raw_scratch = event.get("scratch_dbname")
+    scratch_dbname = _require_identifier(raw_scratch if raw_scratch else f"{dsn['dbname']}_canary")
+
+    _bucket = rt.SMOKE_DATA_PATH.split("/")[2]
+    scratch_data_path = event.get("scratch_data_path") or f"s3://{_bucket}/ducklake/_canary_rehearsal/"
+
+    scratch_dsn = {**dsn, "dbname": scratch_dbname}
+
+    def _create_scratch_db() -> None:
+        conn = psycopg2.connect(rt.libpq_conninfo(dsn))
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(f"CREATE DATABASE {scratch_dbname}")
+        finally:
+            conn.close()
+
+    def _drop_scratch_db() -> None:
+        conn = psycopg2.connect(rt.libpq_conninfo(dsn))
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(f"DROP DATABASE IF EXISTS {scratch_dbname}")
+        finally:
+            conn.close()
+
+    scratch_created = False
+    with tempfile.TemporaryDirectory(prefix="clone-catalog-") as tmp:
+        dump_path = f"{tmp}/clone.dump"
+        try:
+            # Step 1: pg_dump the production meta-schema (--format=custom, --schema only).
+            cmd = catalog_dr.build_pg_dump_cmd(catalog_dr.dsn_uri(dsn), dump_path, schema=meta_schema)
+            result = subprocess_run(cmd)
+            if result.returncode != 0:
+                raise catalog_dr.CatalogDrError(
+                    f"clone_catalog pg_dump exited {result.returncode}: {result.stderr.strip()[:500]}"
+                )
+
+            # Step 2: CREATE isolated scratch Neon database.
+            _create_scratch_db()
+            scratch_created = True
+
+            # Step 3: pg_restore the dump into the scratch database (loud-fail on non-zero).
+            catalog_dr.run_pg_restore(dump_path, scratch_dsn)
+
+            # Step 4: ATTACH the scratch clone on the in-Lambda DuckDB engine (candidate version).
+            # Step 5: Prove read-your-write -- SELECT 1 after ATTACH proves the Postgres meta-schema
+            # survived the pg_dump -> pg_restore round-trip and the candidate engine can connect.
+            con = rt.open_connection(
+                dsn=scratch_dsn,
+                data_path=scratch_data_path,
+                meta_schema=meta_schema,
+                extension_directory=EXTENSION_DIRECTORY,
+            )
+            try:
+                rows = con.execute("SELECT 1").fetchall()
+                if not rows:
+                    raise catalog_dr.CatalogDrError(
+                        "clone_catalog RYW FAILED: empty SELECT after ATTACH on cloned catalog -- "
+                        "candidate engine could not query the restored metadata (Decision 55)"
+                    )
+            finally:
+                con.close()
+
+        finally:
+            # Step 6: DROP scratch database (always, even on error -- no scratch residue).
+            if scratch_created:
+                _drop_scratch_db()
+
+    return {
+        "ok": True,
+        "meta_schema": meta_schema,
+        "scratch_dbname": scratch_dbname,
+        "scratch_data_path": scratch_data_path,
+        "cloned": True,
+    }
+
+
 def action_reconcile_columns(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     """OPERATIONAL: add any spec columns missing from the physical ops_* history+current tables.
 
@@ -499,12 +591,21 @@ _ACTIONS: dict[str, Any] = {
     "merge_ops": action_merge_ops,
     "catalog_stats": action_catalog_stats,
     "reconcile_columns": action_reconcile_columns,
+    "clone_catalog": action_clone_catalog,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
 # catalog_stats is ATTACH-free (psycopg2 metadata read) -- also connectionless.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops", "catalog_stats", "reconcile_columns"}
+# clone_catalog manages its own scratch-db connection (never the scheduled smoke env).
+_CONNECTIONLESS_ACTIONS = {
+    "catalog_reinit",
+    "restore_drill",
+    "merge_ops",
+    "catalog_stats",
+    "reconcile_columns",
+    "clone_catalog",
+}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
