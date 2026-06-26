@@ -1,0 +1,198 @@
+schema_version: 1
+slug: "oq12-clone-rehearsal-lambda"
+intent: >-
+  Re-home the OQ.12 pre-deploy clone-rehearsal gate so it runs through an ephemeral candidate-layer
+  canary Lambda against a scratch/cloned Neon catalog, making the mandatory pre-deploy DuckDB-pin-bump
+  check runnable from CC-web (no TCP/5432) while exercising the real production Lambda code path.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-oq12-clone-rehearsal-lambda.yaml
+phase: >-
+  Platform T2.17 / OQ.12 (DuckLake version-bump clone-rehearsal policy). Resolves the standing handoff
+  rec-2357 (PLAN-duckdb-pin-bump-1-5-4 VP14 blocked: Neon unreachable from CC-web).
+scope:
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Add the pre-deploy canary-rehearsal orchestration mode (--canary-rehearsal): publish candidate
+      layers, create ephemeral writer/reader/maintenance canaries on those layers reusing the existing
+      execution roles + scratch env, author the scratch write-catalog with the prior engine, prove
+      attach + churn (unchanged CD.33 budgets) + read-your-write on the candidate engine, invoke the
+      maintenance canary's real-prod read-clone, then tear down. Add a privileged-env-only guard to the
+      DIRECT gates (churn_gate/restore_drill) that loud-refuses from CC-web and names the canary path as
+      canonical.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Add a candidate-layer publish helper (--ducklake-publish-canary-layers) that publishes the three
+      DuckLake layer zips already uploaded to S3 as new aws_lambda layer versions and prints their
+      version ARNs as JSON for the canary orchestrator to consume. Harden build_pgclient_layer to also
+      assert bin/pg_restore is present in the bundle (the real read-clone needs it; fail closed if absent).
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Add a server-side action_clone_catalog action that pg_dumps the REAL prod ducklake_ops meta-schema,
+      pg_restores it into an ISOLATED scratch Neon database (never the live catalog), ATTACHes the clone
+      on the in-Lambda (candidate, when run on a canary) engine, and proves read-your-write against a real
+      prior-version-authored row, then drops the scratch database. Read-only w.r.t. prod; loud-fail on any
+      step (Decision 55). Reuses the production named-verb/schema path verbatim -- no SQL escape hatch.
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      100%-coverage tests for the canary-rehearsal orchestration (layer-ARN resolution, ephemeral canary
+      create/teardown, scratch-catalog authoring, gate sequencing) and the DIRECT-gate privileged-env
+      guard (refuses without opt-in; runs with opt-in), with boto3/subprocess seams mocked. Assert the
+      churn budget constants are imported unchanged and the version-assert still raises on mismatch.
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      100%-coverage tests for the candidate-layer publish helper (mocked aws lambda publish-layer-version,
+      ARN JSON output) and the pg_restore-presence assertion in build_pgclient_layer (fail-closed path).
+  - file: tests/test_ducklake_maintenance_handler.py
+    action: Modify
+    purpose: >-
+      100%-coverage tests for action_clone_catalog (mocked pg_dump/pg_restore/scratch-db DDL/connection):
+      happy path read-your-write, scratch-db isolation (never targets ducklake_ops), teardown drops the
+      scratch db, and loud-fail on a non-zero pg_dump/pg_restore or a missing probe row.
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: >-
+      Update Section 2 step 4 to describe the implemented canary-rehearsal tooling as the canonical
+      pre-deploy gate; retire the "Tooling gap (follow-up)" note; document the DIRECT gates as
+      privileged-env-only (with the opt-in env var) and add a Decision-88 egress acknowledgement.
+bundled_recommendations:
+  - rec-2357
+infrastructure_dependencies:
+  - "Existing IAM execution roles reused (NO new IAM, NO terraform apply): agent-platform-ducklake-writer, agent-platform-ducklake-reader, agent-platform-ducklake-maintenance. Their S3 grants already cover the ducklake/ prefix (scratch DATA_PATH lives under ducklake/_canary_rehearsal/)."
+  - "Ephemeral canary functions are created/deleted at rehearsal time via aws lambda create-function/delete-function under agent_platform_admin (CreateFunction + iam:PassRole on the existing roles); no standing infra, no guard-gated apply."
+  - "Candidate DuckLake layers published via aws lambda publish-layer-version from the S3 zips that build_lambda --ducklake-only already uploads; published layer versions accumulate (inert, prune later) and are NOT deregistered by teardown to avoid racing the prod functions."
+  - "pgclient Lambda layer must contain bin/pg_restore for the real read-clone. PRE-REQ: if the seeded s3://<data-lake>/ducklake-pgclient/pgclient-bundle.tar.gz lacks bin/pg_restore, an operator must re-seed the AL2023-ABI bundle (pg_dump + pg_restore ship in the same postgresql16 client package). build_pgclient_layer fails closed if absent."
+  - "Neon DSN secret ducklake-neon-catalog-dsn (read by all canaries). Scratch Neon database for the read-clone is created + dropped server-side by the maintenance canary."
+acceptance_criteria:
+  - "From a CC-web session (no TCP/5432), `bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal` runs the full pre-deploy rehearsal end-to-end (publish candidate layers -> create ephemeral canaries on the candidate layer reusing existing roles -> author a scratch prior-version catalog -> prove attach + churn + read-your-write on the candidate engine -> real-prod read-clone via the maintenance canary -> teardown) and exits 0 on a healthy candidate."
+  - "The churn portion of the canary path uses the UNCHANGED CD.33 budgets imported from ducklake_runtime (COMMIT_LATENCY_BUDGET_MS=2000.0, OCC_COLLISION_RATE_BUDGET=0.20, CHURN_WRITERS=4) and the per-invocation wall-p95 term; no budget constant or measured term is altered (Decision 82 / CD.33 / Decision 55)."
+  - "src/common/ducklake_runtime.py::assert_duckdb_version still raises VersionMismatchError on a real mismatch (unchanged); a deliberately-wrong candidate pin makes the canary rehearsal loud-fail rather than pass."
+  - "The DIRECT gates (--churn-gate / --restore-drill) loud-refuse from CC-web unless an explicit privileged-env opt-in (DUCKLAKE_ALLOW_DIRECT_GATE=1) is set; the refusal message names the --canary-rehearsal path as canonical and explains the 5432 constraint. With the opt-in set, the direct gates still execute their existing logic unchanged."
+  - "The new maintenance action_clone_catalog clones the REAL prod ducklake_ops meta-schema into an ISOLATED scratch Neon database (a _canary suffix dbname, never ducklake_ops), proves candidate-engine read-your-write against a real prior-authored row, drops the scratch database on completion, and never mutates the live catalog or its DATA_PATH."
+  - "Scratch isolation holds throughout: the write/churn catalog uses a scratch meta-schema + scratch DATA_PATH (s3://<data-lake>/ducklake/_canary_rehearsal/) and the read-clone uses a scratch Neon database; no meta-schema, DATA_PATH, or dbname used by the rehearsal equals the live ducklake_ops / production values."
+  - "All new and changed source files have matching test files at 100% line+branch coverage; `bin/venv-python -m scripts.validate --pre` passes."
+  - "docs/runbooks/ducklake-catalog-operations.md Section 2 step 4 reflects the implemented canary tooling, the 'Tooling gap (follow-up)' note is removed, the DIRECT gates are documented as privileged-env-only, and a Decision-88 egress acknowledgement is present."
+  - "Per Decision 79, ducklake_maintenance is rebuilt and redeployed and an existing maintenance smoke gate passes against the redeployed function, proving the handler change is healthy in the deployed package."
+  - "rec-2357 is closed via the Resolves: trailer after merge (confirmed in the local cache post-sync)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit-test the canary-rehearsal orchestration (layer-ARN resolution, ephemeral canary create/teardown, scratch-catalog authoring, gate sequencing) with boto3/subprocess seams mocked.
+    command: bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -k "canary_rehearsal" -q
+    expected: All canary-rehearsal orchestration tests pass; teardown is asserted to run even when an inner gate raises (try/finally), and create-function reuses the existing role ARNs.
+    fix_if: A test fails or teardown is skippable on an inner-gate exception -- fix the orchestration so scratch resources are always torn down; do not weaken the assertions.
+  - step: 2
+    phase: pre-deploy
+    action: Unit-test the DIRECT-gate privileged-env guard.
+    command: bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -k "direct_gate_guard or privileged_env" -q
+    expected: churn_gate()/restore_drill() raise/refuse with the canary-path message when DUCKLAKE_ALLOW_DIRECT_GATE is unset, and execute their existing logic when it is set to 1.
+    fix_if: The guard can be bypassed silently or the message omits the canary path -- tighten the guard and message; loud-fail is mandatory (Decision 55).
+  - step: 3
+    phase: pre-deploy
+    action: Unit-test action_clone_catalog (mocked pg_dump/pg_restore/scratch-db DDL/connection) for read-your-write, scratch-db isolation, teardown, and loud-fail.
+    command: bin/venv-python -m pytest tests/test_ducklake_maintenance_handler.py -k "clone_catalog" -q
+    expected: Happy-path proves read-your-write; the scratch dbname is asserted != prod dbname and carries a _canary suffix; teardown drops the scratch db; a non-zero pg_dump/pg_restore or a missing probe row raises CatalogDrError.
+    fix_if: The action can target the live database, skip teardown, or swallow a failed restore -- fix to enforce isolation and loud-fail.
+  - step: 4
+    phase: pre-deploy
+    action: Assert the CD.33 churn budgets and the runtime version-assert are unchanged.
+    command: "bin/venv-python -c \"import types,pytest; from src.common import ducklake_runtime as r; assert (r.COMMIT_LATENCY_BUDGET_MS,r.OCC_COLLISION_RATE_BUDGET,r.CHURN_WRITERS)==(2000.0,0.20,4); pytest.raises(r.VersionMismatchError,r.assert_duckdb_version,types.SimpleNamespace(__version__='0.0.0-wrong')); print('BUDGETS_UNCHANGED version-assert OK')\""
+    expected: Prints "BUDGETS_UNCHANGED version-assert OK" -- the budget constants are exactly (2000.0, 0.20, 4) and assert_duckdb_version raises VersionMismatchError on a wrong version.
+    fix_if: A constant changed or the assert no longer raises -- revert the relaxation; these are CD.33/Decision 55 invariants and must not be touched.
+  - step: 5
+    phase: pre-deploy
+    action: Unit-test the build_lambda candidate-layer publish helper and the pg_restore-presence assertion.
+    command: bin/venv-python -m pytest tests/test_build_lambda.py -k "publish_canary_layers or pg_restore_present" -q
+    expected: publish-canary-layers emits the three layer version ARNs as JSON (mocked publish-layer-version); build_pgclient_layer fails closed when bin/pg_restore is absent from the bundle.
+    fix_if: ARNs are not captured/printed for the orchestrator, or a missing pg_restore is not caught at build time -- fix the helper and the assert.
+  - step: 6
+    phase: pre-deploy
+    action: Schema-validate the plan document and run the fast presubmit tier.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-oq12-clone-rehearsal-lambda.yaml && bin/venv-python -m scripts.validate --pre
+    expected: The plan validates against PlanDocument and the diff-aware --pre tier (ruff, mypy, picked tests, static gates) passes within budget.
+    fix_if: Validation or --pre fails -- fix the reported issue; if a NEW CI gate was added it must be wired into validate.py first (single source of truth).
+  - step: 7
+    phase: post-deploy
+    action: Build + publish the candidate DuckLake layers and assert pg_restore is present in the pgclient layer.
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only && bin/venv-python -m scripts.build_lambda --ducklake-publish-canary-layers
+    expected: The four zips + three layers build from the SSOT pin; publish-canary-layers prints JSON with the deps/extensions/pgclient layer version ARNs; the pgclient build asserted bin/pg_restore present (else it failed closed with the re-seed instruction).
+    fix_if: The pgclient bundle lacks pg_restore -- an operator re-seeds s3://<data-lake>/ducklake-pgclient/pgclient-bundle.tar.gz with bin/pg_restore (same postgresql16 client package as pg_dump), then re-run.
+  - step: 8
+    phase: post-deploy
+    action: Decision 79 -- redeploy the affected ducklake_maintenance artifact and prove the deployed handler is healthy via an existing maintenance smoke gate.
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy && bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge --profile agent_platform
+    expected: ducklake_maintenance code updates from S3; "MAINTENANCE_MERGE OK ..." prints -- the redeployed handler (with action_clone_catalog added) still serves the existing actions.
+    fix_if: Deploy fails or the merge gate regresses -- RCA the handler change (Decision 55); do not proceed to the live rehearsal until the deployed maintenance Lambda is healthy.
+  - step: 9
+    phase: post-deploy
+    action: Run the full canary clone-rehearsal end-to-end from CC-web (no 5432) and assert it proves attach + churn (within budget) + read-your-write on the candidate engine against a prior-authored clone, plus the real-prod read-clone, then tears down.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --profile agent_platform_admin; echo "EXIT=$?"
+    expected: "Prints a green summary (attach OK on candidate version; CHURN within CD.33 budget at N=4; read-your-write verified on the scratch prior-authored catalog; CLONE_CATALOG read-your-write verified against the real prod meta-schema clone; teardown removed the canaries + scratch meta-schema + scratch Neon db) and EXIT=0."
+    fix_if: A gate fails -- if it is a real candidate-engine regression, STOP and do NOT bump (Decision 55, RCA the regression); if it is a tooling defect (canary create/teardown, layer ARN, DSN), fix the orchestration. Never relax a budget or the version-assert to make it pass.
+  - step: 10
+    phase: post-deploy
+    action: Confirm scratch isolation and teardown left no residue (no scratch meta-schema, no scratch Neon db, no scratch S3 prefix).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --json --profile agent_platform_admin | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); assert d['torn_down']['canary_functions'] and d['torn_down']['scratch_meta'] and d['torn_down']['scratch_db'] and d['torn_down']['scratch_s3_prefix'], d; assert 'ducklake_ops' not in (d['scratch']['meta_schema'], d['scratch']['data_path'], d['scratch']['clone_dbname']), d; print('ISOLATION+TEARDOWN OK')"
+    expected: Prints "ISOLATION+TEARDOWN OK" -- the rehearsal reports every scratch resource torn down and none of the scratch identifiers equal the production ducklake_ops values.
+    fix_if: Any scratch resource survived or a scratch identifier collides with prod -- fix teardown/isolation; a surviving scratch DATA_PATH or db is a Decision-55 stop.
+  - step: 11
+    phase: post-deploy
+    action: Confirm the DIRECT gate refuses from CC-web without the privileged-env opt-in.
+    command: env -u DUCKLAKE_ALLOW_DIRECT_GATE bin/venv-python -m scripts.ducklake_neon_smoke_test --churn-gate --profile agent_platform; echo "EXIT=$?"
+    expected: Exits non-zero with a loud message that names --canary-rehearsal as the canonical CC-web path and explains the 5432 / DUCKLAKE_ALLOW_DIRECT_GATE opt-in; it does NOT attempt a direct 5432 ATTACH.
+    fix_if: It attempts the direct connection (hangs on 5432) or exits 0 -- the guard is not wired; fix it to refuse before any connection attempt.
+  - step: 12
+    phase: post-deploy
+    action: After merge + ops sync, confirm rec-2357 is closed.
+    command: bin/venv-python -m scripts.sync_ops pull && grep -m1 'rec-2357' logs/.recommendations-log.jsonl | bin/venv-python -c "import sys,json; print('rec-2357 status:', json.loads(sys.stdin.read()).get('status'))"
+    expected: "rec-2357 status: closed (auto-closed by the Resolves: trailer rec-autoclose workflow)."
+    fix_if: "Still open -- verify the squash-merge body carried `Resolves: rec-2357`; if the workflow did not fire, close via the ops portal: `ops_data_portal --update-rec rec-2357 --status closed --resolution ...`."
+constraints:
+  - "Do NOT relax or re-term the CD.33 churn budgets (COMMIT_LATENCY_BUDGET_MS=2000, OCC_COLLISION_RATE_BUDGET=0.20, CHURN_WRITERS=4) or switch the measured wall-p95 term to commit_ms (Decision 82 / CD.33 / Decision 55 fail-closed)."
+  - "Do NOT delete or weaken src/common/ducklake_runtime.py::assert_duckdb_version -- it must still loud-fail VersionMismatchError on a real mismatch (OQ.12 lockstep)."
+  - "The canary functions reuse the PRODUCTION writer/reader/maintenance handler code verbatim on the candidate layer with only scratch env vars; do NOT add a SQL escape hatch or bypass the named-verb / schema-gate path (Decision 84 closed boundary)."
+  - "Scratch isolation is absolute: the rehearsal targets a scratch meta-schema + scratch DATA_PATH + scratch Neon database; it MUST NEVER attach, write, or pg_restore into the live ducklake_ops catalog or its DATA_PATH (existing restore-drill _restore_drill/_canary suffix discipline)."
+  - "No new IAM and no terraform apply: canaries reuse existing execution roles and are created/torn down via the Lambda API; keep ducklake_runtime.py OUT of scope so the Decision-79 blast radius stays at the single ducklake_maintenance artifact."
+  - "Any new CI gate must be added to scripts/validate.py first (single source of truth); never add a check to ci.yml without validate.py."
+  - "New/changed source files require 100%-coverage test files (tests/CLAUDE.md)."
+  - "No rescue agents or workaround loops (Decision 55): a real candidate-engine regression STOPS the bump and is RCA'd; it is never papered over."
+context:
+  - "Resolves rec-2357 (High, open): PLAN-duckdb-pin-bump-1-5-4 VP14 stalled because the CC-web container blocks outbound TCP/5432, so the direct churn-gate/restore-drill could not run. CC-web CAN reach AWS APIs + Lambda Function URLs over 443, so a Lambda that itself connects to Neon is fully invocable."
+  - "OQ.12 (ROADMAP-PLATFORM.yaml): DuckLake v1.0 is lockstep with the DuckDB pin in config/lambda/ducklake/version.yaml (SSOT, Decision 99); version bumps require a clone-rehearsal gate. The runbook Section 2 step 4 already PRESCRIBES rehearsing via --lambda-* against a Lambda built on the candidate layer pointed at the cloned catalog -- this plan implements that for the pre-deploy phase."
+  - "Decision 81 / CD.33: closed ducklake_writer/reader boundary + the three-artifact split; the canary preserves this (named-verb path verbatim). Decision 82 / CD.33: the EC8 churn gate measures N=4 concurrent Lambda INVOCATIONS (each its own vCPU), so the churn portion must fan out N concurrent writer-canary churn_single invokes -- not an in-container thread burst."
+  - "Decision 79: per-Lambda gating. Only src/lambdas/ducklake_maintenance/handler.py is Lambda-packaged in scope (action_clone_catalog), so only ducklake_maintenance needs build+deploy+smoke. Touching src/common/ducklake_runtime.py would fan out to all four DuckLake Lambdas -- deliberately kept out of scope (the privileged-env guard lives client-side in the smoke-test script)."
+  - "Decision 77: terraform apply is human/guard-gated. This plan avoids new IAM and terraform entirely (ephemeral canaries reuse existing roles via the Lambda API), so it never touches the gated-apply path."
+  - "Decision 88 (Neon catalog egress is a budgeted resource): the real read-clone is a metered pg_dump on the paid-tier Neon catalog. It is kept SERVER-SIDE (pg_dump -> pg_restore inside AWS, not a DuckDB ATTACH-pull to CC-web) and is a deliberate, infrequent, pre-deploy-only event with scratch teardown bounding the footprint. Documented as an accepted, acknowledged egress event in the runbook (flagged NOTE by decision-scout; accepted by the human)."
+  - "Decision 84 (closed named-verb boundary): canary handlers reuse the production code path verbatim; no ad-hoc SQL/ATTACH escape hatch is added to the canary build (flagged NOTE by decision-scout; accepted by the human)."
+  - "Decision 70: physical deletion is exceptional. The teardown deletes ONLY scratch resources (ephemeral canary functions, scratch meta-schema, scratch Neon db, scratch S3 prefix) and never the live catalog."
+  - "DIRECT-gate disposition (human decision): KEEP the direct churn-gate/restore-drill as a privileged-env-only break-glass option behind a DUCKLAKE_ALLOW_DIRECT_GATE opt-in; the canary path is canonical. Runbook updated; the 'Tooling gap' note retired."
+  - "Clone fidelity (human decision): HYBRID -- a real pg_dump->pg_restore read-clone of the prod meta-schema (read-side, IAM write-isolated) plus a separate scratch-DATA_PATH catalog seeded by the prior engine for the churn/write side. PRE-REQ dependency: the pgclient layer must ship bin/pg_restore (currently a T2.19 carry per runbook Section 6); build_pgclient_layer fails closed if absent and the runbook documents the re-seed."
+  - "Provisioning (human decision): EPHEMERAL canaries reusing the existing execution roles -- no standing infra, no new IAM."
+  - "Branch claude/oq12-clone-rehearsal-lambda-7ri3du is 0 commits behind origin/main at planning time (no divergence assessment needed). No open ci-rca recs."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/oq12-clone-rehearsal-lambda-7ri3du)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (OQ.12, 99, 81, 82, 79, 77, 88, 84, 70, 55)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "PRE-REQ verified: the pgclient bundle in S3 contains bin/pg_restore (else re-seed before VP7)"
+execution_steps:
+  - "scripts/build_lambda.py: add --ducklake-publish-canary-layers (publish the deps/extensions/pgclient layer zips already in S3 via aws lambda publish-layer-version; print the three version ARNs as JSON). Harden build_pgclient_layer to assert bin/pg_restore is present in the extracted bundle (fail closed with the re-seed instruction)."
+  - "src/lambdas/ducklake_maintenance/handler.py: add action_clone_catalog -- pg_dump the real prod ducklake_ops meta-schema (--format=custom), CREATE a scratch Neon database (<dbname>_canary), pg_restore into it, ATTACH the clone on the in-Lambda engine, prove read-your-write against a real prior-authored row, then DROP the scratch database. Read-only w.r.t. prod; loud-fail (CatalogDrError) on any step; reuse the production named-verb/schema path. Register it in _ACTIONS and _CONNECTIONLESS_ACTIONS."
+  - "scripts/ducklake_neon_smoke_test.py: add the --canary-rehearsal orchestration -- (1) resolve candidate layer ARNs (call build_lambda --ducklake-publish-canary-layers or accept ARNs), (2) create ephemeral writer/reader/maintenance canary functions on the candidate layers reusing the existing execution roles with scratch env (DUCKLAKE_META_SCHEMA + DUCKLAKE_DATA_PATH under ducklake/_canary_rehearsal/), (3) author the scratch write-catalog with the PRIOR engine (writer canary on the current prod layer, or prior-layer pass) then swap writer/reader canaries to the candidate layers, (4) prove attach + churn (N=4 fan-out, unchanged budgets) + read-your-write on the candidate engine, (5) invoke the maintenance canary action_clone_catalog for the real-prod read-clone, (6) teardown in a finally block (delete canaries, drop scratch meta-schema + scratch db, delete scratch S3 prefix); add --json structured output for VP10. Add the DUCKLAKE_ALLOW_DIRECT_GATE privileged-env guard to churn_gate()/restore_drill() with a refusal message naming --canary-rehearsal."
+  - "tests/: add/extend tests for all three changed source files at 100% coverage (mocked boto3/subprocess/connection seams), including the budget-unchanged + version-assert assertions, the guard refuse/run paths, and the clone_catalog isolation/teardown/loud-fail paths."
+  - "docs/runbooks/ducklake-catalog-operations.md: update Section 2 step 4 to the implemented canary tooling, retire the 'Tooling gap (follow-up)' note, document the DIRECT gates as privileged-env-only (DUCKLAKE_ALLOW_DIRECT_GATE), and add the Decision-88 egress acknowledgement."
+  - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure stop and RCA (Decision 55). Include `Resolves: rec-2357` in the squash-merge body."
+  - "Report: what was implemented, verification results, and the rehearsal evidence (attach/churn/read-your-write/clone outputs)."
+work_areas: []
+rollback: >-
+  The change is additive: a new client-side rehearsal mode, a new maintenance action, and a build helper.
+  To roll back, revert the branch and redeploy the prior ducklake_maintenance zip
+  (build_lambda --ducklake-only --deploy from the prior pin); the DIRECT gates remain available behind
+  DUCKLAKE_ALLOW_DIRECT_GATE for privileged-host operation. No scratch resources persist (teardown is
+  in a finally block); any candidate layer versions published are inert and prunable.
