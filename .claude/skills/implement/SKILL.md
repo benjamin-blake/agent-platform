@@ -307,7 +307,7 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 ## Commit Flows (Workflow Step 7 -- MANDATORY)
 **Once validation passes (Step 6), execute the appropriate commit flow autonomously. Do not stop to ask permission -- the plan was approved during /plan.**
 
-This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Squash-merge after CI passes is preserved policy (Decision 89 "Branch Protection Not Available", clause 4); the transport is now the GitHub MCP `merge_pull_request` tool (Decision 76).
+This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Decision 83 (2026-06-08) reversed Decision 89's "Branch Protection Not Available" premise -- branch protection is now LIVE. The squash-merge-after-CI gate design is PRESERVED (Decision 89 stays as audit history; Decision 83 amends its premise only). The transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
@@ -315,8 +315,9 @@ The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on ma
 ### Wait-for-CI: event-driven, never polled
 The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
 1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
-2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
-3. On wake, confirm status (`mcp__github__pull_request_read` with `method=get_status`/`get_check_runs`):
+2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing.
+3. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`.github/workflows/ci.yml` lines 157-178, `continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment IS the pass wake signal. The comment is unverified: on wake, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
+4. On wake, confirm status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).
    - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
    - **Still running** -> end the turn; a later event wakes you.
@@ -348,7 +349,10 @@ the next planning session's convergence-record re-check (not the wake). The gate
 from a laptop.
 
 ### Pre-Push Rebase (applies to both flows)
-After the local commit, before pushing, refresh and rebase so the PR opens against current main:
+**Rebase phase distinction** -- two rules, not one:
+- **Assessment time (planning / Main Divergence Check)**: do NOT auto-rebase. Surface the divergence to the human; wait for their choice (rebase now / proceed / abort). This is because rebasing mid-plan can silently invalidate scoping decisions made against the old tree.
+- **Commit-flow time (here, after all code changes are done)**: DO rebase automatically before pushing. After the local commit, before pushing, refresh and rebase so the PR opens against current main:
+
 ```bash
 git fetch origin main
 git rebase origin/main   # STOP on conflict; do not auto-resolve -- surface to the human
