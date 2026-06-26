@@ -230,9 +230,11 @@ apply these rules:
 ## Main Divergence Assessment (Workflow Step 4)
 After Scope is identified, intersect the prospective Scope file list with `main_freshness.main_files_changed_since_branch` from the preflight report. If any Scope file appears in that list:
 
-> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend `git checkout main && git pull && git rebase main` from the branch BEFORE writing the plan. Options: (1) rebase now, (2) proceed and accept the risk, (3) abort."
+> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend rebasing BEFORE writing the plan: `git fetch origin main && git rebase origin/main`. Options: (1) rebase now and re-enter `/plan`, (2) proceed and accept the risk, (3) abort."
 
-Wait for human direction. Do not auto-rebase. If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
+**Rebase phase distinction (assessment time)**: do NOT auto-rebase here. This is the assessment-time rule -- surface the divergence, wait for the human's choice. Auto-rebase happens only at commit-flow time (the Pre-Push Rebase step in the implement skill), NOT here. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for the full rebase phase distinction.
+
+If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
 
 If `main_freshness.status != "ok"`, this assessment cannot run -- note in the plan's Context section and continue.
 
@@ -283,7 +285,7 @@ Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any 
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
-On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch.
+On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, never agent/).
 
 Verify you are on the harness branch and not on `main`:
 ```bash
