@@ -228,10 +228,20 @@ def test_create_branch_returns_branch_id_and_host():
         "branch": {"id": _FAKE_BRANCH_ID, "name": "br-fake-xyz"},
         "endpoints": [{"type": "read_write", "host": _FAKE_BRANCH_HOST}],
     }
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+    captured_reqs = []
+
+    def _urlopen(req):
+        captured_reqs.append(req)
+        return _mock_urlopen(body)
+
+    with patch("urllib.request.urlopen", side_effect=_urlopen):
         result = neon_api.create_branch(_FAKE_API_KEY, _FAKE_PROJECT_ID)
+
     assert result["branch_id"] == _FAKE_BRANCH_ID
     assert result["host"] == _FAKE_BRANCH_HOST
+    assert len(captured_reqs) == 1
+    sent_body = json.loads(captured_reqs[0].data)
+    assert sent_body == {"endpoints": [{"type": "read_write"}]}
 
 
 def test_create_branch_picks_primary_endpoint_over_first():
@@ -267,12 +277,28 @@ def test_create_branch_no_branch_id_loud_fails():
             neon_api.create_branch(_FAKE_API_KEY, _FAKE_PROJECT_ID)
 
 
-def test_create_branch_no_endpoint_host_loud_fails():
-    """NeonApiError when API response has no endpoint host."""
-    body = {"branch": {"id": _FAKE_BRANCH_ID}, "endpoints": []}
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+def test_create_branch_no_endpoint_host_deletes_branch_and_loud_fails():
+    """When endpoint host is missing, create_branch deletes the created branch then raises."""
+    create_body = {"branch": {"id": _FAKE_BRANCH_ID}, "endpoints": []}
+    captured_methods = []
+
+    def _urlopen(req):
+        captured_methods.append(req.get_method())
+        if req.get_method() == "POST":
+            return _mock_urlopen(create_body)
+        # DELETE response (cleanup)
+        resp = MagicMock()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        resp.read.return_value = b""
+        return resp
+
+    with patch("urllib.request.urlopen", side_effect=_urlopen):
         with pytest.raises(neon_api.NeonApiError, match="no endpoint host"):
             neon_api.create_branch(_FAKE_API_KEY, _FAKE_PROJECT_ID)
+
+    assert "POST" in captured_methods
+    assert "DELETE" in captured_methods
 
 
 def test_create_branch_non_2xx_loud_fails():

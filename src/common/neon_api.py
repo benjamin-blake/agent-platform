@@ -79,9 +79,11 @@ def create_branch(api_key: str, project_id: str) -> dict[str, str]:
     """POST /projects/{project_id}/branches (copy-on-write from the main branch).
 
     Returns ``{"branch_id": str, "host": str}`` where host is the branch endpoint hostname.
+    Requests a read_write compute endpoint alongside the branch so the host is available
+    immediately in the response (without a separate endpoint-create call).
     """
     url = f"{_NEON_API_BASE}/projects/{project_id}/branches"
-    body = _api_post(api_key, url, payload={})
+    body = _api_post(api_key, url, payload={"endpoints": [{"type": "read_write"}]})
     branch = body.get("branch", {})
     endpoints = body.get("endpoints", [])
     branch_id = branch.get("id")
@@ -95,7 +97,12 @@ def create_branch(api_key: str, project_id: str) -> dict[str, str]:
     if not host and endpoints:
         host = endpoints[0].get("host")
     if not host:
-        raise NeonApiError(f"create_branch: no endpoint host in response: {body}")
+        # Branch was created but no endpoint host: delete it before raising to avoid a leak.
+        try:
+            delete_branch(api_key, project_id, branch_id)
+        except NeonApiError:
+            pass
+        raise NeonApiError(f"create_branch: no endpoint host in response (branch {branch_id} deleted): {body}")
     return {"branch_id": branch_id, "host": host}
 
 
