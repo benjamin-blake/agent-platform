@@ -8,7 +8,8 @@ Creates these zip artifacts:
   2. ops-compaction.zip                     -- minimal ops compaction handler
   3. data-pipeline-deps-layer.zip           -- dependencies layer (yfinance, pyyaml, etc.)
   4. ducklake-{writer,reader,maintenance,catalog-dr}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
-  5. ducklake-{deps,extensions}-layer.zip   -- duckdb==1.5.3 + baked extensions (--ducklake-only)
+  5. ducklake-{deps,extensions}-layer.zip   -- duckdb (pinned via config/lambda/ducklake/version.yaml)
+                                               + baked extensions (--ducklake-only)
   6. ducklake-pgclient-layer.zip            -- pg_dump 16 + libpq.so (--ducklake-only, T2.18 FP-B)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
@@ -34,8 +35,13 @@ OUTPUT_DIR = ROOT / "lambda-packages"
 LAMBDA_SIZE_LIMIT_BYTES = 262144000  # 262 MB
 LAMBDA_SIZE_WARN_BYTES = 250 * 1024 * 1024  # early warning before the hard ceiling
 
-# DuckLake lockstep pin (OQ.12): the layer pins duckdb exactly; ducklake_runtime asserts equality.
-PINNED_DUCKDB_VERSION = "1.5.3"
+# DuckLake lockstep pin (OQ.12): derived from the SSOT (config/lambda/ducklake/version.yaml).
+from src.common.ducklake_version import (  # noqa: E402, I001
+    extension_platform as _extension_platform,
+    pinned_duckdb_version as _pinned_duckdb_version,
+)
+
+PINNED_DUCKDB_VERSION = _pinned_duckdb_version()
 
 PROD_DEPS = [
     "numpy>=1.24.0",
@@ -70,9 +76,9 @@ DUCKLAKE_DEPS = [
 
 # DuckLake extensions baked into the ducklake-extensions layer: (LOAD name, published file stem).
 # DuckDB publishes the Postgres extension binary as postgres_scanner.duckdb_extension even though it
-# LOADs as `postgres` (verified against v1.5.3/linux_amd64).
+# LOADs as `postgres` (verified against the pinned duckdb / config/lambda/ducklake/version.yaml).
 DUCKLAKE_EXTENSIONS = (("ducklake", "ducklake"), ("httpfs", "httpfs"), ("postgres", "postgres_scanner"))
-DUCKLAKE_EXT_PLATFORM = "linux_amd64"
+DUCKLAKE_EXT_PLATFORM = _extension_platform()  # derived from config/lambda/ducklake/version.yaml
 DUCKLAKE_EXT_URL_BASE = f"https://extensions.duckdb.org/v{PINNED_DUCKDB_VERSION}/{DUCKLAKE_EXT_PLATFORM}"
 # Vendored fallback prefix (raw .duckdb_extension files), seeded when egress to the CDN is blocked.
 DUCKLAKE_EXT_S3_PREFIX = f"ducklake-extensions/v{PINNED_DUCKDB_VERSION}"
@@ -296,7 +302,8 @@ def build_ducklake_function_package(temp_dir: Path, slug: str, zip_name: str) ->
 
 
 def build_ducklake_deps_layer(temp_dir: Path) -> Path:
-    """Create ducklake-deps-layer.zip (duckdb==1.5.3 + psycopg2-binary + python-ulid + pyyaml)."""
+    """Create ducklake-deps-layer.zip (duckdb pinned via config/lambda/ducklake/version.yaml
+    + psycopg2-binary + python-ulid + pyyaml)."""
     site_packages = temp_dir / "ducklake-deps" / "python" / "lib" / "python3.12" / "site-packages"
     site_packages.mkdir(parents=True)
 
@@ -304,7 +311,7 @@ def build_ducklake_deps_layer(temp_dir: Path) -> Path:
     req_file.write_text("\n".join(DUCKLAKE_DEPS), encoding="utf-8")
 
     print("  Installing DuckLake deps to Lambda layer structure...")
-    # duckdb 1.5.3 publishes a manylinux_2_28 wheel (no manylinux2014/2_17 wheel above 1.2.2);
+    # duckdb publishes a manylinux_2_28 wheel (no manylinux2014/2_17 wheel above 1.2.2);
     # Lambda python3.12 runs on Amazon Linux 2023 (glibc 2.34), compatible with 2_28. Offer both
     # tags newest-first so each dep resolves to its best available wheel.
     pip_result = subprocess.run(

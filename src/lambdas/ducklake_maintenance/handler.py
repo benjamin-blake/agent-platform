@@ -201,7 +201,7 @@ def _drop_meta_schema(meta_schema: str, *, recreate: bool = False) -> bool:
     makes a re-ATTACH at a new DATA_PATH possible. DESTRUCTIVE -- the caller has confirmed the state
     is disposable.
 
-    `recreate=True` re-creates the schema EMPTY after the drop. DuckLake (1.5.3) does not auto-create
+    `recreate=True` re-creates the schema EMPTY after the drop. DuckLake v1.0 does not auto-create
     the Postgres meta-schema on ATTACH -- it errors "Schema not found" -- so a reinit/init must leave an
     empty schema for the next ATTACH to initialize its metadata tables into (at the new DATA_PATH).
     """

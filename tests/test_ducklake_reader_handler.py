@@ -10,6 +10,7 @@ import pytest
 
 import src.lambdas.ducklake_reader.handler as h
 from src.common import ducklake_runtime as rt
+from src.common.ducklake_version import pinned_duckdb_version
 
 pytestmark = pytest.mark.unit
 
@@ -82,10 +83,12 @@ def test_handler_unknown_action():
 def test_handler_attach_check(monkeypatch):
     con = FakeCon()
     monkeypatch.setattr(h, "_open_reader_connection", lambda: con)
-    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__="1.5.3"))
+    monkeypatch.setattr(
+        rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__=pinned_duckdb_version())
+    )
     r = h.handler({"action": "attach_check"})
     body = json.loads(r["body"])
-    assert body["version"] == "1.5.3"
+    assert body["version"] == pinned_duckdb_version()
     assert body["source"] == "layer"
     # D2 warm reuse: the connection is kept open for the next invocation, NOT closed per-request.
     assert con.closed is False

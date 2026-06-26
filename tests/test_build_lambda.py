@@ -21,6 +21,7 @@ from scripts.build_lambda import (
     update_lambda_functions,
     validate_bucket_exists,
 )
+from src.common.ducklake_version import pinned_duckdb_version
 
 
 class _FakePath:
@@ -399,7 +400,7 @@ class TestSizeAssert:
 
 class TestPinnedConstants:
     def test_pinned_duckdb_version(self):
-        assert PINNED_DUCKDB_VERSION == "1.5.3"
+        assert PINNED_DUCKDB_VERSION == pinned_duckdb_version()
 
     def test_ducklake_deps_pin_exact(self):
         assert f"duckdb=={PINNED_DUCKDB_VERSION}" in bl.DUCKLAKE_DEPS
@@ -479,7 +480,7 @@ class TestBuildDucklakeExtensionsLayer:
 
         names = zipfile.ZipFile(out).namelist()
         for stem in ("ducklake", "httpfs", "postgres_scanner"):
-            assert any(f"duckdb_extensions/v1.5.3/linux_amd64/{stem}.duckdb_extension" == n for n in names)
+            assert any(f"duckdb_extensions/v{pinned_duckdb_version()}/linux_amd64/{stem}.duckdb_extension" == n for n in names)
 
 
 class TestFetchExtensionBytes:

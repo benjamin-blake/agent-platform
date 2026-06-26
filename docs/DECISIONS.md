@@ -2,6 +2,52 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 99: DuckDB/DuckLake lockstep version SSOT + first exercised version bump 1.5.3->1.5.4 (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-26
+**Warehouse ID:** dec-099 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The DuckDB lockstep version (`1.5.3`) was hardcoded as a literal string in four places:
+`src/common/ducklake_runtime.py::PINNED_DUCKDB_VERSION`, `scripts/build_lambda.py::PINNED_DUCKDB_VERSION`,
+the `requirements.txt` floor, and implicitly the S3 extension URLs. A version bump required four
+coordinated edits with no machine-enforced invariant that all surfaces agreed. Additionally the
+local venv ran DuckDB 1.5.4 while the pin was 1.5.3, causing `assert_duckdb_version` loud-failures
+on every local DuckLake connection (PLAN-t2-28 VP6 blocker).
+
+**Decision:**
+Collapse to a single machine-readable SSOT (`config/lambda/ducklake/version.yaml`) with a shared
+loader (`src/common/ducklake_version.py::pinned_duckdb_version()`). All derive surfaces read the pin
+via the loader; no literal survives outside `version.yaml`. A `ducklake-version-lockstep` gate in
+`validate.py` enforces drift-free coherence at every PR. The pending 1.5.3->1.5.4 bump is executed
+as the cascade proof: one edit to `version.yaml`, then `sync_ducklake_version` to update
+`requirements.txt`, then rebuild + redeploy the four active DuckLake Lambda artifacts.
+
+**Rehearsal evidence (OQ.12 clone-rehearsal gate):**
+- VP3 sentinel override (`DUCKLAKE_VERSION_CONFIG` env) confirmed all derive surfaces read `9.9.9`
+  when the override YAML contains that value -- cascade proof PASS.
+- VP8: local DuckDB 1.5.4 matches `pinned_duckdb_version()` -- assert_duckdb_version PASS.
+- Clone-rehearsal (VP13-14) and production redeploy (VP15) are post-code V3 steps gated on
+  AWS credentials + interactive Terraform loop (human-confirmed before merge per Decision 77).
+
+**Rationale:**
+- A single-value edit is the correct abstraction: the bump procedure now touches exactly one file,
+  with machine-enforced downstream coherence (the validate gate catches any reintroduced literal).
+- The SSOT pattern mirrors the existing `field_semantics.yaml` / `_load_field_semantics_cached`
+  pattern in `src/common/ducklake_scd2_schema.py` -- same module-relative path resolution,
+  same `lru_cache`, same env override.
+- Test files may retain `1.5.3` as fixture values (testing the upgrade FROM `1.5.3`) -- the
+  zero-stray gate explicitly scopes to `src/ scripts/ requirements.txt terraform/personal/` only.
+
+**Affected files:**
+`config/lambda/ducklake/version.yaml` (new SSOT), `src/common/ducklake_version.py` (new loader),
+`scripts/sync_ducklake_version.py` (new sync helper), `scripts/validate.py` (new gate),
+`src/common/ducklake_runtime.py`, `scripts/build_lambda.py`, `requirements.txt`,
+`terraform/personal/ducklake_lambdas.tf`, four Lambda manifests.
+
+---
+
 ## Decision 98: Provisioning model for convergence-writer and peer CI roles -- admin-create in terraform/personal, read-only bootstrap IAMRolesRead grant (Decided)
 
 **Status:** Decided

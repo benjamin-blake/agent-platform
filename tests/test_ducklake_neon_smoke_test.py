@@ -13,6 +13,7 @@ import types
 import pytest
 
 import scripts.ducklake_neon_smoke_test as smoke
+from src.common.ducklake_version import pinned_duckdb_version
 
 _DSN = {
     "host": "ep-test-123.eu-west-2.aws.neon.tech",
@@ -150,7 +151,7 @@ def test_open_attached_delegates_to_runtime(monkeypatch):
 def test_open_attached_real_attach_composition(monkeypatch):
     """Through the real runtime: dev-mode INSTALL + a single ATTACH with META_SCHEMA."""
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(smoke.ducklake_runtime.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     monkeypatch.setattr(smoke.ducklake_runtime.ducklake_spike, "_set_s3_credentials", lambda c, profile=None: None)
     smoke._open_attached(_DSN, profile=None)
@@ -336,8 +337,9 @@ def test_churn_gate_loud_fails(monkeypatch):
 
 
 def test_engine_tag_with_version(monkeypatch):
-    monkeypatch.setattr(smoke.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__="1.5.3"))
-    assert smoke._engine_tag() == "duckdb-1.5.3"
+    pin = pinned_duckdb_version()
+    monkeypatch.setattr(smoke.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__=pin))
+    assert smoke._engine_tag() == f"duckdb-{pin}"
 
 
 def test_engine_tag_without_version(monkeypatch):
@@ -369,7 +371,9 @@ def test_run_passes_text_flags(monkeypatch):
 
 def test_consistent_pg_dump_success(monkeypatch):
     monkeypatch.setattr(smoke, "_run", lambda cmd: _completed(0))
-    assert smoke._consistent_pg_dump(_DSN, engine_tag="duckdb-1.5.3", dump_path="/tmp/x.sql") == "/tmp/x.sql"
+    assert (
+        smoke._consistent_pg_dump(_DSN, engine_tag=f"duckdb-{pinned_duckdb_version()}", dump_path="/tmp/x.sql") == "/tmp/x.sql"
+    )
 
 
 def test_consistent_pg_dump_loud_fails(monkeypatch):
@@ -429,7 +433,7 @@ def test_derive_scratch_dsn_suffixes_dbname():
 
 
 def test_restore_drill_success_explicit_dsns(monkeypatch):
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
     monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
     monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
@@ -439,7 +443,7 @@ def test_restore_drill_success_explicit_dsns(monkeypatch):
 
 def test_restore_drill_defaults_dsn_and_scratch(monkeypatch):
     monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
     monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
     monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
@@ -448,7 +452,7 @@ def test_restore_drill_defaults_dsn_and_scratch(monkeypatch):
 
 
 def test_restore_drill_loud_fails_on_lost_probe(monkeypatch):
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-1.5.3")
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
     monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
     monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
@@ -588,9 +592,10 @@ def _patch_gate(monkeypatch, payload, status=200):
 
 
 def test_lambda_attach_ok(monkeypatch, capsys):
-    _patch_gate(monkeypatch, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+    pin = pinned_duckdb_version()
+    _patch_gate(monkeypatch, {"version": pin, "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
     smoke.lambda_attach()
-    assert "LAMBDA_ATTACH OK version=1.5.3 source=layer" in capsys.readouterr().out
+    assert f"LAMBDA_ATTACH OK version={pin} source=layer" in capsys.readouterr().out
 
 
 def test_lambda_attach_wrong_version_fails(monkeypatch):
@@ -707,7 +712,7 @@ def _patch_fanout_churn(monkeypatch, per_invocation_body=None):
 
     def fake_invoke(url, payload, **kw):
         if payload.get("action") == "attach_check":
-            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+            return _Resp(200, {"version": pinned_duckdb_version(), "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
         if payload.get("setup"):
             return _Resp(200, {"ok": True, "setup": True})
         return _Resp(200, body)
@@ -732,7 +737,7 @@ def test_lambda_churn_fanout_n_concurrent_calls(monkeypatch):
     def fake_invoke(url, payload, **kw):
         call_payloads.append(dict(payload))
         if payload.get("action") == "attach_check":
-            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+            return _Resp(200, {"version": pinned_duckdb_version(), "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
         if payload.get("setup"):
             return _Resp(200, {"ok": True, "setup": True})
         return _Resp(200, _churn_single_body())
@@ -766,7 +771,7 @@ def test_lambda_churn_fanout_collision_rate_loudfail(monkeypatch):
 
     def fake_invoke(url, payload, **kw):
         if payload.get("action") == "attach_check":
-            return _Resp(200, {"version": "1.5.3", "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
+            return _Resp(200, {"version": pinned_duckdb_version(), "source": "layer", "connect_ms": 12.0, "commit_ms": 3.0})
         if payload.get("setup"):
             return _Resp(200, {"ok": True, "setup": True})
         collided = idx[0] < (smoke.CHURN_WRITERS // 2 + 1)

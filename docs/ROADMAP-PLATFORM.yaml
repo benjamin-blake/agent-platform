@@ -4600,6 +4600,12 @@ tier_items:
     status: complete
     completed_at: "2026-06-07"
     note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.34 pending; CD.34 ratifies post-hoc via the portal vehicle. (Gating CD.31/CD.33 were already ratified at completion.)"
+    progress_note: |
+      2026-06-26: PLAN-duckdb-pin-bump-1-5-4 landed -- DuckDB version SSOT (config/lambda/ducklake/version.yaml)
+      + shared loader (src/common/ducklake_version.py) + drift gate (validate.py ducklake-version-lockstep).
+      First exercised version bump: 1.5.3->1.5.4 as the cascade proof (one-value edit, all derive surfaces
+      updated via loader; requires V3 clone-rehearsal + redeploy for VP13-19, Decision 99). T2.17 exit criterion
+      "DuckDB 1.5.3 pinned" now reads as "DuckDB 1.5.4 pinned via SSOT" post-bump.
 
   - id: T2.18
     tier: T2
@@ -6679,13 +6685,15 @@ open_questions:
     question: DuckLake version and DuckDB upgrade policy -- lockstep constraint + clone-rehearsal gate
     resolution_tier: T2.17
     notes: |
-      DuckLake v1.0 is lockstep with DuckDB 1.5.3: the catalog schema, the DuckLake extension, and DuckDB
-      must all upgrade together. There is no in-place catalog migration tooling across version bumps. Options
-      for upgrade path: (a) clone-rehearsal gate -- clone the catalog to a staging schema, upgrade DuckLake
-      + DuckDB there, run the full maintenance cycle, confirm data integrity, then promote; (b) blue/green
-      catalog -- provision a new catalog alongside the old one, replay writes to both during the cutover
-      window, then retire the old catalog. The version pin (v1.0 / DuckDB 1.5.3) is set at T2.17; the
-      upgrade policy is chosen at T2.17 implementation and documented in docs/runbooks/ducklake-catalog-operations.md (OQ.12).
+      DuckLake v1.0 is lockstep with the DuckDB version pinned in config/lambda/ducklake/version.yaml (SSOT,
+      Decision 99). Currently: DuckDB 1.5.4 (bumped from 1.5.3 by PLAN-duckdb-pin-bump-1-5-4, 2026-06-26).
+      The catalog schema, the DuckLake extension, and DuckDB must all upgrade together. There is no in-place
+      catalog migration tooling across version bumps. Options for upgrade path: (a) clone-rehearsal gate --
+      clone the catalog to a staging schema, upgrade DuckLake + DuckDB there, run the full maintenance cycle,
+      confirm data integrity, then promote; (b) blue/green catalog -- provision a new catalog alongside the old
+      one, replay writes to both during the cutover window, then retire the old catalog.
+      The version SSOT (config/lambda/ducklake/version.yaml) was established at PLAN-duckdb-pin-bump-1-5-4;
+      the upgrade policy is documented in docs/runbooks/ducklake-catalog-operations.md (OQ.12).
 
   - id: OQ.13
     question: NS.1 generalisation -- "S3 + Iceberg" to "S3 + open table format"

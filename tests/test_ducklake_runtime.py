@@ -19,6 +19,7 @@ import pytest
 
 from src.common import ducklake_runtime as rt
 from src.common import ducklake_scd2_schema as schema
+from src.common.ducklake_version import pinned_duckdb_version
 
 pytestmark = pytest.mark.unit
 
@@ -120,19 +121,21 @@ def test_mint_write_identity_explicit_now():
 
 
 def test_assert_duckdb_version_match():
-    fake = types.SimpleNamespace(__version__="1.5.3")
-    assert rt.assert_duckdb_version(fake) == "1.5.3"
+    pin = pinned_duckdb_version()
+    fake = types.SimpleNamespace(__version__=pin)
+    assert rt.assert_duckdb_version(fake) == pin
 
 
 def test_assert_duckdb_version_mismatch_raises():
-    fake = types.SimpleNamespace(__version__="1.5.2")
+    fake = types.SimpleNamespace(__version__=pinned_duckdb_version() + "-mismatch")
     with pytest.raises(rt.VersionMismatchError, match="version mismatch"):
         rt.assert_duckdb_version(fake)
 
 
 def test_assert_duckdb_version_resolves_default(monkeypatch):
-    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__="1.5.3"))
-    assert rt.assert_duckdb_version() == "1.5.3"
+    pin = pinned_duckdb_version()
+    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__=pin))
+    assert rt.assert_duckdb_version() == pin
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +215,7 @@ def test_libpq_conninfo_honours_connect_timeout_env(monkeypatch):
 
 
 def _patch_duckdb(monkeypatch, con):
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     monkeypatch.setattr(rt.ducklake_spike, "_set_s3_credentials", lambda c, profile=None: None)
 
@@ -257,7 +260,7 @@ def test_open_connection_baked_mode_failclosed(monkeypatch):
 
 def test_open_connection_with_shared_creds(monkeypatch):
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     creds = ("AKIA", "secret", "token", "eu-west-2")  # pragma: allowlist secret
     rt.open_connection(dsn=_DSN, data_path="s3://x/y/", _creds=creds)
@@ -268,7 +271,7 @@ def test_open_connection_with_shared_creds(monkeypatch):
 
 def test_open_connection_shared_creds_no_token(monkeypatch):
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     creds = ("AKIA", "secret", None, "eu-west-2")  # pragma: allowlist secret
     rt.open_connection(dsn=_DSN, data_path="s3://x/y/", _creds=creds)
