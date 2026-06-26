@@ -33,7 +33,7 @@ catalog:
     is a per-session override ONLY -- it does NOT persist the stored value (verified live).
     Relocating the catalog therefore requires reinitialising it (drop the meta_schema and
     re-ATTACH at the new path), not an override. Code aligns to the stored path, never the reverse.
-  pinned_duckdb_version: "1.5.3"
+  pinned_duckdb_version: "1.5.4"  # SSOT: config/lambda/ducklake/version.yaml
   pinned_ducklake_version: "v1.0"
   extension_platform: linux_amd64
 ```
@@ -54,7 +54,8 @@ session cannot mutate the catalog data.
 
 - Assume the `agent_platform_admin` (PlatformAdmin) role. Verify:
   `aws sts get-caller-identity --profile agent_platform_admin`
-- DuckDB `1.5.3` available locally (`bin/venv-python -c "import duckdb; print(duckdb.__version__)"`).
+- DuckDB at the SSOT-pinned version locally. Check:
+  `bin/venv-python -c "import duckdb; from src.common.ducklake_version import pinned_duckdb_version; assert duckdb.__version__ == pinned_duckdb_version(), (duckdb.__version__, pinned_duckdb_version())"`.
   The break-glass ATTACH uses the SAME pinned version as the runtime (OQ.12 lockstep).
 
 ### Inspect (read-only ATTACH)
@@ -103,23 +104,51 @@ drill proves the credential grant, the ATTACH, and the read path end-to-end.
 
 ## Section 2 -- OQ.12 DuckLake/DuckDB version-bump clone-rehearsal policy
 
-DuckLake `v1.0` is lockstep with DuckDB `1.5.3`: the catalog schema, the DuckLake extension, and the DuckDB
-engine move together. The runtime asserts this at every connection
-(`src/common/ducklake_runtime.py::assert_duckdb_version`, loud-fail `VersionMismatchError`), and the Lambda
-layer pins `duckdb==1.5.3` exactly (`scripts/build_lambda.py::PINNED_DUCKDB_VERSION`). A version bump is
-therefore a coordinated change across four surfaces, gated by a clone-rehearsal:
+DuckLake `v1.0` is lockstep with the DuckDB version pinned in
+`config/lambda/ducklake/version.yaml` (the single source of truth / SSOT for all derive surfaces).
+The catalog schema, the DuckLake extension, and the DuckDB engine move together. The runtime asserts
+this at every connection (`src/common/ducklake_runtime.py::assert_duckdb_version`, loud-fail
+`VersionMismatchError`). All derive surfaces load the pin through the shared loader
+(`src/common/ducklake_version.py::pinned_duckdb_version()`); the ducklake-version-lockstep
+`validate.py` gate enforces that no derive surface diverges from the SSOT.
+
+**First exercised bump:** `1.5.3` → `1.5.4` (PLAN-duckdb-pin-bump-1-5-4, 2026-06-26).
+A 1.5.4 engine successfully reads a 1.5.3-authored catalog clone (no on-disk migration needed).
 
 ```yaml
 version_bump_surfaces:
-  - requirements.txt                                   # duckdb floor
-  - scripts/build_lambda.py PINNED_DUCKDB_VERSION      # layer pin + extension URL/version
-  - src/common/ducklake_runtime.py PINNED_DUCKDB_VERSION  # runtime assert
+  - config/lambda/ducklake/version.yaml          # SOLE EDITABLE -- change ONLY this value
+  - requirements.txt                              # DERIVED -- sync via scripts/sync_ducklake_version.py
   - s3://agent-platform-data-lake/ducklake-extensions/<new-version>/  # re-seeded baked extensions
+  # (src/common/ducklake_runtime.py and scripts/build_lambda.py derive via pinned_duckdb_version() --
+  #  no edits needed when version.yaml is the sole change point)
 ```
+
+### Environment constraint (where the rehearsal runs)
+
+The direct-connection smoke gates (`--churn-gate`, `--restore-drill`) open a DuckDB engine ->
+Neon Postgres ATTACH over TCP/5432 from the host running them. **The Claude Code on the web
+(CC-web) container blocks outbound 5432 by design** -- in production only the reader/writer
+Lambdas reach Neon (public TLS, post-de-VPC per T2.17), plus PlatformAdmin break-glass from a
+privileged host. CC-web is neither, so the direct rehearsal **cannot** run there; it is a
+break-glass-class gate that must run from a Neon-reachable privileged environment (a laptop,
+the PySR compute node, or a bastion in eu-west-2 with the `agent_platform`/`agent_platform_admin`
+chain). This is structural, not transient -- do NOT treat a 5432 timeout from CC-web as a flaky
+network error.
+
+> **Tooling gap (follow-up):** step 4 below describes the *correct* design -- rehearse through a
+> Lambda built on the candidate layer pointed at the cloned catalog (`--lambda-*`), which is the
+> only sanctioned Neon path and is runnable from CC-web. The PLAN-duckdb-pin-bump-1-5-4 VP14
+> tooling instead used the direct `--churn-gate`/`--restore-drill` path, which is why that bump's
+> pre-deploy rehearsal stalled on CC-web (rec-2357). Re-homing the pre-deploy rehearsal to a
+> scratch/canary Lambda against scratch Neon is tracked as a follow-up plan; until it lands, run
+> the direct gates from a privileged host per the constraint above.
 
 ### Clone-rehearsal gate (mandatory before any production bump)
 
-1. **Pin candidate.** Bump all four surfaces to the candidate `duckdb==X.Y.Z` / DuckLake version on a branch.
+1. **Pin candidate.** Edit `duckdb_version` in `config/lambda/ducklake/version.yaml` on a branch.
+   Run `bin/venv-python -m scripts.sync_ducklake_version` to sync `requirements.txt`.
+   Run `bin/venv-python -m scripts.validate --pre` to confirm the ducklake-version-lockstep gate passes.
 2. **Re-seed extensions.** Fetch `ducklake`/`httpfs`/`postgres_scanner` for `vX.Y.Z/linux_amd64` and upload to
    `s3://agent-platform-data-lake/ducklake-extensions/vX.Y.Z/` (the build's S3 fallback). Confirm the local
    DuckDB `X.Y.Z` can LOAD all three from a baked `extension_directory` with autoload/autoinstall OFF.
@@ -285,7 +314,7 @@ catalog_dr:
     custom-format dump (the existing _restore_dump / restore_drill in the smoke test uses psql).
   key_format: "catalog-dr/{YYYY}/{MM}/{DD}/ducklake-catalog-pg{PG}-duckdb{DUCKDB}-{ts}.dump"
   retention_days: 30     # tunable to 7 (S3 lifecycle rule); re-baseline on engine bump (OQ.12)
-  engine_version_tag: "PG16 + duckdb 1.5.3 in both S3 key and object metadata"
+  engine_version_tag: "PG16 + duckdb {pin} in both S3 key and object metadata; pin derived from config/lambda/ducklake/version.yaml at Lambda boot"
   metric: "CatalogDumpSuccess=1 to CloudWatch DuckLakeCatalogDR namespace on success"
   loud_fail: "Non-zero pg_dump exit raises CatalogDrError BEFORE emitting the metric (Decision 55)"
 ```

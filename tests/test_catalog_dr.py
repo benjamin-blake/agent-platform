@@ -21,6 +21,7 @@ from src.common.catalog_dr import (
     run_catalog_dump,
 )
 from src.common.ducklake_runtime import PINNED_DUCKDB_VERSION
+from src.common.ducklake_version import pinned_duckdb_version
 
 pytestmark = pytest.mark.unit
 
@@ -118,8 +119,9 @@ def test_build_dr_key_contains_pg_version():
 
 
 def test_build_dr_key_contains_duckdb_version():
-    key = build_dr_key(_NOW, duckdb_version="1.5.3")
-    assert "duckdb1.5.3" in key or "duckdb-1.5.3" in key or "1.5.3" in key
+    pin = pinned_duckdb_version()
+    key = build_dr_key(_NOW, duckdb_version=pin)
+    assert f"duckdb{pin}" in key or f"duckdb-{pin}" in key or pin in key
 
 
 def test_build_dr_key_has_dump_extension():
@@ -154,8 +156,9 @@ def test_build_dr_object_metadata_has_pg_version():
 
 
 def test_build_dr_object_metadata_has_duckdb_version():
-    meta = build_dr_object_metadata(duckdb_version="1.5.3")
-    assert meta["duckdb_version"] == "1.5.3"
+    pin = pinned_duckdb_version()
+    meta = build_dr_object_metadata(duckdb_version=pin)
+    assert meta["duckdb_version"] == pin
 
 
 def test_build_dr_object_metadata_default_versions():

@@ -690,7 +690,7 @@ def lambda_catalog_dr(*, profile: str | None = None, region: str = "eu-west-2") 
 
     Invokes the ducklake_catalog_dr Lambda via its Function URL (AWS_IAM). Asserts:
     - Response ok=True (200)
-    - s3_key present and contains expected engine-version tags (pg16 + duckdb 1.5.3)
+    - s3_key present and contains expected engine-version tags (pg16 + duckdb at the pinned version)
     - bucket returned matches the configured DR bucket
     - dump_bytes > 0 (a real dump was produced)
 

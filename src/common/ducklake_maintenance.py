@@ -26,7 +26,7 @@ T2.19 expansion forward pointer:
   GENERALISES to the full ducklake_ops catalog and the real ops_* business tables
   (ops_recommendations, ops_decisions, etc.). Wiring rides Phase 4; the restore drill is rec-2113 (T2.26 gate).
 
-CALL signature notes (verified against live DuckDB 1.5.3 / DuckLake v1.0):
+CALL signature notes (verified against DuckLake v1.0):
   - All maintenance functions are table functions, not SQL CALL procedures.
   - Use SELECT * FROM / FROM syntax.
   - ducklake_merge_adjacent_files takes (catalog, table, schema=schema) per-table

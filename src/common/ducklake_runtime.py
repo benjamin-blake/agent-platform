@@ -71,12 +71,13 @@ from src.common.ducklake_scd2_schema import (
     resolve_table_spec,
     schema_gate,
 )
+from src.common.ducklake_version import pinned_duckdb_version as _pinned_duckdb_version
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-PINNED_DUCKDB_VERSION = "1.5.3"  # lockstep with DuckLake v1.0 (OQ.12); Lambda layer pins ==1.5.3
+_PINNED_DUCKDB_VERSION: str | None = None  # resolved lazily via module __getattr__ -> _pinned_duckdb_version()
 
 DSN_SECRET_ID = "ducklake-neon-catalog-dsn"
 META_SCHEMA = "ducklake_ops"
@@ -93,7 +94,7 @@ SMOKE_DATA_PATH = "s3://agent-platform-data-lake/ducklake-neon-smoke/"
 
 # Baked extensions in the Lambda layer: (LOAD/INSTALL name, on-disk file stem). DuckDB publishes
 # the Postgres extension binary as `postgres_scanner.duckdb_extension` even though it INSTALLs and
-# LOADs under the name `postgres` (verified against v1.5.3/linux_amd64).
+# LOADs under the name `postgres` (verified against the pinned duckdb / config/lambda/ducklake/version.yaml).
 BAKED_EXTENSIONS: tuple[tuple[str, str], ...] = (
     ("ducklake", "ducklake"),
     ("httpfs", "httpfs"),
@@ -129,6 +130,13 @@ CHURN_WRITES_PER_WRITER = 5  # writes per writer per churn iteration
 
 # CloudWatch metric namespace for OCC-retry + commit-latency emission (EC9).
 CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
+
+
+def __getattr__(name: str):
+    """PEP 562 lazy module attribute: expose PINNED_DUCKDB_VERSION without import-time I/O."""
+    if name == "PINNED_DUCKDB_VERSION":
+        return _pinned_duckdb_version()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +181,12 @@ def assert_duckdb_version(duckdb_module: Any = None) -> str:
     """
     duckdb_module = duckdb_module if duckdb_module is not None else ducklake_spike._require_duckdb()
     actual = getattr(duckdb_module, "__version__", None)
-    if actual != PINNED_DUCKDB_VERSION:
+    target = _pinned_duckdb_version()
+    if actual != target:
         raise VersionMismatchError(
-            f"DuckDB version mismatch: runtime has {actual!r}, pinned {PINNED_DUCKDB_VERSION!r}. "
-            "DuckLake v1.0 is lockstep with DuckDB 1.5.3 (OQ.12). Follow the clone-rehearsal "
-            "version-bump policy in docs/runbooks/ducklake-catalog-operations.md before bumping."
+            f"DuckDB version mismatch: runtime has {actual!r}, pinned {target!r}. "
+            "DuckLake v1.0 is lockstep with the version in config/lambda/ducklake/version.yaml (OQ.12). "
+            "Follow the clone-rehearsal version-bump policy in docs/runbooks/ducklake-catalog-operations.md."
         )
     return actual
 
@@ -463,7 +472,7 @@ def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bo
     Partition transforms are post-ALTER-only (CD.33 M-5): they MUST be applied before any row lands.
     `force_recreate=True` drops both tables first -- the backfill's resurrection-loop guard: a
     re-run DROPs + recreates rather than appending onto a half-populated catalog. Re-ALTER on an
-    already-partitioned table is idempotent in DuckLake 1.5.3, so the non-force path converges too.
+    already-partitioned table is idempotent in DuckLake v1.0, so the non-force path converges too.
     """
     spec = resolve_table_spec(table)
     history = f"{CATALOG_ALIAS}.{spec.history_table}"
@@ -496,7 +505,7 @@ def reconcile_table_columns(con: Any, *, table: str) -> dict[str, list[str]]:
     Reads the column spec from the field_semantics.yaml contract via resolve_table_spec, introspects
     the physical tables using DuckDB information_schema, and issues ALTER TABLE ADD COLUMN for each
     spec column absent from the live table. Idempotency is guaranteed by the pre-check (not SQL IF NOT
-    EXISTS -- there is no ADD COLUMN IF NOT EXISTS precedent in DuckLake 1.5.3). Never DROPs.
+    EXISTS -- there is no ADD COLUMN IF NOT EXISTS precedent in DuckLake v1.0). Never DROPs.
 
     Args:
         con: Open DuckDB connection with the production catalog attached.

@@ -2872,6 +2872,71 @@ def validate_field_semantics_drift(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_ducklake_version_lockstep(failed: list[str]) -> None:
+    """Sub-second static gate: verify no derive surface diverges from config/lambda/ducklake/version.yaml.
+
+    Checks:
+    (a) requirements.txt duckdb floor == ">=<duckdb_version>" (sync_ducklake_version --check is clean).
+    (b) No hardcoded duckdb version literal in src/common/ducklake_runtime.py or scripts/build_lambda.py
+        (both must reach the pin only via the loader, not a literal).
+
+    Eligible for both --pre fast-tier AND full presubmit (pure Python, sub-second).
+    """
+    print("\n=== DuckLake version lockstep gate (OQ.12 / PLAN-duckdb-pin-bump-1-5-4) ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        import re as _re  # noqa: PLC0415
+
+        # (a) requirements.txt floor check
+        try:
+            import scripts.sync_ducklake_version as _sdv  # noqa: PLC0415
+
+            ok = _sdv.sync(check_only=True, requirements_path=ROOT / "requirements.txt")
+            if not ok:
+                failed.append(
+                    "ducklake-version-lockstep: requirements.txt duckdb floor drifts from "
+                    "config/lambda/ducklake/version.yaml -- run: bin/venv-python -m scripts.sync_ducklake_version"
+                )
+                print("  FAIL: requirements.txt duckdb floor drifts from the SSOT.")
+            else:
+                print("  PASS: requirements.txt duckdb floor matches the SSOT.")
+        except Exception as exc:
+            failed.append(f"ducklake-version-lockstep: requirements check raised: {exc}")
+
+        # (b) no hardcoded version literal in derive surfaces
+        derive_surfaces = [
+            ROOT / "src" / "common" / "ducklake_runtime.py",
+            ROOT / "scripts" / "build_lambda.py",
+        ]
+        for surface in derive_surfaces:
+            try:
+                text = surface.read_text(encoding="utf-8")
+            except OSError as exc:
+                failed.append(f"ducklake-version-lockstep: cannot read {surface}: {exc}")
+                continue
+            # Allow version-looking strings in comments only if they look like semver but NOT as
+            # a string assignment or constant value (i.e., PINNED_DUCKDB_VERSION = "x.y.z").
+            literal_assigns = _re.findall(
+                r'(?:PINNED_DUCKDB_VERSION\s*=\s*["\'])([\d.]+)(["\'])',
+                text,
+            )
+            if literal_assigns:
+                failed.append(
+                    f"ducklake-version-lockstep: {surface.relative_to(ROOT)} contains a hardcoded "
+                    f"duckdb version literal assignment (PINNED_DUCKDB_VERSION = '...'). "
+                    "Repoint through src.common.ducklake_version.pinned_duckdb_version()."
+                )
+                print(f"  FAIL: hardcoded version literal in {surface.name}.")
+            else:
+                print(f"  PASS: no hardcoded version literal assignment in {surface.name}.")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2914,6 +2979,8 @@ def run_python_checks(failed: list[str]) -> None:
     validate_contract_drift(failed)
     validate_field_semantics_drift(failed)
     validate_ci_rca_taxonomy(failed)
+    # DuckLake version lockstep gate: sub-second static, eligible for both tiers (OQ.12 SSOT enforcement)
+    validate_ducklake_version_lockstep(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
@@ -3395,6 +3462,9 @@ def main() -> None:
         validate_ci_rca_taxonomy(failed)
         # claude -p retry wrapper enforcement in --pre: O(lines) workflow scan, Decision 73, Decision 92.
         validate_claude_p_retry_wrapper(failed)
+        # DuckLake version lockstep gate in --pre: sub-second static (OQ.12 SSOT enforcement). Registered
+        # at BOTH sites -- here (--pre fast-tier) and in run_python_checks (full tier) -- per AGENTS.md.
+        validate_ducklake_version_lockstep(failed)
 
         elapsed = time.monotonic() - _t0
 
