@@ -1,0 +1,237 @@
+schema_version: 1
+slug: "oq12-clone-rehearsal-managed-db"
+intent: >-
+  Re-fix the OQ.12 pre-deploy clone-rehearsal read-clone to use Neon's NATIVE copy-on-write branching
+  (REST API over HTTPS/443) instead of the merged plan's self-managed pg_dump -> scratch-DB -> pg_restore
+  pattern, and install a procedure guard so future plans reach for managed-service-native primitives before
+  vendoring client tooling. Restores the correct managed-database-owns-its-primitives architecture and
+  unblocks the OQ.12 version-bump gate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-oq12-clone-rehearsal-managed-db.yaml
+phase: >-
+  Platform T2.17 / OQ.12 (DuckLake version-bump clone-rehearsal policy). Corrects the read-clone mechanism
+  shipped by PLAN-oq12-clone-rehearsal-lambda (PR #273) and adds a planning-pipeline procedure fix
+  (extends Decision 75 frame-lock governance).
+scope:
+  - file: src/common/neon_api.py
+    action: Create
+    purpose: >-
+      Thin Neon control-plane REST client over HTTPS/443 (stdlib urllib only -- NO new dependency, NO
+      vendored binaries): fetch_api_key (reads the existing neon-api-key Secrets Manager secret),
+      resolve_project_id (GET /projects, match name "ducklake-catalog"), create_branch
+      (POST /projects/{id}/branches -> returns branch_id + branch endpoint host), delete_branch
+      (DELETE /projects/{id}/branches/{branch_id}). Loud-fail (NeonApiError) on any non-2xx (Decision 55).
+      Orchestrator-only: imported by scripts/ducklake_neon_smoke_test.py, NOT by the Lambda handler.
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Rewrite action_clone_catalog to drop pg_dump / pg_restore / CREATE DATABASE / DROP DATABASE entirely.
+      The read-clone now ATTACHes the in-Lambda (candidate) DuckDB engine to a NEON BRANCH: the branch
+      endpoint host arrives in the invoke event (branch_host); the Lambda builds branch_dsn = {**fetch_dsn(),
+      host: branch_host} (Neon branches inherit the parent role/password/dbname), ATTACHes at
+      meta_schema=ducklake_ops + the production data_path (read-only validation), and reads REAL prod catalog
+      metadata read-only (information_schema over the attached branch -- metadata-only; issues NO writes, never
+      mutates the live ducklake_ops Postgres catalog, never writes prod S3 DATA_PATH). Proves the candidate
+      engine parses the prior-engine-authored catalog. Loud-fail (CatalogDrError) on any step. The Lambda does
+      NOT create or delete the branch (the orchestrator owns the branch lifecycle) and needs no neon-api-key grant.
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      In canary_rehearsal, replace the bare maintenance-canary clone invoke with the orchestrator-driven Neon
+      branch lifecycle (under the existing agent_platform_admin profile -- admin already holds secretsmanager
+      read; the rehearsal already runs as admin, so ZERO new IAM): resolve project id + create an ephemeral
+      branch via neon_api BEFORE the clone invoke, pass the branch endpoint host in the maintenance-canary
+      action=clone_catalog event, and delete the branch in the existing finally teardown (no residue, even on
+      inner failure). Update the --json output (clone_dbname -> branch_id; torn_down.scratch_db -> torn_down.branch).
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Revert the pg_restore-presence guard that PLAN-oq12-clone-rehearsal-lambda added to build_pgclient_layer
+      (its error text ties it explicitly to action_clone_catalog / the OQ.12 read-clone). The read-clone no longer
+      needs pg_restore, so the guard -- which broke the V3 build because the prod bundle ships bin/pg_dump only --
+      is removed. The pgclient layer keeps bin/pg_dump and its PG16 version assert unchanged. The separate
+      restore_drill / catalog_dr DR pipeline (recover from an S3 backup; no live source to branch) legitimately
+      retains pg_dump/pg_restore and is OUT OF SCOPE -- its bundle pg_restore gap is a pre-existing T2.19 carry,
+      neither caused nor fixed here.
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: >-
+      Update Section 2 step 4 to describe the Neon-branch read-clone as the canonical pre-deploy read-clone
+      mechanism. REMOVE the Decision-88 egress acknowledgement for the read-clone (a branch-create stays inside
+      Neon -- no pull-through-Lambda dump -- so the read-clone no longer egresses) and the pgclient pg_restore
+      re-seed PRE-REQ. Retire the "HYBRID pg_dump->pg_restore read-clone" framing. Leave the DR pg_dump-to-S3
+      egress (Section 4) untouched -- that egress is real and remains governed by Decision 88.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 100 ("Managed services own their primitives") which EXTENDS Decision 75 (Frame-Lock):
+      broaden Decision 75's primitive-absorption principle from "AWS-native primitives already in this codebase"
+      to "native managed-service primitives (Neon branching, RDS snapshots, S3 versioning, ...), whether or not
+      already used here"; rule that a recorded human-decision about a MECHANISM does not exempt it from the
+      native-primitive check; and record this OQ.12 read-clone as the canonical instance (vendored pg_dump/pg_restore
+      to clone a managed Neon catalog that branches natively). Supersedes the merged plan's "HYBRID read-clone"
+      human-decision and its Decision-88 read-clone egress acknowledgement (the egress is eliminated, not accepted).
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a "managed-service-native" pre-commitment check: flag WARN any proposed plan that vendors client tooling,
+      custom scripts, or self-managed primitives to replicate a capability a managed service in scope exposes
+      natively (branching, snapshots, point-in-time-restore, replication, versioning), requiring the plan to justify
+      why the native primitive is unavailable/insufficient. Cross-reference Decision 100 (and Decision 75) so the
+      check reads as an extension of ratified frame-lock governance, not a duplicate. decision-scout is .claude-only
+      (no .agents mirror), so this is a single-file edit.
+  - file: tests/test_neon_api.py
+    action: Create
+    purpose: >-
+      100% line+branch coverage for neon_api.py with the urllib/boto3 seams mocked: resolve_project_id name-match
+      + not-found loud-fail, create_branch returns id+host, delete_branch issues DELETE, fetch_api_key parses the
+      secret, and NeonApiError on any non-2xx response.
+  - file: tests/test_ducklake_maintenance_handler.py
+    action: Modify
+    purpose: >-
+      Replace the clone_catalog pg_dump/pg_restore/scratch-DB tests with Neon-branch tests (mocked open_connection):
+      branch_dsn is built from the event branch_host + fetch_dsn, ATTACH targets meta_schema=ducklake_ops read-only,
+      the metadata read proves parse, loud-fail (CatalogDrError) when ATTACH/SELECT fails, and assert NO pg_dump /
+      pg_restore / CREATE DATABASE / DROP DATABASE is invoked on the clone path (surface-retirement assertion).
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Update the canary-rehearsal orchestration tests (neon_api + boto3 seams mocked): the branch is created before
+      the clone invoke, its host is passed in the clone event, and delete_branch runs in the finally teardown even
+      when the clone invoke raises. Assert the CD.33 churn budget constants are still imported unchanged and the
+      version-assert still raises on mismatch (unchanged invariants).
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Remove the pg_restore-presence assertion test and assert the reverted build_pgclient_layer succeeds with a
+      pg_dump-only bundle (no pg_restore required) while keeping the PG16 pg_dump version-assert test. publish_canary_layers
+      test unchanged.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "ZERO new IAM and NO terraform apply. The orchestrator runs under agent_platform_admin, whose existing AdminOps secretsmanager grant reads the out-of-band neon-api-key secret; the maintenance canary needs no new grant (it receives the branch host in its event and reuses fetch_dsn for the inherited role/password/dbname)."
+  - "Neon branches are created/deleted via the Neon control-plane REST API (HTTPS/443), NOT Terraform -- no neon_* resource is added, so the terraform_apply_guard / gated-apply path is never touched. Ephemeral per-rehearsal branch; free-tier ceiling is 10 branches/project and teardown deletes it, so no accumulation."
+  - "Existing infra reused verbatim: neon_project.ducklake_catalog (name 'ducklake-catalog'), the ducklake-neon-catalog-dsn secret (parent DSN), the three ducklake execution roles, and the candidate-layer publish path (build_lambda --ducklake-publish-canary-layers)."
+acceptance_criteria:
+  - "src/common/neon_api.py provides resolve_project_id / create_branch / delete_branch / fetch_api_key over HTTPS/443 (stdlib urllib, no new dependency, no vendored binary) and raises NeonApiError on any non-2xx (Decision 55); it is imported only by the orchestrator, never by the Lambda handler."
+  - "action_clone_catalog performs the read-clone by ATTACHing the candidate DuckDB engine to a Neon branch DSN (branch host from the event; role/password/dbname inherited via fetch_dsn) at meta_schema=ducklake_ops and reading real prod catalog metadata read-only (information_schema); it invokes NO pg_dump, pg_restore, CREATE DATABASE, or DROP DATABASE, never mutates the live ducklake_ops catalog, and never writes the prod S3 DATA_PATH."
+  - "canary_rehearsal creates the ephemeral Neon branch (under agent_platform_admin) before the clone invoke, passes the branch host into the clone_catalog event, and deletes the branch in the finally teardown even when an inner gate raises; the --json output reports torn_down.branch true and a branch_id, and no scratch identifier equals the production ducklake_ops values."
+  - "build_lambda --ducklake-only builds the pgclient layer from a pg_dump-only bundle WITHOUT failing (the pg_restore guard added by PR #273 is reverted); the PG16 pg_dump version-assert still holds and publish_canary_layers still emits the three layer ARNs."
+  - "The CD.33 churn budgets (COMMIT_LATENCY_BUDGET_MS=2000.0, OCC_COLLISION_RATE_BUDGET=0.20, CHURN_WRITERS=4) and src/common/ducklake_runtime.py::assert_duckdb_version are unchanged -- a deliberately-wrong candidate pin still makes the rehearsal loud-fail (Decision 82 / CD.33 / Decision 55)."
+  - "docs/DECISIONS.md contains Decision 100 extending Decision 75 (managed-service-native principle; mechanism-as-human-decision does not exempt the check), and it backfills to ops_decisions cleanly (ops_data_portal --backfill-decisions-md)."
+  - ".claude/skills/decision-scout/SKILL.md contains a managed-service-native WARN check cross-referencing Decision 100/75 that fires when a plan vendors tooling to replicate a managed service's native capability."
+  - "docs/runbooks/ducklake-catalog-operations.md Section 2 describes the Neon-branch read-clone, the Decision-88 read-clone egress acknowledgement and the pg_restore re-seed PRE-REQ are removed, and the HYBRID framing is retired; Section 4 (DR pg_dump-to-S3) is untouched."
+  - "Per Decision 79, ducklake_maintenance is rebuilt + redeployed and an existing maintenance smoke gate passes against the redeployed function (handler change healthy in the deployed package)."
+  - "All new/changed source files have matching test files at 100% line+branch coverage; bin/venv-python -m scripts.validate --pre passes."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit-test the Neon REST client (mocked urllib/boto3) for resolve/create/delete/fetch and loud-fail.
+    command: bin/venv-python -m pytest tests/test_neon_api.py -q
+    expected: All pass; resolve_project_id matches by name and loud-fails (NeonApiError) when absent; create_branch returns id+host; delete_branch issues DELETE; any non-2xx raises NeonApiError.
+    fix_if: A non-2xx is swallowed or a branch id/host is not surfaced -- tighten the client; loud-fail is mandatory (Decision 55).
+  - step: 2
+    phase: pre-deploy
+    action: Unit-test the rewritten action_clone_catalog (mocked open_connection) -- branch DSN from event host, read-only metadata read, loud-fail, and NO self-managed clone calls.
+    command: bin/venv-python -m pytest tests/test_ducklake_maintenance_handler.py -k "clone_catalog" -q
+    expected: branch_dsn = {**fetch_dsn(), host=<event host>}; ATTACH targets meta_schema=ducklake_ops; a failed ATTACH/SELECT raises CatalogDrError; the test asserts subprocess_run/pg_dump/pg_restore/CREATE DATABASE/DROP DATABASE are NOT called on the clone path.
+    fix_if: The clone path still shells a pg_* binary or creates/drops a database, or a failed read is swallowed -- finish the rewrite and enforce loud-fail.
+  - step: 3
+    phase: pre-deploy
+    action: Unit-test the canary_rehearsal orchestration -- branch created before clone invoke, host passed in event, branch deleted in finally even on inner failure.
+    command: bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -k "canary_rehearsal or branch_teardown" -q
+    expected: create_branch precedes the clone invoke; the clone event carries the branch host; delete_branch runs in finally when the clone invoke raises; out['torn_down']['branch'] is asserted.
+    fix_if: The branch can leak on an inner exception or the host is not threaded into the event -- move delete_branch into the finally and thread the host through.
+  - step: 4
+    phase: pre-deploy
+    action: Surface-retirement / stale-reference sweep -- confirm the self-managed clone path and the pg_restore build guard are gone.
+    command: "bin/venv-python -c \"import ast,sys; src=open('src/lambdas/ducklake_maintenance/handler.py').read(); fn=[n for n in ast.walk(ast.parse(src)) if isinstance(n,ast.FunctionDef) and n.name=='action_clone_catalog'][0]; body=ast.get_source_segment(src,fn); bad=[t for t in ('pg_dump','pg_restore','CREATE DATABASE','DROP DATABASE') if t in body]; g=open('scripts/build_lambda.py').read(); guard='did not contain bin/pg_restore' in g; assert not bad, ('clone path still references '+repr(bad)); assert not guard, 'pg_restore build guard still present'; print('SURFACE_RETIRED OK')\""
+    expected: Prints "SURFACE_RETIRED OK" -- action_clone_catalog contains no pg_dump/pg_restore/CREATE DATABASE/DROP DATABASE and the pg_restore-presence guard is removed from build_lambda.py.
+    fix_if: A forbidden token survives -- finish removing the self-managed clone path / the guard.
+  - step: 5
+    phase: pre-deploy
+    action: Assert the CD.33 churn budgets and the runtime version-assert are unchanged (carried invariants).
+    command: "bin/venv-python -c \"import types,pytest; from src.common import ducklake_runtime as r; assert (r.COMMIT_LATENCY_BUDGET_MS,r.OCC_COLLISION_RATE_BUDGET,r.CHURN_WRITERS)==(2000.0,0.20,4); pytest.raises(r.VersionMismatchError,r.assert_duckdb_version,types.SimpleNamespace(__version__='0.0.0-wrong')); print('BUDGETS_UNCHANGED version-assert OK')\""
+    expected: Prints "BUDGETS_UNCHANGED version-assert OK".
+    fix_if: A constant changed or the assert no longer raises -- revert; these are CD.33/Decision 55 invariants.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the procedure fix landed -- Decision 100 in DECISIONS.md (extends 75) and the decision-scout managed-native check -- and that the decision backfills.
+    command: "bin/venv-python -c \"d=open('docs/DECISIONS.md').read(); s=open('.claude/skills/decision-scout/SKILL.md').read(); assert 'Decision 100' in d and 'Decision 75' in d.split('Decision 100',1)[1][:1200], 'Decision 100 missing or does not reference 75'; assert ('managed-service-native' in s.lower()) or ('managed service' in s.lower() and 'native' in s.lower()), 'scout check missing'; print('PROCEDURE_FIX OK')\" && bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md"
+    expected: Prints "PROCEDURE_FIX OK" and the backfill reports Decision 100 synced to ops_decisions (no error).
+    fix_if: Decision 100 missing/does-not-extend-75, the scout check absent, or backfill errors -- add the entry/check; fix the DECISIONS.md format if backfill rejects it.
+  - step: 7
+    phase: pre-deploy
+    action: Schema-validate the plan document and run the fast presubmit tier.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-oq12-clone-rehearsal-managed-db.yaml && bin/venv-python -m scripts.validate --pre
+    expected: The plan validates against PlanDocument and the diff-aware --pre tier (ruff, mypy, picked tests, static gates) passes within budget.
+    fix_if: Validation or --pre fails -- fix the reported issue; a new CI gate must be wired into validate.py first.
+  - step: 8
+    phase: post-deploy
+    action: Build + publish the candidate DuckLake layers and confirm the pgclient layer now builds WITHOUT the pg_restore guard (original symptom resolved).
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only && bin/venv-python -m scripts.build_lambda --ducklake-publish-canary-layers
+    expected: The four zips + three layers build from the SSOT pin; the pgclient layer builds from the pg_dump-only bundle with NO "did not contain bin/pg_restore" failure; publish-canary-layers prints the three layer version ARNs as JSON.
+    fix_if: The build still fails on pg_restore -- the guard revert is incomplete; finish reverting build_pgclient_layer.
+  - step: 9
+    phase: post-deploy
+    action: Decision 79 -- redeploy ducklake_maintenance and prove the deployed handler is healthy via an existing maintenance smoke gate.
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy && bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge --profile agent_platform
+    expected: ducklake_maintenance code updates from S3; "MAINTENANCE_MERGE OK ..." prints -- the redeployed handler (with the rewritten action_clone_catalog) still serves the existing actions.
+    fix_if: Deploy fails or the merge gate regresses -- RCA the handler change (Decision 55); do not run the live rehearsal until the deployed maintenance Lambda is healthy.
+  - step: 10
+    phase: post-deploy
+    action: Run the full canary clone-rehearsal end-to-end from CC-web (no 5432) and assert the Neon-branch read-clone proves the candidate engine parses the real prod catalog, then deletes the branch.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --profile agent_platform_admin; echo "EXIT=$?"
+    expected: Prints a green summary (attach OK on candidate; CHURN within CD.33 budget at N=4; read-your-write on the scratch catalog; CLONE read-only metadata verified against a real prod Neon BRANCH; branch deleted in teardown) and EXIT=0.
+    fix_if: A gate fails -- if it is a real candidate-engine regression, STOP and do NOT bump (Decision 55, RCA); if it is a tooling defect (branch create/delete, host threading, layer ARN), fix the orchestration. Never relax a budget or the version-assert to make it pass.
+  - step: 11
+    phase: post-deploy
+    action: Confirm isolation + teardown left no residue (Neon branch deleted; no scratch meta-schema/S3; no prod identifier touched).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --json --profile agent_platform_admin | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); assert d['torn_down']['canary_functions'] and d['torn_down']['scratch_meta'] and d['torn_down']['branch'] and d['torn_down']['scratch_s3_prefix'], d; assert 'ducklake_ops' not in (d['scratch']['meta_schema'], d['scratch']['data_path']), d; print('ISOLATION+TEARDOWN OK')"
+    expected: Prints "ISOLATION+TEARDOWN OK" -- every scratch resource (including the Neon branch) is reported torn down and no scratch identifier equals the production ducklake_ops values.
+    fix_if: Any scratch resource survived (notably a leaked Neon branch) or a scratch identifier collides with prod -- fix teardown/isolation; a surviving branch is a Decision-55 stop.
+constraints:
+  - "Do NOT relax or re-term the CD.33 churn budgets or switch the measured wall-p95 term (Decision 82 / CD.33 / Decision 55 fail-closed); the churn/write rehearsal is unchanged -- only the read-clone mechanism changes."
+  - "Do NOT delete or weaken src/common/ducklake_runtime.py::assert_duckdb_version -- it must still loud-fail VersionMismatchError on a real mismatch (OQ.12 lockstep). ducklake_runtime.py stays OUT of scope (keeps the Decision-79 blast radius at the single ducklake_maintenance artifact)."
+  - "The read-clone is READ-ONLY and metadata-only: it issues no writes, never mutates the live ducklake_ops Postgres catalog, and never writes the prod S3 DATA_PATH. Isolation is the Neon branch (a separate branch + compute endpoint); the branch is deleted in the orchestrator finally (no residue)."
+  - "ZERO new IAM and NO terraform apply: the orchestrator reuses agent_platform_admin's existing secretsmanager grant and the Neon REST API; no neon_* terraform resource is added and the maintenance role gets no new grant (Decision 77 gated-apply path untouched)."
+  - "restore_drill / catalog_dr and the DR pg_dump-to-S3 pipeline are OUT OF SCOPE -- they legitimately use pg_dump/pg_restore (recover from an S3 backup; no live source to branch) and remain governed by Decision 88. Do not remove pg_dump from the pgclient layer or touch the DR egress."
+  - "Decision 86: no new standing prose-architecture doc -- the procedure fix amends DECISIONS.md (rationale) + the decision-scout skill (enforcement) only; it creates no docs/INTENT-*.md."
+  - "New/changed source files require 100%-coverage test files (tests/CLAUDE.md). Any new CI gate must be added to scripts/validate.py first (single source of truth)."
+  - "No rescue agents or workaround loops (Decision 55): a real candidate-engine regression STOPS the bump and is RCA'd; it is never papered over."
+context:
+  - "RCA -- how the wrong mechanism merged (PR #273): (1) the clone MECHANISM was recorded as a settled 'human decision' (HYBRID pg_dump->pg_restore), which both gates treat as exogenous -- they check consistency-with-decisions, not whether the recorded mechanism is optimal; (2) no active decision encoded the managed-native principle, so decision-scout had no contradiction to raise; (3) the one smell that surfaced (Neon egress) was defused by Decision 88, which legitimately meters the UNAVOIDABLE DR-backup egress but was mis-applied to the entirely AVOIDABLE read-clone egress -- 'acknowledge egress' resolved the symptom without root-causing the mechanism; (4) Decision 75 (Frame-Lock) already carries a plan-critique question 'what existing AWS-native primitives could absorb this custom code?' but it is scoped to primitives already in the codebase (a managed-SaaS branching capability not yet used here does not trigger it), lives post-plan in plan-critique not the pre-commitment scout, and was short-circuited by the human-decision label; (5) reuse of the existing DR pg_dump/pg_restore machinery read as house-style virtue, masking that DR (no live source) and clone (live branchable source) have different constraints. Net: every gate did its chartered job; no gate asks 'for a managed service in scope, was the native operation considered before re-implementing it in vendored tooling?'"
+  - "Procedure fix lever (PREFERRED process change, not the AGENTS.md nuclear option): extend Decision 75 via Decision 100 + add a managed-service-native WARN check to the decision-scout skill. Justification -- AGENTS.md is ambient on every session and would tax all sessions for a check that only applies to plans touching managed external services; decision-scout already runs per-plan in fresh context at zero ambient cost and is the exact pre-commitment gate the RCA fingers; building on ratified governance (Decision 75) avoids the duplication the scout warned about. Lightest durable fix."
+  - "Decision 75 [CITE/NOTE from decision-scout]: the direct precedent. Decision 100 extends its principle (AWS-native-already-here -> managed-service-native generally) and closes the mechanism-as-human-decision loophole; the new scout check complements 75's plan-critique frame-challenge rather than duplicating it."
+  - "Decision 88 [CITE]: governs the egress this redesign ELIMINATES for the read-clone (a Neon branch-create stays inside Neon -- no pull-through-Lambda dump). The plan SUPERSEDES the merged plan's read-clone egress acknowledgement (the egress no longer occurs); it does NOT touch the DR pg_dump-to-S3 egress, which remains real and Decision-88-governed."
+  - "Decision 81 [CITE]: clause 9 leaves OQ.12 (version/upgrade policy + clone-rehearsal default) a T2.17 implementation detail -- this plan refines that default. Decision 99 [RELATED]: names OQ.12 clone-rehearsal as its version-bump rehearsal-evidence gate (VP13-14); this is the apparatus it relies on."
+  - "Decision 70 [NOTE from decision-scout, not over-applied]: physical-deletion-is-exceptional is scoped to ops records, NOT ephemeral infra. Deleting an ephemeral Neon branch in teardown is not the deletion class Decision 70 governs."
+  - "Decision 84 [CITE]: the new Decision 100 is recorded via DECISIONS.md (numbering authority) + ops_data_portal --backfill-decisions-md (ETL to ops_decisions); the canary handlers still reuse the production named-verb/schema path verbatim (no SQL escape hatch)."
+  - "Decision 79 [CITE]: only src/lambdas/ducklake_maintenance/handler.py is Lambda-packaged in scope (active artifact) -> build+deploy+smoke required. neon_api.py lives in src/common but is orchestrator-only (imported by the smoke-test script, not the handler), so it does not change the handler's runtime behavior."
+  - "Decision 77 [CITE]: zero new IAM and no terraform -- the rehearsal already runs under agent_platform_admin and branches go via the Neon REST API, so the guard/gated-apply path is never touched."
+  - "Neon native branching (research): copy-on-write, full-fidelity, isolated (separate branch + compute endpoint), ephemeral (delete via API), created in <1s, HTTPS/443 control plane, free-tier 10 branches/project. Branches inherit parent roles, so the branch DSN = parent DSN with the branch endpoint host substituted. This is the managed-database-native primitive the merged plan re-implemented by hand."
+  - "Branch claude/oq12-clone-rehearsal-managed-db-dq77w9 is 0 commits behind origin/main at planning time (no divergence assessment needed). No open ci-rca recs. rec-2357 was already closed by PR #273; rec-2361 (build_lambda.resolve_bucket warning text) is a separate real bug, OUT OF SCOPE."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/oq12-clone-rehearsal-managed-db-dq77w9)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (Decisions 75, 88, 81, 55, 79, 77, 86, 84, 70; related 99, 82)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Confirmed: agent_platform_admin holds the secretsmanager read for neon-api-key (existing AdminOps grant) -- if a live AccessDenied surfaces at VP10, STOP and reassess IAM scope rather than widening silently"
+execution_steps:
+  - "src/common/neon_api.py: create the HTTPS REST client (stdlib urllib): fetch_api_key (Secrets Manager neon-api-key), resolve_project_id (GET /projects -> match name 'ducklake-catalog'), create_branch (POST .../branches -> {branch_id, host}), delete_branch (DELETE). Raise NeonApiError on any non-2xx. Orchestrator-only import."
+  - "src/lambdas/ducklake_maintenance/handler.py: rewrite action_clone_catalog -- read branch_host from the event, build branch_dsn = {**fetch_dsn(), host: branch_host}, open_connection(dsn=branch_dsn, data_path=<prod data_path>, meta_schema='ducklake_ops'), read real catalog metadata read-only (information_schema), prove parse, loud-fail (CatalogDrError). Remove pg_dump/pg_restore/CREATE DATABASE/DROP DATABASE and the psycopg2 scratch-db helpers from this action. Keep it in _ACTIONS/_CONNECTIONLESS_ACTIONS."
+  - "scripts/ducklake_neon_smoke_test.py: in canary_rehearsal, import neon_api; before the clone invoke resolve the project id + create_branch (agent_platform_admin), pass the branch host into the action=clone_catalog event, and delete_branch in the existing finally teardown; update the --json fields (branch_id / torn_down.branch)."
+  - "scripts/build_lambda.py: revert the pg_restore-presence guard in build_pgclient_layer (remove the 'did not contain bin/pg_restore' fail-closed block); keep the bin/pg_dump presence + PG16 version assert."
+  - "docs/DECISIONS.md: add Decision 100 (extends Decision 75; managed-service-native principle; mechanism-as-human-decision does not exempt the check; records the OQ.12 read-clone instance; supersedes the merged plan's HYBRID human-decision + Decision-88 read-clone egress acknowledgement). Then run ops_data_portal --backfill-decisions-md."
+  - ".claude/skills/decision-scout/SKILL.md: add the managed-service-native WARN check cross-referencing Decision 100/75."
+  - "docs/runbooks/ducklake-catalog-operations.md: rewrite Section 2 step 4 for the Neon-branch read-clone; remove the Decision-88 read-clone egress acknowledgement + the pg_restore re-seed PRE-REQ; retire the HYBRID framing. Leave Section 4 (DR) untouched."
+  - "tests/: add tests/test_neon_api.py (new, 100%); update test_ducklake_maintenance_handler.py (branch-based clone_catalog + surface-retirement assertions), test_ducklake_neon_smoke_test.py (branch lifecycle + unchanged-invariant asserts), test_build_lambda.py (reverted guard)."
+  - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results, and the rehearsal evidence (attach/churn/read-clone/branch-teardown outputs)."
+work_areas: []
+rollback: >-
+  The change is additive plus a guard revert. To roll back, revert the branch and redeploy the prior
+  ducklake_maintenance zip (build_lambda --ducklake-only --deploy from the prior pin). No scratch resources
+  persist (branch + canaries are deleted in finally); any candidate layer versions published are inert and
+  prunable. Decision 100 and the decision-scout check are documentation/governance and carry no runtime risk.
