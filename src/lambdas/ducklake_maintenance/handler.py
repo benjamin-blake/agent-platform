@@ -351,9 +351,7 @@ def action_clone_catalog(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     dsn = rt.fetch_dsn()
 
     raw_scratch = event.get("scratch_dbname")
-    scratch_dbname = raw_scratch if raw_scratch else f"{dsn['dbname']}_canary"
-    if not isinstance(scratch_dbname, str) or not scratch_dbname.strip():
-        raise rt.DuckLakeRuntimeError("clone_catalog: scratch_dbname must be a non-empty string")
+    scratch_dbname = _require_identifier(raw_scratch if raw_scratch else f"{dsn['dbname']}_canary")
 
     _bucket = rt.SMOKE_DATA_PATH.split("/")[2]
     scratch_data_path = event.get("scratch_data_path") or f"s3://{_bucket}/ducklake/_canary_rehearsal/"

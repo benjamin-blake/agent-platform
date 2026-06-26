@@ -1023,3 +1023,11 @@ def test_action_clone_catalog_listed_in_actions():
     assert "clone_catalog" in h._ACTIONS
     body = _response_body(h.handler({"action": "bad"}))
     assert "clone_catalog" in body["actions"]
+
+
+def test_action_clone_catalog_invalid_scratch_dbname_loud_fails():
+    """Non-identifier scratch_dbname raises DuckLakeRuntimeError (H-1: SQL injection guard)."""
+    p = _clone_catalog_patches()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        with pytest.raises(h.rt.DuckLakeRuntimeError, match="invalid SQL identifier"):
+            h.action_clone_catalog({"action": "clone_catalog", "scratch_dbname": "bad; DROP DATABASE ducklake_ops --"}, None)

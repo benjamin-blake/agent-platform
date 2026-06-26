@@ -1152,6 +1152,8 @@ def test_canary_rehearsal_json_output(monkeypatch):
     assert data["ryw_ok"] is True
     assert data["clone_ok"] is True
     assert data["torn_down"]["canary_functions"] is True
+    assert data["torn_down"]["scratch_meta"] is True
+    assert data["torn_down"]["scratch_s3_prefix"] is True
     assert data["scratch"]["meta_schema"] != "ducklake_ops"
     assert "_canary_rehearsal" in data["scratch"]["data_path"]
 
@@ -1236,3 +1238,25 @@ def test_canary_rehearsal_budget_constants_unchanged():
     assert smoke.CHURN_WRITERS == ducklake_runtime.CHURN_WRITERS
     assert smoke.COMMIT_LATENCY_BUDGET_MS == ducklake_runtime.COMMIT_LATENCY_BUDGET_MS
     assert smoke.OCC_COLLISION_RATE_BUDGET == ducklake_runtime.OCC_COLLISION_RATE_BUDGET
+
+
+def test_canary_rehearsal_scratch_meta_teardown_false_on_sigv4_error(monkeypatch):
+    """torn_down['scratch_meta'] is False (not raised) when _sigv4_invoke raises (H-2 failure branch)."""
+    import contextlib
+    import io
+    import json as _json
+
+    _stub_canary_rehearsal(monkeypatch)
+
+    def _raise_sigv4(url, payload, **kw):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _raise_sigv4)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        smoke.canary_rehearsal(json_output=True)
+
+    data = _json.loads([ln for ln in buf.getvalue().splitlines() if ln.startswith("{")][-1])
+    assert data["torn_down"]["scratch_meta"] is False
+    assert data["torn_down"]["canary_functions"] is True
