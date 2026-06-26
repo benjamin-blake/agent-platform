@@ -337,93 +337,49 @@ def subprocess_run(cmd: list[str]) -> Any:
 
 
 def action_clone_catalog(event: dict[str, Any], _con: Any) -> dict[str, Any]:
-    """OQ.12 canary rehearsal: pg_dump prod meta-schema -> isolated scratch Neon DB -> ATTACH -> RYW.
+    """OQ.12 canary rehearsal read-clone via Neon native copy-on-write branch (Decision 100).
 
-    Steps: (1) pg_dump ducklake_ops, (2) CREATE scratch DB, (3) pg_restore, (4) ATTACH on candidate
-    engine, (5) SELECT 1 (RYW proof), (6) DROP scratch DB in finally (no residue, Decision 55).
-    Accepts: meta_schema (default "ducklake_ops"), scratch_dbname, scratch_data_path.
+    The orchestrator (ducklake_neon_smoke_test.canary_rehearsal) owns the branch lifecycle:
+    it creates the branch before invoking this action and deletes it in its finally block.
+    This action receives branch_host from the event, builds the branch DSN (prod role/password/
+    dbname inherited via fetch_dsn, branch endpoint host substituted), ATTACHes the candidate
+    DuckDB engine to meta_schema=ducklake_ops, and reads real catalog metadata read-only via
+    information_schema. Raises CatalogDrError on ATTACH failure or empty result (Decision 55).
+
+    Never invokes pg_dump, pg_restore, CREATE DATABASE, or DROP DATABASE. Never mutates the
+    live ducklake_ops catalog. Never writes the production S3 DATA_PATH.
     """
-    import tempfile  # noqa: PLC0415
+    branch_host = event.get("branch_host")
+    if not branch_host:
+        raise catalog_dr.CatalogDrError(
+            "clone_catalog: branch_host is required in the event -- orchestrator must create "
+            "a Neon branch and pass its endpoint host (Decision 100 / Decision 55)"
+        )
 
-    import psycopg2  # noqa: PLC0415
+    prod_dsn = rt.fetch_dsn()
+    branch_dsn = {**prod_dsn, "host": branch_host}
+    meta_schema = "ducklake_ops"
 
-    meta_schema = _require_identifier(event.get("meta_schema", "ducklake_ops"))
-    dsn = rt.fetch_dsn()
-
-    raw_scratch = event.get("scratch_dbname")
-    scratch_dbname = _require_identifier(raw_scratch if raw_scratch else f"{dsn['dbname']}_canary")
-
-    _bucket = rt.SMOKE_DATA_PATH.split("/")[2]
-    scratch_data_path = event.get("scratch_data_path") or f"s3://{_bucket}/ducklake/_canary_rehearsal/"
-
-    scratch_dsn = {**dsn, "dbname": scratch_dbname}
-
-    def _create_scratch_db() -> None:
-        conn = psycopg2.connect(rt.libpq_conninfo(dsn))
-        try:
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                cur.execute(f"CREATE DATABASE {scratch_dbname}")
-        finally:
-            conn.close()
-
-    def _drop_scratch_db() -> None:
-        conn = psycopg2.connect(rt.libpq_conninfo(dsn))
-        try:
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                cur.execute(f"DROP DATABASE IF EXISTS {scratch_dbname}")
-        finally:
-            conn.close()
-
-    scratch_created = False
-    with tempfile.TemporaryDirectory(prefix="clone-catalog-") as tmp:
-        dump_path = f"{tmp}/clone.dump"
-        try:
-            # Step 1: pg_dump the production meta-schema (--format=custom, --schema only).
-            cmd = catalog_dr.build_pg_dump_cmd(catalog_dr.dsn_uri(dsn), dump_path, schema=meta_schema)
-            result = subprocess_run(cmd)
-            if result.returncode != 0:
-                raise catalog_dr.CatalogDrError(
-                    f"clone_catalog pg_dump exited {result.returncode}: {result.stderr.strip()[:500]}"
-                )
-
-            # Step 2: CREATE isolated scratch Neon database.
-            _create_scratch_db()
-            scratch_created = True
-
-            # Step 3: pg_restore the dump into the scratch database (loud-fail on non-zero).
-            catalog_dr.run_pg_restore(dump_path, scratch_dsn)
-
-            # Step 4: ATTACH the scratch clone on the in-Lambda DuckDB engine (candidate version).
-            # Step 5: Prove read-your-write -- SELECT 1 after ATTACH proves the Postgres meta-schema
-            # survived the pg_dump -> pg_restore round-trip and the candidate engine can connect.
-            con = rt.open_connection(
-                dsn=scratch_dsn,
-                data_path=scratch_data_path,
-                meta_schema=meta_schema,
-                extension_directory=EXTENSION_DIRECTORY,
+    con = rt.open_connection(
+        dsn=branch_dsn,
+        data_path=rt.SMOKE_DATA_PATH,
+        meta_schema=meta_schema,
+        extension_directory=EXTENSION_DIRECTORY,
+    )
+    try:
+        rows = con.execute("SELECT schema_name FROM information_schema.schemata LIMIT 1").fetchall()
+        if not rows:
+            raise catalog_dr.CatalogDrError(
+                "clone_catalog FAIL: empty information_schema.schemata on Neon branch -- "
+                "candidate DuckDB engine could not read the production catalog clone (Decision 55)"
             )
-            try:
-                rows = con.execute("SELECT 1").fetchall()
-                if not rows:
-                    raise catalog_dr.CatalogDrError(
-                        "clone_catalog RYW FAILED: empty SELECT after ATTACH on cloned catalog -- "
-                        "candidate engine could not query the restored metadata (Decision 55)"
-                    )
-            finally:
-                con.close()
-
-        finally:
-            # Step 6: DROP scratch database (always, even on error -- no scratch residue).
-            if scratch_created:
-                _drop_scratch_db()
+    finally:
+        con.close()
 
     return {
         "ok": True,
         "meta_schema": meta_schema,
-        "scratch_dbname": scratch_dbname,
-        "scratch_data_path": scratch_data_path,
+        "branch_host": branch_host,
         "cloned": True,
     }
 

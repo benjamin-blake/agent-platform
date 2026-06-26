@@ -510,16 +510,6 @@ def build_pgclient_layer(
             print(f"  ERROR: {bundle_name} did not contain bin/pg_dump", file=sys.stderr)
             sys.exit(1)
 
-        pg_restore_bin = opt_bin / "pg_restore"
-        if not pg_restore_bin.exists():
-            print(
-                f"  ERROR: {bundle_name} did not contain bin/pg_restore (required for action_clone_catalog / "
-                "OQ.12 real read-clone). Re-seed the S3 bundle with pg_restore included -- it ships in the same "
-                "postgresql16 client RPM as pg_dump. See the catalog-DR runbook (Section 4).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
         # Fail-closed version assert: pg_dump --version must report PG major 16, with the bundled
         # libs on the loader path (proves the closure links before the layer ships).
         version_env = {**os.environ, "LD_LIBRARY_PATH": str(opt_lib)}

@@ -2,6 +2,63 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 100: Managed services own their primitives -- no client-tooling substitution for native operations (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-26
+**Warehouse ID:** dec-100 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+PR #273 introduced a `pg_dump -> scratch-DB -> pg_restore` mechanism for the OQ.12 pre-deploy
+clone-rehearsal, despite Neon providing native copy-on-write branching (HTTPS/443 REST API,
+no TCP/5432 egress required). Three compounding factors allowed this:
+1. The mechanism was recorded as a "human decision" (HYBRID pg_dump->pg_restore framing),
+   which was then treated as exempt from architectural review.
+2. Decision 75 (Frame-Lock) was scoped to AWS-native primitives, leaving Neon's native
+   primitives uncovered by an explicit decision.
+3. The pg_dump egress smell was mis-resolved by citing Decision 88 (which governs the
+   unavoidable DR backup egress, not the avoidable read-clone egress).
+
+**Decision:**
+Extends Decision 75 (Frame-Lock) to all managed services: when a managed service exposes a
+native primitive (branching, snapshots, PITR, replication, versioning, cloning), the system
+must use that primitive rather than vendoring client tooling or custom scripts to replicate
+the capability outside the managed boundary. A mechanism recorded as a "human decision"
+does NOT exempt it from this principle -- the decision record is evidence of a choice made,
+not a permanent seal against architectural correction.
+
+Canonical instance: OQ.12 clone-rehearsal uses Neon's native copy-on-write branching
+(POST /api/v2/projects/{project_id}/branches over HTTPS/443), not pg_dump -> pg_restore.
+The orchestrator owns the branch lifecycle (create before invoke, delete in finally).
+The Lambda action only ATTACHes to the branch endpoint and reads catalog metadata read-only.
+
+Decision 88 governs the DR pg_dump-to-S3 backup pipeline, which remains real and unchanged
+(unavoidable egress for an offline backup). Decision 88 never applied to the read-clone path.
+
+**Enforcement (Decision 100 procedure guard):**
+The `decision-scout` skill (Phase 2 triage) is updated with a WARN check: flag any plan that
+vendors client tooling or custom scripts to replicate a capability a managed service exposes
+natively. Cross-references Decision 100 and Decision 75.
+
+**Rationale:**
+- Native primitives are lower-latency, eliminate operational complexity (no scratch DB lifecycle,
+  no pg_restore binary dependency in Lambda layers), and stay within the managed boundary.
+- The pg_dump -> pg_restore path required pg_restore in the Lambda pgclient layer, imposing a
+  non-CC-web operator rebuild constraint and blocking the "DEFERRED at sign-off" restore-drill gate.
+  Removing it unblocks both constraints simultaneously.
+- Zero new IAM: the orchestrator's `agent_platform_admin` profile already holds
+  `secretsmanager:GetSecretValue` on `neon-api-key` (no new grants needed).
+
+**Affected files:**
+`src/common/neon_api.py` (new -- Neon REST client),
+`src/lambdas/ducklake_maintenance/handler.py` (action_clone_catalog rewritten),
+`scripts/ducklake_neon_smoke_test.py` (canary_rehearsal branch lifecycle),
+`scripts/build_lambda.py` (pg_restore guard removed from build_pgclient_layer),
+`docs/runbooks/ducklake-catalog-operations.md` (Section 2 step 4 rewritten),
+`.claude/skills/decision-scout/SKILL.md` (managed-service-native WARN check added).
+
+---
+
 ## Decision 99: DuckDB/DuckLake lockstep version SSOT + first exercised version bump 1.5.3->1.5.4 (Decided)
 
 **Status:** Decided

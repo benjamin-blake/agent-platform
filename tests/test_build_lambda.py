@@ -848,46 +848,22 @@ class TestPublishCanaryLayers:
             assert key.startswith("S3Bucket=my-bucket,S3Key=lambda-packages/")
 
 
-class TestBuildPgclientLayerPgRestoreCheck:
-    """Fail-closed assertion: build_pgclient_layer exits if bundle lacks bin/pg_restore."""
+class TestBuildPgclientLayerPgDumpOnlyBundle:
+    """build_pgclient_layer succeeds with a pg_dump-only bundle (no pg_restore required, Decision 100)."""
 
-    def test_exits_when_pg_restore_missing_from_bundle(self, tmp_path):
-        """If the bundle has pg_dump but not pg_restore, build_pgclient_layer must sys.exit(1)."""
+    def test_passes_with_pg_dump_only_bundle(self, tmp_path):
+        """pg_dump-only bundle (no bin/pg_restore) must not cause build_pgclient_layer to exit."""
         import io
         import tarfile
 
-        # Build a tarball that has bin/pg_dump but NOT bin/pg_restore.
         raw_tar = io.BytesIO()
         with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
-            content = b"#!/bin/sh\necho 'pg_dump (PostgreSQL) 16.0'"
+            content = b"#!/bin/sh\necho 'fake-binary'"
             info = tarfile.TarInfo(name="bin/pg_dump")
             info.size = len(content)
             tar.addfile(info, io.BytesIO(content))
         bundle_bytes = raw_tar.getvalue()
 
-        with (
-            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
-            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
-        ):
-            with pytest.raises(SystemExit):
-                bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
-
-    def test_passes_when_both_pg_dump_and_pg_restore_present(self, tmp_path):
-        """When bin/pg_dump AND bin/pg_restore are in the bundle, proceed past the guard."""
-        import io
-        import tarfile
-
-        # Build a tarball with both binaries.
-        raw_tar = io.BytesIO()
-        with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
-            for name in ("bin/pg_dump", "bin/pg_restore"):
-                content = b"#!/bin/sh\necho 'fake-binary'"
-                info = tarfile.TarInfo(name=name)
-                info.size = len(content)
-                tar.addfile(info, io.BytesIO(content))
-        bundle_bytes = raw_tar.getvalue()
-
-        # The version assert runs pg_dump --version; stub it to return the right PG major.
         def fake_run(cmd, **kw):
             return types.SimpleNamespace(returncode=0, stdout=f"pg_dump (PostgreSQL) {bl.PINNED_PG_MAJOR}.0\n", stderr="")
 

@@ -1,0 +1,113 @@
+"""Neon control-plane REST client (orchestrator-only; never imported by Lambda handlers).
+
+Provides thin wrappers around the Neon HTTPS API (console.neon.tech/api/v2) for the
+OQ.12 canary rehearsal branch lifecycle. Uses stdlib urllib only -- zero new dependencies.
+"""
+
+from __future__ import annotations
+
+import json
+import urllib.request
+from typing import Any
+
+_NEON_API_BASE = "https://console.neon.tech/api/v2"
+_NEON_SECRET_ID = "neon-api-key"
+
+
+class NeonApiError(RuntimeError):
+    """Raised on any non-2xx response from the Neon control-plane API."""
+
+
+def fetch_api_key(profile: str | None = None) -> str:
+    """Read the Neon API key from Secrets Manager (secret id: neon-api-key).
+
+    Uses the agent_platform_admin (PlatformDev) assume-role chain -- the orchestrator
+    already holds secretsmanager:GetSecretValue on this secret, so zero new IAM is needed.
+    """
+    import boto3  # noqa: PLC0415
+
+    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+    client = session.client("secretsmanager", region_name="eu-west-2")
+    response = client.get_secret_value(SecretId=_NEON_SECRET_ID)
+    secret = response["SecretString"]
+    try:
+        parsed = json.loads(secret)
+        return parsed.get("api_key") or parsed.get("NEON_API_KEY") or secret.strip()
+    except (json.JSONDecodeError, AttributeError):
+        return secret.strip()
+
+
+def resolve_project_id(api_key: str, name: str = "ducklake-catalog") -> str:
+    """GET /projects and return the project_id matching `name`. Raises NeonApiError if not found."""
+    url = f"{_NEON_API_BASE}/projects"
+    data = _api_get(api_key, url)
+    for project in data.get("projects", []):
+        if project.get("name") == name:
+            return project["id"]
+    raise NeonApiError(f"Neon project {name!r} not found -- check the Neon console or the project name")
+
+
+def create_branch(api_key: str, project_id: str) -> dict[str, str]:
+    """POST /projects/{project_id}/branches (copy-on-write from the main branch).
+
+    Returns ``{"branch_id": str, "host": str}`` where host is the branch endpoint hostname.
+    """
+    url = f"{_NEON_API_BASE}/projects/{project_id}/branches"
+    body = _api_post(api_key, url, payload={})
+    branch = body.get("branch", {})
+    endpoints = body.get("endpoints", [])
+    branch_id = branch.get("id")
+    if not branch_id:
+        raise NeonApiError(f"create_branch: no branch id in response: {body}")
+    host: str | None = None
+    for ep in endpoints:
+        if ep.get("type") in ("read_write", "primary"):
+            host = ep.get("host")
+            break
+    if not host and endpoints:
+        host = endpoints[0].get("host")
+    if not host:
+        raise NeonApiError(f"create_branch: no endpoint host in response: {body}")
+    return {"branch_id": branch_id, "host": host}
+
+
+def delete_branch(api_key: str, project_id: str, branch_id: str) -> None:
+    """DELETE /projects/{project_id}/branches/{branch_id}. Raises NeonApiError on non-2xx."""
+    url = f"{_NEON_API_BASE}/projects/{project_id}/branches/{branch_id}"
+    _api_delete(api_key, url)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _api_request(api_key: str, url: str, method: str, payload: Any = None) -> Any:
+    body: bytes | None = None
+    headers: dict[str, str] = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    if payload is not None:
+        body = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:500]
+        raise NeonApiError(f"Neon API {method} {url} -> {exc.code}: {detail}") from exc
+
+
+def _api_get(api_key: str, url: str) -> Any:
+    return _api_request(api_key, url, "GET")
+
+
+def _api_post(api_key: str, url: str, payload: Any) -> Any:
+    return _api_request(api_key, url, "POST", payload)
+
+
+def _api_delete(api_key: str, url: str) -> None:
+    _api_request(api_key, url, "DELETE")

@@ -34,7 +34,7 @@ from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from src.common import catalog_dr as _catalog_dr
-from src.common import ducklake_runtime, ducklake_spike
+from src.common import ducklake_runtime, ducklake_spike, neon_api
 from src.common.ducklake_runtime import (
     CHURN_WRITERS,
     CHURN_WRITES_PER_WRITER,
@@ -1286,15 +1286,18 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
         "torn_down": {
             "canary_functions": False,
             "scratch_meta": False,
-            "scratch_db": False,
+            "branch": False,
             "scratch_s3_prefix": False,
         },
         "scratch": {
             "meta_schema": scratch_meta,
             "data_path": scratch_data_path,
-            "clone_dbname": None,
+            "branch_id": None,
         },
     }
+
+    api_key = neon_api.fetch_api_key(profile=profile)
+    project_id = neon_api.resolve_project_id(api_key)
 
     layer_arns = _publish_candidate_layers(bucket=_bucket, profile=profile, region=region)
     layer_arn_list = list(layer_arns.values())
@@ -1358,20 +1361,26 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
         out["ryw_ok"] = True
         print(f"CANARY_RYW OK probe {probe_id!r} verified via reader canary")
 
-        clone_invoked = False
+        branch_id: str | None = None
         try:
-            clone_body = _lambda_invoke_cli(maint_fn, {"action": "clone_catalog"}, profile=profile, region=region)
-            clone_invoked = True
-            out["scratch"]["clone_dbname"] = clone_body.get("scratch_dbname")
+            branch_info = neon_api.create_branch(api_key, project_id)
+            branch_id = branch_info["branch_id"]
+            branch_host = branch_info["host"]
+            out["scratch"]["branch_id"] = branch_id
+            clone_body = _lambda_invoke_cli(
+                maint_fn,
+                {"action": "clone_catalog", "branch_host": branch_host},
+                profile=profile,
+                region=region,
+            )
             if not clone_body.get("ok"):
                 raise SmokeTestFailure(f"CANARY_CLONE_CATALOG FAIL: {clone_body}")
             out["clone_ok"] = True
-            print(
-                f"CANARY_CLONE_CATALOG OK scratch_dbname={clone_body.get('scratch_dbname')!r} "
-                f"meta_schema={clone_body.get('meta_schema')!r}"
-            )
+            print(f"CANARY_CLONE_CATALOG OK branch_id={branch_id!r} meta_schema={clone_body.get('meta_schema')!r}")
         finally:
-            out["torn_down"]["scratch_db"] = clone_invoked
+            if branch_id is not None:
+                neon_api.delete_branch(api_key, project_id, branch_id)
+            out["torn_down"]["branch"] = branch_id is not None
 
     finally:
         all_fn_deleted = True

@@ -870,147 +870,108 @@ def test_handler_catalog_stats_listed_in_actions():
 
 
 # ---------------------------------------------------------------------------
-# action_clone_catalog (OQ.12 canary rehearsal)
+# action_clone_catalog (OQ.12 canary rehearsal -- Neon native branch, Decision 100)
 # ---------------------------------------------------------------------------
 
-
-class _FakePsycopg2Conn:
-    """Minimal psycopg2 connection double for clone_catalog unit tests."""
-
-    def __init__(self):
-        self.autocommit = False
-        self.closed_count = 0
-        self.executed: list[str] = []
-
-    def cursor(self):
-        return self
-
-    def execute(self, sql: str) -> None:
-        self.executed.append(sql)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def close(self):
-        self.closed_count += 1
+_BRANCH_HOST = "br-fake-abc.us-east-2.aws.neon.tech"
 
 
-def _psycopg2_connect_factory(create_conn=None, drop_conn=None):
-    """Return a fake psycopg2.connect that alternates create / drop connections."""
-    calls = []
-    conns = [create_conn or _FakePsycopg2Conn(), drop_conn or _FakePsycopg2Conn()]
-
-    def _connect(conninfo_str):
-        idx = min(len(calls), len(conns) - 1)
-        conn = conns[idx]
-        calls.append(conninfo_str)
-        return conn
-
-    return _connect, calls
-
-
-def _clone_catalog_patches(*, pg_dump_rc=0, ryw_rows=None, run_pg_restore_ok=True, scratch_dbname=None):
-    """Return a stack of patches for action_clone_catalog happy-path tests."""
-    import types
-
-    create_conn = _FakePsycopg2Conn()
-    drop_conn = _FakePsycopg2Conn()
-    fake_connect, _ = _psycopg2_connect_factory(create_conn, drop_conn)
-
-    fake_result = types.SimpleNamespace(returncode=pg_dump_rc, stderr="boom" if pg_dump_rc else "")
+def _clone_catalog_branch_patches(*, schemata_rows=None, open_raises=None):
+    """Return a stack of patches for action_clone_catalog Neon-branch tests."""
 
     class _FakeCon:
         def execute(self, sql):
             return self
 
         def fetchall(self):
-            return ryw_rows if ryw_rows is not None else [(1,)]
+            if open_raises:
+                raise open_raises
+            return schemata_rows if schemata_rows is not None else [("public",)]
 
         def close(self):
             pass
 
     con_mock = _FakeCon()
 
-    event = {"action": "clone_catalog"}
-    if scratch_dbname is not None:
-        event["scratch_dbname"] = scratch_dbname
+    if open_raises:
+
+        def _open_raises(*, dsn=None, data_path=None, meta_schema=None, extension_directory=None):
+            raise open_raises
+
+        open_patch = patch.object(h.rt, "open_connection", side_effect=_open_raises)
+    else:
+        open_patch = patch.object(h.rt, "open_connection", return_value=con_mock)
 
     return (
-        patch("psycopg2.connect", side_effect=fake_connect),
         patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
-        patch.object(h, "subprocess_run", return_value=fake_result),
-        patch.object(h.catalog_dr, "build_pg_dump_cmd", return_value=["pg_dump", "--fake"]),
-        patch.object(h.catalog_dr, "run_pg_restore")
-        if run_pg_restore_ok
-        else patch.object(h.catalog_dr, "run_pg_restore", side_effect=h.catalog_dr.CatalogDrError("pg_restore boom")),
-        patch.object(h.rt, "open_connection", return_value=con_mock),
+        open_patch,
     )
 
 
 def test_action_clone_catalog_happy_path():
-    """Happy path: pg_dump success, scratch DB created, pg_restore, ATTACH, RYW, DROP scratch."""
-    p = _clone_catalog_patches()
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
+    """Happy path: branch_host in event, branch DSN built, ATTACH succeeds, returns ok."""
+    p = _clone_catalog_branch_patches()
+    with p[0], p[1] as open_mock:
+        result = h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
     assert result["ok"] is True
     assert result["cloned"] is True
     assert result["meta_schema"] == "ducklake_ops"
-    assert result["scratch_dbname"] == "neondb_canary"
-    assert "_canary_rehearsal" in result["scratch_data_path"]
+    assert result["branch_host"] == _BRANCH_HOST
+    call_kwargs = open_mock.call_args[1]
+    assert call_kwargs["dsn"]["host"] == _BRANCH_HOST
+    assert call_kwargs["dsn"]["dbname"] == _FULL_DSN["dbname"]
+    assert call_kwargs["meta_schema"] == "ducklake_ops"
 
 
-def test_action_clone_catalog_custom_scratch_dbname():
-    """Custom scratch_dbname is accepted and used."""
-    p = _clone_catalog_patches(scratch_dbname="my_scratch_db")
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        result = h.action_clone_catalog({"action": "clone_catalog", "scratch_dbname": "my_scratch_db"}, None)
-    assert result["scratch_dbname"] == "my_scratch_db"
+def test_action_clone_catalog_branch_dsn_inherits_prod_credentials():
+    """branch_dsn must use prod role/password/dbname with only host substituted."""
+    p = _clone_catalog_branch_patches()
+    with p[0], p[1] as open_mock:
+        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+    call_dsn = open_mock.call_args[1]["dsn"]
+    assert call_dsn["host"] == _BRANCH_HOST
+    assert call_dsn["dbname"] == _FULL_DSN["dbname"]
+    assert call_dsn["username"] == _FULL_DSN["username"]
+    assert call_dsn["password"] == _FULL_DSN["password"]  # pragma: allowlist secret -- fake fixture
 
 
-def test_action_clone_catalog_pg_dump_failure_loud_fails():
-    """Non-zero pg_dump exit raises CatalogDrError (Decision 55 loud-fail)."""
-    p = _clone_catalog_patches(pg_dump_rc=1)
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        with pytest.raises(h.catalog_dr.CatalogDrError, match="pg_dump exited 1"):
+def test_action_clone_catalog_missing_branch_host_loud_fails():
+    """Missing branch_host in event raises CatalogDrError (Decision 55 loud-fail)."""
+    with patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN):
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="branch_host is required"):
             h.action_clone_catalog({"action": "clone_catalog"}, None)
 
 
-def test_action_clone_catalog_pg_restore_failure_loud_fails():
-    """CatalogDrError from run_pg_restore propagates (Decision 55 loud-fail)."""
-    p = _clone_catalog_patches(run_pg_restore_ok=False)
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        with pytest.raises(h.catalog_dr.CatalogDrError, match="pg_restore boom"):
-            h.action_clone_catalog({"action": "clone_catalog"}, None)
+def test_action_clone_catalog_empty_schemata_loud_fails():
+    """Empty information_schema.schemata result raises CatalogDrError (Decision 55)."""
+    p = _clone_catalog_branch_patches(schemata_rows=[])
+    with p[0], p[1]:
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="empty information_schema.schemata"):
+            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
 
 
-def test_action_clone_catalog_ryw_empty_loud_fails():
-    """Empty SELECT 1 after ATTACH raises CatalogDrError (probe proved the engine cannot query)."""
-    p = _clone_catalog_patches(ryw_rows=[])
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        with pytest.raises(h.catalog_dr.CatalogDrError, match="RYW FAILED"):
-            h.action_clone_catalog({"action": "clone_catalog"}, None)
+def test_action_clone_catalog_attach_failure_loud_fails():
+    """open_connection raising DuckLakeRuntimeError propagates (Decision 55 loud-fail)."""
+    p = _clone_catalog_branch_patches(open_raises=h.rt.DuckLakeRuntimeError("ATTACH fail"))
+    with p[0], p[1]:
+        with pytest.raises(h.rt.DuckLakeRuntimeError, match="ATTACH fail"):
+            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
 
 
-def test_action_clone_catalog_never_targets_ducklake_ops_directly():
-    """scratch_dbname must never equal the production dbname (isolation invariant)."""
-    p = _clone_catalog_patches()
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
-    assert result["scratch_dbname"] != _FULL_DSN["dbname"], (
-        "clone_catalog must NOT target the production database -- scratch isolation violated"
-    )
-
-
-def test_action_clone_catalog_scratch_data_path_not_production():
-    """scratch_data_path must be the canary prefix, never the production SMOKE_DATA_PATH."""
-    p = _clone_catalog_patches()
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
-    assert result["scratch_data_path"] != h.rt.SMOKE_DATA_PATH
-    assert "_canary_rehearsal" in result["scratch_data_path"]
+def test_action_clone_catalog_no_pg_dump_no_pg_restore():
+    """Surface-retirement: pg_dump, pg_restore, CREATE DATABASE, DROP DATABASE must never be called."""
+    pg_dump_calls = []
+    pg_restore_calls = []
+    p = _clone_catalog_branch_patches()
+    with (
+        p[0],
+        p[1],
+        patch.object(h.catalog_dr, "build_pg_dump_cmd", side_effect=lambda *a, **kw: pg_dump_calls.append(1) or []),
+        patch.object(h.catalog_dr, "run_pg_restore", side_effect=lambda *a, **kw: pg_restore_calls.append(1)),
+    ):
+        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST}, None)
+    assert pg_dump_calls == [], "build_pg_dump_cmd must not be called on the clone path (Decision 100)"
+    assert pg_restore_calls == [], "run_pg_restore must not be called on the clone path (Decision 100)"
 
 
 def test_action_clone_catalog_is_connectionless():
@@ -1023,11 +984,3 @@ def test_action_clone_catalog_listed_in_actions():
     assert "clone_catalog" in h._ACTIONS
     body = _response_body(h.handler({"action": "bad"}))
     assert "clone_catalog" in body["actions"]
-
-
-def test_action_clone_catalog_invalid_scratch_dbname_loud_fails():
-    """Non-identifier scratch_dbname raises DuckLakeRuntimeError (H-1: SQL injection guard)."""
-    p = _clone_catalog_patches()
-    with p[0], p[1], p[2], p[3], p[4], p[5]:
-        with pytest.raises(h.rt.DuckLakeRuntimeError, match="invalid SQL identifier"):
-            h.action_clone_catalog({"action": "clone_catalog", "scratch_dbname": "bad; DROP DATABASE ducklake_ops --"}, None)
