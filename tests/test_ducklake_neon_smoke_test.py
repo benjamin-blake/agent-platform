@@ -1072,8 +1072,13 @@ def test_restore_drill_proceeds_with_direct_gate_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+_FAKE_BRANCH_ID = "br-fake-canary-abc"
+_FAKE_BRANCH_HOST = "br-fake-canary-abc.us-east-2.aws.neon.tech"
+_FAKE_PROJECT_ID = "proj-fake-123"
+
+
 def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=True):
-    """Stub all subprocess/AWS calls for canary_rehearsal unit tests."""
+    """Stub all subprocess/AWS/Neon API calls for canary_rehearsal unit tests."""
     _fake_arns = {
         "ducklake-deps-layer": "arn:fake:1",
         "ducklake-extensions-layer": "arn:fake:2",
@@ -1083,6 +1088,15 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=
     monkeypatch.setattr(smoke, "_get_function_role_arn", lambda fn, **kw: "arn:aws:iam::ACCOUNT_ID_PLACEHOLDER:role/fake-role")
     monkeypatch.setattr(smoke, "_canary_create_function", lambda fn, **kw: None)
     monkeypatch.setattr(smoke, "_canary_delete_function", lambda fn, **kw: True)
+
+    monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
+    monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
+    monkeypatch.setattr(
+        smoke.neon_api,
+        "create_branch",
+        lambda api_key, project_id: {"branch_id": _FAKE_BRANCH_ID, "host": _FAKE_BRANCH_HOST},
+    )
+    monkeypatch.setattr(smoke.neon_api, "delete_branch", lambda api_key, project_id, branch_id: None)
 
     def _fake_invoke(fn, payload, **kw):
         action = payload.get("action", "")
@@ -1103,7 +1117,7 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=
         if action == "clone_catalog":
             if not clone_ok:
                 return {"ok": False, "error": "clone failed"}
-            return {"ok": True, "scratch_dbname": "neondb_canary", "meta_schema": "ducklake_ops"}
+            return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
         return {}
 
     monkeypatch.setattr(smoke, "_lambda_invoke_cli", _fake_invoke)
@@ -1134,7 +1148,7 @@ def test_canary_rehearsal_happy_path(monkeypatch, capsys):
 
 
 def test_canary_rehearsal_json_output(monkeypatch):
-    """json_output=True emits machine-readable JSON with expected keys."""
+    """json_output=True emits machine-readable JSON with expected keys including branch fields."""
     _stub_canary_rehearsal(monkeypatch)
     import contextlib
     import io
@@ -1154,6 +1168,8 @@ def test_canary_rehearsal_json_output(monkeypatch):
     assert data["torn_down"]["canary_functions"] is True
     assert data["torn_down"]["scratch_meta"] is True
     assert data["torn_down"]["scratch_s3_prefix"] is True
+    assert data["torn_down"]["branch"] is True
+    assert data["scratch"]["branch_id"] == _FAKE_BRANCH_ID
     assert data["scratch"]["meta_schema"] != "ducklake_ops"
     assert "_canary_rehearsal" in data["scratch"]["data_path"]
 
@@ -1206,6 +1222,12 @@ def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
     monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
     monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
     monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
+    monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
+    monkeypatch.setattr(
+        smoke.neon_api, "create_branch", lambda api_key, project_id: {"branch_id": _FAKE_BRANCH_ID, "host": _FAKE_BRANCH_HOST}
+    )
+    monkeypatch.setattr(smoke.neon_api, "delete_branch", lambda api_key, project_id, branch_id: None)
 
     def _raise_on_attach(fn, payload, **kw):
         if payload.get("action") == "create_tables":
@@ -1260,3 +1282,52 @@ def test_canary_rehearsal_scratch_meta_teardown_false_on_sigv4_error(monkeypatch
     data = _json.loads([ln for ln in buf.getvalue().splitlines() if ln.startswith("{")][-1])
     assert data["torn_down"]["scratch_meta"] is False
     assert data["torn_down"]["canary_functions"] is True
+
+
+def test_canary_rehearsal_branch_host_passed_to_clone(monkeypatch):
+    """Neon branch_host must be included in the clone_catalog event payload (Decision 100)."""
+    clone_events = []
+
+    _stub_canary_rehearsal(monkeypatch)
+
+    def _capture_invoke(fn, payload, **kw):
+        if payload.get("action") == "clone_catalog":
+            clone_events.append(payload.copy())
+
+        if payload.get("action") == "create_tables":
+            return {"ok": True}
+        if payload.get("action") == "write":
+            return {"ok": True, "ulid": "fake-ulid"}
+        if payload.get("action") == "churn_single":
+            return {"ok": True}
+        if payload.get("action") == "read_current":
+            return {"rows": [{"rec_id": payload.get("rec_id", "x")}]}
+        if payload.get("action") == "clone_catalog":
+            return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
+        return {}
+
+    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _capture_invoke)
+
+    smoke.canary_rehearsal()
+
+    assert len(clone_events) == 1, "clone_catalog must be invoked exactly once"
+    assert clone_events[0].get("branch_host") == _FAKE_BRANCH_HOST, (
+        "branch_host from Neon create_branch must be forwarded to clone_catalog event"
+    )
+
+
+def test_canary_rehearsal_delete_branch_called_on_clone_failure(monkeypatch):
+    """delete_branch must be called in finally even when clone_catalog returns ok=False."""
+    deleted = []
+
+    _stub_canary_rehearsal(monkeypatch, clone_ok=False)
+    monkeypatch.setattr(
+        smoke.neon_api,
+        "delete_branch",
+        lambda api_key, project_id, branch_id: deleted.append(branch_id),
+    )
+
+    with pytest.raises(smoke.SmokeTestFailure, match="CANARY_CLONE_CATALOG FAIL"):
+        smoke.canary_rehearsal()
+
+    assert deleted == [_FAKE_BRANCH_ID], "delete_branch must be called in finally even when clone fails"

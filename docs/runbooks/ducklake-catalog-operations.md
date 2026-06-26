@@ -157,10 +157,14 @@ is a structural block, not a transient network error.
    bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --profile agent_platform [--json]
    ```
    The orchestrator: publishes candidate layers, creates ephemeral writer/reader/maintenance canaries
-   pointed at a scratch meta-schema + scratch S3 prefix + scratch Neon DB, proves ATTACH + churn
-   (unchanged CD.33 budgets) + RYW + real-prod read-clone (`action_clone_catalog`), then tears down
-   all ephemeral resources. Passes all EC gates on the candidate engine. NEVER touches `ducklake_ops`
-   or the production DATA_PATH.
+   pointed at a scratch meta-schema + scratch S3 prefix, proves ATTACH + churn (unchanged CD.33 budgets)
+   + RYW + real-prod read-clone (`action_clone_catalog`), then tears down all ephemeral resources.
+   For the read-clone step, the orchestrator creates a Neon native copy-on-write branch (HTTPS/443 REST
+   API, `neon_api.create_branch`), passes the branch endpoint host to `action_clone_catalog` in the event,
+   and deletes the branch in its finally block (Decision 100). The Lambda action ATTACHes the candidate
+   DuckDB engine to the branch DSN at `meta_schema=ducklake_ops` and reads real catalog metadata read-only
+   via `information_schema` -- it invokes no pg_dump, pg_restore, CREATE DATABASE, or DROP DATABASE.
+   Passes all EC gates on the candidate engine. NEVER touches `ducklake_ops` or the production DATA_PATH.
 5. **Compatibility decision.** If the canary rehearsal is green, file a Decision recording the bump
    and the rehearsal evidence, then roll the production layer (`--deploy`). If it regresses, STOP --
    do not bump; RCA the regression (Decision 55). Never relax the runtime version-assert to paper
