@@ -35,7 +35,7 @@ git branch --show-current
 ```
 If the result is `main`, STOP.
 
-The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.md`). If an argument was given, resolve it:
+The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.yaml`). If an argument was given, resolve it:
 ```bash
 bin/venv-python scripts/find_plan.py <path-from-arguments>
 ```
