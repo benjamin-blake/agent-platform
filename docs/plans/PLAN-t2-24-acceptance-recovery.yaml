@@ -1,0 +1,567 @@
+schema_version: 1
+slug: "t2-24-acceptance-recovery"
+intent: >-
+  Repair the T2.24 alarm-only scheduled Terraform drift detector's broken rec-filing path -- the
+  workflow files its tf_drift rec with a PROSE acceptance string that fails the ops portal's bash
+  acceptance lint every tick, so no rec is ever filed and the sandbox convergence record is stranded
+  red -- then recover the sandbox to green and demonstrate the full c1 cycle (detect -> rec -> dedup
+  -> recover) end-to-end, closing T2.24 so the platform's self-improving infra loop has a provably
+  observed sandbox (drift is detected, FILED, and self-healed), not merely wired.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-24-acceptance-recovery.yaml
+phase: >-
+  Platform tier T2.24 (CD.35 Wave 5, ratified as Decision 92). Follow-on to
+  PLAN-terraform-cicd-drift-detection (shipped the code, PR #250), PLAN-t2-24-drift-role-recovery
+  (made github_ci_drift operational, 2026-06-24), and PLAN-t2-24-drift-live-demo (the staged
+  demonstration that exposed THIS genuine workflow defect -- prose acceptance -- and could not
+  complete c1). Product roadmap: not applicable (platform infra governance).
+scope:
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Root-cause fix. Replace the prose --acceptance argument on the "File the drift rec via the ops
+      portal" step (currently line ~302) with an EXECUTABLE bash command that passes
+      lint_acceptance_command (scripts/executor/acceptance_lint.py) and is semantically "the drift is
+      resolved when the convergence record is green again":
+      `aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - | grep -q green`.
+      This is the only functional change to the workflow; no terraform apply is added, -detailed-exitcode
+      and the lock-acquisition-failure skip branch are preserved (alarm-only invariant intact).
+  - file: tests/test_terraform_drift_acceptance.py
+    action: Create
+    purpose: >-
+      Regression guard so a runtime-only acceptance-lint failure becomes a pre-merge failure (pytest
+      runs in both validate tiers). The test scans .github/workflows/*.yml for every
+      `scripts.ops_data_portal ... --acceptance <value>` argument, extracts the value, and asserts
+      lint_acceptance_command(value) == (True, None). It additionally asserts terraform-drift.yml's
+      alarm-only structural invariants: no `terraform apply`, `-detailed-exitcode` present, and the
+      "Error acquiring the state lock" skip branch present. Prevents recurrence of the prose-acceptance
+      class for ANY workflow that files a rec via the portal.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Exit-criteria ledger bookkeeping ONLY, performed by /implement's bookkeeping walk on a verified VP
+      pass (Status-Trusted-Never-Inferred, candidate CD.39): flip T2.24 c1/c2/c3 status open->met with
+      met_by: t2-24-acceptance-recovery, then flip T2.24 status in_progress->complete with completed_at
+      and a closeout note citing this plan + the demonstration run URLs. No criterion is flipped by
+      /plan; this row exists so /implement may edit the file.
+bundled_recommendations: []
+closes_criteria:
+  - "T2.24:c1"
+  - "T2.24:c2"
+  - "T2.24:c3"
+infrastructure_dependencies:
+  - >-
+    NO .tf files are in scope. terraform/personal/oidc.tf is deliberately NOT modified: the
+    github_ci_drift role already resolves the ducklake_writer Function URL via
+    lambda:GetFunctionUrlConfig (oidc.tf DuckLakeWriterInvoke, ~line 760-766), NOT via SSM, so the
+    portal write needs no IAM change. Avoiding an IAM diff keeps the code PR on the guard-PASS
+    auto-merge path and avoids the iam:CreateRole authority-budget deny class that bit PR #250
+    (Decision 98 / T2.23).
+  - >-
+    The only terraform apply invoked by this plan is the pre-existing terraform-apply-sandbox
+    workflow_dispatch acknowledge-and-retry, used twice operationally: (a) to UNSTRAND the current real
+    DuckDB-bump drift red record back to green (VP6), and (b) to RECONVERGE after the c1 demo seed is
+    reverted (VP12). Both re-plan fresh and apply already-merged terraform/personal state -- nothing
+    new from this plan. If either apply surfaces an IAM/trust/destroy diff the guard fail-closes it to
+    the tf-gated-apply Environment (human approval in GitHub Actions); a guard-PASS diff auto-applies.
+  - >-
+    agent_platform_admin (PlatformAdmin) is REQUIRED in the implementation container: the c1/c2 live
+    seeds mutate terraform/personal-managed resources and the .tflock object, and the c3 IAM proof calls
+    iam:SimulatePrincipalPolicy -- all beyond the PlatformDev (agent_platform) runtime grant. Verify
+    with `aws sts get-caller-identity --profile agent_platform_admin`. terraform/personal plan/apply under
+    admin follows the "Running terraform/personal on CC-web" procedure in terraform/CLAUDE.md (recover the
+    four no-default tfvars from remote state; never paste account_id / ExternalIds anywhere).
+  - >-
+    Starting state at planning time (2026-06-26): convergence record
+    s3://agent-platform-data-lake/convergence/personal/sandbox.json is status=red,
+    commit_sha=eea421b475cbb8e2d3ab2d126baa6b7c0b1ef2b2, drift_detected_at=2026-06-26T11:52:07Z
+    (drift_run_url run 28236146418) -- a REAL DuckDB-bump drift, NOT a demo seed. Zero open tf_drift recs
+    (the portal call has been failing on the acceptance lint each tick, so none was ever filed). VP6
+    reads the live commit_sha at run time rather than hardcoding it.
+  - >-
+    The hourly drift cron ('17 * * * *') may interleave with the manual workflow_dispatch runs. The
+    terraform-drift concurrency group (cancel-in-progress: false) serialises ticks, and every VP
+    assertion checks OUTCOME state (record status, open-rec count) rather than a specific run id, so an
+    interleaved scheduled tick cannot invalidate a demonstration (the dedup invariant guarantees exactly
+    one open tf_drift rec while red regardless of which run filed it). Once the fix is merged, an
+    interleaved scheduled tick filing the c1 rec instead of the dispatched run is acceptable and equally
+    proves rec-filing.
+acceptance_criteria:
+  - >-
+    (fix) The --acceptance argument the terraform-drift workflow passes to scripts.ops_data_portal
+    --file-rec is an executable command that passes lint_acceptance_command (returns (True, None)) --
+    not prose; verified directly against the workflow file's live value.
+  - >-
+    (regression guard) tests/test_terraform_drift_acceptance.py passes: it lints every workflow-embedded
+    portal --acceptance value and asserts terraform-drift.yml's alarm-only structural invariants; the
+    test FAILS if a prose acceptance is reintroduced into any workflow's portal file-rec call.
+  - >-
+    (recovery / unstrand) The stranded-red sandbox is returned to green via a terraform-apply-sandbox
+    dispatch-ack acknowledge-and-retry; the convergence record reads status=green with zero open tf_drift
+    recs after the unstrand.
+  - >-
+    (c1 rec-filing) With the fix on main and the record green, a real out-of-band change to a
+    terraform/personal-managed resource is detected by a dispatched terraform-drift run (plan exit 2);
+    the record transitions green->red AND exactly one OPEN rec with source=tf_drift is filed via the ops
+    portal (visible in the local cache after sync). This is the criterion the prose-acceptance bug
+    previously blocked.
+  - >-
+    (c1 dedup) A second drift cycle while the record is already red files NO duplicate tf_drift rec and
+    does not re-write the record (one red = one signal; drift never writes green).
+  - >-
+    (c1 recovery) After the c1 demo, a terraform-apply-sandbox dispatch-ack run converges and returns the
+    record to green, and the demo's tf_drift rec is closed via the ops portal update_rec path; the sandbox
+    ends green with zero open tf_drift recs.
+  - >-
+    (c2) With a .tflock seeded at tfstate/personal/sandbox/terraform.tfstate.tflock, a dispatched
+    terraform-drift run skips the cycle without alarming: the run concludes success, its job log shows the
+    "lock held; skipping" notice, NO tf_drift rec is filed, and the convergence record is untouched (still
+    green) -- lock-acquisition-failure distinguished from drift and from a genuine error.
+  - >-
+    (c3 structural) terraform-drift.yml contains no `terraform apply` invocation (alarm-only) and retains
+    -detailed-exitcode plus the lock-acquisition-failure skip branch.
+  - >-
+    (c3 IAM) simulate-principal-policy proves agent-platform-github-ci-drift CANNOT s3:PutObject the state
+    object terraform.tfstate, and CAN read tfstate, write the .tflock object, read+write
+    convergence/personal/*, and invoke the ducklake_writer but NOT the ducklake_reader.
+  - >-
+    (bookkeeping) On the verified VP pass, /implement flips T2.24 c1/c2/c3 open->met (met_by:
+    t2-24-acceptance-recovery) and T2.24 status in_progress->complete with completed_at + a closeout note;
+    validate.py passes (closes_criteria refs resolve; no bare-string criteria on the touched item).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: This plan document is schema-valid (PlanDocument; closes_criteria well-formed).
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-24-acceptance-recovery.yaml
+    expected: 'Prints "PASS: ... validates against PlanDocument schema." and exits 0.'
+    fix_if: Schema error -- fix the offending field (e.g. a closes_criteria entry not in '<item>:<crit>' form) and re-run.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      (fix) The workflow's live --acceptance value is now an executable command that passes the portal's
+      acceptance lint. Extracts the value directly from terraform-drift.yml and runs it through
+      lint_acceptance_command -- the exact validator that rejected the prose string.
+    command: |
+      bin/venv-python - <<'PY'
+      import re
+      from scripts.executor.acceptance_lint import lint_acceptance_command
+      txt = open(".github/workflows/terraform-drift.yml").read()
+      m = re.search(r"--acceptance\s+\"([^\"]+)\"", txt) or re.search(r"--acceptance\s+'([^']+)'", txt)
+      assert m, "no --acceptance argument found in terraform-drift.yml"
+      val = m.group(1)
+      ok, msg = lint_acceptance_command(val)
+      assert ok, f"acceptance still fails lint: {val!r}: {msg}"
+      assert "green" in val, f"acceptance should assert convergence-green; got {val!r}"
+      print(f"fix OK: workflow --acceptance lints clean: {val!r}")
+      PY
+    expected: 'Prints "fix OK: workflow --acceptance lints clean: ..." -- the value is executable and lint-clean.'
+    fix_if: >-
+      Assertion trips -- the acceptance is still prose or otherwise fails bash -n. Replace it with
+      `aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - | grep -q green`
+      (single-token grep avoids the multi-word-grep lint warning and JSON-whitespace fragility).
+  - step: 3
+    phase: pre-deploy
+    action: (regression guard) The new test passes -- it lints every workflow-embedded portal acceptance and asserts alarm-only invariants.
+    command: bin/venv-python -m pytest tests/test_terraform_drift_acceptance.py -q
+    expected: 'All tests pass (exit 0).'
+    fix_if: >-
+      A test fails -- if it is the acceptance-lint assertion, the workflow fix in VP2 is incomplete; if it
+      is a structural assertion, the workflow regressed (apply added / branch removed) -- that is out of
+      scope, STOP + RCA (Decision 55).
+  - step: 4
+    phase: pre-deploy
+    action: (c3 structural) The drift workflow is alarm-only -- no terraform apply, keeps -detailed-exitcode and the lock-skip branch.
+    command: |
+      bin/venv-python - <<'PY'
+      import re
+      txt = open(".github/workflows/terraform-drift.yml").read()
+      assert not re.search(r"terraform\s+apply\b", txt), "ALARM-ONLY violated: terraform apply present in drift workflow"
+      assert "-detailed-exitcode" in txt, "drift plan must use -detailed-exitcode"
+      assert "Error acquiring the state lock" in txt, "missing lock-acquisition-failure skip branch"
+      print("c3 structural OK: no terraform apply; -detailed-exitcode + lock-skip branch present")
+      PY
+    expected: 'Prints "c3 structural OK: ...".'
+    fix_if: An assertion trips -- the shipped workflow regressed (an apply was added or a branch removed). Out of scope; STOP + RCA (Decision 55), do not inline-patch.
+  - step: 5
+    phase: pre-deploy
+    action: Pre-state -- T2.24 c1/c2/c3 are all currently open (so the bookkeeping walk has criteria to flip) and the refs resolve.
+    command: |
+      bin/venv-python - <<'PY'
+      import yaml
+      doc = yaml.safe_load(open("docs/ROADMAP-PLATFORM.yaml"))
+      items = {i["id"]: i for i in doc["tier_items"]}
+      t = items["T2.24"]
+      crit = {c["id"]: c["status"] for c in t["exit_criteria"]}
+      assert crit.get("c1") == "open" and crit.get("c2") == "open" and crit.get("c3") == "open", f"expected c1/c2/c3 open, got {crit}"
+      print("pre-state OK: T2.24 c1/c2/c3 all open; closes_criteria refs resolve")
+      PY
+    expected: 'Prints "pre-state OK: T2.24 c1/c2/c3 all open; closes_criteria refs resolve".'
+    fix_if: A criterion is already met/rehomed -- another plan closed it; drop that ref from closes_criteria and re-scope.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      (recovery / unstrand -- AFTER the code PR is merged to main) ACTION (admin): read the current
+      convergence record's commit_sha, then dispatch terraform-apply-sandbox
+      (mcp__github__actions_run_trigger, workflow_dispatch on main) with acknowledge_red_commit set to
+      that commit_sha (the dispatch-ack acknowledge-and-retry re-plans fresh and applies, reconverging the
+      real DuckDB-bump drift). Wait for the run to conclude (mcp__github__actions_get); if the guard
+      fail-closes an IAM/destroy diff it routes to the tf-gated-apply Environment -- approve in the Actions
+      UI. THEN this command verifies the record is green with zero open tf_drift recs.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = green
+      bin/venv-python - <<'PY'
+      import json
+      rows = [json.loads(l) for l in open("logs/.recommendations-log.jsonl")]
+      n = sum(1 for r in rows if r.get("source") == "tf_drift" and r.get("status") == "open")
+      assert n == 0, f"expected 0 open tf_drift recs after unstrand, got {n}"
+      print("unstrand OK: stranded red cleared; record green; zero open tf_drift recs")
+      PY
+    expected: 'Convergence record green AND zero open tf_drift recs -- prints "unstrand OK: ...".'
+    fix_if: >-
+      Record stays red -- the dispatch-ack apply did not converge. Inspect the run via get_job_logs. If the
+      real DuckDB drift requires a code/lockfile change (not reconcilable by apply alone) that is a GENUINE
+      separate defect -- STOP, file a rec, and recover that separately (out of scope for the c1 demo).
+      A guard-blocked IAM diff needs the tf-gated-apply Environment approval before it can apply.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      (c3 IAM) Under agent_platform_admin, simulate-principal-policy proves github_ci_drift CANNOT write
+      the state object (the alarm-only proof at the IAM layer) and CAN read tfstate / write the .tflock /
+      read+write convergence / invoke the writer but NOT the reader.
+    command: |
+      set -euo pipefail
+      ACCT=$(aws sts get-caller-identity --query Account --output text --profile agent_platform_admin)
+      ROLE=arn:aws:iam::$ACCT:role/agent-platform-github-ci-drift
+      B=arn:aws:s3:::agent-platform-data-lake
+      L=eu-west-2:$ACCT
+      chk() { aws iam simulate-principal-policy --policy-source-arn "$ROLE" --action-names "$1" --resource-arns "$2" --profile agent_platform_admin --query 'EvaluationResults[0].EvalDecision' --output text; }
+      test "$(chk s3:GetObject $B/tfstate/personal/sandbox/terraform.tfstate)" = allowed
+      test "$(chk s3:PutObject $B/tfstate/personal/sandbox/terraform.tfstate.tflock)" = allowed
+      test "$(chk s3:PutObject $B/convergence/personal/sandbox.json)" = allowed
+      test "$(chk s3:PutObject $B/tfstate/personal/sandbox/terraform.tfstate)" != allowed
+      test "$(chk lambda:InvokeFunction arn:aws:lambda:$L:function:agent-platform-ducklake-writer)" = allowed
+      test "$(chk lambda:InvokeFunction arn:aws:lambda:$L:function:agent-platform-ducklake-reader)" != allowed
+      echo "c3 IAM OK: drift reads tfstate + writes .tflock/convergence + invokes writer; CANNOT write the state object or invoke the reader"
+    expected: 'All test assertions pass and it prints "c3 IAM OK: ...". The decisive assertion is PutObject on the state object != allowed.'
+    fix_if: >-
+      State-object PutObject = allowed -- the applied policy diverges from least-privilege intent (out of
+      scope; STOP + RCA, Decision 55). A writer/reader-invoke decision is wrong only because the function
+      name differs -- confirm the live names (aws lambda list-functions --profile agent_platform_admin) and
+      adjust the ARN; the policy semantics are unchanged.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      (c2) Lock-held skip. ACTION (admin): seed a .tflock with a recognisable demo ID at the exact lock key,
+      then dispatch terraform-drift (mcp__github__actions_run_trigger, workflow_dispatch on main); wait for
+      the run to CONCLUDE (it waits out the 120s lock-timeout, then skips) and confirm via
+      mcp__github__get_job_logs that it logged the "Lock held ... skipping this drift cycle" notice and exit
+      0. THEN this command verifies no rec was filed and the record is untouched, and removes the demo lock
+      (only if it still carries our ID -- never clobber a real in-flight lock).
+    command: |
+      set -euo pipefail
+      LOCK=s3://agent-platform-data-lake/tfstate/personal/sandbox/terraform.tfstate.tflock
+      ID=$(aws s3 cp "$LOCK" - --profile agent_platform_admin 2>/dev/null | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin).get("ID",""))' 2>/dev/null || echo "")
+      test "$ID" = "t2-24-acceptance-recovery-demo" && aws s3 rm "$LOCK" --profile agent_platform_admin
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      bin/venv-python - <<'PY'
+      import json
+      rows = [json.loads(l) for l in open("logs/.recommendations-log.jsonl")]
+      n = sum(1 for r in rows if r.get("source") == "tf_drift" and r.get("status") == "open")
+      assert n == 0, f"expected 0 open tf_drift recs after a locked cycle (run c2 before c1), got {n}"
+      print("c2 rec-check OK: locked cycle filed no tf_drift rec")
+      PY
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = green
+      echo "c2 OK: lock-held cycle skipped without alarming; record still green; demo .tflock removed"
+    expected: 'No tf_drift rec filed, convergence record still green, the demo .tflock removed -- prints "c2 OK: ...". (The job-log "lock held; skipping" line is confirmed in the ACTION via get_job_logs.)'
+    fix_if: >-
+      A rec was filed or the record changed -- the "Error acquiring the state lock" reclassification is
+      mis-wired (treated as drift or hard error); out of scope, STOP + RCA. If the run instead acquired the
+      lock and planned, the seeded .tflock was absent/expired at run time -- re-seed and re-dispatch. If the
+      ID guard fails (lock missing or different ID), do NOT delete -- a real apply may hold it; wait and retry.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      (c1 seed + gate) ACTION (admin): per terraform/CLAUDE.md, recover tfvars + `terraform -chdir=terraform/personal
+      init -backend-config=backend-sandbox.hcl`, then seed a REVERSIBLE out-of-band change by modifying an
+      EXISTING terraform-managed tag VALUE on a low-risk terraform/personal resource. Recommended primary: a
+      ducklake Lambda managed tag (admin has Lambda perms) -- read current tags (aws lambda list-tags), then
+      overwrite one managed key's value with a marker (aws lambda tag-resource ... --tags <Key>=DRIFT-DEMO).
+      THEN this command GATES on local drift detection before any dispatch.
+    command: |
+      cd terraform/personal && terraform plan -detailed-exitcode -lock=false -var-file=terraform.personal.tfvars >/dev/null 2>&1; rc=$?; cd - >/dev/null
+      test "$rc" -eq 2 && echo "c1 seed OK: out-of-band change present; local terraform plan reports drift (exit 2)"
+    expected: 'The local plan exit code is exactly 2 (drift detected) -- prints "c1 seed OK: ...".'
+    fix_if: >-
+      exit 0 (no diff) -- the chosen mutation is not terraform-managed or did not take; pick another managed
+      attribute that an available profile can mutate AND revert (Glue DB description via `aws glue
+      update-database`; a Secrets Manager secret tag; a different managed Lambda tag) and re-verify exit 2.
+      AccessDenied -- admin lacks permission on that resource; choose one it can mutate. Never seed a
+      destructive or functional change -- tag/description value only.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      (c1 drift signal -- THE criterion the prose-acceptance bug blocked) ACTION: dispatch terraform-drift
+      (mcp__github__actions_run_trigger, workflow_dispatch on main) with the seed in place; wait for the run
+      to conclude via mcp__github__actions_get (it detects exit 2 on a green record -> flips red + files the
+      rec via the now-EXECUTABLE acceptance). Confirm via get_job_logs that the "tf_drift rec filed via ops
+      portal." line appears and the portal call did NOT raise the acceptance ValueError. THEN this command
+      verifies the record flipped red and exactly one open tf_drift rec was filed via the ops portal.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = red
+      bin/venv-python - <<'PY'
+      import json
+      rows = [json.loads(l) for l in open("logs/.recommendations-log.jsonl")]
+      od = [r for r in rows if r.get("source") == "tf_drift" and r.get("status") == "open"]
+      assert len(od) >= 1, f"expected >=1 open tf_drift rec, got {len(od)}"
+      print(f"c1 OK: drift -> record red + open tf_drift rec(s) filed: {[r['id'] for r in od]}")
+      PY
+    expected: 'Convergence record status=red AND at least one open tf_drift rec -- prints "c1 OK: ...". This proves the acceptance-lint fix: the portal write now succeeds.'
+    fix_if: >-
+      Not red / no rec -- inspect the run via get_job_logs. If the portal call again raised a ValueError on
+      --acceptance, the fix did not reach main (confirm the merged workflow). If the run reached exit 2 but
+      did not flip red or file a rec for a DIFFERENT reason (e.g. an IAM gap on github_ci_drift reaching the
+      writer), that is a genuine separate defect -- STOP + RCA (Decision 55), file a rec, do not inline-patch.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      (c1 dedup -- one red = one signal) ACTION: with the record already red, dispatch terraform-drift again
+      (mcp__github__actions_run_trigger) and wait for it to conclude (it logs "already red; not re-alarming"
+      and exits 0). THEN this command verifies the open tf_drift rec count did not increase.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      bin/venv-python - <<'PY'
+      import json
+      rows = [json.loads(l) for l in open("logs/.recommendations-log.jsonl")]
+      n = sum(1 for r in rows if r.get("source") == "tf_drift" and r.get("status") == "open")
+      assert n == 1, f"expected exactly 1 open tf_drift rec after a second already-red cycle, got {n}"
+      print("dedup OK: second already-red cycle filed no duplicate (one red = one signal)")
+      PY
+    expected: 'Exactly one open tf_drift rec (no duplicate) -- prints "dedup OK: ...".'
+    fix_if: n>1 -- the prior_status != "red" green->red-transition guard is broken; out of scope, STOP + RCA (Decision 55).
+  - step: 12
+    phase: post-deploy
+    action: >-
+      (c1 recovery / hygiene) ACTION (admin): revert the seed (restore the original tag value); confirm local
+      `terraform -chdir=terraform/personal plan -detailed-exitcode -lock=false -var-file=...` exits 0; dispatch
+      terraform-apply-sandbox (mcp__github__actions_run_trigger, workflow_dispatch) with acknowledge_red_commit
+      naming the red commit sha from the record (or the open rec id); wait for success (writes green); then
+      close the demo rec via `bin/venv-python -m scripts.ops_data_portal --update-rec <rec-id> --status closed
+      --resolution "T2.24 c1 live drift demonstration; reverted and reconverged to green"`. THEN this command
+      verifies green + the rec closed.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      test "$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = green
+      bin/venv-python - <<'PY'
+      import json
+      rows = [json.loads(l) for l in open("logs/.recommendations-log.jsonl")]
+      n = sum(1 for r in rows if r.get("source") == "tf_drift" and r.get("status") == "open")
+      assert n == 0, f"expected 0 open tf_drift recs after recovery, got {n}"
+      print("recovery OK: record green + demo tf_drift rec closed; sandbox restored")
+      PY
+    expected: 'Convergence record green AND zero open tf_drift recs -- prints "recovery OK: ...".'
+    fix_if: >-
+      Record stays red -- the dispatch-ack apply did not converge; inspect the run; a residual code-vs-state
+      or IAM-sensitive diff must be admin-reconciled (Decision 98) before re-dispatch. Rec still open -- run
+      the update_rec close.
+  - step: 13
+    phase: post-deploy
+    action: >-
+      (bookkeeping) After /implement's bookkeeping walk edits the ledger, verify T2.24 c1/c2/c3 are met with
+      met_by and T2.24 is complete; the plan + roadmap remain schema/CI valid.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-24-acceptance-recovery.yaml >/dev/null
+      bin/venv-python - <<'PY'
+      import yaml
+      doc = yaml.safe_load(open("docs/ROADMAP-PLATFORM.yaml"))
+      items = {i["id"]: i for i in doc["tier_items"]}
+      t = items["T2.24"]
+      crit = {c["id"]: (c["status"], c.get("met_by")) for c in t["exit_criteria"]}
+      for cid in ("c1", "c2", "c3"):
+          st, mb = crit[cid]
+          assert st == "met" and mb, f"{cid} expected met with met_by, got {crit[cid]}"
+      assert t["status"] == "complete", f"T2.24 expected complete, got {t['status']}"
+      print("bookkeeping OK: c1/c2/c3 met (met_by set); T2.24 complete")
+      PY
+    expected: 'c1/c2/c3 = met with non-empty met_by AND T2.24 = complete -- prints "bookkeeping OK: ...".'
+    fix_if: A criterion still open or item not complete -- the bookkeeping walk did not run; ensure closes_criteria are declared and every VP step above passed, then flip per the ledger contract.
+constraints:
+  - >-
+    Acceptance commands must be executable, not prose (Decision 66 Precision Context Injection /
+    write-time deterministic rejection via lint_acceptance_command; Decision 48 acceptance must be
+    behavioural/executable). The fix
+    replaces prose with a bash command; the regression test enforces this for all workflow portal calls.
+  - >-
+    Alarm-only (Decision 55 / 92): the drift workflow must contain no terraform apply and drift must never
+    auto-remediate. This plan adds NO apply to the workflow. The only applies invoked are the pre-existing
+    terraform-apply-sandbox dispatch-ack (a human-reviewed convergence path) for the unstrand and the c1
+    recovery.
+  - >-
+    RCA-first, no inline workaround (Decision 55 / 72): if a live demonstration exposes a GENUINE workflow
+    or IAM defect beyond the prose-acceptance bug this plan fixes (e.g. a github_ci_drift SSM/IAM gap
+    reaching the writer, or the real DuckDB drift being unreconcilable by apply), STOP and run RCA -- file a
+    rec, do not inline-patch the workflow or policy. That fix is out of scope and becomes a separate plan.
+  - >-
+    Status-Trusted-Never-Inferred (exit-criteria ledger, candidate CD.39): /plan flips no criterion. Only
+    /implement's bookkeeping walk flips c1/c2/c3 open->met (met_by: t2-24-acceptance-recovery) and T2.24 ->
+    complete, and only on a verified VP pass. Never infer met from prose, file existence, or run activity.
+  - >-
+    Single Portal Invariant (Decision 84): the demo tf_drift rec is filed by the workflow via the ops portal
+    (writer-allocated id; no outbox; fail-loud) and CLOSED via `scripts.ops_data_portal --update-rec`
+    (Decision 70 lifecycle closure, not deletion). Never edit logs/.recommendations-log.jsonl directly.
+  - >-
+    Drift writes the convergence record RED only, never green (T2.20 anti-masking anchor). Green is written
+    solely by a converged terraform-apply-sandbox run; the dispatch-ack acknowledge-and-retry is the ONLY
+    path that clears red (Decision 98 clause 4(c): verify global convergence -- untargeted plan exit 0 --
+    before dispatch-ack where applicable).
+  - >-
+    Live mutations must be reversible, functionally inert (tag/description value only -- never a destructive
+    or behavioural change), and cleaned up even on failure: remove any seeded .tflock (after verifying its
+    demo ID t2-24-acceptance-recovery-demo) and restore any seeded tag; leave the sandbox green with no open
+    tf_drift rec.
+  - >-
+    Never paste account_id or the ExternalIds into chat, a PR, or any committed file (pre-commit never-commit
+    hook shape-blocks the 12-digit account id; ExternalIds are AssumeRole trust secrets). All VP commands
+    derive the account id at runtime via `aws sts get-caller-identity`.
+  - >-
+    Do NOT add terraform-drift or any drift signal to main-protection required_status_checks (Decision 83
+    non-wedging: strict=false + admin bypass make a required check both bypassable and wedging).
+  - >-
+    agent_platform_admin is required for the unstrand, the c1/c2 seeds, and the c3 IAM simulate; the
+    implementation container must have it configured. Never on main; web GitHub MCP flow for all
+    dispatch/merge (Decision 76).
+  - No emojis; ASCII hyphens only; bin/venv-python for Python; Linux/bash only. Only the three scope files may be modified.
+context:
+  - >-
+    Root cause: terraform-drift.yml's "File the drift rec via the ops portal" step passes a PROSE string to
+    `scripts.ops_data_portal --file-rec --acceptance "..."`. ops_data_portal.file_rec calls
+    lint_acceptance_command (scripts/executor/acceptance_lint.py) at line ~647 and raises ValueError on
+    failure; the prose fails `bash -n` ("syntax error near unexpected token '('"). The failure is
+    CLIENT-SIDE (before any network call), so it recurs every tick and no tf_drift rec is ever filed. The
+    drift detection ENGINE works (record flips red on real drift, run 28236146418) -- only the rec-filing
+    sub-step is broken. The fix: replace the prose with an executable command that passes the lint.
+  - >-
+    This plan is the forward-fix for the genuine workflow defect that PLAN-t2-24-drift-live-demo
+    (already merged, no code in scope) exposed: that plan's c1 step could never have filed the rec because
+    the workflow's acceptance was prose. Per that plan's own RCA-first constraint (STOP + file a new plan
+    when a demo exposes a genuine defect), this plan adds the code fix the demo plan structurally lacked,
+    then re-runs the c1/c2/c3 demonstration to close T2.24.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS. Decisions to cite: 66 (Precision Context Injection --
+    write-time deterministic rejection of structurally-invalid field values; the executable acceptance +
+    the regression guard realize this write-time-rejection principle),
+    48 (V3 tier; acceptance must be behavioural/executable, not structural), 92 (CD.35 ratification: drift
+    files via the ops portal, alarm-only, nothing auto-remediates), 98 (peer CI roles admin-created; verify
+    global convergence before dispatch-ack -- governs c3 IAM + the recovery applies), 55 (alarm-only / RCA-first
+    / forward-fix not workaround), 72 (drift uses source=tf_drift via the portal, not ci-rca), 84 (closed
+    DuckLake writer boundary; Single Portal; writer-allocated ids; no outbox), 77 (human-gated apply frame;
+    admin runs the recovery applies), 76 (web MCP dispatch + merge), 70 (rec closure via update_rec lifecycle,
+    not deletion), candidate CD.39 (exit-criteria ledger / Status-Trusted-Never-Inferred for the bookkeeping
+    walk), CD.35 (the five-wave program; T2.24 is Wave 5). Context Decisions: 73 (two-tier CI; the new pytest
+    lands in both tiers, turning a runtime-only failure into a pre-merge one; sandbox tolerates transient red
+    main), 83 (merge gate / non-wedging), 94 (drift trust mirrors refs/heads/main), 99/78/81 (DuckDB/DuckLake
+    lockstep -- root cause of the existing real drift the unstrand reconverges).
+  - >-
+    CI-RCA deferral (Related-Work): one open Critical ci-rca rec exists at planning time -- rec-2363
+    (github_ci_branch IAM lacks ssm:GetParameter for the DuckLake reader URL; DataQualityVerifier FAIL on
+    main's full tier). It is DEFERRED per explicit human decision (it is under investigation by another
+    agent). It satisfies NO Related-Work condition for this plan: different role (github_ci_branch, the
+    push-to-main validate role) and different access path (SSM reader-URL resolution) than T2.24's
+    github_ci_drift, which resolves the WRITER url via lambda:GetFunctionUrlConfig (oidc.tf, no SSM). This
+    plan touches neither terraform/personal/oidc.tf nor the DataQualityVerifier path. The T2.24 code fix
+    merges via the fast PR (--pre) tier, which does not run the full-tier DataQualityVerifier that rec-2363
+    fails. Residual risk surfaced in VP10 fix_if: if the drift role hits its OWN IAM gap reaching the writer
+    after the lint fix, that is a separate defect -> STOP + RCA + rec.
+  - >-
+    Single combined plan (human decision): the code fix (terraform-drift.yml + test) MUST be merged to main
+    before the c1 demo, because dispatched terraform-drift runs check out main's workflow. This produces TWO
+    PRs within the one plan -- PR-A (code fix + regression test) merged first, then the operational demo runs
+    (no repo changes), then PR-B (docs/ROADMAP-PLATFORM.yaml bookkeeping). The demo (unstrand + c3 + c2 + c1 +
+    recovery) is post-deploy operational work between the two PRs.
+  - >-
+    Main divergence: branch is 0 commits behind origin/main at planning time (preflight 2026-06-26) -- no
+    Main Divergence Assessment overlap. T2.24 files_in_scope were re-grounded by the original plan and the
+    recovery plan; this plan changes the workflow's acceptance line + adds a test + (via /implement) the
+    criterion statuses. tfvars are gitignored and recovered from remote state at /implement time.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the decision-scout fresh-context gate (66, 48, 92, 98, 55, 72, 84, 77, 76, 70; candidate CD.39, CD.35)
+  - agent_platform_admin (PlatformAdmin) assume-role chain reachable in the implementation container (REQUIRED -- verify with `aws sts get-caller-identity --profile agent_platform_admin`)
+  - terraform/personal init + tfvars-recovery-from-state procedure understood (terraform/CLAUDE.md "Running terraform/personal on CC-web")
+  - terraform-drift.yml, terraform-apply-sandbox.yml, the github_ci_drift role, and the convergence/lock S3 keys located and readable
+  - Current convergence record state confirmed (status=red from real DuckDB drift; zero open tf_drift recs) before the unstrand
+  - Acceptance criteria understood and each independently verifiable; closes_criteria refs resolve to open criteria
+execution_steps:
+  - >-
+    Fix the workflow: in .github/workflows/terraform-drift.yml, replace the prose --acceptance argument on
+    the "File the drift rec via the ops portal" step with the executable command
+    `aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - | grep -q green`
+    (preserve the surrounding step and all other portal args). No other workflow change.
+  - >-
+    Create tests/test_terraform_drift_acceptance.py: scan .github/workflows/*.yml for every
+    `--acceptance <value>` argument that follows an ops_data_portal invocation, extract the value (handle
+    quoted single-line form), and assert lint_acceptance_command(value) == (True, None). Add asserts that
+    terraform-drift.yml has no `terraform apply`, has `-detailed-exitcode`, and has the "Error acquiring the
+    state lock" skip branch. Import lint_acceptance_command from scripts.executor.acceptance_lint.
+  - >-
+    Run VP1-VP5 (schema, fix-lint, regression test, c3 structural, pre-state) -- all local/read-only. Then
+    run the authoritative local gate `bin/venv-python -m scripts.validate --pre` and ensure it passes.
+  - >-
+    Commit-flow PR-A (code): push the branch; open the code PR (terraform-drift.yml + the new test) via
+    GitHub MCP create_pull_request; subscribe_pr_activity and end the turn; on green CI wake confirm checks
+    then squash-merge. This puts the fixed workflow on main BEFORE any dispatched drift run.
+  - >-
+    VP6 (unstrand): AFTER PR-A is merged, under agent_platform_admin read the convergence record commit_sha
+    and dispatch terraform-apply-sandbox (workflow_dispatch, acknowledge_red_commit=that sha); approve the
+    tf-gated-apply Environment if the guard fail-closes; wait for success; run the VP6 command (green + zero
+    open tf_drift recs).
+  - >-
+    VP7 (c3 IAM): under agent_platform_admin, run the simulate-principal-policy capability matrix; the
+    decisive assertion is that the drift role CANNOT s3:PutObject the state object. Loop until pass.
+  - >-
+    VP8 (c2): under agent_platform_admin, seed the demo .tflock (JSON body including
+    "ID":"t2-24-acceptance-recovery-demo") at tfstate/personal/sandbox/terraform.tfstate.tflock; dispatch
+    terraform-drift (workflow_dispatch); wait for the run to conclude and confirm via get_job_logs the
+    "lock held; skipping" notice + exit 0; run the VP8 command (verifies no rec, record green, removes the
+    demo lock after the ID guard). Run c2 BEFORE c1 so the no-rec assertion holds against a zero baseline.
+  - >-
+    VP9 (c1 seed): under agent_platform_admin, recover tfvars + init terraform/personal; seed a reversible
+    managed-tag-value change on a low-risk resource; run the VP9 command to GATE on local plan exit 2 before
+    dispatching. If it does not produce exit 2 or admin lacks permission, pick another managed attribute per
+    VP9 fix_if and re-verify.
+  - >-
+    VP10 (c1 signal -- the keystone proof): dispatch terraform-drift (workflow_dispatch) with the seed in
+    place; wait for the run; confirm via get_job_logs the portal "tf_drift rec filed" line (no acceptance
+    ValueError); run the VP10 command (record red + one open tf_drift rec). VP11 (dedup): dispatch
+    terraform-drift again while red; run the VP11 command (no duplicate).
+  - >-
+    VP12 (c1 recovery): revert the seed; confirm local plan exit 0; dispatch terraform-apply-sandbox
+    (workflow_dispatch, acknowledge_red_commit = the red commit sha or rec id); wait for success; close the
+    demo rec via ops_data_portal --update-rec ... --status closed; run the VP12 command (green + zero open recs).
+  - >-
+    Bookkeeping walk (PR-B repo edit): in docs/ROADMAP-PLATFORM.yaml, flip T2.24 c1/c2/c3 status open->met
+    with met_by: t2-24-acceptance-recovery, and flip T2.24 status in_progress->complete with completed_at and
+    a closeout note citing this plan + the demonstration run URLs. Run VP13 to verify. Run
+    `bin/venv-python -m scripts.validate --pre`; open PR-B (docs-only) via GitHub MCP; subscribe and end the
+    turn; on green wake squash-merge. No Resolves: trailer (the demo rec is closed directly via update_rec).
+  - >-
+    Report: the c1/c2/c3 demonstration outcomes (run URLs, the tf_drift rec id filed-then-closed), the
+    convergence record's red->green->red->green trajectory (unstrand then demo), all VP results, the
+    workflow fix + regression test, and the final roadmap bookkeeping.
+work_areas: []
+rollback: >-
+  The demonstration is self-cleaning: revert any seeded tag (restore the original managed value), remove any
+  seeded .tflock (after verifying its demo ID t2-24-acceptance-recovery-demo), dispatch-ack
+  terraform-apply-sandbox back to green, and close the demo tf_drift rec via update_rec -- leaving the sandbox
+  green with no open tf_drift rec. The code change (terraform-drift.yml acceptance line + the new test) is
+  revertable by reverting PR-A; the roadmap bookkeeping by reverting PR-B (which returns T2.24 to in_progress
+  with c1/c2/c3 open). No schema or data migration is involved; rollback is low-risk. If abandoned mid-demo,
+  perform the seed/lock cleanup and reconverge to green before ending.
