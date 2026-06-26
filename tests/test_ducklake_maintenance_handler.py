@@ -933,9 +933,7 @@ def test_action_clone_catalog_branch_dsn_inherits_prod_credentials():
     """branch_dsn must use prod role/password/dbname with only host substituted."""
     p = _clone_catalog_branch_patches()
     with p[0], p[1] as open_mock:
-        h.action_clone_catalog(
-            {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
-        )
+        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None)
     call_dsn = open_mock.call_args[1]["dsn"]
     assert call_dsn["host"] == _BRANCH_HOST
     assert call_dsn["dbname"] == _FULL_DSN["dbname"]
@@ -961,9 +959,7 @@ def test_action_clone_catalog_invalid_data_path_loud_fails():
     """Non-s3:// data_path raises CatalogDrError (Decision 55 loud-fail)."""
     with patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN):
         with pytest.raises(h.catalog_dr.CatalogDrError, match="data_path is required"):
-            h.action_clone_catalog(
-                {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": "/local/path"}, None
-            )
+            h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": "/local/path"}, None)
 
 
 def test_action_clone_catalog_empty_schemata_loud_fails():
@@ -997,9 +993,7 @@ def test_action_clone_catalog_no_pg_dump_no_pg_restore():
         patch.object(h.catalog_dr, "build_pg_dump_cmd", side_effect=lambda *a, **kw: pg_dump_calls.append(1) or []),
         patch.object(h.catalog_dr, "run_pg_restore", side_effect=lambda *a, **kw: pg_restore_calls.append(1)),
     ):
-        h.action_clone_catalog(
-            {"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None
-        )
+        h.action_clone_catalog({"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH}, None)
     assert pg_dump_calls == [], "build_pg_dump_cmd must not be called on the clone path (Decision 100)"
     assert pg_restore_calls == [], "run_pg_restore must not be called on the clone path (Decision 100)"
 
