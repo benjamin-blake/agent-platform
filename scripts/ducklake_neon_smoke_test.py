@@ -610,29 +610,18 @@ def lambda_warm_reuse_writer(*, profile: str | None = None, region: str = "eu-we
 
 
 def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """T2.18 VP9: write many small files to smoke tables, invoke merge, assert file count drops.
+    """T2.18 VP9: invoke merge on the smoke catalog, assert files_after_merge <= files_before.
 
-    Writes 5 small records to force multiple small Parquet files, then invokes action=merge.
-    Asserts files_after_merge >= 1 and that the response is ok=True.
+    The maintenance Lambda uses the smoke catalog (ducklake_smoke schema, smoke S3 path), which is
+    separate from the writer's production catalog (ducklake_ops). force_recreate_tables=True creates
+    the smoke DuckLake tables if absent, making this call idempotent on a fresh environment.
+    Requires agent_platform_admin (maintenance is break-glass on PlatformAdmin; PlatformDev only
+    holds InvokeFunction on writer + reader per platform_roles.tf).
     """
     maint_url = _function_url("maintenance")
-    writer_url = _function_url("writer")
-
-    # Pre-create tables and write several records to generate multiple small files.
-    _ok_json(
-        _sigv4_invoke(writer_url, {"action": "create_tables", "force_recreate_tables": True}, profile=profile, region=region)
+    body = _ok_json(
+        _sigv4_invoke(maint_url, {"action": "merge", "force_recreate_tables": True}, profile=profile, region=region)
     )
-    for i in range(5):
-        _ok_json(
-            _sigv4_invoke(
-                writer_url,
-                {"action": "write", "record": {"rec_id": f"maint-merge-{i}", "payload": f"v{i}"}},
-                profile=profile,
-                region=region,
-            )
-        )
-
-    body = _ok_json(_sigv4_invoke(maint_url, {"action": "merge"}, profile=profile, region=region))
     if not body.get("ok"):
         raise SmokeTestFailure(f"MAINTENANCE_MERGE FAIL: {body}")
     files_before = body.get("files_before", 0)
@@ -1291,6 +1280,8 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
             "branch_id": None,
         },
     }
+    # When emitting JSON on stdout, intermediate progress lines go to stderr so the pipe is clean.
+    _progress_file = sys.stderr if json_output else sys.stdout
 
     api_key = neon_api.fetch_api_key(profile=profile)
     project_id = neon_api.resolve_project_id(api_key)
@@ -1347,7 +1338,7 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
         if not create_body.get("ok"):
             raise SmokeTestFailure(f"CANARY_ATTACH FAIL (create_tables): {create_body}")
         out["attach_ok"] = True
-        print(f"CANARY_ATTACH OK (scratch catalog at {scratch_data_path})")
+        print(f"CANARY_ATTACH OK (scratch catalog at {scratch_data_path})", file=_progress_file)
 
         probe_id = uuid4().hex
         write_body = _lambda_invoke_cli(
@@ -1366,7 +1357,7 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
         if not rows:
             raise SmokeTestFailure(f"CANARY_RYW FAIL: probe {probe_id!r} not found (body: {read_body})")
         out["ryw_ok"] = True
-        print(f"CANARY_RYW OK probe {probe_id!r} verified via reader canary")
+        print(f"CANARY_RYW OK probe {probe_id!r} verified via reader canary", file=_progress_file)
 
         branch_id: str | None = None
         try:
@@ -1387,7 +1378,10 @@ def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", j
             if not clone_body.get("ok"):
                 raise SmokeTestFailure(f"CANARY_CLONE_CATALOG FAIL: {clone_body}")
             out["clone_ok"] = True
-            print(f"CANARY_CLONE_CATALOG OK branch_id={branch_id!r} meta_schema={clone_body.get('meta_schema')!r}")
+            print(
+                f"CANARY_CLONE_CATALOG OK branch_id={branch_id!r} meta_schema={clone_body.get('meta_schema')!r}",
+                file=_progress_file,
+            )
         finally:
             if branch_id is not None:
                 neon_api.delete_branch(api_key, project_id, branch_id)
