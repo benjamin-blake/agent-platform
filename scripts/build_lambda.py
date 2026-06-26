@@ -102,6 +102,13 @@ _DUCKLAKE_FUNCTION_ZIP_KEYS = {
 DUCKLAKE_PGCLIENT_S3_PREFIX = "ducklake-pgclient"
 PINNED_PG_MAJOR = "16"
 
+# The three DuckLake Lambda layers (deps + extensions + pgclient). Used by publish_canary_layers.
+DUCKLAKE_LAYER_NAMES = (
+    "ducklake-deps-layer",
+    "ducklake-extensions-layer",
+    "ducklake-pgclient-layer",
+)
+
 # Retained for backward compatibility with external callers and tests.
 _LAMBDA_SCRIPTS = [
     "__init__.py",
@@ -503,6 +510,16 @@ def build_pgclient_layer(
             print(f"  ERROR: {bundle_name} did not contain bin/pg_dump", file=sys.stderr)
             sys.exit(1)
 
+        pg_restore_bin = opt_bin / "pg_restore"
+        if not pg_restore_bin.exists():
+            print(
+                f"  ERROR: {bundle_name} did not contain bin/pg_restore (required for action_clone_catalog / "
+                "OQ.12 real read-clone). Re-seed the S3 bundle with pg_restore included -- it ships in the same "
+                "postgresql16 client RPM as pg_dump. See the catalog-DR runbook (Section 4).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         # Fail-closed version assert: pg_dump --version must report PG major 16, with the bundled
         # libs on the loader path (proves the closure links before the layer ships).
         version_env = {**os.environ, "LD_LIBRARY_PATH": str(opt_lib)}
@@ -543,6 +560,57 @@ def build_pgclient_layer(
                         info.external_attr = 0o644 << 16
                     zf.writestr(info, f.read_bytes())
     return zip_path
+
+
+def publish_canary_layers(*, bucket: str, profile: str = "agent_platform", region: str = "eu-west-2") -> dict[str, str]:
+    """Publish the three DuckLake layer zips (already in S3) as new aws_lambda layer versions.
+
+    Calls ``aws lambda publish-layer-version`` for each of the three DuckLake layers (deps, extensions,
+    pgclient) using the S3 zips that ``--ducklake-only`` already uploaded. Prints JSON mapping layer
+    name -> version ARN for the canary orchestrator to consume.
+
+    Layer zips must already be in S3 (run ``--ducklake-only`` first). Fails closed if any publish
+    fails. Returns the same ARN dict.
+    """
+    import json as _json  # noqa: PLC0415
+
+    arns: dict[str, str] = {}
+    for layer_name in DUCKLAKE_LAYER_NAMES:
+        s3_key = f"lambda-packages/{layer_name}.zip"
+        result = subprocess.run(
+            [
+                "aws",
+                "lambda",
+                "publish-layer-version",
+                "--layer-name",
+                layer_name,
+                "--content",
+                f"S3Bucket={bucket},S3Key={s3_key}",
+                "--region",
+                region,
+                "--profile",
+                profile,
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if result.returncode != 0:
+            print(
+                f"ERROR: failed to publish layer {layer_name}: {result.stderr.strip()[:500]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        data = _json.loads(result.stdout)
+        arn = data["LayerVersionArn"]
+        arns[layer_name] = arn
+        print(f"  OK {layer_name}: {arn}")
+    print(_json.dumps(arns))
+    return arns
 
 
 def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
@@ -794,10 +862,24 @@ def main() -> None:
         help="Stage a manifest-driven bundle and emit its static file list (skip_pip=True). "
         "ARTIFACT_SLUG is the src/lambdas/<name>/ directory name (e.g. data-pipeline).",
     )
+    parser.add_argument(
+        "--ducklake-publish-canary-layers",
+        action="store_true",
+        dest="ducklake_publish_canary_layers",
+        help="Publish the three DuckLake layer zips (already uploaded to S3 by --ducklake-only) as new "
+        "aws_lambda layer versions. Prints JSON mapping layer name -> version ARN for the canary "
+        "orchestrator (OQ.12 clone-rehearsal). Run after --ducklake-only to get candidate layer ARNs.",
+    )
     args = parser.parse_args()
 
     if args.list_bundle:
         list_bundle(args.list_bundle)
+        return
+
+    if args.ducklake_publish_canary_layers:
+        args.profile = _resolve_ducklake_profile(args.profile)
+        bucket = args.bucket or resolve_bucket(args.profile)
+        publish_canary_layers(bucket=bucket, profile=args.profile, region=args.region)
         return
 
     print("Lambda Package Builder (Manifest-Driven, CD.24)")

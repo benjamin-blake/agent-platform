@@ -867,3 +867,159 @@ def test_handler_catalog_stats_listed_in_actions():
     """catalog_stats must appear in the actions list returned on an unknown action."""
     body = _response_body(h.handler({"action": "bad"}))
     assert "catalog_stats" in body["actions"]
+
+
+# ---------------------------------------------------------------------------
+# action_clone_catalog (OQ.12 canary rehearsal)
+# ---------------------------------------------------------------------------
+
+
+class _FakePsycopg2Conn:
+    """Minimal psycopg2 connection double for clone_catalog unit tests."""
+
+    def __init__(self):
+        self.autocommit = False
+        self.closed_count = 0
+        self.executed: list[str] = []
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql: str) -> None:
+        self.executed.append(sql)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def close(self):
+        self.closed_count += 1
+
+
+def _psycopg2_connect_factory(create_conn=None, drop_conn=None):
+    """Return a fake psycopg2.connect that alternates create / drop connections."""
+    calls = []
+    conns = [create_conn or _FakePsycopg2Conn(), drop_conn or _FakePsycopg2Conn()]
+
+    def _connect(conninfo_str):
+        idx = min(len(calls), len(conns) - 1)
+        conn = conns[idx]
+        calls.append(conninfo_str)
+        return conn
+
+    return _connect, calls
+
+
+def _clone_catalog_patches(*, pg_dump_rc=0, ryw_rows=None, run_pg_restore_ok=True, scratch_dbname=None):
+    """Return a stack of patches for action_clone_catalog happy-path tests."""
+    import types
+
+    create_conn = _FakePsycopg2Conn()
+    drop_conn = _FakePsycopg2Conn()
+    fake_connect, _ = _psycopg2_connect_factory(create_conn, drop_conn)
+
+    fake_result = types.SimpleNamespace(returncode=pg_dump_rc, stderr="boom" if pg_dump_rc else "")
+
+    class _FakeCon:
+        def execute(self, sql):
+            return self
+
+        def fetchall(self):
+            return ryw_rows if ryw_rows is not None else [(1,)]
+
+        def close(self):
+            pass
+
+    con_mock = _FakeCon()
+
+    event = {"action": "clone_catalog"}
+    if scratch_dbname is not None:
+        event["scratch_dbname"] = scratch_dbname
+
+    return (
+        patch("psycopg2.connect", side_effect=fake_connect),
+        patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
+        patch.object(h, "subprocess_run", return_value=fake_result),
+        patch.object(h.catalog_dr, "build_pg_dump_cmd", return_value=["pg_dump", "--fake"]),
+        patch.object(h.catalog_dr, "run_pg_restore")
+        if run_pg_restore_ok
+        else patch.object(h.catalog_dr, "run_pg_restore", side_effect=h.catalog_dr.CatalogDrError("pg_restore boom")),
+        patch.object(h.rt, "open_connection", return_value=con_mock),
+    )
+
+
+def test_action_clone_catalog_happy_path():
+    """Happy path: pg_dump success, scratch DB created, pg_restore, ATTACH, RYW, DROP scratch."""
+    p = _clone_catalog_patches()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
+    assert result["ok"] is True
+    assert result["cloned"] is True
+    assert result["meta_schema"] == "ducklake_ops"
+    assert result["scratch_dbname"] == "neondb_canary"
+    assert "_canary_rehearsal" in result["scratch_data_path"]
+
+
+def test_action_clone_catalog_custom_scratch_dbname():
+    """Custom scratch_dbname is accepted and used."""
+    p = _clone_catalog_patches(scratch_dbname="my_scratch_db")
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        result = h.action_clone_catalog({"action": "clone_catalog", "scratch_dbname": "my_scratch_db"}, None)
+    assert result["scratch_dbname"] == "my_scratch_db"
+
+
+def test_action_clone_catalog_pg_dump_failure_loud_fails():
+    """Non-zero pg_dump exit raises CatalogDrError (Decision 55 loud-fail)."""
+    p = _clone_catalog_patches(pg_dump_rc=1)
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="pg_dump exited 1"):
+            h.action_clone_catalog({"action": "clone_catalog"}, None)
+
+
+def test_action_clone_catalog_pg_restore_failure_loud_fails():
+    """CatalogDrError from run_pg_restore propagates (Decision 55 loud-fail)."""
+    p = _clone_catalog_patches(run_pg_restore_ok=False)
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="pg_restore boom"):
+            h.action_clone_catalog({"action": "clone_catalog"}, None)
+
+
+def test_action_clone_catalog_ryw_empty_loud_fails():
+    """Empty SELECT 1 after ATTACH raises CatalogDrError (probe proved the engine cannot query)."""
+    p = _clone_catalog_patches(ryw_rows=[])
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        with pytest.raises(h.catalog_dr.CatalogDrError, match="RYW FAILED"):
+            h.action_clone_catalog({"action": "clone_catalog"}, None)
+
+
+def test_action_clone_catalog_never_targets_ducklake_ops_directly():
+    """scratch_dbname must never equal the production dbname (isolation invariant)."""
+    p = _clone_catalog_patches()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
+    assert result["scratch_dbname"] != _FULL_DSN["dbname"], (
+        "clone_catalog must NOT target the production database -- scratch isolation violated"
+    )
+
+
+def test_action_clone_catalog_scratch_data_path_not_production():
+    """scratch_data_path must be the canary prefix, never the production SMOKE_DATA_PATH."""
+    p = _clone_catalog_patches()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        result = h.action_clone_catalog({"action": "clone_catalog"}, None)
+    assert result["scratch_data_path"] != h.rt.SMOKE_DATA_PATH
+    assert "_canary_rehearsal" in result["scratch_data_path"]
+
+
+def test_action_clone_catalog_is_connectionless():
+    """clone_catalog must appear in _CONNECTIONLESS_ACTIONS (handler skips open_connection call)."""
+    assert "clone_catalog" in h._CONNECTIONLESS_ACTIONS
+
+
+def test_action_clone_catalog_listed_in_actions():
+    """clone_catalog must appear in _ACTIONS and in the handler's action list response."""
+    assert "clone_catalog" in h._ACTIONS
+    body = _response_body(h.handler({"action": "bad"}))
+    assert "clone_catalog" in body["actions"]

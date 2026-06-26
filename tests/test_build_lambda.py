@@ -761,3 +761,140 @@ class TestMainDispatch:
             bl.main()
         mock_lb.assert_called_once_with("data-pipeline")
         mock_prod.assert_not_called()
+
+    def test_main_ducklake_publish_canary_layers_routes(self):
+        """--ducklake-publish-canary-layers short-circuits to publish_canary_layers() then returns."""
+        with (
+            patch("scripts.build_lambda.publish_canary_layers") as mock_pub,
+            patch("scripts.build_lambda.resolve_bucket", return_value="test-bucket"),
+            patch("scripts.build_lambda._run_ducklake_build") as mock_dl,
+            patch(
+                "sys.argv",
+                ["build_lambda", "--ducklake-publish-canary-layers", "--profile", "agent_platform"],
+            ),
+        ):
+            bl.main()
+        mock_pub.assert_called_once()
+        mock_dl.assert_not_called()
+
+
+class TestPublishCanaryLayers:
+    """Unit tests for publish_canary_layers() -- mocked aws lambda publish-layer-version."""
+
+    def _arn_response(self, layer_name: str) -> str:
+        import json
+
+        return json.dumps(
+            {
+                "LayerVersionArn": f"arn:aws:lambda:eu-west-2:ACCOUNT_ID_PLACEHOLDER:layer:{layer_name}:99",
+                "Version": 99,
+            }
+        )
+
+    def test_publishes_all_three_layers_returns_arns(self):
+        call_args_list = []
+
+        def fake_run(cmd, **kw):
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            call_args_list.append(layer_name)
+            return types.SimpleNamespace(returncode=0, stdout=self._arn_response(layer_name), stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            arns = bl.publish_canary_layers(bucket="my-bucket", profile="agent_platform", region="eu-west-2")
+
+        assert set(arns.keys()) == {"ducklake-deps-layer", "ducklake-extensions-layer", "ducklake-pgclient-layer"}
+        for name, arn in arns.items():
+            assert arn == f"arn:aws:lambda:eu-west-2:ACCOUNT_ID_PLACEHOLDER:layer:{name}:99"
+        assert set(call_args_list) == {"ducklake-deps-layer", "ducklake-extensions-layer", "ducklake-pgclient-layer"}
+
+    def test_prints_json_arns_to_stdout(self, capsys):
+        def fake_run(cmd, **kw):
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            return types.SimpleNamespace(returncode=0, stdout=self._arn_response(layer_name), stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bl.publish_canary_layers(bucket="b", profile="p", region="r")
+
+        captured = capsys.readouterr().out
+        import json
+
+        json_line = [ln for ln in captured.splitlines() if ln.startswith("{")]
+        assert json_line, "Expected a JSON line in stdout"
+        data = json.loads(json_line[-1])
+        assert "ducklake-deps-layer" in data
+
+    def test_exits_on_publish_failure(self):
+        def fake_run(cmd, **kw):
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="AccessDenied")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            with pytest.raises(SystemExit):
+                bl.publish_canary_layers(bucket="b", profile="p", region="r")
+
+    def test_uses_correct_s3_key_per_layer(self):
+        seen_keys = []
+
+        def fake_run(cmd, **kw):
+            content_arg = cmd[cmd.index("--content") + 1]
+            seen_keys.append(content_arg)
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            return types.SimpleNamespace(returncode=0, stdout=self._arn_response(layer_name), stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bl.publish_canary_layers(bucket="my-bucket", profile="p", region="r")
+
+        for key in seen_keys:
+            assert "my-bucket" in key
+            assert key.startswith("S3Bucket=my-bucket,S3Key=lambda-packages/")
+
+
+class TestBuildPgclientLayerPgRestoreCheck:
+    """Fail-closed assertion: build_pgclient_layer exits if bundle lacks bin/pg_restore."""
+
+    def test_exits_when_pg_restore_missing_from_bundle(self, tmp_path):
+        """If the bundle has pg_dump but not pg_restore, build_pgclient_layer must sys.exit(1)."""
+        import io
+        import tarfile
+
+        # Build a tarball that has bin/pg_dump but NOT bin/pg_restore.
+        raw_tar = io.BytesIO()
+        with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
+            content = b"#!/bin/sh\necho 'pg_dump (PostgreSQL) 16.0'"
+            info = tarfile.TarInfo(name="bin/pg_dump")
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+        bundle_bytes = raw_tar.getvalue()
+
+        with (
+            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
+            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
+        ):
+            with pytest.raises(SystemExit):
+                bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
+
+    def test_passes_when_both_pg_dump_and_pg_restore_present(self, tmp_path):
+        """When bin/pg_dump AND bin/pg_restore are in the bundle, proceed past the guard."""
+        import io
+        import tarfile
+
+        # Build a tarball with both binaries.
+        raw_tar = io.BytesIO()
+        with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
+            for name in ("bin/pg_dump", "bin/pg_restore"):
+                content = b"#!/bin/sh\necho 'fake-binary'"
+                info = tarfile.TarInfo(name=name)
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+        bundle_bytes = raw_tar.getvalue()
+
+        # The version assert runs pg_dump --version; stub it to return the right PG major.
+        def fake_run(cmd, **kw):
+            return types.SimpleNamespace(returncode=0, stdout=f"pg_dump (PostgreSQL) {bl.PINNED_PG_MAJOR}.0\n", stderr="")
+
+        with (
+            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
+            patch("scripts.build_lambda.subprocess.run", side_effect=fake_run),
+            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
+        ):
+            result = bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
+        assert result.name == "ducklake-pgclient-layer.zip"

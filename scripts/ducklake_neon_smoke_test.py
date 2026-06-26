@@ -171,6 +171,12 @@ def _evaluate_churn(results: list[dict[str, Any]]) -> tuple[bool, dict[str, floa
 
 def churn_gate(*, profile: str | None = None, dsn: dict[str, str] | None = None) -> dict[str, float]:
     """Run the connection-churn / OCC gate. Loud-fail (Decision 55) if outside CD.33's OCC budget."""
+    if not os.environ.get("DUCKLAKE_ALLOW_DIRECT_GATE"):
+        raise SmokeTestFailure(
+            "DIRECT_GATE_REFUSED: --churn-gate requires outbound TCP/5432 which is blocked from CC-web. "
+            "Canonical pre-deploy gate from CC-web: --canary-rehearsal (runs over 443 via Lambda). "
+            "To force on a privileged host with TCP/5432 access: export DUCKLAKE_ALLOW_DIRECT_GATE=1"
+        )
     import boto3  # noqa: PLC0415
 
     from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
@@ -267,6 +273,12 @@ def restore_drill(
     dump_path: str = "/tmp/ducklake_neon_restore_drill.sql",
 ) -> bool:
     """Consistent pg_dump -> scratch Neon -> DuckDB read-your-write. Loud-fail if the probe is lost."""
+    if not os.environ.get("DUCKLAKE_ALLOW_DIRECT_GATE"):
+        raise SmokeTestFailure(
+            "DIRECT_GATE_REFUSED: --restore-drill requires outbound TCP/5432 which is blocked from CC-web. "
+            "Canonical pre-deploy gate from CC-web: --canary-rehearsal (runs over 443 via Lambda). "
+            "To force on a privileged host with TCP/5432 access: export DUCKLAKE_ALLOW_DIRECT_GATE=1"
+        )
     dsn = dsn or fetch_dsn(profile=profile)
     scratch = scratch_dsn or _derive_scratch_dsn(dsn)
     probe = uuid4().hex
@@ -1031,6 +1043,374 @@ def lambda_append_only(*, profile: str | None = None, region: str = "eu-west-2")
     )
 
 
+# ---------------------------------------------------------------------------
+# OQ.12 Canary-rehearsal orchestration (pre-deploy, CC-web compatible over 443)
+# ---------------------------------------------------------------------------
+
+_CANARY_SCRATCH_META = "ducklake_canary_rehearsal"
+_CANARY_FUNCTION_NAMES = {
+    "writer": "ducklake-writer-canary-ephemeral",
+    "reader": "ducklake-reader-canary-ephemeral",
+    "maintenance": "ducklake-maintenance-canary-ephemeral",
+}
+_CANARY_PROD_FUNCTION_NAMES = {
+    "writer": "agent-platform-ducklake-writer",
+    "reader": "agent-platform-ducklake-reader",
+    "maintenance": "agent-platform-ducklake-maintenance",
+}
+_CANARY_ZIP_KEYS = {
+    "writer": "lambda-packages/ducklake-writer.zip",
+    "reader": "lambda-packages/ducklake-reader.zip",
+    "maintenance": "lambda-packages/ducklake-maintenance.zip",
+}
+_CANARY_HANDLERS = {
+    "writer": "src.lambdas.ducklake_writer.handler.handler",
+    "reader": "src.lambdas.ducklake_reader.handler.handler",
+    "maintenance": "src.lambdas.ducklake_maintenance.handler.handler",
+}
+
+
+def _aws_cmd(args_list: list[str], *, profile: str | None) -> list[str]:
+    """Prepend [aws] and optional --profile to a command list."""
+    cmd = ["aws"] + args_list
+    if profile:
+        cmd += ["--profile", profile]
+    return cmd
+
+
+def _publish_candidate_layers(*, bucket: str, profile: str | None, region: str) -> dict[str, str]:
+    """Call build_lambda --ducklake-publish-canary-layers and parse the ARN JSON from stdout.
+
+    Returns a dict mapping layer name -> version ARN for all three DuckLake layers.
+    Loud-fail if the subprocess errors or no ARN JSON is found in stdout.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "scripts.build_lambda",
+        "--ducklake-publish-canary-layers",
+        "--bucket",
+        bucket,
+        "--region",
+        region,
+    ]
+    if profile:
+        cmd += ["--profile", profile]
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if result.returncode != 0:
+        raise SmokeTestFailure(f"publish-canary-layers failed rc={result.returncode}: {result.stderr.strip()[:300]}")
+    for line in reversed(result.stdout.strip().splitlines()):
+        try:
+            data = json.loads(line)
+            if isinstance(data, dict) and data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    raise SmokeTestFailure(f"publish-canary-layers: no ARN JSON found in output: {result.stdout[:300]}")
+
+
+def _get_function_role_arn(fn_name: str, *, profile: str | None, region: str) -> str:
+    """Get the execution role ARN from an existing Lambda function's configuration."""
+    cmd = _aws_cmd(
+        [
+            "lambda",
+            "get-function-configuration",
+            "--function-name",
+            fn_name,
+            "--query",
+            "Role",
+            "--output",
+            "text",
+            "--region",
+            region,
+        ],
+        profile=profile,
+    )
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if result.returncode != 0:
+        raise SmokeTestFailure(f"get-function-configuration {fn_name} failed: {result.stderr.strip()[:300]}")
+    return result.stdout.strip()
+
+
+def _canary_create_function(
+    fn_name: str,
+    *,
+    handler: str,
+    bucket: str,
+    zip_key: str,
+    role_arn: str,
+    layer_arns: list[str],
+    env_vars: dict[str, str],
+    profile: str | None,
+    region: str,
+) -> None:
+    """Create an ephemeral Lambda function on the candidate layers.
+
+    Loud-fail if create-function returns non-zero. Reuses an existing execution role ARN --
+    no new IAM is created (Decision 77). The function is ephemeral: torn down in canary_rehearsal's
+    finally block.
+    """
+    env_str = "Variables={" + ",".join(f"{k}={v}" for k, v in env_vars.items()) + "}"
+    cmd = _aws_cmd(
+        [
+            "lambda",
+            "create-function",
+            "--function-name",
+            fn_name,
+            "--runtime",
+            "python3.12",
+            "--role",
+            role_arn,
+            "--handler",
+            handler,
+            "--code",
+            f"S3Bucket={bucket},S3Key={zip_key}",
+            "--layers",
+        ]
+        + layer_arns
+        + [
+            "--environment",
+            env_str,
+            "--timeout",
+            "900",
+            "--memory-size",
+            "512",
+            "--region",
+            region,
+        ],
+        profile=profile,
+    )
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if result.returncode != 0:
+        raise SmokeTestFailure(f"create-function {fn_name} failed: {result.stderr.strip()[:300]}")
+
+
+def _canary_delete_function(fn_name: str, *, profile: str | None, region: str) -> bool:
+    """Delete an ephemeral Lambda function. Returns True on success (including 404 = already gone)."""
+    cmd = _aws_cmd(["lambda", "delete-function", "--function-name", fn_name, "--region", region], profile=profile)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    return result.returncode == 0
+
+
+def _lambda_invoke_cli(fn_name: str, payload: dict[str, Any], *, profile: str | None, region: str) -> dict[str, Any]:
+    """Invoke a Lambda function via `aws lambda invoke` (over 443 -- CC-web compatible).
+
+    Returns the parsed response body dict. Loud-fail if the AWS CLI call errors.
+    Does NOT check for ok=True -- callers inspect the body.
+    """
+    import tempfile as _tf  # noqa: PLC0415
+
+    with _tf.TemporaryDirectory() as tmp:
+        out_path = f"{tmp}/response.json"
+        cmd = _aws_cmd(
+            [
+                "lambda",
+                "invoke",
+                "--function-name",
+                fn_name,
+                "--payload",
+                json.dumps(payload),
+                "--cli-binary-format",
+                "raw-in-base64-out",
+                "--region",
+                region,
+                out_path,
+            ],
+            profile=profile,
+        )
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        if result.returncode != 0:
+            raise SmokeTestFailure(f"lambda invoke {fn_name} failed rc={result.returncode}: {result.stderr.strip()[:300]}")
+        with open(out_path) as f:
+            return json.load(f)
+
+
+def _canary_churn(writer_fn: str, *, profile: str | None, region: str) -> dict[str, float]:
+    """N=CHURN_WRITERS concurrent churn_single invocations on writer_fn. Evaluates unchanged CD.33 budgets.
+
+    Concurrent Lambda invocations (each its own vCPU) -- matches the EC8 measurement subject (Decision 82
+    / CD.33 clause 3). Loud-fail if collision_rate or p95_latency_ms exceeds the budget constants
+    imported from ducklake_runtime (Decision 55 -- never relax).
+    """
+    with ThreadPoolExecutor(max_workers=CHURN_WRITERS) as pool:
+        futures = [
+            pool.submit(
+                _lambda_invoke_cli,
+                writer_fn,
+                {"action": "churn_single", "writer_id": i},
+                profile=profile,
+                region=region,
+            )
+            for i in range(CHURN_WRITERS)
+        ]
+        bodies = [f.result() for f in futures]
+
+    collided_count = sum(1 for b in bodies if b.get("collided"))
+    collision_rate = collided_count / len(bodies) if bodies else 0.0
+    p95_wall = _p95([b.get("latency_ms", 0.0) for b in bodies])
+
+    if collision_rate > OCC_COLLISION_RATE_BUDGET or p95_wall > COMMIT_LATENCY_BUDGET_MS:
+        raise SmokeTestFailure(
+            f"CANARY_CHURN FAIL: collision_rate={collision_rate:.3f} (budget {OCC_COLLISION_RATE_BUDGET}) "
+            f"p95_latency_ms={p95_wall:.1f} (budget {COMMIT_LATENCY_BUDGET_MS}). "
+            "RCA the regression -- do NOT relax the budget constants (Decision 55)."
+        )
+    return {"collision_rate": round(collision_rate, 3), "p95_latency_ms": round(p95_wall, 1)}
+
+
+def canary_rehearsal(*, profile: str | None = None, region: str = "eu-west-2", json_output: bool = False) -> None:
+    """OQ.12 pre-deploy clone-rehearsal from CC-web (no TCP/5432).
+
+    Full orchestration (all AWS API calls over 443; TCP/5432 happens server-side inside Lambda):
+      (1) Publish candidate DuckLake layers via build_lambda --ducklake-publish-canary-layers.
+      (2) Create ephemeral writer/reader/maintenance canaries on candidate layers + scratch env
+          (DUCKLAKE_META_SCHEMA=ducklake_canary_rehearsal, DUCKLAKE_DATA_PATH=.../ducklake/_canary_rehearsal/).
+      (3) Prove ATTACH: writer canary action=create_tables at the scratch catalog.
+      (4) Prove churn: N=CHURN_WRITERS concurrent churn_single invocations (unchanged CD.33 budgets).
+      (5) Prove RYW: reader canary reads back the probe row.
+      (6) Real-prod read-clone: maintenance canary action=clone_catalog.
+      (7) Teardown in finally: delete canaries, catalog_reinit scratch meta-schema, delete scratch S3 prefix.
+
+    With json_output=True, emits a JSON dict for VP10 isolation check including torn_down + scratch identifiers.
+    Loud-fail (SmokeTestFailure) on any gate miss (Decision 55).
+    """
+    _bucket = ducklake_runtime.SMOKE_DATA_PATH.split("/")[2]
+    scratch_data_path = f"s3://{_bucket}/ducklake/_canary_rehearsal/"
+    scratch_meta = _CANARY_SCRATCH_META
+
+    out: dict[str, Any] = {
+        "attach_ok": False,
+        "churn": {},
+        "ryw_ok": False,
+        "clone_ok": False,
+        "torn_down": {
+            "canary_functions": False,
+            "scratch_meta": False,
+            "scratch_db": False,
+            "scratch_s3_prefix": False,
+        },
+        "scratch": {
+            "meta_schema": scratch_meta,
+            "data_path": scratch_data_path,
+            "clone_dbname": None,
+        },
+    }
+
+    layer_arns = _publish_candidate_layers(bucket=_bucket, profile=profile, region=region)
+    layer_arn_list = list(layer_arns.values())
+
+    role_arns = {
+        role: _get_function_role_arn(prod_fn, profile=profile, region=region)
+        for role, prod_fn in _CANARY_PROD_FUNCTION_NAMES.items()
+    }
+
+    scratch_env = {"DUCKLAKE_META_SCHEMA": scratch_meta, "DUCKLAKE_DATA_PATH": scratch_data_path}
+    writer_fn = _CANARY_FUNCTION_NAMES["writer"]
+    reader_fn = _CANARY_FUNCTION_NAMES["reader"]
+    maint_fn = _CANARY_FUNCTION_NAMES["maintenance"]
+
+    try:
+        for role, fn_name in _CANARY_FUNCTION_NAMES.items():
+            _canary_create_function(
+                fn_name,
+                handler=_CANARY_HANDLERS[role],
+                bucket=_bucket,
+                zip_key=_CANARY_ZIP_KEYS[role],
+                role_arn=role_arns[role],
+                layer_arns=layer_arn_list,
+                env_vars=scratch_env,
+                profile=profile,
+                region=region,
+            )
+
+        create_body = _lambda_invoke_cli(
+            writer_fn, {"action": "create_tables", "force_recreate_tables": True}, profile=profile, region=region
+        )
+        if not create_body.get("ok"):
+            raise SmokeTestFailure(f"CANARY_ATTACH FAIL (create_tables): {create_body}")
+        out["attach_ok"] = True
+        print(f"CANARY_ATTACH OK (scratch catalog at {scratch_data_path})")
+
+        probe_id = uuid4().hex
+        write_body = _lambda_invoke_cli(
+            writer_fn,
+            {"action": "write", "record": {"rec_id": probe_id, "payload": "canary-probe"}},
+            profile=profile,
+            region=region,
+        )
+        if not write_body.get("ok"):
+            raise SmokeTestFailure(f"CANARY_RYW probe write FAIL: {write_body}")
+
+        _lambda_invoke_cli(writer_fn, {"action": "churn_single", "setup": True}, profile=profile, region=region)
+        churn_metrics = _canary_churn(writer_fn, profile=profile, region=region)
+        out["churn"] = churn_metrics
+        print(
+            f"CANARY_CHURN OK collision_rate={churn_metrics['collision_rate']} "
+            f"p95_latency_ms={churn_metrics['p95_latency_ms']}"
+        )
+
+        read_body = _lambda_invoke_cli(
+            reader_fn, {"action": "read_current", "rec_id": probe_id}, profile=profile, region=region
+        )
+        rows = read_body.get("rows") or []
+        if not rows:
+            raise SmokeTestFailure(f"CANARY_RYW FAIL: probe {probe_id!r} not found (body: {read_body})")
+        out["ryw_ok"] = True
+        print(f"CANARY_RYW OK probe {probe_id!r} verified via reader canary")
+
+        clone_invoked = False
+        try:
+            clone_body = _lambda_invoke_cli(maint_fn, {"action": "clone_catalog"}, profile=profile, region=region)
+            clone_invoked = True
+            out["scratch"]["clone_dbname"] = clone_body.get("scratch_dbname")
+            if not clone_body.get("ok"):
+                raise SmokeTestFailure(f"CANARY_CLONE_CATALOG FAIL: {clone_body}")
+            out["clone_ok"] = True
+            print(
+                f"CANARY_CLONE_CATALOG OK scratch_dbname={clone_body.get('scratch_dbname')!r} "
+                f"meta_schema={clone_body.get('meta_schema')!r}"
+            )
+        finally:
+            out["torn_down"]["scratch_db"] = clone_invoked
+
+    finally:
+        all_fn_deleted = True
+        for fn_name in _CANARY_FUNCTION_NAMES.values():
+            if not _canary_delete_function(fn_name, profile=profile, region=region):
+                all_fn_deleted = False
+        out["torn_down"]["canary_functions"] = all_fn_deleted
+
+        try:
+            maint_url = _function_url("maintenance")
+            reinit_resp = _sigv4_invoke(
+                maint_url,
+                {
+                    "action": "catalog_reinit",
+                    "meta_schema": scratch_meta,
+                    "confirm": scratch_meta,
+                    "data_path": scratch_data_path,
+                },
+                profile=profile,
+                region=region,
+            )
+            out["torn_down"]["scratch_meta"] = reinit_resp.status_code == 200
+        except Exception:  # noqa: BLE001
+            out["torn_down"]["scratch_meta"] = False
+
+        rm_cmd = _aws_cmd(["s3", "rm", "--recursive", scratch_data_path, "--region", region], profile=profile)
+        rm_result = subprocess.run(rm_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        out["torn_down"]["scratch_s3_prefix"] = rm_result.returncode == 0
+
+    if json_output:
+        print(json.dumps(out))
+        return
+
+    print(
+        f"CANARY_REHEARSAL OK attach={out['attach_ok']} churn={out['churn']} "
+        f"ryw={out['ryw_ok']} clone={out['clone_ok']} torn_down={out['torn_down']}"
+    )
+
+
 _LAMBDA_GATES: dict[str, Callable[..., None]] = {
     "lambda_attach": lambda_attach,
     "lambda_ingress": lambda_ingress,
@@ -1151,6 +1531,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="[post-deploy] T1.14 VP gate: write_ops on ops_smoke_events (append_only), "
         "assert 1 history row + no current projection",
     )
+    group.add_argument(
+        "--canary-rehearsal",
+        action="store_true",
+        dest="canary_rehearsal",
+        help="[pre-deploy] OQ.12 full canary rehearsal from CC-web (no TCP/5432): publish candidate layers, "
+        "create ephemeral canaries, prove attach + churn + RYW + real-prod read-clone, teardown.",
+    )
     parser.add_argument("--profile", default=None, help="AWS profile override for Secrets Manager / S3 creds")
     parser.add_argument("--region", default="eu-west-2", help="AWS region for SigV4 / metrics")
     parser.add_argument(
@@ -1182,6 +1569,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             lambda_warm_reuse(profile=args.profile, region=args.region, json_output=args.json_output)
         elif args.lambda_warm_reuse_writer:
             lambda_warm_reuse_writer(profile=args.profile, region=args.region, json_output=args.json_output)
+        elif args.canary_rehearsal:
+            canary_rehearsal(profile=args.profile, region=args.region, json_output=args.json_output)
         else:
             gate = _selected_lambda_gate(args)
             gate(profile=args.profile, region=args.region)
