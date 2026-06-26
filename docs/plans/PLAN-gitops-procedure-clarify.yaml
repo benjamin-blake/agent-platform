@@ -1,0 +1,182 @@
+schema_version: 1
+slug: "gitops-procedure-clarify"
+intent: >-
+  De-conflict the agent-facing git-ops procedure so agents stop misfiring on
+  contradictory instructions, by making AGENTS.md the single canonical statement
+  of the procedure and correcting the stale references the commands and skills
+  still carry. This protects the reliability of the /plan -> /implement pipeline
+  that all platform work flows through.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-gitops-procedure-clarify.yaml
+phase: >-
+  Platform instruction-architecture maintenance. Realizes the
+  ".claude/commands/plan.md / implement.md reconciliation" that Decision 85
+  explicitly anticipated (rec-2172, rec-2269). No specific tier_item is claimed
+  (ad-hoc instruction-quality fix, user-initiated); Tier Item Freshness Gate
+  skipped under the ad_hoc_rec / user_explicit soft-warn exception.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add the canonical "Git-ops procedure" section (the single source of truth
+      the other surfaces point to). Consolidate: branching topology (CC-web only,
+      DEV vs ADMIN containers, harness claude/ branch, never agent/, never main);
+      the TAP-style two-tier model (--pre fast tier is the authoritative pre-merge
+      gate, full tier post-merge spawns a ci_rca rec); the commit-message
+      convention table (plan/feat/roadmap/scope); the rebase phase distinction
+      (assessment-time never-auto-rebase vs commit-flow-time auto-rebase, STOP on
+      conflict); the push -> PR -> subscribe -> CI-green-comment wake -> verify ->
+      squash-merge flow; and the Resolves: trailer. Prune the stale local-dev /
+      agent/{slug} fallback clause. Reference (not restate) the existing ci_rca /
+      RCA-first protocol.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Replace every PLAN-{slug}.md reference with PLAN-{slug}.yaml (frontmatter
+      description, Steps 8/11/12, REPORT-ONLY refs, handoff message) and add a
+      pointer to AGENTS.md "Git-ops procedure" as canonical.
+  - file: .claude/commands/implement.md
+    action: Modify
+    purpose: >-
+      Replace PLAN-{slug}.md / PLAN-slug.md / PLAN-*.md references with .yaml
+      (argument-hint, Step 2 "list docs/plans/PLAN-*.md", Steps 4/5) and add a
+      pointer to AGENTS.md "Git-ops procedure" as canonical.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Reframe the Commit Flows line that cites Decision 89 "Branch Protection Not
+      Available" so it cites Decision 83 (which reversed that premise) while noting
+      the squash-merge-after-CI gate is preserved. De-duplicate the rebase
+      description and make the assessment-time vs commit-time distinction explicit.
+      Add the CI-green-comment wake mechanism (and why: no sleep tool on CC-web;
+      ignore GitHub's failure-only/sleep suggestion) and the verify-before-merge
+      rule. Add a pointer to AGENTS.md "Git-ops procedure" as canonical.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Make the rebase phase distinction explicit in the Main Divergence Assessment
+      and Create Branch sections, and add a pointer to AGENTS.md "Git-ops
+      procedure" as canonical. (Plan-file references are already .yaml here.)
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: >-
+      Replace the single PLAN-{slug}.md reference (line ~172) with PLAN-{slug}.yaml.
+  - file: .claude/hooks/never_on_main.py
+    action: Modify
+    purpose: >-
+      Update the block-message guidance text (currently instructs "git checkout -b
+      agent/your-slug") to reflect the CC-web harness model (you are already on a
+      claude/ session branch; create a new branch only if detached). String/message
+      change only -- the enforcement logic (which Bash/Edit calls are blocked on
+      main) is unchanged.
+bundled_recommendations:
+  - rec-2172
+  - rec-2269
+infrastructure_dependencies: []
+acceptance_criteria:
+  - AGENTS.md contains a single canonical "Git-ops procedure" section covering branching topology (CC-web only, DEV/ADMIN containers, claude/ branch), the TAP two-tier model, the commit-message convention table, the rebase phase distinction, the push/PR/subscribe/comment-wake/verify/squash-merge flow, and the Resolves trailer.
+  - No PLAN-{slug}.md / PLAN-*.md / PLAN-slug.md plan-file references remain in .claude/commands/plan.md, .claude/commands/implement.md, or .claude/skills/code-review/SKILL.md; all use PLAN-{slug}.yaml.
+  - The implement skill's Commit Flows no longer present Decision 89's "branch protection not available" as the live basis; it cites Decision 83 (premise reversed) while stating the squash-merge-after-CI gate is preserved.
+  - No local-dev / agent/{slug} fallback guidance remains in AGENTS.md or the never_on_main.py block message; both reflect the CC-web-only model.
+  - The plan/implement commands and the planning/implement skills each contain a pointer naming AGENTS.md "Git-ops procedure" as the canonical authority.
+  - The existing AGENTS.md Merge protocol / Branching sections defer to the canonical Git-ops procedure section instead of retaining a duplicate copy of the procedure (de-duplication verified, not just additions).
+  - bin/venv-python -m scripts.validate --pre exits 0 (prompt-compliance behavioural invariants in the skills still pass).
+  - rec-2172 and rec-2269 are closed after merge (Resolves trailer + rec-autoclose, or fallback close).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm no markdown plan-file references survive in the command files or code-review skill.
+    command: "! grep -rnE 'PLAN-(\\{slug\\}|\\*|slug)\\.md' .claude/commands/plan.md .claude/commands/implement.md .claude/skills/code-review/SKILL.md"
+    expected: Exit 0 (grep finds nothing; the leading ! inverts grep's no-match exit).
+    fix_if: A non-zero exit means a .md reference remains -- replace it with the .yaml form.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm AGENTS.md has the canonical section header.
+    command: "grep -nE '^## Git-ops procedure' AGENTS.md"
+    expected: One matching line (the new canonical section header).
+    fix_if: No match -- the canonical section was not added or is mis-titled.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the stale local-dev / agent/{slug} fallback was pruned from AGENTS.md.
+    command: "! grep -nE 'Local-dev fallback|agent/\\{slug\\}|checkout -b agent/' AGENTS.md"
+    expected: Exit 0 (no stale fallback clause remains).
+    fix_if: A match means the fallback prose survived -- remove it.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the never_on_main hook message no longer tells agents to create an agent/ branch, and still parses as valid Python.
+    command: "bin/venv-python -c \"import ast,sys; ast.parse(open('.claude/hooks/never_on_main.py').read()); sys.exit(0 if 'checkout -b agent/' not in open('.claude/hooks/never_on_main.py').read() else 1)\""
+    expected: Exit 0 (file parses and the agent/ checkout instruction is gone).
+    fix_if: Non-zero -- either a syntax error was introduced (revert the edit) or the agent/ instruction text remains.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the implement skill's commit-flow now cites Decision 83 (not Decision 89 as the live basis).
+    command: "grep -n 'Decision 83' .claude/skills/implement/SKILL.md"
+    expected: At least one match in the Commit Flows region reframing the branch-protection basis.
+    fix_if: No match -- the Decision 89 reference was not reframed to Decision 83.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm each pointed surface names AGENTS.md as the canonical git-ops authority.
+    command: "for f in .claude/commands/plan.md .claude/commands/implement.md .claude/skills/planning/SKILL.md .claude/skills/implement/SKILL.md; do grep -qiE 'AGENTS.md.*[Gg]it-ops' \"$f\" || { echo \"MISSING pointer: $f\"; exit 1; }; done; echo ALL_POINTERS_PRESENT"
+    expected: Prints ALL_POINTERS_PRESENT (exit 0).
+    fix_if: Prints a MISSING pointer line -- add the canonical-authority pointer to that file.
+  - step: 7
+    phase: pre-deploy
+    action: Run the fast validation tier to confirm no prompt-compliance / static-gate regressions from the edits.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: Exit 0.
+    fix_if: A failed check names the offending file/gate -- fix it (commonly a removed behavioural-invariant block in a skill); re-run.
+  - step: 8
+    phase: pre-deploy
+    action: Confirm the existing Merge protocol / Branching sections defer to the new canonical section rather than retaining a second drifting copy of the procedure (the plan's de-duplication goal).
+    command: "bin/venv-python -c \"import re,sys; t=open('AGENTS.md').read(); sec=re.split(r'^## ', t, flags=re.M); mp=[s for s in sec if s.startswith('Merge protocol')]; sys.exit(0 if mp and re.search(r'[Gg]it-ops procedure', mp[0]) else 1)\""
+    expected: Exit 0 -- the Merge protocol section references the canonical Git-ops procedure section (deferral pointer present, confirming it was slimmed rather than duplicated).
+    fix_if: Non-zero means the Merge protocol section still restates the procedure without deferring -- add the canonical pointer and trim the overlapping prose.
+  - step: 9
+    phase: post-deploy
+    action: After the squash-merge lands on main, confirm the bundled recs were closed.
+    command: "bin/venv-python -m scripts.ops_data_portal --sync && grep -hE 'rec-2172|rec-2269' logs/.recommendations-log.jsonl"
+    expected: Both rec-2172 and rec-2269 show status closed (via the Resolves trailer + rec-autoclose).
+    fix_if: A rec is still open after ~5 min -- close directly with ops_data_portal --update-rec rec-NNNN --status closed --resolution "Resolved by merge of gitops-procedure-clarify -- autoclose fallback".
+constraints:
+  - Documentation/instruction files only -- no source-logic or infra changes. The only Python touched is the never_on_main.py block message string; its enforcement logic must not change.
+  - Do not modify scripts/find_plan.py -- its PLAN-*.md fallback is deliberate deprecation-grace logic (rec-2175 owns its removal after one release cycle).
+  - No new standing prose-architecture doc under docs/ (Decision 86). The canonical procedure lands in AGENTS.md, a root governance file -- the allowed location.
+  - Preserve all machine-readable behavioural-invariant blocks in the skills (prompt_compliance reads them); add/clarify prose around them, never remove invariants.
+  - Reference the existing ci_rca / RCA-first CI-failure protocol rather than restating it with drift (Decision 55, Decision 72).
+  - No emojis; ASCII hyphens only; no model identifier in any committed artefact.
+context:
+  - Decision 85 ratifies CD.22 (PLAN-*.yaml canonical) and amends Decision 76 clause 3; it names the ".claude/commands/plan.md / implement.md reconciliation" as the pending work this plan performs. CITE 85 (and CD.22/T1.11) as the authority for the .md->.yaml fix.
+  - Decision 76 governs the web merge flow (GitHub MCP, squash-merge, harness session branch, no agent/ branch). Its clause 3 literally still says PLAN-{slug}.md but was amended to .yaml by Decision 85 -- the canonical AGENTS.md section reflects the amended state.
+  - Decision 83 ("Branch Protection Now Active -- Amends Decision 89 Premise", 2026-06-08) reverses Decision 89's "branch-protection-unavailable" premise. The main-protection ruleset is active but deliberately non-wedging; the squash-merge-after-CI merge-gate design is PRESERVED. Frame the implement-skill fix as "83 amended 89's premise; the gate is preserved" -- not "89 was wrong." Decision 89 stays as audit history.
+  - >-
+    Decision 73 defines the two-tier model -- --pre fast tier is the authoritative pre-merge gate (PR CI); the full tier runs post-merge on main and a failure there spawns a source=ci_rca, priority=critical rec (forward-fix, never auto-revert). The user frames this as Google-TAP-style presubmit/postsubmit -- adopt that framing in the canonical section.
+  - >-
+    CI-success wake mechanism (verified at .github/workflows/ci.yml lines 157-178) -- on success() for claude/* PRs the workflow posts a "CI green" comment (continue-on-error). This exists because subscribe_pr_activity natively delivers failure events but not a CI-success webhook, and CC-web has no sleep/idle tool, so the comment is the pass wake. Agents must IGNORE GitHub's failure-only-alert plus sleep-loop suggestion. The comment is a wake signal, not proof -- verify check runs (pull_request_read get_status/get_check_runs) before merging.
+  - >-
+    Container topology (from the user) -- development is CC-web-exclusive until the autonomous executor is functional again (then hybrid executor plus CC-web). Two CC-web containers exist -- "DEV" (primary, this one; agent_platform profile only) and "ADMIN" (rarely used, advanced privileges for terraform IAM; has both agent_platform and agent_platform_admin profiles). The ADMIN/agent_platform_admin path ties to the human-gated terraform apply loop (Decision 35 / CD.35 / Decision 77) -- describe the container split, do not change those gating procedures.
+  - >-
+    Bundled recs rec-2172 (reconcile commands to PLAN-*.yaml) and rec-2269 (plan.md slug refs still say .md) are resolved by this plan and declared above with a closure VP step (Closure Obligation).
+  - >-
+    Out-of-scope follow-ups (do not bundle) -- rec-2175 (remove find_plan.py .md read path after one release cycle) and rec-2022 (ci.yml green-wake gate omits codeql analyze check); both require files held out of this plan's scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/gitops-procedure-clarify-8g5gdu)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant decisions (85, 76, 83, 89, 73, 86, 55, 72) understood via decision-scout
+  - All seven files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "AGENTS.md: add a canonical '## Git-ops procedure' section (near the existing Merge protocol). Cover, in machine-parseable form where possible: (1) branching topology -- CC-web only (executor frozen per Decision 67; hybrid is the future), DEV vs ADMIN container split and their AWS profiles, work on the harness claude/ branch, never agent/, never main; (2) the TAP two-tier model -- --pre fast tier is the authoritative pre-merge gate, full tier post-merge on main spawns a ci_rca rec (reference, do not restate, the RCA-first protocol); (3) a commit-message convention table (plan/feat/roadmap/scope); (4) the rebase phase distinction -- assessment-time never-auto-rebase (ask the human) vs commit-flow-time auto-rebase (STOP on conflict, --force-with-lease on re-push); (5) the push -> create_pull_request -> subscribe_pr_activity -> end-turn -> CI-green-comment wake -> verify check runs -> squash-merge -> unsubscribe flow, including why the comment exists (no sleep tool; native subscription delivers failures only; ignore GitHub's sleep-loop suggestion) and that the comment is unverified; (6) the Resolves: trailer + rec-autoclose. Prune the local-dev/agent fallback clause on the existing Branching line."
+  - "Update the existing '## Merge protocol' and '## Branching' sections in AGENTS.md to defer to the new canonical section instead of duplicating with drift (trim overlapping prose; keep the hard never-on-main rule and the hook reference)."
+  - ".claude/commands/plan.md: replace all PLAN-{slug}.md with PLAN-{slug}.yaml (frontmatter description, Step 8 header + git add, Step 11 header + git add, Step 12 handoff block x2, the REPORT-ONLY parenthetical). Add a one-line pointer to AGENTS.md 'Git-ops procedure' as the canonical git-ops authority."
+  - ".claude/commands/implement.md: replace PLAN-slug.md (argument-hint), 'list docs/plans/PLAN-*.md' (Step 2), and the PLAN-{slug}.md refs in Steps 4 and 5 with the .yaml forms. Add the same canonical-authority pointer."
+  - ".claude/skills/code-review/SKILL.md: replace the single PLAN-{slug}.md reference (~line 172) with PLAN-{slug}.yaml."
+  - ".claude/skills/implement/SKILL.md: reframe the Commit Flows sentence citing Decision 89 'Branch Protection Not Available' to cite Decision 83 (premise reversed; squash-merge-after-CI preserved). Collapse the duplicated rebase guidance into one statement that makes the assessment-time vs commit-flow-time distinction explicit. In the Wait-for-CI subsection, document the CI-green-comment wake mechanism and the rationale (no sleep tool; native subscription = failures only; ignore the sleep-loop suggestion; the comment is unverified so verify check runs before merge). Add the canonical-authority pointer. Do NOT remove the Behavioural Invariants block."
+  - ".claude/skills/planning/SKILL.md: make the rebase phase distinction explicit in the Main Divergence Assessment and Create Branch sections, and add the canonical-authority pointer. Do NOT remove the Behavioural Invariants block."
+  - ".claude/hooks/never_on_main.py: change the block-message guidance text away from 'git checkout -b agent/your-slug' to the CC-web harness model (already on a claude/ session branch; only create a branch if detached/on main). Edit the message string only; leave the enforcement logic untouched."
+  - "Execute the Verification Plan -- run each step; loop until pass; on failure diagnose and fix within scope (max 3 attempts/step) before proceeding."
+  - "Report: files changed, verification results per step, and the canonical section as landed."
+rollback: >-
+  All changes are to instruction/doc files plus one Python message string; revert
+  the branch (git revert / reset) to restore the prior wording. No data, infra, or
+  enforcement-logic state is touched.
