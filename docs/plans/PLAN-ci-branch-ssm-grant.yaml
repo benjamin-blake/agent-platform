@@ -1,0 +1,204 @@
+schema_version: 1
+slug: "ci-branch-ssm-grant"
+intent: >-
+  Restore the platform's self-improvement loop: the main-validate full-tier gate is red because the
+  github_ci_branch CI role cannot resolve the DuckLake ops store, blinding every data-quality check on
+  the recommendations backend. Grant the missing SSM read and add a structural guard so this class of
+  CI-role permission drift cannot silently recur.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-branch-ssm-grant.yaml
+phase: >-
+  Platform T2 (Terraform CI/CD convergence). Resolves ci-rca rec-2363 (Critical); adds prevention
+  tier item T2.27 to docs/ROADMAP-PLATFORM.yaml.
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add SSMParameterRead (ssm:Get*/Describe*/List* on parameter/agent-platform/*) and
+      SSMDescribeParameters (ssm:DescribeParameters on *) statements to
+      aws_iam_role_policy.github_ci_branch, mirroring the identical pair already carried by
+      github_ci_plan / github_ci_drift / github_ci_apply. This is the rec-2363 fix.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier item T2.27 capturing the structural prevention work (DRY CI-role policy composition +
+      validate.py invoke-implies-resolve invariant as MVP; IAM Access Analyzer check-access-not-granted
+      gate as post-MVP). Roadmap-bookkeeping addition only; implements no prevention code in this plan.
+bundled_recommendations:
+  - rec-2363
+infrastructure_dependencies:
+  - >-
+    IAM diff on an existing role policy (aws_iam_role_policy.github_ci_branch). The deterministic guard
+    (scripts/terraform_apply_guard.py) fail-closes on IAM diffs (exit 2), so this change does NOT
+    auto-apply via sandbox CD. It lands via the human-gated apply path (Decision 77): either the
+    tf-gated-apply GitHub Environment gated CD apply at merge, or the interactive agent_platform_admin
+    apply loop in terraform/CLAUDE.md.
+  - >-
+    Policy edit on an existing role -- NOT a role create. Decision 98's bootstrap IAMRolesRead
+    refresh-grant step (required when minting a new peer CI role) does NOT apply here.
+  - >-
+    Speculative-plan pipeline (CD.35 Wave 2 / T2.21): the PR speculative-plan job plans under
+    github_ci_plan and posts a redacted diff with the guard's PREDICTED verdict (BLOCKED, expected for
+    IAM). The merge-time guard re-run on the saved plan.bin is authoritative.
+  - >-
+    No Lambda artifact is in scope (terraform/personal/oidc.tf and docs/ are not Lambda-packaged); no
+    build/deploy/smoke-test step is required.
+acceptance_criteria:
+  - >-
+    aws_iam_role_policy.github_ci_branch in terraform/personal/oidc.tf contains an SSMParameterRead Sid
+    granting ssm:Get*/Describe*/List* on arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*
+    and an SSMDescribeParameters Sid granting ssm:DescribeParameters on "*".
+  - >-
+    terraform plan for terraform/personal/ shows exactly one changed resource
+    (aws_iam_role_policy.github_ci_branch) and no other diffs.
+  - >-
+    After the gated apply lands, the agent-platform-github-ci-branch role is authorized for
+    ssm:GetParameter on both /agent-platform/ducklake/reader_url and /agent-platform/ducklake/writer_url
+    (simulate-principal-policy returns allowed for both).
+  - >-
+    After apply, a main-validate full-tier run reports DataQualityVerifier PASS for ops_recommendations
+    (the 38 previously-ERROR checks resolve) and the V3 harness HARD_GATE passes.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains a new tier_item T2.27 for the prevention work and passes the
+    RoadmapDocument schema check in validate.py --pre.
+  - rec-2363 is closed (status closed in the local read cache after sync).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Terraform formatting is clean for the edited module.
+    command: terraform -chdir=terraform/personal fmt -check -diff
+    expected: Exit 0; no formatting diff emitted for oidc.tf.
+    fix_if: Non-zero exit or a diff printed means oidc.tf is mis-formatted; run terraform fmt and re-commit.
+  - step: 2
+    phase: pre-deploy
+    action: The rec-2363 acceptance grep passes against the edited policy block.
+    command: grep -A 120 'aws_iam_role_policy.*github_ci_branch' terraform/personal/oidc.tf | grep -q SSMParameterRead
+    expected: Exit 0 -- the SSMParameterRead Sid is present within the github_ci_branch policy.
+    fix_if: Non-zero exit means the Sid was added to the wrong role or outside the policy block; re-place it inside aws_iam_role_policy.github_ci_branch.
+  - step: 3
+    phase: pre-deploy
+    action: Both the new SSM Sids are present and the branch role gains the writer-path scope too (not just reader_url).
+    command: grep -A 120 'aws_iam_role_policy.*github_ci_branch' terraform/personal/oidc.tf | grep -Eq 'parameter/agent-platform/\*' && grep -A 120 'aws_iam_role_policy.*github_ci_branch' terraform/personal/oidc.tf | grep -q SSMDescribeParameters
+    expected: Exit 0 -- the parameter/agent-platform/* wildcard scope and the SSMDescribeParameters Sid are both inside the branch policy.
+    fix_if: Missing wildcard or DescribeParameters Sid; mirror the github_ci_plan pair exactly (oidc.tf lines ~569-581).
+  - step: 4
+    phase: pre-deploy
+    action: Fast-tier validate passes, covering the RoadmapDocument schema for the T2.27 addition and the plan document schema.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; RoadmapDocument validates with new tier_item T2.27 and no referential-integrity errors.
+    fix_if: Roadmap schema failure -- align the T2.27 entry's fields (id, tier, name, intent, depends_on, files_in_scope, exit_criteria, effort, strategic, status) with the T2.25/T2.26 shape.
+  - step: 5
+    phase: pre-deploy
+    action: The speculative-plan PR comment shows only the github_ci_branch policy change and a BLOCKED predicted guard verdict (expected for IAM).
+    command: echo "Manual review gate -- inspect the speculative-plan PR comment posted by terraform-apply-sandbox.yml on the PR"
+    expected: The redacted plan diff lists exactly one resource change (aws_iam_role_policy.github_ci_branch adding two Statements); predicted guard verdict is BLOCKED (IAM_SENSITIVE).
+    fix_if: Any additional resource diff appears -- the branch view has drifted from main; rebase and re-plan before requesting the gated apply.
+  - step: 6
+    phase: post-deploy
+    action: After the gated apply lands, prove the branch role is authorized for ssm:GetParameter on BOTH ducklake URL parameters.
+    command: ACC=$(aws sts get-caller-identity --profile agent_platform --query Account --output text); aws iam simulate-principal-policy --profile agent_platform --policy-source-arn arn:aws:iam::$ACC:role/agent-platform-github-ci-branch --action-names ssm:GetParameter --resource-arns arn:aws:ssm:eu-west-2:$ACC:parameter/agent-platform/ducklake/reader_url arn:aws:ssm:eu-west-2:$ACC:parameter/agent-platform/ducklake/writer_url --query 'EvaluationResults[].EvalDecision' --output text
+    expected: Both results print allowed.
+    fix_if: Either prints implicitDeny -- the apply did not land or the wildcard scope is wrong; confirm the gated apply succeeded and the resource ARN scope matches parameter/agent-platform/*.
+  - step: 7
+    phase: post-deploy
+    action: Confirm the end-to-end fix -- the main-validate full-tier DataQualityVerifier passes against ops_recommendations under the branch role.
+    command: echo "Confirm the post-merge main-validate full-tier run is green via mcp__github__pull_request_read get_check_runs (DataQualityVerifier PASS, convergence record green)"
+    expected: main-validate full tier passes; the 38 ops_recommendations DQ checks report PASS (no ERROR); convergence record is green.
+    fix_if: Still red with the same AccessDenied -- the apply has not propagated; re-confirm step 6 before re-running.
+  - step: 8
+    phase: post-deploy
+    action: Confirm rec-2363 is closed after the Resolves trailer fires.
+    command: |-
+      bin/venv-python -m scripts.sync_ops pull && grep '"rec-2363"' logs/.recommendations-log.jsonl | grep -q closed
+    expected: Exit 0 -- rec-2363 status is closed in the refreshed read cache.
+    fix_if: Still open -- ensure the squash-merge body carried the Resolves trailer naming rec-2363, or close via ops_data_portal --update-rec rec-2363 --status closed.
+constraints:
+  - >-
+    Only the two files in Scope may be modified. The SSM grant must be scoped to
+    parameter/agent-platform/* (the ratified iterative-discovery closure pattern, terraform/CLAUDE.md
+    lines 273-287) -- do NOT narrow to a single parameter ARN (the branch role resolves BOTH reader_url
+    and writer_url) and do NOT broaden beyond /agent-platform/*.
+  - >-
+    IAM apply precedes everything; there is no Lambda deploy in this plan. Apply is human-gated
+    (Decision 77) -- never auto-applied, never applied from a laptop without presenting the plan.
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable V3 apply failure, stop and RCA.
+  - >-
+    Roadmap edit is bookkeeping only -- adding tier_item T2.27. Do NOT implement any prevention code
+    (DRY composition, validate.py invariant, Access Analyzer) in this plan; that is T2.27's own future work.
+context:
+  - >-
+    Root cause (rec-2363): the agent-platform-github-ci-branch OIDC role (assumed on push to main for
+    main-validate) has no SSM grant. Post Decision 84, every ops_recommendations DQ check transits the
+    DuckLake reader Function URL, whose URL iceberg_reader resolves from SSM /agent-platform/ducklake/reader_url
+    (src/common/iceberg_reader.py:45,376). ssm:GetParameter returns AccessDenied, so all 38 DQ checks
+    ERROR, the V3 harness HARD_GATE FAILs, and validate.py exits non-zero on main.
+  - >-
+    The branch role ALSO writes recs (ci-rca path) via ops_data_portal, which resolves the WRITER URL
+    from SSM /agent-platform/ducklake/writer_url (scripts/ops_data_portal.py:72,226). So the grant must
+    cover both ducklake params -- the parameter/agent-platform/* mirror covers both; a single-parameter
+    grant would leave the writer path broken.
+  - >-
+    The three peer CI roles (github_ci_plan oidc.tf:569-581, github_ci_drift oidc.tf:927-940, and
+    github_ci_apply in terraform/bootstrap) already carry the identical SSMParameterRead +
+    SSMDescribeParameters pair. The branch role is the sole omission -- the same class as the
+    rec-2223/2251/2276 iterative-discovery rounds documented in terraform/CLAUDE.md.
+  - >-
+    Decisions to cite (decision-scout NO_FLAGS): Decision 77 (human-gated/fail-closed apply path for the
+    IAM diff), Decision 84 (ops_recommendations DuckLake-on-Neon sole backend -- why the role needs SSM),
+    Decision 92 (CD.35 CI-role privilege-tiering), Decision 83 / CD.20 (main-protection: terraform-converged
+    is advisory, main-validate is non-wedging). Decision 81 is the PlatformDev endpoint-discovery-grant
+    precedent. Decision 94 (environment sub) does NOT apply: the branch role uses refs/heads/main, so the
+    post-apply simulate probe targets the main assume path, not an environment sub.
+  - >-
+    Apply-lag flag: rec-2363's acceptance grep (SSMParameterRead present in oidc.tf) is satisfied at
+    MERGE, and the Resolves trailer closes the rec then. But main only actually goes green after the
+    gated apply lands. The implementer MUST hold the PR subscription through the gated apply and verify
+    VP steps 6-7 before treating the operational failure as resolved (implement skill "Hold subscription
+    through apply", Decision 76 / CD.35 / T2.20). Do not consider the work done at merge alone.
+  - >-
+    Prevention (T2.27) shape to add to docs/ROADMAP-PLATFORM.yaml, tier T2, after T2.26. MVP exit criteria:
+    (a) shared CI-role policy statements (the refresh-read surface incl. SSM) are composed from a single
+    source via aws_iam_policy_document source_policy_documents/override_policy_documents so peer roles
+    cannot silently drift, preserving Decision 35 enumerate-IAM-reads; (b) a validate.py invariant asserts
+    every role granted lambda:InvokeFunction on the ducklake reader/writer ALSO has ssm:Get* on
+    parameter/agent-platform/* (the invoke-implies-resolve coupling), credential-free over rendered policy.
+    Post-MVP: IAM Access Analyzer check-access-not-granted as a pre-merge gate wired into the
+    speculative-plan job. depends_on [T2.21]; related rec-2363, rec-2223, rec-2251, rec-2276; effort M;
+    strategic false; status not_started. files_in_scope: terraform/personal/oidc.tf, scripts/validate.py.
+  - >-
+    Separately filed: rec-2364 (Low) to rename src/common/iceberg_reader.py to an engine-neutral name --
+    not in scope here.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no scope-file
+    divergence.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-recommendation-3onohh)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions 77/84/92/83/81 understood (cited via decision-scout, not re-read in full)
+  - terraform/personal/oidc.tf and docs/ROADMAP-PLATFORM.yaml located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed the github_ci_plan SSMParameterRead + SSMDescribeParameters pair is the mirror source
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf: inside aws_iam_role_policy.github_ci_branch's policy Statement list (after
+    the DuckLakeInvokeCI statement, ~line 170), add two statements mirroring github_ci_plan exactly --
+    SSMParameterRead (Effect Allow, Action ["ssm:Get*","ssm:Describe*","ssm:List*"], Resource
+    ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]) and
+    SSMDescribeParameters (Effect Allow, Action ["ssm:DescribeParameters"], Resource ["*"]). Keep the
+    explanatory comments consistent with the peer roles. Run terraform fmt.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: add tier_item T2.27 (tier T2) after T2.26 using the field shape from the
+    Context "Prevention (T2.27) shape" entry. Bookkeeping only -- no prevention code.
+  - >-
+    Execute the Verification Plan: run pre-deploy steps 1-4 locally; push and open the PR; review the
+    speculative-plan comment (step 5); request/await the gated apply (Decision 77); after apply, run
+    post-deploy steps 6-8. Loop until pass; on unrecoverable V3 apply failure stop and RCA (Decision 55).
+  - >-
+    Report: the SSM grant added, the speculative-plan predicted verdict, the gated-apply outcome, the
+    simulate-principal-policy decisions for both URLs, the main-validate full-tier result, and rec-2363 closure.
+work_areas: []
+rollback: >-
+  Revert the oidc.tf statements via a follow-up PR and re-run the gated apply to remove the grant
+  (additive, least-privilege-only change; low blast radius). The T2.27 roadmap addition is inert data and
+  can be dropped in the same revert.
