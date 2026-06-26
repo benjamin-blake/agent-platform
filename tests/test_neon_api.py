@@ -94,8 +94,10 @@ def test_fetch_api_key_no_profile_uses_default_session():
 
 
 # ---------------------------------------------------------------------------
-# resolve_project_id
+# resolve_org_id / resolve_project_id
 # ---------------------------------------------------------------------------
+
+_FAKE_ORG_ID = "org-fake-123"
 
 
 def _mock_urlopen(response_body: dict, *, status: int = 200):
@@ -108,20 +110,88 @@ def _mock_urlopen(response_body: dict, *, status: int = 200):
     return resp
 
 
-def test_resolve_project_id_matches_by_name():
-    """resolve_project_id returns project_id when name matches."""
-    body = {"projects": [{"id": _FAKE_PROJECT_ID, "name": "ducklake-catalog"}, {"id": "other-id", "name": "other"}]}
+def _mock_urlopen_by_url(url_to_body: dict):
+    """Return a urlopen side_effect that dispatches by request URL (path match)."""
+
+    def _dispatch(req, *args, **kwargs):
+        url = req.full_url if hasattr(req, "full_url") else req
+        for fragment, body in url_to_body.items():
+            if fragment in url:
+                return _mock_urlopen(body)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    return _dispatch
+
+
+def test_resolve_org_id_returns_sole_org():
+    """resolve_org_id returns the id of the single visible organization."""
+    body = {"organizations": [{"id": _FAKE_ORG_ID, "name": "acme"}]}
     with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+        oid = neon_api.resolve_org_id(_FAKE_API_KEY)
+    assert oid == _FAKE_ORG_ID
+
+
+def test_resolve_org_id_zero_orgs_loud_fails():
+    """NeonApiError raised when no organizations are visible (Decision 55)."""
+    body = {"organizations": []}
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+        with pytest.raises(neon_api.NeonApiError, match="expected exactly 1 organization, found 0"):
+            neon_api.resolve_org_id(_FAKE_API_KEY)
+
+
+def test_resolve_org_id_multiple_orgs_loud_fails():
+    """NeonApiError raised when more than one organization is visible (ambiguous)."""
+    body = {"organizations": [{"id": "o1"}, {"id": "o2"}]}
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+        with pytest.raises(neon_api.NeonApiError, match="expected exactly 1 organization, found 2"):
+            neon_api.resolve_org_id(_FAKE_API_KEY)
+
+
+def test_resolve_org_id_org_without_id_loud_fails():
+    """NeonApiError raised when the sole organization has no id."""
+    body = {"organizations": [{"name": "no-id-org"}]}
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+        with pytest.raises(neon_api.NeonApiError, match="organization has no id"):
+            neon_api.resolve_org_id(_FAKE_API_KEY)
+
+
+def test_resolve_project_id_matches_by_name():
+    """resolve_project_id resolves org_id then returns project_id when name matches."""
+    urls = {
+        "/users/me/organizations": {"organizations": [{"id": _FAKE_ORG_ID}]},
+        "/projects": {"projects": [{"id": _FAKE_PROJECT_ID, "name": "ducklake-catalog"}, {"id": "other", "name": "x"}]},
+    }
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen_by_url(urls)):
         pid = neon_api.resolve_project_id(_FAKE_API_KEY)
     assert pid == _FAKE_PROJECT_ID
 
 
 def test_resolve_project_id_custom_name():
     """Custom name argument is matched against project names."""
-    body = {"projects": [{"id": "p1", "name": "other"}, {"id": "p2", "name": "my-project"}]}
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
+    urls = {
+        "/users/me/organizations": {"organizations": [{"id": _FAKE_ORG_ID}]},
+        "/projects": {"projects": [{"id": "p1", "name": "other"}, {"id": "p2", "name": "my-project"}]},
+    }
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen_by_url(urls)):
         pid = neon_api.resolve_project_id(_FAKE_API_KEY, name="my-project")
     assert pid == "p2"
+
+
+def test_resolve_project_id_explicit_org_id_skips_org_lookup():
+    """When org_id is passed explicitly, no /users/me/organizations call is made."""
+    body = {"projects": [{"id": _FAKE_PROJECT_ID, "name": "ducklake-catalog"}]}
+    captured = []
+
+    def _urlopen(req, *args, **kwargs):
+        captured.append(req.full_url)
+        return _mock_urlopen(body)
+
+    with patch("urllib.request.urlopen", side_effect=_urlopen):
+        pid = neon_api.resolve_project_id(_FAKE_API_KEY, org_id=_FAKE_ORG_ID)
+    assert pid == _FAKE_PROJECT_ID
+    assert len(captured) == 1
+    assert "/users/me/organizations" not in captured[0]
+    assert f"org_id={_FAKE_ORG_ID}" in captured[0]
 
 
 def test_resolve_project_id_not_found_loud_fails():
@@ -129,7 +199,7 @@ def test_resolve_project_id_not_found_loud_fails():
     body = {"projects": [{"id": "p1", "name": "some-other-project"}]}
     with patch("urllib.request.urlopen", return_value=_mock_urlopen(body)):
         with pytest.raises(neon_api.NeonApiError, match="ducklake-catalog.*not found"):
-            neon_api.resolve_project_id(_FAKE_API_KEY)
+            neon_api.resolve_project_id(_FAKE_API_KEY, org_id=_FAKE_ORG_ID)
 
 
 def test_resolve_project_id_non_2xx_loud_fails():
@@ -144,7 +214,7 @@ def test_resolve_project_id_non_2xx_loud_fails():
     http_err.read = lambda: b"unauthorized"
     with patch("urllib.request.urlopen", side_effect=http_err):
         with pytest.raises(neon_api.NeonApiError, match="401"):
-            neon_api.resolve_project_id(_FAKE_API_KEY)
+            neon_api.resolve_project_id(_FAKE_API_KEY, org_id=_FAKE_ORG_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +351,7 @@ def test_api_request_sends_bearer_token():
         return resp
 
     with patch("urllib.request.urlopen", side_effect=_urlopen):
-        neon_api.resolve_project_id(_FAKE_API_KEY)
+        neon_api.resolve_project_id(_FAKE_API_KEY, org_id=_FAKE_ORG_ID)
 
     assert len(captured_reqs) == 1
     assert captured_reqs[0].get_header("Authorization") == f"Bearer {_FAKE_API_KEY}"

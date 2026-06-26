@@ -1077,7 +1077,7 @@ _FAKE_BRANCH_HOST = "br-fake-canary-abc.us-east-2.aws.neon.tech"
 _FAKE_PROJECT_ID = "proj-fake-123"
 
 
-def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=True):
+def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, ryw_ok=True):
     """Stub all subprocess/AWS/Neon API calls for canary_rehearsal unit tests."""
     _fake_arns = {
         "ducklake-deps-layer": "arn:fake:1",
@@ -1100,16 +1100,12 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=
 
     def _fake_invoke(fn, payload, **kw):
         action = payload.get("action", "")
+        if action == "catalog_reinit":
+            return {"ok": True, "meta_schema": payload.get("meta_schema"), "reinitialized": True}
         if action == "create_tables":
             return {"ok": True}
         if action == "write":
             return {"ok": True, "ulid": "fake-ulid"}
-        if action == "churn_single":
-            if payload.get("setup"):
-                return {"ok": True}
-            if not churn_ok:
-                return {"collided": True, "latency_ms": 9999.0}
-            return {"collided": False, "latency_ms": 5.0}
         if action == "read_current":
             if not ryw_ok:
                 return {"rows": []}
@@ -1121,13 +1117,6 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, churn_ok=True, ryw_ok=
         return {}
 
     monkeypatch.setattr(smoke, "_lambda_invoke_cli", _fake_invoke)
-
-    def _fake_canary_churn(writer_fn, **kw):
-        if not churn_ok:
-            raise smoke.SmokeTestFailure("CANARY_CHURN FAIL: over budget")
-        return {"collision_rate": 0.0, "p95_latency_ms": 5.0}
-
-    monkeypatch.setattr(smoke, "_canary_churn", _fake_canary_churn)
 
     monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}.lambda-url")
     monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
@@ -1142,7 +1131,6 @@ def test_canary_rehearsal_happy_path(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "CANARY_REHEARSAL OK" in out
     assert "CANARY_ATTACH OK" in out
-    assert "CANARY_CHURN OK" in out
     assert "CANARY_RYW OK" in out
     assert "CANARY_CLONE_CATALOG OK" in out
 
@@ -1204,13 +1192,6 @@ def test_canary_rehearsal_clone_catalog_fail_raises(monkeypatch):
         smoke.canary_rehearsal()
 
 
-def test_canary_rehearsal_churn_fail_raises(monkeypatch):
-    """Churn budget exceeded raises SmokeTestFailure (budget never relaxed, Decision 55)."""
-    _stub_canary_rehearsal(monkeypatch, churn_ok=False)
-    with pytest.raises(smoke.SmokeTestFailure, match="CANARY_CHURN FAIL"):
-        smoke.canary_rehearsal()
-
-
 def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
     """Ephemeral Lambda functions are deleted even when a gate fails (finally block)."""
     deleted = []
@@ -1230,6 +1211,8 @@ def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
     monkeypatch.setattr(smoke.neon_api, "delete_branch", lambda api_key, project_id, branch_id: None)
 
     def _raise_on_attach(fn, payload, **kw):
+        if payload.get("action") == "catalog_reinit":
+            return {"ok": True}
         if payload.get("action") == "create_tables":
             raise smoke.SmokeTestFailure("attach failed")
         return {}
@@ -1294,12 +1277,12 @@ def test_canary_rehearsal_branch_host_passed_to_clone(monkeypatch):
         if payload.get("action") == "clone_catalog":
             clone_events.append(payload.copy())
 
+        if payload.get("action") == "catalog_reinit":
+            return {"ok": True}
         if payload.get("action") == "create_tables":
             return {"ok": True}
         if payload.get("action") == "write":
             return {"ok": True, "ulid": "fake-ulid"}
-        if payload.get("action") == "churn_single":
-            return {"ok": True}
         if payload.get("action") == "read_current":
             return {"rows": [{"rec_id": payload.get("rec_id", "x")}]}
         if payload.get("action") == "clone_catalog":
@@ -1331,3 +1314,74 @@ def test_canary_rehearsal_delete_branch_called_on_clone_failure(monkeypatch):
         smoke.canary_rehearsal()
 
     assert deleted == [_FAKE_BRANCH_ID], "delete_branch must be called in finally even when clone fails"
+
+
+def _stub_invoke_response(monkeypatch, return_value):
+    """Stub subprocess.run + the response-file read so _lambda_invoke_cli returns `return_value`."""
+    monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    import builtins
+    import json as _json
+
+    real_open = builtins.open
+
+    def _fake_open(path, *a, **kw):
+        if isinstance(path, str) and path.endswith("response.json"):
+            import io
+
+            return io.StringIO(_json.dumps(return_value))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+
+def test_lambda_invoke_cli_unwraps_function_url_envelope(monkeypatch):
+    """_lambda_invoke_cli unwraps the {statusCode, body} envelope, returning the parsed body dict."""
+    envelope = {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": '{"ok": true, "x": 1}'}
+    _stub_invoke_response(monkeypatch, envelope)
+    out = smoke._lambda_invoke_cli("fn", {"action": "catalog_reinit"}, profile=None, region="eu-west-2")
+    assert out == {"ok": True, "x": 1}
+
+
+def test_lambda_invoke_cli_passes_through_raw_error(monkeypatch):
+    """A handler runtime error (no statusCode/body) is returned as-is for the caller to inspect."""
+    err = {"errorMessage": "boom", "errorType": "RuntimeError"}
+    _stub_invoke_response(monkeypatch, err)
+    out = smoke._lambda_invoke_cli("fn", {"action": "create_tables"}, profile=None, region="eu-west-2")
+    assert out == err
+    assert out.get("ok") is None
+
+
+def test_lambda_invoke_cli_loud_fails_on_nonzero_rc(monkeypatch):
+    """A non-zero CLI exit raises SmokeTestFailure (Decision 55)."""
+    monkeypatch.setattr(
+        smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=254, stdout="", stderr="boom")
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="lambda invoke fn failed"):
+        smoke._lambda_invoke_cli("fn", {"action": "x"}, profile=None, region="eu-west-2")
+
+
+def test_wait_function_active_invokes_waiter(monkeypatch):
+    """_wait_function_active runs `lambda wait function-active-v2` for the named function."""
+    captured = {}
+
+    def _run(cmd, **kw):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(smoke.subprocess, "run", _run)
+    smoke._wait_function_active("ducklake-maintenance-canary-ephemeral", profile="p", region="eu-west-2")
+    cmd = captured["cmd"]
+    assert "wait" in cmd
+    assert "function-active-v2" in cmd
+    assert "ducklake-maintenance-canary-ephemeral" in cmd
+
+
+def test_wait_function_active_loud_fails_on_waiter_error(monkeypatch):
+    """A non-zero waiter exit raises SmokeTestFailure (Decision 55 -- never race the first invoke)."""
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda cmd, **kw: types.SimpleNamespace(returncode=255, stdout="", stderr="Waiter FunctionActiveV2 failed"),
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="wait function-active-v2"):
+        smoke._wait_function_active("fn", profile=None, region="eu-west-2")
