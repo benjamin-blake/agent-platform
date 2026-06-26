@@ -7,6 +7,7 @@ OQ.12 canary rehearsal branch lifecycle. Uses stdlib urllib only -- zero new dep
 from __future__ import annotations
 
 import json
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -37,9 +38,36 @@ def fetch_api_key(profile: str | None = None) -> str:
         return secret.strip()
 
 
-def resolve_project_id(api_key: str, name: str = "ducklake-catalog") -> str:
-    """GET /projects and return the project_id matching `name`. Raises NeonApiError if not found."""
-    url = f"{_NEON_API_BASE}/projects"
+def resolve_org_id(api_key: str) -> str:
+    """GET /users/me/organizations and return the sole organization id.
+
+    Neon org-scoped API keys require ``org_id`` on the projects list endpoint. Raises
+    NeonApiError when zero or more than one organization is visible (ambiguous -- the
+    caller must then pass org_id explicitly).
+    """
+    url = f"{_NEON_API_BASE}/users/me/organizations"
+    data = _api_get(api_key, url)
+    orgs = data.get("organizations", [])
+    if len(orgs) != 1:
+        raise NeonApiError(
+            f"resolve_org_id: expected exactly 1 organization, found {len(orgs)} -- "
+            "pass org_id explicitly or check the Neon API key's org scope"
+        )
+    org_id = orgs[0].get("id")
+    if not org_id:
+        raise NeonApiError(f"resolve_org_id: organization has no id: {orgs[0]}")
+    return org_id
+
+
+def resolve_project_id(api_key: str, name: str = "ducklake-catalog", org_id: str | None = None) -> str:
+    """GET /projects?org_id=... and return the project_id matching `name`.
+
+    Neon's projects list endpoint requires ``org_id`` for org-scoped API keys; when not
+    supplied it is resolved via :func:`resolve_org_id`. Raises NeonApiError if not found.
+    """
+    if org_id is None:
+        org_id = resolve_org_id(api_key)
+    url = f"{_NEON_API_BASE}/projects?org_id={urllib.parse.quote(org_id)}"
     data = _api_get(api_key, url)
     for project in data.get("projects", []):
         if project.get("name") == name:
