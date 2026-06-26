@@ -80,6 +80,7 @@ acceptance_criteria:
   - The implement skill's Commit Flows no longer present Decision 89's "branch protection not available" as the live basis; it cites Decision 83 (premise reversed) while stating the squash-merge-after-CI gate is preserved.
   - No local-dev / agent/{slug} fallback guidance remains in AGENTS.md or the never_on_main.py block message; both reflect the CC-web-only model.
   - The plan/implement commands and the planning/implement skills each contain a pointer naming AGENTS.md "Git-ops procedure" as the canonical authority.
+  - The existing AGENTS.md Merge protocol / Branching sections defer to the canonical Git-ops procedure section instead of retaining a duplicate copy of the procedure (de-duplication verified, not just additions).
   - bin/venv-python -m scripts.validate --pre exits 0 (prompt-compliance behavioural invariants in the skills still pass).
   - rec-2172 and rec-2269 are closed after merge (Resolves trailer + rec-autoclose, or fallback close).
 verification_plan:
@@ -126,6 +127,12 @@ verification_plan:
     expected: Exit 0.
     fix_if: A failed check names the offending file/gate -- fix it (commonly a removed behavioural-invariant block in a skill); re-run.
   - step: 8
+    phase: pre-deploy
+    action: Confirm the existing Merge protocol / Branching sections defer to the new canonical section rather than retaining a second drifting copy of the procedure (the plan's de-duplication goal).
+    command: "bin/venv-python -c \"import re,sys; t=open('AGENTS.md').read(); sec=re.split(r'^## ', t, flags=re.M); mp=[s for s in sec if s.startswith('Merge protocol')]; sys.exit(0 if mp and re.search(r'[Gg]it-ops procedure', mp[0]) else 1)\""
+    expected: Exit 0 -- the Merge protocol section references the canonical Git-ops procedure section (deferral pointer present, confirming it was slimmed rather than duplicated).
+    fix_if: Non-zero means the Merge protocol section still restates the procedure without deferring -- add the canonical pointer and trim the overlapping prose.
+  - step: 9
     phase: post-deploy
     action: After the squash-merge lands on main, confirm the bundled recs were closed.
     command: "bin/venv-python -m scripts.ops_data_portal --sync && grep -hE 'rec-2172|rec-2269' logs/.recommendations-log.jsonl"
