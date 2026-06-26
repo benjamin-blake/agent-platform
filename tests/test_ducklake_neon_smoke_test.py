@@ -1297,6 +1297,10 @@ def test_canary_rehearsal_branch_host_passed_to_clone(monkeypatch):
     assert clone_events[0].get("branch_host") == _FAKE_BRANCH_HOST, (
         "branch_host from Neon create_branch must be forwarded to clone_catalog event"
     )
+    clone_data_path = clone_events[0].get("data_path", "")
+    assert clone_data_path.startswith("s3://") and clone_data_path.endswith("/ducklake/"), (
+        f"clone_catalog event must carry the production data_path (s3://<bucket>/ducklake/), got {clone_data_path!r}"
+    )
 
 
 def test_canary_rehearsal_delete_branch_called_on_clone_failure(monkeypatch):
