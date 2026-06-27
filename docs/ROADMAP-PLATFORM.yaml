@@ -5590,6 +5590,46 @@ tier_items:
     status: complete
     completed_at: "2026-06-22"
 
+  - id: T2.34
+    tier: T2
+    name: CI-role IAM drift prevention - DRY policy composition + invoke-implies-resolve invariant
+    intent: |
+      Prevent recurrence of the class of CI-role permission drift exposed by rec-2363 (and predecessors
+      rec-2223, rec-2251, rec-2276): the branch CI role was missing SSM grants that three peer roles
+      (github_ci_plan, github_ci_drift, github_ci_apply) already carry, because each role's policy is
+      hand-authored independently. Two structural guards close the gap.
+      MVP: (a) Compose the shared refresh-read surface (incl. SSM) from a single
+      aws_iam_policy_document source via source_policy_documents/override_policy_documents so peer
+      roles cannot silently drift -- preserving Decision 35 enumerate-IAM-reads. (b) A validate.py
+      credential-free invariant asserts that every role granted lambda:InvokeFunction on the ducklake
+      reader/writer ALSO carries ssm:Get* on parameter/agent-platform/* (the invoke-implies-resolve
+      coupling), checked over rendered policy JSON.
+      Post-MVP: IAM Access Analyzer check-access-not-granted wired into the speculative-plan job as
+      a pre-merge gate.
+    depends_on: [T2.21]
+    files_in_scope:
+      - terraform/personal/oidc.tf
+      - scripts/validate.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          Shared CI-role refresh-read statements (incl. SSMParameterRead + SSMDescribeParameters) are
+          composed from a single aws_iam_policy_document source via
+          source_policy_documents/override_policy_documents; peer roles cannot silently drift on this
+          surface
+        status: open
+      - id: c2
+        text: >-
+          scripts/validate.py contains a credential-free invariant: every role granted
+          lambda:InvokeFunction on the ducklake reader/writer ALSO has ssm:Get* on
+          parameter/agent-platform/* (invoke-implies-resolve); check runs over rendered policy JSON and
+          fails CI if violated
+        status: open
+    related_decisions: [35, 77, 84, 92]
+    effort: M
+    strategic: false
+    status: not_started
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3

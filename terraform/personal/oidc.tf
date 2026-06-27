@@ -167,6 +167,21 @@ resource "aws_iam_role_policy" "github_ci_branch" {
           aws_lambda_function.ducklake_reader.arn,
           "${aws_lambda_function.ducklake_reader.arn}:*",
         ]
+      },
+      {
+        # SSM parameter refresh-time reads on /agent-platform/*. Mirrors github_ci_plan SSMParameterRead.
+        Sid      = "SSMParameterRead"
+        Effect   = "Allow"
+        Action   = ["ssm:Get*", "ssm:Describe*", "ssm:List*"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
+      },
+      {
+        # ssm:DescribeParameters has no resource-level scoping; Resource: "*" required.
+        # Mirrors github_ci_plan SSMDescribeParameters.
+        Sid      = "SSMDescribeParameters"
+        Effect   = "Allow"
+        Action   = ["ssm:DescribeParameters"]
+        Resource = ["*"]
       }
     ]
   })
