@@ -5090,21 +5090,25 @@ tier_items:
         text: >-
           An out-of-band console change is detected within one cron cycle and filed as a rec via the ops
           portal with source=tf_drift
-        status: open
+        status: met
+        met_by: t2-24-acceptance-recovery
       - id: c2
         text: >-
           A held state lock skips the cycle without alarming (lock-acquisition-failure distinguished from a
           genuine error and from drift)
-        status: open
+        status: met
+        met_by: t2-24-acceptance-recovery
       - id: c3
         text: >-
           Drift never triggers an auto-apply (alarm-only; Decision 55) -- verified structurally (no apply in
           workflow) and at IAM layer (github_ci_drift has no state-object write)
-        status: open
+        status: met
+        met_by: t2-24-acceptance-recovery
     related_candidate_decisions: [CD.35]
     effort: S
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-06-27"
     progress_note: |
       2026-06-24: Wave 5 pre-deploy code merged in PR #250 (PLAN-terraform-cicd-drift-detection):
       terraform-drift.yml (alarm-only, cron + dispatch), github_ci_drift OIDC role HCL in oidc.tf,
@@ -5121,6 +5125,23 @@ tier_items:
         28132972296: assume-role not skipped, plan exit=0 (converged), no false red. EC3 satisfied
         (no apply step in workflow; drift role has no state-object write). EC1/EC2 pending live
         demonstration (actual drift event and lock-held cycle).
+      - 2026-06-27 (PLAN-t2-24-acceptance-recovery -- COMPLETE): root-caused and fixed the
+        prose-acceptance defect that blocked rec-filing -- terraform-drift.yml's portal --acceptance
+        was a prose string that failed lint_acceptance_command (bash -n) every tick, so no tf_drift
+        rec was ever filed. Replaced with an executable command
+        (aws s3 cp .../sandbox.json - | grep -q green); added tests/test_terraform_drift_acceptance.py
+        as a pre-merge regression guard (PR #287; ruff-format follow-up PR #289). Demonstrated the full
+        c1 cycle live (all VPs PASS): VP6 unstrand dispatch-ack apply run 28288925401 reconverged the
+        real DuckDB-bump drift to green (after clearing a >24h orphaned gated-apply, run 113, holding
+        the concurrency lock). c3: VP4 structural + VP7 IAM simulate (drift role CANNOT write the state
+        object or invoke the reader; CAN read tfstate, write .tflock/convergence, invoke the writer).
+        c2: VP8 lock-held skip (drift run 28289238857 waited the 120s timeout, logged "Lock held ...
+        skipping", exit 0, no rec, record untouched green). c1: VP9 seed (reversible ducklake-writer
+        Purpose tag; local plan exit 2) -> VP10 drift run 28289470258 flipped green->red and FILED
+        rec-2373 via the portal (no acceptance ValueError -- the fix proven) -> VP11 dedup run
+        28289661935 (already-red guard, no duplicate) -> VP12 recovery (reverted seed, dispatch-ack
+        apply 28289817202 reconverged green, rec-2373 closed via update_rec). Sandbox left green with
+        zero open tf_drift recs. c1/c2/c3 -> met (met_by: t2-24-acceptance-recovery); T2.24 -> complete.
   - id: T2.25
     tier: T2
     name: "Terraform CI/CD: convention synchronization + guard narrowing + confirm CD.35 ratification (Wave X)"
