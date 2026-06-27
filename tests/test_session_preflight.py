@@ -147,31 +147,85 @@ class TestGetGitStatus:
 
 
 class TestCheckTerraformPending:
-    def test_returns_false_when_exit_code_0(self) -> None:
-        mock_result = MagicMock(returncode=0)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is False
+    """check_terraform_pending() reads the sandbox convergence record (CD.35 Wave 6 / T2.35).
 
-    def test_returns_true_when_exit_code_2(self) -> None:
-        mock_result = MagicMock(returncode=2)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is True
+    The retired ``terraform -chdir=terraform plan`` invocation was replaced by a
+    convergence-record read. The function now returns a tuple
+    (pending: bool | None, convergence_health: dict | None).
+    """
 
-    def test_returns_none_when_exit_code_1(self) -> None:
-        mock_result = MagicMock(returncode=1)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is None
+    from contextlib import contextmanager
 
-    def test_returns_none_when_terraform_not_found(self) -> None:
-        with patch("session_preflight.subprocess.run", side_effect=FileNotFoundError):
-            assert _preflight.check_terraform_pending() is None
+    @staticmethod
+    @contextmanager
+    def _patched(verdict):
+        """Patch the convergence-record read path so assess_health returns ``verdict``."""
+        from contextlib import ExitStack
 
-    def test_returns_none_on_timeout(self) -> None:
-        with patch(
-            "session_preflight.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="terraform", timeout=120),
-        ):
-            assert _preflight.check_terraform_pending() is None
+        with ExitStack() as stack:
+            stack.enter_context(patch("session_preflight.resolve_aws_profile", return_value="agent_platform"))
+            stack.enter_context(patch("boto3.Session"))
+            stack.enter_context(patch("scripts.convergence_health.read_convergence_record", return_value={}))
+            stack.enter_context(patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]))
+            stack.enter_context(patch("scripts.convergence_health.assess_health", return_value=verdict))
+            yield
+
+    def test_returns_false_when_green(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is False
+        assert health["status"] == "green"
+        assert health["red_age_hours"] == 0.0
+
+    def test_returns_true_when_red(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="red", red_age_hours=24.27, unapplied_backlog=0, severity="high")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is True
+        assert health["status"] == "red"
+        assert health["severity"] == "high"
+
+    def test_returns_true_when_backlog_nonzero_even_if_green(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=3, severity="low")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is True
+        assert health["unapplied_backlog"] == 3
+
+    def test_returns_none_when_status_unknown(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="unknown", red_age_hours=0.0, unapplied_backlog=0, severity="none")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is None
+        assert health["status"] == "unknown"
+
+    def test_stuck_approvals_count_surfaced(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(
+            status="red",
+            red_age_hours=2.0,
+            unapplied_backlog=0,
+            stuck_approvals=[{"run_id": 1}, {"run_id": 2}],
+            severity="high",
+        )
+        with self._patched(verdict):
+            _, health = _preflight.check_terraform_pending()
+        assert health["stuck_approvals"] == 2
+
+    def test_returns_none_none_on_exception(self) -> None:
+        with patch("session_preflight.resolve_aws_profile", side_effect=RuntimeError("creds down")):
+            result = _preflight.check_terraform_pending()
+        assert result == (None, None)
 
 
 class TestCheckMainFreshness:

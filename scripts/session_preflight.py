@@ -229,31 +229,61 @@ def check_main_freshness() -> dict:
     }
 
 
-def check_terraform_pending() -> bool | None:
-    """Return True if terraform has pending changes, False if clean, None if unavailable.
+def check_terraform_pending() -> tuple[bool | None, dict | None]:
+    """Read the sandbox convergence record and derive pending-change state.
 
-    Runs ``terraform -chdir=terraform plan -detailed-exitcode`` and interprets:
-    - exit code 0: no changes pending
-    - exit code 2: changes pending
-    - exit code 1 or FileNotFoundError: terraform not available or plan error
+    Replaces the retired ``terraform -chdir=terraform plan`` invocation (CD.21:
+    the terraform/ root is no longer applied; the personal/ sandbox root is
+    managed by the CD pipeline). The convergence record at
+    convergence/personal/sandbox.json is the authoritative truth for the
+    applied-vs-code delta.
+
+    Returns a tuple (pending, convergence_health) where:
+      - pending: bool | None
+          True  = record is red or unapplied_backlog > 0 (changes pending)
+          False = record is green with no backlog
+          None  = unavailable (S3 read failed / no credentials)
+      - convergence_health: dict | None
+          Sub-object surfaced in the preflight report:
+          {status, red_age_hours, unapplied_backlog, stuck_approvals, severity}
+          or None when the record cannot be fetched.
     """
     try:
-        result = subprocess.run(
-            ["terraform", "-chdir=terraform", "plan", "-detailed-exitcode", "-no-color"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-            cwd=ROOT,
+        import boto3  # noqa: PLC0415
+
+        from scripts.convergence_health import (  # noqa: PLC0415
+            assess_health,
+            find_stuck_gated_approvals,
+            read_convergence_record,
         )
-        if result.returncode == 0:
-            return False
-        if result.returncode == 2:
-            return True
-        return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+
+        profile = resolve_aws_profile()
+        session = boto3.Session(profile_name=profile)
+        s3 = session.client("s3")
+
+        record = read_convergence_record(s3)
+        stuck = find_stuck_gated_approvals()
+        verdict = assess_health(record, stuck_approvals=stuck)
+
+        health: dict = {
+            "status": verdict.status,
+            "red_age_hours": verdict.red_age_hours,
+            "unapplied_backlog": verdict.unapplied_backlog,
+            "stuck_approvals": len(verdict.stuck_approvals),
+            "severity": verdict.severity,
+        }
+
+        if verdict.status == "unknown":
+            pending = None
+        elif verdict.status == "red" or verdict.unapplied_backlog > 0:
+            pending = True
+        else:
+            pending = False
+
+        return pending, health
+
+    except Exception:  # noqa: BLE001
+        return None, None
 
 
 def check_credentials() -> str:
@@ -1566,7 +1596,13 @@ def main(roadmap_detail: str = "slim") -> int:
         fut_terraform = phase_a.submit(check_terraform_pending)
         creds_result = fut_creds.result()
         main_freshness = fut_freshness.result()
-        terraform_pending = fut_terraform.result()
+        terraform_result = fut_terraform.result()
+
+    # check_terraform_pending now returns (bool|None, dict|None)
+    if isinstance(terraform_result, tuple):
+        terraform_pending, convergence_health_data = terraform_result
+    else:
+        terraform_pending, convergence_health_data = terraform_result, None
 
     creds_status = _handle_credentials_startup(creds_result)
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
@@ -1699,6 +1735,7 @@ def main(roadmap_detail: str = "slim") -> int:
         "s3_log_bucket_set": s3_log_bucket_set,
         "ops_outbox": outbox,
         "terraform_pending": terraform_pending,
+        "convergence_health": convergence_health_data,
         "last_session": last_session,
         "open_recommendations": open_recommendations,
         "aging_recommendations": aging_recommendations,

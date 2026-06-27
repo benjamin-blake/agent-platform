@@ -78,7 +78,18 @@ Deferred gates include the reason string so the operator understands which runti
 
 ### 2. CI-RCA Triage
 
-Source: `ci_rca_unresolved_recs`, `ci_rca_likely_resolved_recs`, `ci_rca_liveness_alert`, `forward_fix_recursion_alert` from preflight cache. Decision 72 surfacing obligation: all open ci-rca recs are visible here so the operator knows the state before opening `/plan`.
+Source: `ci_rca_unresolved_recs`, `ci_rca_likely_resolved_recs`, `ci_rca_liveness_alert`, `forward_fix_recursion_alert`, `convergence_health` from preflight cache. Decision 72 surfacing obligation: all open ci-rca recs are visible here so the operator knows the state before opening `/plan`.
+
+**Convergence-health surfacing (CD.35 Wave 6 / T2.35):** Check `convergence_health` in the preflight report. Surface at the top of this section when it indicates a problem:
+
+| `convergence_health` condition | Triage action |
+|---|---|
+| `status == "red"` and `red_age_hours` > 6 OR `stuck_approvals` > 0 | **STALE PIPELINE ALERT** -- Surface red_age_hours, unapplied_backlog, stuck_approvals count. An open tf_convergence_stale rec should exist; if it does, point the operator to it. Recovery: approve the pending gated-apply run in GitHub Actions, or run terraform-apply-sandbox workflow_dispatch with acknowledge_red_commit naming the red commit SHA. |
+| `status == "red"` and `red_age_hours` <= 6 | **PIPELINE RED (recent)** -- note it; not yet escalated. |
+| `status == "unknown"` | S3 read failed -- note as informational; may indicate transient credential issue. |
+| `status == "green"` or `convergence_health` is null | No action needed. |
+
+Do not surface this when `convergence_health` is null (preflight ran without credentials) or `status == "green"`.
 
 | Preflight signal | Classification | Operator action |
 |---|---|---|
