@@ -64,10 +64,7 @@ _ACCEPTANCE_CASES = _collect_acceptance_values()
 def test_portal_acceptance_passes_lint(workflow_name: str, acceptance_value: str) -> None:
     """Every ops portal --acceptance argument embedded in a workflow must pass lint_acceptance_command."""
     ok, msg = lint_acceptance_command(acceptance_value)
-    assert ok, (
-        f"{workflow_name}: --acceptance value fails lint_acceptance_command: "
-        f"{acceptance_value!r} -> {msg}"
-    )
+    assert ok, f"{workflow_name}: --acceptance value fails lint_acceptance_command: {acceptance_value!r} -> {msg}"
 
 
 def test_drift_workflow_has_no_terraform_apply() -> None:
@@ -87,9 +84,7 @@ def test_drift_workflow_has_no_terraform_apply() -> None:
 def test_drift_workflow_has_detailed_exitcode() -> None:
     """terraform-drift.yml must use -detailed-exitcode to distinguish drift from no-change."""
     content = DRIFT_WORKFLOW.read_text(encoding="utf-8")
-    assert "-detailed-exitcode" in content, (
-        "terraform-drift.yml is missing -detailed-exitcode; drift detection would break"
-    )
+    assert "-detailed-exitcode" in content, "terraform-drift.yml is missing -detailed-exitcode; drift detection would break"
 
 
 def test_drift_workflow_has_lock_skip_branch() -> None:
