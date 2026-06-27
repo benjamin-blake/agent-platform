@@ -1,0 +1,77 @@
+name: convergence-health
+
+# CD-convergence staleness escalation sensor (CD.35 Wave 6 / T2.35).
+#
+# Runs on a cron schedule (offset from terraform-drift's '17' to avoid
+# concurrency pile-up) and on workflow_dispatch. Reads the sandbox convergence
+# record, derives red_since / red_age_hours / unapplied_backlog, and queries
+# GitHub Actions for stuck gated-apply approvals.
+#
+# On a threshold breach: files or updates exactly ONE tf_convergence_stale rec
+# per red-episode via the ops portal (idempotent; never duplicates). On green:
+# closes the open rec if present.
+#
+# Alarm-only invariants:
+#   - NO terraform apply step.
+#   - NO workflow_dispatch of terraform-apply-sandbox (not even a trigger attempt).
+#   - Never writes the convergence record (red or green).
+#   - Never re-fires the T2.20 latch.
+#   - Not added to main-protection required_status_checks (Decision 83 non-wedging).
+#
+# Identity: assumes agent-platform-github-ci-branch (the same role ci-rca uses).
+# That role already (a) reads the agent-platform-data-lake bucket so it can read
+# convergence/personal/sandbox.json with no new grant, and (b) invokes the
+# ducklake_writer Function URL so it can file recs via the ops portal.
+
+on:
+  schedule:
+    - cron: '37 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Prevent overlapping health ticks from double-filing. cancel-in-progress: false
+  # so a running tick always completes -- a cancelled tick might miss a close action.
+  group: convergence-health
+  cancel-in-progress: false
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write   # OIDC token minting for assume-role
+      contents: read    # checkout
+      actions: read     # query waiting gated-apply runs via GitHub API
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials (OIDC -- github_ci_branch role)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies (venv)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Assess convergence health and escalate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m scripts.convergence_health

@@ -5630,6 +5630,78 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T2.35
+    tier: T2
+    name: "Terraform CI/CD: convergence-health staleness sensor (CD.35 Wave 6)"
+    intent: |
+      Close the convergence-observability gap exposed by the 2026-06-24..27 wedge: the T2.20
+      latch fires once (one red = one signal) and then goes silent. A persistently-red pipeline
+      -- forgotten gated-apply approval or out-of-band admin apply that never reconciled the
+      record -- sat red for days with no escalation as the unapplied backlog grew.
+      This sensor fires on red-AGE (a new, orthogonal signal): when the record has been red
+      longer than the threshold (default 6h), or when a terraform-apply-sandbox gated-apply job
+      has been waiting on the tf-gated-apply Environment beyond threshold, it files exactly one
+      tf_convergence_stale rec per red-episode via the ops portal (idempotent: update_rec on
+      subsequent ticks, never duplicate). When the record returns to green the open rec is closed.
+      Routing: NOT ci-rca (no failure log for a successfully-applied-but-stale state; Decision 72/55).
+      NOT validate.py (live-state, time-based property is wrong for a static code gate; Decision 92).
+      Alarm-only: no terraform apply, no auto-dispatch of terraform-apply-sandbox, no record write.
+      Reuses agent-platform-github-ci-branch (ci-rca's role): no new IAM role, no guard-block.
+    depends_on: [T2.20, T2.24]
+    files_in_scope:
+      - scripts/convergence_health.py
+      - .github/workflows/convergence-health.yml
+      - scripts/session_preflight.py
+      - .claude/skills/orient/SKILL.md
+      - config/agent/data_quality/source_registry.yaml
+      - docs/ROADMAP-PLATFORM.yaml
+      - tests/test_convergence_health.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          When the convergence record is status=red with red_age_hours exceeding the threshold
+          (default 6h), the sensor files exactly one open rec with source=tf_convergence_stale
+          via the ops portal; a second tick while still over-threshold UPDATES rather than files
+          a duplicate (one rec per red-episode)
+        status: met
+        met_by: cd-convergence-health-sensor
+      - id: c2
+        text: >-
+          The sensor contains no terraform apply and does not dispatch terraform-apply-sandbox;
+          it never writes the convergence record -- verified structurally (no apply/dispatch in
+          the workflow) and behaviourally (reads S3 + git + GitHub API, calls ops portal only)
+        status: met
+        met_by: cd-convergence-health-sensor
+      - id: c3
+        text: >-
+          When the record returns to green, the next tick closes the open tf_convergence_stale
+          rec via the standard portal path; no new rec is filed while green
+        status: met
+        met_by: cd-convergence-health-sensor
+      - id: c4
+        text: >-
+          A terraform-apply-sandbox run whose gated-apply job has been waiting on the
+          tf-gated-apply Environment beyond threshold is surfaced in the HealthVerdict and folded
+          into the tf_convergence_stale rec context; verified in unit tests and live smoke
+        status: open
+      - id: c5
+        text: >-
+          session_preflight's terraform_pending derives from the convergence record (not a
+          terraform plan against the retired terraform/ root); /orient surfaces a red/stale
+          convergence state in its triage; tf_convergence_stale is registered in
+          source_registry.yaml and accepted by validate_source; full validate.py presubmit passes
+        status: met
+        met_by: cd-convergence-health-sensor
+    related_decisions: [55, 72, 73, 83, 84, 86, 92]
+    effort: M
+    strategic: false
+    status: in_progress
+    progress_note: >-
+      2026-06-27: shipped sensor (scripts/convergence_health.py, 36 unit tests, convergence-health
+      workflow, preflight repoint, orient SKILL update, source_registry entry, taxonomy entry,
+      ROADMAP T2.35 item). Criteria c1/c2/c3/c5 met. c4 open: live smoke (VP7/VP8) pending
+      post-merge workflow_dispatch.
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
