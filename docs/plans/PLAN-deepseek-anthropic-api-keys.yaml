@@ -16,10 +16,14 @@ scope:
     action: Modify
     purpose: >-
       On a verified VP pass, flip T0.4 c1/c2/c3 to status=met (met_by=deepseek-anthropic-api-keys),
-      set c4 to status=rehomed (rotation reminder owned by T2.5, deferred_post_mvp), refresh
+      set c4 to status=rehomed (rotation reminder owned by T2.9, deferred_post_mvp), refresh
       progress_note, and leave item status=in_progress with a note that all active criteria are met
       and completion is gated solely on CD.28 ratification.
 bundled_recommendations: []
+closes_criteria:
+  - "T0.4:c1"
+  - "T0.4:c2"
+  - "T0.4:c3"
 infrastructure_dependencies:
   - >-
     No new terraform apply and no Lambda deploy. The two Secrets Manager envelopes
@@ -44,9 +48,9 @@ acceptance_criteria:
     wildcard).
   - >-
     Roadmap bookkeeping: T0.4 c1/c2/c3 are status=met with met_by=deepseek-anthropic-api-keys; c4 is
-    status=rehomed pointing to T2.5; T0.4 item status remains in_progress with a note that completion
-    is gated only on CD.28 ratification; `validate --pre` passes (closes_criteria, rehomed c4, and
-    met_by resolution all valid).
+    status=rehomed pointing to T2.9; T0.4 item status remains in_progress with a note that completion
+    is gated only on CD.28 ratification; the platform-roadmap validation (VP step 4) passes
+    (closes_criteria refs, rehomed c4, and met_by resolution all valid).
 verification_plan:
   - step: 1
     phase: post-deploy
@@ -85,17 +89,22 @@ verification_plan:
       a missing grant) -- treat them as the authoritative c3 signal and note the skipped explicit check.
   - step: 4
     phase: pre-deploy
-    action: After the roadmap bookkeeping edit, confirm roadmap schema + criteria integrity.
-    command: bin/venv-python -m scripts.validate --pre
+    action: >-
+      After the roadmap bookkeeping edit, run the platform-roadmap schema + criteria-integrity checks
+      directly. NOTE: validate_platform_roadmap runs in full presubmit only (not --pre), so invoke it
+      directly rather than via `validate --pre`.
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_platform_roadmap as v; f=[];
+      v(f); import sys; sys.exit(1 if f else 0)"
     expected: >-
-      Pass. The platform-roadmap schema validation accepts c1/c2/c3 status=met with a resolvable
-      met_by (this plan file exists at docs/plans/PLAN-deepseek-anthropic-api-keys.yaml), c4
-      status=rehomed, and the plan's closes_criteria refs (T0.4:c1, T0.4:c2, T0.4:c3) resolve to real
-      item:criteria.
+      Exit code 0. The platform-roadmap validation (T-1.5 schema + T-1.23 assertions i/ii/iii) accepts
+      c1/c2/c3 status=met with a resolvable met_by (this plan exists at
+      docs/plans/PLAN-deepseek-anthropic-api-keys.yaml), c4 status=rehomed (a known tier_item id),
+      and the plan's closes_criteria refs (T0.4:c1, T0.4:c2, T0.4:c3) resolving to real item:criteria.
     fix_if: >-
-      met_by does not resolve (set met_by=deepseek-anthropic-api-keys, matching the plan slug),
-      bare-string criteria warning on the touched T0.4 item (keep all criteria as structured
-      ExitCriterion objects), or a closes_criteria referential-integrity FAIL.
+      Non-zero exit. met_by does not resolve (set met_by=deepseek-anthropic-api-keys, matching the
+      plan slug); bare-string criteria warning on the touched T0.4 item (keep all criteria as
+      structured ExitCriterion objects); or a closes_criteria referential-integrity FAIL.
 constraints:
   - >-
     Criterion status flips happen ONLY in /implement's bookkeeping walk, on a verified VP pass, for
@@ -108,9 +117,9 @@ constraints:
     No new terraform apply and no Lambda deploy; no .tf content changes (infra already applied in
     sandbox per Decision 77). Secret values stay out-of-band; never Terraform-managed (Decision 37).
   - >-
-    Do NOT build or modify T2.5's rotation-automation surface (terraform/personal/secrets_rotation.tf,
+    Do NOT build or modify T2.9's rotation-automation surface (terraform/personal/secrets_rotation.tf,
     docs/contracts/secrets-rotation.md, .github/workflows/secrets-rotation-reminder.yml). Key rotation
-    is deferred_post_mvp (human decision 2026-06-28); c4 is rehomed to T2.5, which already owns the
+    is deferred_post_mvp (human decision 2026-06-28); c4 is rehomed to T2.9, which already owns the
     DeepSeek + Anthropic rotation cadence + reminder.
   - >-
     Do NOT ratify CD.28. It gates multiple items (T0.4, T4.1, T4.2, T4.3, T4.4); ratification is a
@@ -132,10 +141,10 @@ context:
   - >-
     CD.28's discipline-point (ROADMAP-PLATFORM.yaml line 1139) mandates quarterly, calendar-reminded
     rotation for the DeepSeek and Anthropic credentials. That rotation work is deferred_post_mvp and
-    owned by T2.5 ("Secrets rotation policy + automation", ROADMAP line 4166), whose exit_criteria
+    owned by T2.9 ("Secrets rotation policy + automation", ROADMAP line 4164), whose exit_criteria
     already name "DeepSeek + Anthropic API keys (per CD.28 / T0.4) documented as Secrets Manager
     versioned with quarterly rotation cadence" and "Calendar-cron files a rec ... before rotation due".
-    Per human decision (2026-06-28) key rotation stays post-MVP, so c4 is rehomed to T2.5 rather than
+    Per human decision (2026-06-28) key rotation stays post-MVP, so c4 is rehomed to T2.9 rather than
     built/closed here. Mirrors the T2.14 broker-credential precedent and the Decision 93
     deferred_post_mvp boundary.
   - >-
@@ -172,7 +181,7 @@ execution_steps:
   - >-
     Roadmap bookkeeping walk in docs/ROADMAP-PLATFORM.yaml: set T0.4 c1/c2/c3 status=met with
     met_by=deepseek-anthropic-api-keys; set c4 status=rehomed and prepend an annotation to its text,
-    e.g. "[Rehomed 2026-06-28: quarterly-rotation calendar reminder is post-MVP, owned by T2.5
+    e.g. "[Rehomed 2026-06-28: quarterly-rotation calendar reminder is post-MVP, owned by T2.9
     (Secrets rotation policy + automation, deferred_post_mvp), whose criteria already cover the
     DeepSeek + Anthropic key rotation cadence + reminder; not required for T0.4 MVP completion per
     human decision]"; refresh progress_note to record this closeout; leave item status=in_progress
