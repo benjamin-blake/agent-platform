@@ -1,0 +1,316 @@
+schema_version: 1
+slug: "agent-context-refresh"
+intent: >-
+  Refresh the agent-facing instruction surface (AGENTS.md, docs/PROJECT_CONTEXT.md, per-directory
+  CLAUDE.md) so fresh agents orient correctly: state plainly that the repo is PUBLIC with all
+  confidential data confined to the personal AWS account, remove dead "work account" and
+  local-development framing, prune redundancy, and give agents the platform DESTINATION (a derived
+  end-state synthesis) without forcing a full roadmap read -- advancing the agent-first North Star
+  by reducing per-session orientation cost.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-agent-context-refresh.yaml
+phase: >-
+  Platform / agent-instruction architecture (Layer 1-2 of the 5-layer instruction model). Ad-hoc
+  context-management refresh; targets no single tier_item (soft-warn category
+  user_explicit_out_of_scope). Adjacent to T5.3 (legacy-prompt retirement) and T5.2 (work-account
+  teardown) but performs neither -- those teardowns remain deferred.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add a prominent "PUBLIC repository / confidential-data boundary" section (cite Decision 73/83).
+      Remove work-account framing and local-development framing (cite Decision 76/84). Strip
+      duplication that belongs in PROJECT_CONTEXT.md so AGENTS.md stays lean (ambient hard rules
+      only). Keep the deep-frozen .github legacy line accurate (deletion is deferred, not done).
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Full prune + de-dupe vs AGENTS.md. Add the new "Platform End-State" section (the synthesized
+      destination architecture) as a NON-AUTHORITATIVE derived projection, stamped with source
+      commit + date + the sha256 fingerprint of the roadmap tier_item ID set. Refresh the File Router
+      and AWS block (correct the stale Bedrock/Gemini executor line to current reality). Prune
+      dead-subsystem Known Gotchas (frozen executor -- keep a "still frozen, Decision 67" pointer;
+      retired Copilot SDK; retired Bedrock). Add the PUBLIC note. Bump "Last Updated" to 2026-06-28.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Reframe the work-account lines (the "work-root .tf", "work-account files", "SCP block was
+      work-account-only" framing) and the bblake-* legacy mentions to personal-account-only, while
+      preserving the necessary "why" (legacy .tf retained but not applied; only terraform/personal/
+      is live). The file already affirms CC-web-only and public-repo safety -- leave that intact.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Add an ADVISORY end-state drift check: compute sha256 of the sorted live ROADMAP-PLATFORM.yaml
+      tier_item ID set, compare to the fingerprint stamped in PROJECT_CONTEXT.md, and emit an
+      `endstate_drift` field in the preflight report plus a one-line stdout summary when they differ.
+      Never fail preflight (advisory only). Keys on the ID SET, so completing/reordering items is
+      silent; only added (or removed) IDs trip it.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Add unit tests for the end-state drift check: (a) identical ID set -> not stale, no warning;
+      (b) a new tier_item ID present in the roadmap but absent from the stamp -> stale, names the new
+      id(s); (c) a completed/status-changed item with unchanged ID set -> not stale (no false
+      positive). Exercise the real hashing/compare code path (not a mock of it).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - AGENTS.md contains a PUBLIC-repository / confidential-data-boundary section that cites Decision 73/83 and states confidential data lives only in the personal AWS account + gitignored files + Secrets Manager.
+  - docs/PROJECT_CONTEXT.md contains the same PUBLIC note (in its Rules or AWS section).
+  - No "work account" / "work-root" / "company AWS" framing remains in AGENTS.md, docs/PROJECT_CONTEXT.md, or terraform/CLAUDE.md.
+  - The specific local-development phrases are removed from AGENTS.md and docs/PROJECT_CONTEXT.md (reframed to the CC-web container); legitimate uses of the word "local" (e.g. local read cache, embedded/local query engine) are preserved.
+  - docs/PROJECT_CONTEXT.md contains a "Platform End-State" section that is explicitly labelled non-authoritative (a cached query of ROADMAP-PLATFORM.yaml, which is named as the sole source of truth), stamped with the source commit + date and the roadmap_tier_id_set sha256 fingerprint.
+  - The Platform End-State section introduces NO forward commitment, sequencing, or rationale not already present in ROADMAP-PLATFORM.yaml (derived content only).
+  - Duplication between AGENTS.md (ambient) and PROJECT_CONTEXT.md (on-demand deep) is consolidated to a single owner per the lean/deep split (verified by review/critique).
+  - session_preflight emits an advisory `endstate_drift` signal (report field + stdout line) when the live tier_item ID-set hash differs from the stamped hash, and stays silent + non-failing when they match.
+  - The drift check is advisory only -- it never changes the preflight exit code.
+  - "`bin/venv-python -m scripts.validate --pre` passes (no regression); no files are deleted."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: PUBLIC-repo statement present in both top-level agent docs.
+    command: grep -qiE 'public(ly)? (repo|repository)' AGENTS.md && grep -qiE 'public(ly)? (repo|repository)' docs/PROJECT_CONTEXT.md && echo OK
+    expected: OK
+    fix_if: One of the docs lacks the PUBLIC-repository / confidential-boundary statement.
+  - step: 2
+    phase: pre-deploy
+    action: No work-account / company-account framing remains in the three edited docs.
+    command: "if grep -rniE 'work[- ]account|work[- ]root|company[- ]aws|company account' AGENTS.md docs/PROJECT_CONTEXT.md terraform/CLAUDE.md; then echo FAIL; else echo CLEAN; fi"
+    expected: CLEAN
+    fix_if: A residual work/company-account reference survives (reframe it to personal-account-only).
+  - step: 3
+    phase: pre-deploy
+    action: Targeted local-development framing removed (specific phrases, not the word "local" wholesale).
+    command: "if grep -rniE 'local terminal|when run locally|Local-dev .agent|Local and Claude-Code-on-web dev|local machine still resolve' AGENTS.md docs/PROJECT_CONTEXT.md; then echo FAIL; else echo CLEAN; fi"
+    expected: CLEAN
+    fix_if: A targeted local-dev phrase survives; reframe to the CC-web container.
+  - step: 4
+    phase: pre-deploy
+    action: Platform End-State section present, non-authoritative, and fingerprint-stamped.
+    command: grep -qE 'Platform End-State' docs/PROJECT_CONTEXT.md && grep -qiE 'non-authoritative|cached query|sole source of truth' docs/PROJECT_CONTEXT.md && grep -qE 'roadmap_tier_id_set sha256:' docs/PROJECT_CONTEXT.md && echo OK
+    expected: OK
+    fix_if: Section missing, unstamped, or not labelled non-authoritative.
+  - step: 5
+    phase: pre-deploy
+    action: After stamping with the current fingerprint, preflight reports the end-state as in-sync (no drift).
+    command: "bin/venv-python -m scripts.session_preflight >/dev/null 2>&1; bin/venv-python -c \"import json; r=json.load(open('logs/.preflight-report.json')); d=r.get('endstate_drift') or {}; print('DRIFT' if d.get('stale') else 'IN_SYNC')\""
+    expected: IN_SYNC
+    fix_if: The stamped hash does not equal sha256 of the sorted live tier_item IDs, or the report field is absent/misshaped.
+  - step: 6
+    phase: pre-deploy
+    action: Drift unit tests pass (in-sync, new-id-stale, completed-item-not-stale).
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -k endstate -q
+    expected: All selected tests pass.
+    fix_if: A case fails -- most likely the hash is over item content/status instead of the ID set (false positive on completion).
+  - step: 7
+    phase: pre-deploy
+    action: Negative drift proof -- injecting a synthetic new tier_item id makes the check report stale and name it (run on a throwaway copy, not the real roadmap).
+    command: "bin/venv-python -c \"import yaml,hashlib,copy; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); ids=sorted({str(i['id']) for i in d['tier_items'] if isinstance(i,dict) and 'id' in i}); h=hashlib.sha256(chr(10).join(ids).encode()).hexdigest(); ids2=sorted(set(ids)|{'ZZ9.99'}); h2=hashlib.sha256(chr(10).join(ids2).encode()).hexdigest(); print('DETECTS_NEW' if h!=h2 and 'ZZ9.99' in set(ids2)-set(ids) else 'FAIL')\""
+    expected: DETECTS_NEW
+    fix_if: Adding an id does not change the fingerprint (the hash is not over the ID set).
+  - step: 8
+    phase: pre-deploy
+    action: Refresh the Last-Updated stamp in PROJECT_CONTEXT.md.
+    command: grep -qE 'Last Updated.*(June 28, 2026|2026-06-28)' docs/PROJECT_CONTEXT.md && echo OK
+    expected: OK
+    fix_if: The Last-Updated line still reads the old date.
+  - step: 9
+    phase: pre-deploy
+    action: Full presubmit passes (no regression; confirms no deletions broke tooling and the schema/guards are green).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit code 0.
+    fix_if: A presubmit check fails -- diagnose from its output before re-running.
+constraints:
+  - Pure agent-context management. NO files are deleted. The 17-file .github Tier-A teardown (legacy prompts/agents) and its reference cleanup are explicitly DEFERRED to a later session; do not perform them here.
+  - The Platform End-State section is a NON-AUTHORITATIVE derived projection (Agent-First / Decision 86). ROADMAP-PLATFORM.yaml is the sole source of truth; add no net-new forward intent/rationale here (route any net-new to a tier_item or Decision). Precedent for derived-projection-of-git-source is Decision 87.
+  - The preflight end-state drift check is ADVISORY ONLY -- it must never change the preflight exit code or become a CI merge gate (drift-alarm philosophy, consistent with DQ-as-code).
+  - The fingerprint is computed over the sorted SET of tier_item IDs only -- never over item bodies/status -- so completing an item never registers as drift.
+  - When pruning executor/Copilot/Bedrock gotchas, keep a one-line "executor still frozen (Decision 67)" pointer; do not imply the executor was removed. Copilot SDK and Bedrock are retired/dormant for the dev surface.
+  - Edit existing files only; create no new standing prose-architecture doc under docs/ (intent-doc-freeze guard matches docs/INTENT-*.md; PROJECT_CONTEXT.md is grandfathered and safe to edit in place).
+  - Style (AGENTS.md / PROJECT_CONTEXT.md rules) - no emojis, ASCII hyphens only (no em dashes), ruff line length 127, invoke Python via bin/venv-python.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - "Decision-scout verdict on this approach- FLAGS_FOUND, one NOTE on Decision 86. Reconciliation HOLDS conditionally with three guardrails now encoded as constraints/ACs- (1) section labelled non-authoritative + sole-source-of-truth named + stamped; (2) no net-new forward content; (3) intent-doc-freeze guard confirmed to scope to docs/INTENT-*.md only, so the in-place PROJECT_CONTEXT.md edit does not trip it (verified- scripts/validate.py validate_intent_doc_freeze rglob 'INTENT-*.md')."
+  - "Decisions to cite- 73 + 83 (repository made public 2026-05-30); 101 (now ratified on main- external brand identity + the public-content boundary- never publish AWS account specifics, market platform engineering not trading alpha/performance; presentation-layer-only, internal identifiers unchanged) -- cite 101 alongside 73/83 in the PUBLIC / confidential-boundary section; 76 + 84 (Claude-Code-on-the-web is the sole dev surface, agent/{slug} ceremony removed, .claude canonical, .github legacy demoted); 86 + 87 (derived non-authoritative projection of a git-authoritative source is permitted; Decision 101's Agent-First marketing-prose exception is scoped to a top-level marketing/ dir and does NOT cover docs/, so this plan's in-place PROJECT_CONTEXT.md edit relies on grandfathering, not the 101 exception); 67 (executor frozen, not removed); 75 (sanctioned premise-correction for the public/no-local/account reframes); 90 (four-tier workflow framing stays accurate)."
+  - "End-state fingerprint captured at planning time- source commit e588678 (2026-06-28); 121 tier_items; sha256(sorted tier_item ids) = f5072e405c65dee3c5cd216d11ef6bf1e9fedfe80bf628b63cf1c4be7db946c6. Use these in the PROJECT_CONTEXT.md stamp line so VP step 5 reports IN_SYNC immediately after implementation."
+  - "Exact stamp line to place at the top of the Platform End-State section- 'Derived from ROADMAP-PLATFORM.yaml @ e588678 (2026-06-28). NON-AUTHORITATIVE cache- a materialized query of the roadmap, NOT a source of truth; re-synthesize via a fresh subagent to refresh. roadmap_tier_id_set sha256: f5072e405c65dee3c5cd216d11ef6bf1e9fedfe80bf628b63cf1c4be7db946c6'"
+  - "Tier Item Freshness Gate- SKIPPED. Intent is an ad-hoc context-management refresh naming no tier_item (soft-warn category user_explicit_out_of_scope). main is 0 commits behind origin/main at planning time; no scope-file divergence."
+  - "Per-directory CLAUDE.md review outcome- src/data/handlers/CLAUDE.md and tests/CLAUDE.md were reviewed during planning and need NO change (the schedule.yaml reference in the handlers doc is a valid live Tier-B consumer; tests/CLAUDE.md has no work-account/local-dev/stale content). They are intentionally NOT in scope."
+  - "Known PROJECT_CONTEXT.md staleness to fix (surfaced by the end-state synthesis subagent)- line ~111 frames the executor as using Gemini CLI with Bedrock deepseek.v3.2; current reality is executor FROZEN (Decision 67) and the LLM substrate retired Bedrock. Reframe to current state without inventing end-state detail."
+  - "session_preflight.py integration point- main() (~line 1564) assembles a `report` dict written to logs/.preflight-report.json (~line 1775); add report['endstate_drift'] = {stale: bool, synthesized_hash, current_hash, new_ids: [...]} alongside the existing report[...] additions (~lines 1761-1765), and a one-line advisory in the stdout summary block (~line 1812). Parse the stamped hash from docs/PROJECT_CONTEXT.md via regex on 'roadmap_tier_id_set sha256:'. Fail-open- if the stamp is unparseable, emit a soft note, never an exception or non-zero exit."
+  - "PLATFORM END-STATE PAYLOAD- the verbatim markdown to insert into docs/PROJECT_CONTEXT.md (BELOW the stamp line above). Produced by a fresh-context synthesis subagent that read ROADMAP-PLATFORM.yaml in full; the planning agent did not read the roadmap itself. Insert as-is (ASCII only)-"
+  - |
+    ## Platform End-State (derived from ROADMAP-PLATFORM.yaml)
+
+    This is the destination: what the platform looks like once the entire ROADMAP-PLATFORM.yaml
+    work-list is implemented. PLATFORM = the infrastructure/governance/automation substrate
+    underneath the trading system (ROADMAP-PRODUCT.yaml is the sibling product axis). Present tense
+    describes the target; "[future]" marks parts not yet live.
+
+    North Star (NS.1-NS.5): storage durable / compute interchangeable; personal AWS account (IP
+    ownership); hybrid compute (cloud orchestration + local rig for CPU-bound batch); the repo is for
+    agents; the agent surface is self-describing typed verbs over HTTPS with Pydantic schema-as-code.
+
+    ### 1. Self-improvement / recursive loop
+    The four-tier workflow (Decision 90) runs end-to-end with no human in the critical path of one
+    iteration (the Platform-MVP boundary, Decision 93):
+    - /orient (read-only) surfaces eligible work, CI-RCA triage, and ranked /plan prompts -> /plan
+      produces a schema-validated PLAN-{slug}.yaml (PlanDocument, Decision 85/CD.22) -> /implement
+      executes or scopes -> /develop-executor supervises the autonomous executor [future].
+    - Recommendations and decisions are the loop's currency. Findings (code review, scheduled agents,
+      CI-RCA, telemetry analysis) become ops_recommendations rows via the portal; architectural
+      commitments become ops_decisions rows.
+    - The autonomous executor (T4) is the end-state consumer of the rec queue. Today it is FROZEN
+      (Decision 67 STRATEGIC-plan clause, reversed only by CD.17 when T4.2 is stable +14d, T3.2
+      verifier PASS, T3.3 +7d). In the end-state, recs flow queue -> executor -> plan/critique/
+      revision -> GitHub Actions verification -> merge, with RCA-on-failure (Decision 55: stop
+      cleanly, diagnose, file a permanent-fix rec; never inline-patch).
+    - Plans, plan-critiques, and revisions graduate to first-class warehouse entities (ops_plans,
+      ops_plan_revisions; T4.5/T4.6, Decision 87), with git authoritative until the autonomous
+      producer flips authority [future]. Autonomy escalates through maturity gates A0-A5 (T4.4) keyed
+      to verifier pass-rates and drift silence.
+
+    ### 2. Operational data backbone
+    - ops_recommendations, ops_decisions, ops_priority_queue live on DuckLake-on-Neon as the SOLE
+      backend (Decision 84/CD.31/CD.33/CD.34). No Athena path, no rollback flag. Neon serverless
+      Postgres is the DuckLake catalog (replaced RDS, ~$0; egress budgeted per Decision 88).
+    - Closed reader/writer boundary: reads transit ducklake_reader via NAMED VERBS only (no caller
+      SQL); writes transit ducklake_writer with OCC-retry, writer-owned rec-ID keyspace (file_ops
+      allocates rec-NNNN in-transaction), and a "current" projection replacing SCD2 _current views.
+      Append-only/event-journal write mode coexists with SCD2 per table (T1.14).
+    - Agent surface = typed Lambda verbs (CD.10, shape per Decision 91): the verb set fronts the
+      closed boundary (extensible; not a fixed six). Agents call file_rec/update_rec/sync (and query
+      verbs) via boto3+sigv4 over Function URLs with AWS_IAM auth, through the agent_platform
+      (PlatformDev) role; PlatformAdmin handles import-mode/break-glass. An agent SDK shim (T0.8)
+      hides URL discovery, signing, retry, and idempotency (T1.10).
+    - Single Portal Invariant + warehouse-as-source-of-truth: all ops writes go through the portal;
+      local logs/*.jsonl are read-only caches rebuilt downstream via sync. Writes FAIL LOUDLY (no
+      offline outbox, Decision 84 I-4).
+    - Telemetry: canonical 4-table trace/observation model (Decisions 95-97: ULID keys minted at the
+      boundary, event-time day(started_at) UTC partitioning, no downstream re-derivation). Telemetry
+      tables migrate onto DuckLake; Phase E (cloud analysis agent, T3.3) reads them. ops_session_log
+      / ops_execution_plans are the last Athena/Iceberg holdouts, retired/migrated by T2.26
+      (ops_compaction retires with them); docs/DECISIONS.md (T5.4) and docs/SESSION_LOG.md retire
+      once ops_decisions is canonical.
+    - DQ-as-code (CD.12): Annotated-Pydantic models (DqNotNull, DqUnique, ...) are the single source
+      of schema + DQ; Iceberg DDL is generated by walking model_fields (T0.13). The DQ runner is a
+      SCHEDULED DRIFT ALARM that files recs (T1.6), NOT a merge gate; stateful invariants
+      (uniqueness/FK/status-DAG) run in-handler pre-commit and return typed 4xx.
+
+    ### 3. Trading data / compute pipeline and lakehouse
+    - S3 + open table formats at every scale (NS.1): Iceberg for market-data/product tables; DuckLake
+      for ops/telemetry (Decision 78). Every table is partitioned (CD.9: day(trade_date) market
+      data, day(...) event-time ops/telemetry). No unpartitioned-table path.
+    - DuckDB is the default operational read engine (CD.8, CD.15): embedded, sub-second, queries
+      snapshots/DuckLake directly inside the query Lambda; agents see verbs, not SQL or the engine.
+      Athena _current views are retired in the personal account; in the DuckLake end-state there is
+      no Athena escape hatch (OQ.7 option a) -- ad-hoc scans live behind ducklake_reader; break-glass
+      = the audited PlatformAdmin / Neon credential.
+    - Compute is hybrid (NS.3): PySR formula discovery runs overnight on the local compute node
+      (VPN+SSH; T2.6, deferred post-MVP), writing to S3; cloud holds orchestration and state.
+    - Workflow orchestration is Step Functions (Decision 39), with TCA/cost-curve aggregation Lambdas
+      (T3.5) feeding product cost models. Glue database agent_platform, bucket agent-platform-data-lake,
+      region eu-west-2.
+
+    ### 4. Environments and promotion (two-axis taxonomy, Decision 77)
+    - Platform axis (infrastructure): bootstrap (admin-only, owns the CI/CD role's own IAM, never
+      auto-applies) -> sandbox (current personal account, mocked externals, auto-apply on
+      push-to-main behind the deterministic guard) -> SIT [future account, manual apply] -> PROD
+      [future account, real capital, second approver]. Same code path everywhere; only externals
+      (mocked vs real) and apply-gate differ. Single-account until the product axis reaches live_full
+      nearing full capital -- that event triggers standing up SIT then PROD.
+    - Product axis (strategy lifecycle): research -> backtest_canonical -> paper -> live_small ->
+      live_full. Advancement is a capital_allocation config change (single-account, never a
+      deploy/infra spin-up).
+    - "promotion" is always axis-qualified; environment and phase are reserved, lint-enforced vocabulary.
+
+    ### 5. Infrastructure-as-code and convergence (CD.35 waves, Decision 92/94)
+    - All infra is Terraform under terraform/personal/ (full re-deploy in personal account, not state
+      migration; CD.6). Apply is agent-native CI/CD, never from a laptop:
+      - PRs run a speculative terraform plan under a least-privilege github_ci_plan role (refs/pull/*
+        trust, read-only state, fork-safe).
+      - Routine merges to main auto-apply the SAVED plan.bin behind a deterministic guard
+        (scripts/terraform_apply_guard.py, fail-closed on any IAM/trust/destroy diff, exit 2) plus
+        subagent plan review.
+      - Guard-flagged (fail-closed) applies route to a gated-apply job under the tf-gated-apply GitHub
+        Environment, blocking on a required reviewer; on approval it applies the same reviewed plan
+        (no re-plan, no TOCTOU).
+      - A durable S3 convergence record (green/red, always-written, pipeline-identity-only) makes
+        apply outcomes sticky and observed; a scheduled drift detector runs terraform plan
+        (alarm-only, exit-code-typed); a convergence-health staleness sensor (T2.35) re-fires if the
+        latch goes quiet.
+      - Privilege tiering / bootstrap root (T2.23): the CI/CD role's OWN IAM (permissions boundary +
+        authority budget) lives in terraform/bootstrap/, breaking the self-grant; in-budget IAM
+        auto-apply (guard-consumption) is pending T2.25. CI-role IAM is DRY-composed with
+        invoke-implies-permission to prevent drift (T2.34).
+    - IAM/OIDC roles: runtime agent_platform / agent_platform_admin; CI agent-platform-github-ci-branch
+      / -pr; apply-path github_ci_plan / github_ci_apply / convergence-writer (admin-created per
+      Decision 98). Lambda code deploys are decoupled from infra applies (ignore_changes =
+      [source_code_hash]).
+
+    ### 6. CI/CD and governance
+    - Two-tier presubmit (Decision 60/73): validate.py --pre (diff-aware, authoritative on PR CI) +
+      full validate.py post-merge. validate.py is the single source of truth -- no CI check exists
+      without it.
+    - CI runs on GitHub-hosted ubuntu-latest + OIDC (self-hosted EC2 runner retired, CD.21). Branch
+      protection is live (Decision 83): main-protection ruleset (required: pr-validate +
+      terraform-validate), Dependabot, GHAS secret-scanning/push-protection/CodeQL.
+    - CI-RCA forward-fix (Decision 72): a failed main CI auto-files a source=ci_rca, priority=critical
+      rec and hard-blocks /plan until reviewed; fixes are forward-only, never auto-revert, never
+      inline-patched ahead of architectural review.
+    - Merge flow: harness claude/* branch -> push -> GitHub MCP create_pull_request ->
+      subscribe_pr_activity + end turn -> CI-green-comment wake -> confirm check runs -> squash-merge
+      with Resolves: rec-NNNN trailer (triggers rec-autoclose).
+    - Validation is a curated asset (CD.29/CD.30): graduated/deduplicated, hard-gate behind a
+      hermeticity precondition (T3.6 audit), diff-line-coverage ratchet (CD.30), and meta-validated by
+      scheduled mutation testing + deterministic dead-test detection (T3.7).
+
+    ### 7. Verifier harness / typed checks / graduation registry (T3)
+    - Filesystem-as-registry verifiers in scripts/verifiers/, exit-code-as-verdict, with a same-PR
+      guard (an author cannot weaken their own verifier) and a graduation registry where proven
+      verifiers graduate into validation (T3.1, CD.29).
+    - A causal-chain verifier (T3.2) proves a telemetry record flows PRODUCE -> TRANSPORT -> PERSIST
+      -> QUERY -> ASSERT atomically; its latest-run PASS is the gate (G.8) that unblocks the Phase E
+      cloud analysis agent (T3.3) and is a precondition for executor autonomy (CD.17).
+    - Recommendation relevance is a governed lifecycle state (CD.36): a freshness/relevance gate
+      prevents starting stale recs (T3.8) and post-merge reconciliation prevents stale recs
+      accumulating (T3.9).
+
+    ### 8. Agent / instruction architecture end-state
+    - 5-layer instruction model (instruction-architecture contract): L1 universal rules
+      (AGENTS.md/CLAUDE.md, ambient) / L2 project knowledge (docs/PROJECT_CONTEXT.md, on-demand) / L3
+      slash commands (.claude/commands/) / L4 skills (.claude/skills/) / L5 executor prompts
+      (config/agent/executor/prompts/). .claude/ is canonical (Decision 76); .agents/ and
+      .github/prompts|agents/ are deep-frozen legacy, retired at T5.3.
+    - Agent-first repository (NS.4, CD.13): all artefacts machine-parseable. Standing
+      prose-architecture docs are forbidden (Decision 86) -- intent routes to tier_items, rationale to
+      Decisions, field semantics to contracts (Class A data schemas, Class B Lambda-verb, Class C
+      cross-system). INTENT-*.md docs are fully extracted and deleted (T5.5). Contracts are converted
+      to .yaml and wired to their code consumers (T-1.13..T-1.19).
+    - LLM substrate (CD.28): DeepSeek-direct via LiteLLM (Tier 1) + Anthropic-direct Claude (Tier 2
+      warm-fetched escape hatch); Bedrock fully retired. Keys in Secrets Manager (T0.4). Precision
+      Context Injection (Decision 66): field semantics surfaced at agent write time.
+    - Multi-product topology (CD.32): a unified project_id data plane with an IP-boundary-only repo
+      axis [future]. Dev surface is Claude Code on the web only (CD.2; Windows VM decommissioned at
+      T5.1, old work account torn down at T5.2 after 30d grace).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/agent-docs-review-zmxa3u)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (cite list 73/83/76/84/86/87/67/75/90)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - End-state payload + stamp (commit e588678, sha256 f5072e40...b946c6) available in this plan's context
+execution_steps:
+  - "AGENTS.md - add a PUBLIC repository / confidential-data boundary section near the top (Role/environment): state the repo is PUBLIC (Decision 73/83) and apply Decision 101's public-content boundary (never publish AWS account specifics; market platform engineering, not trading alpha/performance); confidential data (AWS account id, IAM ExternalIds, credentials/keys, trading alpha/performance) lives ONLY in the personal AWS account, gitignored files (e.g. terraform.personal.tfvars), and Secrets Manager -- never committed. Remove work-account framing; reframe local-development phrases to the CC-web container (Decision 76/84). Remove duplication now owned by PROJECT_CONTEXT.md, keeping AGENTS.md to ambient hard rules. Keep the deep-frozen .github legacy line (deletion deferred)."
+  - "docs/PROJECT_CONTEXT.md - add the PUBLIC note (Rules/AWS block); add the Platform End-State section using the stamp line then the verbatim payload from this plan's context; correct the stale executor/Bedrock/Gemini line to current reality (executor frozen Decision 67; Bedrock retired); prune dead-subsystem Known Gotchas (frozen executor -- keep a one-line Decision 67 pointer; retired Copilot SDK; retired Bedrock); de-duplicate against AGENTS.md per the lean/deep split; refresh File Router entries; bump Last Updated to June 28, 2026."
+  - "terraform/CLAUDE.md - reframe the work-account lines (work-root .tf / work-account files / SCP-was-work-account-only) and bblake-* legacy mentions to personal-account-only, preserving the 'legacy .tf retained but not applied; only terraform/personal/ is live' rationale. Leave the convergence/gated-apply/public-repo-safety content intact."
+  - "scripts/session_preflight.py - add the advisory end-state drift check in main(): read the stamped sha256 from docs/PROJECT_CONTEXT.md (regex on 'roadmap_tier_id_set sha256:'); compute sha256 of the sorted set of ROADMAP-PLATFORM.yaml tier_item ids; set report['endstate_drift'] = {stale, synthesized_hash, current_hash, new_ids}; print a one-line advisory when stale. Fail-open and never alter the exit code."
+  - "tests/test_session_preflight.py - add tests covering in-sync (not stale), new-id (stale + names id), and completed-item/unchanged-id-set (not stale) cases, exercising the real hash/compare path."
+  - "Execute the Verification Plan - run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Confirm bin/venv-python -m scripts.validate --pre is green and no files were deleted."
+  - "Report - what was changed across the five files, the VP results, and confirmation that the end-state drift check is advisory-only."
+work_areas: []
+rollback: >-
+  Pure-docs + one advisory preflight check; revert the single implementation commit
+  (git revert) to restore the prior instruction surface. No data, infra, or deploy side effects.
