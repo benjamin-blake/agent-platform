@@ -2,6 +2,87 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-28
+**Warehouse ID:** dec-101 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The platform and its trading product were operating under purely internal identifiers (repo
+`agent-platform`, AWS prefixes `agent-platform-*`, profile `agent_platform`, project_id
+`trading-system`). As the system matures toward MVP, external-facing brand identity and a
+public documentation/marketing presence are needed. No ratified decision named the external
+brands or governed what may and may not be published publicly.
+
+**Decision:**
+
+**(a) Naming hierarchy:**
+- **Theseus** = external brand for the PLATFORM (the self-improving host system).
+- **Guerdon** = external brand for the trading PRODUCT (product #1 built on Theseus).
+- **Semanto** = the external-facing marketing/comms system and the name of its roadmap
+  (`docs/ROADMAP-SEMANTO.yaml`). Semanto is a PRESENTATION-LAYER-ONLY brand for the
+  marketing and communications surface; it is not a product or a subsystem.
+
+**(b) Presentation-layer only -- internal identifiers unchanged:**
+The external brands apply exclusively to external/marketing surfaces. ALL internal identifiers
+are unchanged by this decision and must not be altered without a separate explicit decision:
+- Repository name: `agent-platform`
+- AWS resource prefixes: `agent-platform-*`
+- IAM profile: `agent_platform`
+- Glue database: `agent_platform`
+- Project ID: `trading-system` (per the INTENT-multi-product-platform origin model, which is
+  unbuilt and unchanged here)
+
+A deep internal rename (aligning identifiers to `theseus-*`) is a recognised high-blast-radius
+future item DEFERRED to a post-MVP tightening refactor. Citing Decision 75 (Frame-Lock): no
+fixed internal-rename scope is committed here; the scope will be bounded in a future plan.
+
+**(c) Scoped Decision-86 marketing-prose exception:**
+Decision 86 (Agent-First repository) mandates machine-parseable artefacts over narrative prose
+and bans standing human-readable companion documents. Marketing prose is hereby granted a
+SCOPED EXCEPTION under the following conditions:
+- Marketing content lives OUTSIDE `docs/` -- the canonical directory is the top-level
+  `marketing/` directory.
+- Marketing content is NOT consumed by internal agents as a source of truth. It is strictly
+  one-way downstream: it renders internal artefacts; it never feeds back into agent context.
+- Marketing content is never a warehouse write source (Decision 84). It is read-only from the
+  warehouse's perspective.
+- This exception is scoped to marketing prose only and does not extend to any other
+  human-readable content under `docs/`.
+
+**(d) Public-content boundary:**
+The public site (theseus.support) must enforce the following boundary at all times:
+- Never publish AWS account specifics: account IDs, infra topology, VPC details, secret
+  names, decision logs, or any content from `docs/` or `logs/`.
+- Market the platform engineering and architecture; never publish Guerdon's trading
+  alpha, performance figures, or returns. Publishing performance claims exposes
+  investment-solicitation and securities-law risk.
+
+**(e) Hosting:**
+The public site is a static site on Cloudflare Pages, built with Astro and Starlight
+(both free/MIT-licensed). Cloudflare Pages is the native managed primitive for static-site
+hosting -- consistent with Decision 100 (use managed primitives, no client-tooling substitution
+for native operations). No hand-rolled build or hosting tooling is permitted.
+Domain: `theseus.support` (Cloudflare-managed DNS, already owned).
+
+**(f) Positioning:**
+- Primary audience: data-engineering hiring managers (portfolio and technical credibility signal).
+- Secondary aspiration: open-source community (transparency, contribution).
+- Deferred, separately gated: a paid service offering (requires its own decision and plan;
+  not in scope for the MVP marketing surface).
+
+**Scope of this decision:**
+This decision ratifies branding and governance only. It DOES NOT provision any infrastructure,
+deploy any site, or change any internal identifier. The theseus.support site and DNS are
+deferred_post_mvp items (S1.2/S1.3 in `docs/ROADMAP-SEMANTO.yaml`). The deep internal rename
+is explicitly deferred. This session's only artefacts are this decision and `docs/ROADMAP-SEMANTO.yaml`.
+
+**Affected files:**
+`docs/DECISIONS.md` (this decision), `docs/ROADMAP-SEMANTO.yaml` (new third sibling roadmap).
+
+---
+
 ## Decision 100: Managed services own their primitives -- no client-tooling substitution for native operations (Decided)
 
 **Status:** Decided
