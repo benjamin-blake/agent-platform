@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -2500,3 +2501,103 @@ class TestGetRecentMainCommits:
         with patch("session_preflight.subprocess.run", return_value=self._make_git_result("")):
             result = _preflight._get_recent_main_commits()
         assert result == []
+
+
+class TestEndstateDrift:
+    """Tests for _check_endstate_drift() -- VP step 6 (endstate drift cases)."""
+
+    _OLD_IDS = ["T1.1", "T1.2"]
+    _NEW_ID = "ZZ9.99"
+    _STAMP_COMMIT = "abc1234"
+
+    def _make_old_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: not_started\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+        )
+
+    def _make_new_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: not_started\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+            "  - id: ZZ9.99\n"
+            "    name: New Item\n"
+            "    status: not_started\n"
+        )
+
+    def _make_completed_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: complete\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+        )
+
+    def _hash_of(self, ids: list[str]) -> str:
+        return hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest()
+
+    def _make_context_md(self, stamped_hash: str, commit: str = "abc1234") -> str:
+        return f"Derived from ROADMAP-PLATFORM.yaml @ {commit} (2026-06-28).\nroadmap_tier_id_set sha256: {stamped_hash}\n"
+
+    def _setup_tmpdir(self, tmp_path: Path, context_text: str, roadmap_yaml: str) -> None:
+        (tmp_path / "docs").mkdir(parents=True)
+        (tmp_path / "docs" / "PROJECT_CONTEXT.md").write_text(context_text, encoding="utf-8")
+        (tmp_path / "docs" / "ROADMAP-PLATFORM.yaml").write_text(roadmap_yaml, encoding="utf-8")
+
+    def test_endstate_in_sync_not_stale(self, tmp_path: Path) -> None:
+        """Identical ID set: stamped hash matches current roadmap -> not stale, no warning."""
+        current_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(current_hash)
+        roadmap = self._make_old_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        with patch("session_preflight.ROOT", tmp_path):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is False
+        assert result["current_hash"] == current_hash
+        assert result["new_ids"] == []
+
+    def test_endstate_new_id_stale_names_new_id(self, tmp_path: Path) -> None:
+        """New tier_item ID added to roadmap -> stale=True, new_ids contains the new ID."""
+        old_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(old_hash, self._STAMP_COMMIT)
+        roadmap = self._make_new_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        git_result = MagicMock()
+        git_result.returncode = 0
+        git_result.stdout = self._make_old_roadmap_yaml()
+
+        with patch("session_preflight.ROOT", tmp_path), patch("session_preflight.subprocess.run", return_value=git_result):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is True
+        assert self._NEW_ID in result["new_ids"]
+        assert result["current_hash"] != old_hash
+
+    def test_endstate_completed_item_unchanged_ids_not_stale(self, tmp_path: Path) -> None:
+        """Completing an item changes status but NOT the ID set -> hash unchanged -> not stale."""
+        current_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(current_hash)
+        roadmap = self._make_completed_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        with patch("session_preflight.ROOT", tmp_path):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is False
+        assert result["new_ids"] == []

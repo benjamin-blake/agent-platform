@@ -3,8 +3,16 @@
 Universal rules for Claude Code. Auto-loaded into every session.
 For full project context (AWS config, file router, recommendation schema, gotchas), see `docs/PROJECT_CONTEXT.md` — workflows load it on demand; you don't need it ambiently.
 
+## PUBLIC repository / confidential-data boundary
+
+This repository is PUBLIC (Decisions 73, 83, 101). Public-content boundary (Decision 101):
+- NEVER publish: AWS account IDs or ARNs, IAM ExternalIds, credentials or API keys, trading alpha / strategy performance, or any internal hostname that provides an attack surface.
+- SAFE to publish: platform engineering, infrastructure patterns, tooling, CI/CD design, and general LLM-agent architecture -- market the engineering, not the alpha.
+- Confidential data lives ONLY in: the personal AWS account (Secrets Manager, gitignored tfvars, S3 private prefixes), and gitignored local files (e.g. `terraform/personal/terraform.personal.tfvars`, `~/.aws/credentials`). Nothing confidential is ever committed.
+- The pre-commit `never-commit` hook (shape-pattern) blocks 12-digit AWS account IDs, secret-like strings, and ExternalId patterns from reaching the repo.
+
 ## Role and environment
-You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
+You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (CC-web; Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
 
 ## Code style
 - Python 3.12+, type hints required, `async` for I/O.
@@ -134,7 +142,7 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 ### Two-tier presubmit model (Google TAP style)
 | Tier | When | Command | Gate |
 |---|---|---|---|
-| Fast (`--pre`) | PR / edit loop | `bin/venv-python -m scripts.validate --pre` | Authoritative pre-merge gate when run by PR CI (Decision 73); advisory only when run locally |
+| Fast (`--pre`) | PR / edit loop | `bin/venv-python -m scripts.validate --pre` | Authoritative pre-merge gate when run by PR CI (Decision 73); advisory only when run outside CI |
 | Full | Post-merge on `main` | `bin/venv-python -m scripts.validate` | A failure spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never auto-revert); see CI-failure / RCA-first protocol in `## Merge protocol` |
 
 `validate.py` is the single source of truth -- never add a check to `.github/workflows/ci.yml` without adding it to `validate.py` first.
@@ -226,12 +234,12 @@ To re-enable:
 The self-hosted EC2 runner was retired 2026-05-28 per CD.21. CI now runs on GitHub-hosted
 runners (`ubuntu-latest`) with OIDC to the personal account (role
 `agent-platform-github-ci-branch` for branch/push events, `agent-platform-github-ci-pr` for
-pull requests). See `terraform/personal/oidc.tf`. The work-account runner definition is
+pull requests). See `terraform/personal/oidc.tf`. The retired EC2 runner definition is
 retained in `terraform/ec2_runner.tf` as an architectural-evolution artefact (no longer applied).
 
 ### Claude Code OAuth token (CI + scheduled agents)
 
-Setup (one-time, local terminal):
+Setup (one-time, from CC-web terminal):
 ```bash
 claude setup-token
 # Copy the printed token -- it uses your Max plan subscription (no API billing)
@@ -239,7 +247,7 @@ claude setup-token
 In GitHub: repo -> Settings -> Secrets and variables -> Actions -> Repository secrets
 -> New secret. Name: `CLAUDE_CODE_OAUTH_TOKEN`. Paste the token.
 
-Rotation: re-run `claude setup-token` locally. Update the GH Actions secret with
+Rotation: re-run `claude setup-token` from the CC-web terminal. Update the GH Actions secret with
 the new token. Set a 90-day calendar reminder. If the scheduled agent workflow fails
 with auth errors, check token expiry first.
 

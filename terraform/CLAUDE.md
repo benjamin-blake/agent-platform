@@ -14,9 +14,9 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 - Region: `eu-west-2`
 - Account: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed).
 - Profile: `agent_platform` (PlatformDev, runtime) for agent operations; `agent_platform_admin` (PlatformAdmin) for provisioning (creates IAM + OIDC).
-- Glue database: `agent_platform` (personal module). Retained work-root `.tf` files still reference `trading_formulas_db`.
-- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
-- The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
+- Glue database: `agent_platform` (personal module). Retained legacy `.tf` files at the repo root still reference `trading_formulas_db` (artefacts from a prior account; not applied).
+- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). Legacy `.tf` files in `terraform/` are retained as architectural-evolution artefacts per CD.21 but no longer applied; only `terraform/personal/` is live.
+- The personal account has no SCP restricting IAM users or external OIDC (Decisions 36/37 do not apply to this account). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
 ## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
 **This project runs ONLY on Claude Code on the web. There is no operator local machine.** The agent
