@@ -1,0 +1,357 @@
+schema_version: 1
+slug: "convergence-health-staleness"
+intent: >-
+  Close the single remaining open exit criterion (c4) of platform tier item T2.35 (CD-convergence
+  health staleness sensor, CD.35 Wave 6), already shipped and merged in PR #288. c4 requires that a
+  terraform-apply-sandbox run whose gated-apply job has been waiting on the tf-gated-apply Environment
+  beyond threshold is surfaced in the HealthVerdict and folded into the tf_convergence_stale rec
+  context, verified in unit tests AND live smoke. The c4 code and unit tests are already done; the
+  only gap is the live smoke of the stuck-approval path. The post-merge green-state run #1
+  (workflow_dispatch, 2026-06-27 12:21) already proved the live PRODUCTION query: the real GitHub
+  Actions API was queried with GH_TOKEN + actions: read and correctly returned stuck_approvals=0 with
+  no error and no false alarm (the negative case). What has never been exercised live is the real-data
+  PARSE path -- field/age extraction from a real terraform-apply-sandbox run object. This follow-on
+  adds a committed, read-only diagnostic path so that parse can be exercised against real run history
+  without manufacturing a stuck run or re-entering the human-gated apply wall (the very failure mode
+  the sensor instruments). It then flips c4 open->met and T2.35 in_progress->complete.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-convergence-health-staleness.yaml
+phase: >-
+  Platform tier T2.35 (CD.35 "Wave 6") follow-on -- the final criterion of the convergence-health
+  sensor. Builds directly on PR #288 (the shipped sensor) and the Wave 1-5 convergence substrate
+  (T2.20 record + refusal; T2.24 drift detector). Reuses the existing github_ci_branch CI identity and
+  the existing actions: read workflow permission. No new IAM role, no terraform apply, no gated-apply
+  path, no convergence-record schema change. Product roadmap: not applicable (platform infra
+  governance).
+scope:
+  - file: scripts/convergence_health.py
+    action: Modify
+    purpose: >-
+      Refactor the per-run parse/age/field-extraction loop body out of find_stuck_gated_approvals into
+      a pure, injectable helper filter_stuck_runs(runs, threshold_hours, now) -> list[dict] that
+      find_stuck_gated_approvals then calls. This is a pure refactor: the production query path keeps
+      its status=waiting URL filter and identical output, so c1/c2/c3 behaviour is unchanged. Add a
+      read-only diagnose_stuck_approvals(gh_caller=None, threshold_hours=0.0, now=None) -> list[dict]
+      entrypoint that queries recent terraform-apply-sandbox runs of ANY status (per_page recent) and
+      runs filter_stuck_runs over them at threshold 0, so the real-data parse path is exercised against
+      real run objects regardless of whether any run is currently waiting; it never escalates and never
+      writes. Add a diagnose mode to main() gated on a CONVERGENCE_HEALTH_DIAGNOSE env var (set by the
+      new workflow_dispatch input): in diagnose mode main() reads the record, prints the HealthVerdict
+      and the diagnose_stuck_approvals output, and RETURNS WITHOUT calling escalate() (read-only;
+      no file_rec/update_rec, no record mutation, no apply). Default (non-diagnose) behaviour is
+      byte-for-byte unchanged.
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      Add a workflow_dispatch input `diagnose` (boolean, default false) and plumb it to the python
+      invocation via the CONVERGENCE_HEALTH_DIAGNOSE env var on the existing "Assess convergence health
+      and escalate" step. The existing actions: read job permission already authorises the any-status
+      run-history query, so NO permission change is needed. Preserve every alarm-only invariant: NO
+      terraform apply step, NO workflow_dispatch/dispatch of terraform-apply-sandbox, never writes the
+      convergence record, never re-fires the T2.20 latch, and not added to required_status_checks. The
+      schedule and the default escalating behaviour are untouched -- diagnose is an opt-in, read-only
+      dispatch flag.
+  - file: tests/test_convergence_health.py
+    action: Modify
+    purpose: >-
+      Add unit coverage for all new code (tests/CLAUDE.md 100%-new-code rule): filter_stuck_runs over a
+      real-shaped multi-run list (mixed ages -> correct over/under-threshold partition and exact
+      run_id/created_at/age_hours/url field extraction), the threshold boundary, and an empty list;
+      diagnose_stuck_approvals with a mocked gh_caller (returns parsed real-shaped runs at threshold 0;
+      returns [] when the caller yields None); and the main() diagnose branch (mocked boto3 + record +
+      diagnose_stuck_approvals; asserts escalate() is NOT called and rc==0). Keep the existing
+      find_stuck_gated_approvals tests green (the refactor must not change their behaviour).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping only. Flip T2.35 exit criterion c4 status open->met with met_by:
+      convergence-health-staleness. Advance T2.35 status in_progress->complete, add completed_at:
+      2026-06-28, and update progress_note to record the live-smoke evidence (run #1 green-state
+      negative smoke + the diagnose-mode real-data parse smoke). Forward intent already lives in the
+      tier item per Decision 86; no new prose doc.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    NO new IAM role, NO new workflow permission, NO terraform apply. The diagnose any-status
+    run-history query uses the SAME GitHub Actions REST endpoint family the production status=waiting
+    query already uses, authorised by the existing actions: read job permission and github.token. The
+    runner keeps assuming agent-platform-github-ci-branch. If any grant gap is discovered at
+    implementation it is a FINDING -> rec (Decision 55/98), never an inline IAM widen.
+  - >-
+    Decision 79 assessment: compute_affected_artifacts(scope) -- the only Lambda-asset match is
+    docs/ROADMAP-PLATFORM.yaml (asset-only roadmap edit on the active data-pipeline artifact, owes no
+    deploy -- uniform precedent, identical to PR #288). scripts/, .github/workflows/, and tests/ are
+    not Lambda-packaged. No per-Lambda build/deploy/smoke-test step is owed.
+  - >-
+    The diagnose dispatch shares the convergence-health concurrency group (cancel-in-progress: false)
+    with normal ticks. It is read-only (no escalate), so even if it overlaps a scheduled tick it cannot
+    double-file. It needs no S3 lock (never writes the convergence record or tfstate).
+acceptance_criteria:
+  - >-
+    (c4 parse path, pure + testable) find_stuck_gated_approvals is refactored so its per-run
+    parse/age/field-extraction is a pure helper filter_stuck_runs(runs, threshold_hours, now), and
+    find_stuck_gated_approvals delegates to it with no change to its public behaviour (the existing
+    find_stuck_gated_approvals unit tests still pass unchanged).
+  - >-
+    (c4 diagnose entrypoint) diagnose_stuck_approvals queries recent terraform-apply-sandbox runs of
+    ANY status and runs filter_stuck_runs at threshold 0, returning the parsed run dicts; it performs
+    NO escalation and NO write. Verified with a mocked gh_caller in unit tests.
+  - >-
+    (Alarm-only preserved) main() in diagnose mode reads + prints only and RETURNS WITHOUT calling
+    escalate(); it files no rec, writes no convergence record, runs no terraform apply, and dispatches
+    no terraform-apply-sandbox run. The default (non-diagnose) path is unchanged. Verified structurally
+    (no apply/dispatch in the workflow) and behaviourally (diagnose-mode unit test asserts escalate is
+    not called).
+  - >-
+    (Live smoke -- real-data parse) A post-merge convergence-health workflow_dispatch with diagnose=true
+    logs a HealthVerdict and the diagnose_stuck_approvals output, demonstrating the parse path executed
+    against the real terraform-apply-sandbox run history. Combined with run #1's green-state production
+    smoke (real API, stuck_approvals=0, no false alarm), this closes c4's "verified in unit tests and
+    live smoke" requirement.
+  - >-
+    (Bookkeeping) docs/ROADMAP-PLATFORM.yaml flips T2.35 c4 open->met (met_by:
+    convergence-health-staleness) and advances T2.35 in_progress->complete with completed_at and a
+    progress_note citing the live-smoke evidence.
+  - >-
+    The full validate.py presubmit (and test_coverage_checker over the modified scripts file) passes;
+    tf_convergence_stale remains registered and accepted by validate_source (no regression).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Authoritative local gate -- full presubmit (YAML, prompt-compliance, source-registry guard, plan schema, coverage, unit tests).
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    expected: All checks pass (exit 0); test_coverage_checker passes for scripts/convergence_health.py.
+    fix_if: Any check fails -- read the failing check, fix the scope file, re-run. Do not weaken a check to pass.
+  - step: 2
+    phase: pre-deploy
+    action: Unit tests for the sensor module (existing + new filter_stuck_runs / diagnose / main-diagnose tests).
+    command: bin/venv-python -m pytest tests/test_convergence_health.py -q
+    expected: All tests pass, including the unchanged find_stuck_gated_approvals tests (refactor is behaviour-preserving).
+    fix_if: A test fails -- fix convergence_health.py logic (not the test) unless the test encodes a wrong expectation.
+  - step: 3
+    phase: pre-deploy
+    action: Refactor is behaviour-preserving -- find_stuck_gated_approvals still partitions real-shaped runs by threshold and extracts fields identically via filter_stuck_runs.
+    command: |
+      bin/venv-python - <<'PY'
+      from datetime import datetime, timezone
+      from scripts.convergence_health import find_stuck_gated_approvals, filter_stuck_runs
+      now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+      runs = [
+          {"id": 1, "created_at": "2026-06-27T06:00:00Z", "html_url": "u1"},
+          {"id": 2, "created_at": "2026-06-27T19:00:00Z", "html_url": "u2"},
+      ]
+      direct = filter_stuck_runs(runs, threshold_hours=6.0, now=now)
+      via = find_stuck_gated_approvals(gh_caller=lambda url: {"workflow_runs": runs}, threshold_hours=6.0, now=now)
+      assert [r["run_id"] for r in direct] == [1], direct
+      assert direct == via, (direct, via)
+      assert direct[0]["age_hours"] >= 6.0 and direct[0]["url"] == "u1"
+      print("filter_stuck_runs refactor OK")
+      PY
+    expected: Prints "filter_stuck_runs refactor OK"; no assertion trips.
+    fix_if: An assertion trips -- filter_stuck_runs and find_stuck_gated_approvals diverged; align them.
+  - step: 4
+    phase: pre-deploy
+    action: diagnose_stuck_approvals is read-only and parses real-shaped runs at threshold 0 (any-status).
+    command: |
+      bin/venv-python - <<'PY'
+      from datetime import datetime, timezone
+      from scripts.convergence_health import diagnose_stuck_approvals
+      now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+      runs = {"workflow_runs": [{"id": 9, "created_at": "2026-06-27T18:00:00Z", "html_url": "u9"}]}
+      out = diagnose_stuck_approvals(gh_caller=lambda url: runs, threshold_hours=0.0, now=now)
+      assert len(out) == 1 and out[0]["run_id"] == 9, out
+      assert diagnose_stuck_approvals(gh_caller=lambda url: None) == []
+      print("diagnose_stuck_approvals OK")
+      PY
+    expected: Prints "diagnose_stuck_approvals OK"; no assertion trips.
+    fix_if: An assertion trips -- correct diagnose_stuck_approvals (must reuse filter_stuck_runs, return [] on None).
+  - step: 5
+    phase: pre-deploy
+    action: main() diagnose mode is read-only -- it does NOT call escalate.
+    command: |
+      bin/venv-python - <<'PY'
+      from unittest.mock import patch
+      from scripts.convergence_health import main, HealthVerdict
+      with (
+          patch("boto3.Session"),
+          patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
+          patch("scripts.convergence_health.diagnose_stuck_approvals", return_value=[]),
+          patch("scripts.convergence_health.assess_health",
+                return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none")),
+          patch("scripts.convergence_health.escalate") as esc,
+      ):
+          import os
+          os.environ["CONVERGENCE_HEALTH_DIAGNOSE"] = "1"
+          try:
+              rc = main()
+          finally:
+              os.environ.pop("CONVERGENCE_HEALTH_DIAGNOSE", None)
+      assert rc == 0, rc
+      esc.assert_not_called()
+      print("main diagnose read-only OK")
+      PY
+    expected: Prints "main diagnose read-only OK"; escalate is not called.
+    fix_if: escalate is called in diagnose mode -- gate the escalate() call so diagnose mode returns before it.
+  - step: 6
+    phase: pre-deploy
+    action: Workflow structure -- valid YAML, diagnose input present, still alarm-only (NO terraform apply, NO terraform-apply-sandbox dispatch), assumes github_ci_branch, not a required check.
+    command: |
+      bin/venv-python - <<'PY'
+      import re, yaml
+      txt = open(".github/workflows/convergence-health.yml").read()
+      w = yaml.safe_load(txt)
+      on = w.get("on", w.get(True))
+      assert "schedule" in str(on), "must remain scheduled"
+      assert "diagnose" in str(on), "must add the diagnose workflow_dispatch input"
+      runs = " ".join(str(s.get("run","")) for j in w["jobs"].values() for s in j.get("steps", []))
+      assert not re.search(r"terraform\s+apply\b", runs), "ALARM-ONLY violated: terraform apply present"
+      assert "run_workflow" not in txt and "workflow_dispatch.*terraform-apply" not in txt, "must not auto-dispatch apply"
+      assert "github-ci-branch" in txt, "must keep assuming the existing github_ci_branch role"
+      assert "CONVERGENCE_HEALTH_DIAGNOSE" in txt, "diagnose input must be plumbed to the python step"
+      print("convergence-health workflow structure OK:", sorted(w["jobs"]))
+      PY
+    expected: Prints "convergence-health workflow structure OK".
+    fix_if: An assertion trips -- the workflow lost the diagnose input, gained an apply/dispatch, changed role, or dropped the env plumb; fix it.
+  - step: 7
+    phase: post-deploy
+    action: Live smoke -- dispatch convergence-health with diagnose=true and confirm it logs a HealthVerdict and the diagnose_stuck_approvals real-data parse output, files NO rec (read-only).
+    command: |
+      set -euo pipefail
+      echo "Dispatch via GitHub MCP actions_run_trigger (workflow=convergence-health.yml, ref=main, inputs.diagnose=true)."
+      echo "Then read the 'Assess convergence health' step logs: expect a HealthVerdict line and a diagnose output line."
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      echo "open tf_convergence_stale recs: $(grep -c '\"source\": \"tf_convergence_stale\", \"status\": \"open\"' logs/.recommendations-log.jsonl || echo 0) (must be unchanged by diagnose)"
+    expected: >-
+      The diagnose run logs the HealthVerdict + diagnose output and the open tf_convergence_stale count
+      is unchanged (diagnose files no rec). PASS condition for the c4 parse evidence: the diagnose output
+      shows filter_stuck_runs executed over real run history -- EITHER a non-empty parsed list (real run
+      objects field-extracted) OR an explicitly-confirmed-empty real history (the any-status query
+      returned zero terraform-apply-sandbox runs). Do not treat an unexamined empty list as a pass;
+      confirm from the logs which case it is.
+    fix_if: >-
+      A rec is filed by the diagnose run (diagnose escalated) -- the read-only return in main() is
+      missing; fix it. If the run errors on the any-status query, inspect the API call/permission. If the
+      parse list is empty, confirm from the run-history whether that is a true empty (no runs) before
+      accepting it as c4 evidence.
+  - step: 8
+    phase: post-deploy
+    action: No-regression -- a normal (non-diagnose) convergence-health tick still behaves as before against the live record.
+    command: |
+      set -euo pipefail
+      echo "Confirm the most recent scheduled (non-diagnose) convergence-health run logged a HealthVerdict and escalation result as before (green -> action: none)."
+      echo "Inspect via GitHub MCP actions_list/get_job_logs for the latest schedule-event run."
+    expected: The latest scheduled run logs a HealthVerdict and an escalation result identical in shape to run #1 (no behaviour change from the refactor).
+    fix_if: The scheduled run changed behaviour or errored -- the refactor was not behaviour-preserving; reconcile filter_stuck_runs with the prior loop.
+constraints:
+  - >-
+    Behaviour-preserving refactor: filter_stuck_runs must be a pure extraction of the existing
+    find_stuck_gated_approvals loop body. The production query keeps its status=waiting URL filter and
+    identical output shape. The existing find_stuck_gated_approvals unit tests must pass unchanged --
+    they are the regression guard for the refactor.
+  - >-
+    Read-only diagnose: diagnose mode (the diagnose_stuck_approvals entrypoint and the main() diagnose
+    branch) MUST NOT call escalate(), file_rec, update_rec, write the convergence record, run terraform
+    apply, or dispatch terraform-apply-sandbox. It reads the GitHub Actions run history and the
+    convergence record and prints. This preserves the alarm-only model and the Decision 73
+    escalation-vs-read-only boundary.
+  - >-
+    No new IAM role and no new workflow permission: the any-status run-history query is authorised by
+    the existing actions: read job permission + github.token, under the existing
+    agent-platform-github-ci-branch identity (Decision 98 read-only grant model). If a grant gap is
+    discovered, file a FINDING rec -- do NOT widen IAM inline (Decision 55).
+  - >-
+    Do NOT add convergence-health to main-protection required_status_checks (Decision 83 non-wedging).
+  - >-
+    No convergence-record schema change and no edit to the guard-sensitive apply/drift workflows
+    (terraform-apply-sandbox.yml, terraform-drift.yml). Only the four named scope files may be modified.
+  - >-
+    No new docs/INTENT-*.md or standing prose-architecture doc (Decision 86): forward intent stays in
+    the T2.35 tier item; this is bookkeeping plus a small read-only diagnostic.
+  - No emojis; ASCII hyphens only; line length 127; bin/venv-python for Python; Linux/bash only.
+context:
+  - >-
+    Parent: PR #288 shipped the T2.35 sensor (scripts/convergence_health.py + 36 unit tests +
+    .github/workflows/convergence-health.yml + preflight repoint + orient SKILL + source_registry +
+    taxonomy + ROADMAP item). PLAN-cd-convergence-health-sensor.yaml is the parent plan. Criteria
+    c1/c2/c3/c5 are met; c4 is the sole open criterion.
+  - >-
+    c4 text: "A terraform-apply-sandbox run whose gated-apply job has been waiting on the tf-gated-apply
+    Environment beyond threshold is surfaced in the HealthVerdict and folded into the
+    tf_convergence_stale rec context; verified in unit tests and live smoke." The c4 CODE is already
+    present and correct: find_stuck_gated_approvals (status=waiting query), HealthVerdict.stuck_approvals,
+    severity=high + escalation even below age-threshold, and _build_context folding the approvals into
+    the rec. The unit tests already cover the positive (mocked waiting run beyond/below threshold) and
+    negative paths. The gap is the LIVE smoke of the parse path.
+  - >-
+    Live evidence already on record: convergence-health run #1 (workflow_dispatch, run id 28288983991,
+    2026-06-27 12:21) logged HealthVerdict {"status":"green","red_age_hours":0.0,"unapplied_backlog":0,
+    "stuck_approvals":0,"severity":"none"} and escalation result {action: none} -- the live production
+    query against real run history with GH_TOKEN + actions: read, no error, no false alarm (negative
+    case). Two scheduled runs (#2, #3) confirmed the same green-state behaviour.
+  - >-
+    Why not manufacture a stuck run (Option B rejected by the human): manufacturing a genuine waiting
+    gated-apply run means routing a guard-flagged change through terraform-apply-sandbox and parking it
+    on the tf-gated-apply Environment -- re-entering the exact human-gated apply wall the sensor exists
+    to instrument, with apply risk and a 6h threshold wait. The human selected Option A: a read-only
+    real-history parse smoke that needs no apply path and no wait.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS. CITE: 92 (CD.35 CI/CD architecture the sensor observes),
+    94 (gated-apply runs under environment: tf-gated-apply -- source of the "waiting on tf-gated-apply"
+    semantic the diagnose query parses), 98 (convergence-writer/peer-CI read-only IAM provenance --
+    backs the no-new-IAM claim), 73 (escalation-vs-read-only boundary the diagnose mode preserves).
+    Checked clean against 77, 84, 100/75, 86, 55/72. Continuity from the parent: 55, 72, 83, 84, 86.
+  - >-
+    Branch level with origin/main (0 ahead, 0 behind) at planning time; ci_rca_unresolved is empty (no
+    Related-Work HARD BLOCK); the convergence record is green and there are zero open tf_convergence_stale
+    recs at planning time.
+pre_implementation_checklist:
+  - Branch confirmed not main (claude/convergence-health-staleness-p654hp)
+  - PLAN-cd-convergence-health-sensor.yaml (parent) and the current scripts/convergence_health.py, .github/workflows/convergence-health.yml, tests/test_convergence_health.py read
+  - DECISIONS.md reviewed via the decision-scout fresh-context gate (NO_FLAGS; cite 92/94/98/73)
+  - All four scope files located and readable; the existing find_stuck_gated_approvals tests identified as the refactor regression guard
+  - "github_ci_branch's existing actions:read grant confirmed sufficient for the any-status query (else a finding rec, not inline IAM)"
+  - Acceptance criteria understood and each independently verifiable
+execution_steps:
+  - >-
+    scripts/convergence_health.py: extract the per-run parse/age/field-extraction loop from
+    find_stuck_gated_approvals into a pure filter_stuck_runs(runs, threshold_hours, now) -> list[dict];
+    have find_stuck_gated_approvals call it (no public-behaviour change). Add
+    diagnose_stuck_approvals(gh_caller=None, threshold_hours=0.0, now=None): same default caller/token
+    handling as find_stuck_gated_approvals but query terraform-apply-sandbox runs of ANY status
+    (drop the status=waiting filter; per_page recent) and return filter_stuck_runs(runs, threshold_hours,
+    now). Add a diagnose branch to main() gated on os.environ.get("CONVERGENCE_HEALTH_DIAGNOSE"): read
+    the record, print the HealthVerdict, print diagnose_stuck_approvals output, and return 0 WITHOUT
+    calling escalate(). Leave the default path byte-for-byte unchanged.
+  - >-
+    .github/workflows/convergence-health.yml: add workflow_dispatch.inputs.diagnose (type boolean,
+    default false, description) and set CONVERGENCE_HEALTH_DIAGNOSE to the input on the existing
+    "Assess convergence health and escalate" step env (alongside GH_TOKEN). Do not change permissions,
+    the role, the schedule, or add any apply/dispatch. Do not add to required_status_checks.
+  - >-
+    tests/test_convergence_health.py: add tests for filter_stuck_runs (real-shaped multi-run partition +
+    field extraction + boundary + empty), diagnose_stuck_approvals (mocked caller returns parsed runs at
+    threshold 0; None -> []), and the main() diagnose branch (mocked boto3 + record + diagnose; asserts
+    escalate not called, rc==0). Keep the existing find_stuck_gated_approvals tests unchanged. Consolidate
+    new imports into the existing single import block (tests/CLAUDE.md ruff-format rule).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: flip T2.35 c4 status open->met (add met_by: convergence-health-staleness);
+    advance T2.35 status in_progress->complete; add completed_at: 2026-06-28; update progress_note to cite
+    the live-smoke evidence (run #1 negative + diagnose real-data parse).
+  - >-
+    Execute the Verification Plan: pre-deploy steps 1-6 locally until green; then push/PR/merge; then the
+    live post-deploy smoke (steps 7-8) via convergence-health workflow_dispatch with diagnose=true and a
+    no-regression check of the latest scheduled run. On an unrecoverable failure STOP and run RCA
+    (Decision 55) -- no workaround.
+  - >-
+    Report: what changed in each of the four files, the pre-deploy results, and the live smoke results
+    (the diagnose-run HealthVerdict + diagnose output, and the no-regression scheduled-run check).
+work_areas: []
+rollback: >-
+  Revert the four hunks. scripts/convergence_health.py: re-inline filter_stuck_runs into
+  find_stuck_gated_approvals and drop diagnose_stuck_approvals + the main() diagnose branch (no other
+  module imports them; the production path is unchanged so reverting is safe). .github/workflows/
+  convergence-health.yml: drop the diagnose input and the CONVERGENCE_HEALTH_DIAGNOSE env (the sensor
+  keeps running unchanged). tests/test_convergence_health.py and docs/ROADMAP-PLATFORM.yaml: plain
+  reverts. No IAM, no terraform, no convergence-record schema change, no data-plane effect -- rollback
+  is low-risk.
