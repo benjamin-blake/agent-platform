@@ -3972,3 +3972,34 @@ class TestDucklakeVersionLockstepGate:
             with patch("validate.ROOT", tmp_path):
                 validate_ducklake_version_lockstep(failed)
         assert any("hardcoded" in f or "literal" in f or "ducklake_runtime" in f for f in failed), failed
+
+
+class TestPreModeChecks:
+    """Assert validate_subprocess_encoding runs in the --pre tier (rec-2382 RCA fix)."""
+
+    def test_pre_mode_calls_subprocess_encoding(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_subprocess_encoding must be invoked during --pre (tier-membership regression guard)."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        encoding_called = []
+
+        def capture_encoding(failed: list[str]) -> None:
+            encoding_called.append(True)
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        assert encoding_called, "validate_subprocess_encoding was NOT called in --pre mode"

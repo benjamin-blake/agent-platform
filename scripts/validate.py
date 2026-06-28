@@ -3451,6 +3451,10 @@ def main() -> None:
         # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach
         # missed pre-merge in PR #106 because it ran in full-tier only (rec-2106 RCA).
         validate_sloc_limits(failed)
+        # Subprocess-encoding lint in --pre: O(files) static scan, earliest_viable_gate=pre
+        # (docs/INTENT-ci-rca-methodology.md); was full-tier-only, which let rec-2382 escape
+        # PR #300 -- mirrors rec-859/rec-2106 tier promotions.
+        validate_subprocess_encoding(failed)
         # Intent-doc-freeze in --pre: O(dirlist) scan, Decision 86; prevents new INTENT docs before CI catches them.
         validate_intent_doc_freeze(failed)
         # Contract drift gate in --pre: pure Python over docs/contracts/*.yaml (sub-second), CD.25.

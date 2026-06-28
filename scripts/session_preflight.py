@@ -1596,6 +1596,8 @@ def _check_endstate_drift() -> dict:
                     ["git", "show", f"{ref}:docs/ROADMAP-PLATFORM.yaml"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                     cwd=str(ROOT),
                 )
