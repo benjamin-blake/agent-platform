@@ -1,0 +1,215 @@
+schema_version: 1
+slug: "t2-23-bootstrap-root-closeout"
+intent: >-
+  Close out platform tier_item T2.23 (CD.35 Wave 4 -- Terraform CI/CD privilege-tiering / bootstrap
+  root for the CI role's own IAM) by adjudicating its 5 remaining open exit-criteria against live
+  AWS state and flipping them on verified passes, so the self-improving platform's CI/CD pipeline is
+  provably unable to grant itself privileges through the pipeline it gates. Bundles two small two-root
+  doc-hygiene recs (rec-2331, rec-2332).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-23-bootstrap-root-closeout.yaml
+phase: >-
+  Platform tier_item T2.23 (CD.35 Wave 4, ratified Decision 92). Follow-on closeout to
+  PLAN-terraform-cicd-bootstrap-root (shipped the pre-deploy code 2026-06-23; recs rec-2079/rec-2305
+  closed). Downstream consumers T2.25 (guard narrowing / in-budget auto-apply) and T2.34 (DRY CI-role
+  IAM) are NOT in scope. Product roadmap: not applicable (platform infra governance).
+closes_criteria:
+  - "T2.23:c1"
+  - "T2.23:c2"
+  - "T2.23:c3"
+  - "T2.23:c4"
+  - "T2.23:c5"
+scope:
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      rec-2331: in the "Out-of-band IAM grants" section, rename the stale IAMPlatformRolesRead Sid
+      reference (line ~280) to the consolidated IAMRolesRead (rec-2079 merged it) and point the
+      github_ci_apply policy description at terraform/bootstrap/. Doc hygiene only (Decision 86).
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      rec-2332: past-tense the DenyConvergenceRecordWrite comment (line ~100) that still reads "Full
+      privilege-tiering lands at Wave 4 (bootstrap root)" -- Wave 4 / T2.23 has landed. Comment-only.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Exit-criteria ledger bookkeeping ONLY, performed by /implement's bookkeeping walk on a verified
+      VP pass (Status-Trusted-Never-Inferred): flip T2.23 c1-c5 status open->met with met_by:
+      t2-23-bootstrap-root-closeout, then status->complete + completed_at + progress_note. c2/c5 flip
+      on the DEV-side pre-deploy pass; c1/c3/c4 flip after the human-run admin post-deploy pass.
+bundled_recommendations:
+  - rec-2331
+  - rec-2332
+infrastructure_dependencies:
+  - >-
+    Post-deploy VP (steps 6-9) requires the agent_platform_admin (PlatformAdmin) profile and is
+    HUMAN-GATED -- the DEV CC-web container's agent_platform profile gets AccessDenied on iam:GetRole
+    and 403 on the bootstrap state bucket. Same admin-gated V3 closeout pattern as T2.20/T2.21/T2.22
+    and the T2.24 drift-live-demo. No new apply is required for c1/c3/c4: they adjudicate state already
+    established by the original bootstrap apply and the T2.24 recovery (Decision 98).
+  - >-
+    scripts/terraform_apply_guard.py is NOT modified -- in-budget auto-apply / guard narrowing is the
+    downstream T2.25, not this plan (Decision 92 point 5 / Decision 77).
+acceptance_criteria:
+  - >-
+    c2: the migrated apply policy in terraform/bootstrap/github_ci_apply.tf has NO separate
+    Sid = "IAMPlatformRolesRead" assignment (rec-2079 consolidation into IAMRolesRead); the only
+    remaining textual mention is an explanatory comment.
+  - >-
+    c5 (structural): the authority-budget policy aws_iam_policy.github_ci_apply_boundary is defined in
+    terraform/bootstrap/ and terraform/bootstrap is absent from terraform-apply-sandbox.yml's
+    terraform/personal/** path filter (the main pipeline cannot self-apply the budget).
+  - >-
+    c4: post-deploy under agent_platform_admin, github_ci_apply carries a non-null permissions boundary
+    ARN AND an unbounded iam:CreateRole is DENIED while an in-budget data-plane action is ALLOWED.
+  - >-
+    c3: post-deploy under agent_platform_admin, the dedicated bootstrap state bucket exists and
+    github_ci_apply has ZERO write on it (simulate returns implicit/explicit deny).
+  - >-
+    c1: post-deploy under agent_platform_admin, github_ci_apply cannot PutRolePolicy on its own ARN
+    (self-grant broken); the T2.24 GAP-3 github_ci_apply.tf change applied via the admin bootstrap
+    tier with a green personal convergence record and no red main-pipeline push is the witness.
+  - >-
+    rec-2331 absorbed: terraform/CLAUDE.md "Out-of-band IAM grants" section no longer references the
+    stale IAMPlatformRolesRead Sid name and points at terraform/bootstrap/.
+  - >-
+    rec-2332 absorbed: terraform/personal/oidc.tf no longer contains the future-tense "lands at Wave 4"
+    forward reference.
+  - >-
+    On verified passes, /implement flips T2.23 c1-c5 to met (met_by: t2-23-bootstrap-root-closeout)
+    and T2.23 status to complete; rec-2331 + rec-2332 close via the Resolves: trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: c2 -- rec-2079 consolidation holds (no separate IAMPlatformRolesRead Sid assignment in the apply policy).
+    command: >-
+      ! grep -nE 'Sid[[:space:]]*=[[:space:]]*"IAMPlatformRolesRead"' terraform/bootstrap/github_ci_apply.tf
+    expected: "Exit 0 -- no separate Sid = \"IAMPlatformRolesRead\" assignment; the IAM reads are consolidated under IAMRolesRead (a bare-string comment may remain and is fine)."
+    fix_if: "A separate IAMPlatformRolesRead Sid assignment exists -- merge it into the IAMRolesRead statement (rec-2079)."
+  - step: 2
+    phase: pre-deploy
+    action: c5 (structural) -- the authority-budget policy lives in bootstrap and bootstrap is excluded from the auto-apply path filter.
+    command: >-
+      grep -q 'resource "aws_iam_policy" "github_ci_apply_boundary"' terraform/bootstrap/github_ci_apply.tf &&
+      grep -q 'permissions_boundary[[:space:]]*=[[:space:]]*aws_iam_policy.github_ci_apply_boundary.arn' terraform/bootstrap/github_ci_apply.tf &&
+      ! grep -q 'terraform/bootstrap' .github/workflows/terraform-apply-sandbox.yml
+    expected: "Boundary policy defined in bootstrap and attached as the role's permissions_boundary; terraform/bootstrap absent from the apply-sandbox path filter (only terraform/personal/** matches)."
+    fix_if: "Boundary missing/not attached (restore it in bootstrap) or terraform/bootstrap appears in the apply workflow (remove it -- the budget must stay pipeline-unwritable)."
+  - step: 3
+    phase: pre-deploy
+    action: rec-2331 absorbed -- terraform/CLAUDE.md Out-of-band section points at bootstrap and drops the stale Sid name.
+    command: >-
+      grep -q 'terraform/bootstrap/' terraform/CLAUDE.md &&
+      ! grep -q 'IAMPlatformRolesRead' terraform/CLAUDE.md
+    expected: "terraform/CLAUDE.md references terraform/bootstrap/ and no longer names the retired IAMPlatformRolesRead Sid."
+    fix_if: "Stale IAMPlatformRolesRead reference remains -- rename it to IAMRolesRead in the Out-of-band IAM grants section."
+  - step: 4
+    phase: pre-deploy
+    action: rec-2332 absorbed -- terraform/personal/oidc.tf no longer carries the future-tense Wave 4 forward reference.
+    command: >-
+      grep -q 'terraform/bootstrap' terraform/personal/oidc.tf &&
+      ! grep -q 'lands at Wave 4' terraform/personal/oidc.tf
+    expected: "The DenyConvergenceRecordWrite comment is past-tense (Wave 4 / T2.23 landed); oidc.tf still points at terraform/bootstrap."
+    fix_if: "The 'lands at Wave 4' future-tense phrasing remains -- past-tense it (e.g. 'Full privilege-tiering landed at Wave 4 (bootstrap root)')."
+  - step: 5
+    phase: pre-deploy
+    action: Both terraform roots still validate after the edits (creds-free; no backend).
+    command: >-
+      terraform -chdir=terraform/bootstrap init -backend=false -input=false -no-color &&
+      terraform -chdir=terraform/bootstrap validate -no-color &&
+      terraform -chdir=terraform/personal init -backend=false -input=false -no-color &&
+      terraform -chdir=terraform/personal validate -no-color
+    expected: "Both roots: init + validate report Success (the edits are comment/doc-only; no HCL semantics change). Tooling-gated: if the terraform binary is absent in the DEV container, defer to CI's terraform-validate (which already covers both roots); do NOT flip c2/c5 on a skipped VP5 -- they are independently witnessed by VP1/VP2 greps."
+    fix_if: "validate errors -- the edit touched HCL (it should not have); revert to comment/doc-only changes."
+  - step: 6
+    phase: post-deploy
+    action: "[ADMIN-GATED, agent_platform_admin] c4 -- boundary attached; unbounded role-create denied; in-budget data-plane allowed."
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
+      --query 'Role.PermissionsBoundary.PermissionsBoundaryArn' --output text &&
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      A=arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply &&
+      echo "unbounded:" && aws iam simulate-principal-policy --policy-source-arn $A --action-names iam:CreateRole
+      --resource-arns "arn:aws:iam::$ACCT:role/zzz-unbounded-probe" --profile agent_platform_admin
+      --query 'EvaluationResults[0].EvalDecision' --output text &&
+      echo "dataplane:" && aws iam simulate-principal-policy --policy-source-arn $A --action-names s3:PutObject
+      --resource-arns 'arn:aws:s3:::agent-platform-data-lake/tfstate/personal/x' --profile agent_platform_admin
+      --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "Boundary ARN non-null; unbounded=denied (no iam:PermissionsBoundary context); dataplane=allowed (boundary is a superset -- pipeline not capped)."
+    fix_if: "Boundary None / unbounded=allowed (condition key missing) or dataplane=denied (boundary too tight) -- STOP, file a rec, do not inline-patch (Decision 55). Re-apply via agent_platform_admin."
+  - step: 7
+    phase: post-deploy
+    action: "[ADMIN-GATED, agent_platform_admin] c3 -- dedicated bootstrap state bucket exists and the pipeline has zero write on it."
+    command: >-
+      aws s3api head-bucket --bucket agent-platform-bootstrap-tfstate --profile agent_platform_admin &&
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply
+      --action-names s3:PutObject --resource-arns 'arn:aws:s3:::agent-platform-bootstrap-tfstate/*'
+      --profile agent_platform_admin --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "head-bucket succeeds; simulate returns implicitDeny/explicitDeny -- github_ci_apply cannot write bootstrap state."
+    fix_if: "head-bucket fails (the one-time admin provisioning never ran -- provision per terraform/bootstrap/README.md) or simulate=allowed (a bucket-wide grant leaks -- fence it). STOP + file a rec (Decision 55)."
+  - step: 8
+    phase: post-deploy
+    action: "[ADMIN-GATED, agent_platform_admin] c1 -- self-grant broken: the apply role cannot PutRolePolicy on its own ARN."
+    command: >-
+      ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text) &&
+      A=arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply &&
+      aws iam simulate-principal-policy --policy-source-arn $A --action-names iam:PutRolePolicy
+      --resource-arns $A --profile agent_platform_admin --query 'EvaluationResults[0].EvalDecision' --output text
+    expected: "denied -- github_ci_apply can no longer PutRolePolicy on itself (self-grant cycle broken)."
+    fix_if: "allowed -- the apply role's own ARN is still in an IAM-write resource set; remove it in terraform/bootstrap/ and re-apply via agent_platform_admin. STOP + file a rec (Decision 55)."
+  - step: 9
+    phase: post-deploy
+    action: "[ADMIN-GATED] c1 witness -- a github_ci_apply policy change applied via the bootstrap tier left the personal pipeline green (no red push)."
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json;print(json.load(sys.stdin)['status'])"
+    expected: "green -- the live role is intact and the last personal apply converged; the T2.24 GAP-3 github_ci_apply.tf change applied via the admin bootstrap tier with no red main-pipeline push (retrospective c1 witness)."
+    fix_if: "red -- RCA the apply failure (Decision 55); do not flip c1 until the record is green and the witness holds."
+  - step: 10
+    phase: post-deploy
+    action: rec-2331 + rec-2332 closed via the Resolves trailer (rec-autoclose) after merge.
+    command: >-
+      bin/venv-python -m scripts.sync_ops sync >/dev/null 2>&1;
+      for r in rec-2331 rec-2332; do grep "\"id\": \"$r\"" logs/.recommendations-log.jsonl | grep -q '"status": "closed"' && echo "$r closed" || echo "$r OPEN"; done
+    expected: "Both print 'closed'."
+    fix_if: "Either prints 'OPEN' -- confirm the squash-merge body carried 'Resolves: rec-2331, rec-2332'; else close via ops_data_portal --update-rec."
+constraints:
+  - "No rescue agents or workaround loops (Decision 55); a failed post-deploy check STOPs, files a rec, and is RCA'd -- never inline-patched."
+  - "Do NOT modify scripts/terraform_apply_guard.py -- guard narrowing / in-budget auto-apply is the downstream T2.25 (Decision 92 point 5 / Decision 77)."
+  - "The bootstrap root is NEVER auto-applied and is applied only under agent_platform_admin (Decision 35 / Decision 77 / terraform/github/ precedent)."
+  - "Status-Trusted-Never-Inferred: /implement flips criteria ONLY on a verified VP pass; never infer met from prose/file existence. c1/c3/c4 wait on the human-run admin post-deploy pass."
+  - "No new prose-architecture docs (Decision 86); the rec-2331/rec-2332 edits are doc/comment hygiene in existing files."
+  - "Decision 94 two-value OIDC trust (refs/heads/main + environment:tf-gated-apply) on github_ci_apply must remain intact -- this plan does not touch the trust; flag if any post-deploy probe reveals drift."
+context:
+  - "T2.23 / CD.35 Wave 4 (Decision 92). Pre-deploy code shipped 2026-06-23 (PLAN-terraform-cicd-bootstrap-root); rec-2079 + rec-2305 closed (merge fe2079b7). All 5 exit-criteria still read open in the roadmap (criteria flip only in /implement's bookkeeping walk)."
+  - "Live evidence c1/c3/c4 already hold: the T2.24 recovery applied a github_ci_apply.tf change (GAP-3 IAMRolesRead) via the admin bootstrap tier, and the live boundary BLOCKED a pipeline iam:CreateRole on github_ci_drift (T2.24 progress_note). Decision 98 is the operative authority-budget definition being adjudicated."
+  - "c1 demonstration sourced from the retrospective witness (human decision, this session): the T2.24 GAP-3 bootstrap apply is the witnessed 'github_ci_apply policy change via bootstrap, no red main-pipeline push'; no fresh gratuitous infra change (Decision 55 hygiene). The self-grant break is independently confirmed by VP8 simulate-principal-policy."
+  - "Credential reality: agent_platform (DEV CC-web) gets AccessDenied on iam:GetRole and 403 on the bootstrap bucket -- the post-deploy VP (6-9) runs only under agent_platform_admin (human / ADMIN container). Same admin-gated V3 closeout pattern as T2.20/T2.21/T2.22 and the T2.24 drift-live-demo."
+  - "rec-2382 (the prior ci-rca HARD BLOCK -- session_preflight.py subprocess encoding) is resolved on main: its fix landed in PR #303 (commit 8a5540b), which this branch was rebased onto. The warehouse rec record may lag closed; this T2.23 work is unrelated (different file, no shared Decision, different failure category) per the Related-Work Check regardless."
+  - "Branch rebased onto origin/main at planning time (clean); ci_rca_unresolved cleared by #303."
+  - "Decisions to cite: 92 (CD.35), 94 (two-value trust), 77 (no-auto-apply / no-TOCTOU), 35 (human-gated admin apply), 98 (admin-create + IAMRolesRead authority budget), 86 (no new prose docs), 84 (ops portal / Resolves autoclose), 55 (RCA-on-failure); T2.20 Status-Trusted-Never-Inferred lesson."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/tf-cicd-privilege-tiering-if3kgt)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "DECISIONS.md scanned via the decision-scout gate (NO_FLAGS; added Decision 98 to CITE)."
+  - "All files in scope located and readable; terraform/bootstrap/github_ci_apply.tf + the prior PLAN-terraform-cicd-bootstrap-root VP9-14 reviewed."
+  - "Acceptance criteria understood and verifiable; c1-c5 mapped 1:1 to closes_criteria."
+  - "Admin-gated post-deploy steps (6-9) understood as human-run under agent_platform_admin."
+execution_steps:
+  - "Modify terraform/CLAUDE.md (rec-2331) -- in the 'Out-of-band IAM grants' section (~line 280), rename the stale 'IAMPlatformRolesRead' Sid reference to the consolidated 'IAMRolesRead' (rec-2079 merged it) and ensure the github_ci_apply policy description points at terraform/bootstrap/. Doc-only; no other content change."
+  - "Modify terraform/personal/oidc.tf (rec-2332) -- past-tense the DenyConvergenceRecordWrite comment (~line 100): 'Full privilege-tiering lands at Wave 4 (bootstrap root)' -> 'Full privilege-tiering landed at Wave 4 / T2.23 (bootstrap root)'. Comment-only."
+  - "Run pre-deploy VP steps 1-5; loop until green. These are DEV-runnable (agent_platform / creds-free)."
+  - "On the verified pre-deploy pass, perform the /implement bookkeeping walk for the code/structural criteria: flip T2.23 c2 and c5 status open->met with met_by: t2-23-bootstrap-root-closeout in docs/ROADMAP-PLATFORM.yaml (Status-Trusted-Never-Inferred)."
+  - "Hand the post-deploy VP (steps 6-9) to the human to run under agent_platform_admin (DEV cannot: AccessDenied/403). On their verified pass, flip c1, c3, c4 to met (met_by: t2-23-bootstrap-root-closeout) and set T2.23 status->complete + completed_at + a progress_note citing the simulate-principal-policy results and the retrospective c1 witness. On any failure, STOP and RCA (Decision 55) -- do not inline-patch."
+  - "Push -> PR -> CI -> squash-merge with body 'Resolves: rec-2331, rec-2332'; run VP step 10 to confirm both recs closed."
+  - "Report: criteria adjudication outcomes (which flipped on DEV vs admin pass), the simulate-principal-policy results (both directions), the c1 witness, and rec-2331/rec-2332 closure."
+work_areas: []
+rollback: >-
+  No infrastructure changes are made by this plan (the doc/comment edits are reversible via git
+  revert; the criteria flips are roadmap bookkeeping). The live github_ci_apply role, boundary, and
+  bootstrap state are untouched -- post-deploy steps are read-only adjudication (get-role / simulate /
+  head-bucket / convergence read). If a post-deploy check reveals the live state does not satisfy a
+  criterion, that criterion stays open and a rec is filed (Decision 55); nothing to roll back.
