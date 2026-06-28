@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1561,6 +1562,57 @@ def _get_latest_decision_ts(cache_rows: object = _READER_SENTINEL) -> str | None
     return str(ts) if ts else None
 
 
+def _check_endstate_drift() -> dict:
+    """Advisory drift check: compare the sha256 fingerprint stamped in PROJECT_CONTEXT.md
+    against the current sha256 of the sorted ROADMAP-PLATFORM.yaml tier_item ID set.
+
+    Returns a dict {stale, synthesized_hash, current_hash, new_ids}.
+    Fail-open: any parse/IO error returns a non-stale result with a soft note.
+    Never raises, never changes the preflight exit code.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+
+        context_text = (ROOT / "docs" / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
+        stamp_match = re.search(r"roadmap_tier_id_set sha256:\s*([a-f0-9]{64})", context_text)
+        if not stamp_match:
+            return {"stale": False, "synthesized_hash": None, "current_hash": None, "new_ids": [], "note": "stamp absent"}
+        stamped_hash = stamp_match.group(1)
+
+        roadmap = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        _items = roadmap.get("tier_items", [])
+        current_ids = sorted({str(i["id"]) for i in _items if isinstance(i, dict) and "id" in i})
+        current_hash = hashlib.sha256("\n".join(current_ids).encode()).hexdigest()
+
+        if current_hash == stamped_hash:
+            return {"stale": False, "synthesized_hash": current_hash, "current_hash": current_hash, "new_ids": []}
+
+        commit_match = re.search(r"ROADMAP-PLATFORM\.yaml\s*@\s*([0-9a-f]{7,40})", context_text)
+        new_ids: list[str] = []
+        if commit_match:
+            ref = commit_match.group(1)
+            try:
+                result = subprocess.run(
+                    ["git", "show", f"{ref}:docs/ROADMAP-PLATFORM.yaml"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=str(ROOT),
+                )
+                if result.returncode == 0:
+                    old_roadmap = yaml.safe_load(result.stdout)
+                    _old_items = old_roadmap.get("tier_items", [])
+                    old_ids = sorted({str(i["id"]) for i in _old_items if isinstance(i, dict) and "id" in i})
+                    if hashlib.sha256("\n".join(old_ids).encode()).hexdigest() == stamped_hash:
+                        new_ids = sorted(set(current_ids) - set(old_ids))
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {"stale": True, "synthesized_hash": stamped_hash, "current_hash": current_hash, "new_ids": new_ids}
+    except Exception:  # noqa: BLE001
+        return {"stale": False, "synthesized_hash": None, "current_hash": None, "new_ids": [], "note": "parse error"}
+
+
 def main(roadmap_detail: str = "slim") -> int:
     session_start = datetime.now(timezone.utc).isoformat()
 
@@ -1769,6 +1821,14 @@ def main(roadmap_detail: str = "slim") -> int:
             " Repeated bypass indicates fast-tier drift -- consider a planning session to revisit the budget.",
             file=sys.stderr,
         )
+
+    endstate_drift = _check_endstate_drift()
+    report["endstate_drift"] = endstate_drift
+    if endstate_drift.get("stale"):
+        new_ids = endstate_drift.get("new_ids") or []
+        ids_note = f" (new ids: {new_ids})" if new_ids else ""
+        _msg = f"Advisory: Platform End-State fingerprint stale -- roadmap has new tier_item IDs since the stamp.{ids_note}"
+        print(_msg, file=sys.stderr)
 
     # Ensure logs/ directory exists
     PREFLIGHT_REPORT.parent.mkdir(parents=True, exist_ok=True)
