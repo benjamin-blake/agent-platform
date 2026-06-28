@@ -174,3 +174,15 @@ verification_plan:
     command: git diff --name-only origin/main...HEAD | grep -vE "^docs/(DECISIONS\.md|ROADMAP-SEMANTO\.yaml|plans/PLAN-theseus-rebranding-roadmap\.yaml)$" || echo "scope clean OK"
     expected: Prints "scope clean OK" (no file outside the declared scope was touched).
     fix_if: An out-of-scope file appears -- revert it; internal renames/code changes are explicitly out of scope for this plan.
+execution_steps:
+  - "Insert '## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)' into docs/DECISIONS.md (above Decision 100, preserving the file's existing newest-first ordering). Body must cover all six clauses from the scope row: (a) naming hierarchy; (b) presentation-layer-only with internal identifiers and project_id=trading-system unchanged + deep-rename deferred (cite Decision 75); (c) scoped Decision-86 marketing-prose exception sited at top-level marketing/ (never an agent source-of-truth, one-way, never a warehouse write source per Decision 84); (d) public-content boundary (no AWS account specifics; market platform engineering, not Guerdon alpha); (e) Cloudflare Pages + Astro/Starlight hosting (Decision 100 native primitive); (f) positioning (data-engineering hiring managers primary, OSS secondary, paid deferred)."
+  - "Sync the new decision to ops_decisions: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md (must exit 0). Do not edit logs/.decisions-index.jsonl directly."
+  - "Create docs/ROADMAP-SEMANTO.yaml conforming to the platform RoadmapDocument document shape: a document: header (id ROADMAP-SEMANTO, version 1, status draft, description, agent_instructions naming Decision 101 + the deferred_post_mvp gate), candidate_decisions: [], cross_tier_gates: [], and tier_items: [] populated with S1.1-S1.6 exactly as specified in the scope row (tier prefix S, every item status: deferred_post_mvp with a progress_note citing Decision 93 + Decision 101, effort/strategic:false per item, S1.2 user_action_required: true, depends_on edges intra-SEMANTO only)."
+  - "Run verification Step 1 (full validate.py --pre and full) and fix any failure in the offending file -- do not weaken a check."
+  - "Run verification Steps 2-5 (deferred_post_mvp assertion, no-live-dep grep, Decision 101 header + backfill, scope-clean git diff); fix any assertion failure before proceeding."
+  - "Commit the three files (docs/DECISIONS.md, docs/ROADMAP-SEMANTO.yaml, docs/plans/PLAN-theseus-rebranding-roadmap.yaml) with message 'feat(theseus-rebranding-roadmap): ratify Decision 101 + add ROADMAP-SEMANTO.yaml'. Rebase on origin/main and push per the git-ops flow."
+rollback: >-
+  Pure additive documentation change. To roll back: revert the docs/DECISIONS.md Decision 101 insertion
+  and re-run ops_data_portal --backfill-decisions-md (rebuilds ops_decisions from the reverted file), and
+  delete docs/ROADMAP-SEMANTO.yaml. No code, infrastructure, or internal identifier was touched, so there
+  is nothing else to unwind.
