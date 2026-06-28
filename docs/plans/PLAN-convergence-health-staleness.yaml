@@ -222,8 +222,18 @@ verification_plan:
       echo "Then read the 'Assess convergence health' step logs: expect a HealthVerdict line and a diagnose output line."
       bin/venv-python -m scripts.ops_data_portal sync >/dev/null
       echo "open tf_convergence_stale recs: $(grep -c '\"source\": \"tf_convergence_stale\", \"status\": \"open\"' logs/.recommendations-log.jsonl || echo 0) (must be unchanged by diagnose)"
-    expected: The diagnose run logs the HealthVerdict + diagnose output (real-data parse executed); the open tf_convergence_stale count is unchanged (diagnose files no rec).
-    fix_if: A rec is filed by the diagnose run (diagnose escalated) -- the read-only return in main() is missing; fix it. If the run errors on the any-status query, inspect the API call/permission.
+    expected: >-
+      The diagnose run logs the HealthVerdict + diagnose output and the open tf_convergence_stale count
+      is unchanged (diagnose files no rec). PASS condition for the c4 parse evidence: the diagnose output
+      shows filter_stuck_runs executed over real run history -- EITHER a non-empty parsed list (real run
+      objects field-extracted) OR an explicitly-confirmed-empty real history (the any-status query
+      returned zero terraform-apply-sandbox runs). Do not treat an unexamined empty list as a pass;
+      confirm from the logs which case it is.
+    fix_if: >-
+      A rec is filed by the diagnose run (diagnose escalated) -- the read-only return in main() is
+      missing; fix it. If the run errors on the any-status query, inspect the API call/permission. If the
+      parse list is empty, confirm from the run-history whether that is a true empty (no runs) before
+      accepting it as c4 evidence.
   - step: 8
     phase: post-deploy
     action: No-regression -- a normal (non-diagnose) convergence-health tick still behaves as before against the live record.
