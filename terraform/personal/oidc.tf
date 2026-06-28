@@ -97,7 +97,7 @@ resource "aws_iam_role_policy" "github_ci_branch" {
         # anchors its refusal dedup on the red record's commit) but must NOT write or delete it --
         # an explicit Deny makes the two-member writer-set integrity claim true at the IAM layer
         # (explicit Deny overrides the bucket-wide S3ReadWrite Allow above; GetObject is untouched).
-        # Full privilege-tiering lands at Wave 4 (bootstrap root); this Deny is the Wave-1
+        # Full privilege-tiering landed at Wave 4 / T2.23 (bootstrap root); this Deny is the Wave-1
         # enforcement among CI roles.
         Sid    = "DenyConvergenceRecordWrite"
         Effect = "Deny"
