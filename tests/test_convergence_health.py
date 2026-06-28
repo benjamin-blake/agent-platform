@@ -16,11 +16,14 @@ import pytest
 import scripts.convergence_health as ch
 from scripts.convergence_health import (
     HealthVerdict,
+    _make_github_caller,
     assess_health,
     count_unapplied_tf_commits,
     derive_red_since,
+    diagnose_stuck_approvals,
     escalate,
     escalation_action,
+    filter_stuck_runs,
     find_open_convergence_stale_rec,
     find_stuck_gated_approvals,
     main,
@@ -585,3 +588,178 @@ class TestFindStuckDefaultCaller:
             result = find_stuck_gated_approvals(now=now)
         uo.assert_called_once()
         assert result[0]["run_id"] == 7
+
+
+# ---------------------------------------------------------------------------
+# _make_github_caller
+# ---------------------------------------------------------------------------
+
+
+class TestMakeGithubCaller:
+    def test_empty_token_caller_returns_none(self) -> None:
+        caller = _make_github_caller("")
+        assert caller("https://api.github.com/test") is None
+
+    def test_caller_with_token_makes_authenticated_request(self) -> None:
+        payload = json.dumps({"workflow_runs": []}).encode()
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return payload
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as uo:
+            caller = _make_github_caller("tok-xyz")
+            result = caller("https://api.github.com/repos/o/r/actions/workflows/w/runs")
+        uo.assert_called_once()
+        req = uo.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer tok-xyz"
+        assert result == {"workflow_runs": []}
+
+
+# ---------------------------------------------------------------------------
+# filter_stuck_runs
+# ---------------------------------------------------------------------------
+
+
+class TestFilterStuckRuns:
+    def test_partitions_mixed_age_runs_by_threshold(self) -> None:
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        runs = [
+            {"id": 1, "created_at": "2026-06-27T06:00:00Z", "html_url": "u1"},  # age=14h
+            {"id": 2, "created_at": "2026-06-27T19:00:00Z", "html_url": "u2"},  # age=1h
+        ]
+        result = filter_stuck_runs(runs, threshold_hours=6.0, now=now)
+        assert [r["run_id"] for r in result] == [1]
+        assert result[0]["age_hours"] >= 6.0
+        assert result[0]["url"] == "u1"
+        assert result[0]["created_at"] == "2026-06-27T06:00:00Z"
+
+    def test_boundary_exactly_at_threshold_is_included(self) -> None:
+        now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
+        runs = [{"id": 5, "created_at": "2026-06-27T06:00:00Z", "html_url": "u5"}]  # age=6.0h
+        result = filter_stuck_runs(runs, threshold_hours=6.0, now=now)
+        assert len(result) == 1
+        assert result[0]["run_id"] == 5
+
+    def test_returns_empty_list_when_no_runs_meet_threshold(self) -> None:
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        runs = [{"id": 3, "created_at": "2026-06-27T09:00:00Z", "html_url": "u3"}]  # age=1h
+        result = filter_stuck_runs(runs, threshold_hours=6.0, now=now)
+        assert result == []
+
+    def test_returns_empty_list_on_empty_input(self) -> None:
+        assert filter_stuck_runs([], threshold_hours=6.0) == []
+
+    def test_skips_runs_with_blank_created_at(self) -> None:
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        runs = [{"id": 4, "created_at": "", "html_url": "u4"}]
+        assert filter_stuck_runs(runs, threshold_hours=0.0, now=now) == []
+
+    def test_threshold_zero_returns_all_runs(self) -> None:
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        runs = [
+            {"id": 1, "created_at": "2026-06-27T06:00:00Z", "html_url": "u1"},
+            {"id": 2, "created_at": "2026-06-27T19:30:00Z", "html_url": "u2"},
+        ]
+        result = filter_stuck_runs(runs, threshold_hours=0.0, now=now)
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# diagnose_stuck_approvals
+# ---------------------------------------------------------------------------
+
+
+class TestDiagnoseStuckApprovals:
+    def test_returns_parsed_runs_at_threshold_zero(self) -> None:
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        runs = {"workflow_runs": [{"id": 9, "created_at": "2026-06-27T18:00:00Z", "html_url": "u9"}]}
+        out = diagnose_stuck_approvals(gh_caller=lambda url: runs, threshold_hours=0.0, now=now)
+        assert len(out) == 1
+        assert out[0]["run_id"] == 9
+        assert out[0]["url"] == "u9"
+
+    def test_returns_empty_when_caller_yields_none(self) -> None:
+        assert diagnose_stuck_approvals(gh_caller=lambda url: None) == []
+
+    def test_swallows_caller_exception(self) -> None:
+        def _boom(url: str) -> Any:
+            raise RuntimeError("api down")
+
+        assert diagnose_stuck_approvals(gh_caller=_boom) == []
+
+    def test_does_not_filter_by_status_waiting(self) -> None:
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        captured: list[str] = []
+
+        def _capture(url: str) -> Any:
+            captured.append(url)
+            return {"workflow_runs": []}
+
+        diagnose_stuck_approvals(gh_caller=_capture, now=now)
+        assert captured, "caller was never invoked"
+        assert "status=waiting" not in captured[0], f"diagnose URL must not filter by status: {captured[0]}"
+
+
+# ---------------------------------------------------------------------------
+# main() diagnose mode
+# ---------------------------------------------------------------------------
+
+
+class TestMainDiagnoseMode:
+    def test_diagnose_mode_does_not_call_escalate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CONVERGENCE_HEALTH_DIAGNOSE", "1")
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.diagnose_stuck_approvals", return_value=[]),
+            patch(
+                "scripts.convergence_health.assess_health",
+                return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
+            ),
+            patch("scripts.convergence_health.escalate") as esc,
+        ):
+            rc = main()
+        assert rc == 0
+        esc.assert_not_called()
+
+    def test_diagnose_mode_calls_diagnose_stuck_approvals_not_find_stuck(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CONVERGENCE_HEALTH_DIAGNOSE", "1")
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.diagnose_stuck_approvals", return_value=[]) as diag,
+            patch("scripts.convergence_health.find_stuck_gated_approvals") as find_stuck,
+            patch(
+                "scripts.convergence_health.assess_health",
+                return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
+            ),
+            patch("scripts.convergence_health.escalate"),
+        ):
+            main()
+        diag.assert_called_once()
+        find_stuck.assert_not_called()
+
+    def test_normal_mode_calls_find_stuck_not_diagnose(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CONVERGENCE_HEALTH_DIAGNOSE", raising=False)
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]) as find_stuck,
+            patch("scripts.convergence_health.diagnose_stuck_approvals") as diag,
+            patch(
+                "scripts.convergence_health.assess_health",
+                return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
+            ),
+            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}),
+        ):
+            rc = main()
+        assert rc == 0
+        find_stuck.assert_called_once()
+        diag.assert_not_called()

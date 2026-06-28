@@ -135,28 +135,47 @@ def count_unapplied_tf_commits(
         return 0
 
 
-def find_stuck_gated_approvals(
-    gh_caller: Optional[Callable[[str], Any]] = None,
-    owner: str = "benjamin-blake",
-    repo: str = "agent-platform",
-    threshold_hours: float = STUCK_APPROVAL_THRESHOLD_HOURS,
+def filter_stuck_runs(
+    runs: list[dict[str, Any]],
+    threshold_hours: float,
     now: Optional[datetime] = None,
 ) -> list[dict[str, Any]]:
-    """Return terraform-apply-sandbox runs whose gated-apply job is `waiting` beyond threshold.
+    """Filter and parse run dicts whose age_hours >= threshold_hours.
 
-    gh_caller is injected for testability. When None, reads GH_TOKEN / GITHUB_TOKEN env vars;
-    if neither is set, returns [] without error (graceful degradation).
+    Pure: no network calls, no external dependencies. Shared by find_stuck_gated_approvals
+    (status=waiting query) and diagnose_stuck_approvals (any-status diagnostic query).
     """
-    import json as _json  # noqa: PLC0415
-    import os  # noqa: PLC0415
-    import urllib.request  # noqa: PLC0415
-
     if now is None:
         now = datetime.now(timezone.utc)
+    stuck: list[dict[str, Any]] = []
+    for run in runs:
+        created_at_str = run.get("created_at", "")
+        if not created_at_str:
+            continue
+        created_at = _parse_utc(created_at_str)
+        age_hours = (now - created_at).total_seconds() / 3600.0
+        if age_hours >= threshold_hours:
+            stuck.append(
+                {
+                    "run_id": run.get("id"),
+                    "created_at": created_at_str,
+                    "age_hours": round(age_hours, 1),
+                    "url": run.get("html_url"),
+                }
+            )
+    return stuck
 
-    token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
 
-    def _default_caller(url: str) -> Any:
+def _make_github_caller(token: str) -> Callable[[str], Any]:
+    """Return an authenticated GitHub API caller bound to token, or a no-op returning None.
+
+    Shared by find_stuck_gated_approvals and diagnose_stuck_approvals so auth header
+    construction is defined exactly once. Imports are deferred to avoid import-time side effects.
+    """
+    import json as _json  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    def _caller(url: str) -> Any:
         if not token:
             return None
         req = urllib.request.Request(
@@ -170,9 +189,29 @@ def find_stuck_gated_approvals(
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             return _json.loads(resp.read())
 
-    caller = gh_caller or _default_caller
+    return _caller
 
-    stuck: list[dict[str, Any]] = []
+
+def find_stuck_gated_approvals(
+    gh_caller: Optional[Callable[[str], Any]] = None,
+    owner: str = "benjamin-blake",
+    repo: str = "agent-platform",
+    threshold_hours: float = STUCK_APPROVAL_THRESHOLD_HOURS,
+    now: Optional[datetime] = None,
+) -> list[dict[str, Any]]:
+    """Return terraform-apply-sandbox runs whose gated-apply job is `waiting` beyond threshold.
+
+    gh_caller is injected for testability. When None, reads GH_TOKEN / GITHUB_TOKEN env vars;
+    if neither is set, returns [] without error (graceful degradation).
+    """
+    import os  # noqa: PLC0415
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+    caller = gh_caller or _make_github_caller(token)
+
     try:
         url = (
             f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
@@ -181,24 +220,42 @@ def find_stuck_gated_approvals(
         data = caller(url)
         if not data:
             return []
-        for run in data.get("workflow_runs", []):
-            created_at_str = run.get("created_at", "")
-            if not created_at_str:
-                continue
-            created_at = _parse_utc(created_at_str)
-            age_hours = (now - created_at).total_seconds() / 3600.0
-            if age_hours >= threshold_hours:
-                stuck.append(
-                    {
-                        "run_id": run.get("id"),
-                        "created_at": created_at_str,
-                        "age_hours": round(age_hours, 1),
-                        "url": run.get("html_url"),
-                    }
-                )
+        return filter_stuck_runs(data.get("workflow_runs", []), threshold_hours, now)
     except Exception:  # noqa: BLE001
         pass
-    return stuck
+    return []
+
+
+def diagnose_stuck_approvals(
+    gh_caller: Optional[Callable[[str], Any]] = None,
+    owner: str = "benjamin-blake",
+    repo: str = "agent-platform",
+    threshold_hours: float = 0.0,
+    now: Optional[datetime] = None,
+) -> list[dict[str, Any]]:
+    """Query recent terraform-apply-sandbox runs of ANY status and parse them via filter_stuck_runs.
+
+    Read-only diagnostic entrypoint: exercises the real-data parse path without requiring a live
+    waiting run. At threshold_hours=0 every run object is parsed and returned. Returns [] on any
+    error or when the caller yields None. Never escalates or writes.
+    """
+    import os  # noqa: PLC0415
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+    caller = gh_caller or _make_github_caller(token)
+
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/terraform-apply-sandbox.yml/runs?per_page=20"
+        data = caller(url)
+        if not data:
+            return []
+        return filter_stuck_runs(data.get("workflow_runs", []), threshold_hours, now)
+    except Exception:  # noqa: BLE001
+        pass
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +468,7 @@ def escalate(
 def main(profile: Optional[str] = None) -> int:
     """Assess convergence health and escalate if warranted. Returns exit code."""
     import json  # noqa: PLC0415
+    import os  # noqa: PLC0415
 
     try:
         import boto3  # noqa: PLC0415
@@ -422,8 +480,14 @@ def main(profile: Optional[str] = None) -> int:
         return 1
 
     record = read_convergence_record(s3)
-    stuck = find_stuck_gated_approvals()
-    verdict = assess_health(record, stuck_approvals=stuck)
+    diagnose_mode = bool(os.environ.get("CONVERGENCE_HEALTH_DIAGNOSE"))
+
+    if diagnose_mode:
+        diagnose_out = diagnose_stuck_approvals()
+        verdict = assess_health(record, stuck_approvals=diagnose_out)
+    else:
+        stuck = find_stuck_gated_approvals()
+        verdict = assess_health(record, stuck_approvals=stuck)
 
     print(
         f"[convergence_health] HealthVerdict: {
@@ -438,6 +502,10 @@ def main(profile: Optional[str] = None) -> int:
             )
         }"
     )
+
+    if diagnose_mode:
+        print(f"[convergence_health] diagnose_stuck_approvals: {diagnose_out}")
+        return 0  # read-only; do not escalate
 
     result = escalate(verdict, profile=profile)
     print(f"[convergence_health] escalation result: {result}")
