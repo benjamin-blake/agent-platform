@@ -26,7 +26,12 @@ name: convergence-health
 on:
   schedule:
     - cron: '37 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      diagnose:
+        description: 'Read-only diagnostic mode: prints HealthVerdict and diagnose_stuck_approvals output without escalating'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -72,6 +77,7 @@ jobs:
       - name: Assess convergence health and escalate
         env:
           GH_TOKEN: ${{ github.token }}
+          CONVERGENCE_HEALTH_DIAGNOSE: ${{ inputs.diagnose && '1' || '' }}
         run: |
           set -euo pipefail
           .venv/bin/python -m scripts.convergence_health
