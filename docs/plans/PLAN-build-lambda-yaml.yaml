@@ -242,7 +242,13 @@ context:
     tier_item exit criterion "Step 10 multi-perspective critique converges" is satisfied during
     PLANNING by running a Step-10-style 2-agent multi-perspective critique on the embedded
     build-lambda.yaml design spec (in addition to the mandatory Step 9 plan-critique). The /implement
-    agent builds the file to that spec.
+    agent builds the file to that spec. Convergence record: Step 9 plan-critique returned PROCEED
+    (every load-bearing claim independently verified, no decision conflicts). The Step-10-style
+    2-agent spec critique (architect lens + adversarial-risk lens) both returned PROCEED with only
+    LOW/MED specification-precision findings; all agreed revisions folded in -- pinned accessor return
+    shapes, per-branch update_lambda_functions wiring, replace-ALL size-limit uses, autouse fixture
+    resets BOTH registry + path globals (sibling parity), canary-layer YAML-sourcing test, and a YAML
+    note that CLI flag defaults are out of registry scope.
   - >-
     Embedded build-lambda.yaml design spec (the /implement agent creates the file from this, setting
     ratified_at + last_verified to the implementation date): NON-ritual top metadata -- version 1,
@@ -268,7 +274,9 @@ context:
     deploy_targets.ducklake_layer_names [ducklake-deps-layer, ducklake-extensions-layer,
     ducklake-pgclient-layer];
     cli_flags [--skip-upload, --bucket, --profile, --region, --deploy, --ducklake-only, --list-bundle,
-    --ducklake-publish-canary-layers];
+    --ducklake-publish-canary-layers] (with a YAML comment that flag DEFAULTS --
+    --profile=company-aws-profile, --region=eu-west-2 -- are intentionally OUT of registry scope:
+    the equivalence test compares flag-name sets only);
     verified_against ["scripts/build_lambda.py (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES,
     _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS,
     DUCKLAKE_LAYER_NAMES, build_parser() flags)"].
@@ -279,11 +287,22 @@ context:
     yaml inside the function, reads the YAML registry block, and on ANY failure -- FileNotFoundError,
     yaml error, ImportError, missing keys -- returns _fallback_build_registry(); caches the result),
     and accessors _build_size_limit_bytes() / _build_prod_function_names() / _build_ops_compaction()
-    / _build_ducklake_function_zip_keys() / _build_ducklake_layer_names(). Replace internal uses in
-    assert_within_size_limit (size limit), update_lambda_functions (prod functions + ops-compaction +
-    ducklake zip-key map), and publish_canary_layers (ducklake layer names) with the accessors. Extract
-    the argparse construction from main() into build_parser() -> ArgumentParser (main() calls it).
-    Lazy-import yaml inside the loader only; no I/O at import; never raise at import.
+    / _build_ducklake_function_zip_keys() / _build_ducklake_layer_names(). RETURN SHAPES (pin
+    explicitly, per architect critique): _build_size_limit_bytes() -> int; _build_prod_function_names()
+    -> list[str]; _build_ops_compaction() -> dict {"function": str, "zip_key": str};
+    _build_ducklake_function_zip_keys() -> dict[str, str]; _build_ducklake_layer_names() -> list[str].
+    Replace internal uses with the accessors at every site (per risk critique R2 -- replace EVERY use,
+    not just one): (a) assert_within_size_limit -- BOTH the comparison AND the error-message
+    interpolation of LAMBDA_SIZE_LIMIT_BYTES (bind once to a local to avoid a stale-message split);
+    (b) update_lambda_functions -- the prod branch composes _build_prod_function_names() (each ->
+    data-pipeline.zip) + _build_ops_compaction() (function -> zip_key), and the only_ducklake branch
+    uses _build_ducklake_function_zip_keys(); (c) publish_canary_layers -- iterate
+    _build_ducklake_layer_names(). Extract the argparse construction from main() into build_parser()
+    -> ArgumentParser as a pure move (main() still calls build_parser() then parser.parse_args(); the
+    _args() test helper and main-dispatch behavior are unchanged). Lazy-import yaml inside the loader
+    only; no I/O at import; never raise at import. (Note: the module already does pre-existing
+    import-time work -- LAMBDA_FILE_PATTERNS derivation + ducklake_version import; the no-import-I/O
+    rule applies to the NEW loader only, which Step 6 verifies via _BUILD_CONTRACT_REGISTRY is None.)
   - >-
     No ci-rca blocks at planning time (preflight ci_rca_unresolved_recs empty); branch 0 commits behind
     origin/main. build-lambda.md has zero references anywhere in the repo (stale-reference sweep already
@@ -315,9 +334,13 @@ execution_steps:
     anti-drift (YAML registry == FALLBACK_* == named constants), CLI flag equivalence (yaml cli_flags
     == build_parser() option strings minus --help), absent-YAML / unparseable-YAML /
     yaml-import-unavailable fallback, and lazy-import safety; ensure 100% coverage of the new
-    loader/accessor code. Use the file::Class form (no -k selectors). Reset the
-    _BUILD_CONTRACT_REGISTRY module cache via an AUTOUSE fixture (not ad-hoc per-test resets) so the
-    cached global cannot leak state across tests.
+    loader/accessor code. Use the file::Class form (no -k selectors). Reset BOTH the
+    _BUILD_CONTRACT_REGISTRY cache AND the _BUILD_CONTRACT_PATH global via an AUTOUSE save/restore
+    fixture (mirror tests/test_s3_log_store.py's fixture exactly, per risk critique R1 -- the
+    reads-yaml/absent-yaml tests mutate _BUILD_CONTRACT_PATH, which must not leak a bad path into the
+    real accessors used by TestSizeAssert/TestUpdateLambdaFunctions). Include a test asserting
+    publish_canary_layers sources its layer list from _build_ducklake_layer_names() (per risk
+    critique R3 -- the canary path's YAML sourcing is otherwise unexercised by VP steps 2-4).
   - Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable step, stop and RCA per Decision 55; do not patch around it.
   - 'Report: the YAML created, the build_lambda.py wiring, the .md deletion, test results, and validate.py result.'
 work_areas: []
