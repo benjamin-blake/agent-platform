@@ -1,0 +1,327 @@
+schema_version: 1
+slug: build-lambda-yaml
+intent: >-
+  Convert the stale prose boundary contract docs/contracts/build-lambda.md into a machine-readable
+  docs/contracts/build-lambda.yaml authored fresh from the live scripts/build_lambda.py, wire
+  build_lambda.py to read the YAML build registry (import-safe, with in-code fallback), and delete
+  the .md. Eliminates the prose/code drift surface for the Lambda build/deploy workflow and advances
+  the CD.25 pre-codegen contract-ratification series (T-1.13..T-1.19) toward an agent-first,
+  drift-proof docs/contracts/.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-build-lambda-yaml.yaml
+phase: >-
+  PLATFORM tier_item T-1.16 (tier T-1, CD.25 pre-codegen contract ratification). depends_on T-1.12
+  (satisfied). Not on the product roadmap critical path. PROJECT_CONTEXT section 8 end-state:
+  "Contracts are converted to .yaml and wired to their code consumers (T-1.13..T-1.19)."
+scope:
+  - file: docs/contracts/build-lambda.yaml
+    action: Create
+    purpose: >-
+      NON-ritual registry YAML carrying the Lambda build/deploy workflow as structured data: the
+      262 MB hard size ceiling, the two build pipelines (prod data-pipeline/ops-compaction and
+      --ducklake-only), the produced artifact/zip set, the deploy function targets (prod functions,
+      ops-compaction function+zip, ducklake function->zip map, ducklake layer names), and the CLI
+      flag surface. A machine-consumed block (size_limit_bytes, deploy_targets, cli_flags) is read by
+      build_lambda.py. Authored fresh from the live script -- the .md content (a removed
+      --handler/--output/--layer CLI) is NOT carried forward.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Add a lazy, cached, import-safe loader that reads build-lambda.yaml for the build registry,
+      with identical in-code FALLBACK_* defaults when the YAML is absent/unparseable/yaml-unavailable;
+      build/deploy functions consume the YAML-or-fallback values via accessors. Extract the argparse
+      construction into a build_parser() helper so the CLI flag surface is introspectable by the
+      equivalence test. Carry existing constant VALUES forward UNCHANGED (read-substitution only).
+      Perform NO I/O at import; never raise at import.
+  - file: docs/contracts/build-lambda.md
+    action: Delete
+    purpose: >-
+      Superseded by the YAML; the prose contract is severely stale (documents a removed CLI) and the
+      agent-first repo forbids a prose companion alongside a machine-readable source (Decision 86).
+      Zero live references exist anywhere in the repo -- deletion is code-safe.
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Add a TestBuildLambdaContract class with 100% coverage of the new loader/accessors:
+      reads-the-YAML, anti-drift (YAML registry == FALLBACK_* == named constants), CLI flag
+      equivalence (yaml cli_flags == build_parser() option strings), absent-YAML / unparseable-YAML /
+      yaml-import-unavailable fallback, and lazy-import safety.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    None. scripts/build_lambda.py is a build/deploy ORCHESTRATOR, not a Lambda-packaged file:
+    compute_affected_artifacts(['scripts/build_lambda.py','tests/test_build_lambda.py',
+    'docs/contracts/build-lambda.yaml','docs/contracts/build-lambda.md']) returns {} (no active
+    artifact is affected). Per Decision 79, build_lambda.py is explicitly NOT itself Lambda-packaged,
+    so this is V2 -- no build/deploy/smoke-test steps. The YAML is read at BUILD time (CI/local
+    checkout, where docs/contracts/ is always present), never at Lambda runtime.
+acceptance_criteria:
+  - >-
+    docs/contracts/build-lambda.yaml exists with contract_version 1 and status ratified, authored
+    fresh from the live build_lambda.py, carrying size_limit_bytes, the two build pipelines, the
+    artifact/zip set, the deploy_targets block, and the cli_flags surface. It is NON-ritual (no
+    contract: block with a class: field), so the CD.25 contract-drift gate skips it.
+  - >-
+    scripts/build_lambda.py reads the build registry (size limit, deploy function targets,
+    ducklake layer names, function->zip map, CLI flag surface) from build-lambda.yaml where
+    docs/contracts/ is present, and falls through to identical in-code FALLBACK_* defaults where it
+    is absent/unparseable/yaml-unavailable; module import performs no I/O and never raises.
+  - >-
+    The YAML-derived registry equals the in-code FALLBACK_* constants (anti-drift), and the YAML
+    cli_flags equal the build_parser() option strings -- both proven by unit tests. This is the
+    exit-criterion "CI check asserts equivalence" (a pytest check, NOT a bespoke validate.py check,
+    per Decision 80).
+  - >-
+    The DuckDB version pin is NOT recorded in build-lambda.yaml (it stays SSOT'd in
+    config/lambda/ducklake/version.yaml per Decision 99); PROD_DEPS/DUCKLAKE_DEPS dependency lists
+    are omitted as volatile implementation detail.
+  - >-
+    docs/contracts/build-lambda.md is deleted and no live (non-historical-plan, non-audit-snapshot)
+    surface references it.
+  - >-
+    Full validate.py passes locally (contract-drift gate scans the new non-ritual file without
+    failing); tests/test_build_lambda.py is green with 100% coverage of the new code.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Unit tests for build_lambda exercise the real (un-mocked) YAML load path, all fallbacks, the
+      anti-drift assertion, and CLI flag equivalence. Whole-file run confirms no regression in the
+      existing classes.
+    command: bin/venv-python -m pytest tests/test_build_lambda.py -q
+    expected: All tests pass, including the new TestBuildLambdaContract class.
+    fix_if: >-
+      A failure means the loader, accessor, fallback, anti-drift, or CLI-equivalence logic is wrong;
+      fix the loader or align the YAML to the FALLBACK_* constants.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the YAML carries the required top-level keys + metadata, and that build_lambda actually
+      READS the committed YAML (accessor returns the YAML-sourced value, not just the fallback).
+    command: >-
+      bin/venv-python -c "import yaml,scripts.build_lambda as bl;
+      d=yaml.safe_load(open('docs/contracts/build-lambda.yaml'));
+      assert {'version','contract_version','status','size_limit_bytes','pipelines','deploy_targets','cli_flags'} <= set(d), set(d);
+      assert d['contract_version']==1 and d['status']=='ratified';
+      assert bl._build_size_limit_bytes()==d['size_limit_bytes'];
+      assert set(bl._build_prod_function_names())==set(d['deploy_targets']['prod_functions']);
+      print('reads-yaml+keys OK')"
+    expected: Prints "reads-yaml+keys OK" (required keys present, contract_version 1 / status ratified, accessors return YAML-sourced values).
+    fix_if: Mismatch or exception means the loader is not reading the YAML or the accessor names differ; fix the accessor/loader.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Anti-drift -- the in-code FALLBACK_* defaults equal the YAML registry (so the build can never
+      silently diverge from the contract).
+    command: >-
+      bin/venv-python -c "import yaml,scripts.build_lambda as bl;
+      d=yaml.safe_load(open('docs/contracts/build-lambda.yaml'));
+      assert bl.LAMBDA_SIZE_LIMIT_BYTES==d['size_limit_bytes'];
+      assert set(bl._LAMBDA_FUNCTION_NAMES)==set(d['deploy_targets']['prod_functions']);
+      assert bl._OPS_COMPACTION_FUNCTION_NAME==d['deploy_targets']['ops_compaction']['function'];
+      assert bl._OPS_COMPACTION_ZIP_KEY==d['deploy_targets']['ops_compaction']['zip_key'];
+      assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS==d['deploy_targets']['ducklake_function_zip_keys'];
+      assert list(bl.DUCKLAKE_LAYER_NAMES)==list(d['deploy_targets']['ducklake_layer_names']);
+      print('anti-drift OK')"
+    expected: Prints "anti-drift OK".
+    fix_if: Divergence means a constant was edited without updating the YAML (or vice versa); reconcile both to a single value.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      CLI flag equivalence -- the YAML cli_flags exactly match the argparse option strings the script
+      accepts (excluding --help).
+    command: >-
+      bin/venv-python -c "import yaml,scripts.build_lambda as bl;
+      d=yaml.safe_load(open('docs/contracts/build-lambda.yaml'));
+      p=bl.build_parser();
+      flags={s for s in p._option_string_actions if s.startswith('--')}-{'--help'};
+      assert flags==set(d['cli_flags']), (flags, set(d['cli_flags']));
+      print('cli-flags OK')"
+    expected: Prints "cli-flags OK".
+    fix_if: A diff means a flag was added/removed without updating the YAML; reconcile the cli_flags list to the parser.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Absent-YAML fallback -- with the contract file hidden, the module still returns the FALLBACK_*
+      registry and does not raise.
+    command: >-
+      bin/venv-python -c "import scripts.build_lambda as bl;
+      bl._BUILD_CONTRACT_REGISTRY=None;
+      orig=bl._BUILD_CONTRACT_PATH; bl._BUILD_CONTRACT_PATH=orig.with_name('does-not-exist.yaml');
+      assert bl._build_size_limit_bytes()==bl.LAMBDA_SIZE_LIMIT_BYTES;
+      assert set(bl._build_prod_function_names())==set(bl._LAMBDA_FUNCTION_NAMES);
+      print('fallback OK')"
+    expected: Prints "fallback OK" (graceful degradation to in-code defaults).
+    fix_if: An exception means the loader does not handle a missing file; wrap the read in a try/except returning the fallback.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Lazy import safety -- importing the module performs no filesystem read at import time (deferred
+      to first accessor call).
+    command: >-
+      bin/venv-python -c "import scripts.build_lambda as bl;
+      assert bl._BUILD_CONTRACT_REGISTRY is None, 'registry must be lazy, not loaded at import';
+      print('lazy import OK')"
+    expected: Prints "lazy import OK".
+    fix_if: Registry populated at import means I/O runs at import (violates the no-raise-at-import rule); move the load into the accessor.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep -- the deleted contract has no live code/config/contract references
+      (historical PLAN-*.md/.yaml, audit-reports, CHANGELOG, SESSION_LOG, and INTENT conversion notes
+      are allowed).
+    command: >-
+      bash -lc 'test ! -e docs/contracts/build-lambda.md && ! grep -rn "build-lambda\.md"
+      --include=*.py --include=*.yml --include=*.yaml --include=*.md --include=*.toml --include=*.cfg
+      --include=*.json docs/contracts scripts src config .github 2>/dev/null; echo "sweep exit=$?"'
+    expected: build-lambda.md is gone and no live surface references it (exit 0 / empty match set).
+    fix_if: A live reference exists; update or remove it before deleting, or re-point it to the YAML.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Contract-drift gate treats build-lambda.yaml as a non-ritual file (no contract block with a
+      class field) and does NOT fail it; full presubmit passes.
+    command: bin/venv-python -m scripts.validate
+    expected: validate.py exits 0; the "Contract drift gate (CD.25)" section scans the file without a violation.
+    fix_if: A drift-gate failure means the YAML accidentally has a contract block with a class field; keep it non-ritual (top-level metadata + registry only).
+constraints:
+  - No rescue agents or workaround loops; on an unrecoverable step, stop and RCA (Decision 55).
+  - >-
+    Carry the existing build_lambda.py constant VALUES forward UNCHANGED -- read-substitution only.
+    Keep the existing named constants (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES,
+    _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS,
+    DUCKLAKE_LAYER_NAMES) as the in-code FALLBACK so the existing test classes (TestPinnedConstants,
+    TestUpdateLambdaFunctions, TestSizeAssert) stay green with minimal churn.
+  - >-
+    build-lambda.yaml MUST stay NON-ritual (top-level version/contract_version/status metadata +
+    registry; NO contract: block with a class: field) so the CD.25 drift gate skips it -- precedent:
+    read-engine.yaml / storage-substrate.yaml / telemetry-lexicon.yaml.
+  - >-
+    Do NOT record the DuckDB version pin in build-lambda.yaml -- it is SSOT'd in
+    config/lambda/ducklake/version.yaml (Decision 99 lockstep). Do NOT record PROD_DEPS/DUCKLAKE_DEPS
+    dependency lists (volatile implementation detail, not contract surface -- assert the stable
+    artifact/deploy/CLI/limit surface only, avoiding the change-detector-test anti-pattern).
+  - >-
+    Equivalence check lives in pytest ONLY -- do NOT add a bespoke check to validate.py (Decision 80:
+    keep validate.py a thin CLI over the importable check registry).
+  - scripts/build_lambda.py must never raise at import and must defer all I/O to first accessor call (AGENTS.md import-safety rule).
+  - Only modify files in the Scope table.
+context:
+  - >-
+    Decision-scout gate verdict: NO_FLAGS (no contradictions). CITE list folded into this plan:
+    Decision 86 (prose->contract extract-and-retire routing -- the core action), Decision 80 (pytest
+    equivalence check, not a bespoke validate.py check), Decision 79 (build_lambda.py is not
+    Lambda-packaged -> V2 tier; reads-YAML at build time is safe). RELATED guardrails: Decision 99
+    (keep the DuckDB pin out of the YAML), Decision 100 (reflect post-change pgclient layer state if
+    layer internals are enumerated -- avoided here by keeping ducklake artifacts at zip/layer-name
+    granularity, not binary granularity), Decision 84/95-97 (non-ritual registry substrate/precedent).
+  - >-
+    Why reads-the-YAML (not assert-only): the dominant repo precedent in the CD.25 series is to wire
+    the consumer to READ the YAML -- T-1.13 (prompt_compliance.py), T-1.14 (model_registry.py), T-1.15
+    (s3_log_store.py, COMPLETED canonical template), T-1.17 (llm_utils.py), T-1.18 (copilot_wrapper.py).
+    T-1.16's exit criterion offers an assert-only alternative, but human chose the reads-YAML path for
+    series consistency. This plan ports the T-1.15 import-safe lazy-loader + in-code fallback +
+    anti-drift-test pattern. The "CI check asserts equivalence" criterion is satisfied by the pytest
+    anti-drift + reads-YAML + CLI-equivalence tests.
+  - >-
+    The .md is severely STALE: it documents a removed --handler/--output/--layer CLI. The live script
+    is a manifest-driven orchestrator (Decision 79 / CD.24) producing data-pipeline, ops-compaction,
+    and --ducklake-only artifacts. The YAML is authored FRESH from the live script; the .md content is
+    NOT carried forward (mirrors the T-1.13 c4 "must not carry that drift forward" directive).
+  - >-
+    last_verified is set to the implementation date (the date the YAML was verified against the live
+    build_lambda.py). The .md's "Date Last Verified: 2026-04-08" belongs to the removed CLI semantics
+    and is intentionally NOT preserved (unlike T-1.15, which preserved a still-valid storage-audit date).
+  - >-
+    Note: LAMBDA_SIZE_WARN_BYTES (250*1024*1024) numerically equals LAMBDA_SIZE_LIMIT_BYTES
+    (262144000) in the live script -- a pre-existing quirk that is OUT OF SCOPE for this conversion.
+    The YAML records only the hard ceiling (size_limit_bytes); the warn threshold stays in-code.
+  - >-
+    Plan-type / Step 10: this is IMPLEMENTATION (changes code + tests; CI must be green). The
+    tier_item exit criterion "Step 10 multi-perspective critique converges" is satisfied during
+    PLANNING by running a Step-10-style 2-agent multi-perspective critique on the embedded
+    build-lambda.yaml design spec (in addition to the mandatory Step 9 plan-critique). The /implement
+    agent builds the file to that spec.
+  - >-
+    Embedded build-lambda.yaml design spec (the /implement agent creates the file from this, setting
+    ratified_at + last_verified to the implementation date): NON-ritual top metadata -- version 1,
+    contract_version 1, status ratified, ratified_at <impl date>, ratified_via "PLAN-build-lambda-yaml
+    (T-1.16)", last_verified <impl date>, decisions_cited [Decision-79, Decision-80, Decision-86,
+    Decision-99, CD.24, CD.25], note (authored fresh from live build_lambda.py; DuckDB pin omitted ->
+    config/lambda/ducklake/version.yaml SSOT per Decision 99; PROD_DEPS/DUCKLAKE_DEPS omitted as
+    volatile), tool scripts/build_lambda.py; size_limit_bytes 262144000;
+    pipelines.prod {invocation "python -m scripts.build_lambda", artifacts [data-pipeline.zip,
+    ops-compaction.zip, data-pipeline-deps-layer.zip]};
+    pipelines.ducklake {invocation "python -m scripts.build_lambda --ducklake-only", artifacts
+    [ducklake-writer.zip, ducklake-reader.zip, ducklake-maintenance.zip, ducklake-catalog-dr.zip,
+    ducklake-deps-layer.zip, ducklake-extensions-layer.zip, ducklake-pgclient-layer.zip]};
+    deploy_targets.prod_functions [agent-platform-scheduled-agent-dispatcher,
+    agent-platform-findings-processor] (each deploys data-pipeline.zip);
+    deploy_targets.ops_compaction {function agent-platform-ops-compaction, zip_key
+    lambda-packages/ops-compaction.zip};
+    deploy_targets.ducklake_function_zip_keys {agent-platform-ducklake-writer:
+    lambda-packages/ducklake-writer.zip, agent-platform-ducklake-reader:
+    lambda-packages/ducklake-reader.zip, agent-platform-ducklake-maintenance:
+    lambda-packages/ducklake-maintenance.zip, agent-platform-ducklake-catalog-dr:
+    lambda-packages/ducklake-catalog-dr.zip};
+    deploy_targets.ducklake_layer_names [ducklake-deps-layer, ducklake-extensions-layer,
+    ducklake-pgclient-layer];
+    cli_flags [--skip-upload, --bucket, --profile, --region, --deploy, --ducklake-only, --list-bundle,
+    --ducklake-publish-canary-layers];
+    verified_against ["scripts/build_lambda.py (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES,
+    _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS,
+    DUCKLAKE_LAYER_NAMES, build_parser() flags)"].
+  - >-
+    build_lambda.py refactor spec: add _BUILD_CONTRACT_PATH (= ROOT/docs/contracts/build-lambda.yaml),
+    a lazy cached _BUILD_CONTRACT_REGISTRY global (init None), _fallback_build_registry() (returns the
+    registry dict assembled from the in-code FALLBACK constants), _load_build_contract() (lazy-imports
+    yaml inside the function, reads the YAML registry block, and on ANY failure -- FileNotFoundError,
+    yaml error, ImportError, missing keys -- returns _fallback_build_registry(); caches the result),
+    and accessors _build_size_limit_bytes() / _build_prod_function_names() / _build_ops_compaction()
+    / _build_ducklake_function_zip_keys() / _build_ducklake_layer_names(). Replace internal uses in
+    assert_within_size_limit (size limit), update_lambda_functions (prod functions + ops-compaction +
+    ducklake zip-key map), and publish_canary_layers (ducklake layer names) with the accessors. Extract
+    the argparse construction from main() into build_parser() -> ArgumentParser (main() calls it).
+    Lazy-import yaml inside the loader only; no I/O at import; never raise at import.
+  - >-
+    No ci-rca blocks at planning time (preflight ci_rca_unresolved_recs empty); branch 0 commits behind
+    origin/main. build-lambda.md has zero references anywhere in the repo (stale-reference sweep already
+    confirmed empty) -- deletion is code-safe.
+pre_implementation_checklist:
+  - Branch confirmed not main (harness branch claude/build-lambda-md-to-yaml-6ib3fg).
+  - docs/PROJECT_CONTEXT.md read.
+  - Decisions 79/80/86/99 + CD.24/CD.25 understood (reads-YAML with fallback; non-ritual YAML; pin stays SSOT'd; pytest not validate.py).
+  - All scope files located and readable; build_lambda.py current constants identified (size limit, function names, zip-key map, layer names, argparse flags).
+  - Acceptance criteria understood and each maps to a verification_plan step.
+execution_steps:
+  - >-
+    Create docs/contracts/build-lambda.yaml from the embedded design spec in context. Keep it
+    NON-ritual (top-level version + contract_version + status + ratified_at + ratified_via +
+    last_verified + decisions_cited + note + tool metadata, plus size_limit_bytes, pipelines,
+    deploy_targets, cli_flags, verified_against). No contract block with a class field. Set ratified_at
+    and last_verified to the implementation date. Do NOT include the DuckDB version pin or the
+    PROD_DEPS/DUCKLAKE_DEPS lists.
+  - >-
+    Modify scripts/build_lambda.py per the refactor spec in context: add _BUILD_CONTRACT_PATH, the
+    lazy cached _BUILD_CONTRACT_REGISTRY global, _fallback_build_registry(), _load_build_contract()
+    (lazy yaml import; fallback on ANY failure; cache), and the accessors. Replace internal uses in
+    assert_within_size_limit, update_lambda_functions, and publish_canary_layers with the accessors.
+    Extract build_parser() from main(). Keep the existing named constants as the in-code FALLBACK
+    (values UNCHANGED). Perform NO I/O at import; never raise at import.
+  - Delete docs/contracts/build-lambda.md.
+  - >-
+    Update tests/test_build_lambda.py: add a TestBuildLambdaContract class covering reads-the-YAML,
+    anti-drift (YAML registry == FALLBACK_* == named constants), CLI flag equivalence (yaml cli_flags
+    == build_parser() option strings minus --help), absent-YAML / unparseable-YAML /
+    yaml-import-unavailable fallback, and lazy-import safety; ensure 100% coverage of the new
+    loader/accessor code. Use the file::Class form (no -k selectors). Reset the
+    _BUILD_CONTRACT_REGISTRY module cache via an AUTOUSE fixture (not ad-hoc per-test resets) so the
+    cached global cannot leak state across tests.
+  - Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable step, stop and RCA per Decision 55; do not patch around it.
+  - 'Report: the YAML created, the build_lambda.py wiring, the .md deletion, test results, and validate.py result.'
+work_areas: []
+rollback: >-
+  Single-commit revert restores docs/contracts/build-lambda.md and the prior scripts/build_lambda.py
+  (in-code constants only), and removes build-lambda.yaml. No deployed-function change, no data
+  migration, so revert is clean.
