@@ -215,6 +215,74 @@ class TestGenerateBundles:
         assert len(bundles) == 1
 
 
+class TestEmitDir:
+    def test_emit_dir_writes_local_bundle(self, log_file, taxonomy_file, tmp_path, capsys):
+        """--emit-dir writes <dir>/<sha>.json independent of S3 outcome and prints BUNDLE_LOCAL=<path>."""
+        emit_dir = tmp_path / "emit"
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                with patch("scripts.ci_rca_evidence._upload_to_s3"):
+                    with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+                        main(
+                            [
+                                "--log-file",
+                                str(log_file),
+                                "--workflow-name",
+                                "CI",
+                                "--workflow-run-id",
+                                "42",
+                                "--taxonomy-path",
+                                str(taxonomy_file),
+                                "--emit-dir",
+                                str(emit_dir),
+                            ]
+                        )
+        out = capsys.readouterr().out
+        assert "BUNDLE_LOCAL=" in out
+        local_line = next(ln for ln in out.splitlines() if ln.startswith("BUNDLE_LOCAL="))
+        local_path = local_line.split("=", 1)[1]
+        assert Path(local_path).exists()
+        parsed = json.loads(Path(local_path).read_bytes())
+        assert "sha256" in parsed
+        assert len(parsed["sha256"]) == 64
+
+    def test_emit_dir_writes_on_s3_failure(self, log_file, taxonomy_file, tmp_path, capsys):
+        """--emit-dir writes the local bundle even when S3 upload fails."""
+        import scripts.ci_rca_evidence as ev_mod
+
+        emit_dir = tmp_path / "emit_fail"
+        original_pending = ev_mod._PENDING_DIR
+        ev_mod._PENDING_DIR = tmp_path / "pending"
+        try:
+            with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+                with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                    with patch("scripts.ci_rca_evidence._upload_to_s3", side_effect=Exception("S3 down")):
+                        with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+                            main(
+                                [
+                                    "--log-file",
+                                    str(log_file),
+                                    "--workflow-name",
+                                    "CI",
+                                    "--workflow-run-id",
+                                    "99",
+                                    "--taxonomy-path",
+                                    str(taxonomy_file),
+                                    "--emit-dir",
+                                    str(emit_dir),
+                                ]
+                            )
+        finally:
+            ev_mod._PENDING_DIR = original_pending
+        out = capsys.readouterr().out
+        assert "BUNDLE_LOCAL=" in out
+        local_line = next(ln for ln in out.splitlines() if ln.startswith("BUNDLE_LOCAL="))
+        local_path = local_line.split("=", 1)[1]
+        assert Path(local_path).exists()
+        parsed = json.loads(Path(local_path).read_bytes())
+        assert "sha256" in parsed
+
+
 class TestMain:
     def test_missing_log_file_exits(self, tmp_path):
         with pytest.raises(SystemExit) as exc_info:
@@ -241,6 +309,71 @@ class TestMain:
                         )
         out = capsys.readouterr().out
         assert "BUNDLE_SHA=" in out
+
+
+class TestBundleToSchema:
+    """Integration: bundle fields from generate_bundles() populate a valid CiRcaContext."""
+
+    def test_bundle_to_schema(self, log_file, taxonomy_file):
+        """generate_bundles() output feeds a composed CiRcaContext that model_validate accepts."""
+        from scripts.ops_data_portal import CiRcaContext
+
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=30ms", 0.03)):
+            with patch(
+                "scripts.ci_rca_tier_map.build_tier_membership",
+                return_value={"validate_sloc_limits": ["presubmit"]},
+            ):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=777,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert len(bundles) == 1
+        bundle = bundles[0]
+
+        earliest = bundle.get("earliest_viable_gate") or "CI"
+        actual = bundle.get("actual_gate_that_caught_it") or "CI"
+
+        ctx = {
+            "schema_version": 1,
+            "proximate_cause": (
+                f"validate_sloc_limits() failed (check={bundle['failed_check']}, "
+                f"category={bundle['failure_category']}): scripts/product.py is 810 SLOC, exceeds 500 limit."
+            ),
+            "why_chain": [
+                "The file was committed without an incremental refactor plan.",
+                "No --pre check caught this because validate_sloc_limits is presubmit-tier only.",
+                "The tier placement at scripts/validate.py:2294 gates on scope=='all', unreachable from --pre.",
+            ],
+            "detection_gap": {
+                "earliest_viable_gate": earliest,
+                "actual_gate_that_caught_it": actual,
+                "gap_explanation": (
+                    f"Bundle's earliest_viable_gate={earliest!r} vs actual={actual!r}. "
+                    f"Rationale: {bundle.get('earliest_viable_gate_rationale', 'N/A')[:100]}. "
+                    "Gap is tier-placement at scripts/validate.py:2294."
+                ),
+            },
+            "recurrence_class": "instance_of_known_pattern",
+            "corrective_action": (
+                "Add a complexity-waiver header or refactor the module below 500 SLOC "
+                "to satisfy validate_sloc_limits() and unblock CI."
+            ),
+            "preventive_action": (
+                "Promote validate_sloc_limits() to the --pre tier at scripts/validate.py so the "
+                "check fires during local development and prevents the same pattern in future PRs."
+            ),
+            "evidence_bundle_ref": {
+                "sha256": bundle["sha256"],
+                "s3_uri": "s3://agent-platform-data-lake/ci-rca-evidence/" + bundle["sha256"] + ".json",
+                "upload_status": "ok",
+            },
+        }
+
+        validated = CiRcaContext.model_validate(ctx)
+        assert validated.schema_version == 1
+        assert validated.detection_gap.earliest_viable_gate == earliest
 
 
 @pytest.mark.skipif(not os.environ.get("RUN_LIVE_S3"), reason="RUN_LIVE_S3 not set")
