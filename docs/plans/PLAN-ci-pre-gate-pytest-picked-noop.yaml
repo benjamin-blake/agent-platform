@@ -1,0 +1,241 @@
+schema_version: 1
+slug: "ci-pre-gate-pytest-picked-noop"
+intent: >-
+  Restore the integrity of the --pre merge gate's pytest step (Decision 73 diff-aware fast tier;
+  Decision 80 validate.py single source of truth). Today scripts/validate.py:3861-3869 selects tests
+  with `pytest --picked --mode=branch`, but pytest-picked computes its OWN git branch-diff which fails
+  in GitHub Actions' detached-HEAD PR checkout and collects 0 tests; validate.py then treats pytest
+  exit code 5 (no tests collected) as a pass. Net effect: the pr-validate required check (Decision 83)
+  passes VACUOUSLY -- it runs zero unit tests on PRs even when test files changed -- so a failing unit
+  test merges and is only caught post-merge by main-validate. This is the mechanism that let the
+  rec-2424/rec-2423 /dev/null regression reach main (PR #334's pr-validate ran 0 tests yet reported
+  "All checks passed"). This plan applies three layers of defense-in-depth: (1) PRIMARY -- select the
+  changed test files from validate.py's own get_changed_files() result (which works in CI) and pass
+  them EXPLICITLY to pytest, removing the dependence on pytest-picked's fragile independent diff;
+  (2) BACKSTOP -- treat a 0-collected / non-zero pytest result as a FAILURE when changed test files are
+  present, so the contradiction surfaces loudly (Decision 55) instead of being swallowed; (3)
+  REGRESSION TEST -- lock the gate in tests/test_validate.py so this silent no-op cannot recur.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-ci-pre-gate-pytest-picked-noop.yaml
+phase: >-
+  CI-integrity hardening of the Decision 73 two-tier diff-aware presubmit. Not a roadmap tier_item --
+  it repairs the fast-tier (--pre) pytest-selection mechanism that backs the pr-validate required check
+  (Decision 83). Discovered during the rec-2424/rec-2423 forward-fix planning session: the /dev/null
+  regression escaped to main because pr-validate's pytest step collected 0 tests (CI run 28399598578,
+  job pr-validate 84147146286 -- "collected 0 items / no tests ran in 0.01s" yet "All checks passed").
+scope:
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      In the --pre block (around lines 3861-3869), replace the pytest test-selection transport. Compute
+      changed_tests = [f for f in changed if re.match(r"tests/.*test_[^/]+\.py$", f)] from the existing
+      `changed` list already produced by get_changed_files() at line 3843 (git diff --name-only
+      origin/main; resolves correctly in CI since the pr-validate checkout uses fetch-depth: 0).
+      When changed_tests is non-empty, invoke pytest with those EXPLICIT file paths instead of
+      `--picked --mode=branch`: [PYTHON, "-m", "pytest", *changed_tests, "-m", "not integration", "-v"].
+      This removes the dependence on pytest-picked's separate, detached-HEAD-fragile branch diff that
+      collapsed to 0 tests in CI. BACKSTOP: change the result handling from `if returncode not in (0, 5)`
+      to treat a non-zero result (including 5 = no tests collected) as a FAILURE when changed_tests is
+      non-empty -- a 0-collection while changed test files were explicitly passed is a contradiction and
+      must redden the gate loudly (Decision 55), not pass silently. Update the section header/comment to
+      reflect explicit-file selection. Keep the `-m "not integration"` filter and `-v` for parity with
+      the prior behaviour. get_changed_files() already filters to existing paths, so deleted/renamed
+      test files are not passed. Note the one accepted edge case (below) in a code comment.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Two parts. PART A -- RECONCILE the existing TestPreModeDiffAware class (around lines 2740-2822),
+      whose tests assert the OLD behaviour this plan inverts and will FAIL after the change:
+      test_invokes_pytest_picked_when_test_files_changed (line ~2770) asserts the pytest argv contains
+      "--picked"/"--mode=branch" -- update it to assert the explicit changed test-file path is in the
+      argv and "--picked" is NOT; test_treats_pytest_exit_5_as_success (line ~2799) asserts exit 5 ->
+      SystemExit code 0 -- invert it (exit 5 / 0-collected with a changed test file present now yields a
+      FAILURE / non-zero SystemExit) and rename to match (e.g. test_treats_pytest_exit_5_as_failure); the
+      no-test-change test just above (whose assertion filters on "--picked") must drop the "--picked"
+      filter so it still meaningfully asserts pytest is not invoked when no test files changed. PART B --
+      ADD new positive coverage (in TestPreModeDiffAware or a new TestPreModePytestSelection class)
+      mirroring the existing --pre main() test pattern (patch validate.run with a recording side_effect;
+      patch validate.get_changed_files; patch sys.argv to ["validate.py", "--pre"]; expect SystemExit):
+      (a) changed test file -> pytest invoked with that explicit path, no "--picked"; (b) exit 5 with a
+      changed test file present -> failure recorded; (c) no test files changed -> pytest not invoked.
+      Use one consolidated import block (tests/CLAUDE.md ruff-format rule); mock both subprocess layers
+      per tests/CLAUDE.md if any real subprocess could fire. Net: no loss of coverage -- every assertion
+      in the old class is either updated to the new contract or migrated, and the full test file is green.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    None. No terraform, no Lambda build/deploy. compute_affected_artifacts(scope) returns empty --
+    scripts/validate.py is not a Lambda-packaged pattern and tests/* are never packaged. No ci.yml
+    change is required: the workflow already runs `python -m scripts.validate --pre` (Decision 80 -- the
+    workflow is a thin caller of validate.py, the single source of truth). The fix is pure
+    test-selection logic inside validate.py plus a unit test.
+acceptance_criteria:
+  - >-
+    In the --pre path, when one or more changed files match tests/.*test_*.py, validate.py invokes
+    pytest with those explicit file paths (verifiable: the pytest argv contains the changed test file
+    and does NOT contain "--picked").
+  - >-
+    When pytest returns a non-zero result (including exit 5 / 0 collected) while changed test files are
+    present, the --pre run records a failure (the gate reddens) -- the 0-collection contradiction is no
+    longer treated as a pass.
+  - >-
+    When no test files changed, the --pre path does not invoke pytest (no behavioural regression for
+    non-test PRs).
+  - >-
+    tests/test_validate.py contains a regression test exercising (a) explicit-file selection, (b)
+    0-collected-while-changes-present -> failure, and (c) no-test-changes -> no pytest; all pass.
+  - >-
+    The pre-existing TestPreModeDiffAware tests that asserted the OLD behaviour
+    (test_invokes_pytest_picked_when_test_files_changed asserting "--picked"/"--mode=branch";
+    test_treats_pytest_exit_5_as_success asserting exit 5 -> success; and the no-test-change test's
+    "--picked" filter) are reconciled to the new contract, and the FULL tests/test_validate.py suite is
+    green (no orphaned assertion of the removed behaviour, no net coverage loss).
+  - >-
+    Per-file coverage + test-existence gates pass for scripts/validate.py
+    (test_coverage_checker --check-tests --check-coverage), and full local presubmit (validate) is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-pre-gate-pytest-picked-noop.yaml
+    expected: Exit 0; prints validation success.
+    fix_if: Non-zero exit -- fix the named field; an unknown-key error means a stray top-level key.
+  - step: 2
+    phase: pre-deploy
+    action: The reconciled + new --pre selection tests all pass (old --picked/exit-5-success assertions gone; explicit-file selection, 0-collected->fail, no-test-change->no-pytest present).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestPreModeDiffAware -x -q && test -z "$(grep -nE 'in pytest_cmds\[0\]|exit.*5.*as_success|code == 0' tests/test_validate.py | grep -i picked)"
+    expected: All TestPreModeDiffAware cases pass under the new contract (no case asserts "--picked"/"--mode=branch" or exit 5 -> success). If a new TestPreModePytestSelection class was added instead, run that class here too.
+    fix_if: A case still asserts "--picked"/"--mode=branch" or exit 5 -> code 0 -- it was not reconciled to the new contract; update or migrate it (PART A of the test scope).
+  - step: 3
+    phase: pre-deploy
+    action: The legacy "exit 5 treated as pass" behaviour is gone -- grep confirms the (0, 5) whitelist no longer guards the pytest result.
+    command: grep -nE 'returncode not in \(0, 5\)' scripts/validate.py; test $? -ne 0
+    expected: No match for the old `(0, 5)` whitelist on the pytest result (the grep returns non-zero, so the negated test passes).
+    fix_if: The old whitelist is still present -- replace it with the changed_tests-aware failure handling that treats exit 5 as failure when test files changed.
+  - step: 4
+    phase: pre-deploy
+    action: Test-existence + per-file coverage hold for the changed source file scripts/validate.py.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/validate.py
+    expected: 0 missing test files; scripts/validate.py not below its coverage gate.
+    fix_if: Below gate -- the new changed_tests branch / backstop is uncovered; extend TestPreModePytestSelection to hit each branch.
+  - step: 5
+    phase: pre-deploy
+    action: Full local presubmit (CI mirror) is green before push. Self-dogfood -- this run exercises the repaired --pre selection on this very change.
+    command: bin/venv-python -m scripts.validate
+    expected: All checks pass (lint, format, mypy, pytest, coverage, sloc); exit 0.
+    fix_if: Any check fails -- fix before push; remote CI (Decision 83 required checks) is authoritative.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the repaired --pre actually selects and runs the changed test file (no silent 0-collection) on this branch's own diff.
+    command: bin/venv-python -m scripts.validate --pre 2>&1 | grep -E "=== Tests \(pytest" -A2
+    expected: The Tests section runs pytest against tests/test_validate.py (the changed test file) and reports collected/passed items -- NOT "collected 0 items / no tests ran".
+    fix_if: Still 0 collected -- changed_tests is empty (the regex or the `changed` source is wrong) or pytest is still invoked via --picked.
+constraints:
+  - >-
+    Decision 80 -- validate.py is the single source of truth. Do NOT add or duplicate the pytest step in
+    .github/workflows/ci.yml; the workflow already calls `python -m scripts.validate --pre`. All gate
+    logic stays in validate.py.
+  - >-
+    Decision 73 governs the tier semantics (NOT Decision 60). Decision 60's literal "no pytest in --pre"
+    was already superseded by Decision 73 clause 1 (diff-aware `pytest --picked` in --pre) and the live
+    code already runs pytest in --pre. This plan repairs an EXISTING pytest-in-pre step; it does not
+    introduce one. The changed-test-file-scoped run must stay within the fast-tier budget (only the
+    changed test files run, not the full suite).
+  - >-
+    Decision 55 loud-failure -- the backstop MUST redden the gate on a 0-collected/non-zero pytest result
+    when changed test files are present. Do not silence it. (The prior `(0, 5)` whitelist is the exact
+    silent-swallow this plan removes.)
+  - >-
+    Accepted edge case (document in a code comment, do not over-engineer): if a changed test file contains
+    ONLY integration-marked tests, `-m "not integration"` may deselect all and pytest can exit 5. This is
+    a rare, acceptable false-positive in this repo (integration tests are a small minority and rarely the
+    sole content of a changed file); the author resolves it by not gating an all-integration file behind
+    the unit tier. Do NOT add complex carve-out logic for it in this plan.
+  - >-
+    Out of scope (explicit, note as a candidate follow-up rec -- do NOT fix here): the --pre pytest step
+    only triggers when a test_*.py file itself changed (has_test_changes). A PR that changes ONLY source
+    (e.g. a sync_ops.py edit that breaks an unchanged test) still runs no tests in --pre. Mapping changed
+    source files to their tests is a separate, larger design and is not part of this plan.
+  - IMPLEMENTATION type only (Decision 67 / CD.17; single coherent IMPLEMENTATION plan).
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable V1 failure, stop and RCA.
+context:
+  - >-
+    Evidence (verified at planning time): scripts/validate.py:3843 `changed = get_changed_files()`;
+    get_changed_files() at line 109-117 runs `git diff --name-only origin/main` (falls back to HEAD).
+    Line 3861 has_test_changes uses re.match(r"tests/.*test_[^/]+\.py$", f). Lines 3863-3869 run
+    `pytest --picked --mode=branch -m "not integration" -v` and treat returncode in (0, 5) as pass. The
+    pr-validate checkout (.github/workflows/ci.yml line 24-26) already uses actions/checkout@v6 with
+    fetch-depth: 0, so the "increase checkout depth" idea is ALREADY satisfied -- the root cause is
+    pytest-picked's independent branch-diff diverging from get_changed_files() in CI's detached HEAD,
+    not checkout depth. The CI log for PR #334's pr-validate (job 84147146286) shows "collected 0 items
+    / no tests ran in 0.01s" followed by "=== Validation Summary (scope: pre) === All checks passed."
+  - >-
+    Decisions cited (decision-scout gate 2026-06-29, Verdict NO_FLAGS): Decision 73 (two-tier diff-aware
+    CI with forward-fix -- the governing architecture; the fix repairs only the test-selection transport
+    while preserving diff-aware-pytest-in-pre), Decision 80 (validate.py single source of truth -- no
+    ci.yml edit), Decision 55 (loud-failure -- the backstop surfaces the 0-collection contradiction).
+    NOTE accepted: Decision 60 (its literal "no pytest in --pre" is superseded by Decision 73 and the
+    live code; this plan repairs, not introduces, pytest-in-pre). RELATED: Decision 83 (pr-validate is a
+    required check whose integrity this restores), Decision 72 (RCA-as-Plan-Source -- the class of escape
+    this prevents).
+  - >-
+    Relationship to PLAN-ci-rca-sentinel-path-regressions (merged to main this session): that plan is the
+    forward-fix for the /dev/null SYMPTOM (rec-2424/rec-2423); THIS plan fixes the GATE HOLE that let the
+    symptom reach main. They are independent and can implement in either order, but landing this gate fix
+    means future regressions of the same class are caught at pr-validate rather than post-merge.
+  - >-
+    ci-rca block-respect (Related-Work check): the open ci_rca_unresolved_recs at planning time are
+    rec-2424 + rec-2423; this plan is tightly related work (it fixes the gate that allowed those exact
+    recs' failure to escape to main), so it is permitted alongside their forward-fix and is not unrelated
+    scoping.
+  - >-
+    Branch claude/ci-rca-sentinel-path-regressions-oad593 (this session's branch) at planning time:
+    PLAN-ci-rca-sentinel-path-regressions already merged to main; main_freshness ok; scope files
+    (scripts/validate.py, tests/test_validate.py) do not overlap that merged plan, so no rebase conflict
+    is expected. Implementer should `git fetch origin main && git rebase origin/main` before pushing.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - scripts/validate.py:3838-3870 (--pre block) and get_changed_files() (109-117) read in full
+  - The pr-validate CI log evidence (0 collected, all-passed) understood
+  - DECISIONS.md adjudicated via the decision-scout gate (73/80/55 cited; 60 NOTE; 83/72 RELATED; Verdict NO_FLAGS)
+  - Both files in scope located and confirmed editable
+  - Existing tests/test_validate.py::TestPreModeDiffAware read (the two old-behaviour tests to reconcile identified)
+  - No Lambda artifact affected (compute_affected_artifacts returns empty) -- V1 tier confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In scripts/validate.py --pre block: compute changed_tests from the existing `changed` list
+    (re.match the tests/.*test_*.py pattern). Replace the `if has_test_changes:` pytest block: when
+    changed_tests is non-empty, print the Tests header, run pytest with the explicit changed_tests paths
+    (+ "-m", "not integration", "-v"), and append "Tests (pytest)" to failed when returncode != 0
+    (treating exit 5 / 0-collected as failure). Remove the old `--picked --mode=branch` argv and the
+    `not in (0, 5)` whitelist. Add a code comment recording the explicit-file selection rationale, the
+    Decision 55 loud-failure backstop, and the accepted all-integration edge case. (has_test_changes can
+    be folded into `if changed_tests:`.)
+  - >-
+    In tests/test_validate.py PART A (reconcile existing TestPreModeDiffAware, ~lines 2740-2822): update
+    test_invokes_pytest_picked_when_test_files_changed to assert the explicit changed test-file path is in
+    the pytest argv and "--picked" is absent; invert + rename test_treats_pytest_exit_5_as_success to
+    assert exit 5 / 0-collected with a changed test file present yields a FAILURE (non-zero SystemExit);
+    drop the "--picked" filter from the no-test-change test so it still asserts pytest is not invoked.
+  - >-
+    In tests/test_validate.py PART B: add the positive regression coverage (in TestPreModeDiffAware or a
+    new TestPreModePytestSelection class) mirroring the existing --pre main() test pattern (patch
+    validate.run with a recording side_effect; patch validate.get_changed_files; patch sys.argv to
+    ["validate.py", "--pre"]; patch the other --pre validators as the existing tests do; expect
+    SystemExit). Cases: (a) changed=["tests/test_x.py"] -> pytest argv includes "tests/test_x.py" and not
+    "--picked"; (b) pytest returncode 5 while changed test files present -> failure recorded; (c) changed
+    without any test_*.py -> pytest never invoked. Consolidated import block. Confirm the full
+    tests/test_validate.py file is green (no orphaned old-behaviour assertion).
+  - >-
+    Execute the Verification Plan steps 1-6 in order; loop until green. Step 6 self-dogfoods the fix on
+    this branch's own diff. On unrecoverable V1 failure, stop and RCA (Decision 55) -- do not rescue-loop.
+  - "Report: explicit-file pytest selection landed, exit-5/0-collected backstop reddens the gate, regression test class added, coverage/presubmit results, and the self-dogfood --pre output showing the changed test file actually ran (not 0 collected)."
+work_areas: []
+rollback: >-
+  Edits are localized (one selection/result-handling block in the validate.py --pre path + one new test
+  class). Revert via git. No infrastructure, no Lambda deploy, no warehouse change, no filed recs to
+  unwind. Reverting restores the prior pytest --picked behaviour (and re-opens the silent 0-collection
+  no-op), so a revert should only be done alongside an alternative gate fix.
