@@ -566,6 +566,47 @@ def _item_dict(item: TierItem) -> dict[str, Any]:
     }
 
 
+def _pending_gating_cds_for_item(
+    item: TierItem,
+    pending_cds: dict[str, Any],
+    cd_gates_index: dict[str, list[str]],
+) -> dict[str, str]:
+    """Return {cd_id: relationship} for pending CDs gating this item's completion.
+
+    Three sources (same logic as blocked_on_cd but applicable to any item status):
+      1. item.related_candidate_decisions -> relationship 'related'
+      2. cd.gates contains item id or tier shortcut -> relationship 'gates'
+      3. item.decision_required_before entries naming a CD id -> relationship 'decision_required_before'
+
+    First source wins when a CD appears in multiple sources.
+    """
+    blocking: dict[str, str] = {}
+
+    for cd_id in item.related_candidate_decisions:
+        if cd_id in pending_cds and cd_id not in blocking:
+            blocking[cd_id] = "related"
+
+    for ref, cd_ids in cd_gates_index.items():
+        if _TIER_SHORTCUT_RE.match(ref):
+            match = item.tier == ref
+        else:
+            match = item.id == ref
+        if match:
+            for cd_id in cd_ids:
+                if cd_id not in blocking:
+                    blocking[cd_id] = "gates"
+
+    drb = item.decision_required_before or []
+    drb_entries: list[str] = drb if isinstance(drb, list) else [drb] if isinstance(drb, str) else []
+    for entry in drb_entries:
+        for m in _CD_REF_RE.finditer(str(entry)):
+            cd_id = m.group(1)
+            if cd_id in pending_cds and cd_id not in blocking:
+                blocking[cd_id] = "decision_required_before"
+
+    return blocking
+
+
 def load(path: str | Path) -> RoadmapDocument:
     """Parse the YAML roadmap at path and return a validated RoadmapDocument."""
     with Path(path).open(encoding="utf-8") as fh:
@@ -720,30 +761,7 @@ class PlatformRoadmapState:
 
         result: list[dict[str, Any]] = []
         for item in self.eligible_items():
-            blocking: dict[str, str] = {}
-
-            for cd_id in item.related_candidate_decisions:
-                if cd_id in pending_cds and cd_id not in blocking:
-                    blocking[cd_id] = "related"
-
-            for ref, cd_ids in cd_gates_index.items():
-                if _TIER_SHORTCUT_RE.match(ref):
-                    match = item.tier == ref
-                else:
-                    match = item.id == ref
-                if match:
-                    for cd_id in cd_ids:
-                        if cd_id not in blocking:
-                            blocking[cd_id] = "gates"
-
-            drb = item.decision_required_before or []
-            drb_entries: list[str] = drb if isinstance(drb, list) else [drb] if isinstance(drb, str) else []
-            for entry in drb_entries:
-                for m in _CD_REF_RE.finditer(str(entry)):
-                    cd_id = m.group(1)
-                    if cd_id in pending_cds and cd_id not in blocking:
-                        blocking[cd_id] = "decision_required_before"
-
+            blocking = _pending_gating_cds_for_item(item, pending_cds, cd_gates_index)
             if blocking:
                 result.append(
                     {
@@ -759,8 +777,14 @@ class PlatformRoadmapState:
 
     def to_preflight_dict(self, plans_dir: Path | None = None) -> dict[str, Any]:
         if plans_dir is None:
-            plans_dir = Path("docs/plans")
+            plans_dir = Path(__file__).parent.parent / "docs" / "plans"
         followon = compute_followon_state(self._doc, plans_dir)
+
+        pending_cds: dict[str, Any] = {cd.id: cd for cd in self._doc.candidate_decisions if cd.state == "pending"}
+        cd_gates_index: dict[str, list[str]] = {}
+        for cd_id, cd in pending_cds.items():
+            for ref in cd.gates:
+                cd_gates_index.setdefault(ref, []).append(cd_id)
 
         def _in_progress_dict(item: TierItem) -> dict[str, Any]:
             d = _item_dict(item)
@@ -768,6 +792,11 @@ class PlatformRoadmapState:
             d["open_criteria_count"] = state.get("open_criteria_count", 0)
             d["all_plans_actioned"] = state.get("all_plans_actioned", True)
             d["needs_followon_plan"] = state.get("needs_followon_plan", False)
+            if item.bootstrap_completion_exempt:
+                d["completion_blocked_on_cd"] = []
+            else:
+                blocking = _pending_gating_cds_for_item(item, pending_cds, cd_gates_index)
+                d["completion_blocked_on_cd"] = sorted(blocking.keys())
             return d
 
         return {

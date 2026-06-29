@@ -65,6 +65,8 @@ Compact table of tier_items currently `in_progress` or eligible (`not_started` w
 
 **Open-criteria count for in_progress items**: Phase A (this version) -- infer open-criteria count from the item's `exit_criteria[]` list and `progress_note` prose (exit_criteria entries not mentioned as done in the progress_note count as open; when ambiguous, count as open per the conservative bias). Phase B -- read `open_criteria_count` directly from the preflight cache once it carries the structured ledger. Rank in_progress items fewest-open-criteria-first (closest-to-done) in this column so the operator immediately sees which item needs the least remaining work.
 
+**Parked-gated items**: an in_progress item with `open_criteria_count == 0` (or zero open exit_criteria in Phase A) AND a non-empty `completion_blocked_on_cd` list is parked -- all code work is done but it cannot close because a pending candidate_decision gates its completion. Surface it in the Status Digest as "parked: qualifies for complete, gated by CD.X" (list all gating CD ids). Do NOT emit a closeout or follow-on `/plan` prompt for parked-gated items -- the gate is a pending decision, not pending code work. An in_progress item with zero open criteria AND an empty `completion_blocked_on_cd` is a legitimate `/implement` bookkeeping closeout candidate (Decision 90: `/plan` never flips status; status flips happen in `/implement`).
+
 **Blocked-on-CD annotation**: for each item in `platform_roadmap.blocked_on_cd`, add a "gated by CD.NN" note in the Notes column including the relationship type (`gates`, `related`, or `decision_required_before`) and whether the item carries `bootstrap_completion_exempt: true` (in which case it may start/complete despite the pending CD). An item can be eligible-to-start while still annotated as gated-by-CD; the annotation informs planning, it is not a hard block on eligibility.
 
 Omit items with status `complete`, `reserved`, or blocked (depends_on not satisfied).
@@ -105,7 +107,8 @@ If HARD BLOCK recs exist, note them prominently at the top of this section. The 
 Prioritized work list from the Status Digest:
 
 1. **CI-RCA first**: HARD BLOCK recs appear as item 0 -- they block other work. For each, suggest a `/plan` prompt to resolve it.
-2. **In_progress follow-on planning (ranked fewest-open-criteria-first)**: in_progress items have momentum and are typically the lowest-activation-cost next step. Rank them fewest-open-criteria-first (closest-to-done). For each, determine whether a genuinely un-actioned (mid-implementing) plan exists:
+2. **In_progress follow-on planning (ranked fewest-open-criteria-first)**: in_progress items have momentum and are typically the lowest-activation-cost next step. Rank them fewest-open-criteria-first (closest-to-done). For each, determine which of the three cases applies:
+   - **Parked-gated** (`open_criteria_count == 0` AND `completion_blocked_on_cd` non-empty): surface in the Status Digest as "parked: qualifies for complete, gated by CD.X". Emit NO follow-on or closeout `/plan` prompt. The gate is a pending decision, not pending code work.
    - **Mid-implementing** (a PLAN-*.yaml was authored and is in-flight but not yet acted on): suggest `/implement PLAN-{slug}.yaml` for that item.
    - **All authored plans actioned / no plan yet** (the common case -- the last plan was implemented and the item still has open criteria): emit a follow-on `/plan <item-id>: <item-name>` prompt. This is the default action for in_progress items. Phase A: determine mid-implementing status from docs/plans/ and the progress_note. Phase B: read `needs_followon_plan` directly from the preflight cache.
 3. **Keystone-first within eligible**: items that unblock the largest downstream depends_on fan-out appear before items with fewer downstream dependents. Compute the downstream fan-out from `depends_on` chains in `docs/ROADMAP-PLATFORM.yaml`; a keystone is an item whose completion enables the largest set of currently blocked items.
@@ -137,7 +140,9 @@ If a HARD BLOCK ci-rca rec exists, prepend a zero-th prompt:
 ```
 /plan <item-id>: follow-on -- <item-name> (<N> open criteria remaining)
 ```
-Exception: if the item is genuinely mid-implementing (a PLAN-*.yaml with closes_criteria names a still-open criterion of this item, or the progress_note attests a plan was authored but not yet run through `/implement`), suggest the implement action instead:
+Exceptions -- do NOT emit a `/plan` prompt when:
+- The item is **parked-gated** (`open_criteria_count == 0` AND `completion_blocked_on_cd` non-empty): surface it in the Status Digest only; no prompt here.
+- The item is **mid-implementing** (a PLAN-*.yaml with closes_criteria names a still-open criterion, or the progress_note attests a plan was authored but not yet run): suggest the implement action instead:
 ```
 /implement docs/plans/PLAN-{slug}.yaml   # mid-implementing: plan exists but is un-actioned
 ```
