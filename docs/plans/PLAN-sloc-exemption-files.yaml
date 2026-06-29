@@ -69,10 +69,10 @@ verification_plan:
     fix_if: "A test fails; read the assertion and fix validate_sloc_limits / _update_sloc_budgets within scope."
   - step: 2
     phase: pre-deploy
-    action: The budget registry is present, parses as YAML, and registers every currently-oversized file.
-    command: bin/venv-python -c "import yaml,pathlib; b=yaml.safe_load(pathlib.Path('config/sloc_budgets.yaml').read_text())['budgets']; over=[str(p.relative_to('.')).replace(chr(92),'/') for d in ('scripts','src') for p in pathlib.Path(d).rglob('*.py') if p.name!='__init__.py' and len([l for l in p.read_text(errors='replace').splitlines() if l.strip() and not l.strip().startswith('#')])>500]; missing=[f for f in over if f not in b]; print('MISSING',missing); assert not missing"
-    expected: "Prints MISSING [] -- every oversized file is registered."
-    fix_if: "MISSING is non-empty; run `bin/venv-python -m scripts.validate --update-sloc-budgets` to seed the missing files, then re-run."
+    action: The budget registry is present, has the `budgets:` key, and registers a known oversized file (validate.py). Full registration of every oversized file is established by the idempotent regen in step 3.
+    command: grep -q '^budgets:' config/sloc_budgets.yaml && grep -q 'scripts/validate.py:' config/sloc_budgets.yaml && echo REGISTRY_OK
+    expected: "Prints REGISTRY_OK -- the registry exists with a `budgets:` mapping that includes scripts/validate.py."
+    fix_if: "A grep fails; run `bin/venv-python -m scripts.validate --update-sloc-budgets` to (re)seed the registry, then re-run."
   - step: 3
     phase: pre-deploy
     action: Regen is idempotent at steady state (no drift after a fresh --update-sloc-budgets).
@@ -81,9 +81,9 @@ verification_plan:
     fix_if: "git diff shows changes; the seeded budgets did not reflect the final tree -- regenerate as the LAST code step and re-commit."
   - step: 4
     phase: pre-deploy
-    action: Growth beyond budget is rejected (negative test via a temporary 1-line append to a registered file).
-    command: F=$(bin/venv-python -c "import yaml; print(next(iter(yaml.safe_load(open('config/sloc_budgets.yaml'))['budgets'])))"); printf '\nassert True  # ratchet-probe\n' >> "$F"; bin/venv-python -m scripts.validate --pre; RC=$?; git checkout -- "$F"; test $RC -ne 0 && echo GROWTH_REJECTED
-    expected: "Prints GROWTH_REJECTED -- validate --pre exits non-zero when a registered file grows past budget. The probe line is reverted by git checkout."
+    action: Growth beyond budget is rejected (negative test -- temporarily append one SLOC line to the registered file scripts/validate.py, then revert).
+    command: printf '\nassert True  # ratchet-probe\n' >> scripts/validate.py; bin/venv-python -m scripts.validate --pre; RC=$?; git checkout -- scripts/validate.py; test $RC -ne 0 && echo GROWTH_REJECTED
+    expected: "Prints GROWTH_REJECTED -- validate --pre exits non-zero when scripts/validate.py grows one line past its budget. The probe line is reverted by git checkout. (The SLOC gate is full-tree, not diff-aware, so it trips regardless of git-diff state.)"
     fix_if: "validate --pre still passes after the append; the ratchet is not enforcing current<=budget. Fix validate_sloc_limits."
   - step: 5
     phase: pre-deploy
@@ -117,6 +117,7 @@ context:
   - "Next Decision number is 102 (current max is 101). DECISIONS.md is the numbering authority; ops_decisions rebuilds from it via `ops_data_portal --backfill-decisions-md`."
   - "Additive governance plan: resolves no recs and retires no surface -> Closure Obligation exempt. No open ci-rca recs at planning time (HARD BLOCK not in effect). Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main divergence."
   - "V2 tier: validate.py is Python source under test (tests/test_validate.py). Not Lambda-packaged (config/ and scripts/validate.py are not in any src/lambdas manifest), no .tf in scope -> no Lambda Deployment Assessment, no Infrastructure Assessment."
+  - "Design coupling (plan-critique advisory, load-bearing): validate_sloc_limits runs FULL-TREE, not diff-aware, in BOTH --pre and full tiers (scripts/validate.py:3772). The ratchet relies on this -- a growth probe (VP step 4) trips even when the grown file is not in the git diff. Keep the gate full-tree; do not make it diff-scoped."
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
