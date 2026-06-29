@@ -1,0 +1,153 @@
+schema_version: 1
+slug: "ci-rca-prompt-rewrite"
+intent: >-
+  Phase 3 of the CI-RCA methodology contract (T1.13): rewrite the ci-rca scheduled agent so it
+  consumes the deterministic evidence bundle and files a structured CiRcaContext (context_v2_json)
+  instead of free-text, deepening RCA quality for the self-improving control plane.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-prompt-rewrite.yaml
+phase: >-
+  Platform T1.13 (CI-RCA methodology contract) Phase 3 / PLAN-ci-rca-prompt-rewrite. Follow-on to
+  PLAN-ci-rca-schema-enforcement (Phase 1) and PLAN-ci-rca-evidence-script (Phase 2), both landed.
+scope:
+  - file: .claude/agents/scheduled/ci-rca.md
+    action: Modify
+    purpose: >-
+      Primary deliverable. Rewrite the methodology to read the evidence bundle, use its deterministic
+      classifier output, load the ci_rca schema via --guidance --source ci_rca, compose a context_v2_json
+      object (CiRcaContext), file via --file-rec --context-v2-json with all CLI-required fields, preserve
+      the terminal FILED: marker, and remove the stale positional CLI invocations and the legacy free-form
+      5-category taxonomy step. Retain the no-autonomous-fix invariant (Decision 55/72).
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      CLI plumbing the agent (CLI-only) needs. Wire the --guidance branch to honor --source (pass
+      args.source to get_rec_write_guidance) and add a --context-v2-json argument to the --file-rec path
+      that json.loads the value and routes it to the existing file_rec(context_v2_json=...) kwarg.
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Add an --emit-dir option that writes each bundle to <dir>/<sha>.json (canonical JSON) regardless of
+      S3 upload outcome, and print a BUNDLE_LOCAL=<path> line, so the agent can read the bundle on the
+      S3-upload-success path (today only the pending-on-failure path leaves a local file).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Pass --emit-dir to the evidence step, capture BUNDLE_LOCAL, and include the local bundle path in the
+      agent prompt so the agent reads the bundle via cat (already in allowedTools). No trigger narrowing.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Cover the new CLI surface: --guidance --source ci_rca returns the context_v2_json schema_fields;
+      --file-rec --context-v2-json parses valid JSON and routes it to file_rec (writer mocked); invalid
+      JSON is rejected; warn-mode legacy path (source=ci_rca, no context_v2_json) still files.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: Cover --emit-dir writing a readable <sha>.json bundle independent of S3 outcome.
+  - file: tests/test_ci_rca_prompt_contract.py
+    action: Create
+    purpose: >-
+      Prompt-content contract test guarding required tokens in the agent .md (evidence-bundle read,
+      --guidance --source ci_rca, --context-v2-json, FILED: marker) and the absence of the stale positional
+      CLI forms. Runs under the standard pytest path picked up by validate.py (no bespoke CI step).
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "`bin/venv-python -m scripts.ops_data_portal --guidance --source ci_rca` emits the CiRcaContext schema (a context_v2_json entry with schema_fields is present in the YAML output)."
+  - "`--file-rec` accepts `--context-v2-json '<json>'`: valid JSON is parsed and routed to file_rec(context_v2_json=...); malformed JSON exits non-zero with a clear error and files nothing."
+  - "scripts/ci_rca_evidence.py --emit-dir DIR writes <DIR>/<sha>.json as canonical JSON (parseable, contains the bundle fields incl sha256) regardless of S3 upload success or failure, and prints BUNDLE_LOCAL=<path>."
+  - ".github/workflows/ci-rca.yml persists the bundle locally and passes its path into the agent prompt; tests/test_check_workflow_agent_safety.py and tests/test_verify_ci_workflow.py still pass (masked-output + filing-guard contract preserved, trigger surface unchanged)."
+  - ".claude/agents/scheduled/ci-rca.md reads the evidence bundle, uses its classifier output (failed_check, failure_category, earliest_viable_gate, actual_gate_that_caught_it), loads the schema via --guidance --source ci_rca, composes a context_v2_json with all CiRcaContext required fields, files via --file-rec --context-v2-json with all CLI-required fields (--source ci_rca --priority Critical --risk --effort --file --title --context --acceptance), preserves the terminal FILED: marker, and retains the no-autonomous-fix invariant."
+  - "Graceful degradation: when the evidence bundle is minimal or absent (apply-failure backstop, taxonomy_fallback / unknown category, or evidence step failure), the agent still files a rec (warn-mode tolerated) -- the Decision 92pt6/94 apply-failure backstop trigger is preserved, not narrowed."
+  - "The stale positional CLI invocations (`ops_data_portal file_rec`, `ops_data_portal get_rec_write_guidance`) and the legacy free-form 5-category taxonomy step are absent from the rewritten agent .md."
+  - "`bin/venv-python -m scripts.validate --pre` passes with the new tests picked up via the standard pytest path."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: --guidance honors --source ci_rca and returns the structured schema.
+    command: bin/venv-python -m scripts.ops_data_portal --guidance --source ci_rca | grep -q "context_v2_json"
+    expected: Exit 0; output includes the context_v2_json schema_fields entry from get_rec_write_guidance('ci_rca').
+    fix_if: Non-zero / no context_v2_json -- the --guidance branch is not passing args.source to get_rec_write_guidance.
+  - step: 2
+    phase: pre-deploy
+    action: --file-rec --context-v2-json parses valid JSON and routes it to file_rec; malformed JSON rejected; warn-mode legacy path still files.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -k "context_v2_json or guidance_source or ci_rca_legacy" -q
+    expected: Tests pass -- valid JSON reaches file_rec(context_v2_json=...) (writer mocked), invalid JSON exits non-zero filing nothing, and source=ci_rca with no context_v2_json files in warn mode.
+    fix_if: CLI does not accept --context-v2-json, does not json.loads it, or does not pass it through; or malformed JSON is silently accepted.
+  - step: 3
+    phase: pre-deploy
+    action: Evidence script --emit-dir writes a readable local bundle independent of S3 outcome.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py -k "emit_dir or emit_local" -q
+    expected: Test passes -- <dir>/<sha>.json exists, parses as JSON, and equals the generated bundle (including sha256); BUNDLE_LOCAL printed.
+    fix_if: No local file written on the S3-success path, or the file is not canonical/parseable.
+  - step: 4
+    phase: pre-deploy
+    action: Bundle-to-schema integration -- a context_v2_json derived from a real bundle validates against CiRcaContext.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py tests/test_ops_data_portal.py -k "bundle_to_schema or ci_rca_roundtrip" -q
+    expected: Test passes -- generate_bundles() output feeds a composed CiRcaContext (detection_gap gates taken from the bundle) that model_validate accepts.
+    fix_if: The bundle's gate/category fields cannot populate a valid CiRcaContext -- mismatch between evidence output and schema expectations.
+  - step: 5
+    phase: pre-deploy
+    action: Prompt-content contract -- required tokens present, stale forms absent.
+    command: bin/venv-python -m pytest tests/test_ci_rca_prompt_contract.py -q
+    expected: "Test passes -- the agent .md contains the evidence-bundle read, --guidance --source ci_rca, --context-v2-json, and the FILED: marker, and does NOT contain the stale positional CLI forms or the 5-category free-form taxonomy step."
+    fix_if: A required token is missing or a stale form remains in the rewritten prompt.
+  - step: 6
+    phase: pre-deploy
+    action: Workflow safety + verify-ci-workflow contracts still hold after the ci-rca.yml edits.
+    command: bin/venv-python -m pytest tests/test_check_workflow_agent_safety.py tests/test_verify_ci_workflow.py -q
+    expected: Tests pass -- masked-output guard, filing guard, and trigger surface unchanged.
+    fix_if: The ci-rca.yml edits broke the masked-output/filing-guard contract or altered the trigger gate.
+  - step: 7
+    phase: pre-deploy
+    action: Stale-reference sweep -- the rewritten agent .md no longer carries the stale positional CLI invocations.
+    command: bash -c '! grep -nE "ops_data_portal[[:space:]]+(file_rec|get_rec_write_guidance)([[:space:]]|$)" .claude/agents/scheduled/ci-rca.md'
+    expected: Exit 0 (no matches) -- the deprecated positional subcommand forms are gone, replaced by --file-rec / --guidance.
+    fix_if: A stale positional invocation survives the rewrite.
+  - step: 8
+    phase: pre-deploy
+    action: Full fast-tier presubmit passes with the new tests included.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS -- the new tests run under the standard pytest path; no bespoke CI step was added.
+    fix_if: A new test fails or a check regresses; diagnose and fix on-branch.
+constraints:
+  - "No autonomous fixes, rescue agents, or workaround loops -- the agent diagnoses and files only (Decision 55 / Decision 72)."
+  - "Enforcement stays in warn mode -- do NOT flip CI_RCA_STRICT_MODE (Phase 4 work, gated on a Decision Record)."
+  - "Do NOT implement cross-check enforcement, citation-existence lookup, or evidence-bundle SHA-256 S3-existence verification -- these remain deferred to later follow-on plans."
+  - "context_v2_json must route ONLY through the existing file_rec(context_v2_json=...) kwarg / ducklake_writer path -- no side write path (Decision 84)."
+  - "source must remain 'ci_rca' and priority Critical (Decision 72); --file is contract-required for source=ci_rca."
+  - "Add no new check to .github/workflows/ci.yml without validate.py first (Decision 80); new pytest files run under the existing pytest invocation -- do not add a bespoke CI step."
+  - "Create no new standing prose-architecture doc (Decision 86) -- this plan edits a prompt + code + tests only; INTENT-ci-rca-methodology.md is the grandfathered source, do not author a new one."
+  - "Only modify files listed in scope. ASCII only; no emojis, no em-dashes (AGENTS.md code style)."
+context:
+  - "Follow-on mode for in_progress item T1.13. Three of the six follow-on plans have landed (PLAN-ci-rca-schema-enforcement, PLAN-ci-rca-evidence-script, PLAN-ci-rca-workflow-correctness); this is PLAN-ci-rca-prompt-rewrite (Phase 3)."
+  - "closes_criteria is empty by design: prompt-rewrite is one of the six plans named in exit criterion c1, which closes only when ALL six land. This plan advances c1 but closes no criterion alone (Status-Trusted-Never-Inferred)."
+  - "Silent-completion observation (surfaced, not actioned here): exit criterion c6 (PLAN-ci-rca-workflow-correctness landed 2026-06-01, plan file present) appears already satisfied though its roadmap status is still 'open'. Recommend a separate roadmap-bookkeeping flip of c6 to met -- out of scope for this plan."
+  - "Decision-scout flags resolved: (Decision 60/80) the new prompt-content test runs under the standard pytest/validate.py path -- no bespoke CI step added; (Decision 92pt6/94) the apply-failure backstop trigger is preserved and the agent files even when the bundle is minimal/absent (graceful degradation)."
+  - "Decisions cited: 72 (RCA-as-Plan-Source), 66 (Precision Context Injection -- load-bearing for the --guidance half), 65 (ops.yaml semantic authority), 55 (no autonomous fix), 84 (DuckLake sole ops backend), 61 (source-field discriminator), 67/CD.17 (IMPLEMENTATION-only during freeze), 73 (two-tier CI / forward-fix). Related: 79 (no Lambda deploy -- none of the scope files are Lambda-packaged), 70 (portal lifecycle discipline), 86 (no new prose doc), 90 (four-tier workflow)."
+  - "Bucket naming: INTENT references s3://agent-platform-agent-logs/ but the live bucket is agent-platform-data-lake; the agent uses the s3_uri exactly as emitted by the evidence step -- never hardcode a bucket in the prompt."
+  - "CiRcaContext.detection_gap requires non-null pre|presubmit|CI enums. Bundles with a null gate (taxonomy_fallback / apply-failure) cannot populate a strict detection_gap; warn mode tolerates this. Strict-mode null-gate handling is a known gap deferred to a later plan."
+  - "Multi-failure (N recs/run) is documented in the prompt but the evidence script emits one bundle and ci_rca_filing.py captures only the last FILED: marker; full N-rec wiring is deferred (INTENT residual finding 'Multi-failure forward-progress')."
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no Scope-file overlap with recent main changes. ci_rca_unresolved_recs empty -- no hard block."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-o5f2vc)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/INTENT-ci-rca-methodology.md Sections 1-4 and 6 read (the methodology contract this prompt must conform to)
+  - All files in scope located and readable
+  - CiRcaContext model + file_rec(context_v2_json=...) kwarg + get_rec_write_guidance(source='ci_rca') confirmed present from Phase 1
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "scripts/ops_data_portal.py: in the --guidance handler, pass args.source to get_rec_write_guidance(source=args.source). In the --file-rec argument group, add --context-v2-json (dest=context_v2_json). In the --file-rec handler, when provided, json.loads it (catch JSONDecodeError -> print ERROR + return 1) and pass the dict to file_rec(fields, context_v2_json=..., profile=args.profile)."
+  - "scripts/ci_rca_evidence.py: add an --emit-dir argument; when set, write each bundle to <emit-dir>/<sha>.json via _canonical_json before/independent of upload_and_persist, and print BUNDLE_LOCAL=<path> alongside the existing BUNDLE_SHA/BUNDLE_S3_URI/BUNDLE_PATH lines."
+  - ".github/workflows/ci-rca.yml: pass --emit-dir /tmp/ci-rca-bundles in the Generate evidence bundle step, capture BUNDLE_LOCAL into a step output, and append the local bundle path to EVIDENCE_CONTEXT in the Run ci-rca agent step (cat is already in allowedTools). Do not change the rca job if: trigger gate."
+  - ".claude/agents/scheduled/ci-rca.md: rewrite the methodology -- Step: read the evidence bundle from the local path (fall back gracefully if absent); use the bundle's failed_check / failure_category / earliest_viable_gate / actual_gate_that_caught_it instead of the free-form 5-category taxonomy; load the schema via --guidance --source ci_rca; compose a context_v2_json with all CiRcaContext required fields (schema_version, proximate_cause, why_chain with systemic+file:line terminus, detection_gap, recurrence_class, prior_art_citation, corrective_action, preventive_action, evidence_bundle_ref); file via --file-rec with --source ci_rca --priority Critical --risk --effort --file --title --context --acceptance --context-v2-json; document the one-rec-per-failed-check principle (operate on the single emitted bundle); keep the no-autonomous-fix Hard Rules and the FILED: marker contract; replace the stale positional CLI examples."
+  - "tests: add CLI cases to tests/test_ops_data_portal.py (--guidance --source ci_rca; --file-rec --context-v2-json valid/invalid; warn-mode legacy ci_rca path) with the ducklake_writer mocked; add an --emit-dir case to tests/test_ci_rca_evidence.py; add a bundle-to-schema integration case; create tests/test_ci_rca_prompt_contract.py asserting required tokens present and stale forms absent."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results, and the c6 silent-completion observation for a follow-up bookkeeping pass."
+work_areas: []
+rollback: >-
+  All changes are additive prompt/CLI/test edits on a feature branch; revert the commit to restore the
+  prior agent .md and CLI. Enforcement stays in warn mode throughout, so no rec write path is gated by
+  this plan and a revert cannot strand CI failures unfilable.
