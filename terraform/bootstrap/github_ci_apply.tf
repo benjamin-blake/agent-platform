@@ -279,8 +279,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       {
         # In-budget PutRolePolicy/AttachRolePolicy: scoped to pipeline-managed CI roles (branch + pr).
         # The apply role's own ARN is excluded (self-grant break). Condition: target role must carry
-        # the authority budget. In practice the guard blocks all IAM diffs from auto-applying; this
-        # is defense-in-depth at the IAM layer (T2.23 EC4).
+        # the authority budget. The machine-readable mirror of these roles + resource types lives in
+        # terraform/bootstrap/authority_budget.json (T2.25 / Decision 92 point 5). The guard
+        # (scripts/terraform_apply_guard.py) reads that table and auto-applies in-budget inline-policy
+        # / attachment UPDATEs on these managed roles; role CREATES and out-of-budget changes still
+        # route to the gated-apply Environment. Defense-in-depth at the IAM layer (T2.23 EC4).
         Sid    = "IAMRoleWriteBounded"
         Effect = "Allow"
         Action = [

@@ -339,14 +339,16 @@ only via the `workflow_dispatch` acknowledge-and-retry path (naming the red comm
 reviewed -- never an inline workaround (Decision 55). Unsubscribe once the record is green (apply converged)
 or the next planning session has assumed the baseline.
 
-**Fail-closed set (IAM/trust/destroy diffs -- CD.35 Wave 3 / T2.22):** if the change hits the guard's
-fail-closed set (guard exits 2), the post-merge path routes to the `gated-apply` job rather than auto-applying.
-The job declares `environment: tf-gated-apply` and **blocks until benjamin-blake approves in GitHub Actions**
-(Actions tab -> select the run -> Review pending deployments -> Approve). This is NOT a PR required status
-check -- the PR merges normally; the gated apply is a separate post-merge job. After approval, the gated-apply
-job applies the same saved plan.bin and writes the convergence record. The authoritative baseline is still
-the next planning session's convergence-record re-check (not the wake). The gated apply gates the JOB, never
-from a laptop.
+**Gated set (out-of-budget IAM / trust / destroy -- CD.35 Wave 3 / T2.22 + T2.25 narrowing):** if the
+change hits the guard's gated set (guard exits 2), the post-merge path routes to the `gated-apply` job rather
+than auto-applying. In-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying CI roles
+(T2.25 / Decision 92 point 5) now exit 0 and auto-apply; role CREATES, trust diffs, destroys, and
+out-of-budget IAM still exit 2 and route here. The job declares `environment: tf-gated-apply` and **blocks
+until benjamin-blake approves in GitHub Actions** (Actions tab -> select the run -> Review pending deployments
+-> Approve). This is NOT a PR required status check -- the PR merges normally; the gated apply is a separate
+post-merge job. After approval, the gated-apply job applies the same saved plan.bin and writes the convergence
+record. The authoritative baseline is still the next planning session's convergence-record re-check (not the
+wake). The gated apply gates the JOB, never from a laptop.
 
 ### Pre-Push Rebase (applies to both flows)
 **Rebase phase distinction** -- two rules, not one:

@@ -585,12 +585,32 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
    own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
    cycle. Without that separation any automated handling of the fail-closed set is self-approval.
 
-5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
-   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
-   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
-   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
-   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
-   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+5. **Authority-budget + ratchet model (CD.35 points 6-9, IMPLEMENTED by T2.25 / 2026-06-29):**
+   an explicit permissions boundary on github_ci_apply plus boundary-propagation condition keys
+   and deterministic in-budget/out-of-budget diff classification shipped in T2.25.
+
+   Concrete in-budget classification (machine-readable: `terraform/bootstrap/authority_budget.json`):
+   - **In-budget** (auto-apply, still subject to subagent review): resource type
+     `aws_iam_role_policy` or `aws_iam_role_policy_attachment`, action set `["update"]`,
+     target role name `agent-platform-github-ci-branch` or `agent-platform-github-ci-pr`
+     (managed boundary-carrying roles). No trust diff (trust check runs BEFORE IAM classification
+     in the guard; a trust change on an in-budget resource type is always gated).
+   - **Out-of-budget / gated** (routes to tf-gated-apply Environment): trust diffs, destroys,
+     role CREATES (new trust surface), or any IAM change not matching all three in-budget
+     criteria above. Role creates stay gated in this v1 narrowing.
+   - **Fail-closed**: missing or unparseable budget table = all IAM treated as out-of-budget
+     (Decision 77). Budget path overridable via `TF_AUTHORITY_BUDGET` env var (test isolation).
+
+   Ratchet criteria: autonomy is earned and revocable PER CHANGE-CLASS -- the budget widens on
+   measured track record (per change-class, after N incident-free auto-applies) and narrows on
+   incident. Budget amendments via the bootstrap tier only (`terraform/bootstrap/`); subagent
+   review advises, never locks. The drift gate (`scripts/validate.py:validate_authority_budget`)
+   asserts the budget table stays in sync with the IAMRoleWriteBounded SCP in
+   `terraform/bootstrap/github_ci_apply.tf` (pre and full tiers).
+
+   The sole SoT for the apply-model and guard-classification rules is
+   `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection.
+   CD.35 is fully ratified (no re-ratification via this amendment).
 
 6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
    drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
