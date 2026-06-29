@@ -1,0 +1,214 @@
+schema_version: 1
+slug: orient-completion-gate-surfacing
+intent: >-
+  Close a surfacing gap in the roadmap-state machinery so an in_progress tier_item that has
+  finished its work but cannot formally close (completion gated by a pending candidate-decision)
+  is reported as parked-gated rather than ready-to-close, eliminating the spurious closeout
+  /plan prompts that waste autonomous-loop cycles on dead work.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-orient-completion-gate-surfacing.yaml
+phase: >-
+  PLATFORM tier T-1, follow-on for T-1.20 (full-state surfacing + blocked-on-CD); closes T-1.20:c6.
+  Product Phase 1 (Core Infrastructure).
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Factor the per-item pending-gating-CD computation out of blocked_on_cd() into a reusable
+      helper; add completion_blocked_on_cd[] to each in_progress item dict in to_preflight_dict
+      (sorted pending CDs gating completion, [] when bootstrap_completion_exempt). Bundled rec-2349:
+      anchor the to_preflight_dict default plans_dir to a repo-anchored absolute path (CWD-independent).
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Add parked-gated handling: an in_progress item with open_criteria_count == 0 and non-empty
+      completion_blocked_on_cd is surfaced as "parked: qualifies for complete, gated by CD.X" with
+      no closeout/follow-on /plan prompt; an empty list is a legitimate /implement bookkeeping closeout.
+  - file: .claude/commands/orient.md
+    action: Modify
+    purpose: >-
+      Document the completion_blocked_on_cd in_progress field in Step 2; reference the parked-gated
+      handling in Step 3 (consumer-contract text agrees with the emitted keys).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping. This planning commit adds T-1.20 exit criterion c6 (status: open) capturing
+      the in_progress completion-gate surfacing requirement. /implement flips c6 open->met in the
+      bookkeeping walk on a verified VP pass. T-1.20 status is NOT touched (stays in_progress, gated by CD.1).
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Unit tests for completion_blocked_on_cd (non-exempt + pending gating CD -> CDs surfaced;
+      bootstrap_completion_exempt -> []; no pending gating CD -> []) and the rec-2349 plans_dir default.
+  - file: tests/test_session_preflight_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Integration tests: the full (/orient) projection in_progress entries carry completion_blocked_on_cd;
+      the slim (/plan) projection omits the in_progress key entirely (the field never leaks to slim).
+bundled_recommendations:
+  - rec-2349
+closes_criteria:
+  - T-1.20:c6
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    compute_state_dict in_progress items each carry completion_blocked_on_cd[]: the sorted pending CDs
+    gating the item's completion via the three sources (related_candidate_decisions, cd.gates tier/id
+    shortcut, decision_required_before); the list is empty when the item is bootstrap_completion_exempt
+    or no gating CD is pending.
+  - >-
+    The live roadmap's T-1.20 in_progress entry surfaces completion_blocked_on_cd == ["CD.1"]
+    (the real bug, used as the fixture).
+  - >-
+    The full preflight projection (--roadmap-detail full) in_progress entries carry
+    completion_blocked_on_cd; the slim projection omits the in_progress key entirely.
+  - >-
+    orient/SKILL.md and orient.md instruct that an in_progress item with open_criteria_count == 0 and
+    non-empty completion_blocked_on_cd is surfaced as parked-gated (no closeout/follow-on /plan prompt),
+    and that an empty list with 0 open criteria is a legitimate /implement bookkeeping closeout
+    (Decision 90: /plan never flips status).
+  - >-
+    orient.md Step 2 documents the completion_blocked_on_cd in_progress field (consumer-contract text
+    agrees with the emitted report keys).
+  - >-
+    rec-2349: to_preflight_dict's default plans_dir resolves to a repo-anchored absolute path
+    (CWD-independent), so direct callers scan plans correctly.
+  - >-
+    T-1.20:c6 flips open->met on the verified VP pass; rec-2349 closes via the Resolves: trailer at
+    squash-merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit-test the completion_blocked_on_cd computation across the three cases.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -k "completion_blocked_on_cd" -q
+    expected: >-
+      Tests pass: non-exempt item with a pending gating CD surfaces the CD id(s); a
+      bootstrap_completion_exempt item surfaces []; an item with no pending gating CD surfaces [].
+    fix_if: >-
+      Field absent on in_progress dicts, exempt flag not respected, or the wrong CD set is computed.
+  - step: 2
+    phase: pre-deploy
+    action: Assert the live roadmap's T-1.20 surfaces CD.1 as its completion gate (the real bug).
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import
+      compute_state_dict; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'));
+      ip=[i for i in s['in_progress'] if i['id']=='T-1.20'][0];
+      assert ip['completion_blocked_on_cd']==['CD.1'], ip; print('OK')"
+    expected: Prints OK.
+    fix_if: >-
+      List is empty or missing -> the in_progress completion-gate is still not computed (blocked_on_cd
+      only covering eligible items was not extended).
+  - step: 3
+    phase: pre-deploy
+    action: Integration-test the projection split for the new field.
+    command: bin/venv-python -m pytest tests/test_session_preflight_platform_roadmap.py -q
+    expected: >-
+      Tests pass: full projection in_progress entries carry completion_blocked_on_cd; slim projection
+      omits the in_progress key entirely.
+    fix_if: Full projection in_progress lacks the field, or slim leaks the in_progress key.
+  - step: 4
+    phase: pre-deploy
+    action: Verify rec-2349 fix -- to_preflight_dict default plans_dir is CWD-independent.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -k "plans_dir_default" -q
+    expected: Test passes; the default plans_dir resolves to an absolute repo-anchored docs/plans path.
+    fix_if: Default is still the CWD-relative Path("docs/plans").
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the orient consumer-contract documents the field and the parked-gated handling.
+    command: >-
+      grep -q "completion_blocked_on_cd" .claude/commands/orient.md &&
+      grep -q "completion_blocked_on_cd" .claude/skills/orient/SKILL.md &&
+      grep -qi "parked" .claude/skills/orient/SKILL.md && echo OK
+    expected: Prints OK.
+    fix_if: Field undocumented in the command/skill, or no parked-gated guidance present.
+  - step: 6
+    phase: pre-deploy
+    action: Validate the plan document schema and the closes_criteria referential integrity.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-orient-completion-gate-surfacing.yaml
+    expected: Plan validates against the PlanDocument schema (no unknown keys).
+    fix_if: Schema error, or closes_criteria ref T-1.20:c6 does not resolve.
+  - step: 7
+    phase: pre-deploy
+    action: Run the full fast presubmit gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Green, including roadmap validation (closes_criteria check iii), plan schema validation, and pytest.
+    fix_if: Any check red -- diagnose and fix on-branch before merge.
+constraints:
+  - Only modify files listed in the Scope table (AGENTS.md out-of-scope rule; out-of-scope bugs become recs).
+  - >-
+    /plan never flips criterion or item status; /implement flips T-1.20:c6 open->met in the bookkeeping
+    walk on a verified VP pass (Decision 90; Status-Trusted-Never-Inferred).
+  - >-
+    Do NOT flip T-1.20 to complete: it is bootstrap_completion_exempt: false and CD.1 (gating tier T-1)
+    is state: pending; completion stays gated until CD.1 ratifies (at T-1.1 completion).
+  - >-
+    No new standing prose-architecture doc (Decision 86): the requirement lives as T-1.20:c6 in YAML and
+    the orient skill/command text, not a new docs/ file.
+  - >-
+    validate.py is the single source of truth (Decision 80): the new field's report-key/contract-text
+    agreement is enforced through the canonical gate, not bolted onto ci.yml separately.
+  - No rescue agents or workaround loops (Decision 55).
+  - Python 3.12+, type hints required, ruff line length 127; always invoke bin/venv-python.
+context:
+  - >-
+    Follow-on plan for in_progress tier_item T-1.20 (full-state surfacing + blocked-on-CD). Criteria
+    c1-c5 are already met (PLAN-t1-20-criteria-reconciliation, 2026-06-28). c6, added by this plan,
+    covers the in_progress completion-gate surfacing the original blocked_on_cd() (eligible-only) missed.
+  - >-
+    Root cause: blocked_on_cd() iterates only eligible_items() (not_started); an in_progress item that
+    qualifies for complete but is completion-gated by a pending CD surfaces nowhere, so /orient emitted
+    this very session's spurious "T-1.20 closeout (0 open criteria; status-flip bookkeeping)" prompt.
+  - >-
+    CD.1 (candidate decision "adopt platform roadmap as canonical", state: pending) gates tier T-1 and
+    ratifies at T-1.1 completion; T-1.1 is not_started. T-1.20 is non-exempt, so it cannot reach complete
+    until CD.1 ratifies -- the item is correctly parked in_progress, which is what this field surfaces.
+  - >-
+    Decision-scout verdict NO_FLAGS. CITE: Decision 90 (four-tier separation; status flip is /implement,
+    not /plan), Decision 93 (parked-item vocabulary + full-vs-lean projection split), Decision 80
+    (validate.py single source of truth). RELATED: Decision 86, Decision 67/CD.17.
+  - >-
+    Self-consistency: after c6 ships and flips to met, T-1.20 stays in_progress/0-open-criteria/gated,
+    but the live fix now surfaces it as parked-gated, so this session does not re-spawn.
+  - >-
+    Bundled rec-2349 (to_preflight_dict CWD-relative plans_dir default) touches the same function;
+    it closes via the Resolves: trailer at squash-merge.
+  - >-
+    Branch claude/t-1-20-closeout-preflight-kxuybe; 0 commits behind origin/main at plan time
+    (main_freshness.commits_behind == 0), no rebase needed. CD.1/CD.13 are roadmap candidate_decisions,
+    not ratified DECISIONS.md entries.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via decision-scout gate (NO_FLAGS)
+  - All 6 scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - T-1.20:c6 exists (status open) in docs/ROADMAP-PLATFORM.yaml so the closes_criteria ref resolves
+execution_steps:
+  - >-
+    scripts/platform_roadmap.py: factor the per-item pending-gating-CD logic out of blocked_on_cd() into
+    a reusable helper returning {cd_id: relationship}; add completion_blocked_on_cd to _in_progress_dict
+    in to_preflight_dict (sorted pending gating CDs; [] when bootstrap_completion_exempt); anchor the
+    to_preflight_dict default plans_dir to a repo-anchored absolute path (rec-2349).
+  - >-
+    .claude/skills/orient/SKILL.md: add parked-gated handling -- an in_progress item with
+    open_criteria_count == 0 and non-empty completion_blocked_on_cd is surfaced as "parked: qualifies for
+    complete, gated by CD.X" with no closeout/follow-on prompt; empty list = legitimate /implement closeout.
+  - >-
+    .claude/commands/orient.md: document completion_blocked_on_cd in the Step 2 in_progress field list;
+    reference the parked-gated handling in Step 3.
+  - >-
+    tests/test_platform_roadmap.py: add unit tests for completion_blocked_on_cd (non-exempt+pending->CDs,
+    exempt->[], no-pending->[]) and the rec-2349 plans_dir default.
+  - >-
+    tests/test_session_preflight_platform_roadmap.py: add integration tests (full in_progress carries the
+    field; slim omits the in_progress key).
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - >-
+    Bookkeeping walk: flip T-1.20:c6 open->met (met_by orient-completion-gate-surfacing) on the verified VP
+    pass; do NOT flip T-1.20 status (stays in_progress, gated by CD.1).
+  - "Report: what was implemented, verification results, and rec-2349 closure."
+rollback: >-
+  Revert the squash-merge commit. completion_blocked_on_cd is additive (a new nested field plus a new
+  exit criterion); there is no data migration, and reverting restores the prior /orient behavior.
