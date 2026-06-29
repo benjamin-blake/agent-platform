@@ -202,9 +202,6 @@ def _validate_ci_rca_context_v2(context_v2_json: dict) -> list[str]:
         return [str(e["msg"]) for e in exc.errors()]
 
 
-_DISPUTE_FIELDS = frozenset({"earliest_viable_gate", "actual_gate_that_caught_it"})
-
-
 class CiRcaEvidenceDispute(BaseModel):
     """Structured context schema for source=ci_rca_evidence_dispute recs (INTENT Section 4 check 8).
 
