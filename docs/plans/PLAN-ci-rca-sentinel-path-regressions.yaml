@@ -1,0 +1,213 @@
+schema_version: 1
+slug: "ci-rca-sentinel-path-regressions"
+intent: >-
+  Forward-fix the two open Critical ci-rca recs rec-2424 + rec-2423 (Decision 73 forward-fix, never
+  auto-revert). A unit test patches scripts.ops_data_portal.RECS_JSONL to Path('/dev/null') to
+  suppress local cache writes, but file_rec -> _refresh_cache_after_write -> sync_ops.upsert_cache_row
+  unconditionally builds an atomic temp sibling Path('/dev/null.tmp') and opens it for write, raising
+  PermissionError: [Errno 13] on the non-root CI runner (/dev is root-owned). This plan (1) codifies
+  /dev/null as a safe cache-write-suppression sentinel by making upsert_cache_row a no-op when the
+  target path is the os.devnull sentinel or resolves to a character device -- scoped narrowly so real
+  cache-path write errors still propagate loudly (Decision 55); (2) repairs the failing carve-out test
+  to use the tmp_path fixture, mirroring its own sibling test 17 lines above; and (3) adds a focused
+  regression test asserting the sentinel no-op. It does NOT touch the separate --pre gate no-op defect
+  (pytest --picked collecting 0 tests in CI) discovered during planning -- that is tracked as its own
+  plan.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-ci-rca-sentinel-path-regressions.yaml
+phase: >-
+  CI-RCA forward-fix (Decision 72 RCA-as-Plan-Source; Decision 73 two-tier forward-fix). Not a roadmap
+  tier_item -- this is the sanctioned /plan -> /implement consumption of two source=ci_rca,
+  priority=critical recs (rec-2424 scripts/sync_ops.py; rec-2423 tests/test_ops_data_portal.py) filed
+  by the ci-rca agent against CI runs 28400936328 / 28399706188 (main-validate full tier). Resolving
+  both clears the preflight HARD BLOCK on these unresolved ci-rca recs.
+scope:
+  - file: scripts/sync_ops.py
+    action: Modify
+    purpose: >-
+      In upsert_cache_row (the local read-cache refresh path, ~lines 366-388), add a sentinel-path
+      guard immediately after local_path is resolved and BEFORE the by_key read/merge + atomic
+      .tmp-sibling write: return 0 (no-op) when the target is the /dev/null sentinel
+      (str(local_path) == os.devnull) or resolves to a character device (stat.S_ISCHR on an existing
+      path). This codifies /dev/null as the canonical, documented way for a caller (e.g. a test) to
+      opt out of cache writes. The guard is scoped EXACTLY to the sentinel / character-device case --
+      a genuine PermissionError/OSError on a real cache path is NOT swallowed and still propagates
+      loudly (Decision 55 / Decision 84 I-4 loud-failure posture). Add a one-line comment naming the
+      sentinel contract and the loud-failure scoping. import stat at module top (os is already
+      imported at line 30). No change to the warehouse write path -- this is the downstream read-cache
+      refresh only (Decision 84).
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Repair test_file_rec_carve_out_no_ci_rca_context_required (line ~1953,
+      TestCiRcaEvidenceDispute): change the signature to accept the tmp_path fixture and patch
+      scripts.ops_data_portal.RECS_JSONL to (tmp_path / 'recs.jsonl') instead of Path('/dev/null'),
+      mirroring its sibling test_file_rec_carve_out_bypasses_ci_rca_checks at line ~1936 which already
+      uses tmp_path correctly. This removes the fragile /dev/null reliance from the carve-out test
+      (rec-2423 corrective). The test's assertion (rec_id == 'rec-5002') is unchanged.
+  - file: tests/test_sync_ops.py
+    action: Modify
+    purpose: >-
+      Add a focused regression test (new TestUpsertCacheRow class, or extend an existing class)
+      asserting that upsert_cache_row(table, row, path=Path(os.devnull)) returns 0 without raising and
+      writes nothing (rec-2424 acceptance + preventive_action). This pins the sentinel contract so a
+      future caller can rely on /dev/null as a write-suppression opt-out, and satisfies the
+      tests/CLAUDE.md per-file coverage policy for the modified scripts/sync_ops.py.
+bundled_recommendations:
+  - rec-2424
+  - rec-2423
+infrastructure_dependencies:
+  - >-
+    None. No terraform, no Lambda build/deploy. compute_affected_artifacts(scope) returns empty
+    (verified at planning time) -- scripts/sync_ops.py is not in the lambda_manifest packaged-file
+    patterns, and tests/* are never packaged. The change is pure local-filesystem cache-refresh logic;
+    no AWS calls, no warehouse schema change, no reader/writer Function-URL involvement.
+acceptance_criteria:
+  - >-
+    upsert_cache_row(table, row, path=Path(os.devnull)) returns 0 and creates no /dev/null.tmp file and
+    raises no exception; a normal real-path call still writes the cache row and returns the row count
+    (existing behaviour preserved); a write to a genuinely unwritable real path still raises (the guard
+    does not swallow real errors -- Decision 55).
+  - >-
+    tests/test_ops_data_portal.py::TestCiRcaEvidenceDispute::test_file_rec_carve_out_no_ci_rca_context_required
+    uses the tmp_path fixture (no Path('/dev/null')) and passes; it no longer depends on /dev writability.
+  - >-
+    tests/test_sync_ops.py contains a regression test exercising the /dev/null sentinel no-op path of
+    upsert_cache_row and it passes.
+  - >-
+    rec-2424 and rec-2423 acceptance commands both succeed (the carve-out test passes; grep confirms the
+    test exists).
+  - >-
+    Per-file coverage + test-existence gates pass for scripts/sync_ops.py
+    (test_coverage_checker --check-tests --check-coverage), and full local presubmit (validate, no
+    --pre) is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-sentinel-path-regressions.yaml
+    expected: Exit 0; prints validation success.
+    fix_if: Non-zero exit -- fix the named field; an unknown-key error means a stray top-level key.
+  - step: 2
+    phase: pre-deploy
+    action: rec-2423 acceptance -- the repaired carve-out test exists and passes.
+    command: grep -q 'def test_file_rec_carve_out_no_ci_rca_context_required' tests/test_ops_data_portal.py && bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaEvidenceDispute::test_file_rec_carve_out_no_ci_rca_context_required -x
+    expected: grep matches and the test passes (1 passed).
+    fix_if: PermissionError on /dev/null.tmp -- the test still patches RECS_JSONL to /dev/null; switch it to the tmp_path fixture mirroring the sibling at line ~1936.
+  - step: 3
+    phase: pre-deploy
+    action: rec-2424 acceptance -- the carve-out test passes verbosely against the patched module.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaEvidenceDispute::test_file_rec_carve_out_no_ci_rca_context_required -xvs
+    expected: 1 passed; no PermissionError raised from scripts/sync_ops.py.
+    fix_if: PermissionError persists -- the sentinel guard in upsert_cache_row is missing or runs after the .tmp open; move it before the write.
+  - step: 4
+    phase: pre-deploy
+    action: New sync_ops regression test for the /dev/null sentinel no-op passes (and the existing real-path tests still pass).
+    command: grep -q 'os.devnull' tests/test_sync_ops.py && bin/venv-python -m pytest tests/test_sync_ops.py -x -q
+    expected: grep matches; all test_sync_ops.py tests pass including the new sentinel no-op assertion (returns 0, no .tmp written).
+    fix_if: New test fails returning non-zero -- the guard must return 0 before the merge/write; real-path tests fail -- the guard is too broad and short-circuits real paths (narrow it to os.devnull / S_ISCHR).
+  - step: 5
+    phase: pre-deploy
+    action: Test-existence + per-file coverage hold for the changed source file scripts/sync_ops.py.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/sync_ops.py
+    expected: 0 missing test files; scripts/sync_ops.py not below its coverage gate.
+    fix_if: Below gate -- the new guard branch is uncovered; the test_sync_ops.py regression test must exercise the sentinel return-0 path.
+  - step: 6
+    phase: pre-deploy
+    action: Full local presubmit (CI mirror) is green before push.
+    command: bin/venv-python -m scripts.validate
+    expected: All checks pass (lint, format, mypy, pytest full tier, coverage, sloc); exit 0.
+    fix_if: Any check fails -- fix before push; remote CI (Decision 83 required checks) is authoritative.
+constraints:
+  - >-
+    The sentinel guard MUST be scoped EXACTLY to the os.devnull sentinel and the character-device case.
+    It MUST NOT broaden into swallowing genuine PermissionError/OSError on real cache paths -- those
+    must still raise loudly at the call site (Decision 55 RCA-First / Decision 84 I-4 loud-failure;
+    surfaced as a NOTE by the decision-scout gate). Add an explicit code comment recording this scoping.
+  - >-
+    The guard changes ONLY the local read-cache refresh behaviour (when the cache is NOT written). It
+    does NOT touch the warehouse write path: the rec is still written via file_rec / ducklake_writer;
+    a read cache is never a write source (Decision 84). No re-staging from local files.
+  - >-
+    Forward-fix only (Decision 73): repair forward, never auto-revert PR #334. Both recs are consumed
+    via this /plan -> /implement route, not inline-patched without review (Decision 72).
+  - >-
+    Out of scope (explicit): the separate --pre gate no-op defect (validate.py runs pytest --picked
+    --mode=branch, which collects 0 tests in CI's shallow checkout, and treats exit 5 as pass) is the
+    root reason this regression reached main. It is NOT fixed here -- it is addressed by its own plan
+    (PLAN-ci-pre-gate-pytest-picked-noop). Do not widen this forward-fix to touch validate.py.
+  - IMPLEMENTATION type only (Decision 67 / CD.17; the STRATEGIC heuristic is suspended under the freeze -- this is a single small coherent IMPLEMENTATION plan).
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable V1 failure, stop and RCA.
+context:
+  - >-
+    Root cause (from both recs' context_v2_json why_chain): test_file_rec_carve_out_no_ci_rca_context_required
+    patches RECS_JSONL to Path('/dev/null') assuming a cache-write skip; file_rec succeeds against the
+    _ducklake_write mock, then _refresh_cache_after_write -> upsert_cache_row(path=Path('/dev/null'))
+    constructs tmp_path = local_path.with_name(local_path.name + '.tmp') = Path('/dev/null.tmp') at
+    scripts/sync_ops.py:383 and opens it for write, raising PermissionError on the non-root CI runner.
+    The sibling test at line ~1936 uses tmp_path correctly; the failing test (added in commit c197682 /
+    PR #334) did not copy that pattern.
+  - >-
+    Surfaces verified at planning time: scripts/sync_ops.py imports os at line 30 (stat must be added);
+    upsert_cache_row is defined at line 339 with signature (table, row, *, merge_key='id',
+    path: Path | None = None); local_path is resolved at line 366; the atomic .tmp write is lines
+    382-387. tests/test_sync_ops.py exists (1000 lines, class-based: TestDrain, TestPull, TestSync,
+    ... TestCoerce*) but has no upsert_cache_row coverage yet -- a new test class is the clean add.
+    tests/test_ops_data_portal.py:1936 (sibling, uses tmp_path) and :1953 (failing, uses /dev/null) are
+    both in TestCiRcaEvidenceDispute.
+  - >-
+    Decisions cited (decision-scout gate 2026-06-29, Verdict FLAGS_FOUND -- one NOTE accepted): Decision
+    73 (forward-fix-over-revert -- this is a forward-fix to ci-rca recs), Decision 72 (source=ci_rca recs
+    consumed via /plan -> /implement, not inline-patched), Decision 84 (upsert_cache_row is the read-cache
+    refresh path downstream of the writer; the guard suppresses only a local read-cache write and never
+    touches the warehouse write path). NOTE accepted: Decision 55 (loud-failure) -- the no-op is scoped to
+    the os.devnull sentinel only; real-path write errors still propagate (encoded in constraints + an
+    in-code comment).
+  - >-
+    ci-rca block-respect (Related-Work check): the two open ci_rca_unresolved_recs at planning time are
+    rec-2424 + rec-2423 -- exactly the recs THIS plan resolves, so the HARD BLOCK is satisfied (the plan
+    is the sanctioned resolution of the blocking recs, not unrelated work).
+  - >-
+    Branch claude/ci-rca-sentinel-path-regressions-oad593 was 0 commits behind / 0 ahead origin/main at
+    planning time (main_freshness ok, no scope-file overlap), so no rebase was required during planning.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-sentinel-path-regressions-oad593)
+  - docs/PROJECT_CONTEXT.md read
+  - Both recs (rec-2424, rec-2423) and their context_v2_json why_chain / corrective_action read in full
+  - DECISIONS.md adjudicated via the decision-scout gate (73/72/84 cited; 55 NOTE accepted; Verdict FLAGS_FOUND)
+  - All 3 files in scope located and confirmed editable
+  - No Lambda artifact affected (compute_affected_artifacts returns empty) -- V1 tier confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In scripts/sync_ops.py: add `import stat` at module top (alongside the existing `import os` at line
+    30). In upsert_cache_row, immediately after local_path is resolved (line ~366) and before the by_key
+    read loop, insert the sentinel guard: if str(local_path) == os.devnull return 0; else best-effort
+    check `try: is_chardev = local_path.exists() and stat.S_ISCHR(os.stat(local_path).st_mode) except
+    OSError: is_chardev = False` and return 0 when is_chardev. Add a one-line comment: the no-op is
+    scoped to the /dev/null sentinel / char-device only; real-path write errors still propagate
+    (Decision 55). Do NOT wrap the existing .tmp write in a broad except.
+  - >-
+    In tests/test_ops_data_portal.py: change
+    test_file_rec_carve_out_no_ci_rca_context_required(self) to (self, tmp_path: Path) and replace
+    patch("scripts.ops_data_portal.RECS_JSONL", Path("/dev/null")) with
+    patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"), mirroring the sibling test at
+    line ~1936. Keep the rec_id == "rec-5002" assertion. Confirm Path is already imported at module
+    scope (it is used by the sibling test).
+  - >-
+    In tests/test_sync_ops.py: add a TestUpsertCacheRow class with a test that calls
+    sync_ops.upsert_cache_row("ops_recommendations", {"id": "rec-9999", ...}, path=Path(os.devnull)),
+    asserts the return value is 0, and asserts no os.devnull + ".tmp" file was created. Import os / stat
+    as needed at module scope (one consolidated import block per tests/CLAUDE.md ruff-format rule).
+  - >-
+    Execute the Verification Plan steps 1-6 in order; loop until green. On unrecoverable V1 failure,
+    stop and RCA (Decision 55) -- do not rescue-loop.
+  - "Report: sentinel guard landed (scoped to os.devnull / char-device, loud-failure preserved), carve-out test repaired to tmp_path, sync_ops regression test added, coverage/presubmit results, and confirmation both rec acceptance commands pass. The squash-merge body must carry: Resolves: rec-2424, rec-2423."
+work_areas: []
+rollback: >-
+  All edits are additive/local (one guard branch + one import in scripts/sync_ops.py, one test
+  signature/patch change, one new test). Revert via git. No infrastructure, no Lambda deploy, no
+  warehouse schema change, no filed recs to unwind (rec-2424 / rec-2423 close via the Resolves: trailer
+  on squash-merge; if rolling back, reopen them via
+  `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2424 --status open` and likewise rec-2423).
