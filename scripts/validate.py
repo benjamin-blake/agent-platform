@@ -2926,9 +2926,7 @@ def validate_authority_budget(failed: list[str]) -> None:
         else:
             print(f"  PASS: managed role {role!r} found in HCL.")
         if "github-ci-apply" in role:
-            failed.append(
-                f"authority-budget: self-grant guard -- apply role {role!r} must not be in in_budget_managed_roles"
-            )
+            failed.append(f"authority-budget: self-grant guard -- apply role {role!r} must not be in in_budget_managed_roles")
             print(f"  FAIL: self-grant -- apply role {role!r} listed as managed.")
 
     budget_key = "authority-budget:"
