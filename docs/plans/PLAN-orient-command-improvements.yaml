@@ -1,0 +1,182 @@
+schema_version: 1
+slug: "orient-command-improvements"
+intent: >-
+  Improve the /orient operator surface so each session opens with paste-ready /plan
+  prompts, a bounded read on recent direction/momentum, and a deterministic best-practices
+  health read -- sharpening the orientation step that feeds every /plan and /implement cycle.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-orient-command-improvements.yaml
+phase: >-
+  Platform tooling -- Decision 90 four-tier workflow (/orient is the read-only orientation
+  tier). Ad-hoc workflow-tooling improvement; not bound to a tier_item (Freshness Gate skipped).
+scope:
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Add two deliverable sections (Momentum & Direction, Best-Practices Health Check),
+      reshape the /plan Prompts section to one-fenced-block-per-prompt, fix the Inputs-table
+      drift (repoint git-log Bash call to the cached recent_main_commits field), renumber the
+      Deliverable Shape sections 4 -> 6.
+  - file: .claude/commands/orient.md
+    action: Modify
+    purpose: >-
+      Add the new best-practices deterministic signals to the Step 2 input list and renumber
+      the Step 3 deliverable section enumeration from four to six in lockstep with the skill.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The /plan Prompts section instructs emitting each /plan prompt in its own standalone
+    fenced code block (one paste-ready command per block), with the overlap matrix rendered
+    outside any code block.
+  - >-
+    A "Momentum & Direction" deliverable section exists in BOTH the skill Deliverable Shape and
+    the command Step 3 enumeration; it synthesizes the cached recent_main_commits field, is
+    explicitly scoped as inferred neutral dispatch context (NOT a status verdict), cross-references
+    the Status-Trusted-Never-Inferred Rule, and degrades to listing raw commits when the
+    slug->tier_item mapping is ambiguous.
+  - >-
+    A "Best-Practices Health Check" deliverable section exists in BOTH files; it is a fixed
+    checklist evaluated only against deterministic preflight-cache signals (convergence_health,
+    telemetry_health, data_quality, ci_rca liveness, non_automatable softcap, terraform_pending)
+    and explicitly forbids LLM free-association.
+  - >-
+    The skill Inputs table no longer instructs running `git log --oneline -10 origin/main` and
+    instead cites the cached recent_main_commits field; the cache-only / no-new-warehouse-read
+    contract is retained and no DECISIONS.md read is introduced into orient.
+  - >-
+    The orient deliverable is renumbered to six sections consistently across the skill
+    Deliverable Shape and the command Step 3 enumeration; orient remains strictly read-only
+    (chat reply only, writes nothing).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Both new deliverable sections are present in the skill.
+    command: grep -q "Momentum & Direction" .claude/skills/orient/SKILL.md && grep -q "Best-Practices Health Check" .claude/skills/orient/SKILL.md
+    expected: exit 0 (both section headers present in SKILL.md)
+    fix_if: a section header is missing or named differently -- add/rename it in the Deliverable Shape.
+  - step: 2
+    phase: pre-deploy
+    action: The command Step 3 enumeration references both new sections (renumber lockstep).
+    command: grep -q "Momentum & Direction" .claude/commands/orient.md && grep -q "Best-Practices Health Check" .claude/commands/orient.md
+    expected: exit 0 (command Step 3 lists both new sections)
+    fix_if: command Step 3 still lists four sections -- update its enumeration to six in lockstep with the skill.
+  - step: 3
+    phase: pre-deploy
+    action: Drift fix D2 -- the git-log Bash call is removed from the skill Inputs table.
+    command: if grep -q "git log --oneline -10 origin/main" .claude/skills/orient/SKILL.md; then echo FAIL; exit 1; else echo OK; fi
+    expected: prints OK, exit 0 (the out-of-cache Bash fetch is gone)
+    fix_if: the string still appears -- replace the Inputs-table row with the cached recent_main_commits source.
+  - step: 4
+    phase: pre-deploy
+    action: Drift fix D2 positive -- the Inputs table now cites the cached recent_main_commits field.
+    command: grep -q "recent_main_commits" .claude/skills/orient/SKILL.md
+    expected: exit 0 (cached field cited as the recent-main-activity source)
+    fix_if: field not cited -- update the Inputs-table row to reference preflight cache recent_main_commits.
+  - step: 5
+    phase: pre-deploy
+    action: Momentum section governance -- carries the inferred-not-verdict label and cross-refs the rule.
+    command: grep -q "not a status verdict" .claude/skills/orient/SKILL.md && grep -q "Status-Trusted-Never-Inferred" .claude/skills/orient/SKILL.md
+    expected: exit 0 (load-bearing label present and rule cross-referenced)
+    fix_if: label or cross-reference missing -- add both to the Momentum & Direction section per the Decision Scout WARN resolution.
+  - step: 6
+    phase: pre-deploy
+    action: /plan Prompts reshape -- one-fenced-block-per-prompt is mandated.
+    command: grep -q "own fenced code block" .claude/skills/orient/SKILL.md
+    expected: exit 0 (per-prompt paste-block instruction present)
+    fix_if: instruction absent -- add explicit one-fenced-block-per-prompt wording to section 6.
+  - step: 7
+    phase: pre-deploy
+    action: Best-Practices section is deterministic-signal-bound and forbids LLM free-association.
+    command: grep -q "free-association" .claude/skills/orient/SKILL.md && grep -q "data_quality" .claude/skills/orient/SKILL.md && grep -q "telemetry_health" .claude/skills/orient/SKILL.md
+    expected: exit 0 (free-association forbidden; deterministic cache signals enumerated)
+    fix_if: any term missing -- enumerate the fixed deterministic signal checklist and the no-LLM-judgement guardrail.
+  - step: 8
+    phase: pre-deploy
+    action: Egress / read-only contract retained -- no new warehouse read and no DECISIONS.md read introduced.
+    command: grep -q "Do not call" .claude/skills/orient/SKILL.md && { if grep -q "DECISIONS.md" .claude/skills/orient/SKILL.md; then echo FAIL; exit 1; else echo OK; fi; }
+    expected: prints OK, exit 0 (cache-only prohibition retained; no DECISIONS.md read added to orient)
+    fix_if: the cache-only prohibition line was dropped, or a DECISIONS.md read was introduced -- restore the contract and remove the read.
+constraints:
+  - Edit only the two files in scope -- no changes to scripts/session_preflight.py or any other surface.
+  - Orient stays strictly read-only -- chat reply only, writes nothing, no recommendations or roadmap edits (Decision 90).
+  - Introduce no new warehouse reads, DuckLake reader verbs, platform_roadmap calls, or DECISIONS.md reads -- orient reads the preflight cache only (Decision 88 egress budget, Decision 84 closed boundary).
+  - The Best-Practices Health Check is a fixed deterministic-signal checklist -- no LLM free-association best-practices audit (Decision 59).
+  - The Momentum & Direction section is neutral dispatch context, never a status/progress verdict -- scoped under the Status-Trusted-Never-Inferred Rule (T2.20 lesson); degrade to raw commit listing when slug->tier_item mapping is ambiguous.
+  - No new standing prose-architecture docs -- edits land in the existing machine-parseable command/skill artefacts (Decision 86).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Decisions to cite: 90 (read-only chat-reply envelope), 59 (deterministic signals license the
+    checklist and forbid LLM free-association), 88 (the git-log -> cache drift fix; egress budget),
+    84 (no new warehouse reads), 72 (CI-RCA surface-not-remediate). Plus the orient skill's own
+    Status-Trusted-Never-Inferred Rule, cross-referenced from the new Momentum section.
+  - >-
+    Decision Scout verdict FLAGS_FOUND (no BLOCK). WARN: Momentum & Direction is adjacent to the
+    Status-Trusted-Never-Inferred Rule's banned move; resolution (no pivot) is to scope it under
+    that rule's existing "neutral dispatch context only" carve-out with a load-bearing
+    inferred-not-verdict label in both files and graceful degradation to raw commits. NOTE
+    (Decision 59): commit->tier_item mapping is heuristic inference layered over deterministic
+    cache data; acceptable because explicitly labeled non-authoritative.
+  - >-
+    Pre-existing drift this plan fixes: D1 -- recent_main_commits was a listed-but-unused input in
+    both files (Momentum section consumes it). D2 -- the skill Inputs table instructed an out-of-cache
+    `git log` Bash call contradicting the cache-only contract (scout confirmed session_preflight.py
+    genuinely produces recent_main_commits into the cache). D3 -- command Step 3 hardcoded
+    "four-section deliverable"; renumber to six in lockstep to prevent command/skill drift.
+  - >-
+    Proposed section order: Status Digest -> CI-RCA Triage -> Momentum & Direction ->
+    Best-Practices Health Check -> Ranked What-to-Work-On -> /plan Prompts (human-confirmed).
+  - >-
+    No tier_item targeted (ad-hoc tooling improvement, soft-warn category) so the Tier Item
+    Freshness Gate is skipped. No ci-rca recs open (no HARD BLOCK). Branch was 0 commits behind
+    origin/main at planning time (no divergence assessment needed).
+  - >-
+    No CI structural validation gates these markdown files (verified: validate.py and
+    prompt_compliance.py do not lint the orient command/skill structure), so V1 grep-based
+    structural + absence-of-forbidden-pattern checks are the strongest available verification
+    for an instruction-text change.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/orient-command-improvements-f7aox5)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scoped via decision-scout subagent (not read in planning agent)
+  - Both scope files (.claude/skills/orient/SKILL.md, .claude/commands/orient.md) located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify .claude/skills/orient/SKILL.md: in the Inputs table, replace the "Recent main activity |
+    git log --oneline -10 origin/main | Bash" row with a row citing the cached recent_main_commits
+    field (read from logs/.preflight-report.json) -- fixing drift D1/D2.
+  - >-
+    In .claude/skills/orient/SKILL.md Deliverable Shape, renumber to six sections in the
+    human-confirmed order and add section 3 "Momentum & Direction": synthesize recent_main_commits
+    by grouping commits via conventional slug prefix (feat/plan/roadmap) and mapping each to the
+    tier_item it advanced from docs/ROADMAP-PLATFORM.yaml; emit a one-line trajectory read; scope
+    the whole section under the Status-Trusted-Never-Inferred Rule with a load-bearing "inferred
+    neutral dispatch context, not a status verdict" label and a cross-reference to that rule;
+    instruct degrading to a raw sha/date/subject commit list when the slug->tier_item mapping is
+    ambiguous; do NOT resurface parked/deferred items the Status Digest excludes.
+  - >-
+    Add section 4 "Best-Practices Health Check" to .claude/skills/orient/SKILL.md: a fixed
+    checklist rendered practice -> signal -> PASS/WATCH/GAP, evaluated only against deterministic
+    preflight-cache signals (convergence_health, telemetry_health, data_quality coverage + last
+    verdict, ci_rca liveness, non_automatable softcap, terraform_pending); explicitly forbid LLM
+    free-association best-practices auditing (Decision 59) and any new reads.
+  - >-
+    Reshape the (now section 6) /plan Prompts section in .claude/skills/orient/SKILL.md: mandate
+    that each /plan prompt is emitted in its own fenced code block (one paste-ready command line
+    per block) and that the overlap matrix renders as plain text outside any code block, with a
+    one-line "safe to parallelize" note beneath it.
+  - >-
+    Modify .claude/commands/orient.md: add the new deterministic best-practices signals
+    (convergence_health, telemetry_health, data_quality, terraform_pending) to the Step 2 input
+    list, and renumber the Step 3 deliverable enumeration from four to six sections in lockstep
+    with the skill.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass. V1 structural change;
+    no deploy.
+  - 'Report: what was implemented and the verification results.'
+rollback: >-
+  git revert the implementation commit -- both files are markdown instruction artefacts with no
+  runtime coupling; reverting restores the prior four-section orient deliverable with no migration.
