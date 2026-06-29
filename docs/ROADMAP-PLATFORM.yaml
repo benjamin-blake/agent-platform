@@ -6164,6 +6164,146 @@ tier_items:
     status: deferred_post_mvp
     progress_note: "Parked deferred_post_mvp (Decision 93) per operator scoping: the enforcement-side tail CD.29 / T0.12.5 deferred (the field-shape-early / enforcement-late skew names no owner). depends_on T0.12.5 (complete) + T3.1 / T3.6 (live) -- deferred->live, allowed. No live item depends_on it. Reactivate -> not_started once T3.1 + T3.6 are complete and the acceptance typed-checks enforcement flip is scheduled. CD.29.gates intentionally omits T3.10 (the typed-checks field-shape already ratified at T0.12.5; T3.10 is enforcement-only and binds CD.29 via related_candidate_decisions)."
 
+  - id: T3.11
+    tier: T3
+    name: Do-less import-governance baseline (import-linter + lockfile + edit-scope hook + Bazel-revisit wiring)
+    intent: |
+      Sequence the Decision 80 clause-2 obligation that was named (PLAN-do-less-baseline) but never
+      landed as a roadmap item: the lightweight, Bazel-free import-governance baseline the repo chose
+      OVER a build orchestrator. Four parts, each an atomic IMPLEMENTATION plan at /implement time:
+        1. import-linter contracts -- forbid illegal cycles and enforce layering/independence between the
+           src/ packages and scripts/ packages; run as a blocking check inside validate.py (single source
+           of truth, never CI-only). The three known function-local deferred-import "cycles" (scripts/verifiers,
+           ops_data_portal+executor, execute_recommendation<->batch; module-load graph is acyclic) are encoded
+           as explicit contracts or allowlisted WITH rationale, never silently ignored.
+        2. Dependency lockfile -- pin the full transitive closure (the repo today is unpinned >=); CI verifies
+           the lock is in sync with requirements.txt.
+        3. Fail-closed edit-scope hook -- a PreToolUse-style guard (analogue of .claude/hooks/never_on_main.py)
+           that defaults to DENY edits outside a plan's declared Scope, containing agent blast radius.
+        4. Wire the Decision 80 revisit trigger so a build-orchestrator (Bazel AND Pants) re-evaluation fires
+           only on the agreed signal -- executor concurrency > 1 (T4.4) AND (a KG.13 tier_item filed OR a
+           measured _FAST_TIER_BUDGET_SECONDS breach recurs) -- so Bazel is never silently re-litigated.
+      This is the lean path: NOT a build system. It is the keystone the other three T3.1x items build on.
+    depends_on: []
+    files_in_scope:
+      - .importlinter    # new -- layering + independence + no-illegal-cycle contracts
+      - requirements.lock    # new -- pinned transitive-closure lockfile (pip-compile / uv)
+      - requirements.txt    # source of the lockfile (sync-checked)
+      - scripts/validate.py    # wire the import-linter contract check as a blocking presubmit check; lockfile-sync check
+      - .claude/hooks/edit_scope_guard.py    # new -- fail-closed edit-scope hook (cf. never_on_main.py)
+    exit_criteria:
+      - "import-linter contracts run inside validate.py (both tiers) and FAIL CI on an illegal cycle or a layering/independence violation between src/ and scripts/ packages"
+      - "A dependency lockfile pins the full transitive closure; CI fails if the lockfile drifts from requirements.txt"
+      - "A fail-closed edit-scope hook blocks edits outside the active plan's declared Scope, defaulting to DENY (analogue of never_on_main.py)"
+      - "The three known function-local deferred-import cycles are encoded as import-linter contracts or allowlisted with explicit rationale -- never silently ignored"
+      - "The Decision 80 build-orchestrator revisit trigger is wired and surfaces (concurrency>1 AND (KG.13 filed OR _FAST_TIER_BUDGET_SECONDS breach)); no silent Bazel/Pants re-litigation"
+    related_decisions: [80, 43, 75]
+    effort: M
+    strategic: false
+    status: not_started
+    decomposition_hints:
+      provenance: "Decision 80 clause 2 named PLAN-do-less-baseline as the immediate-next IMPLEMENTATION plan but never sequenced it into the roadmap; this tier_item is that orphaned obligation."
+      splits: "Atomic IMPLEMENTATION plans: (a) import-linter contracts + validate wiring; (b) lockfile + sync check; (c) edit-scope hook; (d) revisit-trigger wiring. Tool choice (import-linter/grimp) selected at implement-time, not ratified here (Decision 75 frame-challenge)."
+    note: "Keystone of the T3.11-T3.14 dependency-graph/dead-code/context-leanness group. Eligible now (no deps). Lands the Bazel-free do-less baseline Decision 80 chose; deliberately NOT a build orchestrator -- that stays deferred behind the wired revisit trigger."
+
+  - id: T3.12
+    tier: T3
+    name: Deterministic first-party dependency graph (compute-on-demand, agent-consumable)
+    intent: |
+      Build the deterministic dependency-graph "oracle" Decision 80 noted is "already computable (ast/networkx,
+      installed)" but which no tier_item owns. An ast-derived import graph over first-party Python (src/ + scripts/),
+      module-level first (sound) with a function/symbol-level enrichment layer (unsound for dynamic dispatch).
+      COMPUTE-ON-DEMAND, not a committed artifact: a committed graph file is a generated-file-drift surface that
+      Decision 80's lean posture weighed against; an optional --export exists behind a validate.py freshness guard
+      if a materialised file is ever wanted. The graph answers, for agents AND the human, "what imports X",
+      "transitive closure of Y", and "is Z reachable". Root/boundary set honours the Decision 79 per-Lambda
+      manifests (handlers/includes) plus main()/CLI entrypoints and pytest tests -- and respects Decision 79's
+      deliberate no-transitive-resolution stance (roots are declared, not inferred repo-wide).
+    depends_on: []
+    files_in_scope:
+      - scripts/dependency_graph.py    # new -- ast/networkx graph builder; compute-on-demand; optional --export (JSON edge-list)
+      - scripts/extract_imports.py    # extend from src.*-only to src.* + scripts.*
+    exit_criteria:
+      - "A compute-on-demand CLI builds a first-party import graph (nodes=modules, edges=imports) over src/ and scripts/ via ast, deterministically -- no network, no LLM"
+      - "The graph answers reverse-dependency ('what imports X') and forward-closure ('transitive imports of Y') for any first-party module"
+      - "Function/symbol-level edges are derivable as an enrichment layer; dynamic-dispatch blind spots (getattr, string-keyed dispatch, importlib.spec_from_file_location) are documented as known-unsound, not silently dropped"
+      - "The root/boundary set is sourced from the per-Lambda manifests (handlers/includes) + main()/CLI entrypoints + pytest tests, honouring Decision 79 no-transitive-resolution"
+      - "Default mode is compute-on-demand (no committed graph file); any optional export is drift-guarded by a validate.py freshness check"
+      - "Output is machine-parseable (JSON edge-list) for agent consumption and human inspection"
+    related_decisions: [80, 79]
+    effort: M
+    strategic: false
+    status: not_started
+    decomposition_hints:
+      tooling: "Candidate mechanisms: extend the in-repo extract_imports.py with ast+networkx, or adopt grimp (the import-linter engine). Selected at implement-time per Decision 75 frame-challenge, not ratified here."
+      granularity: "Module-level (sound) first; function-level enrichment (unsound for dynamic dispatch) as a second slice."
+    note: "Foundational data layer consumed by T3.13 (dead-code) and T3.14 (context-budget). Compute-on-demand chosen over a committed artifact per operator decision + Decision 80 lean posture."
+
+  - id: T3.13
+    tier: T3
+    name: Source-code dead/orphan detection (graph-reachability + grep cross-check)
+    intent: |
+      Detect dead SOURCE code -- functions, classes, modules, and files unreachable from real roots -- distinct
+      from T3.7, which is test-suite meta-validation (dead/redundant TESTS, mutation testing). Two-layer verdict
+      that combines the structural strength of the T3.12 graph with grep's recall for dynamic references:
+        1. Graph-reachability: candidates are nodes unreachable from the root set (per-Lambda manifest
+           handlers/includes per Decision 79, main()/CLI entrypoints, pytest tests) over the T3.12 graph.
+        2. grep cross-check across .py AND non-Python surfaces (Lambda manifest.yaml, terraform, .prompt.md):
+           a candidate with any dynamic/string reference is DOWNGRADED to low-confidence "dynamically-referenced",
+           not reported as dead. High-confidence dead = graph-unreachable AND grep-absent.
+      Deterministic (no LLM). Supersedes the disabled grep-only orphan-code scheduled agent, whose core weakness
+      is substring false-positives and no reachability model. No automatic deletion -- mark-then-surface; the
+      human/PR decides (Decision 55 no-rescue-loop posture). Rationale for the whole group: agent context is a
+      first-class resource and dead code eats it.
+    depends_on: [T3.12]
+    files_in_scope:
+      - scripts/dead_code_detector.py    # new -- reachability over the T3.12 graph + grep cross-check; two-tier confidence
+      - scripts/dependency_graph.py    # consumed (T3.12)
+      - .github/prompts/scheduled/orphan-code.prompt.md    # retire/retarget the grep-only detector toward the graph-grounded one
+    exit_criteria:
+      - "Dead-code candidates are computed as graph-unreachable-from-roots over the T3.12 graph at file/module/function granularity (roots = manifest handlers/includes + main()/CLI + pytest)"
+      - "Every candidate is grep-cross-checked across .py AND non-Python surfaces (Lambda manifest.yaml, terraform, .prompt.md); a candidate with any dynamic/string reference is reported low-confidence 'dynamically-referenced', not 'dead'"
+      - "High-confidence dead code (graph-unreachable AND grep-absent) is reported separately from low-confidence candidates; nothing is auto-deleted (mark-then-surface, Decision 55)"
+      - "The detector is deterministic (no LLM) and supersedes the disabled grep-only orphan-code scheduled agent"
+      - "Exit criteria name the boundary with T3.7: T3.13 targets dead SOURCE code, T3.7 targets dead/redundant TESTS -- the two are disjoint, neither depends on the other's machinery"
+    related_decisions: [80, 79, 43]
+    effort: M
+    strategic: false
+    status: not_started
+    decomposition_hints:
+      tooling: "Candidate mechanisms: custom reachability over the T3.12 graph, and/or vulture as an unsound-but-useful symbol-level pass. Selected at implement-time per Decision 75 frame-challenge."
+      disjointness: "Explicitly NOT T3.7 (dead-test/mutation). Source-orphan vs test-redundancy are separate jobs."
+    note: "Consumes T3.12. The graph+grep two-layer verdict is the core design: graph is the structural source of truth, grep is recall insurance for dynamic references the static graph cannot see."
+
+  - id: T3.14
+    tier: T3
+    name: Context-budget as a tracked metric (extend Decision 43 from per-file caps to repo-wide reachable SLOC)
+    intent: |
+      Decision 43 enforces per-FILE SLOC/complexity caps but does not track repo-wide context cost over time.
+      This item elevates "dead code / sprawl eats agent context" from an implicit concern to an explicit,
+      deterministic, trendable metric: reachable-vs-total first-party SLOC (using the T3.12 graph + T3.13
+      reachability), import-surface size, and orphan-symbol/file count. Ships MEASUREMENT, not enforcement --
+      whether any threshold becomes a hard gate or stays advisory is left to a ratifying decision at
+      implement-time (Decision 75 frame-challenge preserved). If the metric is ever PERSISTED as operational
+      data it routes through the ops portal (Decision 84 single-portal invariant), never a local read-cache write.
+    depends_on: [T3.12, T3.13]
+    files_in_scope:
+      - scripts/context_budget.py    # new -- reachable/total SLOC, import-surface, orphan count; trendable snapshot
+      - scripts/validate.py    # optional advisory surfacing (no new hard gate unless ratified)
+    exit_criteria:
+      - "A deterministic metric reports reachable-vs-total first-party SLOC (via the T3.12 graph + T3.13 reachability), import-surface size, and orphan-symbol/file count"
+      - "The metric is trendable over time (snapshot shape defined); if persisted, it routes through the ops portal (Decision 84), never a local read-cache write"
+      - "The metric extends Decision 43's per-file governance to a repo-wide context-budget view WITHOUT duplicating the existing SLOC/complexity caps"
+      - "The item ships measurement only; gate-vs-advisory is deferred to a ratifying decision at implement-time (Decision 75) -- no new hard gate is introduced by this item alone"
+    related_decisions: [80, 43, 84]
+    effort: M
+    strategic: false
+    status: not_started
+    decomposition_hints:
+      scope: "Measurement only; gate-vs-advisory deferred to a ratifying decision."
+      persistence: "Ops portal only if persisted (Decision 84 single-portal invariant); read-time compute otherwise."
+    note: "Capstone of the T3.11-T3.14 group. Depends on the graph (T3.12) and detector (T3.13). Directly serves the 'agent context is a first-class resource' driver."
+
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
   - id: T4.1
     tier: T4
