@@ -848,6 +848,102 @@ class TestPublishCanaryLayers:
             assert key.startswith("S3Bucket=my-bucket,S3Key=lambda-packages/")
 
 
+class TestBuildLambdaContract:
+    """Tests for the lazy YAML loader and accessors in build_lambda (T-1.16)."""
+
+    @pytest.fixture(autouse=True)
+    def reset_registry(self):
+        """Save and restore the cached registry and contract path around each test."""
+        original_registry = bl._BUILD_CONTRACT_REGISTRY
+        original_path = bl._BUILD_CONTRACT_PATH
+        bl._BUILD_CONTRACT_REGISTRY = None
+        yield
+        bl._BUILD_CONTRACT_REGISTRY = original_registry
+        bl._BUILD_CONTRACT_PATH = original_path
+
+    def test_reads_yaml(self):
+        """Loader reads the YAML contract and returns YAML-sourced values from each accessor."""
+        import yaml
+
+        d = yaml.safe_load(bl._BUILD_CONTRACT_PATH.read_text(encoding="utf-8"))
+        assert bl._build_size_limit_bytes() == d["size_limit_bytes"]
+        assert set(bl._build_prod_function_names()) == set(d["deploy_targets"]["prod_functions"])
+        assert bl._build_ops_compaction() == d["deploy_targets"]["ops_compaction"]
+        assert bl._build_ducklake_function_zip_keys() == d["deploy_targets"]["ducklake_function_zip_keys"]
+        assert list(bl._build_ducklake_layer_names()) == list(d["deploy_targets"]["ducklake_layer_names"])
+
+    def test_anti_drift(self):
+        """YAML registry equals in-code FALLBACK_* constants (no silent divergence)."""
+        import yaml
+
+        d = yaml.safe_load(bl._BUILD_CONTRACT_PATH.read_text(encoding="utf-8"))
+        assert bl.LAMBDA_SIZE_LIMIT_BYTES == d["size_limit_bytes"]
+        assert set(bl._LAMBDA_FUNCTION_NAMES) == set(d["deploy_targets"]["prod_functions"])
+        assert bl._OPS_COMPACTION_FUNCTION_NAME == d["deploy_targets"]["ops_compaction"]["function"]
+        assert bl._OPS_COMPACTION_ZIP_KEY == d["deploy_targets"]["ops_compaction"]["zip_key"]
+        assert bl._DUCKLAKE_FUNCTION_ZIP_KEYS == d["deploy_targets"]["ducklake_function_zip_keys"]
+        assert list(bl.DUCKLAKE_LAYER_NAMES) == list(d["deploy_targets"]["ducklake_layer_names"])
+
+    def test_cli_flag_equivalence(self):
+        """YAML cli_flags match build_parser() option strings (excluding --help)."""
+        import yaml
+
+        d = yaml.safe_load(bl._BUILD_CONTRACT_PATH.read_text(encoding="utf-8"))
+        p = bl.build_parser()
+        flags = {s for s in p._option_string_actions if s.startswith("--")} - {"--help"}
+        assert flags == set(d["cli_flags"])
+
+    def test_absent_yaml_fallback(self, tmp_path):
+        """Returns fallback constants when the contract file does not exist."""
+        bl._BUILD_CONTRACT_PATH = tmp_path / "does-not-exist.yaml"
+        assert bl._build_size_limit_bytes() == bl.LAMBDA_SIZE_LIMIT_BYTES
+        assert set(bl._build_prod_function_names()) == set(bl._LAMBDA_FUNCTION_NAMES)
+
+    def test_unparseable_yaml_fallback(self, tmp_path):
+        """Returns fallback constants when the contract file contains invalid YAML."""
+        contract = tmp_path / "build-lambda.yaml"
+        contract.write_text("}{invalid yaml{", encoding="utf-8")
+        bl._BUILD_CONTRACT_PATH = contract
+        assert bl._build_size_limit_bytes() == bl.LAMBDA_SIZE_LIMIT_BYTES
+
+    def test_yaml_import_unavailable_fallback(self, tmp_path):
+        """Returns fallback constants when yaml is unavailable (simulates missing pyyaml)."""
+        import sys
+
+        contract = tmp_path / "build-lambda.yaml"
+        contract.write_text("size_limit_bytes: 999", encoding="utf-8")
+        bl._BUILD_CONTRACT_PATH = contract
+        with patch.dict(sys.modules, {"yaml": None}):
+            assert bl._build_size_limit_bytes() == bl.LAMBDA_SIZE_LIMIT_BYTES
+
+    def test_lazy_import_safety(self):
+        """Registry is None immediately after import (no I/O at module import time)."""
+        assert bl._BUILD_CONTRACT_REGISTRY is None, "registry must be lazy, not loaded at import"
+
+    def test_canary_layers_sourced_from_accessor(self):
+        """publish_canary_layers iterates _build_ducklake_layer_names(), not DUCKLAKE_LAYER_NAMES directly."""
+        import json
+
+        fake_layers = ["layer-a", "layer-b"]
+        call_log: list[str] = []
+
+        def fake_run(cmd, **kw):
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            call_log.append(layer_name)
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"LayerVersionArn": f"arn:aws:lambda:::layer:{layer_name}:1", "Version": 1}),
+                stderr="",
+            )
+
+        with (
+            patch.object(bl, "_build_ducklake_layer_names", return_value=fake_layers),
+            patch("scripts.build_lambda.subprocess.run", side_effect=fake_run),
+        ):
+            bl.publish_canary_layers(bucket="b", profile="p", region="r")
+        assert call_log == fake_layers
+
+
 class TestBuildPgclientLayerPgDumpOnlyBundle:
     """build_pgclient_layer succeeds with a pg_dump-only bundle (no pg_restore required, Decision 100)."""
 
