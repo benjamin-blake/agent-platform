@@ -44,9 +44,12 @@ scope:
       validate_prompt_compliance(): source the invariant-file discovery from
       compliance.get_behavioural_invariant_sources() (resolved under ROOT) instead of the hardcoded
       .github/prompts glob. Add validate_instruction_architecture_layers(failed) that runs
-      check_layer_compliance and appends violations; wire it into the run sequence. KEEP
-      validate_no_underscore_instructions (Decision 38 guard) untouched. Update the stale legacy
-      comment (~line 214).
+      check_layer_compliance and appends violations; wire it into the run sequence. KEEP the
+      validate_no_underscore_instructions guard LOGIC (Decision 38) but genericise its docstring
+      (~line 1018) which references the now-deleted hyphen copilot-instructions.md -- restate it as
+      "the underscore variant is a ghost file (Decision 38 deleted it); this check prevents
+      re-creation" without asserting the hyphen file is loaded. Update the stale legacy comment
+      (~line 214).
   - file: scripts/session_preflight.py
     action: Modify
     purpose: >-
@@ -83,7 +86,19 @@ scope:
     purpose: Repoint the Instruction architecture section (~line 187) from docs/contracts/instruction-architecture.md to the .yaml.
   - file: docs/PROJECT_CONTEXT.md
     action: Modify
-    purpose: Repoint the two instruction-architecture.md references (~lines 6, 148) to the .yaml.
+    purpose: >-
+      Repoint the two instruction-architecture.md references (~lines 6, 148) to the .yaml AND sweep
+      every File Router / prose row that points at a deletion target so this canonical Layer-2 surface
+      holds no dangling links: header note (~L3, .github/copilot-instructions.md deep-frozen fallback
+      -- remove), .agents/ legacy row (~L153 -- remove), plan/implement legacy-prompt clauses
+      (~L154, L156 -- drop the ".github/prompts/...prompt.md is VS Code legacy" tail, keep the
+      canonical .claude/commands/ entry), subagents row (~L159 -- repoint to .claude/skills/),
+      already-dangling strategic_review row (~L166 -- remove), CI-triage rows (~L167, L168 -- remove
+      the deleted .github/prompts refs), the Decision 44 boundary list (~L240 -- drop
+      .github/prompts/develop-executor.prompt.md), and the 5-layer prose (~L459-463 -- update the
+      "deep-frozen legacy, retired at T5.3" sentence to reflect that the legacy mirrors are now
+      deleted and only the scheduled-agent surface survives the dirs). KEEP the schedule.yaml (~L171)
+      and scheduled/ (~L177) rows and the .github/instructions/ boundary ref (~L240).
   - file: EVALUATION-PROMPTS.yaml
     action: Modify
     purpose: Repoint the two instruction-architecture.md references (~lines 5, 34, canonical-sources + answer_loci) to the .yaml.
@@ -147,7 +162,7 @@ acceptance_criteria:
   - scripts/prompt_compliance.py reads the YAML for behavioural_invariant_sources and layer content_locations; module import performs no I/O and never raises; absent/unparseable YAML falls back to ['.claude/skills/*/SKILL.md'] without error.
   - check_layer_compliance passes against the live repo (every declared layer content_locations glob resolves to >=1 path), and a unit test proves it flags a layer whose glob matches nothing.
   - validate.py full run passes locally; prompt-compliance discovery is YAML-sourced; validate_instruction_architecture_layers runs in the sequence; validate_no_underscore_instructions remains active.
-  - docs/contracts/instruction-architecture.md is deleted; AGENTS.md, docs/PROJECT_CONTEXT.md, and EVALUATION-PROMPTS.yaml point at the .yaml; no live (non-historical-plan, non-audit, non-DECISIONS) surface references the deleted .md.
+  - docs/contracts/instruction-architecture.md is deleted; AGENTS.md, docs/PROJECT_CONTEXT.md (full File Router sweep), and EVALUATION-PROMPTS.yaml point at the .yaml; no live (non-historical-plan, non-audit, non-DECISIONS, non-ROADMAP-tier-item-self-description) surface references the deleted .md, and docs/PROJECT_CONTEXT.md has no dangling File Router row pointing at a deleted legacy file.
   - The deleted legacy surfaces (.agents/, top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md, .github/copilot-instructions.md) are gone; .github/prompts/scheduled/, .github/agents/schedule.yaml, and .github/instructions/ are retained; no live code/config references a deleted file.
   - Scheduled-agent + executor surfaces still load (run_scheduled_agent reads schedule.yaml; scheduled-agent + executor-step-runner tests pass); the Copilot SDK provider path is untouched.
   - The affected test suites pass (prompt_compliance, validate, session_preflight, model_registry, executor_step_runner, scheduled_agent_handler, run_scheduled_agent).
@@ -185,10 +200,16 @@ verification_plan:
     fix_if: A target survived or a kept file is missing; adjust the deletion set.
   - step: 6
     phase: pre-deploy
-    action: Stale-reference sweep -- no live code/config references the deleted .md or the deleted legacy files (historical PLAN-*.md, docs/audit-reports, docs/DECISIONS.md, docs/INTENT-*.md are allowed).
-    command: bash -lc '! grep -rn "instruction-architecture\.md\|copilot-instructions\.md" --include=*.py --include=*.yml --include=*.yaml scripts src config tests .github/workflows 2>/dev/null; echo "ref-sweep exit=$?"'
-    expected: No live .py/.yml/.yaml reference to the deleted .md or copilot-instructions.md under scripts/src/config/tests/.github/workflows (exit 0 / empty).
-    fix_if: A live reference remains; repoint it to the .yaml or remove it.
+    action: >-
+      Stale-reference sweep -- no live production code/config references the deleted .md or the
+      deleted copilot-instructions.md (historical PLAN-*.md, docs/audit-reports, docs/DECISIONS.md,
+      docs/INTENT-*.md, and the T-1.13/T5.3 ROADMAP tier_item self-description are allowed; tests/ is
+      EXCLUDED because it legitimately retains path-string fixtures -- e.g. test_validate.py:946's
+      copilot-instructions.md tmp_path fixture for the retained underscore-guard test, and
+      test_model_registry path-string assertions -- per the risk-lens critique).
+    command: bash -lc '! grep -rn "instruction-architecture\.md\|copilot-instructions\.md" --include=*.py --include=*.yml --include=*.yaml scripts src config .github/workflows 2>/dev/null; echo "ref-sweep exit=$?"'
+    expected: No live .py/.yml/.yaml reference to the deleted .md or copilot-instructions.md under scripts/src/config/.github/workflows (exit 0 / empty). tests/ intentionally not swept.
+    fix_if: A live reference remains; repoint it to the .yaml or remove/genericise it (this includes the validate.py:1018 docstring and the four comment genericisations).
   - step: 7
     phase: pre-deploy
     action: No active Lambda manifest references a deleted file (bundle-completeness safety).
@@ -211,6 +232,7 @@ constraints:
   - No rescue agents or workaround loops; on an unrecoverable step, stop and RCA (Decision 55).
   - instruction-architecture.yaml MUST stay NON-ritual (top-level version/contract_version/status metadata; NO contract block carrying a class field) so the CD.25 drift gate skips it -- mirrors log-storage.yaml / read-engine.yaml / storage-substrate.yaml.
   - scripts/prompt_compliance.py must never raise at import and must defer all I/O to first accessor call (AGENTS.md import-safety rule), exactly like s3_log_store.py (T-1.15 precedent).
+  - check_layer_compliance MUST exclude matches under .venv/ and .git/ when resolving content_locations globs -- the Layer 1 "**/CLAUDE.md" glob otherwise matches vendored third-party CLAUDE.md files under .venv (architect-lens critique). The glob expresses first-party per-directory CLAUDE.md intent; the exclusion keeps the existence check semantically correct.
   - KEEP .github/prompts/scheduled/, .github/agents/schedule.yaml, and .github/instructions/executor-*.instructions.md -- they have live consumers (scheduled agents, executor). Deleting them is OUT OF SCOPE and breaks CI.
   - KEEP validate_no_underscore_instructions (Decision 38 guard) and the Copilot SDK provider config -- only the dead instruction-routing surface is removed.
   - Do NOT delete the .github/prompts/ or .github/agents/ DIRECTORIES (only the named files); full-directory deletion is owned by T5.3 and blocked on scheduled-agent decoupling.
@@ -258,10 +280,11 @@ context:
     advancing T5.3's exit criterion ("grep -r '.github/prompts' returns no references in production code")
     without deleting the directory.
   - >-
-    Behavioural-invariant reality: '## Behavioural Invariants' blocks live in the live
-    .claude/skills/{planning,implement,executor-rca}/SKILL.md AND the legacy
-    .github/prompts/{implement,plan}.prompt.md. After deletion only the .claude/skills set remains, which is
-    why behavioural_invariant_sources = ['.claude/skills/*/SKILL.md']. In CI, check_retro_lite_compliance only
+    Behavioural-invariant reality: yaml-fenced '## Behavioural Invariants' blocks (the form
+    parse_invariants' regex matches) live in the live .claude/skills/{planning,implement}/SKILL.md AND the
+    legacy .github/prompts/{implement,plan}.prompt.md; executor-rca/SKILL.md mentions the heading in prose
+    with no yaml fence, so parse_invariants returns {} for it gracefully (no false violation). After deletion
+    only the .claude/skills set remains, which is why behavioural_invariant_sources = ['.claude/skills/*/SKILL.md']. In CI, check_retro_lite_compliance only
     flags when .execution-state.json exists (absent in CI) and validate does not call check_plan_compliance,
     so widening the checked set to .claude/skills is CI-safe.
   - >-
@@ -332,7 +355,8 @@ execution_steps:
     _load_instruction_architecture() (lazy import yaml inside; on ANY failure return a fallback dict with
     behavioural_invariant_sources=['.claude/skills/*/SKILL.md'] and empty layers). Add
     get_behavioural_invariant_sources() and check_layer_compliance(contract) (for each layer, each glob in
-    content_locations must match >=1 path under ROOT; else append "layer N (<name>): no files match <glob>").
+    content_locations must match >=1 path under ROOT, EXCLUDING any match under .venv/ or .git/; else
+    append "layer N (<name>): no files match <glob>").
     In main(): discover invariant files by resolving get_behavioural_invariant_sources() globs under ROOT
     instead of hardcoding .github/prompts; add a layer-claims run. Update the docstring/--all help text. No I/O
     at import; never raise at import.
@@ -341,7 +365,8 @@ execution_steps:
     compliance.get_behavioural_invariant_sources() globs under ROOT (not the hardcoded .github/prompts glob).
     Add validate_instruction_architecture_layers(failed) that loads the contract via the compliance module and
     appends check_layer_compliance violations; wire it into the run sequence adjacent to
-    validate_prompt_compliance. Leave validate_no_underscore_instructions untouched. Refresh the stale legacy
+    validate_prompt_compliance. Keep validate_no_underscore_instructions LOGIC but genericise its docstring
+    (~L1018) to drop the now-deleted hyphen copilot-instructions.md reference. Refresh the stale legacy
     comment (~line 214).
   - >-
     Modify scripts/session_preflight.py: delete sync_copilot_instructions() and its call site (~line 1621).
@@ -352,8 +377,10 @@ execution_steps:
   - >-
     Delete docs/contracts/instruction-architecture.md, .github/copilot-instructions.md, the .agents/ directory,
     the top-level .github/prompts/*.prompt.md files (NOT scheduled/), and the .github/agents/*.agent.md files
-    (NOT schedule.yaml). Repoint the live references in AGENTS.md (~line 187), docs/PROJECT_CONTEXT.md
-    (~lines 6, 148), and EVALUATION-PROMPTS.yaml (~lines 5, 34) from the .md to the .yaml.
+    (NOT schedule.yaml). Repoint AGENTS.md (~line 187) and EVALUATION-PROMPTS.yaml (~lines 5, 34) from the
+    .md to the .yaml, and sweep docs/PROJECT_CONTEXT.md FULLY per its scope-table entry (instruction-architecture
+    refs at ~L6/L148 PLUS the File Router rows, header note ~L3, Decision-44 boundary list ~L240, and 5-layer
+    prose ~L459-463 that point at deleted targets -- not just lines 6/148).
   - >-
     Update tests: test_prompt_compliance.py (loader/accessor/layer-check/fallback + 100% new-code coverage;
     use file::Class form, AUTOUSE fixture to reset _INSTRUCTION_ARCH_REGISTRY); test_validate.py
