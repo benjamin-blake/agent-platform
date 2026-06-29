@@ -135,7 +135,7 @@ verification_plan:
     action: Guard fails closed when the budget table is absent (all IAM treated out-of-budget).
     command: >-
       TF_AUTHORITY_BUDGET=/nonexistent/authority_budget.json bin/venv-python scripts/terraform_apply_guard.py
-      tests/fixtures/guard/iam_inline_update_branch.json; echo "exit=$?"
+      tests/fixtures/terraform_apply_guard/iam_inline_update_branch.json; echo "exit=$?"
     expected: "exit=2 -- a missing budget table routes the in-budget-shaped IAM change to gated (fail-closed)."
     fix_if: exit=0 -- the guard trusts an absent table and auto-passes IAM; fail-closed is broken.
   - step: 3
@@ -195,27 +195,38 @@ verification_plan:
     phase: post-deploy
     action: >-
       Demonstrate in-budget auto-apply: open a PR adding a harmless refresh-read action to the
-      github_ci_branch inline policy; the speculative-plan predicts in-budget PASS; at merge the guard
-      exits 0, the subagent review runs, and the apply converges.
+      github_ci_branch inline policy; the speculative-plan predicts in-budget PASS. AUTHORITATIVE CHECK
+      via the GitHub MCP (pull_request_read get_check_runs + the workflow run's jobs): for that merge
+      commit's run, the apply-sandbox job concluded success on the AUTO path with routed != true and NO
+      gated-apply job ran. The convergence read below is necessary-but-not-sufficient corroboration --
+      a green record alone does not prove the change rode the auto path.
     command: >-
       aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
-      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print(d['status'], d.get('commit_sha','')[:8])"
-    expected: status green at the in-budget change commit -- the IAM inline-policy update auto-applied without a human gate.
-    fix_if: Record red or the run routed to gated -- the guard mis-classified the in-budget change, or the IAM apply failed.
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print(d['status'], d.get('commit_sha','')[:8], 'plan_sha=' + str(d.get('plan_sha'))[:8])"
+    expected: >-
+      GitHub MCP shows apply-sandbox applied on the auto path (routed falsy, no gated-apply job for the
+      run); AND the convergence record is green at the in-budget commit with a non-null plan_sha.
+    fix_if: >-
+      The run routed to gated (routed=true / reviewer approval required) -- the guard mis-classified an
+      in-budget change as out-of-budget; or the record is red -- the IAM apply failed (confirm branch
+      boundary propagation from step 8 landed).
   - step: 10
     phase: post-deploy
     action: >-
-      Demonstrate out-of-budget routing: open a PR with an out-of-budget IAM diff (e.g. a trust /
-      assume_role_policy change, or an inline-policy change on github_ci_plan); confirm the guard
-      exits 2, the apply-sandbox job sets routed=true, and the gated-apply job waits on the
-      tf-gated-apply Environment reviewer (inspect the workflow run via the GitHub MCP).
+      Demonstrate out-of-budget routing: open a PR with an out-of-budget IAM diff (a trust /
+      assume_role_policy change, or an inline-policy change on github_ci_plan). AUTHORITATIVE CHECK via
+      the GitHub MCP: for that run the apply-sandbox job sets routed=true and the gated-apply job is in
+      the waiting / blocked state on the tf-gated-apply Environment reviewer (it has NOT applied). The
+      convergence read below confirms the record was untouched while pending.
     command: >-
       aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
-      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('record_untouched_while_pending', d['status'])"
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8])"
     expected: >-
-      The gated-apply job is blocked pending reviewer approval (verified in the Actions run); the
-      convergence record is untouched (no auto-apply) while routed.
-    fix_if: The change auto-applied without routing -- out-of-budget classification failed (anti-masking / authority breach).
+      GitHub MCP shows routed=true and the gated-apply job blocked pending reviewer approval (not
+      applied); AND the convergence record is untouched (no auto-apply, unchanged commit_sha) while routed.
+    fix_if: >-
+      The change auto-applied (apply-sandbox applied without routing) -- out-of-budget classification
+      failed (authority breach / anti-masking failure).
   - step: 11
     phase: post-deploy
     action: Sync the Decision 92 amendment to ops_decisions via the backfill ETL.
@@ -274,6 +285,11 @@ context:
   - >-
     The AGENTS.md and terraform/CLAUDE.md "in-budget IAM auto-apply pending T2.25" sentinels are the
     on-disk markers this plan flips to past-tense on completion.
+  - >-
+    Implementation note (plan-critique): validate.py has a validate_claude_md_pointer_invariant check --
+    the AGENTS.md / terraform/CLAUDE.md reduction-to-pointer must satisfy it (verify --pre passes after
+    the edit). Decision 92's amendment target is point 5 (the authority-budget + ratchet model clause,
+    "concrete classification deferred to T2.23/T2.25") -- confirmed present in the Decision 92 body.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/terraform-cicd-convention-sync-toxf3p)
   - docs/PROJECT_CONTEXT.md read
@@ -332,7 +348,7 @@ execution_steps:
     tests/test_terraform_apply_guard.py + tests/test_validate_authority_budget.py: add in-budget pass,
     out-of-budget block, trust-diff-still-blocks, create-still-blocks, and fail-closed-on-missing-table
     guard cases; add positive + deliberate-mismatch drift-assertion cases (with a small JSON fixture
-    under tests/fixtures/guard/).
+    under tests/fixtures/terraform_apply_guard/, the existing guard-fixture dir).
   - >-
     Run the pre-deploy Verification Plan (steps 1-7); on green, commit, push, open the PR, and merge
     per the implement skill commit flow.
