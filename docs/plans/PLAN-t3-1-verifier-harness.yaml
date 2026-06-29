@@ -62,17 +62,31 @@ scope:
       hard-gate (implemented here) + the future Step-Functions executor verify-state
       (named/deferred). Roadmap-bookkeeping edit only -- no other roadmap change.
 bundled_recommendations: []
-infrastructure_dependencies: []
+infrastructure_dependencies:
+  - >-
+    Lambda-affectedness carve-out (asset-only, no deploy): the docs/ROADMAP-PLATFORM.yaml
+    criterion-7 re-grounding makes compute_affected_artifacts() return {'data-pipeline':
+    ['docs/ROADMAP-PLATFORM.yaml']} because that artifact (status: active) bundles the roadmap
+    under its manifest `assets:` block. NO build/deploy/smoke-test step is required here because
+    the edit is a pure documentation-asset change with no handler, import-contract, or behavioural
+    delta; the scheduled-agent dispatcher is disabled/frozen (AGENTS.md "Re-enable Lambda
+    scheduled agents" runbook); and validate_lambda_deploy_gating is advisory-only (never fails
+    CI). A redeploy would at most refresh a bundled reference document for a disabled Lambda.
 acceptance_criteria:
   - >-
-    scripts/verification_checks.py implements EXACTLY the CD.29 closed 6-primitive vocabulary
-    (command_exit_zero, command_output_matches, file_exists/file_absent, grep_count,
-    test_selector, metric_under_threshold), each with a deterministic comparator; the module
-    imports without AWS credentials and contains no eval/exec.
+    scripts/verification_checks.py implements EXACTLY the CD.29 closed vocabulary of SIX primitive
+    slots: command_exit_zero, command_output_matches, the paired file_exists/file_absent slot,
+    grep_count, test_selector, metric_under_threshold. (file_exists and file_absent are two member
+    functions of one slot, so the registry may expose seven symbols but counts as six slots.) Each
+    has a deterministic comparator; the module imports without AWS credentials and contains no
+    eval/exec.
   - >-
-    The closed vocabulary is enforced in code: a test asserts the primitive registry is exactly
-    the six and fails if a seventh is added without an accompanying new-CD reference (mirrors the
-    CD.12 marker-budget discipline; orthogonal to and not consuming the CD.12 budget).
+    The closed vocabulary is enforced in code against the SIX-SLOT count, not the symbol count: a
+    test asserts the canonical six slots are present and fails if a SEVENTH slot is added without an
+    accompanying new-CD reference (mirrors the CD.12 marker-budget discipline; orthogonal to and not
+    consuming the CD.12 budget). The guard must key on slots so it does not misfire on the
+    file_exists/file_absent pair -- a naive `len(symbols) == 6` assertion against a seven-symbol
+    registry is wrong.
   - >-
     docs/contracts/verification-registry.yaml loads and schema-validates as a Class A contract
     (scripts.contracts.load_contract succeeds) at contract_version 1, status ratified, with a
@@ -119,11 +133,12 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Assert the closed-vocabulary discipline -- the primitive registry is exactly the six
-      members and the guard test fails if a seventh is introduced without a new-CD reference.
+      Assert the closed-vocabulary discipline by SLOT count -- the registry exposes exactly the six
+      canonical slots (file_exists/file_absent counted as one) and the guard test fails if a seventh
+      SLOT is introduced without a new-CD reference.
     command: bin/venv-python -m pytest tests/test_verification_checks.py -k closed_vocabulary -v
-    expected: Test passes; the registered primitive set equals the canonical six.
-    fix_if: The set has drifted (extra or missing primitive) or the guard does not trip when a seventh is added.
+    expected: Test passes; the registered slot set equals the canonical six (the file_exists/file_absent pair counts once).
+    fix_if: The slot set has drifted, the guard counts symbols instead of slots (mis-tripping on the paired slot), or it does not trip when a seventh slot is added.
   - step: 3
     phase: pre-deploy
     action: Load and schema-validate the registry contract as a ratified Class A document.
@@ -266,6 +281,13 @@ context:
     Decision 80, Decision 86. Decision-scout verdict was FLAGS_FOUND (NOTE-level only; no BLOCK).
   - >-
     Branch was 0 commits behind origin/main at planning time; no Scope-file overlap with main.
+  - >-
+    Execution-time note (drift gate runs in --pre): validate_contract_drift validates
+    docs/contracts/*.yaml in the fast tier, so docs/contracts/verification-registry.yaml must pass
+    the drift gate at EVERY intermediate commit -- not only after the portal-allocated dec id is
+    written into ratified_via. Author the contract with a syntactically valid placeholder
+    ratified_via plus status: ratified, contract_version: 1, previous_versions: [] from the first
+    commit so no intermediate `validate.py --pre` run fails the drift gate.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/t3-1-verifier-harness-unny29)
   - docs/PROJECT_CONTEXT.md read
@@ -275,10 +297,12 @@ pre_implementation_checklist:
   - Closed 6-primitive vocabulary and CD.25 contract ritual understood before authoring the kernel/contract
 execution_steps:
   - >-
-    Create scripts/verification_checks.py -- the closed 6-primitive kernel. Define a primitive
-    registry (exactly: command_exit_zero, command_output_matches, file_exists, file_absent,
-    grep_count, test_selector, metric_under_threshold; file_exists/file_absent are the
-    paired slot). Each primitive is a typed check carrying its inputs and a deterministic
+    Create scripts/verification_checks.py -- the closed six-slot kernel. Define a primitive
+    registry of exactly six slots: command_exit_zero, command_output_matches, the paired
+    file_exists/file_absent slot, grep_count, test_selector, metric_under_threshold. Model the
+    file_exists/file_absent pair as ONE slot (e.g. a single primitive parameterised by polarity, or
+    two symbols mapped to a shared slot id) so the closed-vocabulary guard counts six slots, not
+    seven symbols. Each primitive is a typed check carrying its inputs and a deterministic
     comparator; running it returns a CheckResult (verdict + message). Import-safe, no eval/exec.
   - >-
     In scripts/verification_checks.py, add the differential admission gate: given a candidate
