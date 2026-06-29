@@ -6276,15 +6276,38 @@ tier_items:
     files_in_scope:
       - terraform/scheduled_agents.tf
       - .github/workflows/scheduled-agents.yml
+      - .github/prompts/scheduled/
+      - .github/agents/schedule.yaml
     exit_criteria:
-      - "All six scheduled agents run on schedule"
-      - "Findings file recs via log-rec Lambda"
-      - "Telemetry emitted for each invocation"
-      - "Substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented in T4.3 atomic plan with rationale"
+      - id: c1
+        text: "All six scheduled agents run on schedule"
+        status: open
+      - id: c2
+        text: "Findings file recs via log-rec Lambda"
+        status: open
+      - id: c3
+        text: "Telemetry emitted for each invocation"
+        status: open
+      - id: c4
+        text: "Substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented in T4.3 atomic plan with rationale"
+        status: open
+      - id: c5
+        text: >-
+          Delete .github/prompts/scheduled/ and .github/agents/schedule.yaml, and repoint all
+          runtime consumers: scripts/run_scheduled_agent.py, src/data/handlers/scheduled_agent_handler.py,
+          src/data/handlers/findings_processor_handler.py, scripts/validate.py check_source_registry,
+          src/lambdas/data-pipeline/manifest.yaml. Rehomed from T5.3:c1 and T5.3:c2.
+        status: open
     related_candidate_decisions: [CD.27, CD.28]
     effort: M
     strategic: false
     status: not_started
+    progress_note: >-
+      - 2026-06-29: Inherited scope from T5.3 (PLAN-t5-3-scheduled-surface-rehome). T5.3's two
+        exit_criteria (grep-no-references + single-PR deletion) rehomed here as c5 per Decision 86
+        -- the surviving .github/prompts/scheduled/ (x7 files) and .github/agents/schedule.yaml
+        are live runtime surfaces owned by this item, not T5.3. Deletion + consumer repoint blocked
+        on T4.3 re-homing the scheduled-agent loop onto the CD.27/CD.28 substrate.
   - id: T4.4
     tier: T4
     name: Autonomy maturity gates A0-A5 (STRATEGIC)
@@ -6591,19 +6614,27 @@ tier_items:
       - .github/prompts/    # eventually deleted
       - .github/agents/    # eventually deleted
     exit_criteria:
-      - "grep -r '.github/prompts' returns no references in production code"
-      - "Directories deleted in a single PR"
+      - id: c1
+        text: "grep -r '.github/prompts' returns no references in production code"
+        status: rehomed
+        met_by: T4.3
+      - id: c2
+        text: "Directories deleted in a single PR"
+        status: rehomed
+        met_by: T4.3
     related_decisions: [58]
     effort: S
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-06-29"
     progress_note: >-
-      - 2026-06-29: T-1.13 (PLAN-instruction-architecture-yaml) deleted top-level
-        .github/prompts/*.prompt.md (8 files), .github/agents/*.agent.md (9 files),
-        .github/copilot-instructions.md, and .agents/ directory. The .github/prompts/
-        and .github/agents/ directories survive for live scheduled-agent surfaces
-        (.github/prompts/scheduled/, .github/agents/schedule.yaml). Full directory
-        deletion remains blocked on scheduled-agent decoupling (depends_on T4.3).
+      - 2026-06-29: Re-scoped. T-1.13 (commit f1e001bafa28d5d0b4fa857ca6eac2cc38d4b07d) delivered
+        the interactive-surface retirement (.github/prompts/*.prompt.md x8, .github/agents/*.agent.md
+        x9, .github/copilot-instructions.md, .agents/ tree). The surviving scheduled-agent surfaces
+        (.github/prompts/scheduled/ x7, .github/agents/schedule.yaml) are live runtime infrastructure
+        owned by T4.3; their deletion is T4.3 work, gated on T4.3 re-homing the loop onto the
+        CD.27/CD.28 substrate. Both exit_criteria rehomed to T4.3 per Decision 86 (forward-route
+        intent to the receiving tier_item). T5.3 complete; T4.3 not_started, inherits deletion scope.
   - id: T5.4
     tier: T5
     name: Markdown DECISIONS.md retirement
