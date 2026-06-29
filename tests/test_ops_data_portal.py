@@ -1679,6 +1679,132 @@ class TestCiRcaSchemaEnforcement:
         assert result2["added_current"] == []
         con.close()
 
+    def test_guidance_source_ci_rca_returns_schema(self, capsys: pytest.CaptureFixture) -> None:
+        """CLI --guidance --source ci_rca emits the context_v2_json schema_fields block."""
+        from scripts.ops_data_portal import main
+
+        rc = main(["--guidance", "--source", "ci_rca"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "context_v2_json" in out
+        assert "schema_fields" in out
+        assert "proximate_cause" in out
+
+    def test_file_rec_context_v2_json_valid_routes_to_file_rec(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """CLI --file-rec --context-v2-json with valid JSON parses and routes to file_rec(context_v2_json=...)."""
+        import json as _json
+
+        from scripts.ops_data_portal import main
+
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-cv2-1"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            rc = main(
+                [
+                    "--file-rec",
+                    "--source",
+                    "ci_rca",
+                    "--priority",
+                    "Critical",
+                    "--risk",
+                    "medium",
+                    "--effort",
+                    "S",
+                    "--file",
+                    "scripts/validate.py",
+                    "--title",
+                    "validate_sloc_limits missed in pre tier",
+                    "--context",
+                    "validate_sloc_limits() raised on scripts/product_roadmap.py: 810 SLOC exceeds 500 limit. "
+                    "CI step 'validate' failed; resource: scripts/product_roadmap.py.",
+                    "--acceptance",
+                    "grep -q validate_sloc_limits scripts/validate.py",
+                    "--context-v2-json",
+                    _json.dumps(_VALID_CONTEXT_V2),
+                ]
+            )
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "rec-cv2-1" in captured.out
+        entry = _json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
+        assert "context_v2_json" in entry
+        stored = _json.loads(entry["context_v2_json"])
+        assert stored["schema_version"] == 1
+
+    def test_file_rec_context_v2_json_invalid_json_exits_nonzero(self, capsys: pytest.CaptureFixture) -> None:
+        """CLI --file-rec --context-v2-json with malformed JSON exits 1 and files nothing."""
+        from scripts.ops_data_portal import main
+
+        rc = main(
+            [
+                "--file-rec",
+                "--source",
+                "ci_rca",
+                "--priority",
+                "Critical",
+                "--risk",
+                "low",
+                "--effort",
+                "XS",
+                "--file",
+                "scripts/validate.py",
+                "--title",
+                "Test invalid JSON path",
+                "--context",
+                "validate_sloc_limits() raised: file is over limit. CI step failed; resource: scripts/foo.py.",
+                "--acceptance",
+                "grep -q validate scripts/validate.py",
+                "--context-v2-json",
+                "{not: valid json",
+            ]
+        )
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+        assert "not valid JSON" in captured.err
+
+    def test_file_rec_ci_rca_legacy_path_warns_and_files(self, tmp_path: Path, caplog, capsys: pytest.CaptureFixture) -> None:
+        """CLI --file-rec source=ci_rca without --context-v2-json still files in warn mode."""
+        import logging
+
+        from scripts.ops_data_portal import main
+
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-legacy-1"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            rc = main(
+                [
+                    "--file-rec",
+                    "--source",
+                    "ci_rca",
+                    "--priority",
+                    "Critical",
+                    "--risk",
+                    "low",
+                    "--effort",
+                    "XS",
+                    "--file",
+                    "scripts/validate.py",
+                    "--title",
+                    "Legacy ci_rca path test",
+                    "--context",
+                    "validate_sloc_limits() raised: file is over 500 SLOC. CI step failed; resource: scripts/foo.py.",
+                    "--acceptance",
+                    "grep -q validate scripts/validate.py",
+                ]
+            )
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "rec-legacy-1" in captured.out
+        assert any("legacy free-text" in r.message for r in caplog.records)
+
     @pytest.mark.integration
     @pytest.mark.enable_socket()
     def test_context_v2_roundtrip_live(self) -> None:

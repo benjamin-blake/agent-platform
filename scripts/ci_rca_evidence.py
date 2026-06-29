@@ -223,6 +223,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--validate-path", type=Path, default=ROOT / "scripts" / "validate.py")
     parser.add_argument("--taxonomy-path", type=Path, default=None)
     parser.add_argument("--print-bundle", action="store_true")
+    parser.add_argument(
+        "--emit-dir",
+        type=Path,
+        default=None,
+        help="Write each bundle to <dir>/<sha>.json regardless of S3 upload outcome; prints BUNDLE_LOCAL=<path>",
+    )
     args = parser.parse_args(argv)
 
     if not args.log_file.exists():
@@ -242,6 +248,11 @@ def main(argv: list[str] | None = None) -> None:
 
     for bundle in bundles:
         sha = bundle["sha256"]
+        if args.emit_dir is not None:
+            args.emit_dir.mkdir(parents=True, exist_ok=True)
+            local_path = args.emit_dir / f"{sha}.json"
+            local_path.write_bytes(_canonical_json(bundle))
+            print(f"BUNDLE_LOCAL={local_path}")
         result = upload_and_persist(bundle, bucket)
         if args.print_bundle:
             print(json.dumps({**bundle, **result}, indent=2, sort_keys=True))

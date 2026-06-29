@@ -197,13 +197,16 @@ jobs:
             --jobs-file /tmp/ci-rca-jobs.json \
             --workflow-name "$WORKFLOW_NAME" \
             --workflow-run-id "$RUN_ID" \
+            --emit-dir /tmp/ci-rca-bundles \
             > /tmp/ci-rca-evidence-out.txt 2>/tmp/ci-rca-evidence-err.txt || true
           BUNDLE_SHA=$(grep '^BUNDLE_SHA=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
           BUNDLE_S3_URI=$(grep '^BUNDLE_S3_URI=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
           BUNDLE_PATH=$(grep '^BUNDLE_PATH=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
+          BUNDLE_LOCAL=$(grep '^BUNDLE_LOCAL=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
           echo "bundle_sha=${BUNDLE_SHA}" >> "$GITHUB_OUTPUT"
           echo "bundle_s3_uri=${BUNDLE_S3_URI}" >> "$GITHUB_OUTPUT"
           echo "bundle_path=${BUNDLE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "bundle_local=${BUNDLE_LOCAL}" >> "$GITHUB_OUTPUT"
 
       - name: Run ci-rca agent
         id: rca_agent
@@ -216,9 +219,10 @@ jobs:
           BUNDLE_SHA="${{ steps.evidence.outputs.bundle_sha }}"
           BUNDLE_S3_URI="${{ steps.evidence.outputs.bundle_s3_uri }}"
           BUNDLE_PATH="${{ steps.evidence.outputs.bundle_path }}"
+          BUNDLE_LOCAL="${{ steps.evidence.outputs.bundle_local }}"
           EVIDENCE_CONTEXT=""
           if [ -n "$BUNDLE_SHA" ]; then
-            EVIDENCE_CONTEXT=" Evidence bundle SHA: ${BUNDLE_SHA}. S3 URI: ${BUNDLE_S3_URI}. Local path: ${BUNDLE_PATH}."
+            EVIDENCE_CONTEXT=" Evidence bundle SHA: ${BUNDLE_SHA}. S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local bundle path: ${BUNDLE_LOCAL}."
           fi
           # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
           # trailing positional prompt, leaving claude with no input ("Input must be provided

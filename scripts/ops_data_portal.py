@@ -1252,6 +1252,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     rec.add_argument("--dependencies", nargs="*", default=None)
     rec.add_argument("--verification")
     rec.add_argument("--verification-tier", choices=["V1", "V2", "V3"], dest="verification_tier")
+    rec.add_argument(
+        "--context-v2-json",
+        dest="context_v2_json",
+        default=None,
+        help="JSON-encoded CiRcaContext dict to attach to a source=ci_rca rec",
+    )
 
     # update-rec fields
     upd = parser.add_argument_group("--update-rec fields")
@@ -1300,8 +1306,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             fields["verification"] = args.verification
         if args.verification_tier:
             fields["verification_tier"] = args.verification_tier
+        context_v2_parsed: dict | None = None
+        if args.context_v2_json is not None:
+            try:
+                context_v2_parsed = json.loads(args.context_v2_json)
+            except json.JSONDecodeError as exc:
+                print(f"ERROR: --context-v2-json is not valid JSON: {exc}", file=sys.stderr)
+                return 1
         try:
-            rec_id = file_rec(fields, profile=args.profile)
+            rec_id = file_rec(fields, context_v2_json=context_v2_parsed, profile=args.profile)
             print(rec_id)
             return 0
         except (ValidationError, ValueError) as exc:
@@ -1388,7 +1401,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.guidance:
         from scripts.executor.rec_write_guidance import get_rec_write_guidance
 
-        guidance = get_rec_write_guidance()
+        guidance = get_rec_write_guidance(source=args.source)
         print(yaml.dump(guidance, default_flow_style=False, sort_keys=True, allow_unicode=True))
         return 0
 
