@@ -2,6 +2,54 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-29
+**Warehouse ID:** dec-102 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 43 introduced a binary SLOC waiver: any scripts/ or src/ Python file carrying a
+`# complexity-waiver: decision-43` header comment was entirely exempt from the 500-SLOC cap,
+allowing unbounded growth. Seventeen files currently exceed 500 SLOC under this exemption.
+The waiver mechanism provided no ratchet, no visibility into file growth, and no pressure
+toward the reduction that Decision 43 itself mandated.
+
+**Decision:**
+The `# complexity-waiver: decision-43` comment no longer authorises unbounded SLOC growth.
+Oversized scripts/ and src/ Python files are instead pinned to their current size in a
+checked-in registry (`config/sloc_budgets.yaml`) and enforced by `validate_sloc_limits` at
+`current SLOC <= budget`. Budgets ratchet DOWN only:
+
+- Raising a budget requires a manual, reviewable edit to `config/sloc_budgets.yaml`.
+- Shrinking a file and re-running `validate --update-sloc-budgets` automatically lowers the
+  registered budget to the new size.
+- Files that shrink to <=500 SLOC are dropped from the registry automatically.
+- A file >500 SLOC that is NOT registered in `config/sloc_budgets.yaml` fails the gate,
+  regardless of whether it carries the waiver comment.
+- A file <=500 SLOC that still carries the waiver comment is a stale-waiver advisory (not a
+  failure), because the comment may still be load-bearing for the cyclomatic-complexity gate
+  (validate_cc_limits). Do not remove the comment without verifying the CC gate first.
+
+**Preserved from Decision 43:**
+The cyclomatic-complexity (CC) row of Decision 43 is UNCHANGED. The `_WAIVER_PATTERN` and the
+`validate_cc_limits` gate are not modified by this decision. The shared waiver comment still
+waives the CC gate; its SLOC semantics are amended here only.
+
+**Forward-compatibility (Decision 80):**
+`config/sloc_budgets.yaml` keys are repo-relative forward-slash paths. When `scripts/validate.py`
+is decomposed per Decision 80, keys are re-pointed at the new module paths via
+`validate --update-sloc-budgets`. No other migration is required.
+
+**Deferred breakdown program:**
+The breakdown of registered files below 500 SLOC (split each file, drop from registry,
+until `budgets: {}`) is tracked as rec-2414. This decision creates the registry that rec-2414
+consumes; it does not resolve rec-2414.
+
+**Related:** Decision 43 (amended SLOC row), Decision 80 (validate.py decomposition direction),
+Decision 73 (one-directional enforced-budget ratchet precedent), Decision 86 (rationale routed
+to this numbered Decision).
+
 ## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)
 
 **Status:** Decided
