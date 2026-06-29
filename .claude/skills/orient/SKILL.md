@@ -28,7 +28,7 @@ Status flips remain the verification-earned closing step owned by `/implement` t
 | Blocked-on-CD annotations | `logs/.preflight-report.json` (`platform_roadmap.blocked_on_cd`) | Read preflight cache |
 | Gate evaluations | `logs/.preflight-report.json` (`platform_roadmap.gate_evaluations`) | Read preflight cache |
 | Roadmap detail | `docs/ROADMAP-PLATFORM.yaml` | Read file |
-| Recent main activity | `git log --oneline -10 origin/main` | Bash |
+| Recent main activity | `logs/.preflight-report.json` (`recent_main_commits`) | Read preflight cache |
 
 **Read-from-preflight-cache constraint (Decision 88 egress budget; Decision 84 closed boundary):** `/orient` reads the preflight cache -- it must NOT trigger a fresh warehouse reader fan-out. Do not call `bin/venv-python -m scripts.platform_roadmap` or any DuckLake reader verb during orient. The preflight script is the only path that may refresh `logs/.preflight-report.json`.
 
@@ -50,7 +50,7 @@ Do not re-author the four checks here -- that would be drift by design. `/orient
 
 ## Deliverable Shape
 
-The orient deliverable is a structured chat reply with four sections, in order:
+The orient deliverable is a structured chat reply with six sections, in order:
 
 ### 1. Status Digest
 
@@ -102,7 +102,36 @@ Do not surface this when `convergence_health` is null (preflight ran without cre
 
 If HARD BLOCK recs exist, note them prominently at the top of this section. The next `/plan` session will enforce the block; orient provides the full visibility layer.
 
-### 3. Ranked What-to-Work-On
+### 3. Momentum & Direction
+
+**Inferred neutral dispatch context -- not a status verdict (Status-Trusted-Never-Inferred Rule; see above).**
+
+Source: `recent_main_commits` from the preflight cache (`logs/.preflight-report.json`). Do not issue a `git log` Bash call -- cache only (Decision 88 egress budget; Decision 84 closed boundary).
+
+Group the recent commits by conventional-prefix slug (`feat`/`plan`/`roadmap`/`scope`) and map each slug to the tier_item it advanced using `docs/ROADMAP-PLATFORM.yaml`. Emit a one-line trajectory read describing which area of the platform saw recent activity.
+
+**Degradation rule**: when the slug->tier_item mapping is ambiguous (e.g., the commit prefix does not match any tier_item slug or multiple items share a prefix pattern), skip the inferred mapping and emit the raw commit list (sha, date, subject) without any inferred tier_item association.
+
+**Scope constraint**: do NOT resurface parked-gated or deferred items that the Status Digest excludes. This section describes recent commit activity, not future eligibility.
+
+### 4. Best-Practices Health Check
+
+**Deterministic-signal-only checklist (Decision 59). No LLM free-association of best-practices -- evaluate ONLY the fixed signals listed below. No new warehouse reads, no DuckLake reader calls.**
+
+Render as a table: practice -> preflight signal -> PASS/WATCH/GAP.
+
+| Practice | Preflight signal | PASS/WATCH/GAP threshold |
+|---|---|---|
+| Terraform converged | `convergence_health.status` | PASS if `green`; WATCH if `red` and `red_age_hours` < 6; GAP if `red` and `red_age_hours` >= 6 or `stuck_approvals` > 0 |
+| Telemetry healthy | `telemetry_health` | PASS if `ok`; WATCH if `degraded`; GAP if `dead` or field absent |
+| Data quality coverage | `data_quality.last_verdict` | PASS if `pass`; WATCH if `warn`; GAP if `fail` or field absent |
+| CI-RCA liveness | `ci_rca_unresolved_recs` empty AND `ci_rca_liveness_alert` null | PASS if both clear; GAP if either non-empty or non-null |
+| Rec backlog (soft cap) | `non_automatable_softcap_breached` | PASS if false; GAP if true |
+| Terraform pending | `terraform_pending` | PASS if false or absent; WATCH if true |
+
+If a signal is absent from the preflight cache, mark it UNKNOWN rather than inferring a verdict. Do not issue any read to resolve UNKNOWN.
+
+### 5. Ranked What-to-Work-On
 
 Prioritized work list from the Status Digest:
 
@@ -116,9 +145,9 @@ Prioritized work list from the Status Digest:
 
 Format: numbered list with a one-line rationale per item citing the keystone/momentum/block reasoning.
 
-### 4. /plan Prompts with Overlap Matrix
+### 6. /plan Prompts with Overlap Matrix
 
-Up to 5 ready-to-paste `/plan` prompts (one per eligible non-blocked item), ordered keystone-first.
+Up to 5 ready-to-paste `/plan` prompts (one per eligible non-blocked item), ordered keystone-first. Emit each `/plan` prompt in its own fenced code block (one paste-ready command per block). The overlap matrix renders as plain text outside any code block, with a one-line "safe to parallelize" note beneath it.
 
 **Overlap matrix** -- before finalizing prompts, compute pairwise overlap between items. Two items overlap if they share at least one `files_in_scope` path, share a `related_candidate_decisions` cd_id, or one is in the other's `depends_on` chain. Non-overlap on all three dimensions = safe to parallelize.
 
