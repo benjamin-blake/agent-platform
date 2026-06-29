@@ -436,6 +436,21 @@ def _derive_ci_rca_open(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _derive_ci_rca_dispute_open(rows: list[dict]) -> list[dict]:
+    """Client-side derive: open/in-progress ci_rca_evidence_dispute recs, newest first, capped at 5."""
+    matched = [r for r in rows if r.get("source") == "ci_rca_evidence_dispute" and r.get("status") in ("open", "in_progress")]
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "priority": r.get("priority", ""),
+            "created_timestamp": r.get("created_timestamp"),
+        }
+        for r in matched[:5]
+    ]
+
+
 def _derive_ci_rca_closed(rows: list[dict]) -> list[dict]:
     """Client-side derive: closed ci_rca recs projected to the sibling-cluster fields."""
     matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") == "closed"]
@@ -814,6 +829,35 @@ def _fetch_ci_rca_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
         file=sys.stderr,
     )
     return []
+
+
+def _fetch_ci_rca_dispute_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return up to 5 open ci_rca_evidence_dispute recs -- from the warm-pulled cache rows only.
+
+    cache_rows (neon-egress-reduction D4 / Decision 88 egress invariant): a supplied row list is
+    served via _derive_ci_rca_dispute_open (zero reader call); a supplied None means the warm-up
+    pull failed -> []. Omitted (sentinel) -> [] (no new DuckLake reader named-verb for dispute recs;
+    the dispute section derives from the same warm cache used by _fetch_ci_rca_recs).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_dispute_open(cache_rows)  # type: ignore[arg-type]
+    return []
+
+
+def print_ci_rca_dispute_recs(recs: list[dict]) -> None:
+    """Print the CI-RCA Dispute Recs section to terminal."""
+    print("\n--- CI-RCA Dispute Recs (open) ---")
+    if not recs:
+        print("  (none)")
+        print()
+        return
+    for rec in recs:
+        rec_id = rec.get("id", "unknown")
+        title = rec.get("title", "")
+        priority = rec.get("priority", "")
+        created = rec.get("created_timestamp", "")
+        print(f"  {rec_id} [{priority}] {created}: {title}")
+    print()
 
 
 def _check_non_automatable_softcap(non_auto_count: int) -> bool:
@@ -1694,6 +1738,7 @@ def main(roadmap_detail: str = "slim") -> int:
     with ThreadPoolExecutor(max_workers=4) as phase_b:
         fut_rec_count = phase_b.submit(_count_recommendations_reader, recs_cache)
         fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs, recs_cache)
+        fut_ci_rca_dispute = phase_b.submit(_fetch_ci_rca_dispute_recs, recs_cache)
         fut_pq = phase_b.submit(read_priority_queue, 5, creds_status, pq_cache)
         fut_commits = phase_b.submit(_get_recent_main_commits)
         fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
@@ -1703,6 +1748,7 @@ def main(roadmap_detail: str = "slim") -> int:
 
         _rec_result = fut_rec_count.result()
         ci_rca_recs = fut_ci_rca.result()
+        ci_rca_dispute_recs = fut_ci_rca_dispute.result()
         priority_queue = fut_pq.result()
         recent_main_commits = fut_commits.result()
         latest_decision_ts = fut_decision_ts.result()
@@ -1721,6 +1767,7 @@ def main(roadmap_detail: str = "slim") -> int:
     closed_ci_rca_recs = _derive_ci_rca_closed(recs_cache) if recs_cache is not None else None
     correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=closed_ci_rca_recs)
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
+    print_ci_rca_dispute_recs(ci_rca_dispute_recs)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
 
@@ -1772,6 +1819,7 @@ def main(roadmap_detail: str = "slim") -> int:
         "ci_rca_recs": ci_rca_recs,
         "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
         "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
+        "ci_rca_dispute_recs": ci_rca_dispute_recs,
         "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
