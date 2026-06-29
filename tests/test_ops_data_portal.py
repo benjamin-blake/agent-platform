@@ -1950,14 +1950,15 @@ class TestCiRcaEvidenceDispute:
         stored = json.loads(entry["context_v2_json"])
         assert stored["parent_rec_id"] == "rec-1234"
 
-    def test_file_rec_carve_out_no_ci_rca_context_required(self) -> None:
+    def test_file_rec_carve_out_no_ci_rca_context_required(self, tmp_path: Path) -> None:
         """Dispute rec filed without CiRcaContext fields (no why_chain, detection_gap, etc.) does not raise."""
         import scripts.ops_data_portal as p
 
+        recs_file = tmp_path / "recs.jsonl"
         with (
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-5002"}),
             patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal.RECS_JSONL", Path("/dev/null")),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             rec_id = p.file_rec(dict(_DISPUTE_FIELDS), context_v2_json=_VALID_DISPUTE_PAYLOAD)
         assert rec_id == "rec-5002"
