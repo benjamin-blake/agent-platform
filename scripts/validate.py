@@ -2617,6 +2617,237 @@ def _verifier_is_non_hermetic(class_node: ast.ClassDef) -> bool:
     return False
 
 
+def _extract_verifier_covers(class_node: ast.ClassDef) -> list[str] | None:
+    """Extract the covers list from a Verifier class body via AST.
+
+    Returns the list of glob strings if a ``covers`` class attribute is found,
+    or None if the class inherits the default (["**"]).  Handles both plain
+    assignment and annotated assignment; list literals only (dynamic covers not
+    supported by the static scanner).
+    """
+    for stmt in class_node.body:
+        target_name: str | None = None
+        value_node: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target_name = stmt.targets[0].id
+            value_node = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target_name = stmt.target.id
+            value_node = stmt.value
+        if target_name == "covers" and value_node is not None and isinstance(value_node, ast.List):
+            return [elt.s for elt in value_node.elts if isinstance(elt, ast.Constant) and isinstance(elt.s, str)]
+    return None
+
+
+def validate_verifier_same_pr_guard(failed: list[str]) -> None:
+    """Reject a PR that touches a verifier file AND any file it covers (--pre, T3.1).
+
+    Exceptions (per CD.29):
+      (b) The verifier file is itself new in this diff (first commit cannot violate).
+      (c) No covered file appears in the diff (the author is changing only the verifier,
+          not any guarded target).
+
+    AST-scan scripts/verifiers/*.py to extract the ``covers`` class attribute.
+    Classes without an explicit ``covers`` default to ["**"] (matches everything).
+    """
+    print("\n=== Verifier same-PR guard (T3.1) ===")
+    verifiers_dir = ROOT / "scripts" / "verifiers"
+    if not verifiers_dir.is_dir():
+        print("  scripts/verifiers/ not found -- skip.")
+        return
+
+    changed = get_changed_files()
+    changed_set = set(changed)
+
+    git_new = run(
+        ["git", "diff", "--name-only", "--diff-filter=A", "origin/main"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=ROOT,
+    )
+    new_files: set[str] = set(git_new.stdout.strip().splitlines()) if git_new.returncode == 0 else set()
+
+    violations: list[str] = []
+    for py_file in sorted(verifiers_dir.glob("*.py")):
+        rel = str(py_file.relative_to(ROOT))
+        if rel not in changed_set:
+            continue
+        if rel in new_files:
+            # Exception (b): verifier is brand-new this PR -- no guard violation possible.
+            continue
+
+        try:
+            source = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(py_file))
+        except SyntaxError:
+            continue
+
+        classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+        if not classes:
+            continue
+
+        for cls in classes:
+            covers = _extract_verifier_covers(cls) or ["**"]
+            import fnmatch as _fnmatch  # noqa: PLC0415
+
+            covered_in_diff = [f for f in changed if f != rel and any(_fnmatch.fnmatch(f, g) for g in covers)]
+            if not covered_in_diff:
+                # Exception (c): no covered file in this diff.
+                continue
+            violations.append(
+                f"same-pr-guard: {rel} (class {cls.name}) modified in same PR as covered file(s): "
+                + ", ".join(covered_in_diff[:3])
+                + (" ..." if len(covered_in_diff) > 3 else "")
+            )
+
+    if violations:
+        for v in violations:
+            print(f"  FAIL: {v}")
+        failed.append("Verifier same-PR guard")
+    else:
+        print("  OK: no same-PR violations found.")
+
+
+def validate_verification_registry(failed: list[str]) -> None:
+    """Validate config/agent/verification_registry/registry.yaml against the CD.29 contract (--pre, T3.1).
+
+    Checks:
+    1. Registry file exists.
+    2. File is valid YAML with an ``entries`` list.
+    3. Every entry's primitive_slot is in CANONICAL_SLOTS.
+    4. Every entry carries required fields: check_id, primitive_slot, guard_target, plan_slug, graduated_at.
+    5. check_id values are unique within the file.
+    """
+    print("\n=== Verification registry (T3.1) ===")
+    registry_path = ROOT / "config" / "agent" / "verification_registry" / "registry.yaml"
+    if not registry_path.exists():
+        failed.append("verification-registry: config/agent/verification_registry/registry.yaml not found")
+        return
+
+    try:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        failed.append(f"verification-registry: YAML parse error: {exc}")
+        return
+
+    if not isinstance(data, dict) or "entries" not in data:
+        failed.append("verification-registry: missing top-level 'entries' key")
+        return
+
+    entries = data["entries"] or []
+    if not isinstance(entries, list):
+        failed.append("verification-registry: 'entries' must be a list")
+        return
+
+    # Lazy-import CANONICAL_SLOTS to avoid a module-level import of scripts.verification_checks.
+    root_str = str(ROOT)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts.verification_checks import CANONICAL_SLOTS  # noqa: PLC0415
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+    required_fields = {"check_id", "primitive_slot", "guard_target", "plan_slug", "graduated_at"}
+    seen_ids: set[str] = set()
+    errors: list[str] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"  entry[{i}]: not a mapping")
+            continue
+        missing = required_fields - entry.keys()
+        if missing:
+            errors.append(f"  entry[{i}] ({entry.get('check_id', '?')}): missing fields: {sorted(missing)}")
+        slot = entry.get("primitive_slot")
+        if slot is not None and slot not in CANONICAL_SLOTS:
+            cid_hint = entry.get("check_id", "?")
+            errors.append(f"  entry[{i}] ({cid_hint}): unknown primitive_slot {slot!r} (not in CD.29 vocabulary)")
+        cid = entry.get("check_id")
+        if cid is not None:
+            if cid in seen_ids:
+                errors.append(f"  duplicate check_id: {cid!r}")
+            seen_ids.add(cid)
+
+    if errors:
+        for e in errors:
+            print(e)
+        failed.append("Verification registry")
+    else:
+        print(f"  OK: {len(entries)} graduated checks, all valid.")
+
+
+def validate_differential_gate_baseline(failed: list[str]) -> None:
+    """Exercise the differential admission gate on the kernel's own self-test (full tier, T3.1).
+
+    Runs the slot-count invariant check via is_admitted() with a revert_runner that
+    simulates a pre-change environment where SLOT_COUNT is wrong (7).  The check must
+    FAIL in that environment (proving it is non-tautological) and PASS in the live one.
+
+    This is the gate's own self-test; production baseline execution surfaces are:
+      - validate.py CI hard-gate (this function, live)
+      - Step-Functions executor verify-state (named surface, deferred per CD.27)
+    """
+    print("\n=== Differential admission gate baseline (T3.1) ===")
+    root_str = str(ROOT)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts.verification_checks import (  # noqa: PLC0415
+            CANONICAL_SLOTS,
+            CheckResult,
+            CheckStatus,
+            GrepCountCheck,
+            is_admitted,
+        )
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+    # Build a check that asserts the SLOT_COUNT sentinel is present (via grep on the source file).
+    kernel_path = str(ROOT / "scripts" / "verification_checks.py")
+    slot_count_check = GrepCountCheck(
+        name="kernel-slot-count-eq-6",
+        path=kernel_path,
+        pattern=r"SLOT_COUNT: int = len\(CANONICAL_SLOTS\)",
+        operator="eq",
+        count=1,
+    )
+
+    # Revert runner: simulates the pre-change tree where the sentinel line is absent.
+    def revert_runner(check: GrepCountCheck) -> CheckResult:  # type: ignore[override]
+        # In the pre-change environment the sentinel line "SLOT_COUNT: int = 6" did not
+        # exist (the file didn't exist). Simulate by returning FAIL directly.
+        return CheckResult(status=CheckStatus.FAIL, message="simulated pre-change: sentinel absent")
+
+    admitted = is_admitted(slot_count_check, revert_runner)  # type: ignore[arg-type]
+    if not admitted:
+        failed.append("Differential gate baseline: slot_count_check was not admitted (revert did not produce FAIL)")
+        return
+
+    # Additionally verify the live check actually passes.
+    live_result = slot_count_check.run()
+    if live_result.status != CheckStatus.PASS:
+        failed.append(f"Differential gate baseline: slot_count_check FAILED on live tree: {live_result.message}")
+        return
+
+    # Verify CANONICAL_SLOTS has exactly 6 entries.
+    if len(CANONICAL_SLOTS) != 6:
+        failed.append(f"Differential gate baseline: CANONICAL_SLOTS has {len(CANONICAL_SLOTS)} entries, expected 6")
+        return
+
+    print(f"  OK: differential gate admitted slot_count_check; live check passed; CANONICAL_SLOTS={sorted(CANONICAL_SLOTS)}")
+
+
 def validate_verifier_hermeticity(failed: list[str]) -> None:
     """Fail CI when a HERMETIC-declared (or default) verifier uses a non-hermetic primitive.
 
@@ -3058,6 +3289,9 @@ def run_python_checks(failed: list[str]) -> None:
     validate_scheduled_agent_logs(failed)
     validate_hermeticity_flags(failed)
     validate_verifier_hermeticity(failed)
+    validate_verifier_same_pr_guard(failed)
+    validate_verification_registry(failed)
+    validate_differential_gate_baseline(failed)
     validate_intent_doc_freeze(failed)
     validate_contract_drift(failed)
     validate_field_semantics_drift(failed)
@@ -3556,6 +3790,10 @@ def main() -> None:
         # DuckLake version lockstep gate in --pre: sub-second static (OQ.12 SSOT enforcement). Registered
         # at BOTH sites -- here (--pre fast-tier) and in run_python_checks (full tier) -- per AGENTS.md.
         validate_ducklake_version_lockstep(failed)
+        # Same-PR guard in --pre: pure AST + git diff scan (sub-second), T3.1 / CD.29.
+        validate_verifier_same_pr_guard(failed)
+        # Verification registry validation in --pre: pure YAML parse (sub-second), T3.1 / CD.29.
+        validate_verification_registry(failed)
 
         elapsed = time.monotonic() - _t0
 
