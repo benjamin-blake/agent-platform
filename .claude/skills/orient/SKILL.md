@@ -126,7 +126,7 @@ Render as a table: practice -> preflight signal -> PASS/WATCH/GAP.
 | Telemetry healthy | `telemetry_health` | PASS if `ok`; WATCH if `degraded`; GAP if `dead` or field absent |
 | Data quality coverage | `data_quality.last_verdict` | PASS if `pass`; WATCH if `warn`; GAP if `fail` or field absent |
 | CI-RCA liveness | `ci_rca_unresolved_recs` empty AND `ci_rca_liveness_alert` null | PASS if both clear; GAP if either non-empty or non-null |
-| Rec backlog (soft cap) | `non_automatable` count | PASS if < 500; WATCH if 500-599; GAP if >= 600 |
+| Rec backlog (soft cap) | `non_automatable_softcap_breached` | PASS if false; GAP if true |
 | Terraform pending | `terraform_pending` | PASS if false or absent; WATCH if true |
 
 If a signal is absent from the preflight cache, mark it UNKNOWN rather than inferring a verdict. Do not issue any read to resolve UNKNOWN.

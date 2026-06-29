@@ -45,7 +45,7 @@ Read the following from the preflight cache (`logs/.preflight-report.json`):
 - `convergence_health` -- terraform convergence state (for Best-Practices Health Check)
 - `telemetry_health` -- telemetry pipeline health (for Best-Practices Health Check)
 - `data_quality` -- data quality coverage and last verdict (for Best-Practices Health Check)
-- `non_automatable` -- count of non-automatable open recs (for Best-Practices Health Check)
+- `non_automatable_softcap_breached` -- boolean: true when non-automatable rec count exceeds the soft cap (for Best-Practices Health Check)
 - `terraform_pending` -- pending terraform changes flag (for Best-Practices Health Check)
 
 Read `docs/ROADMAP-PLATFORM.yaml` directly for:
