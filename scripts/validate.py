@@ -2691,11 +2691,7 @@ def validate_verifier_same_pr_guard(failed: list[str]) -> None:
             covers = _extract_verifier_covers(cls) or ["**"]
             import fnmatch as _fnmatch  # noqa: PLC0415
 
-            covered_in_diff = [
-                f
-                for f in changed
-                if f != rel and any(_fnmatch.fnmatch(f, g) for g in covers)
-            ]
+            covered_in_diff = [f for f in changed if f != rel and any(_fnmatch.fnmatch(f, g) for g in covers)]
             if not covered_in_diff:
                 # Exception (c): no covered file in this diff.
                 continue

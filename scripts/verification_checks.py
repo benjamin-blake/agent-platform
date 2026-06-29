@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -29,6 +30,7 @@ class CheckResult:
 # Abstract base
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BaseCheck:
     """Abstract base for all verification checks."""
@@ -43,6 +45,7 @@ class BaseCheck:
 # ---------------------------------------------------------------------------
 # Slot 1: command_exit_zero
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CommandExitZeroCheck(BaseCheck):
@@ -72,6 +75,7 @@ class CommandExitZeroCheck(BaseCheck):
 # ---------------------------------------------------------------------------
 # Slot 2: command_output_matches
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CommandOutputMatchesCheck(BaseCheck):
@@ -108,6 +112,7 @@ class CommandOutputMatchesCheck(BaseCheck):
 # ---------------------------------------------------------------------------
 # Slot 3: file_presence (file_exists + file_absent share one slot)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FileExistsCheck(BaseCheck):
@@ -152,6 +157,7 @@ class FileAbsentCheck(BaseCheck):
 # ---------------------------------------------------------------------------
 # Slot 4: grep_count
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class GrepCountCheck(BaseCheck):
@@ -198,6 +204,7 @@ class GrepCountCheck(BaseCheck):
 # Slot 5: test_selector
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TestSelectorCheck(BaseCheck):
     """Assert that a specific pytest node passes."""
@@ -229,6 +236,7 @@ class TestSelectorCheck(BaseCheck):
 # ---------------------------------------------------------------------------
 # Slot 6: metric_under_threshold
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MetricUnderThresholdCheck(BaseCheck):
@@ -293,14 +301,12 @@ def _assert_slot_count() -> None:
         raise ValueError(f"CD.29 violation: expected 6 canonical slots, found {SLOT_COUNT}: {sorted(CANONICAL_SLOTS)}")
 
 
-_assert_slot_count()
-
-
 # ---------------------------------------------------------------------------
 # Differential admission gate
 # ---------------------------------------------------------------------------
 
-def is_admitted(check: BaseCheck, revert_runner: "Callable[[BaseCheck], CheckResult]") -> bool:
+
+def is_admitted(check: BaseCheck, revert_runner: Callable[[BaseCheck], CheckResult]) -> bool:
     """Return True iff the check FAILS when the guarded change is reverted.
 
     A check that passes both before and after the change is tautological and
@@ -317,7 +323,3 @@ def is_admitted(check: BaseCheck, revert_runner: "Callable[[BaseCheck], CheckRes
     """
     result = revert_runner(check)
     return result.status == CheckStatus.FAIL
-
-
-# make Callable available for the type annotation above without a runtime import
-from collections.abc import Callable  # noqa: E402
