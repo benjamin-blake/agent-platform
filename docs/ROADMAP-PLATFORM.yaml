@@ -6193,9 +6193,9 @@ tier_items:
       - .claude/hooks/edit_scope_guard.py    # new -- fail-closed edit-scope hook (cf. never_on_main.py)
     exit_criteria:
       - "import-linter contracts run inside validate.py (both tiers) and FAIL CI on an illegal cycle or a layering/independence violation between src/ and scripts/ packages"
-      - "A dependency lockfile pins the full transitive closure; CI fails if the lockfile drifts from requirements.txt"
+      - "A dependency lockfile pins the full transitive closure -- including transitively-present, currently-unpinned packages the graph tooling leans on (e.g. networkx, present at 3.6.1 but in no requirements file); CI fails if the lockfile drifts from requirements.txt"
       - "A fail-closed edit-scope hook blocks edits outside the active plan's declared Scope, defaulting to DENY (analogue of never_on_main.py)"
-      - "The three known function-local deferred-import cycles are encoded as import-linter contracts or allowlisted with explicit rationale -- never silently ignored"
+      - "import-linter/grimp build their graph from ast and COUNT function-local deferred imports as edges; the three known cycles (scripts/verifiers, ops_data_portal+executor, execute_recommendation<->batch; module-load graph is acyclic) must be encoded as contracts or allowlisted WITH rationale BEFORE the contract goes blocking -- never silently ignored, never a day-one false-fail"
       - "The Decision 80 build-orchestrator revisit trigger is wired and surfaces (concurrency>1 AND (KG.13 filed OR _FAST_TIER_BUDGET_SECONDS breach)); no silent Bazel/Pants re-litigation"
     related_decisions: [80, 43, 75]
     effort: M
@@ -6224,10 +6224,10 @@ tier_items:
       - scripts/dependency_graph.py    # new -- ast/networkx graph builder; compute-on-demand; optional --export (JSON edge-list)
       - scripts/extract_imports.py    # extend from src.*-only to src.* + scripts.*
     exit_criteria:
-      - "A compute-on-demand CLI builds a first-party import graph (nodes=modules, edges=imports) over src/ and scripts/ via ast, deterministically -- no network, no LLM"
+      - "A compute-on-demand CLI builds a first-party import graph (nodes=modules, edges=imports) over src/ and scripts/ via ast -- handling absolute src.*/scripts.* imports AND intra-package relative imports (ast.ImportFrom.level > 0) so relative edges are not silently lost -- deterministically, no network, no LLM (networkx, the graph lib, is currently transitive/unpinned; T3.11's lockfile captures it)"
       - "The graph answers reverse-dependency ('what imports X') and forward-closure ('transitive imports of Y') for any first-party module"
-      - "Function/symbol-level edges are derivable as an enrichment layer; dynamic-dispatch blind spots (getattr, string-keyed dispatch, importlib.spec_from_file_location) are documented as known-unsound, not silently dropped"
-      - "The root/boundary set is sourced from the per-Lambda manifests (handlers/includes) + main()/CLI entrypoints + pytest tests, honouring Decision 79 no-transitive-resolution"
+      - "Function/symbol-level edges are derivable as an enrichment layer; dynamic-dispatch blind spots (getattr, string-keyed dispatch, importlib.spec_from_file_location, and the .github/agents/schedule.yaml -> prompt_path -> handler scheduled-agent indirection) are documented as known-unsound, not silently dropped"
+      - "The root/boundary set is sourced from per-Lambda manifests (handlers/includes -- INCLUDING status:stub manifests, so stub handlers are rooted and their deps not false-flagged) + ANY module with a __main__/main() entrypoint as a root in its own right + pytest tests + the CLI-invocation surfaces where this repo actually launches scripts (`-m scripts.X` from .github/workflows/*.yml and .claude/**/*.md), honouring Decision 79 no-transitive-resolution"
       - "Default mode is compute-on-demand (no committed graph file); any optional export is drift-guarded by a validate.py freshness check"
       - "Output is machine-parseable (JSON edge-list) for agent consumption and human inspection"
     related_decisions: [80, 79]
@@ -6251,7 +6251,7 @@ tier_items:
         2. grep cross-check across .py AND non-Python surfaces (Lambda manifest.yaml, terraform, .prompt.md):
            a candidate with any dynamic/string reference is DOWNGRADED to low-confidence "dynamically-referenced",
            not reported as dead. High-confidence dead = graph-unreachable AND grep-absent.
-      Deterministic (no LLM). Supersedes the disabled grep-only orphan-code scheduled agent, whose core weakness
+      Deterministic (no LLM). Supersedes the grep-only orphan-code scheduled agent, whose core weakness
       is substring false-positives and no reachability model. No automatic deletion -- mark-then-surface; the
       human/PR decides (Decision 55 no-rescue-loop posture). Rationale for the whole group: agent context is a
       first-class resource and dead code eats it.
@@ -6262,9 +6262,9 @@ tier_items:
       - .github/prompts/scheduled/orphan-code.prompt.md    # retire/retarget the grep-only detector toward the graph-grounded one
     exit_criteria:
       - "Dead-code candidates are computed as graph-unreachable-from-roots over the T3.12 graph at file/module/function granularity (roots = manifest handlers/includes + main()/CLI + pytest)"
-      - "Every candidate is grep-cross-checked across .py AND non-Python surfaces (Lambda manifest.yaml, terraform, .prompt.md); a candidate with any dynamic/string reference is reported low-confidence 'dynamically-referenced', not 'dead'"
+      - "Every candidate is grep-cross-checked across .py AND non-Python reference surfaces -- Lambda manifest.yaml, terraform, .prompt.md, AND the surfaces where this repo invokes code: .github/workflows/*.yml, .github/agents/schedule.yaml, and .claude/**/*.md (skills/commands launching `-m scripts.X`); a candidate with any dynamic/string reference is reported low-confidence 'dynamically-referenced', not 'dead'"
       - "High-confidence dead code (graph-unreachable AND grep-absent) is reported separately from low-confidence candidates; nothing is auto-deleted (mark-then-surface, Decision 55)"
-      - "The detector is deterministic (no LLM) and supersedes the disabled grep-only orphan-code scheduled agent"
+      - "The detector is deterministic (no LLM) and supersedes the grep-only orphan-code scheduled agent (currently cron-scheduled in .github/agents/schedule.yaml; verify its actual disable mechanism -- EventBridge rule / dispatcher env -- at implement-time rather than assuming it is off)"
       - "Exit criteria name the boundary with T3.7: T3.13 targets dead SOURCE code, T3.7 targets dead/redundant TESTS -- the two are disjoint, neither depends on the other's machinery"
     related_decisions: [80, 79, 43]
     effort: M
@@ -6292,7 +6292,7 @@ tier_items:
       - scripts/validate.py    # optional advisory surfacing (no new hard gate unless ratified)
     exit_criteria:
       - "A deterministic metric reports reachable-vs-total first-party SLOC (via the T3.12 graph + T3.13 reachability), import-surface size, and orphan-symbol/file count"
-      - "The metric is trendable over time (snapshot shape defined); if persisted, it routes through the ops portal (Decision 84), never a local read-cache write"
+      - "The metric is trendable over time via a defined snapshot shape (at minimum: reachable_sloc, total_sloc, import_surface, orphan_count, commit_sha, timestamp); if persisted, it routes through the ops portal (Decision 84), never a local read-cache write"
       - "The metric extends Decision 43's per-file governance to a repo-wide context-budget view WITHOUT duplicating the existing SLOC/complexity caps"
       - "The item ships measurement only; gate-vs-advisory is deferred to a ratifying decision at implement-time (Decision 75) -- no new hard gate is introduced by this item alone"
     related_decisions: [80, 43, 84]
