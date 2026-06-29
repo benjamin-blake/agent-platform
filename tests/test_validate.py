@@ -1822,6 +1822,7 @@ def _mock_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
     return cp
 
 
+@pytest.mark.skipif(importlib.util.find_spec("boto3") is None, reason="boto3 not installed")
 class TestEnsureFreshDqResults:
     """Tests for ensure_fresh_dq_results() — the DQ runner auto-invoke."""
 
