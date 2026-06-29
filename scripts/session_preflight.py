@@ -1413,32 +1413,6 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
     }
 
 
-def sync_copilot_instructions() -> None:
-    """Check that the two instructions files are not accidentally identical.
-
-    copilot_instructions.md (underscore) — loaded by VS Code Copilot Chat.
-      Full developer context: rules, workflow checklists, AWS details, all gotchas.
-
-    copilot-instructions.md (hyphen) — loaded by the `gh copilot` CLI.
-      Lean task-execution context: code style rules, File Router, coding gotchas.
-      Does NOT contain pre-implementation checklists or branch-check workflows,
-      because each CLI call is a single-shot self-contained task.
-
-    These two files serve different purposes and must NOT be kept in sync.
-    This function emits a warning if they are accidentally made identical again.
-    """
-    src = ROOT / ".github" / "copilot_instructions.md"
-    dst = ROOT / ".github" / "copilot-instructions.md"
-    if src.exists() and dst.exists():
-        if src.read_bytes() == dst.read_bytes():
-            print(
-                "WARNING: .github/copilot_instructions.md and .github/copilot-instructions.md "
-                "are identical. They serve different purposes (VS Code vs gh copilot CLI) and "
-                "should have separate content. The CLI version should NOT contain "
-                "pre-implementation checklists or branch-check workflows."
-            )
-
-
 def check_telemetry_health() -> dict:
     """Telemetry health stub: the Athena telemetry tables died with the 2026-05-28 account
     migration, so the previous implementation polled TABLE_NOT_FOUND for ~a minute every
@@ -1617,8 +1591,6 @@ def _check_endstate_drift() -> dict:
 
 def main(roadmap_detail: str = "slim") -> int:
     session_start = datetime.now(timezone.utc).isoformat()
-
-    sync_copilot_instructions()
 
     # Telemetry health runs early so it appears in output
     telemetry_health = check_telemetry_health()

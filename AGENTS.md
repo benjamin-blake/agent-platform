@@ -184,7 +184,7 @@ Triggers `rec-autoclose.yml` to close each rec via the ops portal. Fallback: `bi
 - Manual confirmation: if `validate.py` appears to skip tests, run `pytest` directly to confirm.
 
 ## Instruction architecture
-The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude Code is the 4th consumer. Layers:
+The 5-layer contract is at `docs/contracts/instruction-architecture.yaml`. Claude Code is the 4th consumer. Layers:
 
 | Layer | Location | When loaded |
 |---|---|---|
@@ -194,7 +194,7 @@ The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude 
 | 4. Skills (methodology) | `.claude/skills/*/SKILL.md` | When agent invokes `Skill` tool |
 | 5. Executor prompts | `config/agent/executor/prompts/*.prompt.md` | By `execute_recommendation.py` |
 
-Legacy fallbacks at `.github/prompts/` and `.github/agents/` are deep-frozen — do not edit them unless explicitly asked.
+The `.github/prompts/scheduled/` and `.github/agents/schedule.yaml` surfaces are retained for live scheduled agents. The legacy top-level `.github/prompts/*.prompt.md` and `.github/agents/*.agent.md` files were deleted at T-1.13.
 
 ## Operational runbooks
 
