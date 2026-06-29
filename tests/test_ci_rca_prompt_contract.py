@@ -59,7 +59,7 @@ class TestStaleFormsAbsent:
         assert not re.search(r"ops_data_portal\s+get_rec_write_guidance(\s|$)", agent_text)
 
     def test_no_five_category_taxonomy_step(self, agent_text: str) -> None:
-        """Legacy free-form 5-category taxonomy step (the hardcoded IAM/schema/dependency/environment/code-regression list) is absent."""
+        """Legacy free-form 5-category taxonomy step (hardcoded category list) is absent."""
         stale_categories = [
             "IAM gap",
             "Schema drift",
