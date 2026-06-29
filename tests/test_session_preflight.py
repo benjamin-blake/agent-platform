@@ -1507,7 +1507,6 @@ class TestCredentialsOrderingInMain:
 
         with (
             patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.sync_copilot_instructions"),
             patch(
                 "session_preflight.check_telemetry_health",
                 return_value={"friction_patterns": [], "overall": "ok", "checks": []},

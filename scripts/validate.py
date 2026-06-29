@@ -211,8 +211,8 @@ def validate_requirements(failed: list[str]) -> None:
 
 
 # CLI tools intentionally absent on the Claude Code web harness (GitHub ops use the
-# GitHub MCP tools, Decision 76). Legacy .github/prompts/.github/agents files that still
-# reference these are deep-frozen; a missing optional tool is a skip, not a failure.
+# GitHub MCP tools, Decision 76). The .github/prompts/ and .github/agents/ directories
+# survive for live scheduled-agent surfaces; a missing optional tool is a skip, not a failure.
 _OPTIONAL_CLI_TOOLS = {"gh"}
 
 
@@ -522,8 +522,10 @@ def validate_prompt_compliance(failed: list[str]) -> None:
         print("prompt_compliance.py not found — skipping.")
         return
 
-    prompts_dir = ROOT / ".github" / "prompts"
-    prompt_files = list(prompts_dir.glob("*.prompt.md"))
+    sources = compliance.get_behavioural_invariant_sources()
+    prompt_files: list[Path] = []
+    for glob_pattern in sources:
+        prompt_files.extend(ROOT.glob(glob_pattern))
     violations: list[str] = []
 
     retro_log = ROOT / "logs" / ".retro-lite-log.jsonl"
@@ -555,7 +557,27 @@ def validate_prompt_compliance(failed: list[str]) -> None:
             print(f"  - {v}")
         failed.append("Prompt compliance check")
     else:
-        print(f"Prompt compliance: {len(prompt_files)} prompt file(s) checked, no violations.")
+        print(f"Prompt compliance: {len(prompt_files)} file(s) checked, no violations.")
+
+
+def validate_instruction_architecture_layers(failed: list[str]) -> None:
+    """Check that every layer in instruction-architecture.yaml resolves to at least one file."""
+    print("\n=== Instruction architecture layer claims ===")
+    compliance = _load_prompt_compliance()
+    if compliance is None:
+        print("prompt_compliance.py not found — skipping layer claims check.")
+        return
+
+    contract = compliance._load_instruction_architecture()
+    violations = compliance.check_layer_compliance(contract)
+    if violations:
+        print("Layer claims violations:")
+        for v in violations:
+            print(f"  - {v}")
+        failed.append("Instruction architecture layer claims")
+    else:
+        layers = contract.get("layers", [])
+        print(f"Layer claims: {len(layers)} layer(s) checked, all content_locations resolve.")
 
 
 def validate_copilot_multipliers(failed: list[str]) -> None:
@@ -1015,9 +1037,8 @@ def validate_terraform_try(failed: list[str]) -> None:
 def validate_no_underscore_instructions(failed: list[str]) -> None:
     """Fail if .github/copilot_instructions.md (underscore) exists.
 
-    VS Code loads .github/copilot-instructions.md (hyphen).  The underscore
-    variant is a ghost file that consumes context budget and diverges silently.
-    Decision 38 deleted it; this check prevents accidental re-creation.
+    The underscore variant is a ghost file (Decision 38 deleted it); this check
+    prevents re-creation.
     """
     print("\n=== Underscore instruction file check ===")
     underscore_path = ROOT / ".github" / "copilot_instructions.md"
@@ -3515,6 +3536,7 @@ def main() -> None:
         validate_cli_tools_in_prompts(failed)
         validate_workflow_agent_safety(failed)
         validate_prompt_compliance(failed)
+        validate_instruction_architecture_layers(failed)
 
     ensure_fresh_dq_results(failed)
     validate_verification_harness(failed)
