@@ -154,9 +154,10 @@ verification_plan:
     action: Resolve the contract's $ref cross-system field(s) and confirm chain-depth 1 with no dangling/chained refs.
     command: >-
       bin/venv-python -c "from scripts.contracts import load_contract, resolve_refs; d =
-      load_contract('docs/contracts/verification-registry.yaml'); r = resolve_refs(d,
-      'docs/contracts'); assert any(s.ref is None for s in r.values()); print('refs-ok')"
-    expected: Prints refs-ok; every $ref resolves to a Class C leaf field.
+      load_contract('docs/contracts/verification-registry.yaml'); assert any(s.ref is not None for
+      s in (d.fields or {}).values()), 'no $ref field present'; r = resolve_refs(d,
+      'docs/contracts'); assert all(s.ref is None for s in r.values()); print('refs-ok')"
+    expected: Prints refs-ok; at least one field carried a $ref and every $ref resolved to a Class C leaf field (none left unresolved).
     fix_if: resolve_refs raises (dangling target, chained Class-C ref, or a $ref carrying an inline definition).
   - step: 5
     phase: pre-deploy
@@ -287,7 +288,11 @@ context:
     the drift gate at EVERY intermediate commit -- not only after the portal-allocated dec id is
     written into ratified_via. Author the contract with a syntactically valid placeholder
     ratified_via plus status: ratified, contract_version: 1, previous_versions: [] from the first
-    commit so no intermediate `validate.py --pre` run fails the drift gate.
+    commit so no intermediate `validate.py --pre` run fails the drift gate. Also: the drift gate's
+    Pass 1 (check_required_inline_fields, run unconditionally) requires EVERY inline Class A field
+    to carry description, semantics, populated_by, AND dq_intent -- populate all four on each inline
+    registry field (check_id, primitive_type, guard_target, input_closure, severity,
+    fail_on_revert_verified, graduated_at) or the first --pre run fails.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/t3-1-verifier-harness-unny29)
   - docs/PROJECT_CONTEXT.md read
