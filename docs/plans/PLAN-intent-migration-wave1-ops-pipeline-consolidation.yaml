@@ -1,0 +1,198 @@
+schema_version: 1
+slug: "intent-migration-wave1-ops-pipeline-consolidation"
+intent: >-
+  Advance platform tier T5.5 (INTENT-doc extract-and-retire) by retiring the WAVE-1
+  document docs/INTENT-ops-pipeline-consolidation.md, whose incident-analysis content and
+  architectural recommendations are fully subsumed by Decision 84 (DuckLake single-portal
+  consolidation) and Decision 78 (DuckLake adoption, which superseded Decision 69) -- shrinking
+  the prose drift surface so agents read architectural intent from canonical machine-parseable
+  surfaces (Decisions + roadmap), per Decision 86 and the agent-first North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-intent-migration-wave1-ops-pipeline-consolidation.yaml
+phase: >-
+  Platform tier T5.5 (INTENT-* document extraction and retirement); WAVE-1 of
+  docs/intent-migration/MANIFEST.yaml (feasibility_graduated -> delete_pointer).
+scope:
+  - file: docs/INTENT-ops-pipeline-consolidation.md
+    action: Delete
+    purpose: >-
+      Retire the ops-pipeline incident analysis and consolidation recommendation. Its
+      architectural content (three-function API, primitive fixes, single-portal invariant) is
+      fully subsumed by Decision 84 (I-1 single backend, I-2 writer-owned keyspace, I-3
+      named-verb boundary, I-4 no write buffering) and Decision 78 (DuckLake adoption, which
+      superseded Decision 69). All five "decisions the planner will need to make" in the doc
+      are resolved by the Decision 78/84 DuckLake cutover. Prose deleted per delete_pointer
+      archetype; recoverable in git history.
+  - file: docs/intent-migration/MANIFEST.yaml
+    action: Modify
+    purpose: >-
+      Flip the ops-pipeline-consolidation documents[] entry disposition_state from pending to
+      done. Change ONLY that one field; leave content_blocks / drift_findings / primary_targets /
+      related_decisions intact as the disposition record.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Inbound-reference sweep: remove the `- docs/INTENT-ops-pipeline-consolidation.md` line
+      from tier_item T5.5 files_in_scope (line ~6639) so the deleted path is not a dangling
+      reference and the T5.5 final INTENT- grep stays clean.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - docs/INTENT-ops-pipeline-consolidation.md no longer exists on disk.
+  - >-
+    The MANIFEST ops-pipeline-consolidation documents[] entry has disposition_state: done,
+    and it is the only entry flipped to done; every other documents[] entry is unchanged.
+  - >-
+    The validate.py intent-doc-freeze guard (validate_intent_doc_freeze) produces no failure
+    naming ops-pipeline-consolidation when run against the post-change tree.
+  - >-
+    tier_item T5.5 files_in_scope no longer lists docs/INTENT-ops-pipeline-consolidation.md.
+  - >-
+    Repo-wide, the only remaining occurrence of the path docs/INTENT-ops-pipeline-consolidation.md
+    is the historical plan artifact docs/plans/PLAN-ops-pipeline-consolidation.md. Neither
+    docs/DECISIONS.md nor docs/ROADMAP-PLATFORM.yaml contains the path.
+  - Full `bin/venv-python -m scripts.validate` exits 0 (credential-gated checks may report SKIPPED in degraded mode).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the INTENT doc is deleted from the working tree.
+    command: test ! -f docs/INTENT-ops-pipeline-consolidation.md && echo DELETED || echo PRESENT
+    expected: Prints DELETED.
+    fix_if: >-
+      Prints PRESENT -- the file still exists. Ensure `git rm docs/INTENT-ops-pipeline-consolidation.md` ran.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the MANIFEST ops-pipeline-consolidation entry is flipped to disposition_state done.
+    command: >-
+      grep -A20 '^  - id: ops-pipeline-consolidation$' docs/intent-migration/MANIFEST.yaml | grep -m1 'disposition_state:'
+    expected: "Prints a line whose value is `    disposition_state: done`."
+    fix_if: >-
+      Prints `    disposition_state: pending` (or nothing) -- flip ONLY the ops-pipeline-consolidation
+      entry's disposition_state to done; do not touch other entries.
+  - step: 3
+    phase: pre-deploy
+    action: Run the real intent-doc-freeze guard; confirm no ops-pipeline-consolidation false-positive.
+    command: >-
+      bin/venv-python -c "import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f); print('PASS' if not any('ops-pipeline-consolidation' in x for x in f) else 'FAIL:'+str(f))"
+    expected: Prints PASS.
+    fix_if: >-
+      Prints FAIL -- the guard flags ops-pipeline-consolidation. Ensure BOTH the file is deleted
+      AND the manifest entry is done (the two must land together).
+  - step: 4
+    phase: pre-deploy
+    action: Inbound-reference sweep -- confirm ROADMAP-PLATFORM.yaml holds no path reference.
+    command: >-
+      grep -n "INTENT-ops-pipeline-consolidation.md" docs/ROADMAP-PLATFORM.yaml; echo "grep_exit=$?"
+    expected: No matching lines printed; trailing line reads grep_exit=1.
+    fix_if: >-
+      Any line prints (grep_exit=0) -- a live path reference remains. Remove the
+      `- docs/INTENT-ops-pipeline-consolidation.md` line from T5.5 files_in_scope.
+  - step: 5
+    phase: pre-deploy
+    action: Inbound-reference sweep -- confirm neither DECISIONS.md nor ROADMAP-PLATFORM.yaml contain the path.
+    command: >-
+      grep -rn "INTENT-ops-pipeline-consolidation.md" docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml; echo "grep_exit=$?"
+    expected: No matching lines; grep_exit=1.
+    fix_if: >-
+      Any line prints -- a live canonical surface still dangles. Remove or reword the reference.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm only the historical plan artifact holds the path repo-wide.
+    command: >-
+      grep -rl "INTENT-ops-pipeline-consolidation.md" . --include=*.md --include=*.yaml --include=*.py | sort
+    expected: >-
+      Exactly one path -- ./docs/plans/PLAN-ops-pipeline-consolidation.md.
+      Neither docs/DECISIONS.md nor docs/ROADMAP-PLATFORM.yaml appears.
+    fix_if: >-
+      docs/DECISIONS.md or docs/ROADMAP-PLATFORM.yaml appears -- a live surface still dangles.
+      An unexpected new path appears -- investigate before editing.
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the synthetic-fixture guard tests still pass (unaffected by the real manifest flip).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestIntentDocFreeze -q
+    expected: All TestIntentDocFreeze tests pass.
+    fix_if: >-
+      A failure -- inspect it; the tests are synthetic and should be flip-independent. Do NOT edit
+      the tests to mask a real regression (Decision 55).
+  - step: 8
+    phase: pre-deploy
+    action: Run the authoritative presubmit (CI-equivalent gate).
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exits 0; the "Intent doc freeze (Decision 86)" section reports no failures; the ROADMAP
+      and MANIFEST schema checks pass (credential-gated DQ checks may report SKIPPED).
+    fix_if: >-
+      Non-zero exit -- read the failing check. Likely causes: malformed YAML after the manifest or
+      roadmap edit. Fix the cited check; do not add or remove checks to make it pass.
+constraints:
+  - >-
+    Scope is STRICTLY the three files listed. Touch no other INTENT doc.
+  - >-
+    DECISIONS.md has NO live path reference to docs/INTENT-ops-pipeline-consolidation.md
+    (confirmed by grep at plan time). No DECISIONS.md edit is needed or permitted.
+  - >-
+    Do NOT file a new tier_item for any residual gap -- all five "decisions the planner will
+    need to make" from the INTENT doc are resolved by Decision 78/84. Decision 84 Phase 4 /
+    T2.26 already carries the telemetry path.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Do NOT edit logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl. This plan
+    files no recs and closes none.
+context:
+  - >-
+    Governing authority: Decision 86 (INTENT prose docs retired). The guard's allowed set is
+    auto-derived from MANIFEST disposition_state != done.
+  - >-
+    Primary deletion pointer: Decision 84 (DuckLake single-portal consolidation) subsumes
+    the recommended architecture and resolves all five open decisions from the INTENT doc.
+    Decision 78 (DuckLake adoption) superseded Decision 69 (ghost-superseded before it was
+    formally authored as a heading in DECISIONS.md; a pre-existing data quality gap unrelated
+    to this plan's scope).
+  - >-
+    Content block verification:
+    Block 1 "Recommended architecture" -> Decision 84 (I-1 single backend, I-2 writer-owned
+    keyspace, I-3 named-verb boundary, I-4 no write buffering). Three-function API (file_rec,
+    update_rec, sync) and primitive fixes are all live.
+    Block 2 "Decisions the planner will need to make" -> All 5 resolved by Decision 78/84:
+    (1) compaction trigger -- DuckLake atomic commits; (2) DynamoDB read source -- DuckLake
+    writer-owned keyspace; (3) CLI migration -- I-4 hard-removed drain/pull; (4) cache
+    rebuild -- I-3 named-verb boundary; (5) incident recovery -- historical, done.
+  - >-
+    Inbound-reference inventory:
+    LIVE to remove: docs/ROADMAP-PLATFORM.yaml T5.5 files_in_scope line ~6639.
+    LEAVE: docs/plans/PLAN-ops-pipeline-consolidation.md (historical plan artifact).
+    NO path reference found in docs/DECISIONS.md (confirmed by grep at plan time).
+  - >-
+    WAVE-1 gate "WAVE-0 complete" holds: Decision 86 is Decided and the validate.py
+    intent-doc-freeze guard is wired (WAVE-0 shipped 2026-06-12). WAVE-1 has NO cross_wave_gate.
+  - >-
+    Decision-scout gate: NO_FLAGS. CITE Decision 86 + Decision 84.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/intent-migration-ops-consolidation-q2xe2l)
+  - docs/INTENT-ops-pipeline-consolidation.md read in full
+  - Decision 84 read (primary deletion pointer confirmed)
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Inbound-reference inventory confirmed (LIVE to sweep: ROADMAP-PLATFORM.yaml ~6639;
+    LEAVE: docs/plans/PLAN-ops-pipeline-consolidation.md; NO path reference in DECISIONS.md)
+execution_steps:
+  - >-
+    Delete docs/INTENT-ops-pipeline-consolidation.md (`git rm docs/INTENT-ops-pipeline-consolidation.md`).
+  - >-
+    In docs/intent-migration/MANIFEST.yaml, flip the ops-pipeline-consolidation documents[]
+    entry's disposition_state from pending to done. Change ONLY that one field.
+  - >-
+    In docs/ROADMAP-PLATFORM.yaml, remove the `- docs/INTENT-ops-pipeline-consolidation.md`
+    line from tier_item T5.5 files_in_scope (line ~6639).
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass.
+  - >-
+    Report: the doc is deleted, the manifest entry is done, the guard passes, the live-surface
+    sweep is clean, the synthetic guard tests pass, and the full presubmit is green.
+work_areas: []
+rollback: >-
+  All three edits land in one branch commit. Restore docs/INTENT-ops-pipeline-consolidation.md
+  from git history, re-flip the MANIFEST entry to pending, and restore the ROADMAP-PLATFORM.yaml
+  T5.5 files_in_scope line.
