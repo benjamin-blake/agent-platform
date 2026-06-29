@@ -2901,8 +2901,12 @@ def validate_authority_budget(failed: list[str]) -> None:
         print(f"  FAIL: cannot read HCL: {exc}")
         return
 
+    # Use bounded matching: names must appear as ARN path components or quoted strings in HCL.
+    # Bare substring matching is too broad -- a short name or prefix would match spuriously
+    # across comment lines or other strings (H1, code-review 2026-06-29).
     boundary_name = budget.get("boundary_policy_name", "")
-    if boundary_name not in hcl_text:
+    # Boundary policy names appear as ":policy/<name>" in ARN strings in the HCL.
+    if f":policy/{boundary_name}" not in hcl_text and f'"{boundary_name}"' not in hcl_text:
         failed.append(
             f"authority-budget: boundary_policy_name {boundary_name!r} not found in {hcl_path.name} -- "
             "budget and HCL are out of sync"
@@ -2912,7 +2916,8 @@ def validate_authority_budget(failed: list[str]) -> None:
         print(f"  PASS: boundary_policy_name {boundary_name!r} found in HCL.")
 
     for role in budget.get("in_budget_managed_roles", []):
-        if role not in hcl_text:
+        # Role names appear as ":role/<name>" ARN path components in IAMRoleWriteBounded Resource lists.
+        if f":role/{role}" not in hcl_text and f'"{role}"' not in hcl_text:
             failed.append(
                 f"authority-budget: in_budget_managed_role {role!r} not found in {hcl_path.name} -- "
                 "role is not a target in IAMRoleWriteBounded; remove from budget or update HCL"
