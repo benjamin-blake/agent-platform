@@ -1,0 +1,374 @@
+schema_version: 1
+slug: instruction-architecture-yaml
+intent: >-
+  T-1.13: Convert the prose contract docs/contracts/instruction-architecture.md into a
+  machine-readable docs/contracts/instruction-architecture.yaml (the 5-layer model as structured
+  fields: layer, name, consumers, load_time, content_locations, anti_patterns), correcting the
+  stale Layer 1/2 drift (the .md still names GEMINI.md / copilot-instructions.md; the live set is
+  CLAUDE.md/AGENTS.md + docs/PROJECT_CONTEXT.md per Decision 76, audit F-038). Wire
+  scripts/prompt_compliance.py to read the YAML (behavioural-invariant source discovery +
+  layer-claims enforcement), delete the prose .md, and -- per user directive 2026-06-29 -- delete
+  the runtime-orphaned legacy instruction surfaces this work would otherwise edit/reference
+  (.agents/, top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md,
+  .github/copilot-instructions.md). Advances the CD.25 pre-codegen contract-ratification series
+  (T-1.13..T-1.19) and partially advances T5.3 (legacy retirement).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-instruction-architecture-yaml.yaml
+phase: >-
+  PLATFORM tier_item T-1.13 (tier T-1, CD.25 pre-codegen contract ratification). depends_on T-1.12
+  (satisfied). Not on the product roadmap critical path. Partially advances T5.3 (Legacy
+  .github/prompts + .github/agents retirement).
+scope:
+  - file: docs/contracts/instruction-architecture.yaml
+    action: Create
+    purpose: >-
+      NON-ritual registry YAML carrying the 5-layer model as structured data (per-layer name,
+      content_locations globs, load_time, consumers, contains/excludes), the consumers table,
+      the anti-patterns table, a behavioural_invariant_sources list (read by prompt_compliance),
+      and a legacy_surfaces_retired note. Describes ONLY the live consumer set -- no legacy mirrors.
+  - file: docs/contracts/instruction-architecture.md
+    action: Delete
+    purpose: Superseded by the YAML; agent-first repo forbids a prose companion alongside a machine-readable source (Decision 86). Carries stale GEMINI.md/copilot-instructions.md drift that must not survive.
+  - file: scripts/prompt_compliance.py
+    action: Modify
+    purpose: >-
+      Add a lazy, cached, import-safe loader for instruction-architecture.yaml; an accessor
+      get_behavioural_invariant_sources() (fallback ['.claude/skills/*/SKILL.md']); and
+      check_layer_compliance() asserting each layer's content_locations resolve to >=1 path on disk.
+      Repoint the hardcoded .github/prompts/ discovery in main() to the YAML-sourced set. Update
+      docstring/help text. Never raise at import; all I/O deferred to first accessor call.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      validate_prompt_compliance(): source the invariant-file discovery from
+      compliance.get_behavioural_invariant_sources() (resolved under ROOT) instead of the hardcoded
+      .github/prompts glob. Add validate_instruction_architecture_layers(failed) that runs
+      check_layer_compliance and appends violations; wire it into the run sequence. KEEP
+      validate_no_underscore_instructions (Decision 38 guard) untouched. Update the stale legacy
+      comment (~line 214).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Remove sync_copilot_instructions() (function + its call site ~line 1621) -- it compared the
+      now-deleted copilot-instructions.md against the already-absent underscore variant; with the
+      hyphen file deleted it is permanently vacuous.
+  - file: scripts/executor/step_runner.py
+    action: Modify
+    purpose: Remove the dead '.github/copilot-instructions.md' key from _GOTCHA_MAP (the executor can no longer target a deleted file).
+  - file: config/agent/copilot/model_routing.yaml
+    action: Modify
+    purpose: >-
+      Remove the dead 'copilot-instructions.md' path-tier pattern. KEEP the '.github/prompts/',
+      '.github/agents/', '.github/instructions/' patterns -- live files (scheduled/, schedule.yaml,
+      executor instructions) still match them. Does NOT touch the Copilot SDK provider config
+      (Decision 49/40 -- this is path-tier routing, not provider selection).
+  - file: scripts/model_registry.py
+    action: Modify
+    purpose: Update the docstring example (~lines 221-222) that referenced copilot-instructions.md pattern matching; no logic change.
+  - file: scripts/copilot_wrapper.py
+    action: Modify
+    purpose: Genericise the comment (~line 579) referencing copilot-instructions.md Known Gotchas; the gotchas now live in AGENTS.md/PROJECT_CONTEXT.md. KEEP the .github/instructions/ reference (~line 472, files retained). No logic change.
+  - file: scripts/telemetry_schemas.py
+    action: Modify
+    purpose: Genericise the comment (~line 385) referencing copilot-instructions.md. No logic change.
+  - file: scripts/delegate_runner.py
+    action: Modify
+    purpose: Genericise the comment (~line 10) referencing copilot-instructions.md. No logic change.
+  - file: scripts/list_customizations.py
+    action: Modify
+    purpose: Update the docstring/scan (~line 106) that scans top-level .github/prompts/*.prompt.md + .github/agents/*.agent.md to reflect that only scheduled/ + schedule.yaml remain. Advisory script (not in CI); keep it non-erroring.
+  - file: AGENTS.md
+    action: Modify
+    purpose: Repoint the Instruction architecture section (~line 187) from docs/contracts/instruction-architecture.md to the .yaml.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: Repoint the two instruction-architecture.md references (~lines 6, 148) to the .yaml.
+  - file: EVALUATION-PROMPTS.yaml
+    action: Modify
+    purpose: Repoint the two instruction-architecture.md references (~lines 5, 34, canonical-sources + answer_loci) to the .yaml.
+  - file: tests/test_prompt_compliance.py
+    action: Modify
+    purpose: >-
+      Add coverage for the new loader (reads-YAML, absent-YAML fallback, unparseable fallback,
+      yaml-import-unavailable fallback, lazy-import), get_behavioural_invariant_sources(), and
+      check_layer_compliance() (pass when all layers resolve; violation when a layer's
+      content_locations match nothing). 100% coverage of new code. Update any main() test that
+      assumed the .github/prompts discovery path.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Update TestValidatePromptCompliance (3 tests) for YAML-sourced discovery (stub
+      get_behavioural_invariant_sources on the mock to return ['.github/prompts/*.prompt.md'] so the
+      tmp_path .github/prompts fixtures still resolve, OR switch fixtures to .claude/skills). Add
+      TestValidateInstructionArchitectureLayers. Leave the underscore-instruction test intact.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: Remove the patch("session_preflight.sync_copilot_instructions") line (~1510) and any assertion on it.
+  - file: tests/test_model_registry.py
+    action: Modify
+    purpose: Remove/adjust the copilot-instructions.md pattern assertions (~lines 67, 247, 377, 387). KEEP the .github/prompts//.github/agents//.github/instructions/ pattern assertions (patterns retained).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Mark T-1.13 status complete (set completed_at; record met_by). Add a T5.3 progress_note that
+      top-level .github/prompts/*.prompt.md + .github/agents/*.agent.md + .github/copilot-instructions.md
+      + .agents/ were deleted under T-1.13; the directories survive for scheduled/ + schedule.yaml,
+      so T5.3's full-directory deletion remains blocked on scheduled-agent decoupling (depends_on T4.3).
+  - file: .agents/
+    action: Delete
+    purpose: Antigravity legacy mirror (workflows/ + skills/). Zero runtime consumers; demoted to legacy (Decision 76) / retired (Decision 58). Reverses PLAN-t014-phase3-residual-sweep retention -- conscious choice per user directive.
+  - file: .github/prompts/*.prompt.md (top-level only)
+    action: Delete
+    purpose: >-
+      Legacy VS Code/Copilot interactive prompts (ci_triage, develop-executor, documentation,
+      documentation_full_audit, documentation_update, git_add_commit_message, implement, plan).
+      KEEP the .github/prompts/scheduled/ subdirectory (live scheduled-agent prompts).
+  - file: .github/agents/*.agent.md
+    action: Delete
+    purpose: >-
+      Legacy subagent definitions (code-review, plan-critique, prompt-reviewer, rca-analyst,
+      rec-curator, retro-lite, retrospective, scope-guard, step-validator). KEEP
+      .github/agents/schedule.yaml (live scheduled-agent manifest read by run_scheduled_agent.py).
+  - file: .github/copilot-instructions.md
+    action: Delete
+    purpose: Legacy gh-copilot-CLI instruction file; external Copilot tooling abandoned (user directive 2026-06-29). The underscore variant was already removed (Decision 38).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    NONE. No Lambda artifact change: config/agent/ is NOT Lambda-packaged (AGENTS.md); the only
+    Lambda-asset legacy files (.github/agents/schedule.yaml, .github/prompts/scheduled/) are KEPT.
+    scripts/prompt_compliance.py, validate.py, session_preflight.py, step_runner.py, model_registry.py
+    are not in any active Lambda manifest's includes. A verification step confirms no active manifest
+    references a deleted file. No terraform. V2.
+acceptance_criteria:
+  - docs/contracts/instruction-architecture.yaml exists with version 1, contract_version 1, status ratified; it is NON-ritual (no contract block carrying a class field) so the CD.25 drift gate skips it.
+  - The YAML's layer table reflects the LIVE consumer set -- Layer 1 = CLAUDE.md/AGENTS.md + per-dir CLAUDE.md, Layer 2 = docs/PROJECT_CONTEXT.md, Layer 3 = .claude/commands/, Layer 4 = .claude/skills/, Layer 5 = config/agent/executor/prompts/ -- with NO GEMINI.md or copilot-instructions.md references and no legacy-mirror layer entries.
+  - scripts/prompt_compliance.py reads the YAML for behavioural_invariant_sources and layer content_locations; module import performs no I/O and never raises; absent/unparseable YAML falls back to ['.claude/skills/*/SKILL.md'] without error.
+  - check_layer_compliance passes against the live repo (every declared layer content_locations glob resolves to >=1 path), and a unit test proves it flags a layer whose glob matches nothing.
+  - validate.py full run passes locally; prompt-compliance discovery is YAML-sourced; validate_instruction_architecture_layers runs in the sequence; validate_no_underscore_instructions remains active.
+  - docs/contracts/instruction-architecture.md is deleted; AGENTS.md, docs/PROJECT_CONTEXT.md, and EVALUATION-PROMPTS.yaml point at the .yaml; no live (non-historical-plan, non-audit, non-DECISIONS) surface references the deleted .md.
+  - The deleted legacy surfaces (.agents/, top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md, .github/copilot-instructions.md) are gone; .github/prompts/scheduled/, .github/agents/schedule.yaml, and .github/instructions/ are retained; no live code/config references a deleted file.
+  - Scheduled-agent + executor surfaces still load (run_scheduled_agent reads schedule.yaml; scheduled-agent + executor-step-runner tests pass); the Copilot SDK provider path is untouched.
+  - The affected test suites pass (prompt_compliance, validate, session_preflight, model_registry, executor_step_runner, scheduled_agent_handler, run_scheduled_agent).
+  - docs/ROADMAP-PLATFORM.yaml marks T-1.13 complete and records the T5.3 partial-progress note.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Unit tests for prompt_compliance exercise the real (un-mocked) YAML load path, the accessor, check_layer_compliance, and all fallbacks.
+    command: bin/venv-python -m pytest tests/test_prompt_compliance.py -q
+    expected: All tests pass, including new loader/accessor/layer-check/fallback tests.
+    fix_if: A failure means the loader, accessor, layer-check, or fallback is wrong; fix the implementation or the test fixture.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the YAML has the required top-level keys + ratified status, declares the live layers (no GEMINI.md / copilot-instructions.md), and that prompt_compliance reads it (not just the fallback).
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/instruction-architecture.yaml')); assert {'version','contract_version','status','layers','consumers','behavioural_invariant_sources','anti_patterns'} <= set(d), set(d); assert d['contract_version']==1 and d['status']=='ratified'; t=yaml.safe_dump(d); assert 'GEMINI.md' not in t and 'copilot-instructions.md' not in t, 'stale drift survived'; import scripts.prompt_compliance as p; assert '.claude/skills' in ''.join(p.get_behavioural_invariant_sources()); print('yaml+keys+live-consumer OK')"
+    expected: Prints "yaml+keys+live-consumer OK".
+    fix_if: Missing keys, wrong status, surviving stale names, or accessor not reading the YAML; fix the YAML or accessor.
+  - step: 3
+    phase: pre-deploy
+    action: check_layer_compliance passes against the live repo -- every declared layer content_locations glob resolves to at least one file.
+    command: bin/venv-python -c "import scripts.prompt_compliance as p; c=p._load_instruction_architecture(); v=p.check_layer_compliance(c); assert v==[], v; print('layer-claims OK')"
+    expected: Prints "layer-claims OK" (no unresolved layer content_locations).
+    fix_if: A violation means a layer's glob is wrong or points at a deleted/moved path; correct the YAML content_locations.
+  - step: 4
+    phase: pre-deploy
+    action: Import safety + absent-YAML fallback -- importing performs no FS read; with the contract hidden the accessor returns the fallback and does not raise.
+    command: bin/venv-python -c "import scripts.prompt_compliance as p; assert getattr(p,'_INSTRUCTION_ARCH_REGISTRY',None) is None, 'must be lazy'; orig=p._INSTRUCTION_ARCH_PATH; p._INSTRUCTION_ARCH_PATH=orig.with_name('nope.yaml'); p._INSTRUCTION_ARCH_REGISTRY=None; assert p.get_behavioural_invariant_sources()==['.claude/skills/*/SKILL.md']; print('lazy+fallback OK')"
+    expected: Prints "lazy+fallback OK".
+    fix_if: An exception or eager load means the loader is not lazy/fallback-safe; defer I/O to the accessor and wrap the read in try/except returning the fallback.
+  - step: 5
+    phase: pre-deploy
+    action: Deleted-surface sweep -- the orphaned legacy files are gone and the load-bearing subset is retained.
+    command: bash -lc 'set -e; test ! -e .github/copilot-instructions.md; test ! -e docs/contracts/instruction-architecture.md; test ! -d .agents; test -z "$(ls .github/prompts/*.prompt.md 2>/dev/null)"; test -z "$(ls .github/agents/*.agent.md 2>/dev/null)"; test -d .github/prompts/scheduled; test -f .github/agents/schedule.yaml; test -d .github/instructions; echo "deleted-surface sweep OK"'
+    expected: Prints "deleted-surface sweep OK" (orphans gone, scheduled/ + schedule.yaml + instructions/ kept).
+    fix_if: A target survived or a kept file is missing; adjust the deletion set.
+  - step: 6
+    phase: pre-deploy
+    action: Stale-reference sweep -- no live code/config references the deleted .md or the deleted legacy files (historical PLAN-*.md, docs/audit-reports, docs/DECISIONS.md, docs/INTENT-*.md are allowed).
+    command: bash -lc '! grep -rn "instruction-architecture\.md\|copilot-instructions\.md" --include=*.py --include=*.yml --include=*.yaml scripts src config tests .github/workflows 2>/dev/null; echo "ref-sweep exit=$?"'
+    expected: No live .py/.yml/.yaml reference to the deleted .md or copilot-instructions.md under scripts/src/config/tests/.github/workflows (exit 0 / empty).
+    fix_if: A live reference remains; repoint it to the .yaml or remove it.
+  - step: 7
+    phase: pre-deploy
+    action: No active Lambda manifest references a deleted file (bundle-completeness safety).
+    command: bin/venv-python -m scripts.lambda_manifest --list-patterns
+    expected: No deleted path (top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md, .agents/, copilot-instructions.md) appears as an active artifact asset; only kept assets (schedule.yaml, scheduled/) referenced.
+    fix_if: A deleted file is a manifest asset; restore it or update the manifest (out of scope -- escalate, do not silently delete a packaged asset).
+  - step: 8
+    phase: pre-deploy
+    action: Scheduled-agent + executor + routing surfaces intact -- the tests that consume schedule.yaml, scheduled/ prompts, executor step-runner gotchas, and model routing still pass.
+    command: bin/venv-python -m pytest tests/test_scheduled_agent_handler.py tests/test_run_scheduled_agent.py tests/test_executor_step_runner.py tests/test_model_registry.py tests/test_session_preflight.py -q
+    expected: All pass (schedule.yaml + scheduled/ still load; _GOTCHA_MAP + model_routing edits are clean; sync_copilot_instructions removal does not break preflight).
+    fix_if: A failure points to an over-broad deletion or a missed reference update; fix the edit.
+  - step: 9
+    phase: pre-deploy
+    action: Full presubmit -- contract-drift gate treats the new YAML as non-ritual and does not fail it; layer-claims + prompt-compliance validators pass; whole suite green.
+    command: bin/venv-python -m scripts.validate
+    expected: validate.py exits 0; "Contract drift gate (CD.25)" scans instruction-architecture.yaml without a violation; the prompt-compliance and instruction-architecture-layers sections pass.
+    fix_if: A drift-gate failure means the YAML accidentally has a contract block carrying a class field; keep it non-ritual. Any other failure -- fix the cited check.
+constraints:
+  - No rescue agents or workaround loops; on an unrecoverable step, stop and RCA (Decision 55).
+  - instruction-architecture.yaml MUST stay NON-ritual (top-level version/contract_version/status metadata; NO contract block carrying a class field) so the CD.25 drift gate skips it -- mirrors log-storage.yaml / read-engine.yaml / storage-substrate.yaml.
+  - scripts/prompt_compliance.py must never raise at import and must defer all I/O to first accessor call (AGENTS.md import-safety rule), exactly like s3_log_store.py (T-1.15 precedent).
+  - KEEP .github/prompts/scheduled/, .github/agents/schedule.yaml, and .github/instructions/executor-*.instructions.md -- they have live consumers (scheduled agents, executor). Deleting them is OUT OF SCOPE and breaks CI.
+  - KEEP validate_no_underscore_instructions (Decision 38 guard) and the Copilot SDK provider config -- only the dead instruction-routing surface is removed.
+  - Do NOT delete the .github/prompts/ or .github/agents/ DIRECTORIES (only the named files); full-directory deletion is owned by T5.3 and blocked on scheduled-agent decoupling.
+  - Only modify/delete files in the Scope table.
+context:
+  - >-
+    Preflight (2026-06-29): on harness branch claude/instruction-architecture-yaml-eldass, main 0
+    behind / 0 ahead, creds ok, no open ci-rca HARD BLOCK. No deferral needed.
+  - >-
+    Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decision 86 (prose-doc retirement authority --
+    converting prose contract to machine-parseable registry + deleting prose is the exact extract-and-retire
+    routing it mandates); Decision 76 (.claude/ canonical interactive layer; .agents/ + .github/ demoted to
+    legacy, no sync obligation -- the legacy deletions execute this demotion); Decision 38 (origin of the
+    copilot_instructions underscore/hyphen consolidation + the validate_no_underscore_instructions guard the
+    plan KEEPS); Decision 58 (.agents named canonical -- the deletion finally retires it, already superseded
+    by Decision 76). RELATED: Decision 85 (.agents/ mirrors are voluntary legacy hygiene, no sync obligation
+    -- supports the deletion breaks nothing live); CD.25 (new YAML is non-ritual, drift gate skips it);
+    Decision 44 (executor self-modification boundary -- this is human /plan->/implement, boundary respected);
+    Decision 49/40 (Copilot SDK provider path is NOT touched -- only path-tier routing + instruction files);
+    Decision 67 (STRATEGIC freeze -- this is IMPLEMENTATION, compliant).
+  - >-
+    Decision 58 NOTE (conscious-choice, no pivot): Decision 58 named .agents/ canonical and
+    PLAN-t014-phase3-residual-sweep (2026-06-15) deliberately RETAINED + reframed .agents/ as a legacy
+    mirror. This plan consciously reverses that retention under the now-authoritative Decision 76 (which
+    superseded Decision 58's sync obligation) plus explicit user directive 2026-06-29. /implement should
+    record a new Decision capturing the legacy-surface retirement (legacy interactive mirrors deleted;
+    .github/prompts + .github/agents directories survive only for the live scheduled-agent surface).
+  - >-
+    Scope decision (user, 2026-06-29): Q1=A (delete the runtime-orphaned set now within T-1.13; keep the
+    load-bearing subset; this grows the task S->M and partially completes T5.3). Q2=Yes (delete the
+    copilot-instructions file + strip its dead hooks; external gh-copilot CLI / VS Code Copilot tooling is
+    abandoned). The underscore copilot_instructions.md was already absent (Decision 38), so "the pair" is the
+    single hyphen file.
+  - >-
+    Load-bearing couplings PROTECTED (must not delete): .github/agents/schedule.yaml (read by
+    scripts/run_scheduled_agent.py, a Lambda asset); .github/prompts/scheduled/ (consumed by live
+    scheduled-agent handlers + tests); .github/instructions/executor-*.instructions.md (read by the executor;
+    config/agent/executor/prompts/README.md points at them). model_routing.yaml '.github/prompts/' /
+    '.github/agents/' / '.github/instructions/' patterns are KEPT because these live files still match them;
+    only the 'copilot-instructions.md' pattern is removed.
+  - >-
+    prompt_compliance.py is wired into CI via validate.py:validate_prompt_compliance (run sequence ~line
+    3517), which today hardcodes ROOT/.github/prompts and globs *.prompt.md. Repointing this (and main()'s
+    discovery) to the YAML-sourced .claude/skills/*/SKILL.md removes a production reference to .github/prompts,
+    advancing T5.3's exit criterion ("grep -r '.github/prompts' returns no references in production code")
+    without deleting the directory.
+  - >-
+    Behavioural-invariant reality: '## Behavioural Invariants' blocks live in the live
+    .claude/skills/{planning,implement,executor-rca}/SKILL.md AND the legacy
+    .github/prompts/{implement,plan}.prompt.md. After deletion only the .claude/skills set remains, which is
+    why behavioural_invariant_sources = ['.claude/skills/*/SKILL.md']. In CI, check_retro_lite_compliance only
+    flags when .execution-state.json exists (absent in CI) and validate does not call check_plan_compliance,
+    so widening the checked set to .claude/skills is CI-safe.
+  - >-
+    Plan-type / Step 10: this is IMPLEMENTATION (code + tests; CI must be green). The tier_item exit criterion
+    "Step 10 multi-perspective critique converges" is satisfied during planning by running a Step-10-style
+    2-agent multi-perspective critique on the embedded instruction-architecture.yaml design spec (in addition
+    to the mandatory Step 9 plan-critique). The /implement agent builds the file to that spec.
+  - >-
+    Embedded instruction-architecture.yaml design spec (the /implement agent creates the file from this,
+    setting ratified_at to the implementation date). NON-ritual: top-level version 1 + contract_version 1 +
+    status ratified + ratified_at + ratified_via "PLAN-instruction-architecture-yaml (T-1.13)" +
+    decisions_cited [Decision-38, Decision-58, Decision-76, Decision-86, CD.25]; NO contract: block with a
+    class: field. Body:
+    cross_cutting_principle {name Agent-First, description "All artefacts at all layers are designed for agent
+    loading efficiency, not human readability; prefer machine-parseable formats; collocate semantic definitions
+    with enforcement; a new file is warranted only when it has a distinct machine-parseable role"}.
+    layers (LIST, each: layer N, name, content_locations [globs], load_time, consumers [keys], contains,
+    excludes):
+    (1) Universal rules; content_locations [CLAUDE.md, AGENTS.md, "**/CLAUDE.md"]; load_time ambient;
+    consumers [claude_code_interactive, executor]; contains "Code style, safety constraints, merge protocol,
+    operational data governance (Single Portal Invariant, ID Authority)"; excludes "Routing logic, project
+    context, agent methodology, file router".
+    (2) Project knowledge base; content_locations [docs/PROJECT_CONTEXT.md]; load_time on_demand; consumers
+    [claude_code_interactive]; contains "North Star goals, AWS configuration, file router, recommendation
+    schemas, known gotchas"; excludes "Workflow steps, agent methodology".
+    (3) Slash commands; content_locations [".claude/commands/*.md"]; load_time on_user_invocation; consumers
+    [claude_code_interactive]; contains "Thin orchestration step-sequences referencing skills + explicit human
+    confirmation gates"; excludes "Deep methodology or project context".
+    (4) Skills (methodology); content_locations [".claude/skills/*/SKILL.md"]; load_time on_skill_invocation;
+    consumers [claude_code_interactive]; contains "Self-contained skill definitions invocable via the Skill
+    tool; must declare required-context frontmatter"; excludes "Project context better suited for Layer 2".
+    (5) Executor role prompts; content_locations ["config/agent/executor/prompts/*.prompt.md"]; load_time
+    by_execute_recommendation; consumers [executor]; contains "Minimal task-specific context for autonomous
+    execution"; excludes "Universal rules or project context (Layers 1/2)".
+    consumers {claude_code_interactive {consumes_layers [1,2,3,4], notes "Reads CLAUDE.md/AGENTS.md
+    automatically; slash commands load docs/PROJECT_CONTEXT.md and invoke skills via the Skill tool; canonical
+    interactive surface (Decision 76)"}, executor {consumes_layers [1,5], notes "Reads universal rules
+    automatically; execution scripts read role prompts and JIT contexts; frozen pending Decision 67 reversal"}}.
+    behavioural_invariant_sources [".claude/skills/*/SKILL.md"].
+    anti_patterns (LIST of {pattern, why, correct_location}): routing logic in Layer 1 -> Layer 3; methodology
+    in Layer 2 -> Layer 4; project context in Layer 1 -> Layer 2; missing required-context in SKILL.md -> Layer
+    4; direct recommendation writes in workflows/skills -> scripts/ops_data_portal.py; human-readable companion
+    doc alongside machine-readable source -> extend the machine-readable source (Decision 86).
+    legacy_surfaces_retired {note "Legacy cross-harness instruction mirrors (.agents/ Antigravity
+    workflows+skills, top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md,
+    .github/copilot-instructions.md) were DELETED in T-1.13 per Decision 76 (legacy demotion) + Decision 58
+    retirement + user directive 2026-06-29. The .github/prompts/ and .github/agents/ directories survive only
+    for the live scheduled-agent surface (.github/prompts/scheduled/, .github/agents/schedule.yaml) and the
+    executor instruction files (.github/instructions/executor-*.instructions.md); full directory deletion
+    remains owned by T5.3 pending scheduled-agent decoupling"}.
+    verified_against ["scripts/prompt_compliance.py (get_behavioural_invariant_sources / check_layer_compliance)",
+    "scripts/validate.py (validate_prompt_compliance / validate_instruction_architecture_layers)"].
+pre_implementation_checklist:
+  - Branch confirmed not main (harness branch claude/instruction-architecture-yaml-eldass).
+  - docs/PROJECT_CONTEXT.md read.
+  - Decisions 38/58/76/86 + CD.25 understood (non-ritual YAML; legacy demotion authority; underscore guard survives).
+  - All scope files located and readable; the deletion set (orphans) and the protected set (scheduled/, schedule.yaml, instructions/) confirmed.
+  - prompt_compliance.py current discovery path (.github/prompts) and validate.py wiring (~line 3517) identified.
+  - Acceptance criteria understood and each maps to a verification_plan step.
+execution_steps:
+  - >-
+    Create docs/contracts/instruction-architecture.yaml from the embedded design spec in context. Keep it
+    NON-ritual (top-level version + contract_version + status + ratified_at + ratified_via + decisions_cited
+    metadata; no contract: block with a class: field). Set ratified_at to the implementation date.
+  - >-
+    Modify scripts/prompt_compliance.py: add _INSTRUCTION_ARCH_PATH (= ROOT/docs/contracts/
+    instruction-architecture.yaml), a lazy cached _INSTRUCTION_ARCH_REGISTRY (None at import), and
+    _load_instruction_architecture() (lazy import yaml inside; on ANY failure return a fallback dict with
+    behavioural_invariant_sources=['.claude/skills/*/SKILL.md'] and empty layers). Add
+    get_behavioural_invariant_sources() and check_layer_compliance(contract) (for each layer, each glob in
+    content_locations must match >=1 path under ROOT; else append "layer N (<name>): no files match <glob>").
+    In main(): discover invariant files by resolving get_behavioural_invariant_sources() globs under ROOT
+    instead of hardcoding .github/prompts; add a layer-claims run. Update the docstring/--all help text. No I/O
+    at import; never raise at import.
+  - >-
+    Modify scripts/validate.py: in validate_prompt_compliance(), build prompt_files by resolving
+    compliance.get_behavioural_invariant_sources() globs under ROOT (not the hardcoded .github/prompts glob).
+    Add validate_instruction_architecture_layers(failed) that loads the contract via the compliance module and
+    appends check_layer_compliance violations; wire it into the run sequence adjacent to
+    validate_prompt_compliance. Leave validate_no_underscore_instructions untouched. Refresh the stale legacy
+    comment (~line 214).
+  - >-
+    Modify scripts/session_preflight.py: delete sync_copilot_instructions() and its call site (~line 1621).
+    Modify scripts/executor/step_runner.py: delete the '.github/copilot-instructions.md' key from _GOTCHA_MAP.
+    Modify config/agent/copilot/model_routing.yaml: delete the 'copilot-instructions.md' pattern entry only.
+    Genericise the copilot-instructions.md comments in scripts/model_registry.py, scripts/copilot_wrapper.py,
+    scripts/telemetry_schemas.py, scripts/delegate_runner.py. Update scripts/list_customizations.py docstring/scan.
+  - >-
+    Delete docs/contracts/instruction-architecture.md, .github/copilot-instructions.md, the .agents/ directory,
+    the top-level .github/prompts/*.prompt.md files (NOT scheduled/), and the .github/agents/*.agent.md files
+    (NOT schedule.yaml). Repoint the live references in AGENTS.md (~line 187), docs/PROJECT_CONTEXT.md
+    (~lines 6, 148), and EVALUATION-PROMPTS.yaml (~lines 5, 34) from the .md to the .yaml.
+  - >-
+    Update tests: test_prompt_compliance.py (loader/accessor/layer-check/fallback + 100% new-code coverage;
+    use file::Class form, AUTOUSE fixture to reset _INSTRUCTION_ARCH_REGISTRY); test_validate.py
+    (YAML-sourced discovery via stubbed accessor; add TestValidateInstructionArchitectureLayers);
+    test_session_preflight.py (drop the sync_copilot_instructions patch); test_model_registry.py (drop the
+    copilot-instructions.md pattern assertions, keep the dir-pattern ones).
+  - >-
+    Update docs/ROADMAP-PLATFORM.yaml: set T-1.13 status complete (+ completed_at + criteria met_by); add the
+    T5.3 progress_note recording the partial legacy deletion and the remaining scheduled-agent-decoupling blocker.
+  - Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable step, stop and RCA per Decision 55; do not patch around it.
+  - 'Report: the YAML created, the prompt_compliance/validate wiring, the deletions, the reference repoints, the roadmap bookkeeping, and all test/validate results.'
+work_areas: []
+rollback: >-
+  Single-commit revert restores docs/contracts/instruction-architecture.md, the deleted legacy surfaces
+  (.agents/, top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md, .github/copilot-instructions.md),
+  the prior scripts/prompt_compliance.py + validate.py + session_preflight.py + step_runner.py +
+  model_routing.yaml, and removes instruction-architecture.yaml. No data migration, no deployed-function
+  change (no Lambda touched), so revert is clean.
