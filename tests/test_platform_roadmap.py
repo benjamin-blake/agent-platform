@@ -1315,10 +1315,17 @@ class TestCompletionBlockedOnCd:
         assert ip["completion_blocked_on_cd"] == ["CD.99"]
 
     def test_completion_blocked_on_cd_is_sorted(self, tmp_path: Path) -> None:
-        """Multiple pending CDs appear in sorted order."""
+        """Multiple pending CDs appear in sorted (lexicographic) order."""
         items = [{**_item("T0.1", status="in_progress"), "related_candidate_decisions": ["CD.99", "CD.13"]}]
         state = self._make_state(items, [_cd("CD.99"), _cd("CD.13")])
         result = state.to_preflight_dict(plans_dir=tmp_path)
         ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
-        assert ip["completion_blocked_on_cd"] == sorted(ip["completion_blocked_on_cd"])
-        assert len(ip["completion_blocked_on_cd"]) == 2
+        assert ip["completion_blocked_on_cd"] == ["CD.13", "CD.99"]
+
+    def test_completion_blocked_on_cd_decision_required_before_source(self, tmp_path: Path) -> None:
+        """decision_required_before referencing a pending CD is surfaced in completion_blocked_on_cd."""
+        items = [{**_item("T0.1", status="in_progress"), "decision_required_before": ["Requires CD.77"]}]
+        state = self._make_state(items, [_cd("CD.77")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == ["CD.77"]
