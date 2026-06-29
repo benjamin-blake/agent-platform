@@ -2600,3 +2600,180 @@ class TestEndstateDrift:
 
         assert result["stale"] is False
         assert result["new_ids"] == []
+
+
+class TestDeriveCiRcaDisputeOpen:
+    """Unit tests for _derive_ci_rca_dispute_open() -- filter/sort/cap."""
+
+    def _make_row(
+        self,
+        rec_id: str,
+        source: str = "ci_rca_evidence_dispute",
+        status: str = "open",
+        created: str = "2026-06-29T10:00:00Z",
+        title: str = "Dispute rec",
+        priority: str = "low",
+    ) -> dict:
+        return {
+            "id": rec_id,
+            "source": source,
+            "status": status,
+            "created_timestamp": created,
+            "title": title,
+            "priority": priority,
+        }
+
+    def test_filters_by_source_and_open_status(self) -> None:
+        """Only source=ci_rca_evidence_dispute + status in (open, in_progress) rows are returned."""
+        rows = [
+            self._make_row("rec-101", status="open"),
+            self._make_row("rec-102", status="in_progress"),
+            self._make_row("rec-103", status="closed"),
+            self._make_row("rec-104", source="ci_rca", status="open"),
+            self._make_row("rec-105", source="planning", status="open"),
+        ]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert {r["id"] for r in result} == {"rec-101", "rec-102"}
+
+    def test_newest_first_ordering(self) -> None:
+        """Results are ordered newest-first by created_timestamp."""
+        rows = [
+            self._make_row("rec-201", created="2026-06-27T08:00:00Z"),
+            self._make_row("rec-202", created="2026-06-29T12:00:00Z"),
+            self._make_row("rec-203", created="2026-06-28T06:00:00Z"),
+        ]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert [r["id"] for r in result] == ["rec-202", "rec-203", "rec-201"]
+
+    def test_capped_at_five(self) -> None:
+        """Result is capped at 5 rows."""
+        rows = [self._make_row(f"rec-{300 + i}", created=f"2026-06-2{i}T00:00:00Z") for i in range(7)]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert len(result) == 5
+
+    def test_projects_expected_fields(self) -> None:
+        """Each returned dict has id, title, priority, created_timestamp."""
+        rows = [self._make_row("rec-401", title="My dispute", priority="Low", created="2026-06-29T10:00:00Z")]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert len(result) == 1
+        assert set(result[0].keys()) == {"id", "title", "priority", "created_timestamp"}
+        assert result[0]["id"] == "rec-401"
+        assert result[0]["title"] == "My dispute"
+
+    def test_empty_rows_returns_empty(self) -> None:
+        assert _preflight._derive_ci_rca_dispute_open([]) == []
+
+
+class TestFetchCiRcaDisputeRecs:
+    """Unit tests for _fetch_ci_rca_dispute_recs() -- cache-row path."""
+
+    def _make_dispute_row(self, rec_id: str, status: str = "open") -> dict:
+        return {
+            "id": rec_id,
+            "source": "ci_rca_evidence_dispute",
+            "status": status,
+            "title": "Dispute rec",
+            "priority": "low",
+            "created_timestamp": "2026-06-29T10:00:00Z",
+        }
+
+    def test_cache_rows_supplied_returns_derived(self) -> None:
+        """When cache_rows is a list, returns _derive_ci_rca_dispute_open result (no reader call)."""
+        rows = [self._make_dispute_row("rec-501")]
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=rows)
+        assert len(result) == 1
+        assert result[0]["id"] == "rec-501"
+
+    def test_cache_rows_none_returns_empty(self) -> None:
+        """When cache_rows is None (warm-pull failed), returns []."""
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=None)
+        assert result == []
+
+    def test_sentinel_returns_empty(self) -> None:
+        """When called with the sentinel (no cache_rows arg), returns [] -- no reader call."""
+        result = _preflight._fetch_ci_rca_dispute_recs()
+        assert result == []
+
+    def test_filters_closed_rows_from_cache(self) -> None:
+        """Closed dispute recs are excluded from the cache-path result."""
+        rows = [
+            self._make_dispute_row("rec-601", status="open"),
+            self._make_dispute_row("rec-602", status="closed"),
+        ]
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=rows)
+        assert [r["id"] for r in result] == ["rec-601"]
+
+
+class TestPrintCiRcaDisputeRecs:
+    """Unit tests for print_ci_rca_dispute_recs() -- section rendering."""
+
+    def test_empty_prints_none_line(self, capsys: pytest.CaptureFixture) -> None:
+        """When recs is empty, prints the header and '(none)'."""
+        _preflight.print_ci_rca_dispute_recs([])
+        out = capsys.readouterr().out
+        assert "CI-RCA Dispute Recs (open)" in out
+        assert "(none)" in out
+
+    def test_renders_rec_ids(self, capsys: pytest.CaptureFixture) -> None:
+        """Each rec is rendered with its id, priority, timestamp, and title."""
+        recs = [
+            {
+                "id": "rec-701",
+                "title": "Bundle wrong on earliest_viable_gate",
+                "priority": "low",
+                "created_timestamp": "2026-06-29T10:00:00Z",
+            },
+        ]
+        _preflight.print_ci_rca_dispute_recs(recs)
+        out = capsys.readouterr().out
+        assert "CI-RCA Dispute Recs (open)" in out
+        assert "rec-701" in out
+        assert "Bundle wrong on earliest_viable_gate" in out
+
+    def test_header_printed_before_entries(self, capsys: pytest.CaptureFixture) -> None:
+        """The section header appears before any rec lines."""
+        recs = [{"id": "rec-801", "title": "Dispute", "priority": "low", "created_timestamp": "2026-06-29T10:00:00Z"}]
+        _preflight.print_ci_rca_dispute_recs(recs)
+        out = capsys.readouterr().out
+        header_pos = out.index("CI-RCA Dispute Recs (open)")
+        rec_pos = out.index("rec-801")
+        assert header_pos < rec_pos
+
+
+class TestPreflightReportDisputeKey:
+    """The preflight report JSON must include ci_rca_dispute_recs."""
+
+    def test_report_json_contains_ci_rca_dispute_recs(self, tmp_path: Path) -> None:
+        """session_preflight.py writes ci_rca_dispute_recs to the report JSON.
+
+        The autouse fixture stubs _make_reader, warm_sync, check_main_freshness, and
+        _sync_ops_pull; we only need to patch the infrastructure that main() calls directly.
+        """
+        preflight_report = tmp_path / ".preflight-report.json"
+        dispute_recs = [
+            {"id": "rec-901", "title": "Dispute rec", "priority": "low", "created_timestamp": "2026-06-29T10:00:00Z"}
+        ]
+
+        with (
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("session_preflight._fetch_ci_rca_dispute_recs", return_value=dispute_recs),
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("session_preflight.read_context_files", return_value={}),
+            patch(
+                "session_preflight.check_telemetry_health",
+                return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        assert preflight_report.exists()
+        report = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert "ci_rca_dispute_recs" in report, f"ci_rca_dispute_recs missing from report keys: {list(report)[:30]}"
+        assert report["ci_rca_dispute_recs"] == dispute_recs
