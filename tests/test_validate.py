@@ -59,6 +59,10 @@ validate_field_semantics_drift = _validate.validate_field_semantics_drift
 validate_broker_env_reads = _validate.validate_broker_env_reads
 validate_platform_roadmap = _validate.validate_platform_roadmap
 validate_ducklake_version_lockstep = _validate.validate_ducklake_version_lockstep
+validate_verifier_same_pr_guard = _validate.validate_verifier_same_pr_guard
+validate_verification_registry = _validate.validate_verification_registry
+validate_differential_gate_baseline = _validate.validate_differential_gate_baseline
+_extract_verifier_covers = _validate._extract_verifier_covers
 
 
 class TestFieldSemanticsDriftGate:
@@ -4045,3 +4049,287 @@ class TestPreModeChecks:
 
         assert exc_info.value.code == 0
         assert encoding_called, "validate_subprocess_encoding was NOT called in --pre mode"
+
+
+# ---------------------------------------------------------------------------
+# same_pr_guard tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestSamePrGuard:
+    """Tests for validate_verifier_same_pr_guard() in validate.py --pre tier."""
+
+    def test_no_violations_when_no_verifier_in_diff(self) -> None:
+        failed: list[str] = []
+        with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_no_violation_when_verifier_newly_added(self, tmp_path: Path) -> None:
+        """Exception (b): a brand-new verifier file is exempt from the guard."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "new_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['**']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/new_verifier.py"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, "scripts/validate.py"]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=rel + "\n"),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed, f"Expected no violation for newly-added verifier: {failed}"
+
+    def test_no_violation_exception_c_no_covered_in_diff(self, tmp_path: Path) -> None:
+        """Exception (c): verifier modified but no covered file in diff."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "my_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['scripts/some_module.py']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/my_verifier.py"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, "scripts/other.py"]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=""),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed, f"Expected no violation when no covered file in diff: {failed}"
+
+    def test_violation_detected_when_verifier_and_covered_both_modified(self, tmp_path: Path) -> None:
+        """Same-PR guard fires when an existing verifier AND a file it covers are both in diff."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "my_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['scripts/target.py']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/my_verifier.py"
+        target = "scripts/target.py"
+        (tmp_path / "scripts" / "target.py").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "scripts" / "target.py").write_text("# target\n", encoding="utf-8")
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, target]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=""),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert "Verifier same-PR guard" in failed
+
+
+# ---------------------------------------------------------------------------
+# verification_registry tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationRegistry:
+    """Tests for validate_verification_registry() in validate.py --pre tier."""
+
+    def test_pass_with_empty_entries(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert not failed
+
+    def test_fail_missing_file(self, tmp_path: Path) -> None:
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("not found" in f for f in failed)
+
+    def test_fail_invalid_yaml(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries: [\n  - invalid: yaml: :", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("YAML" in f for f in failed)
+
+    def test_fail_missing_required_field(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            "entries:\n  - check_id: x\n    primitive_slot: grep_count\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_fail_unknown_slot(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            (
+                "entries:\n"
+                "  - check_id: x\n"
+                "    primitive_slot: unknown_slot\n"
+                "    guard_target: scripts/foo.py\n"
+                "    plan_slug: my-plan\n"
+                "    graduated_at: '2026-06-29'\n"
+            ),
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_fail_duplicate_check_id(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        entry = (
+            "  - check_id: dup\n"
+            "    primitive_slot: grep_count\n"
+            "    guard_target: scripts/foo.py\n"
+            "    plan_slug: my-plan\n"
+            "    graduated_at: '2026-06-29'\n"
+        )
+        (reg / "registry.yaml").write_text(f"entries:\n{entry}{entry}", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_pass_valid_entry(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            (
+                "entries:\n"
+                "  - check_id: my-check\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: scripts/foo.py\n"
+                "    plan_slug: my-plan\n"
+                "    graduated_at: '2026-06-29'\n"
+            ),
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert not failed
+
+
+# ---------------------------------------------------------------------------
+# differential_gate_step tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestDifferentialGateStep:
+    """Tests for validate_differential_gate_baseline() in validate.py full tier."""
+
+    def test_passes_when_kernel_file_contains_sentinel(self) -> None:
+        """Gate passes when scripts/verification_checks.py exists and has SLOT_COUNT: int = 6."""
+        failed: list[str] = []
+        validate_differential_gate_baseline(failed)
+        assert not failed, f"Differential gate baseline failed: {failed}"
+
+    def test_fails_when_sentinel_absent(self, tmp_path: Path) -> None:
+        """Gate fails if the kernel file lacks the expected sentinel line."""
+        kernel_dir = tmp_path / "scripts"
+        kernel_dir.mkdir()
+        (kernel_dir / "verification_checks.py").write_text("# no sentinel here\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_differential_gate_baseline(failed)
+        assert any("Differential gate baseline" in f for f in failed)
+
+
+# ---------------------------------------------------------------------------
+# platform_roadmap ExitCriterion tests (T3.1 structured criteria)
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformRoadmapT31Criteria:
+    """Tests that T3.1's exit_criteria are now structured ExitCriterion objects."""
+
+    def test_t31_exit_criteria_are_structured(self) -> None:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+        assert t31 is not None, "T3.1 not found in ROADMAP-PLATFORM.yaml"
+        criteria = t31["exit_criteria"]
+        assert isinstance(criteria, list)
+        assert len(criteria) == 7
+        for crit in criteria:
+            assert isinstance(crit, dict), f"Criterion is not a dict: {crit!r}"
+            assert "id" in crit, f"Criterion missing 'id': {crit}"
+            assert "text" in crit, f"Criterion missing 'text': {crit}"
+            assert "status" in crit, f"Criterion missing 'status': {crit}"
+
+    def test_t31_criterion_ids_are_c1_through_c7(self) -> None:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+        ids = [c["id"] for c in t31["exit_criteria"]]
+        assert ids == ["c1", "c2", "c3", "c4", "c5", "c6", "c7"]
+
+
+# ---------------------------------------------------------------------------
+# VP selector hooks for test_validate.py
+# Standalone functions named so that `pytest -k <selector>` collects them.
+# ---------------------------------------------------------------------------
+
+
+def test_verification_registry_accepts_empty_file(tmp_path: Path) -> None:
+    """VP step 5: registry guard accepts an empty well-formed entries list."""
+    reg = tmp_path / "config" / "agent" / "verification_registry"
+    reg.mkdir(parents=True)
+    (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    failed: list = []
+    with patch("validate.ROOT", tmp_path):
+        validate_verification_registry(failed)
+    assert not failed
+
+
+def test_same_pr_guard_passes_on_no_verifier_in_diff() -> None:
+    """VP step 6: same-PR guard passes when no verifier file is in the diff."""
+    failed: list = []
+    with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+        validate_verifier_same_pr_guard(failed)
+    assert not failed
+
+
+def test_differential_gate_step_passes_on_live_tree() -> None:
+    """VP step 9: differential gate baseline step passes on the live code tree."""
+    failed: list = []
+    validate_differential_gate_baseline(failed)
+    assert not failed
+
+
+def test_platform_roadmap_t31_criteria_are_structured() -> None:
+    """VP step 10: T3.1 exit_criteria are structured ExitCriterion objects, not bare strings."""
+    import yaml  # noqa: PLC0415
+
+    data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+    t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+    assert t31 is not None
+    for crit in t31["exit_criteria"]:
+        assert isinstance(crit, dict)
+        assert {"id", "text", "status"} <= crit.keys()
