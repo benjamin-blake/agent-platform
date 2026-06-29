@@ -186,6 +186,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Execution checkpoint state | [logs/.execution-state.json](../logs/.execution-state.json) |
 | Execution state management | [scripts/execution_state.py](../scripts/execution_state.py) |
 | Session telemetry (executor) | [scripts/executor/telemetry.py](../scripts/executor/telemetry.py) |
+| PR template | [.github/pull_request_template.md](../.github/pull_request_template.md) |
 
 ## Recommendations Log Schema
 
