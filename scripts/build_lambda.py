@@ -136,6 +136,73 @@ _OPS_COMPACTION_FUNCTION_NAME = "agent-platform-ops-compaction"
 _OPS_COMPACTION_ZIP_KEY = "lambda-packages/ops-compaction.zip"
 
 
+# ---------------------------------------------------------------------------
+# Build contract loader (T-1.16): lazy, cached, import-safe.
+# Falls through to in-code FALLBACK_* constants on ANY read/parse failure.
+# ---------------------------------------------------------------------------
+
+_BUILD_CONTRACT_PATH = ROOT / "docs" / "contracts" / "build-lambda.yaml"
+_BUILD_CONTRACT_REGISTRY: dict | None = None  # None until first accessor call
+
+
+def _fallback_build_registry() -> dict:
+    return {
+        "size_limit_bytes": LAMBDA_SIZE_LIMIT_BYTES,
+        "deploy_targets": {
+            "prod_functions": list(_LAMBDA_FUNCTION_NAMES),
+            "ops_compaction": {
+                "function": _OPS_COMPACTION_FUNCTION_NAME,
+                "zip_key": _OPS_COMPACTION_ZIP_KEY,
+            },
+            "ducklake_function_zip_keys": dict(_DUCKLAKE_FUNCTION_ZIP_KEYS),
+            "ducklake_layer_names": list(DUCKLAKE_LAYER_NAMES),
+        },
+    }
+
+
+def _load_build_contract() -> dict:
+    global _BUILD_CONTRACT_REGISTRY
+    if _BUILD_CONTRACT_REGISTRY is not None:
+        return _BUILD_CONTRACT_REGISTRY
+    try:
+        import yaml  # noqa: PLC0415
+
+        raw = yaml.safe_load(_BUILD_CONTRACT_PATH.read_text(encoding="utf-8"))
+        registry = {
+            "size_limit_bytes": raw["size_limit_bytes"],
+            "deploy_targets": {
+                "prod_functions": list(raw["deploy_targets"]["prod_functions"]),
+                "ops_compaction": dict(raw["deploy_targets"]["ops_compaction"]),
+                "ducklake_function_zip_keys": dict(raw["deploy_targets"]["ducklake_function_zip_keys"]),
+                "ducklake_layer_names": list(raw["deploy_targets"]["ducklake_layer_names"]),
+            },
+        }
+        _BUILD_CONTRACT_REGISTRY = registry
+    except Exception:
+        _BUILD_CONTRACT_REGISTRY = _fallback_build_registry()
+    return _BUILD_CONTRACT_REGISTRY
+
+
+def _build_size_limit_bytes() -> int:
+    return _load_build_contract()["size_limit_bytes"]
+
+
+def _build_prod_function_names() -> list[str]:
+    return list(_load_build_contract()["deploy_targets"]["prod_functions"])
+
+
+def _build_ops_compaction() -> dict:
+    return dict(_load_build_contract()["deploy_targets"]["ops_compaction"])
+
+
+def _build_ducklake_function_zip_keys() -> dict[str, str]:
+    return dict(_load_build_contract()["deploy_targets"]["ducklake_function_zip_keys"])
+
+
+def _build_ducklake_layer_names() -> list[str]:
+    return list(_load_build_contract()["deploy_targets"]["ducklake_layer_names"])
+
+
 def _get_lambda_file_patterns() -> list[str]:
     """Derive LAMBDA_FILE_PATTERNS from the union of all active manifests (CD.24)."""
     root_str = str(ROOT)
@@ -287,11 +354,12 @@ def assert_within_size_limit(zip_path: Path) -> None:
     must stop here rather than ship a zip that cannot be deployed.
     """
     size = zip_path.stat().st_size
-    if size > LAMBDA_SIZE_LIMIT_BYTES:
+    limit = _build_size_limit_bytes()
+    if size > limit:
         mb = round(size / 1024 / 1024, 2)
         print(
             f"ERROR: {zip_path.name} is {mb} MB ({size} bytes), over the "
-            f"{LAMBDA_SIZE_LIMIT_BYTES} byte (262 MB) Lambda zip/layer limit. Build failed.",
+            f"{limit} byte (262 MB) Lambda zip/layer limit. Build failed.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -565,7 +633,7 @@ def publish_canary_layers(*, bucket: str, profile: str = "agent_platform", regio
     import json as _json  # noqa: PLC0415
 
     arns: dict[str, str] = {}
-    for layer_name in DUCKLAKE_LAYER_NAMES:
+    for layer_name in _build_ducklake_layer_names():
         s3_key = f"lambda-packages/{layer_name}.zip"
         result = subprocess.run(
             [
@@ -643,10 +711,11 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     if only_ducklake:
         # Scope the deploy to the two DuckLake functions ONLY: data-pipeline + ops-compaction are
         # NOT redeployed by a T2.17 deploy (Decision 79 affected-artifact hygiene).
-        function_zip_map = dict(_DUCKLAKE_FUNCTION_ZIP_KEYS)
+        function_zip_map = dict(_build_ducklake_function_zip_keys())
     else:
-        function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _LAMBDA_FUNCTION_NAMES}
-        function_zip_map[_OPS_COMPACTION_FUNCTION_NAME] = _OPS_COMPACTION_ZIP_KEY
+        function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _build_prod_function_names()}
+        ops = _build_ops_compaction()
+        function_zip_map[ops["function"]] = ops["zip_key"]
 
     for fn_name, s3_key in function_zip_map.items():
         print(f"  Updating {fn_name}...")
@@ -828,7 +897,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
         print("[4/4] DuckLake build complete.")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build Lambda deployment packages")
     parser.add_argument("--skip-upload", action="store_true", help="Build zips only, skip S3 upload")
     parser.add_argument("--bucket", default="", help="S3 bucket name (default: from terraform output)")
@@ -860,7 +929,11 @@ def main() -> None:
         "aws_lambda layer versions. Prints JSON mapping layer name -> version ARN for the canary "
         "orchestrator (OQ.12 clone-rehearsal). Run after --ducklake-only to get candidate layer ARNs.",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     if args.list_bundle:
         list_bundle(args.list_bundle)
