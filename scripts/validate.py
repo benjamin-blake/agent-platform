@@ -3858,15 +3858,25 @@ def main() -> None:
             if mypy_result.returncode != 0:
                 print("mypy: type errors found in changed files (informational - not blocking). Fix progressively.")
 
-        has_test_changes = any(re.match(r"tests/.*test_[^/]+\.py$", f) for f in changed)
-        if has_test_changes:
-            print("\n=== Tests (pytest --picked) ===")
+        # Select changed test files from the same get_changed_files() result that drives the rest of
+        # --pre. Passing explicit paths removes the dependence on pytest-picked's independent
+        # branch-diff, which collapses to 0 tests in GitHub Actions' detached-HEAD PR checkout
+        # (PR #334, job 84147146286 -- "collected 0 items / no tests ran" yet all-passed).
+        # Decision 55 backstop: exit 5 (0 collected) while changed test files are present is a
+        # contradiction -- redden the gate loudly rather than swallowing it as the old (0,5)
+        # whitelist did.
+        # Accepted edge case: a changed test file containing ONLY integration-marked tests will
+        # trip this backstop because -m "not integration" deselects all; resolve by not gating
+        # all-integration files behind the unit tier.
+        changed_tests = [f for f in changed if re.match(r"tests/.*test_[^/]+\.py$", f)]
+        if changed_tests:
+            print("\n=== Tests (pytest -- explicit changed files) ===")
             pytest_result = run(
-                [PYTHON, "-m", "pytest", "--picked", "--mode=branch", "-m", "not integration", "-v"],
+                [PYTHON, "-m", "pytest", *changed_tests, "-m", "not integration", "-v"],
                 cwd=ROOT,
             )
-            if pytest_result.returncode not in (0, 5):  # exit 5 = no tests collected
-                failed.append("Tests (pytest --picked)")
+            if pytest_result.returncode != 0:
+                failed.append("Tests (pytest)")
 
         validate_iam_runner_policy(failed)
         validate_copilot_multipliers(failed)

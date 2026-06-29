@@ -2764,10 +2764,10 @@ class TestPreModeDiffAware:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c and "--picked" in c]
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
         assert not pytest_cmds
 
-    def test_invokes_pytest_picked_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_invokes_pytest_with_explicit_files_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("CI", raising=False)
@@ -2791,12 +2791,13 @@ class TestPreModeDiffAware:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c and "--picked" in c]
-        assert pytest_cmds, "pytest --picked not invoked"
-        assert "--mode=branch" in pytest_cmds[0]
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert pytest_cmds, "pytest not invoked"
+        assert "tests/test_validate.py" in pytest_cmds[0], "explicit test file path not in pytest argv"
+        assert "--picked" not in pytest_cmds[0], "--picked must not appear in pytest argv"
         assert "not integration" in pytest_cmds[0]
 
-    def test_treats_pytest_exit_5_as_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_treats_pytest_exit_5_as_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("CI", raising=False)
@@ -2804,7 +2805,7 @@ class TestPreModeDiffAware:
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.stdout = "agent/test-branch\n"
-            result.returncode = 5 if ("pytest" in cmd and "--picked" in cmd) else 0
+            result.returncode = 5 if "pytest" in cmd else 0
             return result
 
         with (
@@ -2819,7 +2820,98 @@ class TestPreModeDiffAware:
         ):
             _validate.main()
 
+        assert exc_info.value.code != 0
+
+
+class TestPreModePytestSelection:
+    """Regression tests locking the explicit-file pytest selection contract.
+
+    Acceptance criteria from PLAN-ci-pre-gate-pytest-picked-noop:
+    (a) changed test file -> pytest invoked with that explicit path, no --picked
+    (b) exit 5 / 0-collected with changed test files -> failure (gate reddens)
+    (c) no test files changed -> pytest not invoked at all
+    """
+
+    def test_explicit_path_in_argv_no_picked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        captured_cmds: list[list[str]] = []
+
+        def tracking_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            return _pre_mock_run(cmd, **kwargs)
+
+        with (
+            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("validate.run", side_effect=tracking_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
         assert exc_info.value.code == 0
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert pytest_cmds, "pytest was not invoked despite changed test file"
+        assert "tests/test_x.py" in pytest_cmds[0], "explicit file path missing from pytest argv"
+        assert "--picked" not in pytest_cmds[0], "--picked must not appear (explicit-file transport)"
+
+    def test_exit_5_with_changed_tests_reddens_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            result.returncode = 5 if "pytest" in cmd else 0
+            return result
+
+        with (
+            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("validate.run", side_effect=exit5_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code != 0, "exit 5 / 0-collected with changed test files must redden the gate"
+
+    def test_no_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        captured_cmds: list[list[str]] = []
+
+        def tracking_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            return _pre_mock_run(cmd, **kwargs)
+
+        with (
+            patch("validate.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
+            patch("validate.run", side_effect=tracking_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert not pytest_cmds, f"pytest must not run when no test files changed, got: {pytest_cmds}"
 
 
 class TestBudgetAssertion:
