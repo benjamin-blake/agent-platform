@@ -1822,9 +1822,18 @@ def _mock_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
     return cp
 
 
-@pytest.mark.skipif(importlib.util.find_spec("boto3") is None, reason="boto3 not installed")
 class TestEnsureFreshDqResults:
     """Tests for ensure_fresh_dq_results() — the DQ runner auto-invoke."""
+
+    @pytest.fixture(autouse=True)
+    def _inject_boto3_stub(self):
+        """Ensure boto3 is in sys.modules so patch("boto3.Session") resolves on CI runners where boto3 is not installed."""
+        if "boto3" not in sys.modules:
+            sys.modules["boto3"] = MagicMock()
+            yield
+            del sys.modules["boto3"]
+        else:
+            yield
 
     def test_ensure_fresh_dq_runs_when_cache_missing(self, tmp_path: Path, capsys) -> None:
         """No dq-latest.json on disk: credential check runs, then data_quality_runner is invoked."""
