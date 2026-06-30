@@ -6516,15 +6516,49 @@ tier_items:
       - scripts/validate.py    # wire the import-linter contract check as a blocking presubmit check; lockfile-sync check
       - .claude/hooks/edit_scope_guard.py    # new -- fail-closed edit-scope hook (cf. never_on_main.py)
     exit_criteria:
-      - "import-linter contracts run inside validate.py (both tiers) and FAIL CI on an illegal cycle or a layering/independence violation between src/ and scripts/ packages"
-      - "A dependency lockfile pins the full transitive closure -- including transitively-present, currently-unpinned packages the graph tooling leans on (e.g. networkx, present at 3.6.1 but in no requirements file); CI fails if the lockfile drifts from requirements.txt"
-      - "A fail-closed edit-scope hook blocks edits outside the active plan's declared Scope, defaulting to DENY (analogue of never_on_main.py)"
-      - "import-linter/grimp build their graph from ast and COUNT function-local deferred imports as edges; the three known cycles (scripts/verifiers, ops_data_portal+executor, execute_recommendation<->batch; module-load graph is acyclic) must be encoded as contracts or allowlisted WITH rationale BEFORE the contract goes blocking -- never silently ignored, never a day-one false-fail"
-      - "The Decision 80 build-orchestrator revisit trigger is wired and surfaces (concurrency>1 AND (KG.13 filed OR _FAST_TIER_BUDGET_SECONDS breach)); no silent Bazel/Pants re-litigation"
+      - id: c1
+        text: >-
+          import-linter contracts run inside validate.py (both tiers -- validate_import_contracts wired in
+          --pre block AND run_python_checks) and FAIL CI on an illegal cycle or a layering/independence
+          violation between src/ and scripts/ packages
+        status: met
+        met_by: import-governance-baseline
+      - id: c2
+        text: >-
+          A dependency lockfile (requirements.lock) pins the full transitive closure -- including
+          networkx (>=3.0 in requirements.txt, now pinned to networkx==3.6.1) and grimp (transitive from
+          import-linter); CI fails via check_lockfile_sync() if the lock drifts from requirements.txt
+        status: met
+        met_by: import-governance-baseline
+      - id: c3
+        text: >-
+          A fail-closed edit-scope hook (.claude/hooks/edit_scope_guard.py) blocks edits outside the
+          active plan's declared Scope (exit 2 DENY), defaults to DENY when the plan is unreadable,
+          and ALLOWS when no active plan is declared; registered in .claude/settings.json PreToolUse
+        status: met
+        met_by: import-governance-baseline
+      - id: c4
+        text: >-
+          import-linter/grimp build their graph from ast and COUNT function-local deferred imports as
+          edges; the three known cycles (scripts.executor.batch<->scripts.execute_recommendation;
+          scripts.executor.jsonl_store<->scripts.ops_data_portal; scripts.executor.postflight<->scripts.verifiers)
+          are allowlisted in .importlinter WITH per-entry rationale BEFORE the contract goes blocking --
+          never silently ignored, never a day-one false-fail
+        status: met
+        met_by: import-governance-baseline
+      - id: c5
+        text: >-
+          The Decision 80 build-orchestrator revisit trigger (evaluate_bazel_revisit_trigger in
+          scripts/import_governance.py) is wired and surfaces an advisory when
+          (concurrency>1 AND (KG.13 filed OR _FAST_TIER_BUDGET_SECONDS breach));
+          currently DORMANT (concurrency=1); never auto-acts (Decision 55 / no silent Bazel/Pants re-litigation)
+        status: met
+        met_by: import-governance-baseline
     related_decisions: [80, 43, 75]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-06-30"
     decomposition_hints:
       provenance: "Decision 80 clause 2 named PLAN-do-less-baseline as the immediate-next IMPLEMENTATION plan but never sequenced it into the roadmap; this tier_item is that orphaned obligation."
       splits: "Atomic IMPLEMENTATION plans: (a) import-linter contracts + validate wiring; (b) lockfile + sync check; (c) edit-scope hook; (d) revisit-trigger wiring. Tool choice (import-linter/grimp) selected at implement-time, not ratified here (Decision 75 frame-challenge)."

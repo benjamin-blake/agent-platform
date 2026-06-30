@@ -3485,6 +3485,28 @@ def validate_dependency_graph_freshness(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_import_contracts(failed: list[str]) -> None:
+    """Thin wrapper: run import-linter contracts (Decision 80 / T3.11). Delegates to scripts.import_governance."""
+    print("\n=== Import contracts (Decision 80 / T3.11) ===")
+    from scripts import import_governance  # noqa: PLC0415
+
+    passed, output = import_governance.run_import_contracts()
+    print(output, end="")
+    if not passed:
+        failed.append("Import contracts (Decision 80)")
+
+
+def validate_lockfile_sync(failed: list[str]) -> None:
+    """Thin wrapper: verify requirements.lock sync (Decision 80 / T3.11). Delegates to scripts.import_governance."""
+    print("\n=== Lockfile sync (Decision 80 / T3.11) ===")
+    from scripts import import_governance  # noqa: PLC0415
+
+    in_sync, message = import_governance.check_lockfile_sync()
+    print(f"  {'PASS' if in_sync else 'FAIL'}: {message}")
+    if not in_sync:
+        failed.append("Lockfile sync (Decision 80)")
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -3535,6 +3557,9 @@ def run_python_checks(failed: list[str]) -> None:
     validate_authority_budget(failed)
     # DuckLake version lockstep gate: sub-second static, eligible for both tiers (OQ.12 SSOT enforcement)
     validate_ducklake_version_lockstep(failed)
+    # Import contracts + lockfile sync: both wired here AND in --pre per Decision 73 / exit-criterion c1.
+    validate_import_contracts(failed)
+    validate_lockfile_sync(failed)
     # Dependency-graph freshness: full tier only (Decision 73 non-wedging, Decision 80).
     validate_dependency_graph_freshness(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
@@ -4048,6 +4073,9 @@ def main() -> None:
         # DuckLake version lockstep gate in --pre: sub-second static (OQ.12 SSOT enforcement). Registered
         # at BOTH sites -- here (--pre fast-tier) and in run_python_checks (full tier) -- per AGENTS.md.
         validate_ducklake_version_lockstep(failed)
+        # Import contracts + lockfile sync in --pre: both tiers per exit-criterion c1 / Decision 80 / T3.11.
+        validate_import_contracts(failed)
+        validate_lockfile_sync(failed)
         # Same-PR guard in --pre: pure AST + git diff scan (sub-second), T3.1 / CD.29.
         validate_verifier_same_pr_guard(failed)
         # Verification registry validation in --pre: pure YAML parse (sub-second), T3.1 / CD.29.

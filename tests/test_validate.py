@@ -67,6 +67,8 @@ _extract_verifier_covers = _validate._extract_verifier_covers
 _load_sloc_budgets = _validate._load_sloc_budgets
 _update_sloc_budgets = _validate._update_sloc_budgets
 validate_dependency_graph_freshness = _validate.validate_dependency_graph_freshness
+validate_import_contracts = _validate.validate_import_contracts
+validate_lockfile_sync = _validate.validate_lockfile_sync
 
 
 class TestDependencyGraphFreshness:
@@ -4660,3 +4662,101 @@ class TestValidateRecRelevanceContract:
         with patch("validate.ROOT", tmp_path):
             validate_rec_relevance_contract(failed)
         assert failed
+
+
+# ---------------------------------------------------------------------------
+# validate_import_contracts (Decision 80 / T3.11 wrapper)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateImportContracts:
+    """Tests for validate_import_contracts() -- thin wrapper around import_governance.run_import_contracts."""
+
+    def test_passes_on_clean_tree(self) -> None:
+        """Contracts pass on the unmodified repository tree (integration smoke)."""
+        failed: list[str] = []
+        validate_import_contracts(failed)
+        assert not failed, f"Unexpected import-contract failures: {failed}"
+
+    def test_appends_to_failed_on_contract_breach(self) -> None:
+        """When run_import_contracts returns (False, ...), failure is appended."""
+        from scripts import import_governance  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(import_governance, "run_import_contracts", return_value=(False, "BROKEN: bad cycle\n")):
+            validate_import_contracts(failed)
+        assert any("Import contracts" in f for f in failed)
+
+    def test_no_failure_on_pass(self) -> None:
+        """When run_import_contracts returns (True, ...), nothing is appended to failed."""
+        from scripts import import_governance  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(import_governance, "run_import_contracts", return_value=(True, "All contracts kept\n")):
+            validate_import_contracts(failed)
+        assert not failed
+
+    def test_wired_in_both_tiers(self) -> None:
+        """validate_import_contracts is invoked in both --pre and run_python_checks bodies."""
+        import ast  # noqa: PLC0415
+
+        src = _SCRIPT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        call_sites = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_import_contracts"
+        ]
+        assert len(call_sites) >= 2, (
+            "validate_import_contracts must be called in both --pre and run_python_checks; "
+            f"found only {len(call_sites)} call site(s)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# validate_lockfile_sync (Decision 80 / T3.11 wrapper)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLockfileSync:
+    """Tests for validate_lockfile_sync() -- thin wrapper around import_governance.check_lockfile_sync."""
+
+    def test_passes_on_committed_lockfile(self) -> None:
+        """Lockfile is in sync on the unmodified repository tree (integration smoke)."""
+        failed: list[str] = []
+        validate_lockfile_sync(failed)
+        assert not failed, f"Unexpected lockfile-sync failures: {failed}"
+
+    def test_appends_to_failed_on_drift(self) -> None:
+        """When check_lockfile_sync returns (False, ...), failure is appended."""
+        from scripts import import_governance  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(import_governance, "check_lockfile_sync", return_value=(False, "mypackage missing from lock")):
+            validate_lockfile_sync(failed)
+        assert any("Lockfile" in f for f in failed)
+
+    def test_no_failure_on_in_sync(self) -> None:
+        """When check_lockfile_sync returns (True, ...), nothing is appended."""
+        from scripts import import_governance  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(import_governance, "check_lockfile_sync", return_value=(True, "pins all packages")):
+            validate_lockfile_sync(failed)
+        assert not failed
+
+    def test_wired_in_both_tiers(self) -> None:
+        """validate_lockfile_sync is invoked in both --pre and run_python_checks bodies."""
+        import ast  # noqa: PLC0415
+
+        src = _SCRIPT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        call_sites = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_lockfile_sync"
+        ]
+        assert len(call_sites) >= 2, (
+            "validate_lockfile_sync must be called in both --pre and run_python_checks; "
+            f"found only {len(call_sites)} call site(s)"
+        )
