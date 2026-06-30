@@ -451,6 +451,53 @@ def _derive_ci_rca_dispute_open(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _derive_ci_rca_undetermined_open(cache_rows: list[dict]) -> list[dict]:
+    """Return open source=ci_rca recs with rca_confidence=undetermined from warm cache rows."""
+    import json as _json  # noqa: PLC0415
+
+    results = []
+    for row in cache_rows:
+        if row.get("source") != "ci_rca":
+            continue
+        if row.get("status") != "open":
+            continue
+        ctx_raw = row.get("context_v2_json") or ""
+        if not ctx_raw:
+            continue
+        try:
+            ctx = _json.loads(ctx_raw)
+        except Exception:
+            continue
+        if ctx.get("rca_confidence") == "undetermined":
+            results.append(row)
+    return results[:5]
+
+
+def _fetch_ci_rca_undetermined_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return up to 5 open ci_rca recs with rca_confidence=undetermined -- from warm cache only."""
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_undetermined_open(cache_rows)  # type: ignore[arg-type]
+    return []
+
+
+def print_ci_rca_undetermined_recs(recs: list[dict]) -> None:
+    """Print mandatory human review section for rca_confidence=undetermined recs."""
+    print("\n--- CI-RCA Mandatory Human Review (rca_confidence=undetermined) ---")
+    if not recs:
+        print("  (none)")
+        print()
+        return
+    print("  [MANDATORY HUMAN REVIEW] Evidence bundle abstained on these recs.")
+    print("  Review the proximate cause manually -- the deterministic probe could not classify.")
+    for rec in recs:
+        rec_id = rec.get("id", "unknown")
+        title = rec.get("title", "")
+        priority = rec.get("priority", "")
+        created = rec.get("created_timestamp", "")
+        print(f"  {rec_id} [{priority}] {created}: {title}")
+    print()
+
+
 def _derive_ci_rca_closed(rows: list[dict]) -> list[dict]:
     """Client-side derive: closed ci_rca recs projected to the sibling-cluster fields."""
     matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") == "closed"]
@@ -1793,6 +1840,7 @@ def main(roadmap_detail: str = "slim") -> int:
         fut_rec_count = phase_b.submit(_count_recommendations_reader, recs_cache)
         fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs, recs_cache)
         fut_ci_rca_dispute = phase_b.submit(_fetch_ci_rca_dispute_recs, recs_cache)
+        fut_ci_rca_undetermined = phase_b.submit(_fetch_ci_rca_undetermined_recs, recs_cache)
         fut_pq = phase_b.submit(read_priority_queue, 5, creds_status, pq_cache)
         fut_commits = phase_b.submit(_get_recent_main_commits)
         fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
@@ -1803,6 +1851,7 @@ def main(roadmap_detail: str = "slim") -> int:
         _rec_result = fut_rec_count.result()
         ci_rca_recs = fut_ci_rca.result()
         ci_rca_dispute_recs = fut_ci_rca_dispute.result()
+        ci_rca_undetermined_recs = fut_ci_rca_undetermined.result()
         priority_queue = fut_pq.result()
         recent_main_commits = fut_commits.result()
         latest_decision_ts = fut_decision_ts.result()
@@ -1822,6 +1871,7 @@ def main(roadmap_detail: str = "slim") -> int:
     correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=closed_ci_rca_recs)
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     print_ci_rca_dispute_recs(ci_rca_dispute_recs)
+    print_ci_rca_undetermined_recs(ci_rca_undetermined_recs)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
 
@@ -1874,6 +1924,7 @@ def main(roadmap_detail: str = "slim") -> int:
         "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
         "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
         "ci_rca_dispute_recs": ci_rca_dispute_recs,
+        "ci_rca_undetermined_recs": ci_rca_undetermined_recs,
         "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,

@@ -56,17 +56,41 @@ def classify_failure(
 ) -> tuple[str, str, str]:
     """Classify a CI failure. Returns (failure_category, failed_check, classification_source).
 
-    Priority: function_to_category (primary, first match on function name in log text)
-    -> log_pattern_to_category (regex fallback) -> taxonomy_fallback (unknown).
+    Priority: (1) step_name_to_category on failed steps from jobs JSON,
+              (2) function_to_category on failed step names from jobs JSON,
+              (3) function_to_category on log text (substring scan),
+              (4) log_pattern_to_category regex fallback,
+              (5) taxonomy_fallback (unknown).
     """
     taxonomy = _cached_taxonomy(path)
     func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
+    step_map: dict[str, str] = taxonomy.get("step_name_to_category") or {}
     pattern_list: list[dict] = taxonomy.get("log_pattern_to_category") or []
 
+    # Priority 1: jobs JSON failed step name -> step_name_to_category
+    if jobs:
+        for job in jobs:
+            for step in job.get("steps", []):
+                if step.get("conclusion") == "failure":
+                    step_name = step.get("name", "")
+                    if step_name in step_map:
+                        return (step_map[step_name], step_name, "step_name_to_category")
+
+    # Priority 2: jobs JSON failed step name -> function_to_category (direct key match)
+    if jobs:
+        for job in jobs:
+            for step in job.get("steps", []):
+                if step.get("conclusion") == "failure":
+                    step_name = step.get("name", "")
+                    if step_name in func_map:
+                        return (func_map[step_name], step_name, "function_to_category")
+
+    # Priority 3: function_to_category substring scan on log text
     for func_name, category in func_map.items():
         if func_name in log_text:
             return (category, func_name, "function_to_category")
 
+    # Priority 4: log pattern regex fallback
     for entry in pattern_list:
         pat = entry.get("pattern", "")
         category = entry.get("category", "unknown")
@@ -85,18 +109,29 @@ def classify_failures(
     jobs: list[dict] | None = None,
     path: Path | None = None,
 ) -> list[tuple[str, str, str]]:
-    """Enumerate all distinct failed checks in the run.
-
-    Returns a list of (failure_category, failed_check, classification_source) tuples,
-    one per distinct failed check. The single-failure path still returns a list with one
-    element. classify_failure is retained for backward compatibility.
-    """
+    """Enumerate all distinct failed checks. jobs-JSON step names take priority over log text."""
     taxonomy = _cached_taxonomy(path)
     func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
+    step_map: dict[str, str] = taxonomy.get("step_name_to_category") or {}
 
     results: list[tuple[str, str, str]] = []
     seen_checks: set[str] = set()
 
+    # Priority 1+2: jobs JSON failed step names
+    if jobs:
+        for job in jobs:
+            for step in job.get("steps", []):
+                if step.get("conclusion") == "failure":
+                    step_name = step.get("name", "")
+                    if step_name not in seen_checks:
+                        if step_name in step_map:
+                            results.append((step_map[step_name], step_name, "step_name_to_category"))
+                            seen_checks.add(step_name)
+                        elif step_name in func_map:
+                            results.append((func_map[step_name], step_name, "function_to_category"))
+                            seen_checks.add(step_name)
+
+    # Priority 3: function_to_category on log text (only if jobs didn't already cover)
     for func_name, category in func_map.items():
         if func_name in log_text and func_name not in seen_checks:
             results.append((category, func_name, "function_to_category"))

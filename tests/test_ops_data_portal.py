@@ -1926,10 +1926,10 @@ class TestCiRcaEvidenceDispute:
             CiRcaEvidenceDispute.model_validate(bad)
 
     def test_both_disputed_field_values_accepted(self) -> None:
-        """Both allowed disputed_field enum values pass schema validation."""
+        """All allowed disputed_field enum values pass schema validation (incl. failure_category)."""
         from scripts.ops_data_portal import CiRcaEvidenceDispute
 
-        for value in ("earliest_viable_gate", "actual_gate_that_caught_it"):
+        for value in ("earliest_viable_gate", "actual_gate_that_caught_it", "failure_category"):
             payload = {**_VALID_DISPUTE_PAYLOAD, "disputed_field": value}
             result = CiRcaEvidenceDispute.model_validate(payload)
             assert result.disputed_field == value
@@ -1997,6 +1997,167 @@ class TestCiRcaEvidenceDispute:
         from scripts.executor.rec_write_guidance import validate_source
 
         validate_source("ci_rca_evidence_dispute")  # should not raise
+
+
+class TestCiRcaCrossCheckSpine:
+    """c10: _run_ci_rca_cross_check() and _load_and_verify_bundle() contract tests."""
+
+    def _make_bundle(self, tmp_path, **overrides):
+        """Write a valid bundle JSON to tmp_path/logs/.ci-rca-evidence-pending/<sha>.json."""
+        import hashlib as _hashlib
+        import json as _json
+
+        bundle_data = {
+            "earliest_viable_gate": "pre",
+            "escape_mode": "tier_misplaced",
+            "vacuous_pass": False,
+        }
+        bundle_data.update(overrides)
+        payload = {k: v for k, v in bundle_data.items() if k != "sha256"}
+        sha = _hashlib.sha256(
+            _json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        ).hexdigest()
+        bundle_data["sha256"] = sha
+        pending_dir = tmp_path / "logs" / ".ci-rca-evidence-pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        (pending_dir / f"{sha}.json").write_bytes(
+            _json.dumps(bundle_data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        )
+        return sha, bundle_data
+
+    def _ctx_v2(self, **detection_gap_overrides):
+        """Return a minimal valid context_v2_json dict."""
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": "test gap explanation with enough chars for the field",
+        }
+        dg.update(detection_gap_overrides)
+        return {
+            "schema_version": 2,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, "c " * 25 + "systemic scripts/validate.py:1"],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+
+    def test_no_evidence_bundle_ref_skips_cross_check(self, tmp_path):
+        """Cross-check is skipped when evidence_bundle_ref is absent -- no issues raised."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        p._run_ci_rca_cross_check(ctx)  # should not raise
+
+    def test_bundle_not_found_skips_cross_check(self, tmp_path):
+        """Cross-check is skipped when the bundle file is not found locally."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": "", "upload_status": "ok"}
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)  # should not raise
+
+    def test_sha256_mismatch_always_loud_fails(self, tmp_path):
+        """SHA-256 mismatch raises ValueError regardless of CI_RCA_STRICT_MODE."""
+        import json as _json
+
+        import scripts.ops_data_portal as p
+
+        sha = "a" * 64
+        pending_dir = tmp_path / "logs" / ".ci-rca-evidence-pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        (pending_dir / f"{sha}.json").write_bytes(
+            _json.dumps({"earliest_viable_gate": "pre", "sha256": sha}, sort_keys=True, separators=(",", ":")).encode()
+        )
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+        with patch.object(p, "ROOT", tmp_path):
+            with pytest.raises(ValueError, match="SHA-256 mismatch"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_check1_bundle_undetermined_agent_must_mirror(self, tmp_path):
+        """Check-1: bundle.earliest_viable_gate='undetermined' but agent set 'pre' -> warn/raise."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path, earliest_viable_gate="undetermined")
+        ctx = self._ctx_v2(earliest_viable_gate="pre")
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="check-1"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_check2_bundle_wins_on_evg_mismatch(self, tmp_path):
+        """Check-2: agent earliest_viable_gate differs from bundle -> warn/raise."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path, earliest_viable_gate="CI")
+        ctx = self._ctx_v2(earliest_viable_gate="pre")
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="check-2"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_check3_escape_mode_bundle_wins(self, tmp_path):
+        """Check-3: agent escape_mode differs from bundle -> warn/raise."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path, escape_mode="no_premerge_gate_by_design")
+        ctx = self._ctx_v2()
+        ctx["detection_gap"]["escape_mode"] = "tier_misplaced"
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="check-3"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_check4_vacuous_pass_author_discipline_rejection(self, tmp_path):
+        """Check-4: vacuous_pass=true + author-discipline attribution -> warn/raise."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path, vacuous_pass=True, escape_mode="undetermined")
+        ctx = self._ctx_v2()
+        ctx["detection_gap"]["gap_explanation"] = "author did not run the tests before merging"
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="check-4"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_matching_values_no_issues(self, tmp_path):
+        """When agent mirrors the bundle, no warnings or raises occur."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path, earliest_viable_gate="pre", escape_mode="tier_misplaced", vacuous_pass=False)
+        ctx = self._ctx_v2(earliest_viable_gate="pre")
+        ctx["detection_gap"]["escape_mode"] = "tier_misplaced"
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)  # must not raise
 
 
 class TestProposeOrCloseRec:

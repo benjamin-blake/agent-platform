@@ -46,6 +46,7 @@ from scripts.executor.rec_write_guidance import validate_source
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+ROOT = _REPO_ROOT
 _SSO_PROFILE = "agent_platform"
 _FEATURE_FLAGS_YAML = _REPO_ROOT / "config" / "feature_flags.yaml"
 
@@ -132,9 +133,13 @@ class _EvidenceBundleRef(BaseModel):
 
 
 class _DetectionGap(BaseModel):
-    earliest_viable_gate: str = Field(pattern=r"^(pre|presubmit|CI)$")
+    earliest_viable_gate: str = Field(pattern=r"^(pre|presubmit|CI|undetermined)$")
     actual_gate_that_caught_it: str = Field(pattern=r"^(pre|presubmit|CI)$")
     gap_explanation: str = Field(min_length=120, max_length=600)
+    escape_mode: Optional[str] = Field(
+        default=None,
+        pattern=r"^(check_ran_vacuously|tier_misplaced|no_premerge_gate_by_design|undetermined)$",
+    )
 
     @field_validator("gap_explanation")
     @classmethod
@@ -152,7 +157,7 @@ class CiRcaContext(BaseModel):
     to PLAN-ci-rca-evidence-script Phase 2).
     """
 
-    schema_version: int = Field(default=1, ge=1, le=1)
+    schema_version: int = Field(default=1, ge=1, le=2)
     proximate_cause: str = Field(min_length=100, max_length=600)
     why_chain: list[str] = Field(min_length=3, max_length=7)
     why_chain_terminus_override: Optional[dict] = None
@@ -162,6 +167,10 @@ class CiRcaContext(BaseModel):
     corrective_action: str = Field(min_length=100, max_length=600)
     preventive_action: str = Field(min_length=100, max_length=800)
     evidence_bundle_ref: Optional[_EvidenceBundleRef] = None  # shape-only; S3 check deferred (Phase 2)
+    rca_confidence: Optional[str] = Field(
+        default=None,
+        pattern=r"^(high|medium|low|undetermined)$",
+    )
 
     @field_validator("why_chain")
     @classmethod
@@ -210,7 +219,7 @@ class CiRcaEvidenceDispute(BaseModel):
     """
 
     parent_rec_id: str = Field(pattern=r"^rec-\d+$")
-    disputed_field: str = Field(pattern=r"^(earliest_viable_gate|actual_gate_that_caught_it)$")
+    disputed_field: str = Field(pattern=r"^(earliest_viable_gate|actual_gate_that_caught_it|failure_category)$")
     agent_value: str = Field(min_length=1)
     bundle_value: str = Field(min_length=1)
     evidence_for_dispute: str = Field(min_length=120)
@@ -225,6 +234,139 @@ def _validate_ci_rca_dispute(context_v2_json: dict) -> list[str]:
         return []
     except PydanticError as exc:
         return [str(e["msg"]) for e in exc.errors()]
+
+
+def _load_and_verify_bundle(evidence_bundle_ref: dict) -> dict | None:
+    """Load the local canonical bundle and verify its SHA-256.
+
+    Returns the bundle dict on success, None if bundle is absent (non-strict skip).
+    Raises ValueError if SHA-256 mismatches (loud-fail regardless of mode).
+    """
+    import hashlib  # noqa: PLC0415
+
+    sha256 = evidence_bundle_ref.get("sha256", "")
+    if not sha256:
+        return None
+
+    # Search standard emit dirs for the bundle file
+    candidates = [
+        ROOT / "logs" / ".ci-rca-evidence-pending" / f"{sha256}.json",
+    ]
+    # Also try any BUNDLE_LOCAL path if set in env
+    env_path = os.environ.get("CI_RCA_BUNDLE_LOCAL_PATH", "").strip()
+    if env_path:
+        candidates.insert(0, Path(env_path))
+
+    bundle_path = next((p for p in candidates if p.exists()), None)
+    if bundle_path is None:
+        return None
+
+    raw = bundle_path.read_bytes()
+    try:
+        bundle = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Bundle at {bundle_path} is not valid JSON: {exc}") from exc
+
+    # SHA-256 verify: compute over all fields except sha256 itself
+    payload = {k: v for k, v in bundle.items() if k != "sha256"}
+    computed = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    ).hexdigest()
+    if computed != sha256:
+        raise ValueError(
+            f"[CI_RCA_CROSS_CHECK] SHA-256 mismatch for bundle {sha256}: "
+            f"computed={computed!r} -- bundle file may be corrupt or tampered. "
+            "This is a loud-fail regardless of CI_RCA_STRICT_MODE."
+        )
+    return bundle
+
+
+def _run_ci_rca_cross_check(context_v2_json: dict) -> None:
+    """Run the cross-check spine for source=ci_rca recs.
+
+    Loads the local canonical evidence bundle (from evidence_bundle_ref.sha256),
+    verifies its SHA-256, then compares bundle-wins fields and enforces constraints.
+
+    Raises ValueError in strict mode; logs warnings in warn mode.
+    Never raises for SHA-256 mismatch (always loud-fail).
+    Does nothing if evidence_bundle_ref is absent or bundle file not found locally.
+    """
+    mode = get_ci_rca_strict_mode()
+    evidence_bundle_ref = context_v2_json.get("evidence_bundle_ref") or {}
+    if not evidence_bundle_ref:
+        return
+
+    try:
+        bundle = _load_and_verify_bundle(evidence_bundle_ref)
+    except ValueError as exc:
+        # SHA-256 mismatch is always loud-fail
+        raise ValueError(str(exc)) from exc
+
+    if bundle is None:
+        return  # bundle not found locally -- skip cross-check (Decision 88)
+
+    detection_gap = context_v2_json.get("detection_gap") or {}
+    agent_evg = detection_gap.get("earliest_viable_gate")
+    bundle_evg = bundle.get("earliest_viable_gate")
+    agent_escape = detection_gap.get("escape_mode")
+    bundle_escape = bundle.get("escape_mode")
+    bundle_vacuous = bundle.get("vacuous_pass")
+
+    issues: list[str] = []
+
+    # Check 1: "undetermined" mirror -- when bundle abstains, agent must mirror
+    if bundle_evg == "undetermined" and agent_evg != "undetermined":
+        issues.append(
+            f"[CI_RCA_CROSS_CHECK check-1] bundle.earliest_viable_gate='undetermined' (probe abstained) "
+            f"but agent set earliest_viable_gate={agent_evg!r}. Agent MUST mirror 'undetermined'. "
+            "Set rca_confidence='undetermined' and mirror the bundle value."
+        )
+
+    # Check 2: earliest_viable_gate bundle-wins (when bundle has a concrete value)
+    elif bundle_evg not in (None, "undetermined") and agent_evg not in (None, "undetermined"):
+        if agent_evg != bundle_evg:
+            issues.append(
+                f"[CI_RCA_CROSS_CHECK check-2] detection_gap.earliest_viable_gate={agent_evg!r} "
+                f"disagrees with evidence_bundle.earliest_viable_gate={bundle_evg!r}. "
+                "The bundle is authoritative (bundle-wins). Accept the bundle value or file a "
+                "source=ci_rca_evidence_dispute rec."
+            )
+
+    # Check 3: escape_mode bundle-wins
+    if bundle_escape not in (None, "undetermined") and agent_escape not in (None, "undetermined"):
+        if agent_escape != bundle_escape:
+            issues.append(
+                f"[CI_RCA_CROSS_CHECK check-3] detection_gap.escape_mode={agent_escape!r} "
+                f"disagrees with evidence_bundle.escape_mode={bundle_escape!r}. "
+                "The bundle is authoritative (bundle-wins)."
+            )
+
+    # Check 4: vacuous_pass author-discipline rejection
+    # Reject an author-discipline RCA when vacuous_pass=true unless:
+    # (a) escape_mode=check_ran_vacuously (the vacuous pass IS the cause), or
+    # (b) a typed failure_category dispute is filed (handled via dispute carve-out)
+    if bundle_vacuous is True:
+        author_discipline_keywords = ("author", "did not run", "skipped", "forgot", "missed", "ignored")
+        detection_gap_text = detection_gap.get("gap_explanation", "").lower()
+        why_chain_text = " ".join(context_v2_json.get("why_chain", [])).lower()
+        full_text = f"{detection_gap_text} {why_chain_text}"
+        is_author_discipline = any(kw in full_text for kw in author_discipline_keywords)
+        escape_ok = agent_escape == "check_ran_vacuously" or bundle_escape == "check_ran_vacuously"
+        if is_author_discipline and not escape_ok:
+            issues.append(
+                "[CI_RCA_CROSS_CHECK check-4] bundle.vacuous_pass=true but rec's gap_explanation / why_chain "
+                "contains an author-discipline attribution (e.g. 'did not run', 'author skipped'). "
+                "When vacuous_pass=true the gate failure was a TEST COLLECTION DEFECT, not author discipline. "
+                "Set escape_mode='check_ran_vacuously' or file a source=ci_rca_evidence_dispute rec."
+            )
+
+    if not issues:
+        return
+
+    combined = "; ".join(issues)
+    if mode == "strict":
+        raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {combined}")
+    logger.warning("[CI_RCA_STRICT_MODE=warn] cross-check issues (rec filed anyway): %s", combined)
 
 
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
@@ -680,6 +822,10 @@ def file_rec(
                 "[PORTAL] source=ci_rca rec filed with legacy free-text context (no context_v2_json). "
                 "Migrate to context_v2_json per PLAN-ci-rca-schema-enforcement."
             )
+
+    # Cross-check spine (c10): load local bundle, verify SHA-256, bundle-wins comparison
+    if fields.get("source") == "ci_rca" and context_v2_json is not None and not _migration_mode:
+        _run_ci_rca_cross_check(context_v2_json)
 
     _derive_computed_fields(fields)
 

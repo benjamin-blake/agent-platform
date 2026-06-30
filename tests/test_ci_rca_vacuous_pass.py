@@ -13,6 +13,7 @@ from scripts.ci_rca_vacuous_pass import (  # noqa: E402
     _TEST_FILE_RE,
     _UNDETERMINED,
     compute_coverage_regression,
+    compute_escape_mode,
     compute_merge_gate_test_coverage,
     deleted_test_files,
     merged_diff_files,
@@ -186,3 +187,32 @@ class TestComputeCoverageRegression:
     def test_multiple_deleted_tests_returns_true(self):
         deleted = ["tests/test_a.py", "tests/test_b.py"]
         assert compute_coverage_regression(deleted) is True
+
+
+class TestComputeEscapeMode:
+    """c9: compute_escape_mode() returns escape_mode enum string."""
+
+    def test_any_undetermined_input_returns_undetermined(self):
+        assert compute_escape_mode(_UNDETERMINED, "selected", False, False) == _UNDETERMINED
+        assert compute_escape_mode(False, _UNDETERMINED, False, False) == _UNDETERMINED
+        assert compute_escape_mode(False, "selected", _UNDETERMINED, False) == _UNDETERMINED
+
+    def test_postmerge_canary_returns_tier_misplaced(self):
+        result = compute_escape_mode(False, "selected", True, False)
+        assert result == "tier_misplaced"
+
+    def test_not_selected_returns_no_premerge_gate_by_design(self):
+        result = compute_escape_mode(False, "not_selected", False, False)
+        assert result == "no_premerge_gate_by_design"
+
+    def test_vacuous_pass_and_selected_returns_check_ran_vacuously(self):
+        result = compute_escape_mode(True, "selected", False, False)
+        assert result == "check_ran_vacuously"
+
+    def test_false_vacuous_and_selected_returns_undetermined(self):
+        result = compute_escape_mode(False, "selected", False, False)
+        assert result == _UNDETERMINED
+
+    def test_postmerge_canary_takes_precedence_over_not_selected(self):
+        result = compute_escape_mode(False, "not_selected", True, False)
+        assert result == "tier_misplaced"

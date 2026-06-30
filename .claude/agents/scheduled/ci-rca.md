@@ -46,9 +46,11 @@ The bundle is a JSON object with these fields relevant to RCA:
 - `failed_check`: the exact check function or step name that failed
 - `failure_category`: classifier output (e.g. `sloc_violation`, `iam_gap`, `dependency_gap`,
   `schema_drift`, `environment`, `code_regression`, `unknown`)
-- `earliest_viable_gate`: the earliest CI gate that could have caught this (`pre`, `presubmit`, or `CI`)
+- `earliest_viable_gate`: the earliest CI gate that could have caught this (`pre`, `presubmit`, `CI`, or `undetermined` when the probe abstained)
 - `actual_gate_that_caught_it`: the gate that actually caught it
 - `earliest_viable_gate_rationale`: explanation of why the earliest viable gate was chosen
+- `escape_mode`: how the check escaped the pre-merge gate (`check_ran_vacuously`, `no_premerge_gate_by_design`, `tier_misplaced`, `undetermined`)
+- `vacuous_pass`: whether pytest collected 0 tests (True/False/"undetermined")
 - `sha256`: bundle identifier for `evidence_bundle_ref`
 
 Use these fields directly in the `context_v2_json` you compose below. If the bundle is
@@ -75,7 +77,7 @@ to CiRcaContext. All of the following fields are required:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "proximate_cause": "<100-600 chars: the observable fact the failing check reported>",
   "why_chain": [
     "<3-7 entries, each 40-250 chars, iterative 'but why?' descent>",
@@ -83,9 +85,10 @@ to CiRcaContext. All of the following fields are required:
     "<final entry MUST contain a systemic keyword AND a file:line citation>"
   ],
   "detection_gap": {
-    "earliest_viable_gate": "<pre|presubmit|CI -- from bundle.earliest_viable_gate or derived>",
+    "earliest_viable_gate": "<pre|presubmit|CI|undetermined -- MIRROR from bundle.earliest_viable_gate>",
     "actual_gate_that_caught_it": "<pre|presubmit|CI -- from bundle.actual_gate_that_caught_it>",
-    "gap_explanation": "<120-600 chars with file:line citation>"
+    "gap_explanation": "<120-600 chars with file:line citation>",
+    "escape_mode": "<mirror from bundle.escape_mode>"
   },
   "recurrence_class": "<novel|instance_of_known_pattern|regression>",
   "corrective_action": "<100-600 chars: tactical fix that restores service>",
@@ -97,11 +100,16 @@ Optional fields:
 - `prior_art_citation`: cite a rec-NNNN or Decision NNN if this is a known pattern
 - `evidence_bundle_ref`: `{"sha256": "<from bundle>", "s3_uri": "<from bundle or empty>", "upload_status": "<ok|upload_failed>"}`
 - `why_chain_terminus_override`: `{"reason": "<>=80 chars>"}` only when a file:line terminus cannot be derived
+- `escape_mode`: mirror from bundle.escape_mode
+- `rca_confidence`: "high" | "medium" | "low" | "undetermined" -- set "undetermined" when bundle abstained
 
-When `earliest_viable_gate` or `actual_gate_that_caught_it` from the bundle is `null`
-(taxonomy_fallback / apply-failure path), set the `detection_gap` fields to `"CI"` as a
-safe fallback and note the limitation in `gap_explanation`. The rec is filed in warn mode
-regardless.
+When the bundle provides `earliest_viable_gate` and `escape_mode`, MIRROR these values directly into `detection_gap.earliest_viable_gate` and `detection_gap.escape_mode` -- do NOT free-choose these values. The portal's cross-check spine compares your values against the bundle; mismatches are rejected.
+
+When the bundle's `earliest_viable_gate` is `"undetermined"` (probe abstained), set:
+- `detection_gap.earliest_viable_gate = "undetermined"` (mirror the bundle)
+- `rca_confidence = "undetermined"` (flags for mandatory human review)
+
+When `vacuous_pass=true` in the bundle, the failure was a TEST COLLECTION DEFECT (not author discipline). Do NOT attribute the failure to "author did not run --pre". Set `escape_mode` to the bundle's value (typically `"check_ran_vacuously"` or `"no_premerge_gate_by_design"`).
 
 ### Step 5: File the recommendation
 
@@ -171,8 +179,9 @@ the repo-relative path of the primary file implicated by the failure diagnosis.
 critical` is rejected.
 
 **Graceful degradation.** When the evidence bundle is absent or minimal (taxonomy_fallback,
-apply-failure backstop, unknown category), the agent still files a rec. Warn-mode tolerates
-a null detection_gap gate; use `"CI"` as the fallback gate value in that case.
+apply-failure backstop, unknown category), the agent still files a rec. When the bundle's
+`earliest_viable_gate` is `"undetermined"`, mirror that value and set `rca_confidence="undetermined"`.
+Do NOT free-choose `"CI"` as a fallback gate value -- mirror the bundle's abstention instead.
 
 ## Constraints
 

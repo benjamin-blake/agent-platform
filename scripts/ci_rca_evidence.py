@@ -122,6 +122,7 @@ def _assemble_core(
         compute_earliest_viable_gate,
         probe_runtime,
     )
+    from scripts.ci_rca_vacuous_pass import compute_escape_mode
 
     taxonomy = load_taxonomy(taxonomy_path)
     taxonomy_version = taxonomy.get("taxonomy_version", 1)
@@ -137,12 +138,19 @@ def _assemble_core(
     runtime_confidence, median_sec = probe_runtime(failed_check, validate_path)
     earliest_gate, evg_rationale = compute_earliest_viable_gate(failed_check, tier_membership, runtime_confidence, median_sec)
 
+    escape_mode = compute_escape_mode(
+        vacuous_pass=vacuous_pass,
+        merge_gate_test_coverage=merge_gate_test_coverage,
+        gate_is_postmerge_canary=gate_is_postmerge_canary,
+        coverage_regression=coverage_regression,
+    )
+
     check_tiers = None
     if tier_membership is not None:
         check_tiers = tier_membership.get(failed_check)
 
     bundle: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "workflow_run_id": workflow_run_id,
         "workflow_name": workflow_name,
         "workflow_to_tier_resolution": wf_tier,
@@ -158,6 +166,7 @@ def _assemble_core(
         "vacuous_pass": vacuous_pass,
         "merge_gate_test_coverage": merge_gate_test_coverage,
         "coverage_regression": coverage_regression,
+        "escape_mode": escape_mode,
         "related_recs_by_category": [],
         "decision_records_cited": ["Decision 43", "Decision 60"],
         "ast_walker_version": AST_WALKER_VERSION,
@@ -207,7 +216,7 @@ def generate_bundles(
     except (FileNotFoundError, ValueError) as exc:
         logger.error("TAXONOMY_UNAVAILABLE: %s", exc)
         b: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "workflow_run_id": workflow_run_id,
             "workflow_name": workflow_name,
             "workflow_to_tier_resolution": "unknown",
@@ -216,7 +225,7 @@ def generate_bundles(
             "classification_source": "taxonomy_fallback",
             "taxonomy_error": str(exc),
             "tier_membership": None,
-            "earliest_viable_gate": None,
+            "earliest_viable_gate": "undetermined",
             "earliest_viable_gate_rationale": "Taxonomy unavailable",
             "runtime_confidence": None,
             "actual_gate_that_caught_it": None,
@@ -224,6 +233,7 @@ def generate_bundles(
             "vacuous_pass": vacuous_pass_val,
             "merge_gate_test_coverage": "undetermined",
             "coverage_regression": coverage_reg,
+            "escape_mode": "undetermined",
             "related_recs_by_category": [],
             "decision_records_cited": [],
             "ast_walker_version": 1,

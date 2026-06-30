@@ -377,7 +377,7 @@ class TestBundleToSchema:
 
 
 class TestNewBundleFields:
-    """schema_version=2 and the four new evidence fields are present in every bundle."""
+    """schema_version=3 and the new evidence fields are present in every bundle."""
 
     def test_schema_version_is_2(self, log_file, taxonomy_file):
         with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
@@ -388,7 +388,7 @@ class TestNewBundleFields:
                     workflow_run_id=1,
                     taxonomy_path=taxonomy_file,
                 )
-        assert bundles[0]["schema_version"] == 2
+        assert bundles[0]["schema_version"] == 3
 
     def test_new_fields_present(self, log_file, taxonomy_file):
         with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
@@ -432,7 +432,46 @@ class TestNewBundleFields:
             workflow_run_id=99,
             taxonomy_path=tmp_path / "nonexistent.yaml",
         )
-        assert bundles[0]["schema_version"] == 2
+        assert bundles[0]["schema_version"] == 3
+
+
+class TestSchemaVersion3:
+    """c9/c10: schema_version=3 bundles include escape_mode."""
+
+    def test_escape_mode_present_in_bundle(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        b = bundles[0]
+        assert b["schema_version"] == 3
+        assert "escape_mode" in b
+
+    def test_escape_mode_is_string(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert isinstance(bundles[0]["escape_mode"], str)
+
+    def test_taxonomy_error_bundle_has_escape_mode(self, tmp_path, log_file):
+        bundles = generate_bundles(
+            log_file=log_file,
+            workflow_name="CI",
+            workflow_run_id=99,
+            taxonomy_path=tmp_path / "nonexistent.yaml",
+        )
+        b = bundles[0]
+        assert "escape_mode" in b
+        assert b["escape_mode"] == "undetermined"
 
 
 MULTI_TAXONOMY = {

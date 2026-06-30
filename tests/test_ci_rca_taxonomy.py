@@ -176,3 +176,55 @@ class TestClassifyFailures:
         log = "validate_sloc_limits FAILED\nvalidate_sloc_limits also here\n"
         results = classify_failures(log, path=p)
         assert len(results) == 1
+
+
+class TestJobsJsonPreference:
+    """c9b: jobs-JSON step names take priority over log text substring scan."""
+
+    def test_jobs_step_name_wins_over_log_text(self, tmp_path):
+        taxonomy_data = {
+            "schema_version": 1,
+            "taxonomy_version": 1,
+            "failure_categories": ["sloc_violation", "code_regression", "unknown"],
+            "function_to_category": {"validate_sloc_limits": "sloc_violation"},
+            "step_name_to_category": {"Run pytest": "code_regression"},
+            "log_pattern_to_category": [],
+            "workflow_to_tier": {"CI": "CI"},
+        }
+        p = _write_taxonomy(tmp_path, taxonomy_data)
+        jobs = [{"name": "test", "steps": [{"name": "Run pytest", "conclusion": "failure", "number": 1}]}]
+        cat, check, src = classify_failure("validate_sloc_limits FAILED in output", jobs=jobs, path=p)
+        assert cat == "code_regression"
+        assert check == "Run pytest"
+        assert src == "step_name_to_category"
+
+    def test_jobs_json_none_falls_back_to_log_text(self, tmp_path):
+        taxonomy_data = {
+            "schema_version": 1,
+            "taxonomy_version": 1,
+            "failure_categories": ["sloc_violation", "unknown"],
+            "function_to_category": {"validate_sloc_limits": "sloc_violation"},
+            "step_name_to_category": {},
+            "log_pattern_to_category": [],
+            "workflow_to_tier": {"CI": "CI"},
+        }
+        p = _write_taxonomy(tmp_path, taxonomy_data)
+        cat, check, src = classify_failure("validate_sloc_limits FAILED", jobs=None, path=p)
+        assert cat == "sloc_violation"
+        assert src == "function_to_category"
+
+    def test_new_categories_in_taxonomy(self, tmp_path):
+        taxonomy_data = {
+            "schema_version": 1,
+            "taxonomy_version": 1,
+            "failure_categories": ["test_collection_empty", "gate_escape", "unknown"],
+            "function_to_category": {},
+            "step_name_to_category": {"pytest --collect-only": "test_collection_empty"},
+            "log_pattern_to_category": [],
+            "workflow_to_tier": {"CI": "CI"},
+        }
+        p = _write_taxonomy(tmp_path, taxonomy_data)
+        jobs = [{"name": "j", "steps": [{"name": "pytest --collect-only", "conclusion": "failure", "number": 1}]}]
+        cat, check, src = classify_failure("collected 0 items", jobs=jobs, path=p)
+        assert cat == "test_collection_empty"
+        assert src == "step_name_to_category"

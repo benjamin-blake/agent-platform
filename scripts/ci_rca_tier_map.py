@@ -207,7 +207,7 @@ def compute_earliest_viable_gate(
     runtime_confidence: str | None,
     median_seconds: float | None,
     current_pre_runtime: float = 0.0,
-) -> tuple[str | None, str]:
+) -> tuple[str, str]:
     """Compute earliest_viable_gate. Returns (gate_or_None, rationale_str).
 
     Decision tree per INTENT-ci-rca-methodology Section 3.2 step 4.
@@ -216,7 +216,7 @@ def compute_earliest_viable_gate(
         return ("presubmit", f"{check_name} has external AWS/network deps; --pre is offline-tolerant (Decision 60).")
 
     if tier_membership is None:
-        return (None, "AST parse failure on validate.py; tier_membership unavailable.")
+        return ("undetermined", "AST parse failure on validate.py; tier_membership unavailable.")
 
     tiers = tier_membership.get(check_name, [])
     if "pre" in tiers:
@@ -229,8 +229,8 @@ def compute_earliest_viable_gate(
         if runtime_confidence and (
             runtime_confidence.startswith("dispersion_too_high") or runtime_confidence.startswith("probe_failed")
         ):
-            return (None, f"Runtime probe inconclusive: {runtime_confidence}.")
-        return (None, "Runtime probe result unavailable.")
+            return ("undetermined", f"Runtime probe inconclusive: {runtime_confidence}.")
+        return ("undetermined", "Runtime probe result unavailable.")
 
     headroom = _FAST_TIER_BUDGET_SECONDS - current_pre_runtime
     if median_seconds <= headroom:
