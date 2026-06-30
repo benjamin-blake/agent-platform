@@ -126,23 +126,17 @@ version_bump_surfaces:
 
 ### Environment constraint (where the rehearsal runs)
 
-The direct-connection smoke gates (`--churn-gate`, `--restore-drill`) open a DuckDB engine ->
-Neon Postgres ATTACH over TCP/5432 from the host running them. **The Claude Code on the web
-(CC-web) container blocks outbound 5432 by design** -- in production only the reader/writer
-Lambdas reach Neon (public TLS, post-de-VPC per T2.17), plus PlatformAdmin break-glass from a
-privileged host. CC-web is neither, so the direct rehearsal **cannot** run there; it is a
-break-glass-class gate that must run from a Neon-reachable privileged environment (a laptop,
-the PySR compute node, or a bastion in eu-west-2 with the `agent_platform`/`agent_platform_admin`
-chain). This is structural, not transient -- do NOT treat a 5432 timeout from CC-web as a flaky
-network error.
+**Canonical pre-deploy path (CC-web compatible): `--canary-rehearsal`.**
+All TCP/5432 happens server-side inside ephemeral Lambda canaries; the orchestrator communicates
+over HTTPS/443 only (PLAN-oq12-clone-rehearsal-lambda / rec-2357). The direct-connection gates
+(`--churn-gate`, `--restore-drill`) are privileged-env-only break-glass paths for non-CC-web
+hosts with outbound TCP/5432 (a laptop, PySR compute node, or eu-west-2 bastion).
 
-> **Tooling gap (follow-up):** step 4 below describes the *correct* design -- rehearse through a
-> Lambda built on the candidate layer pointed at the cloned catalog (`--lambda-*`), which is the
-> only sanctioned Neon path and is runnable from CC-web. The PLAN-duckdb-pin-bump-1-5-4 VP14
-> tooling instead used the direct `--churn-gate`/`--restore-drill` path, which is why that bump's
-> pre-deploy rehearsal stalled on CC-web (rec-2357). Re-homing the pre-deploy rehearsal to a
-> scratch/canary Lambda against scratch Neon is tracked as a follow-up plan; until it lands, run
-> the direct gates from a privileged host per the constraint above.
+**Direct-gate guard (Decision-88 egress acknowledgement):** `--churn-gate` and `--restore-drill`
+refuse to run unless `DUCKLAKE_ALLOW_DIRECT_GATE=1` is set in the environment. Setting it
+acknowledges that the caller has TCP/5432 access and accepts that the direct path is NOT
+available from CC-web. DO NOT set this inside CC-web to work around a 5432 timeout -- that
+is a structural block, not a transient network error.
 
 ### Clone-rehearsal gate (mandatory before any production bump)
 
@@ -152,14 +146,29 @@ network error.
 2. **Re-seed extensions.** Fetch `ducklake`/`httpfs`/`postgres_scanner` for `vX.Y.Z/linux_amd64` and upload to
    `s3://agent-platform-data-lake/ducklake-extensions/vX.Y.Z/` (the build's S3 fallback). Confirm the local
    DuckDB `X.Y.Z` can LOAD all three from a baked `extension_directory` with autoload/autoinstall OFF.
-3. **Clone the catalog.** `pg_dump` the live Neon catalog into a scratch Neon database (the restore-drill
-   path already does this). NEVER rehearse against the live catalog.
-4. **Rehearse read+write on the clone.** Run the writer + reader smoke gates (`--lambda-*`) against a
-   Lambda built on the candidate layer, pointed at the cloned catalog + a scratch DATA_PATH. All EC gates
-   (attach, idempotency, partition, inlining, loud-fail, churn, reader) must pass on the new version.
-5. **Compatibility decision.** If the clone rehearsal is green, file a Decision recording the bump and the
-   rehearsal evidence, then roll the production layer. If it regresses, STOP -- do not bump; RCA the
-   regression (Decision 55). Never relax the runtime version-assert to paper over a mismatch.
+3. **Build and upload candidate layers.**
+   ```
+   bin/venv-python -m scripts.build_lambda --ducklake-only --profile agent_platform
+   ```
+   This uploads `ducklake-deps-layer.zip`, `ducklake-extensions-layer.zip`, and
+   `ducklake-pgclient-layer.zip` plus the three function zips to S3.
+4. **Run the canary rehearsal from CC-web (canonical, no TCP/5432).**
+   ```
+   bin/venv-python -m scripts.ducklake_neon_smoke_test --canary-rehearsal --profile agent_platform [--json]
+   ```
+   The orchestrator: publishes candidate layers, creates ephemeral writer/reader/maintenance canaries
+   pointed at a scratch meta-schema + scratch S3 prefix, proves ATTACH + churn (unchanged CD.33 budgets)
+   + RYW + real-prod read-clone (`action_clone_catalog`), then tears down all ephemeral resources.
+   For the read-clone step, the orchestrator creates a Neon native copy-on-write branch (HTTPS/443 REST
+   API, `neon_api.create_branch`), passes the branch endpoint host to `action_clone_catalog` in the event,
+   and deletes the branch in its finally block (Decision 100). The Lambda action ATTACHes the candidate
+   DuckDB engine to the branch DSN at `meta_schema=ducklake_ops` and reads real catalog metadata read-only
+   via `information_schema` -- it invokes no pg_dump, pg_restore, CREATE DATABASE, or DROP DATABASE.
+   Passes all EC gates on the candidate engine. NEVER touches `ducklake_ops` or the production DATA_PATH.
+5. **Compatibility decision.** If the canary rehearsal is green, file a Decision recording the bump
+   and the rehearsal evidence, then roll the production layer (`--deploy`). If it regresses, STOP --
+   do not bump; RCA the regression (Decision 55). Never relax the runtime version-assert to paper
+   over a mismatch.
 
 ### Rollback
 

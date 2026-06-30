@@ -576,7 +576,7 @@ def copilot_call(
         # Pass the inline instruction + @context_file_path inside the -p
         # argument so the CLI expands @file inline as user-message content
         # (not as document context).  This is the correct invocation pattern
-        # per copilot-instructions.md Known Gotchas ("@file vs user message").
+        # per AGENTS.md/PROJECT_CONTEXT.md Known Gotchas ("@file vs user message").
         context_path = Path(context_file_path)
         context_path.parent.mkdir(parents=True, exist_ok=True)
         context_path.write_text(prompt, encoding="utf-8")

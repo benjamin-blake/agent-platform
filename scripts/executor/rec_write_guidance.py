@@ -145,5 +145,49 @@ def get_rec_write_guidance(
                 ),
             },
         }
+    elif source == "ci_rca_evidence_dispute":
+        # Flat top-level guidance entries for the dispute schema fields (Decision 66 Precision Context Injection).
+        # These are the ONLY fields needed in context_v2_json when source=ci_rca_evidence_dispute; no CiRcaContext
+        # fields are required (the check-8 carve-out in file_rec() bypasses ci_rca checks 1-7 automatically).
+        guidance["parent_rec_id"] = {
+            "description": "The existing source=ci_rca rec whose detection_gap cross-check result is being disputed.",
+            "semantics": (
+                "str, pattern ^rec-\\d+$. Identifies the parent ci_rca rec. Example: 'rec-1234'. "
+                "The dispute is filed against this rec's cross-check values; close the dispute by updating "
+                "this parent rec when the disagreement is resolved."
+            ),
+        }
+        guidance["disputed_field"] = {
+            "description": "Which of the two Section-2 cross-check points is in dispute.",
+            "semantics": (
+                "str enum: earliest_viable_gate | actual_gate_that_caught_it. "
+                "These are the only two CiRcaContext detection_gap fields subject to the INTENT Section-2 "
+                "cross-check. Widening the enum requires a schema bump (explicit human direction)."
+            ),
+        }
+        guidance["agent_value"] = {
+            "description": "The value the ci-rca agent reported for the disputed_field.",
+            "semantics": (
+                "str, non-empty. Example: 'pre' (agent claimed the check could have run at pre tier). "
+                "This is the value the agent put into the detection_gap object of the parent rec."
+            ),
+        }
+        guidance["bundle_value"] = {
+            "description": "The value the deterministic evidence bundle produced for the disputed_field.",
+            "semantics": (
+                "str, non-empty. Example: 'CI' (bundle shows the check only runs in CI). "
+                "The disagreement between agent_value and bundle_value is what triggers the dispute."
+            ),
+        }
+        guidance["evidence_for_dispute"] = {
+            "description": "A reproducible, cited argument proving the bundle value is correct and the agent value is wrong.",
+            "semantics": (
+                "str, min 120 chars. Must be specific: name the script, flag, or config that proves the bundle is right. "
+                "Anti-example: 'I think the agent is wrong'. "
+                "Example: 'scripts/collect_ci_evidence.py:142 shows earliest_viable_gate is derived from validate.py "
+                "--pre output; the agent value pre is wrong because the check is guarded by a CI-only env var at "
+                "validate.py:87, making pre impossible.'"
+            ),
+        }
 
     return guidance

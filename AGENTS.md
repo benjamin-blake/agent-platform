@@ -3,8 +3,16 @@
 Universal rules for Claude Code. Auto-loaded into every session.
 For full project context (AWS config, file router, recommendation schema, gotchas), see `docs/PROJECT_CONTEXT.md` — workflows load it on demand; you don't need it ambiently.
 
+## PUBLIC repository / confidential-data boundary
+
+This repository is PUBLIC (Decisions 73, 83, 101). Public-content boundary (Decision 101):
+- NEVER publish: AWS account IDs or ARNs, IAM ExternalIds, credentials or API keys, trading alpha / strategy performance, or any internal hostname that provides an attack surface.
+- SAFE to publish: platform engineering, infrastructure patterns, tooling, CI/CD design, and general LLM-agent architecture -- market the engineering, not the alpha.
+- Confidential data lives ONLY in: the personal AWS account (Secrets Manager, gitignored tfvars, S3 private prefixes), and gitignored local files (e.g. `terraform/personal/terraform.personal.tfvars`, `~/.aws/credentials`). Nothing confidential is ever committed.
+- The pre-commit `never-commit` hook (shape-pattern) blocks 12-digit AWS account IDs, secret-like strings, and ExternalId patterns from reaching the repo.
+
 ## Role and environment
-You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
+You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (CC-web; Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
 
 ## Code style
 - Python 3.12+, type hints required, `async` for I/O.
@@ -21,15 +29,15 @@ You are a Lead Software Developer writing production-quality Python. The user is
 - Never `eval()` or `exec()`. Use `sympy.sympify()` + `sympy.lambdify()` for formula evaluation.
 - Never raise exceptions during module import. Defer validation to explicit calls.
 - Always wrap `filemd5()` and `file()` Terraform calls on optional artifacts with `try()`.
-- Terraform apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state. The guard's fail-closed set (IAM/trust/destroy diffs, exit 2) now routes to the `tf-gated-apply` GitHub Environment in CD: after merge, the `gated-apply` job blocks until benjamin-blake approves in GitHub Actions, then applies the same reviewed plan.bin in CD (never from a laptop). The bootstrap root (CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget (permissions boundary); in-budget IAM auto-apply pending T2.25.
+- Terraform apply model: see `docs/contracts/environment-taxonomy.md` (Axis A + Guard classification subsection) -- that file is the sole SoT. Short form: sandbox auto-applies behind the deterministic guard (Decision 77); in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25 / Decision 92 point 5); trust/destroy/out-of-budget IAM route to the `tf-gated-apply` Environment. Bootstrap root is admin-only out-of-band.
 - Windows subprocess: pass `encoding='utf-8', errors='replace'` with `text=True`. Use `sys.executable` — not the string `'python'` or `'pip'`.
 - Only modify files explicitly in scope. Out-of-scope bugs become recommendations via `scripts/ops_data_portal.py`, not inline fixes.
 
 ## Branching — never edit or commit on `main`
-**Hard rule: do not run `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, or any `git commit` / `git push` command while the current branch is `main`.** If you're on main, the only allowed actions are read-only commands and creating a new branch.
+**Hard rule: do not run `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, or any `git commit` / `git push` command while the current branch is `main`.** If you're on main, the only allowed actions are read-only commands and creating a new branch. See `## Git-ops procedure` for the full branching topology.
 
 - **See current branch**: the statusline at the bottom of the prompt shows it. It will read `WARNING: ON MAIN` if you're on main. Or run `git branch --show-current`.
-- **Create a working branch**: on Claude Code on the web you are already on a harness-assigned session branch (e.g. `claude/...`) -- verify with `git branch --show-current`. Do NOT create an `agent/` branch. (Local-dev fallback: `git checkout main && git pull && git checkout -b agent/{slug}`.)
+- **Create a working branch**: on Claude Code on the web you are already on a harness-assigned session branch (e.g. `claude/...`) -- verify with `git branch --show-current`. Do NOT create an `agent/` branch.
 - A `PreToolUse` hook at `.claude/hooks/never_on_main.py` enforces this at the harness level: it blocks `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, and `Bash(git commit/push ...)` while on `main`. Other Bash commands (e.g. `git status`, `ls`) still run.
 
 ## Temporary Operational Constraints
@@ -105,7 +113,7 @@ This is an append-only lakehouse. The warehouse is the single source of truth fo
 
 **Source-of-truth by table (Decision 84 consolidation, 2026-06-11):**
 - **`ops_recommendations`, `ops_decisions`, `ops_priority_queue` = DuckLake-on-Neon, SOLE backend.** Reads transit the closed `ducklake_reader` boundary via NAMED VERBS (Decision 84 I-3; no caller SQL); writes transit `ducklake_writer` (`file_ops` allocates rec ids in-transaction). There is NO Athena path and NO rollback flag (`OPS_STORAGE_BACKEND` retired -- the frozen Iceberg copy stopped being coherent the day writes moved). `ops_decisions` rebuilds from `DECISIONS.md` via `ops_data_portal --backfill-decisions-md`.
-- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (`docs/INTENT-ducklake-consolidation.md`).
+- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (Decision 84 Phase 4 / tier_item T2.36).
 
 Local files have exactly two valid roles:
 
@@ -118,19 +126,68 @@ The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and 
 
 If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync_ops sync` (which pulls every migrated table from the DuckLake reader and overwrites local). Never fix drift by re-staging from the local file.
 
+## Git-ops procedure
+
+Canonical authority for all agent and session git-ops. All other surfaces (skills, commands) point here and do not restate.
+
+### Branching topology
+| Container | AWS profile(s) | Use |
+|---|---|---|
+| DEV (primary, this one) | `agent_platform` only | All routine work on CC-web |
+| ADMIN (rarely used) | `agent_platform` + `agent_platform_admin` | Advanced terraform IAM; ties to the human-gated apply loop (Decision 35 / CD.35 / Decision 77) |
+
+- **Development surface**: Claude Code on the web (CC-web) only. Executor frozen (Decision 67); hybrid executor + CC-web is the future state.
+- **Branch rule**: work on the harness-assigned `claude/...` session branch -- do NOT create an `agent/` branch, never commit directly to `main`.
+
+### Two-tier presubmit model (Google TAP style)
+| Tier | When | Command | Gate |
+|---|---|---|---|
+| Fast (`--pre`) | PR / edit loop | `bin/venv-python -m scripts.validate --pre` | Authoritative pre-merge gate when run by PR CI (Decision 73); advisory only when run outside CI |
+| Full | Post-merge on `main` | `bin/venv-python -m scripts.validate` | A failure spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never auto-revert); see CI-failure / RCA-first protocol in `## Merge protocol` |
+
+`validate.py` is the single source of truth -- never add a check to `.github/workflows/ci.yml` without adding it to `validate.py` first.
+
+### Commit-message conventions
+| Prefix | Use for |
+|---|---|
+| `feat({slug}):` | IMPLEMENTATION plan execution |
+| `plan({slug}):` | Plan document commit / approved plan |
+| `roadmap({ids}):` | Roadmap bookkeeping edits |
+| `scope({slug}):` | STRATEGIC plan scoping (currently suspended, Decision 67) |
+
+### Rebase phase distinction
+- **Assessment time (planning)**: do NOT auto-rebase. When main has diverged and scope files overlap, surface to the human with options (rebase now and re-enter `/plan` / proceed / abort); record any deferral in the plan's Context field. Rebasing mid-plan can silently invalidate scoping decisions.
+- **Commit-flow time (implementing)**: DO auto-rebase before pushing. After the local commit: `git fetch origin main && git rebase origin/main` -- STOP on conflict, surface to the human. If the branch was already pushed, use `--force-with-lease` (never `--force`).
+
+### Push -> PR -> CI -> merge flow
+1. `git push -u origin HEAD` (harness `claude/...` branch)
+2. `mcp__github__create_pull_request(owner, repo, head=<branch>, base="main", title=<per conventions table>, body=...)`
+3. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)` and **end your turn** -- do NOT busy-wait with sleep or polling; the harness forbids it.
+4. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment is the pass wake signal. The comment is unverified: on wake, confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
+   - **Harness message vs. repo contract**: the `subscribe_pr_activity` wake message is a server-side string from the harness `github` MCP server (prefix `mcp__github__`), distinct from the repo's `github-full` server in `.mcp.json`; it is not repo-editable. In this repo CI success IS delivered via the signal-green comment, so the event-driven wake (failure event + signal-green comment) is the primary routine mechanism -- `send_later` polling for CI status is NOT used.
+   - **Dropped-signal backstop**: exactly one low-frequency (~1h) best-effort one-shot `send_later` self-check-in is permitted to guard against a dropped (best-effort `continue-on-error`) signal-green comment. It is NOT a poll loop (Decision 55), NOT the CI-status mechanism, and is re-armed only if the PR is genuinely still pending after waking.
+   - **Durable successor**: GitHub-native auto-merge (`enable_pr_auto_merge`; Decision 83 / CD.20 / rec-940) retires the comment-wake + backstop once adopted.
+5. On green confirmation: `mcp__github__merge_pull_request(..., merge_method="squash")` then `mcp__github__unsubscribe_pr_activity(...)`.
+6. On red: diagnose, fix on branch, commit, push (re-triggers CI). Stay subscribed. End your turn.
+
+For terraform/personal PRs, see the "Hold subscription through apply" section of the implement skill (Decision 76 / CD.35 / T2.20).
+
+### Resolves: trailer
+When a plan's `bundled_recommendations` list is non-empty, include in the squash-merge commit body:
+```
+Resolves: rec-NNNN[, rec-MMMM]
+```
+Triggers `rec-autoclose.yml` to close each rec via the ops portal. Fallback: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."` (Decision 70).
+
 ## Merge protocol
-- **Authoritative pre-merge gate**: remote CI (`validate.py` on GitHub-hosted runners with OIDC, CD.21) is the authoritative gate. A branch is not merge-ready until CI passes.
-- **Local `--pre` is advisory only**: `bin/venv-python -m scripts.validate --pre` runs the diff-aware fast tier -- ruff + mypy on changed files, `pytest --picked --mode=branch` (changed test files only; integration-marked tests excluded), prompt checks, and sub-second static gates (CC, SLOC, contract-drift, intent-doc-freeze, field-semantics, CI-RCA taxonomy) -- under a hard 5-minute budget that exits non-zero on breach (Decision 73, superseding Decision 60's original lint-only/30s definition). Test selection is git-diff-based via `pytest-picked`, NOT a Bazel-style dependency closure (Decision 80). Run locally it is advisory and does not gate merges; the same `--pre` tier running in PR CI is the authoritative pre-merge gate.
-- **Full presubmit**: `bin/venv-python -m scripts.validate` (no flags) runs the comprehensive tier -- full pytest, terraform validate, dependency health, prompt-compliance, the DQ runner, and the V3 verification harness (the last two skip with a structured event when AWS credentials are absent, per Decision 57). Per Decision 73 this tier runs post-merge on `main` (NOT at PR time); a failure there spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never auto-revert). Run it locally before opening a PR to avoid a post-merge red `main`.
-- Two-tier model: fast `--pre` (edit-loop + PR gate) + full presubmit (post-merge `main` + scheduled drift canary). Tiers originated in Decision 60; redefined diff-aware with a runtime budget assertion by Decision 73. `validate.py` remains the single source of truth (next bullet).
+**Canonical authority: see `## Git-ops procedure` for the full PR/CI/squash-merge flow, two-tier presubmit model, and Resolves trailer.**
+
+- **On CI failure**: the ci-rca agent (`.github/workflows/ci-rca.yml`) automatically files a recommendation with `source="ci_rca"` and `priority="critical"`. The next `/plan` session will surface it under "CI RCA Recs (open)". Do NOT manually patch the failure until the rec has been reviewed in a `/plan` session -- inline fixes without architectural review reproduce the workaround anti-pattern (Decision 55, Decision 72).
 - Never add a check to `.github/workflows/ci.yml` without adding it to `validate.py` first -- `validate.py` is the single source of truth.
 - Manual confirmation: if `validate.py` appears to skip tests, run `pytest` directly to confirm.
-- **On CI failure**: the ci-rca agent (`.github/workflows/ci-rca.yml`) automatically files a recommendation with `source="ci_rca"` and `priority="critical"`. The next `/plan` session will surface it under "CI RCA Recs (open)". Do NOT manually patch the failure until the rec has been reviewed in a `/plan` session -- inline fixes without architectural review reproduce the workaround anti-pattern (Decision 55, Decision 72).
-- **Web merge flow (Decision 76)**: on Claude Code on the web the `gh` CLI is unavailable -- all GitHub PR/merge operations use the GitHub MCP tools (`mcp__github__*`). Open the PR via `create_pull_request`, wait for the fast PR `--pre` tier event-driven via `subscribe_pr_activity` (end the turn; the webhook wakes the session -- never `sleep`/`/loop`), then squash-merge via `merge_pull_request(merge_method="squash")`. The full tier runs post-merge on main with ci-rca on failure.
-- **`Resolves:` trailer convention**: when a plan resolves one or more open recommendations (ci_rca or otherwise), include a `Resolves: rec-NNNN[, rec-MMMM]` trailer line in the squash-merge commit body. This triggers the `rec-autoclose` workflow (`.github/workflows/rec-autoclose.yml`) to close each named rec via the ops portal automatically. The trailer is case-insensitive on the keyword, comma- or space-separated, and is parsed by `scripts/rec_trailer.py`. Plans that bundle recommendations declare them in `bundled_recommendations` and the `/implement` skill emits the trailer into the merge body. Manual close fallback: `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."` (Decision 70 -- closure via lifecycle state, not deletion).
 
 ## Instruction architecture
-The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude Code is the 4th consumer. Layers:
+The 5-layer contract is at `docs/contracts/instruction-architecture.yaml`. Claude Code is the 4th consumer. Layers:
 
 | Layer | Location | When loaded |
 |---|---|---|
@@ -140,7 +197,7 @@ The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude 
 | 4. Skills (methodology) | `.claude/skills/*/SKILL.md` | When agent invokes `Skill` tool |
 | 5. Executor prompts | `config/agent/executor/prompts/*.prompt.md` | By `execute_recommendation.py` |
 
-Legacy fallbacks at `.github/prompts/` and `.github/agents/` are deep-frozen — do not edit them unless explicitly asked.
+The `.github/prompts/scheduled/` and `.github/agents/schedule.yaml` surfaces are retained for live scheduled agents. The legacy top-level `.github/prompts/*.prompt.md` and `.github/agents/*.agent.md` files were deleted at T-1.13.
 
 ## Operational runbooks
 
@@ -180,12 +237,12 @@ To re-enable:
 The self-hosted EC2 runner was retired 2026-05-28 per CD.21. CI now runs on GitHub-hosted
 runners (`ubuntu-latest`) with OIDC to the personal account (role
 `agent-platform-github-ci-branch` for branch/push events, `agent-platform-github-ci-pr` for
-pull requests). See `terraform/personal/oidc.tf`. The work-account runner definition is
+pull requests). See `terraform/personal/oidc.tf`. The retired EC2 runner definition is
 retained in `terraform/ec2_runner.tf` as an architectural-evolution artefact (no longer applied).
 
 ### Claude Code OAuth token (CI + scheduled agents)
 
-Setup (one-time, local terminal):
+Setup (one-time, from CC-web terminal):
 ```bash
 claude setup-token
 # Copy the printed token -- it uses your Max plan subscription (no API billing)
@@ -193,7 +250,7 @@ claude setup-token
 In GitHub: repo -> Settings -> Secrets and variables -> Actions -> Repository secrets
 -> New secret. Name: `CLAUDE_CODE_OAUTH_TOKEN`. Paste the token.
 
-Rotation: re-run `claude setup-token` locally. Update the GH Actions secret with
+Rotation: re-run `claude setup-token` from the CC-web terminal. Update the GH Actions secret with
 the new token. Set a 90-day calendar reminder. If the scheduled agent workflow fails
 with auth errors, check token expiry first.
 

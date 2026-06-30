@@ -49,6 +49,14 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
    - **WARN** -- the proposed approach partially conflicts; a small refactor or explicit deferral note in the plan can resolve.
    - **NOTE** -- the proposed approach edges close to the decision's domain but does not violate it; surface for the planning agent's judgement.
 
+5. **Managed-service-native check (Decision 100 / Decision 75):** During triage, flag CONTRADICT WARN when a
+   plan proposes to vendor client tooling or custom scripts to replicate a capability the managed service
+   already exposes natively (examples: pg_dump/pg_restore instead of Neon branching; manual S3 copy instead
+   of S3 replication; custom schema-copy instead of RDS snapshot). This check fires even when the mechanism
+   was previously recorded as a "human decision" -- a decision record does not exempt a mechanism from the
+   native-primitive principle. Cross-reference Decision 100 (which extends Decision 75 to ALL managed services,
+   not only AWS-native primitives).
+
 5. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed, not superseded, not deferred). If a decision is reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
 
 ### Phase 3: Structured Output

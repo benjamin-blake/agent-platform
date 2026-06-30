@@ -1,13 +1,13 @@
 ---
 description: Implements IMPLEMENTATION plans directly or scopes STRATEGIC plans into atomic recommendations for the executor. Run after /plan.
-argument-hint: [docs/plans/PLAN-slug.md]
+argument-hint: [docs/plans/PLAN-slug.yaml]
 ---
 
 # Implement Workflow
 
 **Intent**: For IMPLEMENTATION plans: execute the Ordered Execution Steps directly. For STRATEGIC plans: research Work Areas and produce atomic, automatable recommendations for the executor.
 
-*Note: For detailed guidelines on how to execute each step below, invoke your `implement` skill via the Skill tool.*
+*Note: For detailed guidelines on how to execute each step below, invoke your `implement` skill via the Skill tool. For the canonical git-ops procedure (branching, rebase rules, PR/CI/merge flow), see AGENTS.md `## Git-ops procedure`.*
 
 ## Step 1: Run Preflight
 ```bash
@@ -35,7 +35,7 @@ git branch --show-current
 ```
 If the result is `main`, STOP.
 
-The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.md`). If an argument was given, resolve it:
+The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.yaml`). If an argument was given, resolve it:
 ```bash
 bin/venv-python scripts/find_plan.py <path-from-arguments>
 ```
@@ -43,7 +43,7 @@ If no argument was given, fall back to auto-discovery:
 ```bash
 bin/venv-python scripts/find_plan.py
 ```
-If either command prints `NOT_FOUND`, list `docs/plans/PLAN-*.md` and ask the human which plan to implement.
+If either command prints `NOT_FOUND`, list `docs/plans/PLAN-*.yaml` and ask the human which plan to implement.
 
 Read the entire plan file. Extract Intent, Plan Type, Verification Tier, Work Areas (STRATEGIC) or Execution Steps (IMPLEMENTATION), Verification Plan, and Constraints.
 **If no plan file exists, STOP.**
@@ -69,7 +69,7 @@ Also read `docs/PROJECT_CONTEXT.md` and `docs/DECISIONS.md` before proceeding.
 
 ## Step 4: Verification Plan (IMPLEMENTATION only -- MANDATORY)
 **You MUST execute this step. Do not skip it.**
-Execute the Verification Plan from the PLAN-{slug}.md file. Apply the strict **Live Verification Protocol** from your `implement` skill.
+Execute the Verification Plan from the PLAN-{slug}.yaml file. Apply the strict **Live Verification Protocol** from your `implement` skill.
 Produce the VP Compliance Table. If ANY row is FAIL, fix and re-verify. If BLOCKED, wait for human.
 
 ## Step 5: Code Review (IMPLEMENTATION only -- MANDATORY)
@@ -78,7 +78,7 @@ Produce the VP Compliance Table. If ANY row is FAIL, fix and re-verify. If BLOCK
 Agent prompt requirements (do NOT brief the subagent on what to look for -- that biases the review):
 - Pre-instruct: "Run `git fetch origin main --quiet` before diffing -- the branch may have been open for hours and the local `origin/main` ref may be stale."
 - Identify the branch under review (`git diff origin/main...HEAD` is the diff under critique). Use `origin/main`, not the local `main` ref.
-- Identify the plan file (`docs/plans/PLAN-{slug}.md`) so the subagent knows the acceptance criteria
+- Identify the plan file (`docs/plans/PLAN-{slug}.yaml`) so the subagent knows the acceptance criteria
 - Instruct: "Apply the `code-review` skill methodology to this branch. Return a structured findings report grouped by severity (Critical / High / Medium / Low) with file:line references. Do not edit files."
 - Forbid file edits
 

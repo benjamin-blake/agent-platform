@@ -186,3 +186,39 @@ class TestFollowonFieldsInPreflight:
         full = _slim_roadmap_state(state, full=True)
         for entry in full.get("next_eligible", []):
             assert "open_criteria_count" not in entry, f"next_eligible must not carry followon fields: {entry['id']}"
+
+
+@pytest.mark.skipif(not _LIVE_YAML.exists(), reason="live ROADMAP-PLATFORM.yaml not present")
+class TestCompletionBlockedOnCdProjection:
+    """T-1.20:c6 -- completion_blocked_on_cd field in full (/orient) projection."""
+
+    def _full_state(self) -> dict:
+        from scripts.platform_roadmap import compute_state_dict
+
+        return compute_state_dict(_LIVE_YAML)
+
+    def test_full_in_progress_carries_completion_blocked_on_cd(self) -> None:
+        """Full projection in_progress entries all carry completion_blocked_on_cd."""
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        for entry in full.get("in_progress", []):
+            assert "completion_blocked_on_cd" in entry, f"in_progress entry {entry['id']} missing completion_blocked_on_cd"
+            assert isinstance(entry["completion_blocked_on_cd"], list), (
+                f"{entry['id']}: completion_blocked_on_cd must be a list"
+            )
+
+    def test_t120_surfaces_cd1_as_completion_gate(self) -> None:
+        """T-1.20 in_progress entry includes CD.1 in completion_blocked_on_cd."""
+        state = self._full_state()
+        full = _slim_roadmap_state(state, full=True)
+        t120 = next((i for i in full.get("in_progress", []) if i["id"] == "T-1.20"), None)
+        assert t120 is not None, "T-1.20 expected in in_progress"
+        assert "CD.1" in t120["completion_blocked_on_cd"], (
+            f"CD.1 expected in T-1.20 completion_blocked_on_cd, got {t120['completion_blocked_on_cd']}"
+        )
+
+    def test_slim_projection_omits_in_progress(self) -> None:
+        """Slim (/plan) projection does not carry in_progress (completion_blocked_on_cd never leaks)."""
+        state = self._full_state()
+        slim = _slim_roadmap_state(state, full=False)
+        assert "in_progress" not in slim, "slim projection must not carry in_progress"

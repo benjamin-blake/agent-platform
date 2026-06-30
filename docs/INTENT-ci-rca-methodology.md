@@ -374,7 +374,7 @@ bin/venv-python -m scripts.ci_rca_evidence \
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "workflow_run_id": 26286390667,
   "workflow_name": "CI",
   "workflow_to_tier_resolution": "CI",
@@ -392,6 +392,10 @@ bin/venv-python -m scripts.ci_rca_evidence \
   "decision_records_cited": ["Decision 43", "Decision 60", "Decision 68"],
   "ast_walker_version": 1,
   "taxonomy_version": 1,
+  "gate_is_postmerge_canary": true,
+  "vacuous_pass": "undetermined",
+  "merge_gate_test_coverage": "not_selected",
+  "coverage_regression": "undetermined",
   "sha256": "<computed at write time>"
 }
 ```
@@ -400,7 +404,7 @@ The SHA-256 hash is computed over the canonical-JSON serialisation of all fields
 
 **Canonical JSON specification.** Implementations MUST use Python's `json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True)` or an RFC 8785 (JSON Canonicalisation Scheme) equivalent. This pins key ordering, whitespace, and number formatting so two implementations produce identical hashes for the same logical bundle. PLAN-ci-rca-evidence-script lands a unit test asserting hash stability across a fixture set.
 
-**Multi-failure example (N=2 failed checks in one workflow run).** When CI run 26286390667 fails BOTH `validate_sloc_limits` AND `validate_iam_runner_policy`, the bundle script emits TWO separate `evidence_bundle.json` objects with shared `workflow_run_id=26286390667` and distinct `sha256` hashes. The agent then files TWO `source=ci_rca` recs (one per failed check) via two sequential `file_rec()` calls. Each rec references its own bundle by SHA-256. The recs share `actual_gate_that_caught_it` (both `CI`) but differ in `proximate_cause`, `failed_check`, and `failure_category`. Filing is sequential, not transactional -- the portal does not provide cross-rec atomicity, and the prompt-rewrite step (PLAN-ci-rca-prompt-rewrite) handles the loop. If the first `file_rec` succeeds and the second fails, the human reviews via `/plan` the partial state.
+**Multi-failure example (N=2 failed checks in one workflow run).** When CI run 26286390667 fails BOTH `validate_sloc_limits` AND `validate_iam_runner_policy`, the bundle script emits TWO separate `evidence_bundle.json` objects with shared `workflow_run_id=26286390667` and distinct `sha256` hashes. The agent then files TWO `source=ci_rca` recs (one per failed check) via two sequential `file_rec()` calls. Each rec references its own bundle by SHA-256. The recs share `actual_gate_that_caught_it` (both `CI`) but differ in `proximate_cause`, `failed_check`, and `failure_category`. Filing is sequential, not transactional -- the portal does not provide cross-rec atomicity, and the prompt-rewrite step (PLAN-ci-rca-prompt-rewrite) handles the loop. If the first `file_rec` succeeds and the second fails, the human reviews via `/plan` the partial state. N-bundle enumeration implemented by PLAN-ci-rca-vacuous-pass-evidence (landed 2026-06-30): `classify_failures()` in `scripts/ci_rca_taxonomy.py` matches all named functions in one log scan and `generate_bundles()` emits one bundle per (category, check) tuple with a distinct sha256 per bundle and shared workflow_run_id.
 
 #### 3.4 Failure modes
 

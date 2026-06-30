@@ -2,6 +2,234 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 103: Recommendation relevance is a governed lifecycle state (CD.36 ratification) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-30
+**Warehouse ID:** dec-103 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The roadmap had a Tier Item Freshness Gate (T-1.21) and implement-side truth-maintenance rules,
+but no governed relevance discipline for operational recommendations. Open recommendations were
+actioned solely on status="open", without checking whether the underlying need was still valid.
+At 2026-06-24, 273 of 505 open recommendations were aging (>60 days), and no automated path
+existed to surface or close satisfied/superseded work.
+
+**Decision:**
+Ratifies CD.36. Recommendation relevance is a governed lifecycle verdict -- distinct from the
+rec lifecycle status (open/closed/failed/declined/superseded). The verdict set is:
+`{relevant, satisfied, superseded, duplicate, contradicted, stale_target, blocked_by_decision, unknown}`.
+
+Key constraints (binding):
+- The deterministic probe is the rec's existing `acceptance` shell-command oracle. No new
+  acceptance machinery is introduced.
+- Deterministic satisfaction (acceptance probe passes; target file/symbol present) may auto-close
+  with a recorded proof. All semantic verdicts (superseded, duplicate, contradicted, etc.)
+  produce a `close_proposed` command for human or policy confirmation -- never a direct close
+  (Decision 70: closure requires a closure proof, not an LLM assertion).
+- Relevance state is computed READ-TIME or stored in a named projection
+  (`docs/contracts/recommendation-relevance.yaml`) -- NO new Class A columns on
+  `ops_recommendations` (Decision 84: the ducklake_writer owns the keyspace).
+- Queue-wide relevance surfacing serves the warmed read-cache only -- no per-session warehouse
+  re-fetch (Decision 88).
+
+**Implementation (T3.8, landed 2026-06-30):**
+`scripts/rec_relevance.py` evaluator (deterministic-first: acceptance probe -> target-existence
+-> decision-contradiction scan -> semantic fallback); `docs/contracts/recommendation-relevance.yaml`
+projection contract; `scripts/session_preflight.py` generalised correlation engine;
+`scripts/ops_data_portal.py` `propose_or_close_rec()` lifecycle helper; planning and implement
+skill freshness gates.
+
+**Related:** Decision 70 (closure-proof requirement), Decision 84 (named projection / read-only
+boundary), Decision 88 (read-cache surfacing), Decision 55 (no auto-action on semantic judgment),
+T3.8 (implementation item), T3.9 (post-merge reconciliation complement).
+
+## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-29
+**Warehouse ID:** dec-102 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 43 introduced a binary SLOC waiver: any scripts/ or src/ Python file carrying a
+`# complexity-waiver: decision-43` header comment was entirely exempt from the 500-SLOC cap,
+allowing unbounded growth. Seventeen files currently exceed 500 SLOC under this exemption.
+The waiver mechanism provided no ratchet, no visibility into file growth, and no pressure
+toward the reduction that Decision 43 itself mandated.
+
+**Decision:**
+The `# complexity-waiver: decision-43` comment no longer authorises unbounded SLOC growth.
+Oversized scripts/ and src/ Python files are instead pinned to their current size in a
+checked-in registry (`config/sloc_budgets.yaml`) and enforced by `validate_sloc_limits` at
+`current SLOC <= budget`. Budgets ratchet DOWN only:
+
+- Raising a budget requires a manual, reviewable edit to `config/sloc_budgets.yaml`.
+- Shrinking a file and re-running `validate --update-sloc-budgets` automatically lowers the
+  registered budget to the new size.
+- Files that shrink to <=500 SLOC are dropped from the registry automatically.
+- A file >500 SLOC that is NOT registered in `config/sloc_budgets.yaml` fails the gate,
+  regardless of whether it carries the waiver comment.
+- A file <=500 SLOC that still carries the waiver comment is a stale-waiver advisory (not a
+  failure), because the comment may still be load-bearing for the cyclomatic-complexity gate
+  (validate_cc_limits). Do not remove the comment without verifying the CC gate first.
+
+**Preserved from Decision 43:**
+The cyclomatic-complexity (CC) row of Decision 43 is UNCHANGED. The `_WAIVER_PATTERN` and the
+`validate_cc_limits` gate are not modified by this decision. The shared waiver comment still
+waives the CC gate; its SLOC semantics are amended here only.
+
+**Forward-compatibility (Decision 80):**
+`config/sloc_budgets.yaml` keys are repo-relative forward-slash paths. When `scripts/validate.py`
+is decomposed per Decision 80, keys are re-pointed at the new module paths via
+`validate --update-sloc-budgets`. No other migration is required.
+
+**Deferred breakdown program:**
+The breakdown of registered files below 500 SLOC (split each file, drop from registry,
+until `budgets: {}`) is tracked as rec-2414. This decision creates the registry that rec-2414
+consumes; it does not resolve rec-2414.
+
+**Related:** Decision 43 (amended SLOC row), Decision 80 (validate.py decomposition direction),
+Decision 73 (one-directional enforced-budget ratchet precedent), Decision 86 (rationale routed
+to this numbered Decision).
+
+## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-28
+**Warehouse ID:** dec-101 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The platform and its trading product were operating under purely internal identifiers (repo
+`agent-platform`, AWS prefixes `agent-platform-*`, profile `agent_platform`, project_id
+`trading-system`). As the system matures toward MVP, external-facing brand identity and a
+public documentation/marketing presence are needed. No ratified decision named the external
+brands or governed what may and may not be published publicly.
+
+**Decision:**
+
+**(a) Naming hierarchy:**
+- **Theseus** = external brand for the PLATFORM (the self-improving host system).
+- **Guerdon** = external brand for the trading PRODUCT (product #1 built on Theseus).
+- **Semanto** = the external-facing marketing/comms system and the name of its roadmap
+  (`docs/ROADMAP-SEMANTO.yaml`). Semanto is a PRESENTATION-LAYER-ONLY brand for the
+  marketing and communications surface; it is not a product or a subsystem.
+
+**(b) Presentation-layer only -- internal identifiers unchanged:**
+The external brands apply exclusively to external/marketing surfaces. ALL internal identifiers
+are unchanged by this decision and must not be altered without a separate explicit decision:
+- Repository name: `agent-platform`
+- AWS resource prefixes: `agent-platform-*`
+- IAM profile: `agent_platform`
+- Glue database: `agent_platform`
+- Project ID: `trading-system` (per the INTENT-multi-product-platform origin model, which is
+  unbuilt and unchanged here)
+
+A deep internal rename (aligning identifiers to `theseus-*`) is a recognised high-blast-radius
+future item DEFERRED to a post-MVP tightening refactor. Citing Decision 75 (Frame-Lock): no
+fixed internal-rename scope is committed here; the scope will be bounded in a future plan.
+
+**(c) Scoped Decision-86 marketing-prose exception:**
+Decision 86 (Agent-First repository) mandates machine-parseable artefacts over narrative prose
+and bans standing human-readable companion documents. Marketing prose is hereby granted a
+SCOPED EXCEPTION under the following conditions:
+- Marketing content lives OUTSIDE `docs/` -- the canonical directory is the top-level
+  `marketing/` directory.
+- Marketing content is NOT consumed by internal agents as a source of truth. It is strictly
+  one-way downstream: it renders internal artefacts; it never feeds back into agent context.
+- Marketing content is never a warehouse write source (Decision 84). It is read-only from the
+  warehouse's perspective.
+- This exception is scoped to marketing prose only and does not extend to any other
+  human-readable content under `docs/`.
+
+**(d) Public-content boundary:**
+The public site (theseus.support) must enforce the following boundary at all times:
+- Never publish AWS account specifics: account IDs, infra topology, VPC details, secret
+  names, decision logs, or any content from `docs/` or `logs/`.
+- Market the platform engineering and architecture; never publish Guerdon's trading
+  alpha, performance figures, or returns. Publishing performance claims exposes
+  investment-solicitation and securities-law risk.
+
+**(e) Hosting:**
+The public site is a static site on Cloudflare Pages, built with Astro and Starlight
+(both free/MIT-licensed). Cloudflare Pages is the native managed primitive for static-site
+hosting -- consistent with Decision 100 (use managed primitives, no client-tooling substitution
+for native operations). No hand-rolled build or hosting tooling is permitted.
+Domain: `theseus.support` (Cloudflare-managed DNS, already owned).
+
+**(f) Positioning:**
+- Primary audience: data-engineering hiring managers (portfolio and technical credibility signal).
+- Secondary aspiration: open-source community (transparency, contribution).
+- Deferred, separately gated: a paid service offering (requires its own decision and plan;
+  not in scope for the MVP marketing surface).
+
+**Scope of this decision:**
+This decision ratifies branding and governance only. It DOES NOT provision any infrastructure,
+deploy any site, or change any internal identifier. The theseus.support site and DNS are
+deferred_post_mvp items (S1.2/S1.3 in `docs/ROADMAP-SEMANTO.yaml`). The deep internal rename
+is explicitly deferred. This session's only artefacts are this decision and `docs/ROADMAP-SEMANTO.yaml`.
+
+**Affected files:**
+`docs/DECISIONS.md` (this decision), `docs/ROADMAP-SEMANTO.yaml` (new third sibling roadmap).
+
+---
+
+## Decision 100: Managed services own their primitives -- no client-tooling substitution for native operations (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-26
+**Warehouse ID:** dec-100 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+PR #273 introduced a `pg_dump -> scratch-DB -> pg_restore` mechanism for the OQ.12 pre-deploy
+clone-rehearsal, despite Neon providing native copy-on-write branching (HTTPS/443 REST API,
+no TCP/5432 egress required). Three compounding factors allowed this:
+1. The mechanism was recorded as a "human decision" (HYBRID pg_dump->pg_restore framing),
+   which was then treated as exempt from architectural review.
+2. Decision 75 (Frame-Lock) was scoped to AWS-native primitives, leaving Neon's native
+   primitives uncovered by an explicit decision.
+3. The pg_dump egress smell was mis-resolved by citing Decision 88 (which governs the
+   unavoidable DR backup egress, not the avoidable read-clone egress).
+
+**Decision:**
+Extends Decision 75 (Frame-Lock) to all managed services: when a managed service exposes a
+native primitive (branching, snapshots, PITR, replication, versioning, cloning), the system
+must use that primitive rather than vendoring client tooling or custom scripts to replicate
+the capability outside the managed boundary. A mechanism recorded as a "human decision"
+does NOT exempt it from this principle -- the decision record is evidence of a choice made,
+not a permanent seal against architectural correction.
+
+Canonical instance: OQ.12 clone-rehearsal uses Neon's native copy-on-write branching
+(POST /api/v2/projects/{project_id}/branches over HTTPS/443), not pg_dump -> pg_restore.
+The orchestrator owns the branch lifecycle (create before invoke, delete in finally).
+The Lambda action only ATTACHes to the branch endpoint and reads catalog metadata read-only.
+
+Decision 88 governs the DR pg_dump-to-S3 backup pipeline, which remains real and unchanged
+(unavoidable egress for an offline backup). Decision 88 never applied to the read-clone path.
+
+**Enforcement (Decision 100 procedure guard):**
+The `decision-scout` skill (Phase 2 triage) is updated with a WARN check: flag any plan that
+vendors client tooling or custom scripts to replicate a capability a managed service exposes
+natively. Cross-references Decision 100 and Decision 75.
+
+**Rationale:**
+- Native primitives are lower-latency, eliminate operational complexity (no scratch DB lifecycle,
+  no pg_restore binary dependency in Lambda layers), and stay within the managed boundary.
+- The pg_dump -> pg_restore path required pg_restore in the Lambda pgclient layer, imposing a
+  non-CC-web operator rebuild constraint and blocking the "DEFERRED at sign-off" restore-drill gate.
+  Removing it unblocks both constraints simultaneously.
+- Zero new IAM: the orchestrator's `agent_platform_admin` profile already holds
+  `secretsmanager:GetSecretValue` on `neon-api-key` (no new grants needed).
+
+**Affected files:**
+`src/common/neon_api.py` (new -- Neon REST client),
+`src/lambdas/ducklake_maintenance/handler.py` (action_clone_catalog rewritten),
+`scripts/ducklake_neon_smoke_test.py` (canary_rehearsal branch lifecycle),
+`scripts/build_lambda.py` (pg_restore guard removed from build_pgclient_layer),
+`docs/runbooks/ducklake-catalog-operations.md` (Section 2 step 4 rewritten),
+`.claude/skills/decision-scout/SKILL.md` (managed-service-native WARN check added).
+
+---
+
 ## Decision 99: DuckDB/DuckLake lockstep version SSOT + first exercised version bump 1.5.3->1.5.4 (Decided)
 
 **Status:** Decided
@@ -447,12 +675,32 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
    own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
    cycle. Without that separation any automated handling of the fail-closed set is self-approval.
 
-5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
-   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
-   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
-   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
-   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
-   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+5. **Authority-budget + ratchet model (CD.35 points 6-9, IMPLEMENTED by T2.25 / 2026-06-29):**
+   an explicit permissions boundary on github_ci_apply plus boundary-propagation condition keys
+   and deterministic in-budget/out-of-budget diff classification shipped in T2.25.
+
+   Concrete in-budget classification (machine-readable: `terraform/bootstrap/authority_budget.json`):
+   - **In-budget** (auto-apply, still subject to subagent review): resource type
+     `aws_iam_role_policy` or `aws_iam_role_policy_attachment`, action set `["update"]`,
+     target role name `agent-platform-github-ci-branch` or `agent-platform-github-ci-pr`
+     (managed boundary-carrying roles). No trust diff (trust check runs BEFORE IAM classification
+     in the guard; a trust change on an in-budget resource type is always gated).
+   - **Out-of-budget / gated** (routes to tf-gated-apply Environment): trust diffs, destroys,
+     role CREATES (new trust surface), or any IAM change not matching all three in-budget
+     criteria above. Role creates stay gated in this v1 narrowing.
+   - **Fail-closed**: missing or unparseable budget table = all IAM treated as out-of-budget
+     (Decision 77). Budget path overridable via `TF_AUTHORITY_BUDGET` env var (test isolation).
+
+   Ratchet criteria: autonomy is earned and revocable PER CHANGE-CLASS -- the budget widens on
+   measured track record (per change-class, after N incident-free auto-applies) and narrows on
+   incident. Budget amendments via the bootstrap tier only (`terraform/bootstrap/`); subagent
+   review advises, never locks. The drift gate (`scripts/validate.py:validate_authority_budget`)
+   asserts the budget table stays in sync with the IAMRoleWriteBounded SCP in
+   `terraform/bootstrap/github_ci_apply.tf` (pre and full tiers).
+
+   The sole SoT for the apply-model and guard-classification rules is
+   `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection.
+   CD.35 is fully ratified (no re-ratification via this amendment).
 
 6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
    drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
@@ -700,7 +948,7 @@ The T2.19 recs-first cutover left the ops store straddling two warehouses. The r
 
 **Operational consequences:** destructive Lambda actions gain explicit-confirm guards (create_ops_tables force_recreate; catalog_reinit loses its production-schema default); the telemetry preflight health check is stubbed until telemetry re-lands on DuckLake (Phase 4); catalog DR remains the existing ducklake_catalog_dr nightly pg_dump, with the restore-drill format gap tracked as rec-2113.
 
-**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27 (roadmap carriers), docs/INTENT-ducklake-consolidation.md (full program).
+**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27/T2.28 (roadmap carriers), T2.36 (Phase 4 telemetry re-lands on DuckLake).
 
 ---
 

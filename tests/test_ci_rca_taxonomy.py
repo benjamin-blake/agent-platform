@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: E402
 from scripts.ci_rca_taxonomy import (  # noqa: E402
     classify_failure,
+    classify_failures,
     enumerate_workflow_names,
     load_taxonomy,
     resolve_workflow_tier,
@@ -131,4 +132,47 @@ class TestEnumerateWorkflowNames:
     def test_real_workflows_dir(self):
         names = enumerate_workflow_names()
         assert "CI" in names
-        assert len(names) == 11
+        assert len(names) == 12
+
+
+MULTI_TAXONOMY = dict(MINIMAL_TAXONOMY)
+MULTI_TAXONOMY["function_to_category"] = {
+    "validate_sloc_limits": "sloc_violation",
+    "validate_iam_runner_policy": "iam_policy_gap",
+}
+
+
+class TestClassifyFailures:
+    def test_single_match_returns_list_of_one(self, tmp_path):
+        p = _write_taxonomy(tmp_path, MINIMAL_TAXONOMY)
+        results = classify_failures("validate_sloc_limits FAILED", path=p)
+        assert isinstance(results, list)
+        assert len(results) == 1
+        cat, check, src = results[0]
+        assert cat == "sloc_violation"
+        assert check == "validate_sloc_limits"
+        assert src == "function_to_category"
+
+    def test_multiple_matches_returns_list_of_n(self, tmp_path):
+        p = _write_taxonomy(tmp_path, MULTI_TAXONOMY)
+        log = "validate_sloc_limits FAILED\nvalidate_iam_runner_policy FAILED\n"
+        results = classify_failures(log, path=p)
+        assert len(results) == 2
+        checks = {r[1] for r in results}
+        assert "validate_sloc_limits" in checks
+        assert "validate_iam_runner_policy" in checks
+
+    def test_no_match_returns_taxonomy_fallback(self, tmp_path):
+        p = _write_taxonomy(tmp_path, MINIMAL_TAXONOMY)
+        results = classify_failures("nothing matched here", path=p)
+        assert isinstance(results, list)
+        assert len(results) == 1
+        cat, check, src = results[0]
+        assert src == "taxonomy_fallback"
+
+    def test_deduplicates_same_function_name(self, tmp_path):
+        p = _write_taxonomy(tmp_path, MINIMAL_TAXONOMY)
+        # function name appears twice in log -- should produce exactly one result
+        log = "validate_sloc_limits FAILED\nvalidate_sloc_limits also here\n"
+        results = classify_failures(log, path=p)
+        assert len(results) == 1

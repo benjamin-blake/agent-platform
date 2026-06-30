@@ -1,0 +1,348 @@
+schema_version: 1
+slug: "cd-convergence-health-sensor"
+intent: >-
+  Close the convergence-observability gap exposed by the 2026-06-24..27 wedge: the agent-native
+  Terraform CI/CD program latches the convergence record red ONCE (one red = one signal) and then
+  goes silent, so a persistently-red pipeline -- a forgotten gated-apply approval plus an out-of-band
+  admin apply that never reconciled the record -- sat red for days while merged-but-unapplied changes
+  piled up with no escalation. Build an alarm-only CD-convergence HEALTH sensor that breaks the silence
+  specifically on PERSISTENCE: it re-escalates a record that has been red longer than a threshold,
+  surfaces gated-apply jobs stuck waiting on the tf-gated-apply Environment, and counts merged-but-
+  unapplied terraform/personal commits since the last green commit. It routes alarm-only via the ops
+  portal (NOT ci-rca: Decision 72/55 -- ci-rca is log-RCA over FAILED runs; staleness is a state
+  condition with no failure log; NOT validate.py: a static code gate is the wrong plane for a live-state,
+  time-based property). It never clears red, never re-fires the latch, and never auto-applies.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-cd-convergence-health-sensor.yaml
+phase: >-
+  Platform tier T2.35 (CD.35 "Wave 6"). Builds on the Wave 1-5 convergence substrate (T2.20 record +
+  refusal; T2.24 drift detector) -- it READS the same convergence/personal/sandbox.json record and reuses
+  the github_ci_branch CI identity ci-rca already uses to file recs. No new IAM role, no terraform apply,
+  no gated-apply path. Product roadmap: not applicable (platform infra governance).
+scope:
+  - file: scripts/convergence_health.py
+    action: Create
+    purpose: >-
+      Pure, unit-testable sensor module. Reads the convergence record from S3
+      (convergence/personal/sandbox.json); derives red_since (drift_detected_at when status=red and
+      present, else timestamp) and red_age_hours; counts merged terraform/personal/** commits since the
+      record's commit_sha via `git log {commit_sha}..HEAD -- terraform/personal/`; queries the GitHub
+      Actions API (when a token is present) for terraform-apply-sandbox runs whose gated-apply job is
+      `waiting` beyond a threshold. Produces a structured HealthVerdict (status, red_age_hours,
+      unapplied_backlog, stuck_approvals, severity). Provides an idempotent escalation entrypoint that
+      files OR updates a single tf_convergence_stale rec per red-episode via scripts.ops_data_portal
+      (file_rec / update_rec) -- never a direct JSONL write, never a record mutation, never an apply.
+  - file: .github/workflows/convergence-health.yml
+    action: Create
+    purpose: >-
+      Scheduled (cron '37 * * * *', offset off terraform-drift's '17') + workflow_dispatch runner.
+      permissions: id-token: write (OIDC S3 read) + contents: read + actions: read (query waiting runs).
+      Assumes agent-platform-github-ci-branch (the SAME role ci-rca uses: reads the data-lake bucket,
+      invokes the ducklake_writer for the portal) -- so NO new IAM role, NO guard-block, NO gated apply.
+      Runs convergence_health; on a red-age OR stuck-approval threshold breach it ESCALATES alarm-only via
+      the ops portal (idempotent: one open tf_convergence_stale rec per red-episode). Contains NO terraform
+      apply and NO workflow_dispatch of terraform-apply-sandbox (alarm-only; nothing auto-remediates).
+      NOT added to main-protection required_status_checks (Decision 83 non-wedging).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Repoint check_terraform_pending: it currently runs `terraform -chdir=terraform plan` against the
+      RETIRED terraform/ root (CD.21, no longer applied) and returns null. Replace with a convergence-
+      record read via convergence_health (status, red_age_hours, unapplied_backlog) so terraform_pending
+      reflects the APPLIED root's convergence truth. Surface the richer health summary in the preflight
+      report (keep the existing terraform_pending key shape backward-compatible: bool|None for "changes
+      pending", plus a new convergence_health sub-object). Read-only; no escalation from preflight.
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a convergence-health surfacing line to the orientation triage: when the preflight
+      convergence_health sub-object shows status=red (with red_age_hours + unapplied_backlog) or a stuck
+      gated-apply approval, /orient surfaces it near CI-RCA triage so a wedged pipeline is impossible to
+      miss at the start of a planning session.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register the tf_convergence_stale canonical source (snake_case, like tf_drift / ci_rca) with
+      description, signal_interpretation (persistence escalation: one rec per red-episode; clears when the
+      record returns to green via dispatch-ack), and added_date, so validate_source('tf_convergence_stale')
+      accepts it at portal write time and check_source_registry stays green.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier item T2.35 (CD.35 "Wave 6": CD-convergence health / staleness-escalation sensor) modelled
+      on the T2.24/T2.34 structure (id, tier, name, intent, depends_on [T2.20, T2.24], files_in_scope,
+      exit_criteria, related_decisions [55, 72, 73, 83, 84, 86, 92], effort M, status). Advance to
+      in_progress/complete on completion. Forward intent lands here per Decision 86 (no new prose doc).
+  - file: tests/test_convergence_health.py
+    action: Create
+    purpose: >-
+      Unit tests for convergence_health: red_since derivation (drift_detected_at vs timestamp), red_age
+      threshold boundary, unapplied_backlog counting (mocked git log), severity classification, and the
+      idempotent-escalation decision (file vs update when an open tf_convergence_stale rec already exists).
+      The S3 read, GitHub API query, and ops_data_portal call are injected/mocked -- no live AWS in unit tests.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    NO new IAM role and NO terraform apply. The runner assumes the EXISTING agent-platform-github-ci-branch
+    role, which already (a) reads the whole agent-platform-data-lake bucket (so it reads
+    convergence/personal/sandbox.json with no new grant -- same as ci-rca's dedup read) and (b) invokes the
+    ducklake_writer Function URL to file recs via the ops portal (ci-rca files source=ci_rca recs with this
+    identity today). Confirm at implementation that github_ci_branch's existing policy covers both; if a
+    gap is found it is a FINDING -> rec (do not widen IAM inline in this plan).
+  - >-
+    Decision 79 assessment: compute_affected_artifacts(scope) -- the only Lambda-asset match is
+    docs/ROADMAP-PLATFORM.yaml (asset-only edit on the active data-pipeline artifact, roadmap bookkeeping,
+    owes no deploy -- uniform precedent). scripts/, .github/workflows/, config/agent/, .claude/skills/, and
+    tests/ are not Lambda-packaged. No per-Lambda build/deploy/smoke-test step is owed.
+  - >-
+    The scheduled job shares NO concurrency group with terraform-apply-sandbox or terraform-drift -- it is a
+    read-only observer. It needs no native S3 lock (it never writes the convergence record or tfstate). Its
+    own concurrency group (cancel-in-progress: false) prevents overlapping health ticks from double-filing.
+acceptance_criteria:
+  - >-
+    (Persistence escalation) When the convergence record is status=red with red_age_hours exceeding the
+    configured threshold (default 6h), the sensor files exactly ONE open rec with source=tf_convergence_stale
+    via the ops portal (file_rec; id writer-allocated; no outbox), priority=High (NOT critical/ci_rca, so it
+    does not hard-block the /plan queue -- Decision 73). A second tick while still red and over-threshold
+    UPDATES that rec (update_rec) rather than filing a duplicate (one rec per red-episode).
+  - >-
+    The sensor NEVER writes the convergence record (red or green), NEVER re-fires the T2.20 latch, and NEVER
+    dispatches terraform-apply-sandbox or runs terraform apply -- verified structurally (no apply/dispatch in
+    the workflow) and behaviourally (it only reads S3 + git + the GitHub API and calls the ops portal).
+  - >-
+    The escalation rec auto-clears the episode: when the record returns to green (via the dispatch-ack apply
+    path), the next tick observes green and the open tf_convergence_stale rec is closed via the standard
+    portal path (update_rec --status closed, or a Resolves: trailer when a fix PR lands). No new rec is filed
+    while green.
+  - >-
+    (Pending-approval alarm) A terraform-apply-sandbox run whose gated-apply job has been `waiting` on the
+    tf-gated-apply Environment longer than the threshold is surfaced in the HealthVerdict (and escalated/
+    folded into the tf_convergence_stale rec context). Verified with a mocked Actions-API response in unit
+    tests and, in the live smoke test, against real run history.
+  - >-
+    (Backlog visibility) The HealthVerdict reports the count of merged terraform/personal/** commits since
+    the record's commit_sha, and session_preflight's terraform_pending now derives from the convergence
+    record (NOT a `terraform -chdir=terraform plan` against the retired terraform/ root). /orient surfaces a
+    red/stale convergence state in its triage.
+  - >-
+    tf_convergence_stale is registered in source_registry.yaml and accepted by validate_source;
+    check_source_registry and the full validate.py presubmit pass.
+  - >-
+    The drift red-without-rec partial failure (the 2026-06-26 flip wrote a red record but filed zero
+    tf_drift recs) is INVESTIGATED and, if a real defect, captured as a filed finding (rec) -- NOT patched
+    inline in this plan (Decision 55/72: out-of-scope bug -> rec, not inline fix).
+  - >-
+    T2.35 is added to docs/ROADMAP-PLATFORM.yaml and advanced on completion.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Authoritative local gate -- full presubmit (YAML, prompt-compliance, source-registry guard, plan schema, unit tests).
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    expected: All checks pass (exit 0); check_source_registry passes (tf_convergence_stale registered).
+    fix_if: Any check fails -- read the failing check, fix the scope file, re-run. Do not weaken a check to pass.
+  - step: 2
+    phase: pre-deploy
+    action: Unit tests for the sensor module.
+    command: bin/venv-python -m pytest tests/test_convergence_health.py -q
+    expected: All tests pass (red_since derivation, red_age boundary, backlog count, severity, idempotent escalation).
+    fix_if: A test fails -- fix convergence_health.py logic (not the test) unless the test encodes a wrong expectation.
+  - step: 3
+    phase: pre-deploy
+    action: Red-age + idempotency logic (no AWS) -- a synthetic red record over threshold yields an ESCALATE decision; with an existing open rec it yields UPDATE not FILE.
+    command: |
+      bin/venv-python - <<'PY'
+      from datetime import datetime, timezone
+      from scripts.convergence_health import derive_red_since, red_age_hours, escalation_action
+      rec = {"status":"red","timestamp":"2026-06-24T22:09:58Z","drift_detected_at":"2026-06-26T11:52:07Z"}
+      rs = derive_red_since(rec)
+      assert rs.isoformat().startswith("2026-06-26"), rs
+      now = datetime(2026,6,27,0,0,tzinfo=timezone.utc)
+      assert red_age_hours(rec, now=now) > 6
+      assert escalation_action(over_threshold=True, open_rec_exists=False) == "file"
+      assert escalation_action(over_threshold=True, open_rec_exists=True) == "update"
+      assert escalation_action(over_threshold=False, open_rec_exists=True) == "close"
+      print("convergence_health logic OK")
+      PY
+    expected: Prints "convergence_health logic OK"; no assertion trips.
+    fix_if: An assertion trips -- correct derive_red_since / red_age_hours / escalation_action.
+  - step: 4
+    phase: pre-deploy
+    action: tf_convergence_stale source is registered and accepted by the real write-time validator.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source, load_source_registry; validate_source('tf_convergence_stale'); assert any(e['canonical_id']=='tf_convergence_stale' for e in load_source_registry()); print('tf_convergence_stale registered OK')"
+    expected: Prints "tf_convergence_stale registered OK" (no ValueError).
+    fix_if: ValueError or missing entry -- add/repair the source_registry.yaml entry.
+  - step: 5
+    phase: pre-deploy
+    action: Workflow structure -- valid YAML, scheduled, alarm-only (NO terraform apply, NO terraform-apply-sandbox dispatch), assumes github_ci_branch, not a required check.
+    command: |
+      bin/venv-python - <<'PY'
+      import re, yaml
+      txt = open(".github/workflows/convergence-health.yml").read()
+      w = yaml.safe_load(txt)
+      assert "schedule" in str(w.get("on", w.get(True))), "must be scheduled"
+      runs = " ".join(str(s.get("run","")) for j in w["jobs"].values() for s in j.get("steps", []))
+      assert not re.search(r"terraform\s+apply\b", runs), "ALARM-ONLY violated: terraform apply present"
+      assert "run_workflow" not in txt and "workflow_dispatch.*terraform-apply" not in txt, "must not auto-dispatch apply"
+      assert "github-ci-branch" in txt, "must assume the existing github_ci_branch role"
+      print("convergence-health workflow structure OK:", sorted(w["jobs"]))
+      PY
+    expected: Prints "convergence-health workflow structure OK".
+    fix_if: An assertion trips -- the workflow has an apply/dispatch, a new role, or is mis-scheduled; fix it.
+  - step: 6
+    phase: pre-deploy
+    action: Preflight repoint -- check_terraform_pending no longer plans the retired terraform/ root; it reads the convergence record.
+    command: bin/venv-python -c "import inspect, scripts.session_preflight as p; src=inspect.getsource(p.check_terraform_pending); assert 'chdir=terraform ' not in src and '-chdir=terraform\"' not in src, 'still planning the retired terraform/ root'; assert 'convergence' in src.lower(), 'must read the convergence record'; print('preflight repoint OK')"
+    expected: Prints "preflight repoint OK".
+    fix_if: Assertion trips -- finish repointing check_terraform_pending to the convergence-record read.
+  - step: 7
+    phase: post-deploy
+    action: Live smoke -- dispatch convergence-health and confirm it surfaces a HealthVerdict and (only if the live record is red over-threshold) files exactly one tf_convergence_stale rec.
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      echo "open tf_convergence_stale recs: $(grep -c '"source": "tf_convergence_stale", "status": "open"' logs/.recommendations-log.jsonl || echo 0)"
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c 'import json,sys; print("record status:", json.load(sys.stdin).get("status"))'
+    expected: The workflow run logs a HealthVerdict; if the record is green there are 0 open recs (no false alarm); if red over-threshold, exactly 1 open rec.
+    fix_if: A rec is filed while green (false alarm) or none while red over-threshold -- fix the threshold/escalation wiring.
+  - step: 8
+    phase: post-deploy
+    action: Idempotency -- a second dispatch while still red over-threshold does NOT create a duplicate open rec (it updates the existing one).
+    command: |
+      set -euo pipefail
+      bin/venv-python -m scripts.ops_data_portal sync >/dev/null
+      echo "open tf_convergence_stale recs after 2nd tick: $(grep -c '"source": "tf_convergence_stale", "status": "open"' logs/.recommendations-log.jsonl || echo 0) (must be <=1)"
+    expected: The open tf_convergence_stale count does not increase on the second over-threshold tick (one rec per red-episode).
+    fix_if: A duplicate open rec appears -- the open-rec lookup before file_rec is missing/wrong; gate on update_rec when an open rec exists.
+constraints:
+  - >-
+    Alarm-only: the sensor MUST contain no terraform apply and MUST NOT auto-dispatch terraform-apply-sandbox.
+    It never writes the convergence record (red or green), never clears red, never re-fires the T2.20 latch.
+    Recovery from red remains the human-reviewed dispatch-ack apply (Decision 55 / 72 / 92 point 6: nothing
+    auto-remediates).
+  - >-
+    Persistence escalation is ORTHOGONAL to the T2.20 one-time latch and the T2.24 one-red-one-signal drift
+    dedup -- it fires on red-AGE, a new signal. It must dedup its OWN output: exactly one open
+    tf_convergence_stale rec per red-episode (update, never file-per-hour), and close it when the record
+    returns to green. It does NOT touch the convergence record or the tf_drift rec.
+  - >-
+    Single Portal Invariant (Decision 84): escalation recs are filed/updated ONLY via
+    python -m scripts.ops_data_portal (file_rec / update_rec); never a direct JSONL write. source=
+    tf_convergence_stale is a runtime CLI arg validated against the registry, NOT a hardcoded literal in
+    ops_data_portal.py. The rec id is writer-allocated in-transaction; never client-side.
+  - >-
+    source=tf_convergence_stale + priority=High (NOT source=ci_rca and NOT priority=critical): a critical
+    ci_rca-style rec would hard-block the /plan queue every hour (Decision 73 point 4). The staleness signal
+    must escalate visibly without wedging planning.
+  - >-
+    NO new IAM role and NO terraform apply: reuse agent-platform-github-ci-branch (ci-rca's identity). If a
+    missing grant is discovered, file a FINDING rec -- do NOT widen IAM inline (out-of-scope; Decision 55).
+  - >-
+    Do NOT add convergence-health to main-protection required_status_checks (Decision 83 non-wedging: a
+    required check is both bypassable via admin and wedging on a red record).
+  - >-
+    The drift red-without-rec investigation produces a FINDING (rec), not an inline fix, unless the fix is
+    squarely within this plan's named scope files (Decision 55/72; AGENTS.md only-modify-in-scope).
+  - >-
+    No new docs/INTENT-*.md or standing prose-architecture doc (Decision 86): forward intent lands in the
+    T2.35 tier item; rationale in DECISIONS.md if a decision is filed; in-file comments otherwise.
+  - No emojis; ASCII hyphens only; line length 127; bin/venv-python for Python; Linux/bash only. Only the seven scope files may be modified.
+context:
+  - >-
+    Triggering incident (2026-06-24..27): terraform-apply-sandbox run #113 routed an IAM/guard-flagged change
+    to the gated-apply job, which sat `waiting` on the tf-gated-apply Environment (a forgotten approval; the
+    GitHub mobile UI also hung on approve/cancel). It held the shared concurrency group, so run #115 queued
+    pending indefinitely. Meanwhile the T2.24 drift detector saw the unapplied delta and flipped the record
+    red (drift_detected_at 2026-06-26 11:52). Another agent applied the state out-of-band, which (by design)
+    did NOT write green -- leaving a stale-red latch. Nothing escalated as the backlog grew. This sensor makes
+    that persistence loud.
+  - >-
+    Routing rationale (locked with the human and the decision-scout gate): NOT ci-rca (Decision 72/55 --
+    ci-rca is log-RCA over a FAILED run; a persistently-red record from a SUCCESSFUL-but-unapplied state has
+    no failure log). NOT validate.py (a static code presubmit is the wrong plane and cannot run continuously
+    or read live state on the fast tier; the existing informational drift check there stays as-is). The
+    correct plane is a scheduled, alarm-only, ops-portal-filing detector -- the same plane Decision 92 point 6
+    places drift detection.
+  - >-
+    Decision-scout gate verdict: FLAGS_FOUND (3 NOTE-level, folded in): (92) escalate on red-AGE only, never
+    re-fire the latch or clear red, dedup own output one-rec-per-episode; (73) non-ci_rca source + High (not
+    critical) priority to avoid the /plan hard-block; (55/72) the drift red-without-rec bug becomes a filed
+    finding, not an inline fix. Decisions to cite: 92, 94, 55, 72, 84, 86, 83 (+73, 77, 98 related).
+  - >-
+    red_since derivation (no record-schema change to the guard-sensitive writers): when status=red, use
+    drift_detected_at if present (a drift-flip preserves the prior green timestamp, so the bare `timestamp`
+    field understates red-age), else `timestamp`. A future enhancement may add an explicit red_since to the
+    apply/drift writers; out of scope here to avoid touching guard-sensitive workflows.
+  - >-
+    Reuse-not-rebuild: the runner reuses github_ci_branch (ci-rca's role) so there is NO guard-BLOCK and NO
+    human-gated apply in this plan -- deliberately, since the gated-apply approval wall is the very failure
+    mode being instrumented. The sensor reads convergence/personal/sandbox.json (branch role already reads
+    the bucket) and files via the portal (branch role already invokes the ducklake_writer).
+  - >-
+    ci_rca_unresolved set is empty at planning time (no Related-Work HARD BLOCK). Branch level with
+    origin/main (0 ahead, 0 behind) at planning time; the convergence record was reconciled to green via a
+    dispatch-ack (acknowledge_red_commit=eea421b4...) during this session after the out-of-band apply.
+pre_implementation_checklist:
+  - Branch confirmed not main (claude/terraform-ci-drift-strategy-fl7c3v)
+  - docs/PROJECT_CONTEXT.md read; terraform/CLAUDE.md convergence sections read
+  - DECISIONS.md reviewed via the decision-scout fresh-context gate (92/94/55/72/84/86/83/73/77/98)
+  - All seven scope files located and readable; ci-rca.yml + terraform-drift.yml + terraform-apply-sandbox.yml read to confirm the github_ci_branch reuse, the record schema, and the alarm-only model
+  - github_ci_branch's existing read-bucket + ducklake_writer-invoke grants confirmed sufficient (else a finding rec, not inline IAM)
+  - Acceptance criteria understood and each independently verifiable
+execution_steps:
+  - >-
+    scripts/convergence_health.py: implement read_convergence_record (S3 get of
+    convergence/personal/sandbox.json; None on NoSuchKey), derive_red_since, red_age_hours,
+    count_unapplied_tf_commits (git log {commit_sha}..HEAD -- terraform/personal/), find_stuck_gated_approvals
+    (GitHub Actions API; skipped when no token), assess_health -> HealthVerdict, and escalate (idempotent
+    file/update/close of one tf_convergence_stale rec per red-episode via scripts.ops_data_portal; derive
+    open_rec_exists + the rec id for update_rec/close from the reader's `open_recs` named verb filtered to
+    source=tf_convergence_stale -- NOT a logs/ cache read; inject the S3 client, an HTTP/gh caller, and the
+    portal call for testability). No apply, no record write.
+  - >-
+    config/agent/data_quality/source_registry.yaml: add the tf_convergence_stale entry (canonical_id,
+    description, signal_interpretation -- persistence escalation, one rec per red-episode, clears on green;
+    added_date). Confirm validate_source('tf_convergence_stale') passes.
+  - >-
+    .github/workflows/convergence-health.yml: schedule cron '37 * * * *' + workflow_dispatch; own concurrency
+    group (cancel-in-progress: false); permissions id-token: write + contents: read + actions: read; assume
+    agent-platform-github-ci-branch; setup-python + venv; run convergence_health to assess + escalate
+    (alarm-only). NO terraform, NO apply, NO terraform-apply-sandbox dispatch. Do NOT add to
+    required_status_checks.
+  - >-
+    scripts/session_preflight.py: repoint check_terraform_pending to read the convergence record via
+    convergence_health (status, red_age_hours, unapplied_backlog); keep the bool|None "changes pending" key
+    backward-compatible and add a convergence_health sub-object to the report. Read-only (no escalation from
+    preflight).
+  - >-
+    .claude/skills/orient/SKILL.md: add a convergence-health surfacing line to the triage (red/stale record +
+    backlog + stuck-approval), placed near CI-RCA triage.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: add tier item T2.35 (CD.35 "Wave 6") modelled on T2.24/T2.34; depends_on
+    [T2.20, T2.24]; files_in_scope = this plan's scope; related_decisions [55, 72, 73, 83, 84, 86, 92];
+    effort M; status not_started -> advance on completion.
+  - >-
+    tests/test_convergence_health.py: cover red_since derivation, red_age boundary, backlog counting (mocked
+    git), severity, and the file/update/close escalation decision (mocked open-rec lookup + portal).
+  - >-
+    Drift red-without-rec investigation: check whether the 2026-06-26 drift flip filed a tf_drift rec
+    (search ops_recommendations via the portal/sync, and the terraform-drift run logs). If the rec-filing
+    step genuinely failed (red written, file_rec errored/masked), file a FINDING rec describing the partial-
+    failure -- do NOT patch terraform-drift.yml inline here.
+  - >-
+    Execute the Verification Plan: pre-deploy steps 1-6 locally until green; then merge; then the live
+    post-deploy smoke (steps 7-8) via workflow_dispatch of convergence-health. On an unrecoverable failure
+    STOP and run RCA (Decision 55) -- no workaround.
+  - >-
+    Report: what changed in each of the seven files, the pre-deploy results, and the live smoke results (or
+    the explicit hand-off if the dispatch smoke is pending).
+work_areas: []
+rollback: >-
+  Delete .github/workflows/convergence-health.yml (the scheduled sensor stops immediately; it is a read-only
+  observer, so removal has zero data-plane effect). Revert scripts/convergence_health.py and
+  tests/test_convergence_health.py (no other module imports them except the preflight repoint -- revert that
+  hunk in the same change). Revert the session_preflight repoint to restore the prior terraform_pending
+  behaviour. The source_registry tf_convergence_stale entry: leave it if any tf_convergence_stale rec is open
+  (validate_source is exact-match; removing it would break that rec's write-time validation) -- otherwise a
+  plain revert. The orient + roadmap edits are plain reverts. No IAM, no terraform, no convergence-record
+  schema change -- rollback is low-risk.

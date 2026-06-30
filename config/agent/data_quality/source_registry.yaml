@@ -159,3 +159,13 @@ entries:
     description: "Scheduled Terraform drift detector that runs terraform plan against sandbox and flips the convergence record on a state-vs-code delta"
     signal_interpretation: "A green->red convergence flip from out-of-band infra drift -- volume tracks how often real infra diverges from code. One rec per drift event (deduped while the record is already red); rec clears via the dispatch-ack apply path (the converged apply writes green, then the rec is closed via the standard portal path)."
     added_date: '2026-06-24'
+
+  - canonical_id: tf_convergence_stale
+    description: "CD-convergence staleness escalation sensor (CD.35 Wave 6 / T2.35): fires when the sandbox convergence record has been red longer than the configured threshold, or when a terraform-apply-sandbox gated-apply job has been waiting on the tf-gated-apply Environment beyond threshold"
+    signal_interpretation: "Persistence escalation -- one rec per red-episode (deduped: update_rec on subsequent over-threshold ticks; no duplicate filing). Volume tracks how often the convergence pipeline stalls without self-clearing. The rec closes automatically when the record returns to green (next sensor tick runs update_rec --status closed). A rec from this source does NOT hard-block the /plan queue (priority=High, not source=ci_rca/priority=critical); it escalates visibly without wedging planning."
+    added_date: '2026-06-27'
+
+  - canonical_id: ci_rca_evidence_dispute
+    description: "Typed dispute path against an existing source=ci_rca rec: routes agent/bundle disagreement through /plan human review (Decision 72) rather than a silent agent override. Filed when the ci-rca agent's detection_gap cross-check disagrees with the deterministic evidence bundle on earliest_viable_gate or actual_gate_that_caught_it (INTENT Section 2 / Section 4 check 8)."
+    signal_interpretation: "Review-resolution flow: open dispute recs surface in /plan under 'CI-RCA Dispute Recs (open)'. When the bundle SCRIPT logic is the defect, /plan scopes a PLAN-ci-rca-evidence-script fix; when the AGENT value is wrong, the dispute is closed declined. Dispute recs do NOT hard-block the /plan queue (they are review requests, not CI failures). High volume without resolution indicates the evidence bundle script needs a targeted fix."
+    added_date: '2026-06-29'

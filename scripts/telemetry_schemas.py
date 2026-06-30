@@ -381,8 +381,8 @@ TELEMETRY_TABLE_NAMES: list[str] = [
 
 # Explicit Athena dtype overrides for awswrangler compaction.
 # array<> columns must be declared explicitly to prevent null-inference failures
-# when a batch has all-null values for those columns (gotcha documented in
-# copilot-instructions.md: awswrangler fill_missing_columns_in_df=True behaviour).
+# when a batch has all-null values for those columns (gotcha: awswrangler
+# fill_missing_columns_in_df=True behaviour; see PROJECT_CONTEXT.md Known Gotchas).
 # All integer columns are declared as "bigint" to avoid Iceberg integer-promotion
 # errors on schema evolution (gotcha: Iceberg integer promotion).
 TELEMETRY_TABLE_DTYPES: dict[str, dict[str, str]] = {

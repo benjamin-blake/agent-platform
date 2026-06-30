@@ -336,6 +336,62 @@ def subprocess_run(cmd: list[str]) -> Any:
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
+def action_clone_catalog(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """OQ.12 canary rehearsal read-clone via Neon native copy-on-write branch (Decision 100).
+
+    The orchestrator (ducklake_neon_smoke_test.canary_rehearsal) owns the branch lifecycle:
+    it creates the branch before invoking this action and deletes it in its finally block.
+    This action receives branch_host from the event, builds the branch DSN (prod role/password/
+    dbname inherited via fetch_dsn, branch endpoint host substituted), ATTACHes the candidate
+    DuckDB engine to meta_schema=ducklake_ops, and reads real catalog metadata read-only via
+    information_schema. Raises CatalogDrError on ATTACH failure or empty result (Decision 55).
+
+    Never invokes pg_dump, pg_restore, CREATE DATABASE, or DROP DATABASE. Never mutates the
+    live ducklake_ops catalog. Never writes the production S3 DATA_PATH.
+    """
+    branch_host = event.get("branch_host")
+    if not branch_host:
+        raise catalog_dr.CatalogDrError(
+            "clone_catalog: branch_host is required in the event -- orchestrator must create "
+            "a Neon branch and pass its endpoint host (Decision 100 / Decision 55)"
+        )
+
+    data_path = event.get("data_path")
+    if not isinstance(data_path, str) or not data_path.startswith("s3://"):
+        raise catalog_dr.CatalogDrError(
+            "clone_catalog: data_path is required in the event (production DuckLake S3 path, "
+            "e.g. s3://<bucket>/ducklake/) -- the Neon branch records the production data_path "
+            "and DuckLake rejects a mismatch; pass the production path, not the scratch path (Decision 55)"
+        )
+
+    prod_dsn = rt.fetch_dsn()
+    branch_dsn = {**prod_dsn, "host": branch_host}
+    meta_schema = "ducklake_ops"
+
+    con = rt.open_connection(
+        dsn=branch_dsn,
+        data_path=data_path,
+        meta_schema=meta_schema,
+        extension_directory=EXTENSION_DIRECTORY,
+    )
+    try:
+        rows = con.execute("SELECT schema_name FROM information_schema.schemata LIMIT 1").fetchall()
+        if not rows:
+            raise catalog_dr.CatalogDrError(
+                "clone_catalog FAIL: empty information_schema.schemata on Neon branch -- "
+                "candidate DuckDB engine could not read the production catalog clone (Decision 55)"
+            )
+    finally:
+        con.close()
+
+    return {
+        "ok": True,
+        "meta_schema": meta_schema,
+        "branch_host": branch_host,
+        "cloned": True,
+    }
+
+
 def action_reconcile_columns(event: dict[str, Any], _con: Any) -> dict[str, Any]:
     """OPERATIONAL: add any spec columns missing from the physical ops_* history+current tables.
 
@@ -499,12 +555,21 @@ _ACTIONS: dict[str, Any] = {
     "merge_ops": action_merge_ops,
     "catalog_stats": action_catalog_stats,
     "reconcile_columns": action_reconcile_columns,
+    "clone_catalog": action_clone_catalog,
 }
 
 # Operational actions manage their OWN connections (their target catalog/data_path comes from the
 # event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
 # catalog_stats is ATTACH-free (psycopg2 metadata read) -- also connectionless.
-_CONNECTIONLESS_ACTIONS = {"catalog_reinit", "restore_drill", "merge_ops", "catalog_stats", "reconcile_columns"}
+# clone_catalog manages its own scratch-db connection (never the scheduled smoke env).
+_CONNECTIONLESS_ACTIONS = {
+    "catalog_reinit",
+    "restore_drill",
+    "merge_ops",
+    "catalog_stats",
+    "reconcile_columns",
+    "clone_catalog",
+}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:

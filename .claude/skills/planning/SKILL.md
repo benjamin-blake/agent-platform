@@ -47,7 +47,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (consolidation Phase 4, docs/INTENT-ducklake-consolidation.md). Until then, do not gate plans on session counts/staleness.
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (Decision 84 Phase 4 / tier_item T2.36). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 
@@ -181,6 +181,40 @@ Search `logs/.recommendations-log.jsonl` for open recommendations that align wit
 >
 > Want to bundle any into this session? Say 'include rec-XXX' or 'skip'."
 
+## Recommendation Relevance Gate (Workflow Step 3, fires before bundling any rec)
+
+Before adding any open recommendation to the plan's `bundled_recommendations` list, re-check
+its relevance using `scripts/rec_relevance.py`. Recs can go stale between filing and the
+current session (target file deleted, decision ratified, sibling plan already fixed it).
+
+### Protocol
+For each candidate rec identified via "Suggest Aligned Recommendations":
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=False)
+print(verdict, '|', evidence[:120])
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; offer to bundle normally.
+- **`satisfied`** -- do NOT bundle. Surface the evidence and the proposal command from
+  `propose_or_close_rec(rec_id, 'satisfied', evidence, deterministic=False)` (planning time:
+  never deterministic). Wait for operator to run the closure command, then proceed without bundling.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- do NOT
+  bundle. Present the `propose_or_close_rec` output and wait for operator decision. Remove from
+  candidate list regardless of outcome.
+
+**Constraints:**
+- `run_acceptance_probe=False` is mandatory at planning time (Decision 55: no auto-closure from
+  semantic judgment). Acceptance probes run only at `/implement` time.
+- Never call `_make_reader()` inside this gate (Decision 88: use read-cache only).
+
 ## Documentation Artefact Design
 
 This repository is agent-first. When a plan creates or modifies documentation artefacts,
@@ -230,9 +264,11 @@ apply these rules:
 ## Main Divergence Assessment (Workflow Step 4)
 After Scope is identified, intersect the prospective Scope file list with `main_freshness.main_files_changed_since_branch` from the preflight report. If any Scope file appears in that list:
 
-> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend `git checkout main && git pull && git rebase main` from the branch BEFORE writing the plan. Options: (1) rebase now, (2) proceed and accept the risk, (3) abort."
+> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend rebasing BEFORE writing the plan: `git fetch origin main && git rebase origin/main`. Options: (1) rebase now and re-enter `/plan`, (2) proceed and accept the risk, (3) abort."
 
-Wait for human direction. Do not auto-rebase. If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
+**Rebase phase distinction (assessment time)**: do NOT auto-rebase here. This is the assessment-time rule -- surface the divergence, wait for the human's choice. Auto-rebase happens only at commit-flow time (the Pre-Push Rebase step in the implement skill), NOT here. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for the full rebase phase distinction.
+
+If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
 
 If `main_freshness.status != "ok"`, this assessment cannot run -- note in the plan's Context section and continue.
 
@@ -283,7 +319,7 @@ Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any 
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
-On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch.
+On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, never agent/).
 
 Verify you are on the harness branch and not on `main`:
 ```bash

@@ -26,8 +26,9 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_branch" {
-  name        = "agent-platform-github-ci-branch"
-  description = "GitHub Actions CI (write): main + agent/* branches via OIDC"
+  name                 = "agent-platform-github-ci-branch"
+  description          = "GitHub Actions CI (write): main + agent/* branches via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -97,7 +98,7 @@ resource "aws_iam_role_policy" "github_ci_branch" {
         # anchors its refusal dedup on the red record's commit) but must NOT write or delete it --
         # an explicit Deny makes the two-member writer-set integrity claim true at the IAM layer
         # (explicit Deny overrides the bucket-wide S3ReadWrite Allow above; GetObject is untouched).
-        # Full privilege-tiering lands at Wave 4 (bootstrap root); this Deny is the Wave-1
+        # Full privilege-tiering landed at Wave 4 / T2.23 (bootstrap root); this Deny is the Wave-1
         # enforcement among CI roles.
         Sid    = "DenyConvergenceRecordWrite"
         Effect = "Deny"
@@ -167,6 +168,21 @@ resource "aws_iam_role_policy" "github_ci_branch" {
           aws_lambda_function.ducklake_reader.arn,
           "${aws_lambda_function.ducklake_reader.arn}:*",
         ]
+      },
+      {
+        # SSM parameter refresh-time reads on /agent-platform/*. Mirrors github_ci_plan SSMParameterRead.
+        Sid      = "SSMParameterRead"
+        Effect   = "Allow"
+        Action   = ["ssm:Get*", "ssm:Describe*", "ssm:List*"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
+      },
+      {
+        # ssm:DescribeParameters has no resource-level scoping; Resource: "*" required.
+        # Mirrors github_ci_plan SSMDescribeParameters.
+        Sid      = "SSMDescribeParameters"
+        Effect   = "Allow"
+        Action   = ["ssm:DescribeParameters"]
+        Resource = ["*"]
       }
     ]
   })
@@ -177,8 +193,9 @@ resource "aws_iam_role_policy" "github_ci_branch" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_pr" {
-  name        = "agent-platform-github-ci-pr"
-  description = "GitHub Actions CI (read-only): PR context via OIDC"
+  name                 = "agent-platform-github-ci-pr"
+  description          = "GitHub Actions CI (read-only): PR context via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

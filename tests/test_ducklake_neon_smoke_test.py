@@ -301,6 +301,7 @@ def _stub_churn_gate_prelude(monkeypatch):
 
 
 def test_churn_gate_pass_returns_metrics(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
         smoke,
@@ -312,6 +313,7 @@ def test_churn_gate_pass_returns_metrics(monkeypatch):
 
 
 def test_churn_gate_fetches_dsn_when_absent(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
     monkeypatch.setattr(
@@ -321,6 +323,7 @@ def test_churn_gate_fetches_dsn_when_absent(monkeypatch):
 
 
 def test_churn_gate_loud_fails(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
         smoke,
@@ -433,6 +436,7 @@ def test_derive_scratch_dsn_suffixes_dbname():
 
 
 def test_restore_drill_success_explicit_dsns(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
     monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
@@ -442,6 +446,7 @@ def test_restore_drill_success_explicit_dsns(monkeypatch):
 
 
 def test_restore_drill_defaults_dsn_and_scratch(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
     monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
@@ -452,6 +457,7 @@ def test_restore_drill_defaults_dsn_and_scratch(monkeypatch):
 
 
 def test_restore_drill_loud_fails_on_lost_probe(monkeypatch):
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
     monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
     monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
@@ -923,6 +929,58 @@ def test_lambda_reader_boundary_broken_fails(monkeypatch):
         smoke.lambda_reader()
 
 
+def test_lambda_maintenance_merge_ok(monkeypatch, capsys):
+    """VP9: maintenance merge with force_recreate_tables=True; asserts files_after_merge <= files_before."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    invoked = {}
+
+    def fake_invoke(url, payload, **kw):
+        invoked["payload"] = payload
+        return _Resp(200, {"ok": True, "files_before": 3, "files_after_merge": 2, "elapsed_ms": 45.0})
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    smoke.lambda_maintenance_merge()
+    out = capsys.readouterr().out
+    assert "MAINTENANCE_MERGE OK files_before=3 files_after_merge=2" in out
+    assert invoked["payload"] == {"action": "merge", "force_recreate_tables": True}
+
+
+def test_lambda_maintenance_merge_empty_smoke_catalog_ok(monkeypatch, capsys):
+    """VP9: works on a fresh environment where smoke tables were just created (files_before=0)."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        smoke,
+        "_sigv4_invoke",
+        lambda url, payload, **kw: _Resp(200, {"ok": True, "files_before": 0, "files_after_merge": 0, "elapsed_ms": 12.0}),
+    )
+    smoke.lambda_maintenance_merge()
+    assert "MAINTENANCE_MERGE OK files_before=0 files_after_merge=0" in capsys.readouterr().out
+
+
+def test_lambda_maintenance_merge_files_grew_fails(monkeypatch):
+    """VP9: loud-fail when files_after_merge > files_before (merge expanded the catalog)."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        smoke,
+        "_sigv4_invoke",
+        lambda url, payload, **kw: _Resp(200, {"ok": True, "files_before": 2, "files_after_merge": 5}),
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="files grew after merge"):
+        smoke.lambda_maintenance_merge()
+
+
+def test_lambda_maintenance_merge_not_ok_fails(monkeypatch):
+    """VP9: loud-fail when maintenance returns ok=False."""
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        smoke,
+        "_sigv4_invoke",
+        lambda url, payload, **kw: _Resp(200, {"ok": False, "error": "catalog error"}),
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="MAINTENANCE_MERGE FAIL"):
+        smoke.lambda_maintenance_merge()
+
+
 def test_main_lambda_attach_dispatch(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "lambda_attach", lambda profile=None, region="eu-west-2": print("LAMBDA_ATTACH OK stub"))
     assert smoke.main(["--lambda-attach"]) == 0
@@ -1015,3 +1073,371 @@ def test_catalog_restore_drill_probe_lost_fails(monkeypatch):
     monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "restored": False}))
     with pytest.raises(smoke.SmokeTestFailure, match="did not restore"):
         smoke.catalog_restore_drill()
+
+
+# ---------------------------------------------------------------------------
+# DUCKLAKE_ALLOW_DIRECT_GATE guard (churn_gate + restore_drill refuse without env)
+# ---------------------------------------------------------------------------
+
+
+def test_churn_gate_refused_without_direct_gate_env(monkeypatch):
+    """churn_gate raises SmokeTestFailure with DIRECT_GATE_REFUSED when env var absent."""
+    monkeypatch.delenv("DUCKLAKE_ALLOW_DIRECT_GATE", raising=False)
+    with pytest.raises(smoke.SmokeTestFailure, match="DIRECT_GATE_REFUSED"):
+        smoke.churn_gate(dsn=_DSN)
+
+
+def test_churn_gate_proceeds_with_direct_gate_env(monkeypatch):
+    """churn_gate does NOT raise the guard error when DUCKLAKE_ALLOW_DIRECT_GATE=1 is set."""
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
+    _stub_churn_gate_prelude(monkeypatch)
+    monkeypatch.setattr(
+        smoke,
+        "_run_churn_burst",
+        lambda dsn, profile=None, _creds=None: [{"latency_ms": 1.0, "collided": False}],
+    )
+    metrics = smoke.churn_gate(dsn=_DSN)
+    assert "collision_rate" in metrics
+
+
+def test_restore_drill_refused_without_direct_gate_env(monkeypatch):
+    """restore_drill raises SmokeTestFailure with DIRECT_GATE_REFUSED when env var absent."""
+    monkeypatch.delenv("DUCKLAKE_ALLOW_DIRECT_GATE", raising=False)
+    with pytest.raises(smoke.SmokeTestFailure, match="DIRECT_GATE_REFUSED"):
+        smoke.restore_drill(dsn=_DSN)
+
+
+def test_restore_drill_proceeds_with_direct_gate_env(monkeypatch):
+    """restore_drill does NOT raise the guard error when DUCKLAKE_ALLOW_DIRECT_GATE=1 is set."""
+    monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
+    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-test")
+    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
+    monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
+    monkeypatch.setattr(smoke, "_verify_probe", lambda scratch, probe, profile=None: True)
+    result = smoke.restore_drill(dsn=_DSN, scratch_dsn=smoke._derive_scratch_dsn(_DSN))
+    assert result is True
+
+
+# ---------------------------------------------------------------------------
+# OQ.12 canary_rehearsal orchestration
+# ---------------------------------------------------------------------------
+
+
+_FAKE_BRANCH_ID = "br-fake-canary-abc"
+_FAKE_BRANCH_HOST = "br-fake-canary-abc.us-east-2.aws.neon.tech"
+_FAKE_PROJECT_ID = "proj-fake-123"
+
+
+def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, ryw_ok=True):
+    """Stub all subprocess/AWS/Neon API calls for canary_rehearsal unit tests."""
+    _fake_arns = {
+        "ducklake-deps-layer": "arn:fake:1",
+        "ducklake-extensions-layer": "arn:fake:2",
+        "ducklake-pgclient-layer": "arn:fake:3",
+    }
+    monkeypatch.setattr(smoke, "_publish_candidate_layers", lambda **kw: _fake_arns)
+    monkeypatch.setattr(smoke, "_get_function_role_arn", lambda fn, **kw: "arn:aws:iam::ACCOUNT_ID_PLACEHOLDER:role/fake-role")
+    monkeypatch.setattr(smoke, "_canary_create_function", lambda fn, **kw: None)
+    monkeypatch.setattr(smoke, "_canary_delete_function", lambda fn, **kw: True)
+
+    monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
+    monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
+    monkeypatch.setattr(
+        smoke.neon_api,
+        "create_branch",
+        lambda api_key, project_id: {"branch_id": _FAKE_BRANCH_ID, "host": _FAKE_BRANCH_HOST},
+    )
+    monkeypatch.setattr(smoke.neon_api, "delete_branch", lambda api_key, project_id, branch_id: None)
+
+    def _fake_invoke(fn, payload, **kw):
+        action = payload.get("action", "")
+        if action == "catalog_reinit":
+            return {"ok": True, "meta_schema": payload.get("meta_schema"), "reinitialized": True}
+        if action == "create_tables":
+            return {"ok": True}
+        if action == "write":
+            return {"ok": True, "ulid": "fake-ulid"}
+        if action == "read_current":
+            if not ryw_ok:
+                return {"rows": []}
+            return {"rows": [{"rec_id": payload.get("rec_id", "x")}]}
+        if action == "clone_catalog":
+            if not clone_ok:
+                return {"ok": False, "error": "clone failed"}
+            return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
+        return {}
+
+    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _fake_invoke)
+
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}.lambda-url")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
+
+    monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+
+def test_canary_rehearsal_happy_path(monkeypatch, capsys):
+    """Full happy-path: all gates pass, teardown completes, prints CANARY_REHEARSAL OK."""
+    _stub_canary_rehearsal(monkeypatch)
+    smoke.canary_rehearsal()
+    out = capsys.readouterr().out
+    assert "CANARY_REHEARSAL OK" in out
+    assert "CANARY_ATTACH OK" in out
+    assert "CANARY_RYW OK" in out
+    assert "CANARY_CLONE_CATALOG OK" in out
+
+
+def test_canary_rehearsal_json_output(monkeypatch):
+    """json_output=True emits machine-readable JSON with expected keys including branch fields."""
+    _stub_canary_rehearsal(monkeypatch)
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        smoke.canary_rehearsal(json_output=True)
+
+    import json
+
+    lines = [ln for ln in buf.getvalue().splitlines() if ln.startswith("{")]
+    assert lines, "No JSON line found in output"
+    data = json.loads(lines[-1])
+    assert data["attach_ok"] is True
+    assert data["ryw_ok"] is True
+    assert data["clone_ok"] is True
+    assert data["torn_down"]["canary_functions"] is True
+    assert data["torn_down"]["scratch_meta"] is True
+    assert data["torn_down"]["scratch_s3_prefix"] is True
+    assert data["torn_down"]["branch"] is True
+    assert data["scratch"]["branch_id"] == _FAKE_BRANCH_ID
+    assert data["scratch"]["meta_schema"] != "ducklake_ops"
+    assert "_canary_rehearsal" in data["scratch"]["data_path"]
+
+
+def test_canary_rehearsal_scratch_meta_isolated(monkeypatch):
+    """Scratch meta-schema must be _CANARY_SCRATCH_META, never the production ducklake_ops."""
+    _stub_canary_rehearsal(monkeypatch)
+    import contextlib
+    import io
+    import json
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        smoke.canary_rehearsal(json_output=True)
+
+    data = json.loads([ln for ln in buf.getvalue().splitlines() if ln.startswith("{")][-1])
+    assert data["scratch"]["meta_schema"] == smoke._CANARY_SCRATCH_META
+    assert data["scratch"]["meta_schema"] != "ducklake_ops"
+
+
+def test_canary_rehearsal_ryw_fail_raises(monkeypatch):
+    """RYW failure (empty rows from reader) raises SmokeTestFailure (Decision 55)."""
+    _stub_canary_rehearsal(monkeypatch, ryw_ok=False)
+    with pytest.raises(smoke.SmokeTestFailure, match="CANARY_RYW FAIL"):
+        smoke.canary_rehearsal()
+
+
+def test_canary_rehearsal_clone_catalog_fail_raises(monkeypatch):
+    """clone_catalog returning ok=False raises SmokeTestFailure."""
+    _stub_canary_rehearsal(monkeypatch, clone_ok=False)
+    with pytest.raises(smoke.SmokeTestFailure, match="CANARY_CLONE_CATALOG FAIL"):
+        smoke.canary_rehearsal()
+
+
+def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
+    """Ephemeral Lambda functions are deleted even when a gate fails (finally block)."""
+    deleted = []
+    _td_arns = {"ducklake-deps-layer": "arn:1", "ducklake-extensions-layer": "arn:2", "ducklake-pgclient-layer": "arn:3"}
+    monkeypatch.setattr(smoke, "_publish_candidate_layers", lambda **kw: _td_arns)
+    monkeypatch.setattr(smoke, "_get_function_role_arn", lambda fn, **kw: "arn:role")
+    monkeypatch.setattr(smoke, "_canary_create_function", lambda fn, **kw: None)
+    monkeypatch.setattr(smoke, "_canary_delete_function", lambda fn, **kw: deleted.append(fn) or True)
+    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
+    monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
+    monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
+    monkeypatch.setattr(
+        smoke.neon_api, "create_branch", lambda api_key, project_id: {"branch_id": _FAKE_BRANCH_ID, "host": _FAKE_BRANCH_HOST}
+    )
+    monkeypatch.setattr(smoke.neon_api, "delete_branch", lambda api_key, project_id, branch_id: None)
+
+    def _raise_on_attach(fn, payload, **kw):
+        if payload.get("action") == "catalog_reinit":
+            return {"ok": True}
+        if payload.get("action") == "create_tables":
+            raise smoke.SmokeTestFailure("attach failed")
+        return {}
+
+    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _raise_on_attach)
+
+    with pytest.raises(smoke.SmokeTestFailure, match="attach failed"):
+        smoke.canary_rehearsal()
+
+    assert len(deleted) == len(smoke._CANARY_FUNCTION_NAMES), "All ephemeral functions must be deleted in finally"
+
+
+def test_main_canary_rehearsal_dispatch(monkeypatch, capsys):
+    """--canary-rehearsal CLI flag dispatches to canary_rehearsal()."""
+    monkeypatch.setattr(
+        smoke,
+        "canary_rehearsal",
+        lambda profile=None, region="eu-west-2", json_output=False: print("CANARY_REHEARSAL OK"),
+    )
+    assert smoke.main(["--canary-rehearsal"]) == 0
+    assert "CANARY_REHEARSAL OK" in capsys.readouterr().out
+
+
+def test_canary_rehearsal_budget_constants_unchanged():
+    """CHURN constants used in _canary_churn must still come from ducklake_runtime (Decision 55)."""
+    from src.common import ducklake_runtime
+
+    assert smoke.CHURN_WRITERS == ducklake_runtime.CHURN_WRITERS
+    assert smoke.COMMIT_LATENCY_BUDGET_MS == ducklake_runtime.COMMIT_LATENCY_BUDGET_MS
+    assert smoke.OCC_COLLISION_RATE_BUDGET == ducklake_runtime.OCC_COLLISION_RATE_BUDGET
+
+
+def test_canary_rehearsal_scratch_meta_teardown_false_on_sigv4_error(monkeypatch):
+    """torn_down['scratch_meta'] is False (not raised) when _sigv4_invoke raises (H-2 failure branch)."""
+    import contextlib
+    import io
+    import json as _json
+
+    _stub_canary_rehearsal(monkeypatch)
+
+    def _raise_sigv4(url, payload, **kw):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(smoke, "_sigv4_invoke", _raise_sigv4)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        smoke.canary_rehearsal(json_output=True)
+
+    data = _json.loads([ln for ln in buf.getvalue().splitlines() if ln.startswith("{")][-1])
+    assert data["torn_down"]["scratch_meta"] is False
+    assert data["torn_down"]["canary_functions"] is True
+
+
+def test_canary_rehearsal_branch_host_passed_to_clone(monkeypatch):
+    """Neon branch_host must be included in the clone_catalog event payload (Decision 100)."""
+    clone_events = []
+
+    _stub_canary_rehearsal(monkeypatch)
+
+    def _capture_invoke(fn, payload, **kw):
+        if payload.get("action") == "clone_catalog":
+            clone_events.append(payload.copy())
+
+        if payload.get("action") == "catalog_reinit":
+            return {"ok": True}
+        if payload.get("action") == "create_tables":
+            return {"ok": True}
+        if payload.get("action") == "write":
+            return {"ok": True, "ulid": "fake-ulid"}
+        if payload.get("action") == "read_current":
+            return {"rows": [{"rec_id": payload.get("rec_id", "x")}]}
+        if payload.get("action") == "clone_catalog":
+            return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
+        return {}
+
+    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _capture_invoke)
+
+    smoke.canary_rehearsal()
+
+    assert len(clone_events) == 1, "clone_catalog must be invoked exactly once"
+    assert clone_events[0].get("branch_host") == _FAKE_BRANCH_HOST, (
+        "branch_host from Neon create_branch must be forwarded to clone_catalog event"
+    )
+    clone_data_path = clone_events[0].get("data_path", "")
+    assert clone_data_path.startswith("s3://") and clone_data_path.endswith("/ducklake/"), (
+        f"clone_catalog event must carry the production data_path (s3://<bucket>/ducklake/), got {clone_data_path!r}"
+    )
+
+
+def test_canary_rehearsal_delete_branch_called_on_clone_failure(monkeypatch):
+    """delete_branch must be called in finally even when clone_catalog returns ok=False."""
+    deleted = []
+
+    _stub_canary_rehearsal(monkeypatch, clone_ok=False)
+    monkeypatch.setattr(
+        smoke.neon_api,
+        "delete_branch",
+        lambda api_key, project_id, branch_id: deleted.append(branch_id),
+    )
+
+    with pytest.raises(smoke.SmokeTestFailure, match="CANARY_CLONE_CATALOG FAIL"):
+        smoke.canary_rehearsal()
+
+    assert deleted == [_FAKE_BRANCH_ID], "delete_branch must be called in finally even when clone fails"
+
+
+def _stub_invoke_response(monkeypatch, return_value):
+    """Stub subprocess.run + the response-file read so _lambda_invoke_cli returns `return_value`."""
+    monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    import builtins
+    import json as _json
+
+    real_open = builtins.open
+
+    def _fake_open(path, *a, **kw):
+        if isinstance(path, str) and path.endswith("response.json"):
+            import io
+
+            return io.StringIO(_json.dumps(return_value))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+
+def test_lambda_invoke_cli_unwraps_function_url_envelope(monkeypatch):
+    """_lambda_invoke_cli unwraps the {statusCode, body} envelope, returning the parsed body dict."""
+    envelope = {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": '{"ok": true, "x": 1}'}
+    _stub_invoke_response(monkeypatch, envelope)
+    out = smoke._lambda_invoke_cli("fn", {"action": "catalog_reinit"}, profile=None, region="eu-west-2")
+    assert out == {"ok": True, "x": 1}
+
+
+def test_lambda_invoke_cli_passes_through_raw_error(monkeypatch):
+    """A handler runtime error (no statusCode/body) is returned as-is for the caller to inspect."""
+    err = {"errorMessage": "boom", "errorType": "RuntimeError"}
+    _stub_invoke_response(monkeypatch, err)
+    out = smoke._lambda_invoke_cli("fn", {"action": "create_tables"}, profile=None, region="eu-west-2")
+    assert out == err
+    assert out.get("ok") is None
+
+
+def test_lambda_invoke_cli_loud_fails_on_nonzero_rc(monkeypatch):
+    """A non-zero CLI exit raises SmokeTestFailure (Decision 55)."""
+    monkeypatch.setattr(
+        smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=254, stdout="", stderr="boom")
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="lambda invoke fn failed"):
+        smoke._lambda_invoke_cli("fn", {"action": "x"}, profile=None, region="eu-west-2")
+
+
+def test_wait_function_active_invokes_waiter(monkeypatch):
+    """_wait_function_active runs `lambda wait function-active-v2` for the named function."""
+    captured = {}
+
+    def _run(cmd, **kw):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(smoke.subprocess, "run", _run)
+    smoke._wait_function_active("ducklake-maintenance-canary-ephemeral", profile="p", region="eu-west-2")
+    cmd = captured["cmd"]
+    assert "wait" in cmd
+    assert "function-active-v2" in cmd
+    assert "ducklake-maintenance-canary-ephemeral" in cmd
+
+
+def test_wait_function_active_loud_fails_on_waiter_error(monkeypatch):
+    """A non-zero waiter exit raises SmokeTestFailure (Decision 55 -- never race the first invoke)."""
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda cmd, **kw: types.SimpleNamespace(returncode=255, stdout="", stderr="Waiter FunctionActiveV2 failed"),
+    )
+    with pytest.raises(smoke.SmokeTestFailure, match="wait function-active-v2"):
+        smoke._wait_function_active("fn", profile=None, region="eu-west-2")

@@ -128,9 +128,11 @@ def main() -> int:
 
     sys.stderr.write(
         f"BLOCKED by .claude/hooks/never_on_main.py: cannot use {tool_name} while on 'main' branch.\n"
-        "Create an agent/{slug} branch first:\n"
-        "  git checkout -b agent/your-slug\n"
-        "Then retry the tool call.\n"
+        "On Claude Code on the web you are already on a harness-assigned claude/ session branch --\n"
+        "verify with: git branch --show-current\n"
+        "If the result is still 'main', create a new branch before retrying:\n"
+        "  git checkout -b claude/your-slug\n"
+        "See AGENTS.md 'Git-ops procedure' for the full branching topology.\n"
     )
     return 2
 

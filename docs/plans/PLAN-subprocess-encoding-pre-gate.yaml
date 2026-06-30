@@ -1,0 +1,252 @@
+schema_version: 1
+slug: "subprocess-encoding-pre-gate"
+intent: >-
+  Resolve the open critical source=ci_rca recommendation rec-2382 (a
+  subprocess.run with text=True missing encoding="utf-8" at
+  scripts/session_preflight.py:1595, which broke full-tier CI on main after
+  PR #300) AND close the structural detection gap that let it escape pre-merge:
+  the validate_subprocess_encoding() lint runs only in the full (post-merge)
+  tier, so the PR's --pre CI passed clean. Promote the lint into the --pre fast
+  tier so the entire missing-encoding class is caught at edit/PR time, mirroring
+  the rec-859 (cyclomatic-complexity) and rec-2106 (SLOC) tier-promotion
+  precedents.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-subprocess-encoding-pre-gate.yaml
+phase: >-
+  Platform T1 (clears the source=ci_rca planning-queue HARD BLOCK that gates all
+  other /plan work; reinforces T1.13 CI-RCA methodology-contract by enacting the
+  preventive_action -- tier promotion -- that T1.13's structured detection_gap
+  schema will eventually emit automatically). Not itself a tier_item -- ci_rca
+  exception category.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      rec-2382 root fix -- add encoding="utf-8", errors="replace" to the
+      subprocess.run(["git", "show", ...]) call at line ~1595 inside
+      _check_endstate_drift(), applying the canonical subprocess-encoding pattern
+      documented in AGENTS.md. Behaviour is unchanged (capture_output/text/timeout
+      kwargs retained); only the decoding contract is made explicit.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Preventive fix -- add a validate_subprocess_encoding(failed) call inside the
+      `if args.pre:` branch (next to validate_cc_limits / validate_sloc_limits)
+      with a comment citing the earliest_viable_gate="pre" doctrine
+      (docs/INTENT-ci-rca-methodology.md) and the rec-859 / rec-2106 precedents.
+      The check is a pure static O(files) regex scan over scripts/**/*.py
+      (sub-second), so it honours the --pre fast-tier budget. The existing
+      full-tier call site in run_python_checks() is retained (the check is
+      idempotent across tiers, like validate_ducklake_version_lockstep).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add a tier-membership regression test asserting main() in --pre mode invokes
+      validate_subprocess_encoding (mirroring the existing
+      test_pre_mode_does_not_call_guard pattern at line ~2028). The lint's
+      detection logic is already covered by TestValidateSubprocessEncoding; the
+      gap this test guards is that the check must be wired into --pre and cannot
+      silently regress to full-tier-only.
+bundled_recommendations:
+  - rec-2382
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/session_preflight.py:~1595 subprocess.run call specifies
+    encoding="utf-8", errors="replace" alongside the existing capture_output=True,
+    text=True, timeout=10, cwd kwargs; no other behavioural change to
+    _check_endstate_drift().
+  - >-
+    bin/venv-python -m scripts.validate (full tier) reports "All subprocess calls
+    with text=True specify encoding." -- the Subprocess encoding lint passes.
+  - >-
+    validate_subprocess_encoding(failed) is invoked from the `if args.pre:` branch
+    of scripts/validate.py main(), so bin/venv-python -m scripts.validate --pre
+    now exercises the lint (the rec's acceptance command can reproduce/verify the
+    gate, which it could not before this change). The existing full-tier call in
+    run_python_checks() is retained.
+  - >-
+    A new tier-membership test in tests/test_validate.py asserts main() --pre
+    invokes validate_subprocess_encoding; it passes with the wiring in place and
+    would fail if the --pre call site were removed.
+  - >-
+    Full presubmit (bin/venv-python -m scripts.validate, no flags) passes on the
+    branch; the existing TestEndstateDrift and TestValidateSubprocessEncoding
+    suites remain green (TestEndstateDrift mocks subprocess.run, so the new kwargs
+    do not affect it).
+  - >-
+    After squash-merge with a "Resolves: rec-2382" trailer, rec-2382 reaches
+    status=closed in the warehouse via the rec-autoclose workflow.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the encoding fix lands and the Subprocess encoding lint passes in
+      the full tier (the tier that originally caught the violation). The grep
+      asserts the pass line is present so a future lint rename cannot silently
+      no-op this gate.
+    command: "bin/venv-python -m scripts.validate 2>&1 | tee /tmp/vp1.txt | grep -E 'All subprocess calls with text=True specify encoding'"
+    expected: >-
+      The lint prints "All subprocess calls with text=True specify encoding." and
+      "Subprocess encoding lint" is absent from the failed-checks summary.
+    fix_if: >-
+      Lint still reports session_preflight.py:1595 -> the encoding kwarg was not
+      added or landed on the wrong call; confirm encoding="utf-8" is inside the
+      subprocess.run(...) argument list at _check_endstate_drift(). A different
+      file is flagged -> an unrelated pre-existing violation surfaced; file it as a
+      separate recommendation (out of scope), do not fix inline.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the lint now runs in the --pre fast tier (the rec's acceptance
+      command). Full presubmit must also be green.
+    command: "bin/venv-python -m scripts.validate --pre 2>&1 | tee /tmp/vp2.txt | grep -E 'Subprocess encoding lint|All subprocess calls with text=True specify encoding'"
+    expected: >-
+      The --pre run now reaches the Subprocess encoding lint section and prints the
+      pass line; the overall --pre summary reports all checks passed.
+    fix_if: >-
+      No Subprocess-encoding output under --pre -> the validate_subprocess_encoding
+      call was not added to the `if args.pre:` branch; add it next to
+      validate_cc_limits/validate_sloc_limits. --pre exceeds the 5-min budget ->
+      unlikely for a sub-second scan, but if so confirm the call was not
+      accidentally duplicated into a loop.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the tier-membership regression test plus the unchanged endstate-drift
+      and lint-detection suites. The grep asserts at least one test ran so a class
+      rename cannot silently no-op the gate.
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestPreModeChecks tests/test_session_preflight.py::TestEndstateDrift tests/test_validate.py::TestValidateSubprocessEncoding -q | tee /tmp/vp3.txt && grep -Eq '[1-9][0-9]* passed' /tmp/vp3.txt"
+    expected: >-
+      All cases pass; the summary reports N passed with N>0, including the new
+      --pre tier-membership assertion.
+    fix_if: >-
+      No "N passed" line -> a node-id collected zero tests; confirm the new test
+      class name (TestPreModeChecks) matches what was added. The tier-membership
+      test fails -> the patch target name does not match the call site
+      (validate.validate_subprocess_encoding); align the @patch path with the
+      module-qualified name used by the other --pre patches in that test.
+  - step: 4
+    phase: post-deploy
+    action: >-
+      After the squash-merge (whose body carries the Resolves: rec-2382 trailer)
+      lands on main and the rec-autoclose workflow runs, sync the local cache and
+      confirm rec-2382 is closed.
+    command: "bin/venv-python -m scripts.sync_ops pull && grep -o '\"id\": \"rec-2382\"[^}]*\"status\": \"[a-z]*\"' logs/.recommendations-log.jsonl | tail -1"
+    expected: rec-2382 shows status closed in the synced read cache.
+    fix_if: >-
+      rec-2382 still open -> the Resolves trailer was malformed or missing from the
+      squash-merge body; re-close via bin/venv-python -m scripts.ops_data_portal
+      --update-rec rec-2382 --status closed --resolution "Fixed by
+      PLAN-subprocess-encoding-pre-gate".
+constraints:
+  - "Only modify the three files in scope; out-of-scope subprocess-encoding violations in other files become recommendations (AGENTS.md), not inline fixes."
+  - "No rescue agents or workaround loops (Decision 55); this is the /plan-routed forward-fix the AGENTS.md 'do not inline-patch ci_rca' rule requires, never an auto-revert (Decision 73)."
+  - "Do not add or remove any check in .github/workflows/ci.yml; validate.py is the single source of truth (Decision 80 / AGENTS.md merge protocol). The --pre promotion is a tier placement inside validate.py, not a ci.yml edit."
+  - "Retain the existing full-tier call to validate_subprocess_encoding in run_python_checks(); the check must run in BOTH tiers (idempotent), as documented for validate_ducklake_version_lockstep."
+  - "Python 3.12+, type hints, ruff format, line length 127, no emojis, ASCII hyphens only (AGENTS.md code style)."
+  - "Closure transits the ops portal -> ducklake_writer via the rec-autoclose workflow; never edit logs/.recommendations-log.jsonl directly (Decision 84 single-portal invariant)."
+  - "Acceptance/VP commands use pytest file::Class node-ids (no -k selectors) per tests/CLAUDE.md."
+context:
+  - >-
+    rec-2382 is a source=ci_rca, priority=critical rec auto-filed against full-tier
+    CI run 28328765447 (job main-validate). The offending subprocess.run was added
+    by commit cba6b43 (feat(agent-context-refresh) #300) in the new
+    _check_endstate_drift() helper, which runs `git show {ref}:docs/ROADMAP-PLATFORM.yaml`
+    with capture_output=True, text=True but omits encoding/errors. It is the sole
+    open ci_rca rec and a preflight HARD BLOCK on the /plan queue.
+  - >-
+    Detection-gap analysis (the "why did this escape pre-merge" the rec itself did
+    not compute): validate_subprocess_encoding() has exactly two references -- its
+    definition (validate.py:935) and one call in run_python_checks() (line 2942),
+    which only executes in the full scope="all" tier. The `if args.pre:` branch
+    (lines ~3408-3494) calls a curated ~19-check list that does NOT include it.
+    claude/* PR CI runs the --pre fast tier as the authoritative pre-merge gate
+    (Decision 73), so PR #300 went green; the violation surfaced only when the full
+    tier ran post-merge on main. This is the third instance of the same
+    tier-placement failure mode -- rec-859 (cyclomatic-complexity gate) and
+    rec-2106 (SLOC gate, PR #106) were the prior two, both remediated by promoting
+    the check to --pre (see the precedent comments at validate.py:3449 and 3452).
+  - >-
+    Doctrine: docs/INTENT-ci-rca-methodology.md classifies O(lines)/O(files) static
+    checks as earliest_viable_gate="pre". The subprocess-encoding lint is a
+    sub-second regex scan over scripts/**/*.py, so it is fully --pre-eligible and
+    honours the Decision 60 / Decision 73 fast-tier budget (no AWS, no pytest).
+    Decision 60's --pre surface is described via an enumerated check list; this
+    change extends that surface the same way the cc/sloc gates already did, under
+    Decision 73's diff-aware fast-tier redefinition (NOTE flag from the decision
+    scout, accepted -- not a contradiction).
+  - >-
+    Roadmap alignment: T1.13 (CI-RCA methodology contract, status=in_progress)
+    enforces structured RCA depth (proximate_cause, why_chain, detection_gap,
+    recurrence_class, corrective_action, preventive_action, prior_art_citation) at
+    portal write time. rec-2382 was filed via the legacy free-text path
+    (context_v2_json=null), so it captured only the proximate cause and local fix,
+    not the detection_gap/preventive_action -- which is why the human had to ask
+    "why is this occurring". This plan enacts, by hand, the preventive_action a
+    fully-realized T1.13 strict-mode RCA would emit. T1.13 exit criterion c4 names
+    the rec-859 tier-promotion as its canonical case study; rec-2382's promotion is
+    the direct analogue. No new tracking artifact is filed -- the deeper-RCA gap is
+    already owned by T1.13.
+  - >-
+    rec-2382 fix detail: scripts/session_preflight.py:1595 currently passes
+    capture_output=True, text=True, timeout=10, cwd=str(ROOT). Add
+    encoding="utf-8", errors="replace". TestEndstateDrift
+    (tests/test_session_preflight.py) mocks session_preflight.subprocess.run, so
+    the kwarg addition does not change those tests.
+  - >-
+    Preventive fix detail: in scripts/validate.py main(), add
+    `validate_subprocess_encoding(failed)` inside the `if args.pre:` block adjacent
+    to the validate_cc_limits(failed) / validate_sloc_limits(failed) calls
+    (lines ~3450-3453), with a one-line comment: O(files) static scan, promoted to
+    --pre per earliest_viable_gate doctrine (rec-859/rec-2106 precedent). Leave the
+    run_python_checks() call site intact.
+  - >-
+    Closure obligation (rec-resolving plan): rec-2382 is declared in
+    bundled_recommendations and VP step 4 verifies closure post-merge. The
+    /implement skill emits the Resolves: rec-2382 trailer into the squash-merge
+    body.
+  - >-
+    Scope satisfies the ci_rca Related-Work "same file" condition: the plan edits
+    scripts/session_preflight.py (rec-2382's file field) plus the validate.py gate
+    that should have caught it and its test.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/open-ci-rca-rec-f7inwv)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Decision references (72, 73, 80, 60; roadmap T1.13) understood; no DECISIONS.md inline edits."
+  - "All three scope files located and readable; the offending call confirmed at scripts/session_preflight.py:1595."
+  - "Confirmed validate_subprocess_encoding is currently full-tier-only (single call in run_python_checks, absent from the --pre branch)."
+  - "Acceptance criteria understood and verifiable via the V2 plan."
+execution_steps:
+  - >-
+    scripts/session_preflight.py -- in _check_endstate_drift(), add
+    encoding="utf-8", errors="replace" to the subprocess.run(["git", "show",
+    f"{ref}:docs/ROADMAP-PLATFORM.yaml"], ...) call at line ~1595, preserving the
+    existing capture_output=True, text=True, timeout=10, cwd=str(ROOT) kwargs.
+  - >-
+    scripts/validate.py -- in main(), inside the `if args.pre:` branch, add
+    `validate_subprocess_encoding(failed)` immediately after the
+    validate_sloc_limits(failed) call (lines ~3453), with a comment:
+    "# Subprocess-encoding lint in --pre: O(files) static scan, earliest_viable_gate=pre
+    (docs/INTENT-ci-rca-methodology.md); was full-tier-only, which let rec-2382 escape
+    PR #300 -- mirrors rec-859/rec-2106 tier promotions." Do not remove the existing
+    call in run_python_checks().
+  - >-
+    tests/test_validate.py -- add a TestPreModeChecks class (or extend the existing
+    --pre test group) with test_pre_mode_calls_subprocess_encoding, mirroring
+    test_pre_mode_does_not_call_guard (line ~2028): patch
+    validate.validate_subprocess_encoding plus the same supporting patches
+    (run_lint_checks, validate_copilot_multipliers, validate_prompt_files,
+    validate_cli_tools_in_prompts, validate.run returning a branch name,
+    _VALIDATE_DEPTH=0, sys.argv=["validate.py", "--pre"]), assert SystemExit is
+    raised, then assert the subprocess-encoding mock was called. Keep all imports
+    in one consolidated block (tests/CLAUDE.md ruff-format rule).
+  - >-
+    Run the V2 verification plan steps 1-3 locally; all must pass before pushing.
+rollback: >-
+  Single-commit revert. The change is additive (one kwarg pair, one --pre call
+  site, one test) with no data-model, schema, or infra impact; reverting the
+  commit restores the prior state with no migration. The retained full-tier lint
+  call means even a partial revert cannot reintroduce an undetected violation on
+  main.

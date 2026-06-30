@@ -52,9 +52,31 @@ declares `environment: tf-gated-apply`, GitHub sets its OIDC sub to
 (gated path). Trusting the environment sub is safe: it can only be minted by an approval-gated job
 (Decision 94 corrects the original "sub stays refs/heads/main" claim, which VP9 disproved). This
 gates the apply JOB, NOT a PR status check (adding it to required checks would wedge autonomous
-fix-merges, Decision 83). The bootstrap root (CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget
-(permissions boundary + propagation condition keys) in `terraform/bootstrap/`; in-budget IAM
-auto-apply (guard-consumption) is pending T2.25.
+fix-merges, Decision 83). The bootstrap root (CD.35 Wave 4 / T2.23) owns `github_ci_apply`'s own IAM + authority budget
+(permissions boundary + propagation condition keys) in `terraform/bootstrap/`. In-budget IAM
+auto-apply (guard-consumption) landed in T2.25 -- see the Guard classification subsection below.
+
+**Guard classification -- in-budget vs out-of-budget (T2.25 / Decision 92 point 5 -- SOLE SoT):**
+
+The deterministic guard (`scripts/terraform_apply_guard.py`) narrows from blocking ALL IAM diffs
+to budget-based classification. Evaluation order: delete -> neon -> trust-diff -> IAM.
+
+| classification | criteria | guard verdict |
+|----------------|----------|---------------|
+| in-budget | resource type in `in_budget_resource_types`, action set == `in_budget_actions` (["update"]), target role name in `in_budget_managed_roles` | exit 0 (auto-apply, still subject to subagent review) |
+| out-of-budget | any IAM-sensitive type+action not matching all three in-budget criteria | exit 2 -> tf-gated-apply Environment |
+| trust-diff | `assume_role_policy` differs on ANY resource (checked BEFORE IAM) | exit 2 always, even on in-budget resource types |
+| destroy/replace | "delete" in actions | exit 2 always |
+| neon update/delete | non-create neon_* action | exit 2 always |
+
+The machine-readable budget table lives at `terraform/bootstrap/authority_budget.json`
+(override via `TF_AUTHORITY_BUDGET` env var for testing). Missing or unparseable table = fail
+closed (all IAM treated as out-of-budget, Decision 77). `scripts/validate.py:validate_authority_budget`
+asserts the table stays in sync with the IAMRoleWriteBounded SCP in `terraform/bootstrap/github_ci_apply.tf`.
+
+Conservative v1 narrowing: role CREATES stay gated (new trust surface). The ratchet widens
+on track record (Decision 92 point 5): budget amendments via the bootstrap tier only; subagent
+review advises, never locks.
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 
