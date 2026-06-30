@@ -3806,8 +3806,9 @@ tier_items:
       - terraform/personal/feature_flags.tf    # new (Decision 77: auto-applies under terraform/personal/)
       - scripts/validate.py    # validate_ci_rca_taxonomy coverage check; validate_ci_rca_trigger wired in by PLAN-ci-rca-workflow-correctness
       - tests/test_ci_rca_evidence_ast.py    # new contract test for AST walker
-      - scripts/ci_rca_gate_evidence.py    # new (HARDENING c8: fetch PR pr-validate job log, compute vacuous_pass)
-      - config/ci_rca_taxonomy.yaml    # HARDENING c9: recurrence_class gains gate_escape value
+      - scripts/ci_rca_gate_evidence.py    # new (HARDENING c8: compute vacuous_pass from validate.py execution manifest + main-log fallback)
+      - scripts/ci_rca_taxonomy.py    # HARDENING c9b: classify_failure prefers structured jobs JSON; add test_collection_empty/gate_escape categories
+      - scripts/ci_rca_tier_map.py    # HARDENING c7: probe-abstention -> earliest_viable_gate=undetermined (not silent null skip)
     exit_criteria:
       - id: c1
         text: >-
@@ -3818,7 +3819,11 @@ tier_items:
       - id: c2
         text: >-
           CI_RCA_STRICT_MODE flipped to strict via Decision Record after Phase 4 back-validation per
-          docs/INTENT-ci-rca-methodology.md Section 6
+          docs/INTENT-ci-rca-methodology.md Section 6 AND after c7 (probe-abstention fail-loud) has
+          landed. Hard dependency: flipping to strict while probe-failure RCAs bypass the cross-check
+          (Section 3.4) would advertise a depth guarantee the contract does not provide on the
+          abstention path -- and would reject conformant non-abstention recs while silently accepting
+          the abstention-path recs that are exactly the dangerous ones (safety-gradient inversion).
         status: open
       - id: c3
         text: Section 7 observability shows warn-mode rejection rate stable < 5% over 7 days of CI failures
@@ -3840,41 +3845,100 @@ tier_items:
         status: open
       - id: c7
         text: >-
-          Probe-abstention fail-loud (H1): when the evidence bundle cannot deterministically compute
+          Probe-abstention fail-loud (H1). When the evidence bundle cannot deterministically compute
           earliest_viable_gate (runtime_confidence=probe_failed, dispersion_too_high, AST parse error, or
           taxonomy_fallback -- bundle value null) the contract MUST NOT silently fall back to unverified
-          agent judgment. Today INTENT Section 3.4 (lines ~371/409) SKIPS the cross-check whenever the
-          bundle value is null, leaving the agent free to assert any earliest_viable_gate with zero
-          deterministic check -- the exact path that produced the wrong rec-2423/rec-2424 RCA ("earliest=pre,
-          author did not run --pre"). Replace the silent skip with: detection_gap.earliest_viable_gate is
-          forced to a new "undetermined" enum value, the rec is stamped low-confidence, and a probe-failure
-          RCA is routed to mandatory human /plan review (not autonomously trusted). Landed via a follow-on
-          IMPLEMENTATION plan (provisional: PLAN-ci-rca-probe-abstention-failloud).
+          agent judgment. Today INTENT Section 3.4 (lines ~371/407-410) SKIPS the cross-check whenever the
+          bundle value is null, leaving the agent free to assert any earliest_viable_gate unchecked -- the
+          exact path that produced the wrong rec-2423/rec-2424 RCA ("earliest=pre, author did not run
+          --pre"). A skipped cross-check in a depth-enforcement contract is a silent privilege escalation:
+          the LLM regains unconstrained authority precisely on the inputs where it is least reliable.
+          Replace the silent skip with: bundle emits earliest_viable_gate="undetermined" (a new enum value;
+          schema_version bump governed by Decision 60 + the INTENT "no dead enum branch" rule), the agent
+          MUST mirror it (not free-choose), the rec carries a typed rca_confidence=undetermined marker, and
+          the /plan preflight HARD-SURFACES such recs (concrete enforcement surface analogous to
+          terminus_override_blocked / upload_status -- "mandatory human review" must be an enforced marker,
+          not advisory prose). Landed via a follow-on IMPLEMENTATION plan.
         status: open
       - id: c8
         text: >-
-          Gate-execution evidence (H2): for a CI failure the evidence bundle records whether the PR's
-          earliest required gate (pr-validate / --pre) actually EXECUTED the failing check on the same head
-          SHA and with what result, by fetching that gate's job log. A required gate that reported success
-          without exercising the failing check is emitted as a deterministic vacuous_pass=true fact. This
-          turns "the required pre-merge gate passed vacuously / the regression escaped at pr-validate" into a
-          bundle-computed datum the cross-check can assert, instead of a conclusion the LLM must infer (and
-          got wrong for rec-2423/rec-2424, where pr-validate's pytest step collected 0 tests yet reported
-          "All checks passed"). Landed via a follow-on IMPLEMENTATION plan (provisional:
-          PLAN-ci-rca-gate-execution-evidence).
+          Vacuous-pass as a deterministic datum (H2, mechanism corrected by 2026-06-30 multi-perspective
+          review). The TRUE root cause of rec-2423/rec-2424 is that a required gate reported success while
+          running 0 tests; the load-bearing signal is "collected 0 items / pytest exit-5 treated as pass",
+          NOT a generic "did a step run". Do NOT implement this by fetching the PR's pr-validate job log:
+          ci-rca triggers on the FAILING main-validate push run (head_branch==default_branch); the PR's
+          pr-validate is a different workflow_run on a different event, and post-squash the main SHA != PR
+          head SHA, and the evidence script is deliberately gh-free at runtime. Instead: validate.py emits a
+          machine-readable execution manifest (pytest collected_count, per-check ran/skipped) persisted as a
+          CI artifact; the bundle computes vacuous_pass from that structured data. vacuous_pass is TRI-STATE
+          (true / false / undetermined) and on its own fetch/parse abstention it fails loud like c7 (never
+          silently emits false). A main-validate-log-only fallback detector ("0 collected" pattern on the
+          already-available failing-run log) keeps correctness from depending on any cross-run fetch.
+          Persist per the corrected agent-platform-data-lake bucket (not the stale agent-platform-agent-logs
+          pattern in c5/Section 1). Landed via its own follow-on IMPLEMENTATION plan (separable: new evidence
+          source).
         status: open
       - id: c9
         text: >-
-          Gate-escape class + failure_category dispute (H3): recurrence_class gains a gate_escape value whose
-          corrective_action targets the GATE (the check did not run / ran vacuously) rather than author
-          discipline; and the ci_rca_evidence_dispute disputed_field enum is extended from
-          {earliest_viable_gate, actual_gate_that_caught_it} to also include failure_category, so a bundle
-          MISCLASSIFICATION (e.g. the rec-2423/rec-2424 sloc_violation mislabel caused by the probe failure)
-          has a typed dispute route instead of being buried in free-text. Landed via a follow-on
-          IMPLEMENTATION plan (provisional: PLAN-ci-rca-gate-escape-class).
+          Failure-category integrity + correct gate-escape modeling (H3, corrected by review). Three parts:
+          (a) extend the ci_rca_evidence_dispute disputed_field enum from {earliest_viable_gate,
+          actual_gate_that_caught_it} to include failure_category, so a bundle misclassification has a typed
+          dispute route instead of free-text burial -- AND land the deferred dispute-frequency throttle
+          (rec-2415) WITH this, since adding a disputable field widens the bypass surface. (b) Fix the
+          classifier at the source: classify_failure must prefer the structured failed-step list (jobs JSON)
+          over the current naive substring scan of free log text (the substring scan is the likely cause of
+          the rec-2423/rec-2424 sloc_violation mislabel -- any log mentioning a validator name miscategorizes
+          the run); add test_collection_empty and gate_escape failure categories. (c) Model gate-escape as a
+          new detection_gap.escape_mode sub-field {check_absent, check_ran_vacuously, tier_misplaced},
+          NOT a recurrence_class value -- recurrence_class is the orthogonal temporal axis {novel,
+          instance_of_known_pattern, regression} and a gate-escape can itself be novel OR a regression.
+          escape_mode redirects corrective_action/preventive_action to target the GATE, not author
+          discipline. Landed via a follow-on IMPLEMENTATION plan (provisional: merge H1+H3 into one plan --
+          both amend ops_data_portal enums + the dispute schema; sequence H2 -> (H1+H3)).
+        status: open
+      - id: c10
+        text: >-
+          Bind vacuous_pass into the cross-check spine (CRITICAL -- without this c8/c9 are advisory and the
+          incident is NOT actually closed). Add a Section-4 portal check that REJECTS an author-discipline
+          RCA contradicted by gate evidence: when evidence_bundle.vacuous_pass=true, a rec whose
+          detection_gap.escape_mode is unset (i.e. claims a normal author/code cause, e.g.
+          earliest_viable_gate=pre + "author did not run --pre") is rejected and must either carry an
+          escape_mode or file a typed failure_category/gate dispute. This is the mechanism that would have
+          deterministically caught rec-2423/rec-2424 even if the probe had succeeded (decoupling gate-escape
+          detection from the probe-abstention trigger of c7, which do not coincide). Landed with the merged
+          H1+H3 plan as the spine wiring that makes c8/c9 load-bearing.
+        status: open
+      - id: c11
+        text: >-
+          Merge-gate coverage facts (closes gaps adjacent to the exit-5 bug that c7-c10 do not). The bundle
+          records, deterministically: (i) source-only-change-no-tests -- validate.py --pre only runs pytest
+          when a tests/*test_*.py file itself changed (has_test_changes), so a pure source change merges with
+          ZERO tests at the required gate; the bundle emits merge_gate_test_coverage=none when a main-validate
+          test failure corresponds to a test --pre would not have selected for the merged diff; (ii)
+          N-failure enumeration -- one bundle + one rec PER failed check (INTENT 3.3/4.9 promises this but
+          generate_bundles currently classifies only the FIRST failure, so a real regression co-occurring
+          with a SLOC line is silently dropped); (iii) coverage-removal -- tests deleted/skipped/xfail-added
+          in the diff (get_changed_files excludes deleted paths today), emitting coverage_regression=true when
+          a required gate goes green while net test count drops on a source-touching diff. Landed via a
+          follow-on IMPLEMENTATION plan (may co-locate with the H2 evidence-source plan).
+        status: open
+      - id: c12
+        text: >-
+          Self-observability + loop-closure (the meta-failures). (i) Section-7 abstention-rate gauge: count
+          earliest_viable_gate=null / total -- today Section 7.1 tracks cross-check DISAGREEMENT but not
+          ABSTENTION, so a systemic probe bug (e.g. the rec-2424 "could not convert string to float") could
+          disable enforcement fleet-wide with no gauge moving; auto-file a ci_rca_probe_health rec on
+          sustained abstention. (ii) Bundle-absent fail-loud: ci-rca.yml generates the bundle
+          continue-on-error and the agent runs even with NO bundle (fully unchecked, worse than c7's
+          degraded path) -- force human-route + a gauge when bundle_sha is empty. (iii) Back-validation loop
+          (Decision 57 loop-closure -- "proof that a fix reduced the failure mode that caused it"): when a
+          new ci_rca rec's failed_check + failure_category matches a CLOSED prior rec whose preventive_action
+          claimed prevention, deterministically stamp recurrence_class=regression, link the prior rec, and
+          surface a "preventive_action did not hold" signal. Landed via the observability follow-on plan
+          (extends PLAN-ci-rca-observability-dashboard scope).
         status: open
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
-    related_candidate_decisions: []
+    related_candidate_decisions: [72, 55, 57, 66, 60, 73]    # 72 RCA-as-Plan-Source; 55 loud-failure/anti-workaround; 57 control-plane loop-closure (c12 back-validation); 66 Precision Context Injection (c8 datum); 60 two-tier enum (c7 undetermined); 73 forward-fix context
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): decomposed into six atomic IMPLEMENTATION plans -- see note
     status: in_progress
@@ -3929,18 +3993,45 @@ tier_items:
       c7 (fail-loud on abstention) SHOULD land before or with the c2 strict-mode flip -- flipping to strict
       while probe-failure RCAs bypass enforcement would advertise a depth guarantee the contract does not
       actually provide on the abstention path.
+      2026-06-30: three zero-context subagent reviews (gate-integrity adversary, methodology architect,
+      skeptical verifier) hardened the wave from c7-c9 to c7-c12. Structural corrections from review:
+      (1) c8's original "fetch the PR pr-validate job log" is unworkable -- ci-rca triggers on the failing
+      main-validate PUSH run, the PR's pr-validate is a different workflow_run on a different event, the main
+      SHA != PR head SHA post-squash, and the evidence script is gh-free at runtime; replaced with a
+      validate.py-emitted execution manifest (collected_count) + a main-log "0 collected" fallback, keyed on
+      the load-bearing signal rather than "did a step run". (2) c9's gate_escape was mis-modeled onto
+      recurrence_class (the temporal axis); moved to a new detection_gap.escape_mode sub-field, and a
+      classifier fix added (prefer structured jobs JSON over substring scan -- the likely cause of the
+      sloc_violation mislabel). (3) c10 added as CRITICAL: nothing bound vacuous_pass into the cross-check
+      spine, so c8/c9 were advisory; c10 rejects an author-discipline RCA when vacuous_pass=true, and is
+      independent of the probe (c7's null-trigger does NOT coincide with the gate-escape condition). (4) c11
+      captures adjacent escape modes the exit-5 bug exposed (source-only-change-no-tests at --pre;
+      N-failure-per-run enumeration, currently single-failure; coverage removal). (5) c12 adds the
+      meta-failure observability + Decision-57 back-validation loop. c2 now hard-depends on c7 in its own
+      criterion text (not just this note). Further candidates noted but NOT yet promoted to criteria (decide
+      at /plan): G6 -- there is no pre-merge full-suite required check (main-validate is a post-merge canary),
+      arguably its own tier_item + a gate_is_postmerge_canary fact so RCAs stop blaming author discipline for
+      escapes no pre-merge gate could catch; dedup-by-status-context can suppress a second distinct RCA on
+      one SHA (add failure_category to the dedup key); flake-reproduction probe (reproduced=true|false);
+      /plan-review outcome capture for confidence calibration.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out
       in phases via the CI_RCA_STRICT_MODE feature flag (warn -> strict). See
       docs/INTENT-ci-rca-methodology.md "Follow-on plans" for the decomposition contract.
-      Post-incident HARDENING WAVE (exit criteria c7-c9, opened 2026-06-30): three further follow-on
-      IMPLEMENTATION plans (provisional names PLAN-ci-rca-probe-abstention-failloud,
-      PLAN-ci-rca-gate-execution-evidence, PLAN-ci-rca-gate-escape-class) close the gate-escape /
-      probe-abstention blind spot surfaced by rec-2423/rec-2424. The decomposition into three plans is
-      PROVISIONAL -- finalize the split (and whether H1+H3 merge into one plan) at /plan time. The INTENT
-      doc Section 3.4 (cross-check skip on null bundle value) and the ci_rca_evidence_dispute disputed_field
-      enum are the two contract surfaces these plans amend.
+      Post-incident HARDENING WAVE (exit criteria c7-c12, opened 2026-06-30, hardened by three zero-context
+      reviews -- see progress_note). Provisional decomposition into THREE follow-on IMPLEMENTATION plans:
+      (P1) PLAN-ci-rca-vacuous-pass-evidence -- c8 + c11 (the new evidence source: validate.py execution
+      manifest, vacuous_pass datum, merge-gate coverage facts, N-failure enumeration); (P2)
+      PLAN-ci-rca-abstention-and-gate-escape -- c7 + c9 + c10 MERGED (all amend ops_data_portal enums +
+      the dispute schema + the cross-check spine; land rec-2415 throttle here too); (P3) extend
+      PLAN-ci-rca-observability-dashboard with c12 (abstention gauge, bundle-absent fail-loud,
+      back-validation loop). SEQUENCE: P1 -> P2 (P2's c10 cross-check consumes P1's vacuous_pass datum),
+      c7 before the c2 strict-flip. All IMPLEMENTATION-type (Decision 67 freeze; the >5-file heuristic is
+      suspended -- author P2 as one larger IMPLEMENTATION plan). Plans AMEND the grandfathered
+      docs/INTENT-ci-rca-methodology.md (Section 3.4 cross-check, Section 4 checks, dispute enum); they MUST
+      NOT create a new INTENT/prose doc (Decision 86 intent-doc-freeze guard blocks it). Decompose/finalize
+      the split at /plan time.
 
   - id: T1.14
     tier: T1
