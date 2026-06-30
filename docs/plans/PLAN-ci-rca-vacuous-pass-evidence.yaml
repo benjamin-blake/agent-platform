@@ -211,6 +211,15 @@ constraints:
   - >-
     test_coverage_checker requires a test file with 100% coverage for every modified source file --
     the new module and both modified scripts must have covering tests.
+  - >-
+    Selector drift guard (plan-critique advisory): the --pre changed-tests selection is re-encoded
+    in ci_rca_vacuous_pass.py because validate.py exports no shared selector. Pin the source with a
+    comment (e.g. "mirrors scripts/validate.py:3871 -- keep in sync") so a future validate.py regex
+    change is caught.
+  - >-
+    Bundle schema_version (ci_rca_evidence bundle) is bumped 1 -> 2; the REC schema
+    CiRcaContext.schema_version (ops_data_portal.py, pinned le=1) is a DIFFERENT field and must NOT
+    be touched -- do not conflate the two.
 context:
   - >-
     Decision 72 (RCA-as-Plan-Source): governs the whole artefact -- ci_rca_evidence produces the
@@ -289,9 +298,11 @@ execution_steps:
     install / log-fetch-retry / workflow_dispatch / fork-PR-gate steps. This is the highest-risk
     step -- verify validate_ci_rca_trigger's expected if:-gate shape still holds.
   - >-
-    Author tests: tests/test_ci_rca_vacuous_pass.py (new, full coverage of the new module incl.
-    fail-loud paths) and extend tests/test_ci_rca_evidence.py + tests/test_ci_rca_taxonomy.py.
-    Add any needed fixtures under tests/fixtures/ci_rca/.
+    Author the tests/fixtures/ci_rca/ fixtures FIRST (the VP steps depend on them): at minimum
+    vacuous_collected0.log (picked-noop -> true), all_integration_deselected.log (false),
+    unparseable.log (undetermined), a multi-failure log, and jobs_single.json. Then author tests:
+    tests/test_ci_rca_vacuous_pass.py (new, full coverage of the new module incl. fail-loud paths)
+    and extend tests/test_ci_rca_evidence.py + tests/test_ci_rca_taxonomy.py.
   - >-
     Amend docs/INTENT-ci-rca-methodology.md Section 3.3 (new fields + schema_version=2 + N-failure);
     append the T1.13 progress_note in docs/ROADMAP-PLATFORM.yaml (no status flips).
