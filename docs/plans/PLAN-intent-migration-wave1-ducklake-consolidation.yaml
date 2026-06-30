@@ -126,10 +126,11 @@ acceptance_criteria:
   - >-
     X6/X7 generic close: a fresh repo-wide `rg 'INTENT-ducklake-consolidation'` returns ZERO live
     references. The only permitted residual hits are c4-exempt or historical: docs/plans/* plan
-    artefacts (historical), docs/intent-migration/MANIFEST.yaml (c4-exempt self-reference), and the
-    synthetic tests/test_validate.py fixture (flip-independent test data). No code/infra surface and
-    no canonical doc (DECISIONS.md, ROADMAP-PLATFORM.yaml, PROJECT_CONTEXT.md, AGENTS.md, contracts/,
-    skills/) contains the path or slug as a live pointer.
+    artefacts (historical) and docs/intent-migration/MANIFEST.yaml (c4-exempt self-reference). (The
+    synthetic tests/test_validate.py fixture references only the bare slug "ducklake-consolidation"
+    without the INTENT- prefix, so it does NOT match this path-prefixed sweep; it is left untouched
+    by design.) No code/infra surface and no canonical doc (DECISIONS.md, ROADMAP-PLATFORM.yaml,
+    PROJECT_CONTEXT.md, AGENTS.md, contracts/, skills/) contains the path or slug as a live pointer.
   - Full `bin/venv-python -m scripts.validate` exits 0 (credential-gated checks may report SKIPPED in degraded mode).
 verification_plan:
   - step: 1
@@ -211,11 +212,12 @@ verification_plan:
       grep -rl "INTENT-ducklake-consolidation" . --include=*.md --include=*.yaml --include=*.py | sort
     expected: >-
       Only these paths appear, all c4-exempt or historical: ./docs/intent-migration/MANIFEST.yaml
-      (c4-exempt self-reference), ./tests/test_validate.py (synthetic flip-independent fixture), and
-      docs/plans/PLAN-*.{md,yaml} historical plan artefacts (e.g. this plan,
-      PLAN-intent-migration-wave1-bazel-feasibility.yaml, PLAN-ratify-ops-class-a-contracts.yaml,
-      PLAN-ratify-class-a-telemetry-contracts.yaml). NO live canonical surface (DECISIONS.md,
-      ROADMAP-PLATFORM.yaml, PROJECT_CONTEXT.md, AGENTS.md, docs/contracts/*, .claude/skills/*) appears.
+      (c4-exempt self-reference) and docs/plans/PLAN-*.{md,yaml} historical plan artefacts (e.g. this
+      plan, PLAN-intent-migration-wave1-bazel-feasibility.yaml, PLAN-ratify-ops-class-a-contracts.yaml,
+      PLAN-ratify-class-a-telemetry-contracts.yaml). NOTE: tests/test_validate.py does NOT appear --
+      its fixture uses the bare slug "ducklake-consolidation" without the INTENT- prefix this grep
+      matches. NO live canonical surface (DECISIONS.md, ROADMAP-PLATFORM.yaml, PROJECT_CONTEXT.md,
+      AGENTS.md, docs/contracts/*, .claude/skills/*) appears.
     fix_if: >-
       A canonical surface appears -- repoint it (step 7). An UNEXPECTED new path appears -- investigate
       before editing; it may be a reference introduced after the 2026-06-30 plan-time inventory.
