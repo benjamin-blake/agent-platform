@@ -3868,15 +3868,19 @@ tier_items:
           NOT a generic "did a step run". Do NOT implement this by fetching the PR's pr-validate job log:
           ci-rca triggers on the FAILING main-validate push run (head_branch==default_branch); the PR's
           pr-validate is a different workflow_run on a different event, and post-squash the main SHA != PR
-          head SHA, and the evidence script is deliberately gh-free at runtime. Instead: validate.py emits a
-          machine-readable execution manifest (pytest collected_count, per-check ran/skipped) persisted as a
-          CI artifact; the bundle computes vacuous_pass from that structured data. vacuous_pass is TRI-STATE
-          (true / false / undetermined) and on its own fetch/parse abstention it fails loud like c7 (never
-          silently emits false). A main-validate-log-only fallback detector ("0 collected" pattern on the
-          already-available failing-run log) keeps correctness from depending on any cross-run fetch.
-          Persist per the corrected agent-platform-data-lake bucket (not the stale agent-platform-agent-logs
-          pattern in c5/Section 1). Landed via its own follow-on IMPLEMENTATION plan (separable: new evidence
-          source).
+          head SHA, and the evidence script is deliberately gh-free at runtime. PRIMARY detector (round-2
+          feasibility correction): parse the "collected N items" line from the ALREADY-fetched failing-run log
+          (ci-rca.yml already runs gh run view --log-failed for the triggering run) -- this needs no artifact
+          wiring (there is zero actions/upload-artifact in the repo today) and no cross-run fetch. SECONDARY:
+          validate.py emits a machine-readable execution manifest as a CI artifact for richer per-check data.
+          The manifest/parse MUST distinguish collected_count from deselected_count/skipped: "0 collected
+          because --picked selected nothing" is the defect (vacuous_pass=true), but "0 ran because a changed
+          test file is all-integration and -m 'not integration' deselected it" is EXPECTED (vacuous_pass=false)
+          -- collapsing them reintroduces a false positive (validate.py:3868 documents this all-integration
+          edge case). vacuous_pass is TRI-STATE (true / false / undetermined); on its own parse abstention it
+          fails loud like c7 (never silently emits false). Persist per the corrected agent-platform-data-lake
+          bucket (not the stale agent-platform-agent-logs pattern in c5/Section 1). Landed via its own
+          follow-on IMPLEMENTATION plan (separable: new evidence source).
         status: open
       - id: c9
         text: >-
@@ -3892,9 +3896,14 @@ tier_items:
           new detection_gap.escape_mode sub-field {check_absent, check_ran_vacuously, tier_misplaced,
           no_premerge_gate_by_design}, NOT a recurrence_class value -- recurrence_class is the orthogonal
           temporal axis {novel, instance_of_known_pattern, regression} and a gate-escape can itself be novel
-          OR a regression. escape_mode forks corrective_action: check_ran_vacuously / check_absent /
-          tier_misplaced target the GATE (a real defect -- the rec-2423/rec-2424 case was
-          check_ran_vacuously: --pre's pytest WAS meant to run the changed test and collected 0); whereas
+          OR a regression. CRITICAL (round-2 consensus): escape_mode is BUNDLE-DERIVED and agent-MIRRORED, NOT
+          a free agent choice -- the bundle computes it deterministically from vacuous_pass +
+          merge_gate_test_coverage (c11), and the portal cross-checks the agent's value against the bundle on
+          the same authoritative-bundle-wins footing as earliest_viable_gate. Otherwise the agent could write
+          no_premerge_gate_by_design over a genuinely vacuous gate and defeat c10. escape_mode forks
+          corrective_action: check_ran_vacuously / check_absent / tier_misplaced target the GATE (a real
+          defect -- the rec-2423/rec-2424 case was check_ran_vacuously: --pre's pytest WAS meant to run the
+          changed test and collected 0); whereas
           no_premerge_gate_by_design is the INTENDED architecture (see c11) -- the post-merge main-validate
           canary catching a regression that --pre was never designed to block is the self-improvement loop
           working as intended, so the corrective_action is the forward-fix itself (Decision 73), NOT an
@@ -3904,14 +3913,19 @@ tier_items:
       - id: c10
         text: >-
           Bind vacuous_pass into the cross-check spine (CRITICAL -- without this c8/c9 are advisory and the
-          incident is NOT actually closed). Add a Section-4 portal check that REJECTS an author-discipline
-          RCA contradicted by gate evidence: when evidence_bundle.vacuous_pass=true, a rec whose
-          detection_gap.escape_mode is unset (i.e. claims a normal author/code cause, e.g.
-          earliest_viable_gate=pre + "author did not run --pre") is rejected and must either carry an
-          escape_mode or file a typed failure_category/gate dispute. This is the mechanism that would have
-          deterministically caught rec-2423/rec-2424 even if the probe had succeeded (decoupling gate-escape
-          detection from the probe-abstention trigger of c7, which do not coincide). Landed with the merged
-          H1+H3 plan as the spine wiring that makes c8/c9 load-bearing.
+          incident is NOT actually closed). FEASIBILITY PREREQUISITE (round-2 finding): the Section-2/4
+          cross-check is INTENT prose, NOT code today -- file_rec validates CiRcaContext for shape/length only;
+          it never fetches the evidence bundle and never compares detection_gap fields against bundle values.
+          So this criterion is "BUILD the cross-check spine, then bind vacuous_pass", not "add one branch":
+          (1) make file_rec receive/fetch the bundle (by the evidence_bundle_ref already on CiRcaContext),
+          (2) consume c8's vacuous_pass + c11's merge_gate_test_coverage, (3) adjudicate escape_mode
+          bundle-wins (c9), and (4) REJECT an author-discipline RCA contradicted by gate evidence: when
+          vacuous_pass=true, a rec whose escape_mode is unset or claims no_premerge_gate_by_design (i.e. a
+          normal author/code cause, e.g. earliest_viable_gate=pre + "author did not run --pre") is rejected
+          and must carry escape_mode=check_ran_vacuously or file a typed failure_category/gate dispute. This is
+          the mechanism that would have deterministically caught rec-2423/rec-2424 even if the probe had
+          succeeded (decoupling gate-escape detection from the probe-abstention trigger of c7, which do not
+          coincide). Landed with the merged H1+H3 plan as the spine wiring that makes c8/c9 load-bearing.
         status: open
       - id: c11
         text: >-
@@ -3924,16 +3938,24 @@ tier_items:
           gate_is_postmerge_canary=true for main-validate-tier failures so RCAs forward-fix rather than
           recommend author-discipline fixes for canary catches. The bundle also records deterministically,
           as INPUTS that feed c9's escape_mode and c10's cross-check: (i) merge_gate_test_coverage -- whether
-          the failing test was in --pre's diff-scoped selection for the merged diff; if --pre would not have
-          selected it (e.g. source-only change), escape_mode=no_premerge_gate_by_design (expected, forward-fix);
-          if --pre WAS meant to select it but collected 0 (vacuous_pass), escape_mode=check_ran_vacuously
-          (gate defect). (ii) N-failure enumeration -- one bundle + one rec PER failed check (INTENT 3.3/4.9
-          promises this but generate_bundles currently classifies only the FIRST failure, so a real regression
-          co-occurring with a SLOC line is silently dropped). (iii) coverage-removal -- tests
-          deleted/skipped/xfail-added in the diff (get_changed_files excludes deleted paths today), emitting
-          coverage_regression=true when a required gate goes green while net test count drops on a
-          source-touching diff. Landed via a follow-on IMPLEMENTATION plan (may co-locate with the H2
-          evidence-source plan).
+          the failing test was in --pre's diff-scoped selection. COMPUTABILITY (round-2 correction): the bundle
+          runs on the post-squash main commit, so get_changed_files's `git diff origin/main` is EMPTY -- it
+          must diff the merge commit against its FIRST PARENT (git diff HEAD^ HEAD) to reconstruct the merged
+          diff, then replay --pre's changed_tests regex. AND the "selected-but-collected-0 (defect)" vs
+          "source-only, never selected (expected)" split cannot be decided from diff+filename alone -- a file
+          can be in the selection yet collect 0 (markers/import error); the decisive datum is c8's
+          collected_count/deselected split, so escape_mode is set jointly from (selection membership) + (c8
+          collection result), NOT from the path regex alone. If --pre would not have selected the failing test
+          (source-only change), escape_mode=no_premerge_gate_by_design (expected, forward-fix); if it was
+          selected but collected 0, escape_mode=check_ran_vacuously (gate defect). (ii) N-failure enumeration
+          -- one bundle + one rec PER failed check (INTENT 3.3/4.9 promises this but generate_bundles currently
+          classifies only the FIRST failure, so a real regression co-occurring with a SLOC line is silently
+          dropped); land WITH the dedup-key fix (add failure_category to the ci-rca/<slug> status context) or
+          the Nth rec is masked by the existing single-context dedup. (iii) coverage-removal -- tests
+          deleted/skipped/xfail-added in the diff; needs a dedicated `git diff --diff-filter=D HEAD^ HEAD` path
+          (get_changed_files filters out deleted paths), emitting coverage_regression=true when a required gate
+          goes green while net test count drops on a source-touching diff. Landed via a follow-on
+          IMPLEMENTATION plan (may co-locate with the H2 evidence-source plan).
         status: open
       - id: c12
         text: >-
@@ -3945,10 +3967,15 @@ tier_items:
           continue-on-error and the agent runs even with NO bundle (fully unchecked, worse than c7's
           degraded path) -- force human-route + a gauge when bundle_sha is empty. (iii) Back-validation loop
           (Decision 57 loop-closure -- "proof that a fix reduced the failure mode that caused it"): when a
-          new ci_rca rec's failed_check + failure_category matches a CLOSED prior rec whose preventive_action
-          claimed prevention, deterministically stamp recurrence_class=regression, link the prior rec, and
-          surface a "preventive_action did not hold" signal. Landed via the observability follow-on plan
-          (extends PLAN-ci-rca-observability-dashboard scope).
+          new ci_rca rec's failed_check + failure_category (keyed on the BUNDLE-DERIVED category, not the
+          agent-asserted one -- the prior closed rec may have carried the very misclassification c9 fixes)
+          matches a CLOSED prior rec whose preventive_action claimed prevention, FLAG it as a candidate
+          regression for cross-check, link the prior rec, and surface a "preventive_action did not hold"
+          signal. Softened from "deterministically stamp regression" (round-2 feasibility): the match is a
+          heuristic over free-text preventive_action, and these fields live inside the context_v2_json VARCHAR
+          -- the join needs a NEW ducklake_reader named-read verb with server-side json_extract predicates
+          (the closed reader boundary forbids ad-hoc SQL), so this is greenfield query work, not a filter on
+          existing columns. Landed via the observability follow-on plan (extends PLAN-ci-rca-observability-dashboard scope).
         status: open
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
     related_candidate_decisions: []    # no candidate (CD.x) decisions; the hardening cites RATIFIED Decisions 72/55/57/66/60/73 -- see note (those are decision-scout CITE targets for the follow-on plans, not candidate-decision IDs)
@@ -4033,6 +4060,25 @@ tier_items:
       noted but NOT yet promoted to criteria (decide at /plan): dedup-by-status-context can suppress a second
       distinct RCA on one SHA (add failure_category to the dedup key); flake-reproduction probe
       (reproduced=true|false); /plan-review outcome capture for confidence calibration.
+      2026-06-30 (round 2): re-reviewed by three fresh zero-context subagents (gate-integrity adversary,
+      convergence judge, feasibility skeptic) -- verdicts PROCEED / PROCEED / PROCEED with the adversary
+      raising textual must-fixes since applied. Consensus tightenings folded into c8/c9/c10/c11/c12: (1)
+      escape_mode is BUNDLE-DERIVED + agent-mirrored + portal-cross-checked bundle-wins (c9/c10) -- else the
+      agent could label a vacuous gate no_premerge_gate_by_design and defeat c10 (flagged independently by
+      adversary + judge); (2) the Section-2/4 cross-check spine is INTENT PROSE, NOT code today (file_rec does
+      shape-validation only, never fetches the bundle) -- so c10 BUILDS the spine, it is not "add a branch"
+      (feasibility skeptic); (3) c8's main-log "0 collected" parse is PRIMARY (no actions/upload-artifact
+      exists in the repo), with deselected_count separated so an all-integration file is not a false-positive
+      vacuous_pass; (4) c11(i) reconstructs the merged diff via git diff HEAD^ HEAD (origin/main diff is empty
+      post-squash) and decides defect-vs-expected jointly from selection membership + c8 collection result,
+      not the path regex alone; (5) c12(iii) softened from "deterministically stamp regression" to "flag
+      candidate" and keys on the bundle-derived failure_category. IMPLEMENTATION CAVEATS for the follow-on
+      /plan sessions (substrate the plans must BUILD, not assume): the cross-check spine itself (file_rec
+      bundle fetch + field comparison); a CI artifact upload/download path if the c8 manifest secondary path
+      is used; new ducklake_reader named-read verbs for both the rec-2415 dispute-frequency throttle (c9) and
+      the c12(iii) back-validation JSON join. Cross-link: docs/intent-migration/MANIFEST.yaml marks
+      INTENT-ci-rca-methodology.md disposition=extract_to_contract (target docs/contracts/ci-rca.yaml, Wave 3)
+      -- land the new schema/enum semantics in a form that extraction can lift, not re-narrate.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out
