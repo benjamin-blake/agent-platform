@@ -1,0 +1,81 @@
+---
+# Named read-time projection contract for recommendation relevance (T3.8 / CD.36).
+# NOT a Class A ops_recommendations column set (Decision 84) -- relevance is computed
+# at read-time by scripts/rec_relevance.py, not stored in the warehouse.
+# Machine-parseable contract (Decision 86). validate.py guards enum drift.
+projection_id: recommendation-relevance
+version: 1
+status: active
+ratified_via: >-
+  PLAN-rec-relevance-freshness-gate merge to main (T3.8 / CD.36)
+description: >-
+  Relevance verdict contract for open recommendations. The verdict is a read-time signal
+  computed deterministically-first, with semantic fallback. No new Class A columns are
+  added to ops_recommendations (Decision 84); this projection is ephemeral and surfaced only.
+verdicts:
+  - relevant
+  - satisfied
+  - superseded
+  - duplicate
+  - contradicted
+  - stale_target
+  - blocked_by_decision
+  - unknown
+closure_split:
+  deterministic_auto_close:
+    verdicts: [satisfied]
+    condition: >-
+      Acceptance probe passes on main (non-empty acceptance field, run_acceptance_probe=True).
+      Auto-closes via update_rec(status=closed, resolution=<proof>). Decision 70 lifecycle.
+    proof_required: true
+  close_proposed:
+    verdicts:
+      - superseded
+      - duplicate
+      - contradicted
+      - stale_target
+      - blocked_by_decision
+    condition: >-
+      Semantic signal or deterministic non-satisfaction verdict.
+      Emits a printed close_proposed command (--update-rec ... --status closed).
+      Never auto-closes on semantic or LLM judgement (CD.36 / Decision 55).
+  no_action:
+    verdicts: [relevant, unknown]
+    condition: >-
+      No resolution signal detected, or insufficient data to assess.
+      Surfaced for operator review; no action is taken automatically.
+signal_definitions:
+  acceptance_probe:
+    type: deterministic
+    signal: >-
+      Run rec.acceptance shell command with bounded timeout (default 10s). On-demand per-rec
+      only -- never queue-wide (Decision 88). Exit 0 => satisfied. No acceptance field =>
+      probe is skipped; rec cannot resolve to satisfied via this signal alone.
+  target_existence:
+    type: deterministic
+    signal: >-
+      Verify rec.file exists at repo root. Absent path => stale_target.
+  decision_contradiction:
+    type: deterministic
+    signal: >-
+      Extract Decision/CD IDs from rec context/acceptance/title. If any cited decision
+      has status containing "superseded by" => contradicted; "pending" => blocked_by_decision.
+  commit_correlation:
+    type: semantic
+    signal: >-
+      If a recent main commit modified rec.file after rec.created_timestamp => satisfied
+      (close_proposed only -- semantic signal, not auto-close).
+  closed_sibling_jaccard:
+    type: semantic
+    signal: >-
+      Closed rec on same file with title Jaccard >= 0.5 => superseded (close_proposed).
+  open_duplicate:
+    type: semantic
+    signal: >-
+      Open rec on same file with title Jaccard >= 0.7 => duplicate (close_proposed).
+constraints:
+  - "Decision 84: no new Class A columns added to ops_recommendations."
+  - "Decision 88: acceptance probe is on-demand per-rec only; never queue-wide."
+  - "Decision 55: semantic verdicts produce close_proposed only; no auto-action."
+  - "Decision 70: verdict and lifecycle status are orthogonal; no new status enum value."
+  - "CD.36: deterministic satisfied auto-closes with proof; all else is close_proposed."

@@ -865,6 +865,45 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
     return True
 
 
+def propose_or_close_rec(
+    rec_id: str,
+    verdict: str,
+    evidence: str,
+    *,
+    deterministic: bool = False,
+    profile: Optional[str] = None,
+) -> Optional[str]:
+    """Apply a relevance verdict to a rec (T3.8 / CD.36 close_proposed lifecycle support).
+
+    Decision 70: verdict and lifecycle status are orthogonal; no new status enum value.
+    CD.36 / Decision 55: only deterministic satisfied auto-closes; every semantically-judged
+    verdict emits a close_proposed proposal string for a human to run.
+
+    Args:
+        rec_id:       The rec ID to act on (e.g. 'rec-042').
+        verdict:      Relevance verdict from rec_relevance.evaluate_rec_relevance().
+        evidence:     Evidence/proof string from the evaluator.
+        deterministic: True when the verdict came from the acceptance probe (on-demand per-rec).
+                       False for semantic signals (commit correlation, Jaccard, etc.).
+        profile:      Optional AWS profile override for update_rec.
+
+    Returns:
+        None when the rec is auto-closed (deterministic satisfied) or no action is warranted
+        (verdict is 'relevant' or 'unknown').
+        A close_proposed command string for all other verdicts -- print this for the operator.
+    """
+    if verdict in ("relevant", "unknown"):
+        return None
+    if deterministic and verdict == "satisfied":
+        update_rec(rec_id, {"status": "closed", "resolution": evidence}, profile=profile)
+        return None
+    safe_evidence = evidence.replace('"', '\\"')
+    return (
+        f"bin/venv-python -m scripts.ops_data_portal --update-rec {rec_id}"
+        f' --status closed --resolution "{safe_evidence}"  # relevance={verdict}'
+    )
+
+
 def file_decision(
     fields: dict,
     profile: Optional[str] = None,

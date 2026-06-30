@@ -1104,33 +1104,33 @@ def _file_paths_correlate(rec_file: str, changed: str) -> bool:
     return parts_rec[-n:] == parts_changed[-n:]
 
 
-def correlate_ci_rca_with_main(
+def correlate_recs_with_commits(
     recs: list[dict],
     commits: list[dict],
-    closed_ci_rca_recs: list[dict] | None = None,
+    closed_recs: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
-    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+    """Classify open recs as LIKELY-RESOLVED or UNRESOLVED from commit history.
+
+    General engine for all rec sources (generalised from the ci_rca path, T3.8).
+    Served from the already-warmed read-cache; never performs a warehouse re-fetch
+    or acceptance-command execution (Decision 88).
 
     A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
     AFTER the rec's created_timestamp either:
       - modified the rec's ``file`` field (path-suffix / basename match), or
       - mentions the rec's ``id`` in its subject line.
 
-    When ``closed_ci_rca_recs`` is provided (cache path only), a rec that is
+    When ``closed_recs`` is provided (cache path only), a rec that is
     still uncorrelated after the commit loop is also classified LIKELY-RESOLVED
-    when a closed ci_rca sibling on the same file has a sufficiently similar
+    when a closed sibling on the same file has a sufficiently similar
     title and was closed at/after this rec's creation (window-independent
     closed-sibling cluster signal). The matched sibling id is recorded on the
     rec as ``_resolved_reason`` for the operator's verify-and-close prompt.
 
-    Recs whose file/id cannot be correlated by either signal retain the HARD
-    BLOCK designation (UNRESOLVED).
-
     Args:
-        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
-        commits:           Recent main commits from _get_recent_main_commits().
-        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path),
-                           or None to skip cluster detection.
+        recs:         Open recs to classify.
+        commits:      Recent main commits from _get_recent_main_commits().
+        closed_recs:  Closed recs (cache path), or None to skip cluster detection.
 
     Returns:
         Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
@@ -1150,18 +1150,15 @@ def correlate_ci_rca_with_main(
         for commit in commits:
             commit_dt = _parse_ts_utc(commit.get("date") or "")
 
-            # Only consider commits that landed AFTER the rec was created.
             if rec_created_dt is not None and commit_dt is not None:
                 if commit_dt <= rec_created_dt:
                     continue
 
-            # Check subject for explicit rec id mention.
             subject_lower = (commit.get("subject") or "").lower()
             if rec_id and rec_id in subject_lower:
                 correlated = True
                 break
 
-            # Check changed files for the rec's source file.
             if rec_file:
                 for changed in commit.get("files") or []:
                     if _file_paths_correlate(rec_file, changed):
@@ -1172,8 +1169,8 @@ def correlate_ci_rca_with_main(
 
         # Closed-sibling cluster: window-independent signal (Decision 88 invariant ii --
         # served from the already-pulled cache, never a fresh reader call).
-        if not correlated and closed_ci_rca_recs and rec_file:
-            for sibling in closed_ci_rca_recs:
+        if not correlated and closed_recs and rec_file:
+            for sibling in closed_recs:
                 sib_file = (sibling.get("file") or "").strip()
                 if not sib_file:
                     continue
@@ -1182,9 +1179,6 @@ def correlate_ci_rca_with_main(
                 if _title_jaccard(rec.get("title") or "", sibling.get("title") or "") < 0.5:
                     continue
                 sib_closed_dt = _row_ts(sibling, "last_updated_timestamp")
-                # Require a dateable closure. No timestamp means we cannot
-                # confirm the sibling was closed after this rec was created;
-                # skip it to avoid false positives from undated historical closes.
                 if sib_closed_dt is None:
                     continue
                 if rec_created_dt is not None and sib_closed_dt < rec_created_dt:
@@ -1199,6 +1193,66 @@ def correlate_ci_rca_with_main(
             unresolved.append(rec)
 
     return {"likely_resolved": likely_resolved, "unresolved": unresolved}
+
+
+def correlate_ci_rca_with_main(
+    recs: list[dict],
+    commits: list[dict],
+    closed_ci_rca_recs: list[dict] | None = None,
+) -> dict[str, list[dict]]:
+    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+
+    Thin wrapper around correlate_recs_with_commits() for backward compatibility.
+    See that function for signal documentation.
+
+    Args:
+        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
+        commits:           Recent main commits from _get_recent_main_commits().
+        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path).
+
+    Returns:
+        Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
+    """
+    return correlate_recs_with_commits(recs, commits, closed_recs=closed_ci_rca_recs)
+
+
+def surface_queue_relevance_triage(
+    cache_rows: list[dict],
+    commits: list[dict],
+    *,
+    exclude_sources: frozenset[str] = frozenset({"ci_rca"}),
+    cap: int = 10,
+) -> list[dict]:
+    """Return queue-wide likely-resolved recs for operator triage (read-cache only, Decision 88).
+
+    Runs cheap commit-file correlation on all open recs EXCEPT those in ``exclude_sources``
+    (ci_rca has its own dedicated triage block). Never calls the warehouse reader and never
+    executes acceptance probes -- surfacing-only per Decision 55.
+
+    Args:
+        cache_rows:      All rows from the warmed read-cache (logs/.recommendations-log.jsonl).
+        commits:         Recent main commits already fetched by the caller.
+        exclude_sources: Source tags that have their own triage block (default: ci_rca).
+        cap:             Maximum recs returned.
+
+    Returns:
+        Likely-resolved recs (up to ``cap``), newest first.
+    """
+    open_non_ci = [r for r in cache_rows if r.get("status") == "open" and (r.get("source") or "") not in exclude_sources]
+    closed_recs = [
+        {
+            "id": r.get("id", ""),
+            "file": r.get("file", ""),
+            "title": r.get("title", ""),
+            "last_updated_timestamp": r.get("last_updated_timestamp"),
+        }
+        for r in cache_rows
+        if r.get("status") == "closed" and (r.get("source") or "") not in exclude_sources
+    ]
+    result = correlate_recs_with_commits(open_non_ci, commits, closed_recs=closed_recs)
+    likely = result.get("likely_resolved") or []
+    likely.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return likely[:cap]
 
 
 def _print_recent_main_commits(commits: list[dict]) -> None:

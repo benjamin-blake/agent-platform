@@ -2,6 +2,48 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 103: Recommendation relevance is a governed lifecycle state (CD.36 ratification) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-30
+**Warehouse ID:** dec-103 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The roadmap had a Tier Item Freshness Gate (T-1.21) and implement-side truth-maintenance rules,
+but no governed relevance discipline for operational recommendations. Open recommendations were
+actioned solely on status="open", without checking whether the underlying need was still valid.
+At 2026-06-24, 273 of 505 open recommendations were aging (>60 days), and no automated path
+existed to surface or close satisfied/superseded work.
+
+**Decision:**
+Ratifies CD.36. Recommendation relevance is a governed lifecycle verdict -- distinct from the
+rec lifecycle status (open/closed/failed/declined/superseded). The verdict set is:
+`{relevant, satisfied, superseded, duplicate, contradicted, stale_target, blocked_by_decision, unknown}`.
+
+Key constraints (binding):
+- The deterministic probe is the rec's existing `acceptance` shell-command oracle. No new
+  acceptance machinery is introduced.
+- Deterministic satisfaction (acceptance probe passes; target file/symbol present) may auto-close
+  with a recorded proof. All semantic verdicts (superseded, duplicate, contradicted, etc.)
+  produce a `close_proposed` command for human or policy confirmation -- never a direct close
+  (Decision 70: closure requires a closure proof, not an LLM assertion).
+- Relevance state is computed READ-TIME or stored in a named projection
+  (`docs/contracts/recommendation-relevance.yaml`) -- NO new Class A columns on
+  `ops_recommendations` (Decision 84: the ducklake_writer owns the keyspace).
+- Queue-wide relevance surfacing serves the warmed read-cache only -- no per-session warehouse
+  re-fetch (Decision 88).
+
+**Implementation (T3.8, landed 2026-06-30):**
+`scripts/rec_relevance.py` evaluator (deterministic-first: acceptance probe -> target-existence
+-> decision-contradiction scan -> semantic fallback); `docs/contracts/recommendation-relevance.yaml`
+projection contract; `scripts/session_preflight.py` generalised correlation engine;
+`scripts/ops_data_portal.py` `propose_or_close_rec()` lifecycle helper; planning and implement
+skill freshness gates.
+
+**Related:** Decision 70 (closure-proof requirement), Decision 84 (named projection / read-only
+boundary), Decision 88 (read-cache surfacing), Decision 55 (no auto-action on semantic judgment),
+T3.8 (implementation item), T3.9 (post-merge reconciliation complement).
+
 ## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
 
 **Status:** Decided
