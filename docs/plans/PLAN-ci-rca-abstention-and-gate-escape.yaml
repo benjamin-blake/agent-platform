@@ -22,10 +22,12 @@ scope:
   - file: scripts/ci_rca_tier_map.py
     action: Modify
     purpose: >-
-      c7. compute_earliest_viable_gate returns the literal "undetermined" (a new enum value) on
-      every abstention path (AST parse error, probe_failed, dispersion_too_high, taxonomy_fallback)
-      instead of None, so the silent-skip in the cross-check has nothing to key off (no dead null
-      branch, Decision 60 enum governance).
+      c7. compute_earliest_viable_gate returns the literal "undetermined" (a new enum value) on its
+      abstention branches (AST parse error at ~line 219, probe_failed / dispersion_too_high /
+      probe-unavailable at ~lines 232-233) instead of None, so the silent-skip in the cross-check has
+      nothing to key off (no dead null branch, Decision 60 enum governance). NOTE: the
+      taxonomy_fallback abstention is NOT in this function -- it is the hardcoded earliest_viable_gate
+      in ci_rca_evidence.py and is handled in that file's row.
   - file: scripts/ci_rca_taxonomy.py
     action: Modify
     purpose: >-
@@ -34,7 +36,10 @@ scope:
       mislabel); add test_collection_empty and gate_escape failure categories.
   - file: config/ci_rca_taxonomy.yaml
     action: Modify
-    purpose: c9b. register the new test_collection_empty and gate_escape failure categories.
+    purpose: >-
+      c9b. add a top-level canonical `failure_categories:` enum list (the authoritative category set
+      validate.py and the classifier assert against) including the new test_collection_empty and
+      gate_escape categories.
   - file: scripts/ci_rca_vacuous_pass.py
     action: Modify
     purpose: >-
@@ -44,9 +49,10 @@ scope:
   - file: scripts/ci_rca_evidence.py
     action: Modify
     purpose: >-
-      c7+c9. bump bundle schema_version 2->3; propagate earliest_viable_gate="undetermined";
-      emit the bundle-derived escape_mode field via compute_escape_mode; keep N-failure enumeration
-      intact.
+      c7+c9. bump bundle schema_version 2->3; propagate earliest_viable_gate="undetermined" from the
+      tier_map AND set the taxonomy_fallback hardcoded gate (~line 219) to "undetermined" instead of
+      None; emit the bundle-derived escape_mode field via compute_escape_mode; keep N-failure
+      enumeration intact.
   - file: scripts/ops_data_portal.py
     action: Modify
     purpose: >-
@@ -61,38 +67,49 @@ scope:
   - file: scripts/executor/rec_write_guidance.py
     action: Modify
     purpose: >-
-      Decision 66. surface write-time semantics for the new fields (escape_mode, rca_confidence,
-      earliest_viable_gate="undetermined" mirror rule) under source='ci_rca' and the failure_category
-      disputed_field under source='ci_rca_evidence_dispute'.
+      Decision 66. This is the AUTHORITATIVE write-time semantics surface for source=ci_rca
+      context_v2_json (the existing fields live in the hardcoded schema_fields dict here, NOT in an
+      ops.yaml column -- the context_v2_json sub-fields are nested JSON, not ops_recommendations table
+      columns). Add escape_mode, rca_confidence, and the earliest_viable_gate="undetermined" mirror
+      rule to the source='ci_rca' schema_fields dict; add the failure_category disputed_field to the
+      source='ci_rca_evidence_dispute' guidance; and update the existing "schema_version ==1" guidance
+      string to accept ==2 in lockstep with the CiRcaContext le bump.
   - file: scripts/session_preflight.py
     action: Modify
     purpose: >-
       c7. hard-surface open source=ci_rca recs carrying rca_confidence=undetermined as an enforced
       "mandatory human review" marker (new derive/fetch/print trio served from the warm read-cache,
-      Decision 88 -- no new reader verb), analogous to the existing dispute-rec surfacing.
+      Decision 88 -- no new reader verb), analogous to the existing dispute-rec surfacing. The derive
+      json.loads the context_v2_json column already present on the cache row and reads
+      rca_confidence from it (rca_confidence is a context_v2_json sub-field, not a flat top-level
+      cache column), so the production warm-cache path surfaces real recs, not just synthesized rows.
   - file: .claude/agents/scheduled/ci-rca.md
     action: Modify
     purpose: >-
       c7+c9. instruct the agent to MIRROR earliest_viable_gate and escape_mode from the bundle (not
       free-choose), set rca_confidence=undetermined when the bundle abstains, and file a typed
-      failure_category dispute rather than burying a category disagreement in free text.
-  - file: config/ops.yaml
-    action: Modify
-    purpose: >-
-      Decision 65/66. add description+semantics metadata for the new context_v2_json fields
-      (escape_mode, rca_confidence) so Tier-A precision injection has an authoritative source.
+      failure_category dispute rather than burying a category disagreement in free text. STALE-
+      INSTRUCTION SWEEP (required): DELETE the current "fall back to 'CI' as a safe default" instruction
+      (~lines 101-104) that directs the agent to free-choose the gate on a null bundle value -- it
+      directly contradicts the new mirror rule -- and bump the hardcoded `"schema_version": 1` example
+      (~line 78) to 2.
   - file: docs/INTENT-ci-rca-methodology.md
     action: Modify
     purpose: >-
       Decision 86. AMEND the grandfathered INTENT in place -- Section 1 schema (escape_mode,
-      rca_confidence, undetermined), Section 2/4 cross-check (spine is now code; bundle-wins on
-      earliest_viable_gate + escape_mode; vacuous_pass rejection rule), Section 3.4 abstention
-      (emit "undetermined", no silent skip), dispute disputed_field enum. No new doc is created.
+      rca_confidence, undetermined, schema_version now 2), Section 2/4 cross-check (spine is now code;
+      bundle-wins on earliest_viable_gate + escape_mode; vacuous_pass rejection rule; update check 1's
+      "schema_version ==1 / rejects >1" text to ==2 in lockstep with the model bump), Section 3.4
+      abstention (emit "undetermined", no silent skip), dispute disputed_field enum. No new doc is created.
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      c9b. extend validate_ci_rca_taxonomy coverage to assert the new categories are present in
-      config/ci_rca_taxonomy.yaml (keeps the taxonomy validator authoritative over the enum set).
+      c9b. extend validate_ci_rca_taxonomy to assert a canonical failure-category enum. Today the
+      validator checks workflow_to_tier coverage only; add a check that the category set
+      (including the new test_collection_empty and gate_escape) declared in a new top-level
+      `failure_categories:` list in config/ci_rca_taxonomy.yaml exactly matches the category enum the
+      classifier and the escape_mode computation consume -- making the YAML the single authoritative
+      category source the validator asserts against.
   - file: tests/test_ci_rca_tier_map.py
     action: Modify
     purpose: c7 unit coverage -- every abstention path returns "undetermined", not None.
@@ -241,8 +258,9 @@ verification_plan:
 constraints:
   - >-
     Decision 86: AMEND docs/INTENT-ci-rca-methodology.md in place; NEVER create a new docs/INTENT-*.md
-    or prose-architecture doc (validate.py intent-doc-freeze guard blocks it). Route new field
-    semantics to config/ops.yaml + the contract, not new INTENT prose.
+    or prose-architecture doc (validate.py intent-doc-freeze guard blocks it). Route new ci_rca
+    context_v2_json field semantics to the rec_write_guidance.py schema_fields surface (the authoritative
+    write-time surface for these nested fields), not new INTENT prose.
   - >-
     Decision 84: the cross-check reads the bundle but is NEVER a warehouse write source; rec writes
     still transit file_rec -> file_ops with writer-allocated ids. No client-side keyspace mutation.
@@ -304,6 +322,17 @@ context:
     Branch is 0 commits behind origin/main at planning time; no Scope-file divergence. Main Divergence
     Assessment: clean.
   - >-
+    schema_version lockstep (plan-critique finding): new escape_mode/rca_confidence fields are Optional
+    on CiRcaContext so historical schema_version=1 recs still validate; the le bound goes 1->2 and the
+    THREE "schema_version ==1" assertions must move in lockstep -- the model bound (ops_data_portal.py),
+    the rec_write_guidance.py guidance string, and INTENT Section 4 check 1 prose.
+  - >-
+    Plan-critique (Step 9) returned REVISE then the three must-fixes were applied: corrected the
+    config/ops.yaml wrong-path (the ci_rca context_v2_json field semantics live in rec_write_guidance.py
+    schema_fields, not an ops.yaml column -- ops.yaml row dropped); made the ci-rca.md stale-instruction
+    sweep explicit (delete the "fall back to CI" free-choose, bump the schema_version example); and
+    corrected the tier_map purpose (taxonomy_fallback lives in ci_rca_evidence.py, not tier_map).
+  - >-
     INTENT-ci-rca-methodology.md is grandfathered in docs/intent-migration/MANIFEST.yaml
     (disposition=extract_to_contract, target docs/contracts/ci-rca.yaml, Wave 3). Land new
     schema/enum semantics so a later extraction can lift them; do not re-narrate.
@@ -320,9 +349,11 @@ execution_steps:
     compute_earliest_viable_gate (AST parse error, probe_failed, dispersion_too_high, taxonomy_fallback)
     with the literal "undetermined" while preserving the rationale string in slot 2.
   - >-
-    scripts/ci_rca_taxonomy.py + config/ci_rca_taxonomy.yaml -- make classify_failures consume the
-    structured failed-step (jobs JSON) list before the substring log scan; add test_collection_empty and
-    gate_escape categories to both the code and the YAML; extend validate.py validate_ci_rca_taxonomy.
+    config/ci_rca_taxonomy.yaml + scripts/ci_rca_taxonomy.py -- add the canonical top-level
+    failure_categories enum list (incl. test_collection_empty, gate_escape) to the YAML; make
+    classify_failures consume the structured failed-step (jobs JSON) list before the substring log scan
+    and emit the new categories; extend validate.py validate_ci_rca_taxonomy to assert the classifier's
+    category set matches the YAML failure_categories list.
   - >-
     scripts/ci_rca_vacuous_pass.py -- add compute_escape_mode(vacuous_pass, merge_gate_test_coverage,
     gate_is_postmerge_canary, coverage_regression) returning the escape_mode enum (abstain to
@@ -332,8 +363,9 @@ execution_steps:
     "undetermined"; call compute_escape_mode and emit bundle["escape_mode"]; keep N-failure enumeration.
   - >-
     scripts/ops_data_portal.py -- extend _DetectionGap.earliest_viable_gate regex with "undetermined";
-    add detection_gap.escape_mode (enum) and CiRcaContext.rca_confidence (typed) fields; bump
-    CiRcaContext schema_version bound le 1->2; widen CiRcaEvidenceDispute.disputed_field to include
+    add detection_gap.escape_mode (enum, Optional) and CiRcaContext.rca_confidence (typed, Optional)
+    fields -- Optional so existing schema_version=1 recs still validate; bump CiRcaContext schema_version
+    bound le 1->2 (new recs file at version 2); widen CiRcaEvidenceDispute.disputed_field to include
     failure_category; BUILD the cross-check spine in file_rec -- a helper that loads the local canonical
     bundle, verifies SHA-256 against evidence_bundle_ref.sha256 (loud-fail on mismatch), compares
     earliest_viable_gate + escape_mode bundle-wins, enforces the "undetermined" mirror, and rejects an
@@ -342,18 +374,19 @@ execution_steps:
     keep the check-8 dispute carve-out short-circuiting first.
   - >-
     scripts/executor/rec_write_guidance.py -- add escape_mode, rca_confidence, and the
-    earliest_viable_gate "undetermined" mirror rule to source='ci_rca' guidance; add the
-    failure_category disputed_field to source='ci_rca_evidence_dispute' guidance (Decision 66).
-  - >-
-    config/ops.yaml -- add description+semantics metadata for escape_mode and rca_confidence so Tier-A
-    precision injection has an authoritative source (Decision 65/66).
+    earliest_viable_gate "undetermined" mirror rule to the source='ci_rca' schema_fields dict (the
+    authoritative semantics surface for these nested context_v2_json fields); add the failure_category
+    disputed_field to source='ci_rca_evidence_dispute' guidance; update the existing "schema_version
+    ==1" guidance string to ==2 in lockstep with the CiRcaContext le bump (Decision 66).
   - >-
     scripts/session_preflight.py -- add the rca_confidence=undetermined derive/fetch/print trio
-    (warm-cache served, Decision 88) and a report-JSON key; render a "mandatory human review" section.
+    (warm-cache served, Decision 88) and a report-JSON key; the derive json.loads context_v2_json from
+    the cache row to read rca_confidence; render a "mandatory human review" section.
   - >-
     .claude/agents/scheduled/ci-rca.md -- instruct the agent to mirror earliest_viable_gate + escape_mode
     from the bundle, set rca_confidence=undetermined on bundle abstention, and file a typed
-    failure_category dispute instead of free-text burial.
+    failure_category dispute instead of free-text burial; DELETE the contradictory "fall back to 'CI'"
+    free-choose instruction (~lines 101-104) and bump the hardcoded schema_version example (~line 78) to 2.
   - >-
     docs/INTENT-ci-rca-methodology.md -- AMEND Sections 1, 2, 3.4, 4 in place to document the new
     schema fields, the now-coded cross-check spine, the bundle-wins + vacuous_pass rejection rules, the
