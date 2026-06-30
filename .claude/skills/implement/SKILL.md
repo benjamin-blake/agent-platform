@@ -61,6 +61,43 @@ STOP and wait. Do not auto-rebase. If the human chooses (2), proceed with a logg
 
 If `main_freshness.status != "ok"`, this check cannot run -- surface the fetch failure to the human and continue.
 
+## Bundled Recommendation Relevance Re-check (Workflow Step 3 -- fires after plan load)
+
+Before writing any code, re-check every rec in the plan's `bundled_recommendations` field.
+A rec can become stale between `/plan` and `/implement` (target file deleted, decision
+ratified, a sibling plan already satisfied it). Implementing stale work wastes the session.
+
+### Protocol
+For each rec id in `bundled_recommendations`:
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+from scripts.ops_data_portal import propose_or_close_rec
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=True)
+det = (verdict == 'satisfied' and evidence.startswith('acceptance probe passed:'))
+proposal = propose_or_close_rec('rec-NNNN', verdict, evidence, deterministic=det)
+print(f'verdict={verdict} det={det}')
+if proposal: print('proposal:', proposal)
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; implement as planned.
+- **`satisfied` (deterministic -- acceptance probe passed)** -- `propose_or_close_rec` auto-closes
+  the rec via the portal. Remove it from the effective bundled list, skip its implementation step,
+  and record in chat: "rec-NNNN auto-closed as satisfied ([evidence]); skipping implementation."
+- **`satisfied` (semantic)** -- present the proposal command; wait for operator confirmation.
+  Do NOT skip implementation until operator explicitly confirms closure.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- present
+  the proposal command and wait for operator decision before removing from the implementation list.
+
+**Decision 55 compliance:** auto-closure fires ONLY for deterministic `satisfied`. All semantic
+verdicts route to the operator -- the agent never auto-acts on semantic judgment.
+
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
 After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
 
@@ -315,7 +352,7 @@ The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on ma
 ### Wait-for-CI: event-driven, never polled
 The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
 1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
-2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing.
+2. **End your turn.** Do NOT busy-wait: no background sleep timer, no manual status polling -- the harness forbids busy-waiting on external events. A single low-frequency (~1h) best-effort one-shot `send_later` backstop is permitted for a dropped signal-green comment (see AGENTS.md `## Git-ops procedure` step 4 for bounds and the harness-vs-repo server distinction); it is NOT a recurring poll loop (Decision 55).
 3. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`.github/workflows/ci.yml` lines 157-178, `continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment IS the pass wake signal. The comment is unverified: on wake, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
 4. On wake, confirm status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).

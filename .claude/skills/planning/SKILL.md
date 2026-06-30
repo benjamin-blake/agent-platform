@@ -181,6 +181,40 @@ Search `logs/.recommendations-log.jsonl` for open recommendations that align wit
 >
 > Want to bundle any into this session? Say 'include rec-XXX' or 'skip'."
 
+## Recommendation Relevance Gate (Workflow Step 3, fires before bundling any rec)
+
+Before adding any open recommendation to the plan's `bundled_recommendations` list, re-check
+its relevance using `scripts/rec_relevance.py`. Recs can go stale between filing and the
+current session (target file deleted, decision ratified, sibling plan already fixed it).
+
+### Protocol
+For each candidate rec identified via "Suggest Aligned Recommendations":
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=False)
+print(verdict, '|', evidence[:120])
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; offer to bundle normally.
+- **`satisfied`** -- do NOT bundle. Surface the evidence and the proposal command from
+  `propose_or_close_rec(rec_id, 'satisfied', evidence, deterministic=False)` (planning time:
+  never deterministic). Wait for operator to run the closure command, then proceed without bundling.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- do NOT
+  bundle. Present the `propose_or_close_rec` output and wait for operator decision. Remove from
+  candidate list regardless of outcome.
+
+**Constraints:**
+- `run_acceptance_probe=False` is mandatory at planning time (Decision 55: no auto-closure from
+  semantic judgment). Acceptance probes run only at `/implement` time.
+- Never call `_make_reader()` inside this gate (Decision 88: use read-cache only).
+
 ## Documentation Artefact Design
 
 This repository is agent-first. When a plan creates or modifies documentation artefacts,
