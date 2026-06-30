@@ -6,10 +6,7 @@ Covers all 8 relevance verdicts and the deterministic-vs-semantic closure split.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from scripts.rec_relevance import (
     RELEVANCE_VERDICTS,
@@ -23,7 +20,16 @@ from scripts.rec_relevance import (
 
 class TestRelevanceVerdictsEnum:
     def test_has_all_eight_verdicts(self):
-        expected = {"relevant", "satisfied", "superseded", "duplicate", "contradicted", "stale_target", "blocked_by_decision", "unknown"}
+        expected = {
+            "relevant",
+            "satisfied",
+            "superseded",
+            "duplicate",
+            "contradicted",
+            "stale_target",
+            "blocked_by_decision",
+            "unknown",
+        }
         assert RELEVANCE_VERDICTS == expected
 
     def test_is_frozenset(self):
@@ -153,7 +159,14 @@ class TestScanDecisionContradiction:
 
 class TestEvaluateRecRelevance:
     def _base_rec(self, **kwargs) -> dict:
-        defaults: dict = {"id": "rec-001", "title": "Test recommendation", "file": None, "acceptance": None, "context": None, "created_timestamp": None}
+        defaults: dict = {
+            "id": "rec-001",
+            "title": "Test recommendation",
+            "file": None,
+            "acceptance": None,
+            "context": None,
+            "created_timestamp": None,
+        }
         defaults.update(kwargs)
         return defaults
 
@@ -287,7 +300,14 @@ class TestDeterministicVsSemanticClosureSplit:
     """
 
     def test_deterministic_satisfied_evidence_prefix(self, tmp_path):
-        rec = {"id": "rec-001", "title": "t", "file": None, "acceptance": "echo ok", "context": None, "created_timestamp": None}
+        rec = {
+            "id": "rec-001",
+            "title": "t",
+            "file": None,
+            "acceptance": "echo ok",
+            "context": None,
+            "created_timestamp": None,
+        }
         with patch("scripts.rec_relevance._run_acceptance_probe", return_value=True):
             verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=True, repo_root=tmp_path)
         assert verdict == "satisfied"
@@ -297,7 +317,14 @@ class TestDeterministicVsSemanticClosureSplit:
         existing = tmp_path / "scripts" / "foo.py"
         existing.parent.mkdir(parents=True)
         existing.write_text("# ok", encoding="utf-8")
-        rec = {"id": "rec-001", "title": "t", "file": "scripts/foo.py", "acceptance": None, "context": None, "created_timestamp": "2026-01-01T00:00:00+00:00"}
+        rec = {
+            "id": "rec-001",
+            "title": "t",
+            "file": "scripts/foo.py",
+            "acceptance": None,
+            "context": None,
+            "created_timestamp": "2026-01-01T00:00:00+00:00",
+        }
         commits = [{"sha": "cafecafe", "date": "2026-06-01T00:00:00+00:00", "files": ["scripts/foo.py"]}]
         verdict, evidence = evaluate_rec_relevance(rec, recent_commits=commits, repo_root=tmp_path)
         assert verdict == "satisfied"

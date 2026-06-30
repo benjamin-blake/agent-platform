@@ -379,6 +379,7 @@ class CandidateDecision(BaseModel):
     detail: str = ""
     gates: list[str] = Field(default_factory=list)
     state: str = "pending"
+    ratified_as: str | None = None
     decision_required_before: list[str] | str | None = None
     bootstrap_allowance: bool = False
     filed_via: str | None = None

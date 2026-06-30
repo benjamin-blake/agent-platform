@@ -195,7 +195,7 @@ from scripts.rec_relevance import evaluate_rec_relevance
 import json, pathlib
 cache = pathlib.Path('logs/.recommendations-log.jsonl')
 rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
-rec = next((r for r in rows if r.get('rec_id') == 'rec-NNNN'), None)
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
 verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=False)
 print(verdict, '|', evidence[:120])
 "

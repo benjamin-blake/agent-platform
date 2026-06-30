@@ -76,7 +76,7 @@ from scripts.ops_data_portal import propose_or_close_rec
 import json, pathlib
 cache = pathlib.Path('logs/.recommendations-log.jsonl')
 rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
-rec = next((r for r in rows if r.get('rec_id') == 'rec-NNNN'), None)
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
 verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=True)
 det = (verdict == 'satisfied' and evidence.startswith('acceptance probe passed:'))
 proposal = propose_or_close_rec('rec-NNNN', verdict, evidence, deterministic=det)
