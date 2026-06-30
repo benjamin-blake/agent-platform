@@ -123,7 +123,7 @@ variable "athena_data_scanned_gb_limit" {
 variable "data_pipeline_schedule_enabled" {
   description = "Whether the daily EventBridge schedule is enabled (set false to pause)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 # Platform Account Variables
