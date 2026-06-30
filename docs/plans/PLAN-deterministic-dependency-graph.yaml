@@ -1,0 +1,221 @@
+schema_version: 1
+slug: "deterministic-dependency-graph"
+intent: >-
+  Build the deterministic, compute-on-demand first-party import-graph "oracle" (ast + networkx) that
+  Decision 80 noted is computable but unowned, giving agents and the human a sound structural answer to
+  "what imports X", "transitive closure of Y", and "is Z reachable" -- a foundational data layer for the
+  "agent context is a first-class resource" driver (T3.13 dead-code, T3.14 context-budget).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-deterministic-dependency-graph.yaml
+phase: >-
+  Platform tier T3 (verifier harness / context-leanness group). Item T3.12, keystone of the T3.11-T3.14
+  dependency-graph/dead-code/context-budget chain; depends_on [] (eligible now). Closes all five T3.12 exit
+  criteria.
+scope:
+  - file: scripts/dependency_graph.py
+    action: Create
+    purpose: >-
+      ast + networkx first-party import-graph builder. Stable importable API (build_graph, roots,
+      reverse_deps, forward_closure, reachable_from_roots, to_export_dict, check_export_freshness) PLUS a CLI
+      (--reverse-deps, --forward-closure, --reachable, --granularity {module,symbol}, --export, --blind-spots).
+      Deterministic sorted JSON output; KNOWN_UNSOUND constant enumerating dynamic-dispatch blind spots.
+  - file: scripts/extract_imports.py
+    action: Modify
+    purpose: >-
+      Add extract_first_party_imports(file_path, roots=("src","scripts")) covering src.* + scripts.* absolute
+      imports AND intra-package relative imports (ast.ImportFrom.level > 0 resolved to absolute module names).
+      Leave extract_src_imports() UNCHANGED for its existing consumer (the code-review skill).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a thin validate_dependency_graph_freshness(failed) wrapper delegating to
+      dependency_graph.check_export_freshness(); register it in the full (post-merge) check run-list, NOT the
+      --pre fast tier (Decision 73 non-wedging). No-op when no committed export exists.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Raise scripts/validate.py's pinned SLOC budget by the freshness-wrapper delta via a manual reviewable
+      edit (the only sanctioned way to raise; the ratchet is shrink-only) with a justification comment citing
+      this plan. Decision 102.
+  - file: tests/test_dependency_graph.py
+    action: Create
+    purpose: >-
+      Unit tests over a fixture module tree with known edges (including a relative import and a scripts.* edge):
+      build_graph, roots assembly, reverse_deps, forward_closure, reachable_from_roots, deterministic export,
+      symbol-granularity enrichment, KNOWN_UNSOUND surfacing, and freshness-guard drift detection.
+  - file: tests/test_extract_imports.py
+    action: Modify
+    purpose: >-
+      Add tests for extract_first_party_imports (scripts.* absolute, relative-import resolution, mixed); assert
+      the existing extract_src_imports tests still pass unchanged (backward-compat for code-review).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the new validate_dependency_graph_freshness wrapper (no-op-when-absent path and drift-detected path)
+      so the modified validate.py meets diff-line coverage.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A compute-on-demand CLI builds a first-party import graph (nodes=modules, edges=imports) over src/ and
+    scripts/ via ast -- resolving absolute src.*/scripts.* imports AND intra-package relative imports
+    (ImportFrom.level > 0) so relative edges are not silently lost -- deterministically, with no network and no
+    LLM call.
+  - >-
+    The graph answers reverse-dependency ("what imports X") and forward-closure ("transitive imports of Y") for
+    any first-party module, both via importable API and CLI.
+  - >-
+    Function/symbol-level edges are derivable as an enrichment layer (--granularity symbol); dynamic-dispatch
+    blind spots (getattr, string-keyed dispatch, importlib.spec_from_file_location, and the schedule.yaml ->
+    prompt_path -> handler scheduled-agent indirection) are enumerated in a machine-parseable KNOWN_UNSOUND
+    constant surfaced via CLI (--blind-spots) and JSON export metadata -- documented, not silently dropped.
+  - >-
+    The root/boundary set is assembled from per-Lambda manifests (handlers + includes, INCLUDING status:stub
+    manifests) + any module with a __main__/main() entrypoint + pytest tests (tests/test_*.py) + the
+    -m scripts.X CLI-invocation surfaces in .github/workflows/*.yml and .claude/**/*.md, honouring Decision 79
+    no-transitive-resolution (roots declared, not inferred repo-wide).
+  - >-
+    Default mode is compute-on-demand (no committed graph file written); the optional --export is drift-guarded
+    by the validate.py freshness check, which is a no-op when no committed export exists and fails on drift when
+    one does.
+  - >-
+    Output is machine-parseable deterministic JSON (sorted nodes/edges, no wall-clock fields in guarded content)
+    for agent consumption and human inspection.
+  - >-
+    extract_src_imports() behaviour is unchanged (its code-review consumer is unaffected); dependency_graph.py
+    stays under the 500-SLOC cap and validate.py stays within its (raised, justified) budget.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: extract_imports unit tests pass (new first-party + relative extraction; unchanged extract_src_imports)
+    command: bin/venv-python -m pytest tests/test_extract_imports.py -q
+    expected: All tests pass, including new extract_first_party_imports cases and the unchanged extract_src_imports cases
+    fix_if: Relative-import resolution wrong, scripts.* missed, or extract_src_imports behaviour drifted
+  - step: 2
+    phase: pre-deploy
+    action: dependency_graph unit tests pass over a fixture tree with known edges (incl. a relative + a scripts.* edge)
+    command: bin/venv-python -m pytest tests/test_dependency_graph.py -q
+    expected: All tests pass -- build_graph, roots, reverse_deps, forward_closure, reachable, export determinism, symbol layer, freshness drift
+    fix_if: Edge construction, root assembly, or query traversal returns wrong nodes
+  - step: 3
+    phase: pre-deploy
+    action: Real-repo reverse-dependency is correct (function-local imports caught via ast.walk)
+    command: bin/venv-python -m scripts.dependency_graph --reverse-deps scripts.lambda_manifest
+    expected: JSON list of importers includes both "scripts.build_lambda" and "scripts.validate"
+    fix_if: Nested/function-local ImportFrom nodes missed, or edge direction inverted
+  - step: 4
+    phase: pre-deploy
+    action: Real-repo forward-closure is correct
+    command: bin/venv-python -m scripts.dependency_graph --forward-closure scripts.build_lambda
+    expected: Transitive-imports list includes "scripts.lambda_manifest"
+    fix_if: Forward traversal (descendants) returns wrong set or omits a direct import
+  - step: 5
+    phase: pre-deploy
+    action: Reachability from the declared root set is correct
+    command: bin/venv-python -m scripts.dependency_graph --reachable scripts.lambda_manifest
+    expected: Reports reachable=true (rooted via the -m scripts.validate CLI surface that imports it)
+    fix_if: Root set omits a CLI-invocation/manifest/main()/pytest surface, or reachability search is wrong
+  - step: 6
+    phase: pre-deploy
+    action: Export is deterministic (byte-identical across runs)
+    command: bin/venv-python -m scripts.dependency_graph --export /tmp/g1.json && bin/venv-python -m scripts.dependency_graph --export /tmp/g2.json && diff /tmp/g1.json /tmp/g2.json
+    expected: diff exits 0 (no differences); guarded content carries no wall-clock/random field
+    fix_if: Unsorted nodes/edges, set-iteration ordering, or a timestamp leaked into guarded content
+  - step: 7
+    phase: pre-deploy
+    action: Blind spots and symbol layer are surfaced, not dropped
+    command: bin/venv-python -m scripts.dependency_graph --blind-spots && bin/venv-python -m scripts.dependency_graph --export /tmp/g.json && grep -q '"known_unsound"' /tmp/g.json
+    expected: --blind-spots lists getattr, string-keyed dispatch, importlib.spec_from_file_location, and the schedule.yaml->prompt_path->handler indirection; export JSON contains a "known_unsound" metadata key
+    fix_if: KNOWN_UNSOUND missing a documented category or not embedded in export metadata
+  - step: 8
+    phase: pre-deploy
+    action: Freshness guard catches drift in a committed export and is a no-op otherwise (validate.py guard exercised via its tests)
+    command: bin/venv-python -m pytest tests/test_validate.py::TestDependencyGraphFreshness -q
+    expected: Drift-detected case fails the guard; absent-export case passes (no-op)
+    fix_if: Guard does not recompute-and-compare, or wedges CI when no export is committed
+  - step: 9
+    phase: pre-deploy
+    action: Test coverage, SLOC budgets, and the full fast gate pass
+    command: bin/venv-python -m scripts.test_coverage_checker --check-coverage && bin/venv-python -m scripts.validate --pre
+    expected: 0 missing test files and new lines covered; validate_sloc_limits passes (dependency_graph.py < 500 SLOC, validate.py within raised budget); --pre exits 0 with the freshness guard a no-op
+    fix_if: A modified source file lacks covered new lines, dependency_graph.py exceeds 500 SLOC, or the validate.py budget delta was not registered
+constraints:
+  - Pure Python only -- ast (stdlib) + networkx (installed); no network, no LLM, no subprocess to external tools (Decision 80 mechanism endorsement).
+  - Honour Decision 79 no-transitive-resolution -- the root/boundary set is the explicit declared surfaces (manifests incl. status:stub, main()/__main__, pytest, -m scripts.X), never inferred repo-wide.
+  - Default is compute-on-demand -- write no file unless --export is passed (Decision 80 lean posture against committed generated-file drift surfaces).
+  - No new standing prose-architecture doc under docs/ -- the dynamic-dispatch blind-spot enumeration lives in the machine-parseable KNOWN_UNSOUND constant + JSON export metadata (Decision 86). The optional export target is a JSON data file (docs/dependency-graph.json), not prose, and is committed only at operator discretion.
+  - Leave extract_src_imports() unchanged -- add a new generalized function so the code-review skill consumer is unaffected; do NOT rewire code-review in this plan (that is a separate follow-on, out of T3.12 scope).
+  - Keep dependency_graph.py under the 500-SLOC cap (Decision 102/43); the symbol-enrichment layer is minimal-by-design (statically-resolvable call edges only) -- the criterion requires symbol edges be derivable, not exhaustive. Trim the symbol layer first if the cap is threatened.
+  - Raising scripts/validate.py's SLOC budget is a manual reviewable edit to config/sloc_budgets.yaml with a justification comment (the ratchet only lowers via --update-sloc-budgets); register the freshness-wrapper delta, do not auto-ratchet.
+  - The validate.py freshness check registers in the FULL post-merge run-list, not --pre (Decision 73 non-wedging fast loop).
+  - validate.py is the single source of truth for checks -- the freshness guard is added there before any CI wiring; do not add a bare CI step.
+  - No rescue agents or workaround loops (Decision 55) -- on an unrecoverable VP failure, stop and RCA.
+context:
+  - >-
+    Decision 80 (Build-Tooling Direction) names this exact oracle as "already computable (ast/networkx,
+    installed)" and its lean do-less posture backs compute-on-demand over a committed artifact; the mechanism
+    choice (extend in-repo extract_imports.py vs adopt grimp) is an implement-time frame-challenge (Decision 75)
+    -- this plan selects the in-repo ast+networkx path for root-set control and zero new heavy dependency.
+  - >-
+    Decision 79 governs the root set (per-Lambda manifests as SSOT, no-transitive-resolution). Concrete surfaces
+    grounded at planning time: 17 unique -m scripts.X invocations across .github/workflows + .claude; 51 modules
+    with __main__ guards in scripts/+src/; manifest handlers/includes via scripts.lambda_manifest.load_all(). No
+    status:stub manifests exist today, but the design roots them for forward-compatibility.
+  - >-
+    Consumer wiring is committed in the roadmap and this graph will NOT be orphaned: T3.13 (depends_on [T3.12])
+    lists scripts/dependency_graph.py in files_in_scope as "consumed" and computes dead-code as
+    graph-unreachable-from-roots; T3.14 (depends_on [T3.12, T3.13]) computes reachable-vs-total SLOC over it.
+    T3.13's only dependency is T3.12, so it is immediately eligible once this lands. The stable importable API
+    (not just a CLI) is the deliberate anti-orphaning lever so the downstream items consume the library directly.
+  - >-
+    Decision 102 (SLOC ratchet, amends 43): validate.py is pinned at 3238 with no headroom, so the freshness
+    wrapper is kept thin (logic lives in dependency_graph.check_export_freshness) and the budget is raised by the
+    delta via a manual reviewable edit. The decision-scout gate flagged this as a NOTE (accepted, no pivot).
+  - >-
+    ast.walk finds ImportFrom nodes at any nesting depth, so function-local imports (e.g. build_lambda's
+    `from scripts.lambda_manifest import ...`) are captured -- this is load-bearing for VP steps 3-4.
+  - >-
+    networkx 3.6.1 is installed (verified); it is transitive/unpinned and T3.11's lockfile captures the pin.
+    This item does not pin it (depends_on is []).
+  - >-
+    Branch claude/deterministic-dependency-graph-gcoqlj is 0 commits behind origin/main at planning time; no
+    Scope-file overlap with main divergence.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/deterministic-dependency-graph-gcoqlj)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS 80, 79, 86, 75, 102/43, 55 understood (via decision-scout gate)
+  - All files in scope located and readable (dependency_graph.py + test are new)
+  - Acceptance criteria understood and verifiable
+  - networkx import confirmed available
+execution_steps:
+  - >-
+    Modify scripts/extract_imports.py -- add extract_first_party_imports(file_path, roots=("src","scripts"))
+    resolving absolute src.*/scripts.* AND relative imports (ast.ImportFrom.level > 0) to absolute module names;
+    leave extract_src_imports unchanged.
+  - >-
+    Create scripts/dependency_graph.py -- importable API (build_graph, roots, reverse_deps, forward_closure,
+    reachable_from_roots, to_export_dict, check_export_freshness) over a networkx.DiGraph; assemble roots from
+    manifests (incl. status:stub) + __main__/main() + pytest + -m scripts.X surfaces; deterministic sorted JSON;
+    KNOWN_UNSOUND constant; CLI (--reverse-deps, --forward-closure, --reachable, --granularity, --export,
+    --blind-spots). Keep under 500 SLOC.
+  - >-
+    Add the minimal symbol-enrichment layer (--granularity symbol) -- function/class def nodes + statically
+    resolvable call edges; enumerate dynamic-dispatch blind spots in KNOWN_UNSOUND.
+  - >-
+    Modify scripts/validate.py -- add thin validate_dependency_graph_freshness(failed) delegating to
+    dependency_graph.check_export_freshness(); register in the FULL run-list only (not --pre).
+  - >-
+    Modify config/sloc_budgets.yaml -- raise scripts/validate.py budget by the wrapper delta with a justification
+    comment citing this plan.
+  - >-
+    Create tests/test_dependency_graph.py and extend tests/test_extract_imports.py + tests/test_validate.py to
+    cover all new code paths at 100% diff-line coverage.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass; on an unrecoverable failure stop and
+    RCA (Decision 55), do not inline-patch around it.
+  - 'Report: what was implemented, verification results, and that T3.13 is now eligible.'
+work_areas: []
+rollback: >-
+  All scope files are additive or thin modifications; revert the branch commit. No infra, no deploy, no data
+  migration. The default workflow commits no export file, so there is no generated artifact to clean up.
