@@ -46,25 +46,17 @@ def _make_fixture(tmp_path: Path) -> Path:
     (tmp_path / "src" / "pkg").mkdir(parents=True)
     (tmp_path / "src" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "src" / "pkg" / "module_a.py").write_text(
-        "from scripts.helper import do_stuff\n", encoding="utf-8"
-    )
-    (tmp_path / "src" / "pkg" / "module_b.py").write_text(
-        "from . import module_a\n", encoding="utf-8"
-    )
+    (tmp_path / "src" / "pkg" / "module_a.py").write_text("from scripts.helper import do_stuff\n", encoding="utf-8")
+    (tmp_path / "src" / "pkg" / "module_b.py").write_text("from . import module_a\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "scripts" / "helper.py").write_text(
-        "def do_stuff():\n    pass\n", encoding="utf-8"
-    )
+    (tmp_path / "scripts" / "helper.py").write_text("def do_stuff():\n    pass\n", encoding="utf-8")
     (tmp_path / "scripts" / "entrypoint.py").write_text(
         "from scripts.helper import do_stuff\n\ndef main():\n    do_stuff()\n",
         encoding="utf-8",
     )
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_stuff.py").write_text(
-        "def test_placeholder():\n    pass\n", encoding="utf-8"
-    )
+    (tmp_path / "tests" / "test_stuff.py").write_text("def test_placeholder():\n    pass\n", encoding="utf-8")
     return tmp_path
 
 
