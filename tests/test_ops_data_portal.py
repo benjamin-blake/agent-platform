@@ -1996,3 +1996,109 @@ class TestCiRcaEvidenceDispute:
         from scripts.executor.rec_write_guidance import validate_source
 
         validate_source("ci_rca_evidence_dispute")  # should not raise
+
+
+class TestProposeOrCloseRec:
+    """Tests for propose_or_close_rec (T3.8 / CD.36 close_proposed lifecycle support)."""
+
+    def test_deterministic_satisfied_auto_closes(self, monkeypatch) -> None:
+        """Deterministic satisfied => update_rec called with status=closed and proof in resolution."""
+        import scripts.ops_data_portal as p
+
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            p, "update_rec", lambda rec_id, updates, profile=None: calls.append({"rec_id": rec_id, "updates": updates})
+        )
+
+        result = p.propose_or_close_rec("rec-001", "satisfied", "acceptance probe passed: echo ok", deterministic=True)
+        assert result is None
+        assert len(calls) == 1
+        assert calls[0]["rec_id"] == "rec-001"
+        assert calls[0]["updates"]["status"] == "closed"
+        assert "acceptance probe passed" in calls[0]["updates"]["resolution"]
+
+    def test_semantic_satisfied_yields_proposal_not_auto_close(self, monkeypatch) -> None:
+        """Semantic satisfied => proposal string returned, update_rec NOT called."""
+        import scripts.ops_data_portal as p
+
+        calls: list[dict] = []
+        monkeypatch.setattr(p, "update_rec", lambda rec_id, updates, profile=None: calls.append(rec_id))
+
+        result = p.propose_or_close_rec(
+            "rec-001", "satisfied", "semantic: file foo.py modified in abc12345", deterministic=False
+        )
+        assert result is not None
+        assert "rec-001" in result
+        assert "--status closed" in result
+        assert len(calls) == 0
+
+    def test_superseded_yields_proposal(self, monkeypatch) -> None:
+        """Semantic superseded => proposal string, update_rec NOT called."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        result = p.propose_or_close_rec("rec-002", "superseded", "semantic: closed sibling rec-001 title similarity >= 0.5")
+        assert result is not None
+        assert "rec-002" in result
+        assert "superseded" in result
+
+    def test_duplicate_yields_proposal(self, monkeypatch) -> None:
+        """Duplicate verdict => proposal string."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        result = p.propose_or_close_rec("rec-003", "duplicate", "semantic: open duplicate rec-999 title similarity >= 0.7")
+        assert result is not None
+        assert "duplicate" in result
+
+    def test_contradicted_yields_proposal(self, monkeypatch) -> None:
+        """Contradicted verdict => proposal string."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        result = p.propose_or_close_rec("rec-004", "contradicted", "Decision 5 is superseded")
+        assert result is not None
+        assert "contradicted" in result
+
+    def test_stale_target_yields_proposal(self, monkeypatch) -> None:
+        """Stale target verdict => proposal string (not auto-close)."""
+        import scripts.ops_data_portal as p
+
+        calls: list[dict] = []
+        monkeypatch.setattr(p, "update_rec", lambda rec_id, updates, profile=None: calls.append(rec_id))
+        result = p.propose_or_close_rec("rec-005", "stale_target", "target file absent: scripts/old.py")
+        assert result is not None
+        assert "stale_target" in result
+        assert len(calls) == 0
+
+    def test_blocked_by_decision_yields_proposal(self, monkeypatch) -> None:
+        """Blocked verdict => proposal string."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        result = p.propose_or_close_rec("rec-006", "blocked_by_decision", "Decision 7 is pending")
+        assert result is not None
+        assert "blocked_by_decision" in result
+
+    def test_relevant_returns_none(self, monkeypatch) -> None:
+        """Relevant verdict => no action (None returned)."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        assert p.propose_or_close_rec("rec-007", "relevant", "no resolution signals detected") is None
+
+    def test_unknown_returns_none(self, monkeypatch) -> None:
+        """Unknown verdict => no action (None returned)."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        assert p.propose_or_close_rec("rec-008", "unknown", "no signals available") is None
+
+    def test_evidence_with_quotes_escaped_in_proposal(self, monkeypatch) -> None:
+        """Evidence string with quotes is shell-safe in the proposal command."""
+        import scripts.ops_data_portal as p
+
+        monkeypatch.setattr(p, "update_rec", lambda *a, **k: None)
+        result = p.propose_or_close_rec("rec-009", "superseded", 'evidence with "quotes" inside')
+        assert result is not None
+        assert '\\"quotes\\"' in result

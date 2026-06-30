@@ -61,6 +61,43 @@ STOP and wait. Do not auto-rebase. If the human chooses (2), proceed with a logg
 
 If `main_freshness.status != "ok"`, this check cannot run -- surface the fetch failure to the human and continue.
 
+## Bundled Recommendation Relevance Re-check (Workflow Step 3 -- fires after plan load)
+
+Before writing any code, re-check every rec in the plan's `bundled_recommendations` field.
+A rec can become stale between `/plan` and `/implement` (target file deleted, decision
+ratified, a sibling plan already satisfied it). Implementing stale work wastes the session.
+
+### Protocol
+For each rec id in `bundled_recommendations`:
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+from scripts.ops_data_portal import propose_or_close_rec
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('rec_id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=True)
+det = (verdict == 'satisfied' and evidence.startswith('acceptance probe passed:'))
+proposal = propose_or_close_rec('rec-NNNN', verdict, evidence, deterministic=det)
+print(f'verdict={verdict} det={det}')
+if proposal: print('proposal:', proposal)
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; implement as planned.
+- **`satisfied` (deterministic -- acceptance probe passed)** -- `propose_or_close_rec` auto-closes
+  the rec via the portal. Remove it from the effective bundled list, skip its implementation step,
+  and record in chat: "rec-NNNN auto-closed as satisfied ([evidence]); skipping implementation."
+- **`satisfied` (semantic)** -- present the proposal command; wait for operator confirmation.
+  Do NOT skip implementation until operator explicitly confirms closure.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- present
+  the proposal command and wait for operator decision before removing from the implementation list.
+
+**Decision 55 compliance:** auto-closure fires ONLY for deterministic `satisfied`. All semantic
+verdicts route to the operator -- the agent never auto-acts on semantic judgment.
+
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
 After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
 

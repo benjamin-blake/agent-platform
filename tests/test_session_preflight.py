@@ -2201,6 +2201,114 @@ class TestPrintCiRcaRecsWithCorrelation:
         assert "(none)" in output
 
 
+class TestCorrelateRecsWithCommits:
+    """Tests for correlate_recs_with_commits() -- general engine (T3.8)."""
+
+    def _rec(self, rec_id: str, file: str = "scripts/foo.py", created: str = "2026-06-10T10:00:00Z") -> dict:
+        return {"id": rec_id, "file": file, "title": "Some recommendation", "created_timestamp": created}
+
+    def _commit(self, sha: str, date: str, files: list[str]) -> dict:
+        return {"sha": sha, "date": date, "subject": f"fix: {sha}", "files": files}
+
+    def test_file_correlation_marks_likely_resolved(self) -> None:
+        rec = self._rec("rec-001", file="scripts/foo.py")
+        commit = self._commit("abc12345", "2026-06-11T10:00:00+00:00", ["scripts/foo.py"])
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_id_in_commit_subject_marks_likely_resolved(self) -> None:
+        rec = self._rec("rec-042")
+        commit = {"sha": "bbb", "date": "2026-06-11T10:00:00+00:00", "subject": "fix: resolves rec-042", "files": []}
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+
+    def test_no_match_marks_unresolved(self) -> None:
+        rec = self._rec("rec-002", file="scripts/bar.py")
+        commit = self._commit("ccc12345", "2026-06-11T10:00:00+00:00", ["scripts/other.py"])
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_signal(self) -> None:
+        rec = self._rec("rec-003", file="scripts/foo.py", created="2026-06-10T10:00:00Z")
+        rec["title"] = "Fix foo module failure"
+        sibling = {
+            "id": "rec-sib",
+            "file": "scripts/foo.py",
+            "title": "Fix foo module error",
+            "last_updated_timestamp": "2026-06-11T10:00:00Z",
+        }
+        result = _preflight.correlate_recs_with_commits([rec], [], closed_recs=[sibling])
+        assert len(result["likely_resolved"]) == 1
+
+    def test_no_reader_call_made(self) -> None:
+        """Serving from read-cache only; no warehouse re-fetch (Decision 88)."""
+        rec = self._rec("rec-004", file="scripts/foo.py")
+        commit = self._commit("ddd12345", "2026-06-11T10:00:00+00:00", ["scripts/foo.py"])
+        with patch("session_preflight._make_reader") as mock_reader:
+            _preflight.correlate_recs_with_commits([rec], [commit])
+        mock_reader.assert_not_called()
+
+    def test_correlate_ci_rca_wrapper_delegates(self) -> None:
+        """correlate_ci_rca_with_main delegates to correlate_recs_with_commits."""
+        rec = self._rec("rec-005", file="scripts/ci.py")
+        commit = self._commit("eee12345", "2026-06-11T10:00:00+00:00", ["scripts/ci.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit], closed_ci_rca_recs=None)
+        assert result["likely_resolved"] == [rec]
+
+
+class TestSurfaceQueueRelevanceTriage:
+    """Tests for surface_queue_relevance_triage() (T3.8 queue-wide surfacing)."""
+
+    def _row(self, rec_id: str, status: str, source: str, file: str, created: str) -> dict:
+        return {
+            "id": rec_id,
+            "status": status,
+            "source": source,
+            "file": file,
+            "title": f"title {rec_id}",
+            "created_timestamp": created,
+            "last_updated_timestamp": created,
+        }
+
+    def test_returns_likely_resolved_for_open_non_ci_rca(self) -> None:
+        cache = [
+            self._row("rec-101", "open", "planning", "scripts/foo.py", "2026-06-10T10:00:00Z"),
+        ]
+        commits = [{"sha": "abc12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/foo.py"]}]
+        result = _preflight.surface_queue_relevance_triage(cache, commits)
+        assert any(r["id"] == "rec-101" for r in result)
+
+    def test_ci_rca_recs_excluded_by_default(self) -> None:
+        cache = [
+            self._row("rec-200", "open", "ci_rca", "scripts/foo.py", "2026-06-10T10:00:00Z"),
+        ]
+        commits = [{"sha": "abc12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/foo.py"]}]
+        result = _preflight.surface_queue_relevance_triage(cache, commits)
+        assert all(r["id"] != "rec-200" for r in result)
+
+    def test_no_reader_call_during_surfacing(self) -> None:
+        """Surfacing is read-cache only; no DuckLake reader call (Decision 88)."""
+        cache = [self._row("rec-300", "open", "planning", "scripts/bar.py", "2026-06-10T10:00:00Z")]
+        commits = [{"sha": "def12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/bar.py"]}]
+        with patch("session_preflight._make_reader") as mock_reader:
+            _preflight.surface_queue_relevance_triage(cache, commits)
+        mock_reader.assert_not_called()
+
+    def test_cap_limits_results(self) -> None:
+        cache = [self._row(f"rec-{i}", "open", "planning", f"scripts/f{i}.py", "2026-06-01T00:00:00Z") for i in range(20)]
+        commits = [
+            {
+                "sha": "fff12345",
+                "date": "2026-06-10T00:00:00+00:00",
+                "subject": "fix all",
+                "files": [f"scripts/f{i}.py" for i in range(20)],
+            }
+        ]
+        result = _preflight.surface_queue_relevance_triage(cache, commits, cap=5)
+        assert len(result) <= 5
+
+
 class TestSyncCollapse:
     """sync_ops.sync is called exactly once; the standalone _sync_ops_pull is not called in main()."""
 
