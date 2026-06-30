@@ -1,0 +1,305 @@
+schema_version: 1
+slug: "ci-rca-vacuous-pass-evidence"
+intent: >-
+  Strengthen the self-improving loop's RCA signal quality (North Star: code/workflow/tooling that
+  improves from captured failures) by adding the deterministic gate-escape evidence the rec-2423/
+  rec-2424 incident proved was missing, so CI-RCA recs forward-fix the real defect instead of
+  blaming author discipline.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-vacuous-pass-evidence.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract -- deterministic depth via structured schema
+  + evidence bundle), post-incident hardening wave. P1 of the 3-plan sequence
+  (P1 -> P2[c7+c9+c10] -> P3[c12]); closes c8 + c11. Product phase: Platform (automation
+  infrastructure), runs parallel to the product roadmap.
+closes_criteria:
+  - "T1.13:c8"
+  - "T1.13:c11"
+scope:
+  - file: scripts/ci_rca_vacuous_pass.py
+    action: Create
+    purpose: >-
+      New module holding the deterministic gate-escape computations: (a) parse the pytest
+      collection summary from the already-fetched failing-run log into a tri-state vacuous_pass
+      (true|false|undetermined); (b) reconstruct the merged diff via `git diff HEAD^ HEAD` and
+      replay --pre's changed-tests selection to compute merge_gate_test_coverage; (c) detect
+      coverage removal via `git diff --diff-filter=D HEAD^ HEAD`. Isolated from ci_rca_evidence.py
+      to keep that file under the SLOC limit and give the new logic a clean unit-test surface.
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Enumerate one bundle per failed check (generate_bundles currently emits only the first);
+      wire the four new bundle fields (vacuous_pass, merge_gate_test_coverage,
+      gate_is_postmerge_canary, coverage_regression) into _assemble_core; bump bundle
+      schema_version 1 -> 2. These are bundle INPUT fields only -- escape_mode and the file_rec
+      cross-check are P2.
+  - file: scripts/ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Add a multi-failure enumerator (classify_failures, plural) returning a list of
+      (failure_category, failed_check, classification_source) for every distinct failed check in
+      the run, so ci_rca_evidence can emit one bundle each. The single-failure classify_failure
+      is retained for backward compatibility; per-check classification QUALITY improvements
+      (prefer-jobs-JSON, new categories test_collection_empty/gate_escape) stay in P2/c9.
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Set checkout fetch-depth: 2 so HEAD^ exists for the merged-diff reconstruction; restructure
+      so failure classification runs before the dedup guard and the dedup status context is
+      per-failure-category (ci-rca/<workflow-slug>/<category>) so a real regression co-occurring
+      with a SLOC line is not dedup-masked. Preserve the existing Decision 74 install / fetch /
+      workflow_dispatch / fork-PR-gate elements unchanged.
+  - file: tests/test_ci_rca_vacuous_pass.py
+    action: Create
+    purpose: >-
+      Unit tests for the new module: vacuous_pass tri-state (picked-noop=true, all-integration-
+      deselected=false, unparseable=undetermined), merge_gate_test_coverage selection-membership
+      against fixture diffs, coverage_regression on a deleted-test fixture, and HEAD^-unavailable
+      fail-loud paths.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Extend the existing bundle tests to assert the four new fields are present, schema_version is
+      2, and N-failure enumeration emits N bundles with distinct sha256 for a multi-failure
+      fixture log.
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: Cover classify_failures enumeration (single, multiple, and zero-match fallback).
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Amend Section 3.3 (evidence_bundle.json output) to document the four new fields and
+      schema_version=2, and note N-failure enumeration is now implemented. Grandfathered doc --
+      amend in place, create NO new INTENT/prose doc (Decision 86 intent-doc-freeze guard).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Append a progress_note to T1.13 recording the P1 landing (bundle input fields + N-failure
+      enumeration + dedup-key fix). Criterion status flips for c8/c11 happen in /implement's
+      bookkeeping walk on a verified VP pass, never here.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    (c8) ci_rca_evidence emits a tri-state vacuous_pass field: a fixture failing-run log with
+    "collected 0 items" and no deselection yields vacuous_pass=true; a fixture log where the only
+    changed test is all-integration ("collected 0 items / N deselected") yields vacuous_pass=false;
+    a log with no parseable pytest collection summary yields vacuous_pass="undetermined" (never
+    silently false).
+  - >-
+    (c11.i) The bundle emits merge_gate_test_coverage derived from `git diff HEAD^ HEAD` and the
+    --pre changed-tests regex (tests/.*test_[^/]+\.py$ minus -m "not integration"); a source-only
+    merged diff yields not-selected, a changed-unit-test diff yields selected, and an absent HEAD^
+    yields "undetermined".
+  - >-
+    (c11) The bundle emits gate_is_postmerge_canary=true for CI / Main Canary workflow failures and
+    coverage_regression computed via `git diff --diff-filter=D HEAD^ HEAD`.
+  - >-
+    (c11.ii) generate_bundles emits one bundle per failed check for a multi-failure fixture
+    (distinct sha256 per bundle, shared workflow_run_id); the single-failure path still emits
+    exactly one bundle.
+  - >-
+    (c11.ii) ci-rca.yml dedups per (workflow, failure_category): two distinct failure categories on
+    one commit produce two un-collapsed status contexts, and the checkout uses fetch-depth: 2.
+  - >-
+    The bundle schema_version is 2; existing readers tolerate the additive fields; the
+    canonical-JSON sha256 remains stable across runs for an identical logical bundle.
+  - >-
+    docs/INTENT-ci-rca-methodology.md Section 3.3 documents the four new fields without creating a
+    new doc; validate_intent_doc_freeze stays green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      vacuous_pass tri-state -- exercise the parser against three crafted fixture logs
+      (picked-noop, all-integration-deselected, unparseable).
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_vacuous_pass.py -k "vacuous_pass" -v
+    expected: >-
+      Tests assert true / false / "undetermined" respectively; the unparseable case never returns
+      false.
+    fix_if: >-
+      Parser returns false on an unparseable log (silent-false bug -- violates c8/Decision 55
+      fail-loud), or conflates deselected with collected (all-integration false-positive).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      merge_gate_test_coverage -- run the selection-membership replay against fixture merged diffs
+      using a mocked `git diff HEAD^ HEAD`.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_vacuous_pass.py -k "merge_gate or coverage" -v
+    expected: >-
+      source-only diff -> not selected; changed-unit-test diff -> selected; all-integration changed
+      test -> selected-but-deselected; deleted-test diff -> coverage_regression=true; absent HEAD^
+      -> "undetermined".
+    fix_if: >-
+      The replay uses get_changed_files()/origin/main (empty post-squash) instead of HEAD^ HEAD, or
+      misses deleted paths (get_changed_files filters them out), or returns a concrete value when
+      HEAD^ is absent.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      N-failure enumeration + bundle assembly -- generate bundles from a multi-failure fixture log
+      and a single-failure fixture log.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_evidence.py -k "enumerat or multi or schema_version or new_fields" -v
+    expected: >-
+      Multi-failure fixture yields N bundles with distinct sha256 and shared workflow_run_id;
+      single-failure yields exactly one; every bundle carries schema_version=2 and the four new
+      fields.
+    fix_if: >-
+      Only the first failure is bundled (regression of the current single-bundle behaviour), sha256
+      collides across bundles, or a new field is missing.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      End-to-end bundle emission -- run the real CLI against a fixture log + jobs file in a temp
+      git repo with a real HEAD^ to prove the fields populate from live `git diff`, not just mocks.
+    command: >-
+      bin/venv-python -m scripts.ci_rca_evidence --log-file tests/fixtures/ci_rca/vacuous_collected0.log --jobs-file tests/fixtures/ci_rca/jobs_single.json --workflow-name CI --workflow-run-id 999 --emit-dir /tmp/circa-vp --print-bundle | grep -E '"vacuous_pass"|"merge_gate_test_coverage"|"gate_is_postmerge_canary"|"coverage_regression"|"schema_version": 2'
+    expected: >-
+      Printed bundle JSON contains all four new fields and schema_version 2; BUNDLE_SHA is emitted.
+    fix_if: >-
+      CLI errors, omits a field, or emits schema_version 1. (If the fixture dir layout differs,
+      adjust the fixture paths -- the assertion is the field presence, not the exact path.)
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Workflow + contract guards stay green -- the ci-rca.yml edits must not regress the trigger /
+      workflow-safety / taxonomy-coverage validators.
+    command: >-
+      bin/venv-python -m scripts.validate --pre 2>&1 | grep -E "validate_ci_rca_trigger|validate_workflow_agent_safety|validate_ci_rca_taxonomy|Tests \(pytest\)|FAIL|PASS" | tail -40
+    expected: >-
+      validate_ci_rca_trigger, validate_workflow_agent_safety, and validate_ci_rca_taxonomy pass;
+      the changed test files run and pass; no new failures.
+    fix_if: >-
+      The per-category dedup restructure breaks the trigger guard's expected if:-gate shape, or the
+      fetch-depth change trips workflow-safety. Re-read the guard's assertions and align.
+  - step: 6
+    phase: pre-deploy
+    action: Plan-document schema validation of this plan file.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-vacuous-pass-evidence.yaml
+    expected: Exit 0 -- the plan validates against PlanDocument and closes_criteria refs resolve.
+    fix_if: Schema error or a closes_criteria ref to a nonexistent T1.13 criterion.
+constraints:
+  - >-
+    P1/P2 boundary is hard: this plan emits bundle INPUT fields ONLY. Do NOT add escape_mode, the
+    "undetermined" earliest_viable_gate enum, or any file_rec()/CiRcaContext cross-check -- those
+    are P2 (c7/c9/c10). escape_mode is derived FROM these inputs in P2; P1 must not compute it.
+  - >-
+    Fail-loud, never silently-false (Decision 55): every new field that cannot be deterministically
+    computed (unparseable collection summary, absent HEAD^, git-diff failure) emits the explicit
+    "undetermined" sentinel -- never a default false/true. A silent false here reproduces exactly
+    the rec-2423/rec-2424 misdiagnosis.
+  - >-
+    The vacuous_pass parse MUST distinguish collected_count from deselected_count (validate.py:3868
+    all-integration edge case): "0 collected because --picked selected nothing" is the defect
+    (true), "0 ran because -m 'not integration' deselected an all-integration file" is expected
+    (false). Collapsing them reintroduces a false positive.
+  - >-
+    Merged-diff reconstruction MUST use `git diff HEAD^ HEAD` (and `--diff-filter=D HEAD^ HEAD` for
+    deletions), NOT get_changed_files()/`git diff origin/main` -- the bundle runs on the post-squash
+    main commit where the origin/main diff is empty and deleted paths are filtered out.
+  - >-
+    Amend the grandfathered docs/INTENT-ci-rca-methodology.md in place; create NO new INTENT/prose
+    doc under docs/ (Decision 86; validate_intent_doc_freeze enforces this).
+  - >-
+    ci_rca_evidence.py runs gh-free at runtime (CC-web / runner has no gh in the python step); all
+    new computation works from the pre-fetched log file and the local git checkout only.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    test_coverage_checker requires a test file with 100% coverage for every modified source file --
+    the new module and both modified scripts must have covering tests.
+context:
+  - >-
+    Decision 72 (RCA-as-Plan-Source): governs the whole artefact -- ci_rca_evidence produces the
+    bundle ci-rca.yml consumes to file source=ci_rca recs. CITE.
+  - >-
+    Decision 73 (two-tier diff-aware CI + forward-fix canary): defines the --pre diff-scoped
+    selection replayed here, the gate_is_postmerge_canary forward-fix-vs-author-discipline split,
+    and the post-merge full-tier canary. CITE.
+  - >-
+    Decision 55 (RCA-first / diagnose-don't-repair, loud failure): anchors the tri-state
+    fail-loud discipline; the plan stays strictly on the evidence-INPUT side. CITE.
+  - >-
+    Decision 86 (INTENT prose docs retired): the doc-amendment amends in place and creates no new
+    doc; validate_intent_doc_freeze enforces. CITE.
+  - >-
+    Decision 79 NOTE (scout-confirmed, not a contradiction): no src/lambdas/**/manifest.yaml
+    references any ci_rca_* script, so none are Lambda-packaged -- V2 is correct (no build/deploy/
+    smoke step). Record the manifest-coverage check as passed.
+  - >-
+    Decision 74 (related): ci-rca.yml harness hardening -- preserve the existing install /
+    log-fetch-retry / workflow_dispatch / fork-PR privilege-gate elements when editing the workflow.
+  - >-
+    Decisions 57/66/60/84 (related, edge the domain): 66/84 govern P2's file_rec spine (out of
+    scope); 60 is the canonical origin of the --pre tier semantics Decision 73 amended; 57 is the
+    control-plane loop this evidence feeds.
+  - >-
+    P1 produces the inputs; P2 (PLAN-ci-rca-abstention-and-gate-escape, c7+c9+c10) consumes
+    vacuous_pass + merge_gate_test_coverage to compute escape_mode and BUILD the file_rec
+    cross-check spine. c10 notes c8/c11 are advisory until that spine lands -- that is expected and
+    is P2's responsibility, not a defect in P1.
+  - >-
+    Secondary path (c8 validate.py execution manifest as a CI artifact) is DEFERRED by design: the
+    log-parse PRIMARY path is self-sufficient and needs no greenfield artifact upload/download
+    wiring. Tracked for a later follow-on if richer per-check data is needed.
+  - >-
+    ci_rca_unresolved_recs was empty at planning time (the two open ci-rca recs rec-2425/rec-2426
+    are SOFT/likely-resolved by main commit c3a3f9b7, not a hard block). This plan is same-file and
+    same-failure-category (validate.py false-negative / gate-escape) as the rec-2423/rec-2424
+    lineage that motivated the wave, satisfying the Related-Work check.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok); no scope-file
+    divergence. forward_fix_recursion_alert flagged tests/test_ops_data_portal.py (not in this
+    plan's scope).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-h5um0o)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scanned via decision-scout gate (NO_FLAGS; CITE 72/73/55/86)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    P1/P2 boundary internalised -- emit inputs only, no escape_mode / enum / cross-check
+  - >-
+    Confirm --pre changed-tests regex and -m "not integration" deselection at scripts/validate.py:3871-3875 before replaying it
+execution_steps:
+  - >-
+    Create scripts/ci_rca_vacuous_pass.py with: parse_collection_summary(log_text) ->
+    tri-state vacuous_pass (true|false|undetermined) distinguishing collected vs deselected counts;
+    merged_diff_files() and deleted_test_files() wrapping `git diff HEAD^ HEAD` and
+    `git diff --diff-filter=D HEAD^ HEAD` (return an explicit undetermined sentinel when HEAD^ is
+    absent or git fails); compute_merge_gate_test_coverage(failed_check, merged_files) replaying the
+    validate.py:3871 regex + -m "not integration" rule; compute_coverage_regression(...). No raises
+    at import; defer all validation to call time.
+  - >-
+    Modify scripts/ci_rca_taxonomy.py: add classify_failures(log_text, jobs, path) -> list of
+    (category, check, source) enumerating every distinct failed check (iterate jobs-JSON failed
+    steps and/or all function_to_category matches in the log); keep classify_failure intact.
+  - >-
+    Modify scripts/ci_rca_evidence.py: generate_bundles loops over classify_failures emitting one
+    hashed bundle per failed check; _assemble_core adds vacuous_pass, merge_gate_test_coverage,
+    gate_is_postmerge_canary (true when workflow tier resolves to CI), coverage_regression; bump
+    schema_version to 2. Keep the gh-free, log+local-git-only contract.
+  - >-
+    Modify .github/workflows/ci-rca.yml: checkout fetch-depth: 2; run evidence/classification so the
+    dedup guard and the "Mark failure as RCA'd" status use a per-category context
+    (ci-rca/<workflow-slug>/<category>); skip only categories already filed. Preserve all Decision 74
+    install / log-fetch-retry / workflow_dispatch / fork-PR-gate steps. This is the highest-risk
+    step -- verify validate_ci_rca_trigger's expected if:-gate shape still holds.
+  - >-
+    Author tests: tests/test_ci_rca_vacuous_pass.py (new, full coverage of the new module incl.
+    fail-loud paths) and extend tests/test_ci_rca_evidence.py + tests/test_ci_rca_taxonomy.py.
+    Add any needed fixtures under tests/fixtures/ci_rca/.
+  - >-
+    Amend docs/INTENT-ci-rca-methodology.md Section 3.3 (new fields + schema_version=2 + N-failure);
+    append the T1.13 progress_note in docs/ROADMAP-PLATFORM.yaml (no status flips).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
+    and RCA (Decision 55), do not inline-patch around a red check.
+  - 'Report: what was implemented, verification results, and the c8/c11 criteria ready for /implement bookkeeping.'
+rollback: >-
+  All changes are additive bundle fields + tests + a workflow edit. Revert the branch commits; the
+  bundle reverts to schema_version 1 with the prior single-failure behaviour. No data migration, no
+  deployed artifact, no infra change to unwind.
