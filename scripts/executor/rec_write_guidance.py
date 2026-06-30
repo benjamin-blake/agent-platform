@@ -118,7 +118,10 @@ def get_rec_write_guidance(
                 "The portal validates it against the Pydantic model at write time."
             ),
             "schema_fields": {
-                "schema_version": "int, ==1. Monotonic version; portal rejects schema_version > 1.",
+                "schema_version": (
+                    "int, ==2. Monotonic version; portal rejects schema_version > 2. "
+                    "New recs file at version 2; historical schema_version=1 recs still validate."
+                ),
                 "proximate_cause": (
                     "str, 100-600 chars. The observable fact the failing check reported -- "
                     "NOT an inference. Anti-example: 'file is too big'. "
@@ -131,9 +134,11 @@ def get_rec_write_guidance(
                 ),
                 "why_chain_terminus_override": "optional dict with 'reason' (str, >=80 chars). Skips terminus checks.",
                 "detection_gap": (
-                    "object: {earliest_viable_gate: pre|presubmit|CI, "
+                    "object: {earliest_viable_gate: pre|presubmit|CI|undetermined, "
                     "actual_gate_that_caught_it: pre|presubmit|CI, "
-                    "gap_explanation: str 120-600 chars with file:line citation}."
+                    "gap_explanation: str 120-600 chars with file:line citation, "
+                    "escape_mode: check_ran_vacuously|tier_misplaced"
+                    "|no_premerge_gate_by_design|undetermined (optional)}."
                 ),
                 "recurrence_class": "str enum: novel | instance_of_known_pattern | regression.",
                 "prior_art_citation": "optional str. Shape-validated only (existence check deferred to Phase 2).",
@@ -142,6 +147,18 @@ def get_rec_write_guidance(
                 "evidence_bundle_ref": (
                     "optional object: {sha256: 64 hex chars, s3_uri: s3://..., upload_status: str}. "
                     "Shape-validated only (S3 existence check deferred to Phase 2)."
+                ),
+                "escape_mode": (
+                    "str enum: check_ran_vacuously | tier_misplaced"
+                    " | no_premerge_gate_by_design | undetermined. "
+                    "MIRROR from evidence_bundle.escape_mode (bundle-wins). When bundle abstains ('undetermined'), "
+                    "set escape_mode='undetermined' here. Do NOT free-choose this value."
+                ),
+                "rca_confidence": (
+                    "str enum: high | medium | low | undetermined. Set to 'undetermined' when the evidence "
+                    "bundle's earliest_viable_gate='undetermined' (probe abstained). This surfaces the rec for "
+                    "mandatory human review in session_preflight. Set 'high' when bundle values are concrete and "
+                    "agent values match; 'low' when significant ambiguity remains."
                 ),
             },
         }
@@ -158,11 +175,13 @@ def get_rec_write_guidance(
             ),
         }
         guidance["disputed_field"] = {
-            "description": "Which of the two Section-2 cross-check points is in dispute.",
+            "description": "Which of the cross-check points is in dispute.",
             "semantics": (
-                "str enum: earliest_viable_gate | actual_gate_that_caught_it. "
-                "These are the only two CiRcaContext detection_gap fields subject to the INTENT Section-2 "
-                "cross-check. Widening the enum requires a schema bump (explicit human direction)."
+                "str enum: earliest_viable_gate | actual_gate_that_caught_it | failure_category. "
+                "These are the CiRcaContext detection_gap fields subject to the INTENT Section-2 "
+                "cross-check. Widening the enum requires a schema bump (explicit human direction). "
+                "CiRcaEvidenceDispute.disputed_field pattern: "
+                "^(earliest_viable_gate|actual_gate_that_caught_it|failure_category)$"
             ),
         }
         guidance["agent_value"] = {

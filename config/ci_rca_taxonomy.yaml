@@ -1,6 +1,20 @@
 schema_version: 1
 taxonomy_version: 1
 
+failure_categories:
+  - sloc_violation
+  - iam_gap
+  - dependency_gap
+  - code_regression
+  - schema_drift
+  - environment
+  - unknown
+  - test_collection_empty
+  - gate_escape
+
+agent_only_categories:
+  - gate_escape
+
 function_to_category:
   validate_sloc_limits: sloc_violation
   validate_cc_limits: sloc_violation
@@ -42,7 +56,15 @@ function_to_category:
   validate_outbox_staleness: environment
   validate_ci_rca_taxonomy: environment
 
+step_name_to_category:
+  "Validate fast tier (ruff lint, ruff format, mypy, prompt checks)": code_regression
+  "Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)": code_regression
+  "Terraform validate + fmt (both roots via validate.py)": environment
+
 log_pattern_to_category:
+  - pattern: "collected 0 items"
+    category: test_collection_empty
+    check_name: pytest_vacuous
   - pattern: "FAILED.*::test_"
     category: code_regression
     check_name: pytest

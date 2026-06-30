@@ -2550,6 +2550,48 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
         return
     print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
 
+    # Check 2: failure_categories list matches classifier's actual category set
+    failure_categories = taxonomy.get("failure_categories")
+    if failure_categories is None:
+        failed.append("CI-RCA taxonomy: missing top-level 'failure_categories:' list in config/ci_rca_taxonomy.yaml")
+        return
+    declared = set(failure_categories)
+
+    # Collect categories used in function_to_category and step_name_to_category
+    func_map = taxonomy.get("function_to_category") or {}
+    step_map = taxonomy.get("step_name_to_category") or {}
+    used_cats = set(func_map.values()) | set(step_map.values())
+    # Also include "unknown" sentinel which classify_failure can return
+    used_cats.add("unknown")
+
+    # Add categories from log_pattern_to_category
+    for entry in taxonomy.get("log_pattern_to_category") or []:
+        cat = entry.get("category")
+        if cat:
+            used_cats.add(cat)
+
+    missing_from_yaml = used_cats - declared
+    if missing_from_yaml:
+        for cat in sorted(missing_from_yaml):
+            failed.append(
+                f"CI-RCA taxonomy: category {cat!r} used in taxonomy maps but absent from "
+                f"failure_categories list in config/ci_rca_taxonomy.yaml"
+            )
+        return
+
+    # Check reverse: every declared category must appear in a classifier map or in agent_only_categories
+    agent_only = set(taxonomy.get("agent_only_categories") or [])
+    unclassifiable = declared - used_cats - agent_only
+    if unclassifiable:
+        for cat in sorted(unclassifiable):
+            failed.append(
+                f"CI-RCA taxonomy: category {cat!r} declared in failure_categories but absent from "
+                f"all classifier maps and agent_only_categories in config/ci_rca_taxonomy.yaml "
+                f"(Decision 60: no dead enum branches)"
+            )
+        return
+    print(f"failure_categories list has {len(declared)} entries; all used categories declared.")
+
 
 def _check_claude_p_raw_invocations(workflows_root: Path) -> list[str]:
     """Return violation strings for unwrapped `claude -p` lines in CI workflow files.

@@ -2887,3 +2887,78 @@ class TestPreflightReportDisputeKey:
         report = json.loads(preflight_report.read_text(encoding="utf-8"))
         assert "ci_rca_dispute_recs" in report, f"ci_rca_dispute_recs missing from report keys: {list(report)[:30]}"
         assert report["ci_rca_dispute_recs"] == dispute_recs
+
+
+class TestFetchCiRcaUndeterminedRecs:
+    """c7: session_preflight surfaces rca_confidence=undetermined recs for mandatory human review."""
+
+    def _make_row(self, rec_id: str, rca_confidence: str | None = "undetermined") -> dict:
+        import json as _json
+
+        ctx: dict = {"schema_version": 2}
+        if rca_confidence is not None:
+            ctx["rca_confidence"] = rca_confidence
+        return {
+            "id": rec_id,
+            "source": "ci_rca",
+            "status": "open",
+            "title": f"CI failure {rec_id}",
+            "priority": "Critical",
+            "created_timestamp": "2026-06-30T10:00:00Z",
+            "context_v2_json": _json.dumps(ctx),
+        }
+
+    def test_returns_undetermined_recs(self):
+        rows = [self._make_row("rec-1"), self._make_row("rec-2", rca_confidence="high")]
+        result = _preflight._derive_ci_rca_undetermined_open(rows)
+        assert len(result) == 1
+        assert result[0]["id"] == "rec-1"
+
+    def test_ignores_non_ci_rca_source(self):
+        row = self._make_row("rec-1")
+        row["source"] = "planning"
+        result = _preflight._derive_ci_rca_undetermined_open([row])
+        assert result == []
+
+    def test_ignores_closed_recs(self):
+        row = self._make_row("rec-1")
+        row["status"] = "closed"
+        result = _preflight._derive_ci_rca_undetermined_open([row])
+        assert result == []
+
+    def test_ignores_missing_context_v2_json(self):
+        row = {"id": "rec-1", "source": "ci_rca", "status": "open", "context_v2_json": ""}
+        result = _preflight._derive_ci_rca_undetermined_open([row])
+        assert result == []
+
+    def test_ignores_invalid_context_v2_json(self):
+        row = {"id": "rec-1", "source": "ci_rca", "status": "open", "context_v2_json": "not-json{{{"}
+        result = _preflight._derive_ci_rca_undetermined_open([row])
+        assert result == []
+
+    def test_capped_at_five(self):
+        rows = [self._make_row(f"rec-{i}") for i in range(10)]
+        result = _preflight._derive_ci_rca_undetermined_open(rows)
+        assert len(result) == 5
+
+    def test_fetch_passes_cache_rows(self):
+        rows = [self._make_row("rec-99")]
+        result = _preflight._fetch_ci_rca_undetermined_recs(cache_rows=rows)
+        assert len(result) == 1
+        assert result[0]["id"] == "rec-99"
+
+    def test_fetch_returns_empty_for_none_cache(self):
+        result = _preflight._fetch_ci_rca_undetermined_recs(cache_rows=None)
+        assert result == []
+
+    def test_print_ci_rca_undetermined_recs_empty(self, capsys):
+        _preflight.print_ci_rca_undetermined_recs([])
+        out = capsys.readouterr().out
+        assert "none" in out
+
+    def test_print_ci_rca_undetermined_recs_with_recs(self, capsys):
+        recs = [{"id": "rec-1", "title": "CI broken", "priority": "Critical", "created_timestamp": "2026-06-30T10:00:00Z"}]
+        _preflight.print_ci_rca_undetermined_recs(recs)
+        out = capsys.readouterr().out
+        assert "rec-1" in out
+        assert "MANDATORY HUMAN REVIEW" in out

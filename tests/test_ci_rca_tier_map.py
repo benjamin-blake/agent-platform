@@ -162,9 +162,10 @@ class TestComputeEarliestViableGate:
         assert gate == "presubmit"
         assert "Decision 60" in rationale
 
-    def test_ast_failure_returns_none(self):
+    def test_ast_failure_returns_undetermined(self):
+        """c7: AST parse failure returns 'undetermined', not None."""
         gate, _ = compute_earliest_viable_gate("validate_x", None, "ok", 0.01)
-        assert gate is None
+        assert gate == "undetermined"
 
     def test_already_in_pre(self):
         tm = {"validate_x": ["pre", "presubmit"]}
@@ -186,15 +187,23 @@ class TestComputeEarliestViableGate:
         gate, _ = compute_earliest_viable_gate("validate_x", tm, "median=400000ms", 400.0, current_pre_runtime=0.0)
         assert gate == "presubmit"
 
-    def test_probe_failed_returns_none(self):
+    def test_probe_failed_returns_undetermined(self):
+        """c7: probe_failed abstention path returns 'undetermined'."""
         tm = {"validate_x": ["presubmit"]}
         gate, _ = compute_earliest_viable_gate("validate_x", tm, "probe_failed: timeout", None)
-        assert gate is None
+        assert gate == "undetermined"
 
-    def test_dispersion_too_high_returns_none(self):
+    def test_dispersion_too_high_returns_undetermined(self):
+        """c7: dispersion_too_high abstention path returns 'undetermined'."""
         tm = {"validate_x": ["presubmit"]}
         gate, _ = compute_earliest_viable_gate("validate_x", tm, "dispersion_too_high: ...", None)
-        assert gate is None
+        assert gate == "undetermined"
+
+    def test_probe_unavailable_returns_undetermined(self):
+        """c7: probe result unavailable returns 'undetermined'."""
+        tm = {"validate_x": ["presubmit"]}
+        gate, _ = compute_earliest_viable_gate("validate_x", tm, "ok", None)
+        assert gate == "undetermined"
 
     def test_version_constant(self):
         assert isinstance(AST_WALKER_VERSION, int)
