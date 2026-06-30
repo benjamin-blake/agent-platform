@@ -51,6 +51,7 @@ _SSO_PROFILE = "agent_platform"
 _FEATURE_FLAGS_YAML = _REPO_ROOT / "config" / "feature_flags.yaml"
 
 _ci_rca_strict_mode_cache: Optional[str] = None
+_ci_rca_strict_mode_cache_path: Optional[Path] = None
 
 _AWS_REGION = "eu-west-2"
 
@@ -108,12 +109,14 @@ _WHY_CHAIN_CITATION_RE = re.compile(r"[\w./-]+\.(py|yaml|tf|md|sh):\d+")
 def get_ci_rca_strict_mode() -> str:
     """Return the CI_RCA_STRICT_MODE flag value ('warn' or 'strict').
 
-    Module-level cached read of config/feature_flags.yaml (no hot-reload).
-    Defaults to 'warn' when the key or file is absent. Raises ValueError for
-    unrecognised values so misconfiguration is loud (Decision 55).
+    Module-level cached read of config/feature_flags.yaml, re-read only when
+    the bound _FEATURE_FLAGS_YAML path changes (no hot-reload for a constant
+    path, Decision 88). Defaults to 'warn' when the key or file is absent.
+    Raises ValueError for unrecognised values so misconfiguration is loud
+    (Decision 55).
     """
-    global _ci_rca_strict_mode_cache
-    if _ci_rca_strict_mode_cache is not None:
+    global _ci_rca_strict_mode_cache, _ci_rca_strict_mode_cache_path
+    if _ci_rca_strict_mode_cache is not None and _ci_rca_strict_mode_cache_path == _FEATURE_FLAGS_YAML:
         return _ci_rca_strict_mode_cache
     try:
         data = yaml.safe_load(_FEATURE_FLAGS_YAML.read_text(encoding="utf-8")) or {}
@@ -123,6 +126,7 @@ def get_ci_rca_strict_mode() -> str:
     if value not in _CI_RCA_VALID_MODES:
         raise ValueError(f"CI_RCA_STRICT_MODE={value!r} is not a valid mode; accepted: {sorted(_CI_RCA_VALID_MODES)}")
     _ci_rca_strict_mode_cache = value
+    _ci_rca_strict_mode_cache_path = _FEATURE_FLAGS_YAML
     return value
 
 
