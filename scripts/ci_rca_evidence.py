@@ -111,6 +111,9 @@ def _assemble_core(
     classification_source: str,
     validate_path: Path | None,
     taxonomy_path: Path | None,
+    vacuous_pass: "bool | str" = "undetermined",
+    merge_gate_test_coverage: str = "undetermined",
+    coverage_regression: "bool | str" = "undetermined",
 ) -> dict[str, Any]:
     from scripts.ci_rca_taxonomy import load_taxonomy, resolve_workflow_tier
     from scripts.ci_rca_tier_map import (
@@ -124,6 +127,7 @@ def _assemble_core(
     taxonomy_version = taxonomy.get("taxonomy_version", 1)
     wf_tier = resolve_workflow_tier(workflow_name, taxonomy_path)
     actual_gate = wf_tier if wf_tier != "unknown" else None
+    gate_is_postmerge_canary = wf_tier == "CI"
 
     tier_membership = build_tier_membership(validate_path)
     ast_walker_error: str | None = None
@@ -138,7 +142,7 @@ def _assemble_core(
         check_tiers = tier_membership.get(failed_check)
 
     bundle: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "workflow_run_id": workflow_run_id,
         "workflow_name": workflow_name,
         "workflow_to_tier_resolution": wf_tier,
@@ -150,6 +154,10 @@ def _assemble_core(
         "earliest_viable_gate_rationale": evg_rationale,
         "runtime_confidence": runtime_confidence,
         "actual_gate_that_caught_it": actual_gate,
+        "gate_is_postmerge_canary": gate_is_postmerge_canary,
+        "vacuous_pass": vacuous_pass,
+        "merge_gate_test_coverage": merge_gate_test_coverage,
+        "coverage_regression": coverage_regression,
         "related_recs_by_category": [],
         "decision_records_cited": ["Decision 43", "Decision 60"],
         "ast_walker_version": AST_WALKER_VERSION,
@@ -169,8 +177,15 @@ def generate_bundles(
     taxonomy_path: Path | None = None,
     repo: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Parse log, classify failure(s), assemble + hash bundles. Returns list of complete dicts."""
-    from scripts.ci_rca_taxonomy import classify_failure, load_taxonomy
+    """Parse log, classify failure(s), assemble + hash bundles. Returns one bundle per failed check."""
+    from scripts.ci_rca_taxonomy import classify_failures, load_taxonomy
+    from scripts.ci_rca_vacuous_pass import (
+        compute_coverage_regression,
+        compute_merge_gate_test_coverage,
+        deleted_test_files,
+        merged_diff_files,
+        parse_vacuous_pass,
+    )
 
     log_text = log_file.read_text(encoding="utf-8", errors="replace")
     jobs: list[dict] | None = None
@@ -181,12 +196,18 @@ def generate_bundles(
         except Exception:
             logger.warning("Could not parse jobs file %s", jobs_file)
 
+    # Pre-compute shared evidence fields once per run
+    vacuous_pass_val = parse_vacuous_pass(log_text)
+    merged = merged_diff_files()
+    deleted = deleted_test_files()
+    coverage_reg = compute_coverage_regression(deleted)
+
     try:
         load_taxonomy(taxonomy_path)
     except (FileNotFoundError, ValueError) as exc:
         logger.error("TAXONOMY_UNAVAILABLE: %s", exc)
         b: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "workflow_run_id": workflow_run_id,
             "workflow_name": workflow_name,
             "workflow_to_tier_resolution": "unknown",
@@ -199,6 +220,10 @@ def generate_bundles(
             "earliest_viable_gate_rationale": "Taxonomy unavailable",
             "runtime_confidence": None,
             "actual_gate_that_caught_it": None,
+            "gate_is_postmerge_canary": False,
+            "vacuous_pass": vacuous_pass_val,
+            "merge_gate_test_coverage": "undetermined",
+            "coverage_regression": coverage_reg,
             "related_recs_by_category": [],
             "decision_records_cited": [],
             "ast_walker_version": 1,
@@ -207,10 +232,25 @@ def generate_bundles(
         b["sha256"] = _sha256_of(b)
         return [b]
 
-    cat, check, src = classify_failure(log_text, jobs, taxonomy_path)
-    core = _assemble_core(workflow_run_id, workflow_name, check, cat, src, validate_path, taxonomy_path)
-    core["sha256"] = _sha256_of(core)
-    return [core]
+    failures = classify_failures(log_text, jobs, taxonomy_path)
+    bundles: list[dict[str, Any]] = []
+    for cat, check, src in failures:
+        coverage = compute_merge_gate_test_coverage(check, merged)
+        core = _assemble_core(
+            workflow_run_id,
+            workflow_name,
+            check,
+            cat,
+            src,
+            validate_path,
+            taxonomy_path,
+            vacuous_pass=vacuous_pass_val,
+            merge_gate_test_coverage=coverage,
+            coverage_regression=coverage_reg,
+        )
+        core["sha256"] = _sha256_of(core)
+        bundles.append(core)
+    return bundles
 
 
 def main(argv: list[str] | None = None) -> None:
