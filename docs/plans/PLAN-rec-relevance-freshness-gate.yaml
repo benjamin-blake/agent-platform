@@ -1,0 +1,216 @@
+schema_version: 1
+slug: "rec-relevance-freshness-gate"
+intent: >-
+  Implement T3.8 (CD.36): a governed RELEVANCE verdict over open recommendations so the
+  human-driven /plan and /implement flow stops actioning dead work merely because a rec is
+  "open" -- the recommendation analogue of the T-1.21 Tier Item Freshness Gate, advancing the
+  self-improvement loop's queue-hygiene backbone.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-rec-relevance-freshness-gate.yaml
+phase: >-
+  Platform tier_item T3.8 (Recommendation relevance contract + freshness gate); gated for
+  COMPLETION on CD.36 (state: pending). Product phase n/a (platform-governance work).
+scope:
+  - file: scripts/rec_relevance.py
+    action: Create
+    purpose: >-
+      Deterministic-first relevance evaluator. Emits one verdict per open rec from the enum
+      {relevant, satisfied, superseded, duplicate, contradicted, stale_target,
+      blocked_by_decision, unknown}. Deterministic signals: acceptance-oracle probe (run the
+      rec's `acceptance` shell command -- bounded timeout, on-demand per-rec only -- passes on
+      main => satisfied), target-existence (rec `file` path/symbol absent => stale_target),
+      and a deterministic decision-contradiction scan (rec cites a decision id now in a
+      pending/contradicting state => blocked_by_decision/contradicted). Semantic signals
+      (satisfied/duplicate/superseded via commit-file correlation + closed-sibling title
+      Jaccard) reuse the engine generalised in session_preflight.py. Returns verdict + the
+      evidence/proof string; deeper semantic supersession stays an unknown/close_proposed, not
+      a deterministic close.
+  - file: docs/contracts/recommendation-relevance.yaml
+    action: Create
+    purpose: >-
+      Named projection contract: the verdict enum, each verdict's signal definition, and the
+      deterministic-vs-semantic closure split. Machine-parseable contract (Decision 86), NOT a
+      Class A ops_recommendations column set (Decision 84) -- relevance is read-time or this
+      named projection. Documents that semantic verdicts produce close_proposed (proposal
+      only), deterministic satisfaction auto-closes with proof.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Generalise correlate_ci_rca_with_main() (and its _title_jaccard / _file_paths_correlate
+      helpers) beyond ci_rca to all rec sources, and surface a queue-wide relevance /
+      likely-resolved triage list. Served ONLY from the already-warmed read-cache
+      (logs/.recommendations-log.jsonl) + recent_main_commits -- no per-session warehouse
+      re-fetch (Decision 88), no acceptance-command execution at queue scale (cheap correlation
+      only). Surfacing only, never auto-acting (Decision 55).
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      close_proposed lifecycle SUPPORT with no schema change. Deterministic `satisfied` may
+      auto-close through the normal update_rec(status=closed, resolution=<closure proof>) path
+      (Decision 70 lifecycle, Decision 84 single-portal/ducklake_writer). Semantic verdicts
+      emit a close_proposed PROPOSAL (a printed `--update-rec ... --status closed` command for
+      a human to run) -- never a direct close. No new status enum value, no new column.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the rec-side freshness gate (analogue of the T-1.21 Tier Item Freshness Gate): when a
+      session plans against or bundles an open rec, re-check its relevance verdict via
+      rec_relevance.py first; satisfied/superseded/duplicate => propose closure instead of
+      planning dead work (Precision Context Injection, Decision 66 -- surfaced before
+      composition, not as a post-rejection error).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Re-check a bundled rec's relevance before implementing it; if the verdict is satisfied/
+      superseded/duplicate, route to closure rather than executing already-dead work.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a presubmit guard that the recommendation-relevance.yaml contract parses and its
+      verdict enum stays in sync with rec_relevance.py (enum-drift guard, analogue of the
+      existing pydantic/yaml drift guards). validate.py is the single source of truth for any
+      CI check.
+  - file: tests/test_rec_relevance.py
+    action: Create
+    purpose: >-
+      Unit coverage for each relevance verdict and the deterministic-vs-semantic closure split
+      (V2). 100% per-file coverage of scripts/rec_relevance.py (test_coverage_checker).
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: Cover the generalised correlation surfacing (read-cache-only; no reader call).
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: Cover deterministic auto-close (proof in resolution) vs semantic close_proposed (proposal only, no write).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: Cover the recommendation-relevance contract-parse + enum-drift guard.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/rec_relevance.py exists and emits a relevance verdict per open rec drawn from the
+    enum {relevant, satisfied, superseded, duplicate, contradicted, stale_target,
+    blocked_by_decision, unknown}, deterministic-first (acceptance probe + target-existence +
+    decision-contradiction scan).
+  - >-
+    docs/contracts/recommendation-relevance.yaml exists, parses, defines the verdict enum and
+    the deterministic-vs-semantic closure split, and adds NO new columns to the
+    ops_recommendations contract (Decision 84) -- it is a named read-time projection.
+  - >-
+    Deterministic satisfaction (acceptance passes on main) auto-closes via update_rec with the
+    proof recorded in `resolution`; every semantically-judged verdict produces a close_proposed
+    proposal (printed command), never a direct close (CD.36, Decision 70).
+  - >-
+    The ci_rca likely-resolved correlation in session_preflight.py is generalised to all rec
+    sources behind one engine, surfaced from the warmed read-cache only (no warehouse re-fetch,
+    Decision 88), surfacing-only (Decision 55).
+  - >-
+    A rec-side freshness gate exists in .claude/skills/planning/SKILL.md (analogue of T-1.21)
+    and .claude/skills/implement/SKILL.md re-checks a bundled rec's relevance before implementing.
+  - >-
+    Unit tests cover each relevance verdict and the deterministic-vs-semantic closure split;
+    validate.py guards the contract parse + verdict-enum drift; the full --pre gate passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: PlanDocument schema validates this plan file.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-rec-relevance-freshness-gate.yaml
+    expected: Exit 0; plan validates against the PlanDocument schema.
+    fix_if: Schema/field error printed -- correct the offending field and re-run.
+  - step: 2
+    phase: pre-deploy
+    action: rec_relevance.py module imports and exposes the evaluator + verdict enum.
+    command: bin/venv-python -c "import scripts.rec_relevance as r; print(sorted(r.RELEVANCE_VERDICTS))"
+    expected: >-
+      Prints the 8 verdicts (blocked_by_decision, contradicted, duplicate, relevant, satisfied,
+      stale_target, superseded, unknown). No import-time exception.
+    fix_if: ImportError or missing enum -- module raised at import (forbidden) or enum incomplete.
+  - step: 3
+    phase: pre-deploy
+    action: Unit tests cover every relevance verdict and the deterministic-vs-semantic closure split.
+    command: bin/venv-python -m pytest tests/test_rec_relevance.py -q
+    expected: All tests pass; one test asserts each of the 8 verdicts and one asserts deterministic auto-close vs semantic close_proposed.
+    fix_if: A verdict path or the closure-split case is unproven -- add the missing case/branch.
+  - step: 4
+    phase: pre-deploy
+    action: Each verdict name is exercised by name in the test suite (verdict-coverage grep).
+    command: bin/venv-python -c "import re,pathlib; t=pathlib.Path('tests/test_rec_relevance.py').read_text(); m=[v for v in ['relevant','satisfied','superseded','duplicate','contradicted','stale_target','blocked_by_decision','unknown'] if v not in t]; assert not m, m; print('all verdicts referenced')"
+    expected: Prints "all verdicts referenced"; no missing verdict.
+    fix_if: A verdict is missing from the test -- add explicit coverage.
+  - step: 5
+    phase: pre-deploy
+    action: The relevance contract parses and its verdict enum matches the evaluator (drift guard).
+    command: bin/venv-python -c "import yaml,scripts.rec_relevance as r; c=yaml.safe_load(open('docs/contracts/recommendation-relevance.yaml')); assert set(c['verdicts'])==set(r.RELEVANCE_VERDICTS), (set(c['verdicts'])^set(r.RELEVANCE_VERDICTS)); print('enum in sync')"
+    expected: Prints "enum in sync"; contract verdict set equals the evaluator enum.
+    fix_if: Symmetric-difference printed -- reconcile the contract and the evaluator enum.
+  - step: 6
+    phase: pre-deploy
+    action: The relevance contract adds NO new column to the ops_recommendations Class A contract.
+    command: bin/venv-python -c "import yaml; o=yaml.safe_load(open('docs/contracts/ops_recommendations.yaml')); rel=yaml.safe_load(open('docs/contracts/recommendation-relevance.yaml')); assert 'columns' not in rel and 'fields' not in rel, 'relevance projection must not declare Class A columns'; print('no class A columns added')"
+    expected: Prints "no class A columns added"; relevance contract is a projection, not a column set.
+    fix_if: The relevance contract declares columns/fields -- Decision 84 violation; reshape as a read-time projection.
+  - step: 7
+    phase: pre-deploy
+    action: Preflight surfacing is served from the read-cache (no warehouse re-fetch in the surfacing path).
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -q -k "relevance or correlate"
+    expected: Tests pass; the generalised-correlation surfacing test asserts no DuckLake reader call is made (read-cache only, Decision 88).
+    fix_if: A reader call is made during surfacing -- route through the warmed cache instead.
+  - step: 8
+    phase: pre-deploy
+    action: Portal close-path tests prove deterministic auto-close vs semantic proposal split.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q -k "close_proposed or relevance or auto_close"
+    expected: >-
+      Tests pass; deterministic satisfied => update_rec(status=closed) with proof in resolution;
+      semantic verdict => proposal string returned, update_rec NOT called.
+    fix_if: Semantic path writes a close, or deterministic path omits the proof -- fix the split.
+  - step: 9
+    phase: pre-deploy
+    action: Both freshness gates are present in the live-tier skills.
+    command: grep -lq "rec_relevance" .claude/skills/planning/SKILL.md && grep -lq "rec_relevance" .claude/skills/implement/SKILL.md && echo gates-present
+    expected: Prints "gates-present"; both skills reference the relevance re-check.
+    fix_if: A skill lacks the gate text -- add the rec-side freshness re-check.
+  - step: 10
+    phase: pre-deploy
+    action: Full fast presubmit gate passes (validate.py is the single source of truth).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; includes the new recommendation-relevance contract guard and all coverage checks.
+    fix_if: Any check fails -- address the specific failure; never add a CI check without adding it to validate.py first.
+constraints:
+  - "Decision 84: ops_recommendations stays DuckLake-sole-backend; NO new Class A columns -- relevance is read-time or the named recommendation-relevance.yaml projection; all writes transit the single portal / ducklake_writer; warehouse reads use named verbs only."
+  - "Decision 88: queue-wide relevance surfacing serves the warmed read-cache, never a per-session warehouse re-fetch; no acceptance-command execution at queue scale."
+  - "Decision 70: relevance verdict and lifecycle status are orthogonal axes -- do not collapse them; no new status enum value; close_proposed is a proposal, not a status."
+  - "CD.36 / Decision 55: deterministic satisfaction may auto-close with recorded proof; every semantically-judged verdict produces close_proposed only (no direct close on LLM judgement); surfacing engine is surfacing-only, never auto-acting."
+  - "Decision 86: recommendation-relevance.yaml is a machine-parseable contract, not narrative prose (intent-doc-freeze guard); no new standing prose-architecture doc under docs/."
+  - "Decision 67: STRATEGIC plans suspended -- this is a single IMPLEMENTATION plan; the >5-file complexity heuristic is suspended for this window. No decomposition into recs for the frozen executor."
+  - "Decision 44 executor self-modification boundary: no scope file is an executor-machinery boundary file; rec_relevance.py may IMPORT (read-only) from scripts/executor/jsonl_store.py but must not modify it."
+  - "Acceptance probe runs author-supplied shell commands -- on-demand per-rec only, with a bounded timeout; never executed across the whole open queue (safety + Decision 88)."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "No emojis; Python 3.12+ with type hints; ruff line length 127; bash/Linux commands via bin/venv-python."
+context:
+  - "Roadmap: T3.8 (docs/ROADMAP-PLATFORM.yaml). CD.36 (state: pending) gates COMPLETION not start; the landing /implement wave ratifies CD.36 via the ops portal (file_decision) -- the edit-and-backfill ratification precedent (Decisions 84/90). Until then START is unblocked (deps T0.12.5/T0.12.7 complete)."
+  - "Decisions to cite (decision-scout CITE): Decision 70, Decision 84, Decision 88, Decision 55. RELATED design precedents: Decision 66 (Precision Context Injection -- surface the verdict before composition), Decision 90 (gates land in the two live tiers /plan + /implement), Decision 86 (machine-parseable contract), Decision 87 (read-time projection framing)."
+  - "Reuse, do not reinvent: scripts/session_preflight.py already has correlate_ci_rca_with_main(), _title_jaccard(), _file_paths_correlate(), _parse_ts_utc(); generalise these rather than duplicating. The acceptance oracle is scripts/executor/jsonl_store.py Recommendation.acceptance (validate.py-enforced); _VALID_STATUSES lives there too."
+  - "OUT OF SCOPE (operator-confirmed 2026-06-24 session): rec-autoclose.yml trailer-trust hardening (not in files_in_scope; a candidate follow-up). Decision-contradiction scan is deterministic-only (cited-decision-id state check); deeper semantic supersession remains a close_proposed."
+  - "ci_rca_unresolved_recs is empty at planning time (2 likely-resolved recs are SOFT, not a hard block) -- Related-Work Check does not bind."
+  - "Gotchas: never raise at import time (defer validation); test_coverage_checker requires a test file per modified source file with 100% per-file coverage; mock both subprocess.run and subprocess.Popen for the acceptance-probe execution path; add CI checks to validate.py before ci.yml."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/recommendation-relevance-freshness-gjnovp)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions 70/84/88/55/66/86/87/90 understood (cited)
+  - CD.36 + T3.8 roadmap entries read; CD.36 confirmed state:pending (completion-gated)
+  - All files in scope located and readable; session_preflight correlation helpers reviewed for reuse
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Phase A (keystone): Create scripts/rec_relevance.py -- define RELEVANCE_VERDICTS enum and the deterministic-first evaluator (acceptance probe with bounded timeout + on-demand only, target-existence, deterministic decision-contradiction scan), returning verdict + evidence/proof. Create docs/contracts/recommendation-relevance.yaml (verdict enum + deterministic-vs-semantic closure split; named projection, no Class A columns). Create tests/test_rec_relevance.py covering all 8 verdicts and the closure split. Add the validate.py contract-parse + enum-drift guard and tests/test_validate.py coverage. Run ruff after each 1-2 file edit."
+  - "Phase B (wiring): Generalise correlate_ci_rca_with_main() in scripts/session_preflight.py to all sources and surface the relevance/likely-resolved triage list from the warmed read-cache only (no reader call); update tests/test_session_preflight.py. Add close_proposed support to scripts/ops_data_portal.py -- deterministic satisfied auto-closes via update_rec(status=closed, resolution=<proof>); semantic verdicts return a printed proposal, no write; update tests/test_ops_data_portal.py."
+  - "Phase C (gates): Add the rec-side freshness gate to .claude/skills/planning/SKILL.md (analogue of T-1.21) and the bundled-rec relevance re-check to .claude/skills/implement/SKILL.md."
+  - "Execute the Verification Plan -- run each step; loop until all pass. Acceptance probe executes only on demand per-rec with a timeout (never queue-wide)."
+  - "At landing time (commit flow): ratify CD.36 via the ops portal (file_decision) per the completion-gate path, OR add bootstrap_completion_exempt + a scope-(c) note if ratification is deferred; close out T3.8 exit_criteria bookkeeping."
+  - "Report: what was implemented, verification results, and the CD.36 ratification disposition."
+work_areas: []
+rollback: >-
+  All scope files are additive or guarded; revert the branch commits. The two new files
+  (scripts/rec_relevance.py, docs/contracts/recommendation-relevance.yaml) are removable
+  without side effects; the session_preflight/ops_data_portal/validate edits are additive
+  surfaces. No data migration, no infra apply -- nothing to unwind in the warehouse.
