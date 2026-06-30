@@ -10,6 +10,7 @@ import pytest
 
 import src.lambdas.ducklake_writer.handler as h
 from src.common import ducklake_runtime as rt
+from src.common.ducklake_version import pinned_duckdb_version
 
 pytestmark = pytest.mark.unit
 
@@ -110,11 +111,13 @@ def test_handler_unknown_action():
 def test_handler_attach_check(monkeypatch):
     con = FakeCon()
     monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
-    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__="1.5.3"))
+    monkeypatch.setattr(
+        rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__=pinned_duckdb_version())
+    )
     r = h.handler({"action": "attach_check"})
     body = json.loads(r["body"])
     assert r["statusCode"] == 200
-    assert body["version"] == "1.5.3"
+    assert body["version"] == pinned_duckdb_version()
     assert body["source"] == "layer"
     # D2 warm reuse: the single-statement path keeps the connection open for the next invocation.
     assert con.closed is False
@@ -847,3 +850,23 @@ def test_action_file_ops_rejects_caller_keyspace_table(monkeypatch):
     monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
     with pytest.raises(rt.DuckLakeRuntimeError, match="no writer-owned keyspace"):
         h.action_file_ops({"table": "ops_decisions", "record": {"title": "t", "status": "open"}}, FakeCon())
+
+
+def test_action_write_ops_append_only_table(monkeypatch):
+    """write_ops on ops_smoke_events (append_only) routes through write_scd2 without error."""
+    captured = {}
+
+    def _write(con, record, *, table, **kw):  # noqa: ARG001
+        captured["table"] = table
+        captured["record"] = record
+        return _result(ulid="01AO", rec_id="test-ao-event-1")
+
+    monkeypatch.setattr(rt, "write_scd2", _write)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda: None)
+    out = h.action_write_ops(
+        {"table": "ops_smoke_events", "record": {"event_id": "test-ao-event-1", "event_type": "smoke"}},
+        FakeCon(),
+    )
+    assert out["ok"] is True
+    assert out["table"] == "ops_smoke_events"
+    assert captured["table"] == "ops_smoke_events"

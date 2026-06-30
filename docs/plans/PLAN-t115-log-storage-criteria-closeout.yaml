@@ -1,0 +1,208 @@
+schema_version: 1
+slug: t115-log-storage-criteria-closeout
+intent: >-
+  Reconcile the T-1.15 exit-criteria ledger with reality: the log-storage.md -> .yaml conversion and
+  the scripts/s3_log_store.py YAML-loader wiring already landed (PR #247, bc93e26), but the structured
+  criteria (lazy-migrated by the #258 ledger) still read open. Close c1/c2/c3 via /implement's verified
+  bookkeeping walk, advancing the CD.25 pre-codegen contract-ratification series toward an agent-first,
+  drift-proof docs/contracts/.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-t115-log-storage-criteria-closeout.yaml
+phase: >-
+  PLATFORM tier_item T-1.15 (tier T-1, CD.25 pre-codegen contract-ratification series). depends_on
+  T-1.12 (satisfied). Reconciliation-only follow-on: the implementation landed in PR #247; this plan
+  closes the lazy-migrated open criteria via /implement's verified closes_criteria bookkeeping walk.
+  Not on the product-roadmap critical path.
+closes_criteria:
+  - "T-1.15:c1"
+  - "T-1.15:c2"
+  - "T-1.15:c3"
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Sole change surface. /implement's closes_criteria bookkeeping walk flips T-1.15 c1/c2/c3
+      open -> met (met_by = this plan slug) on a verified VP pass, then -- on operator confirmation --
+      stages T-1.15 status: complete + completed_at. No hand-edit by /plan
+      (Status-Trusted-Never-Inferred / T2.20); no source-code changes (the implementation landed in
+      PR #247).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    c1: docs/contracts/log-storage.yaml exists with contract_version 1, status ratified, and the
+    required registry keys (version, contract_version, status, patterns, priority_queue, routing).
+  - >-
+    c2: scripts/s3_log_store.py returns the YAML-sourced routing map and priority-queue key (not just
+    the in-code fallback), the FALLBACK_* constants equal the YAML routing (anti-drift), the loader
+    unit tests pass, and the implementing commit bc93e26 is an ancestor of origin/main (merged with
+    green CI).
+  - >-
+    c3: the prior docs/plans/PLAN-t115-log-storage-yaml.yaml attests that the Step-10-style
+    multi-perspective critique converged on the log-storage.yaml design spec (accepted as satisfying
+    the criterion, per operator decision 2026-06-25).
+  - >-
+    Replacement-closure: docs/contracts/log-storage.md is deleted and no live (non-historical-plan)
+    code/config surface references it, so /implement's cutover-closure check on T-1.15 passes.
+  - >-
+    On the verified VP pass /implement flips T-1.15:c1/c2/c3 open -> met with met_by set to this
+    plan's slug; with operator confirmation it stages T-1.15 status: complete + completed_at
+    (bootstrap_completion_exempt inherited true from T-1.15, so CD.25 state: pending does not block
+    completion).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      c1 -- log-storage.yaml carries the required registry keys at contract_version 1 / status
+      ratified.
+    command: |-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/log-storage.yaml')); req={'version','contract_version','status','patterns','priority_queue','routing'}; assert req <= set(d), ('missing', req - set(d)); assert d['contract_version']==1 and d['status']=='ratified', (d.get('contract_version'), d.get('status')); print('c1 OK')"
+    expected: Prints "c1 OK" (required keys present; contract_version 1; status ratified).
+    fix_if: >-
+      A missing key or wrong version/status means c1 does NOT hold -- the prior implementation is
+      incomplete; STOP and escalate (the criterion is genuinely open). Do not flip c1 and do not patch
+      the landed YAML in this plan (Decision 55, fail loud).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      c2 (read path) -- s3_log_store returns the YAML routing (not just the fallback) and anti-drift
+      holds (FALLBACK_* == YAML routing).
+    command: |-
+      bin/venv-python -c "import yaml, scripts.s3_log_store as s; y=yaml.safe_load(open('docs/contracts/log-storage.yaml'))['routing']; assert s.get_ops_table_routing()==y['ops_table_routing'], (s.get_ops_table_routing(), y['ops_table_routing']); assert s.get_priority_queue_key()==y['priority_queue_key']; assert s.FALLBACK_OPS_TABLE_ROUTING==y['ops_table_routing'] and s.FALLBACK_PRIORITY_QUEUE_KEY==y['priority_queue_key']; print('c2-read OK')"
+    expected: Prints "c2-read OK" (module returns YAML-sourced routing; in-code fallbacks equal the YAML).
+    fix_if: >-
+      A mismatch or exception means the loader is not reading the YAML or anti-drift diverged; c2 does
+      NOT hold -- STOP and escalate, do not flip c2 (Decision 55).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      c2 (CI-green proof) -- the loader's unit tests pass on the current tree and the implementing
+      commit is merged to main.
+    command: |-
+      bash -lc 'bin/venv-python -m pytest tests/test_s3_log_store.py -q && git fetch origin main --quiet && git merge-base --is-ancestor bc93e26 origin/main && echo "c2-ci OK"'
+    expected: >-
+      Tests pass and prints "c2-ci OK" (bc93e26 is an ancestor of origin/main -> PR #247 merged with
+      green CI).
+    fix_if: >-
+      A test failure means c2 regressed on main (re-open as real work); an ancestor failure means
+      bc93e26 is not on origin/main (re-investigate the merge state). Either way STOP, do not flip c2.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      c3 -- the prior plan attests the Step-10-style multi-perspective critique converged on the
+      design spec.
+    command: |-
+      bash -lc 'test -f docs/plans/PLAN-t115-log-storage-yaml.yaml && grep -qi "multi-perspective critique" docs/plans/PLAN-t115-log-storage-yaml.yaml && echo "c3 OK"'
+    expected: Prints "c3 OK" (prior plan exists and records the Step-10-style multi-perspective critique).
+    fix_if: >-
+      An absent file or no attestation means c3 evidence is missing; STOP and escalate -- do not flip
+      c3 (either re-run a fresh multi-perspective critique on log-storage.yaml or re-ground the
+      criterion text in a separate plan).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Replacement-closure -- the superseded log-storage.md is deleted with no live code/config
+      references (the .md -> .yaml cutover that c1/c2 represent is genuinely closed).
+    command: |-
+      bash -lc 'test ! -e docs/contracts/log-storage.md && ! grep -rn "log-storage\.md" --include=*.py --include=*.yml --include=*.yaml --include=*.md --include=*.toml --include=*.cfg --include=*.json docs/contracts scripts src config .github 2>/dev/null; echo "closure exit=$?"'
+    expected: >-
+      Prints "closure exit=0" (the .md is gone and no live surface under
+      docs/contracts|scripts|src|config|.github references it; historical PLAN-*.yaml/audit refs under
+      docs/plans are intentionally out of the scan).
+    fix_if: >-
+      A live reference exists -> the cutover is not closed; re-point or remove it (in a separate plan)
+      before flipping, since /implement's replacement-closure check on T-1.15 will FAIL otherwise.
+constraints:
+  - >-
+    This plan changes NO source code. The implementation (log-storage.yaml + s3_log_store.py wiring +
+    log-storage.md deletion) landed in PR #247 (bc93e26). Re-implementing is forbidden; if any VP step
+    shows a criterion does not hold, STOP and escalate -- the criterion is genuinely open, not a flip
+    candidate (Decision 55: no workaround loops, fail loud).
+  - >-
+    Criterion flips happen ONLY via /implement's closes_criteria bookkeeping walk on a verified VP
+    pass, with met_by set to this plan's slug (Status-Trusted-Never-Inferred / T2.20). /plan does not
+    flip criterion or item status.
+  - >-
+    T-1.15 status: complete requires operator confirmation in /implement's bookkeeping (all-criteria-met
+    QUALIFIES but does not auto-flip). bootstrap_completion_exempt is inherited true from T-1.15, so
+    CD.25 (state: pending) does NOT block completion.
+  - Only modify the file in the Scope table (docs/ROADMAP-PLATFORM.yaml).
+context:
+  - >-
+    Silent-completion finding (Tier Item Freshness Gate): T-1.15's three criteria all hold against
+    current main; they read open only because the exit-criteria-ledger (#258, 2026-06-24/25)
+    lazy-migrated bare-string criteria to status=open and refuses to infer met from commit activity
+    (T2.20). Evidence: log-storage.yaml (contract_version 1 / ratified);
+    s3_log_store._load_log_storage_registry; prior PLAN-t115-log-storage-yaml.yaml (Step-10
+    attestation, context ll.139-143); bc93e26 on origin/main.
+  - >-
+    Operator decision (2026-06-25): close via this follow-on plan -> /implement verified-flip path (NOT
+    a direct /plan roadmap-bookkeeping commit), to honor the exit-criteria-ledger contract that landed
+    the same day. c3 accepted as met (the prior IMPLEMENTATION plan's Step-10-style 2-agent
+    multi-perspective critique on the embedded design spec satisfies it); no fresh critique, no
+    re-grounding.
+  - >-
+    Decisions to cite: Decision 55 (no workaround loops; VP fails loud, the flip is sanctioned
+    reconciliation not a paper-over); Decision 84 (DuckLake sole ops-backend; the s3_log_store ->
+    OpsWriter routing VP step 2 checks is the legacy write-through death-dated at T2.26 -- governing
+    citation); Decision 86 (machine-parseable registries supersede prose contracts -- governs the .md
+    -> .yaml premise and the .md deletion); Status-Trusted-Never-Inferred / T2.20 (the reason this plan
+    exists). Related/context only: CD.25 (pre-codegen ratification, state: pending, bootstrap_allowance;
+    T-1.15 exempt so completion is not gated), Decision 90 (/implement makes changes directly during
+    the freeze).
+  - >-
+    Verification-tier rationale (Decision 48): V1 because the ONLY in-scope (Modify) file is
+    docs/ROADMAP-PLATFORM.yaml (roadmap config). scripts/s3_log_store.py, docs/contracts/log-storage.yaml,
+    and tests/test_s3_log_store.py are READ-ONLY verification targets, not modified, so Decision 48's
+    highest-tier-wins (cross-service contract -> V3) does not fire. Decision 79 compute_affected_artifacts
+    is satisfied: config/agent/ is not in scope and no active Lambda manifest file is modified.
+  - >-
+    Out-of-scope observation (do not action here): the landed docs/contracts/log-storage.yaml omits
+    Decision-86 from its decisions_cited list although its header invokes it ("Supersedes the prose
+    boundary contract (Decision 86)"). Editing the landed YAML is outside this reconciliation plan's
+    scope; flagged for a future docs/contracts touch.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok;
+    main_files_changed_since_branch empty) -- no scope-overlap risk on docs/ROADMAP-PLATFORM.yaml.
+  - >-
+    No open ci-rca recs at planning time (ci_rca_unresolved_recs empty) -- no HARD BLOCK, no deferral
+    rationale required.
+pre_implementation_checklist:
+  - Branch confirmed not main (harness branch claude/fervent-keller-bervyu).
+  - docs/PROJECT_CONTEXT.md read.
+  - >-
+    Decisions 55/84/86 + T2.20 + CD.25 understood (verified flip not inference; fail loud; CD.25 does
+    not gate T-1.15 completion).
+  - >-
+    All VP target files located and readable: docs/contracts/log-storage.yaml, scripts/s3_log_store.py,
+    tests/test_s3_log_store.py, docs/plans/PLAN-t115-log-storage-yaml.yaml.
+  - >-
+    closes_criteria refs (T-1.15:c1/c2/c3) resolve to real criteria in docs/ROADMAP-PLATFORM.yaml
+    (validate.py enforces referential integrity).
+  - Acceptance criteria understood and each maps to a verification_plan step.
+execution_steps:
+  - >-
+    Run the Verification Plan in order (steps 1-5). Each is idempotent and read-only against
+    already-landed artefacts. If every step passes, c1/c2/c3 hold and the cutover is closed.
+  - >-
+    On the verified VP pass, /implement's closes_criteria bookkeeping walk flips T-1.15:c1, T-1.15:c2,
+    T-1.15:c3 from status: open to status: met, setting met_by to this plan's slug
+    (t115-log-storage-criteria-closeout), in a single staged docs/ROADMAP-PLATFORM.yaml edit.
+  - >-
+    All three criteria now met -> the item QUALIFIES for completion. Surface to the operator; on
+    confirmation, stage T-1.15 status: complete + completed_at: <today ISO>. Resolve
+    bootstrap_completion_exempt by inheritance from T-1.15 (true), so CD.25 state: pending does not
+    block. Run the replacement-closure check (VP step 5 evidence) as part of the completion gate.
+  - >-
+    If ANY VP step fails, STOP -- do not flip the corresponding criterion. Escalate per Decision 55
+    (the criterion is genuinely open; reconciliation is not applicable). Do not patch source or the
+    landed YAML in this plan.
+  - >-
+    Report: which criteria were verified and flipped, the met_by value, whether T-1.15 was staged
+    complete, and the bookkeeping commit sha.
+work_areas: []
+rollback: >-
+  Pure roadmap-bookkeeping change. Revert the single bookkeeping commit to restore T-1.15's criteria to
+  status: open and the item to status: in_progress. No code, data, or deployed-function change is
+  involved.

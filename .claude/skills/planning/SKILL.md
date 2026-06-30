@@ -47,7 +47,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (consolidation Phase 4, docs/INTENT-ducklake-consolidation.md). Until then, do not gate plans on session counts/staleness.
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (Decision 84 Phase 4 / tier_item T2.36). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 
@@ -59,6 +59,45 @@ Together these form a three-layer health picture:
 - **Quality state**: Are the checks passing? (last_run.verdict == PASS)
 
 If pipeline health is critical (no sessions in 7 days), the plan should prioritise pipeline fixes before adding new features. If quality coverage is zero, any plan touching data write paths should include adding YAML checks. If the last DQ run failed, the plan should note which tables are affected.
+
+## Follow-on /plan mode (in_progress items with open criteria)
+
+When intent targets an `in_progress` tier_item (one with open criteria remaining), `/plan`
+operates in **follow-on mode**. This is the common case -- most items take N follow-on plans.
+
+### Trigger
+- `/orient` emits a follow-on `/plan <item-id>: follow-on -- <name>` prompt for any in_progress
+  item where `needs_followon_plan` is True (open criteria AND no in-flight plan covers them).
+- The human selects one of these prompts, or names an in_progress item directly.
+
+### Follow-on /plan protocol
+1. **Load state.** Read the item's `exit_criteria[]` from `docs/ROADMAP-PLATFORM.yaml`; identify
+   which criteria have `status: open`. Load any prior PLAN-*.yaml files that reference this item
+   (via their `closes_criteria` field or the item id in their Phase/Context) and the item's
+   `progress_note` to understand what has already shipped.
+2. **Scope the NEXT slice only.** Plan the minimum work to close one or more open criteria -- do
+   NOT re-plan work already met/rehomed. The plan's scope, acceptance criteria, and VP steps are
+   constrained to what is needed to flip the chosen open criteria.
+3. **Declare closes_criteria.** The plan document MUST include a `closes_criteria:` field listing
+   each item-criterion the plan commits to close on a verified VP pass, in `<item-id>:<crit-id>`
+   format (e.g. `T-1.23:c2`). The plan's acceptance_criteria should 1:1 map onto the chosen open
+   criteria -- each AC corresponds to a closes_criteria ref.
+4. **Cross-reference the Freshness Gate.** Before committing, run the Tier Item Freshness Gate
+   (below) on the parent item: check if any open criterion is already satisfied by recent work
+   (silent-completion check). If so, propose a criterion status flip to `met` as a roadmap
+   bookkeeping step before scoping the next slice.
+
+### Status-Trusted-Never-Inferred constraint
+`/plan` NEVER flips criterion statuses or item status during planning. Criterion flips happen only
+in `/implement`'s bookkeeping walk, on a verified VP pass, for explicitly declared closes_criteria.
+See T2.20 lesson. Never infer `met` from prose, file existence, or commit activity.
+
+### closes_criteria field format
+Each entry is a string `"<item-id>:<crit-id>"` matching exactly one ExitCriterion in the roadmap:
+- `item-id` must be a real tier_item id in the roadmap.
+- `crit-id` must be an id within that item's exit_criteria (e.g. `c1`, `c2`, ...).
+- `validate.py` enforces referential integrity: a closes_criteria ref to a nonexistent
+  item:criterion fails CI (check (iii) in validate_platform_roadmap).
 
 ## Platform Roadmap Eligibility (Workflow Step 2)
 
@@ -142,6 +181,40 @@ Search `logs/.recommendations-log.jsonl` for open recommendations that align wit
 >
 > Want to bundle any into this session? Say 'include rec-XXX' or 'skip'."
 
+## Recommendation Relevance Gate (Workflow Step 3, fires before bundling any rec)
+
+Before adding any open recommendation to the plan's `bundled_recommendations` list, re-check
+its relevance using `scripts/rec_relevance.py`. Recs can go stale between filing and the
+current session (target file deleted, decision ratified, sibling plan already fixed it).
+
+### Protocol
+For each candidate rec identified via "Suggest Aligned Recommendations":
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=False)
+print(verdict, '|', evidence[:120])
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; offer to bundle normally.
+- **`satisfied`** -- do NOT bundle. Surface the evidence and the proposal command from
+  `propose_or_close_rec(rec_id, 'satisfied', evidence, deterministic=False)` (planning time:
+  never deterministic). Wait for operator to run the closure command, then proceed without bundling.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- do NOT
+  bundle. Present the `propose_or_close_rec` output and wait for operator decision. Remove from
+  candidate list regardless of outcome.
+
+**Constraints:**
+- `run_acceptance_probe=False` is mandatory at planning time (Decision 55: no auto-closure from
+  semantic judgment). Acceptance probes run only at `/implement` time.
+- Never call `_make_reader()` inside this gate (Decision 88: use read-cache only).
+
 ## Documentation Artefact Design
 
 This repository is agent-first. When a plan creates or modifies documentation artefacts,
@@ -191,9 +264,11 @@ apply these rules:
 ## Main Divergence Assessment (Workflow Step 4)
 After Scope is identified, intersect the prospective Scope file list with `main_freshness.main_files_changed_since_branch` from the preflight report. If any Scope file appears in that list:
 
-> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend `git checkout main && git pull && git rebase main` from the branch BEFORE writing the plan. Options: (1) rebase now, (2) proceed and accept the risk, (3) abort."
+> "Main has changed [list of overlapping files] since this branch diverged. Planning against the stale branch view risks decisions that conflict with what is already on main (e.g., a Decision Record you cite has been amended, a tier_item you target has been retired). Recommend rebasing BEFORE writing the plan: `git fetch origin main && git rebase origin/main`. Options: (1) rebase now and re-enter `/plan`, (2) proceed and accept the risk, (3) abort."
 
-Wait for human direction. Do not auto-rebase. If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
+**Rebase phase distinction (assessment time)**: do NOT auto-rebase here. This is the assessment-time rule -- surface the divergence, wait for the human's choice. Auto-rebase happens only at commit-flow time (the Pre-Push Rebase step in the implement skill), NOT here. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for the full rebase phase distinction.
+
+If the human chooses (2), record the deferral as a line in the plan's Context section: "Branch was N commits behind main at planning time; overlapping files: [list]. Rebase deferred per human decision."
 
 If `main_freshness.status != "ok"`, this assessment cannot run -- note in the plan's Context section and continue.
 
@@ -244,7 +319,7 @@ Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any 
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
-On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch.
+On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, never agent/).
 
 Verify you are on the harness branch and not on `main`:
 ```bash

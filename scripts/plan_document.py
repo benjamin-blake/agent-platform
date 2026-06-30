@@ -65,6 +65,7 @@ class PlanDocument(BaseModel):
     phase: str = Field(min_length=1)
     scope: list[ScopeEntry] = Field(min_length=1)
     bundled_recommendations: list[str] = Field(default_factory=list)
+    closes_criteria: list[str] = Field(default_factory=list)
     infrastructure_dependencies: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(min_length=1)
     verification_plan: list[VerificationStep] = Field(min_length=1)

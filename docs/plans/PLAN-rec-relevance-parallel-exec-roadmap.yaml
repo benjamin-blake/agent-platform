@@ -1,0 +1,89 @@
+schema_version: 1
+slug: "rec-relevance-parallel-exec-roadmap"
+intent: >-
+  Capture, as governed roadmap forward intent, the recommendation-relevance lifecycle and the
+  parallel-rec-execution / executor architecture surfaced in an external (GPT5.5) review, so the
+  self-improving loop neither accumulates nor actions dead work; the MVP slice (rec relevance gate +
+  post-merge reconciliation) serves rec-queue hygiene in the human-driven /plan and /implement flow today.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-rec-relevance-parallel-exec-roadmap.yaml
+phase: >-
+  Phase Platform (automation infrastructure). Platform tiers T3 (Trust loop closure -- rec relevance MVP)
+  and T4 (executor + autonomy -- deferred_post_mvp forward intent). No product-phase dependency.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add 3 candidate_decisions (CD.36 rec-relevance-as-governed-lifecycle, CD.37 semantic-locks-for-parallel-exec,
+      CD.38 executor-delegates-validation-to-GitHub-Actions) and 7 tier_items. MVP (not_started): T3.8
+      recommendation relevance contract + freshness gate, T3.9 post-merge reconciliation. deferred_post_mvp:
+      T3.10 retire-verification-projection, T4.8 semantic-lock-registry+leases, T4.9 executor->GitHub-Actions
+      handshake, T4.10 durable-persona-contract-registry, T4.11 executor-loop-budget+retry. This is the
+      REPORT-ONLY deliverable (roadmap forward-intent DATA); no code, contracts, or skills are modified.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema (scripts.platform_roadmap PASS, exit 0)
+  - Candidate decisions CD.36, CD.37, CD.38 are present with state == pending
+  - Tier items T3.8 and T3.9 are present with status == not_started (MVP)
+  - Tier items T3.10, T4.8, T4.9, T4.10, T4.11 are present with status == deferred_post_mvp
+  - No live (not_started/in_progress) tier_item depends_on a deferred_post_mvp item (platform_roadmap.py model_validator passes at load)
+  - T3.8 is eligible to start (depends_on T0.12.5 + T0.12.7, both complete); the five deferred_post_mvp items are excluded from next_eligible
+  - The change is confined to docs/ROADMAP-PLATFORM.yaml -- no code, contract, or skill file is modified (nothing implemented)
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Validate the roadmap against the RoadmapDocument Pydantic schema and the no-live-dep model_validator
+    command: bin/venv-python -m scripts.platform_roadmap
+    expected: "Prints 'PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.' and exits 0"
+    fix_if: "Schema error, unknown key, or a model_validator failure (e.g. a live item depending on a deferred_post_mvp item) -- fix the offending tier_item/CD block"
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the 10 new ids are present with the intended statuses (2 MVP not_started, 5 deferred_post_mvp, 3 pending CDs)
+    command: 'bin/venv-python -m scripts.platform_roadmap && grep -cE "id: (CD\.3[678]|T3\.8|T3\.9|T3\.10|T4\.8|T4\.9|T4\.10|T4\.11)" docs/ROADMAP-PLATFORM.yaml'
+    expected: "platform_roadmap PASS, then grep count == 10 (CD.36-38 + T3.8/T3.9/T3.10 + T4.8-T4.11)"
+    fix_if: "Count < 10 means an id is missing or mis-indented; re-check the inserted blocks"
+  - step: 3
+    phase: pre-deploy
+    action: Run the fast presubmit tier over the edited tree (lint/format/prompts)
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exits 0 (no lint/format/prompt-compliance regressions); full validate on CI is the authoritative gate"
+    fix_if: "Address the reported lint/format issue in docs/ROADMAP-PLATFORM.yaml"
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the change is purely additive -- no pre-existing tier_item or candidate_decision was mutated or deleted (enforces acceptance criterion 7 / round-1 plan-critique finding)
+    command: 'git fetch origin main --quiet && git diff origin/main -- docs/ROADMAP-PLATFORM.yaml | grep -cE "^-[^-]"'
+    expected: "Prints 0 -- no deletion lines; the roadmap change adds only the CD.36-38 + T3.8-T3.10 / T4.8-T4.11 blocks"
+    fix_if: "A non-zero count means a pre-existing block was altered or the base is stale -- rebase onto origin/main (the common cause) and re-diff; revert any genuine unintended edit"
+constraints:
+  - REPORT-ONLY -- the deliverable is roadmap forward-intent DATA; nothing is implemented this session
+  - Executor is frozen (Decision 67 / CD.17) and concurrency=1 by design until T4.4; the four T4 items are inert forward intent
+  - No new Class A ops_recommendations columns (Decision 84) -- T3.8 relevance is read-time or a named projection (recommendation-relevance.yaml)
+  - No new standing prose-architecture docs (Decision 86) -- forward intent routes to tier_items, rationale to candidate_decisions
+  - No live (not_started/in_progress) tier_item may depend_on a deferred_post_mvp item (Decision 93, enforced at load)
+  - Edits confined to docs/ROADMAP-PLATFORM.yaml; no code, contract, or skill file is touched
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - "Origin: external (GPT5.5) architecture review of a semantic-relevance protocol for recommendations + parallel rec execution. Ground-truthed against the live roadmap: CD.27 (executor substrate), CD.29 (acceptance/verification typed-checks convergence), CD.35/Decision 92 (Terraform CI/CD authority) confirmed; all referenced depends_on ids (T0.12.5, T0.12.7, T1.12, T2.20, T3.1, T3.6, T3.7) verified to exist."
+  - "Decision Scout gate run twice (initial + expanded scope): NO_FLAGS both times. CD.38 (executor delegates validation to GitHub Actions) makes the CD.27 topology EXPLICIT and generalises CD.35/CD.21 -- it does not contradict any decision. No decision forbids speculative pending candidate_decisions."
+  - "Already covered, deliberately NOT duplicated: the required `acceptance` oracle on every rec (jsonl_store.py), the Tier Item Freshness Gate (T-1.21), implement-side replacement-closure/truth-maintenance (T-1.22), the CD.27 Step-Functions+Durable-Lambda executor substrate, CD.29 acceptance/verification convergence (contract-level done at T0.12.5), and GitHub Actions as verifier substrate (CD.21)."
+  - "Reworked from the GPT5.5 source, not transcribed: (a) item-1's proposed Class A relevance/closure_proof columns are corrected to read-time-or-named-projection per Decision 84; (b) T4.10 personas EXTENDS T4.2 (which already lands the personas) with the governance-contract layer + the net-new rca/bookkeeping personas, rather than duplicating the substrate; (c) T4.11 loop-budget EXTENDS T4.1/T4.2 (concurrency=1 + deterministic-retry-split already present) with bounded budgets; (d) GPT5.5's CD.NN/T3.x/T4.x placeholders and inter-item deps replaced with allocated ids."
+  - "MVP scoping (operator, 2026-06-24): T3.8 + T3.9 are MVP (status not_started); T3.10 + T4.8-T4.11 are deferred_post_mvp. T3.9 was decoupled from T4.8 (semantic locks, deferred) so a live item does not depend on a deferred one -- MVP reconciliation uses file-level overlap; semantic-lock overlap (T4.8) is a post-MVP enhancement."
+  - "Present-value driver: 505 open / 273 aging recs at planning time; the oldest open recs are an April 2026 cli-migration-analysis that predates the current architecture -- direct evidence the queue accumulates dead work the relevance gate (T3.8) and reconciliation (T3.9) address."
+  - "T3.10 left deferred_post_mvp per operator scoping though it is a natural T3 trust-loop companion (its deps T3.1/T3.6 are not yet complete, so it would not be eligible regardless)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/upbeat-ptolemy-rp7z88)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS scouted via the decision-scout gate (NO_FLAGS; CITE list incorporated into the CD/tier_item text)
+  - Scope file docs/ROADMAP-PLATFORM.yaml located and readable
+  - Acceptance criteria understood and verifiable (platform_roadmap PASS + status/eligibility outcome confirmed)
+execution_steps:
+  - "Deliverable authored DURING this planning session (REPORT-ONLY): docs/ROADMAP-PLATFORM.yaml gains candidate_decisions CD.36-38 (pending) and tier_items T3.8/T3.9 (not_started, MVP), T3.10/T4.8/T4.9/T4.10/T4.11 (deferred_post_mvp). Verified: platform_roadmap PASS, no live->deferred edges, T3.8 eligible."
+  - "No /implement required for this plan -- it captures roadmap forward intent. Per-item implementation is a separate future plan when each item is scheduled (T3.8 is eligible now; pick it up via /orient -> /plan when rec-queue hygiene is prioritised)."
+  - "Execute the Verification Plan; run the Step 10 multi-perspective REPORT critique against the roadmap additions; merge to main."
+work_areas: []
+rollback: >-
+  Revert the three additive edits to docs/ROADMAP-PLATFORM.yaml (the CD.36-38 block and the T3.8-T3.10 /
+  T4.8-T4.11 tier_item blocks). Purely additive forward-intent DATA; no runtime or code impact, so reverting
+  has no downstream consequence beyond removing the roadmap entries.

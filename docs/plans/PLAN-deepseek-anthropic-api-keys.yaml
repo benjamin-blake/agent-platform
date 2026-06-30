@@ -1,0 +1,200 @@
+schema_version: 1
+slug: deepseek-anthropic-api-keys
+intent: >-
+  Confirm the Tier-1 (DeepSeek) and Tier-2 (Anthropic) LLM-inference credentials are live and
+  close out T0.4's shipped criteria. Provisioned inference credentials are the precondition for the
+  LiteLLM transport and the autonomous executor (T4.2); this closeout flips the verified criteria so
+  the inference path is unblocked.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-deepseek-anthropic-api-keys.yaml
+phase: >-
+  Platform tier T0.4 "Provision DeepSeek + Anthropic API keys in Secrets Manager" (in_progress);
+  item completion gated by CD.28 (state: pending).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      On a verified VP pass, flip T0.4 c1/c2/c3 to status=met (met_by=deepseek-anthropic-api-keys),
+      set c4 to status=rehomed (rotation reminder owned by T2.9, deferred_post_mvp), refresh
+      progress_note, and leave item status=in_progress with a note that all active criteria are met
+      and completion is gated solely on CD.28 ratification.
+bundled_recommendations: []
+closes_criteria:
+  - "T0.4:c1"
+  - "T0.4:c2"
+  - "T0.4:c3"
+infrastructure_dependencies:
+  - >-
+    No new terraform apply and no Lambda deploy. The two Secrets Manager envelopes
+    (agent-platform-deepseek-api-key, agent-platform-anthropic-api-key) and the PlatformDev DailyOps
+    InferenceCredentialsRead IAM grant are already applied in the sandbox/personal account (PR #201,
+    terraform/personal/inference_credentials.tf + terraform/personal/platform_roles.tf). This plan
+    changes no .tf content; it only exercises the already-applied infra.
+  - >-
+    Secret VALUES are set out-of-band via put-secret-value and are never Terraform-managed
+    (Decision 37). The VP assumes both secret values are present in the sandbox account.
+acceptance_criteria:
+  - >-
+    c1: `scripts.smoke_test_inference_credentials --provider deepseek` exits 0 and prints
+    "PASS [deepseek] deepseek/deepseek-chat -> ..." (key fetched from Secrets Manager as PlatformDev,
+    LiteLLM completion returns a non-empty response).
+  - >-
+    c2: `scripts.smoke_test_inference_credentials --provider anthropic` exits 0 and prints
+    "PASS [anthropic] anthropic/claude-haiku-4-5 -> ..." against the live Anthropic key.
+  - >-
+    c3: the PlatformDev DailyOps inline policy contains an InferenceCredentialsRead statement granting
+    secretsmanager:GetSecretValue ARN-scoped to exactly the two inference-credential secret ARNs (no
+    wildcard).
+  - >-
+    Roadmap bookkeeping: T0.4 c1/c2/c3 are status=met with met_by=deepseek-anthropic-api-keys; c4 is
+    status=rehomed pointing to T2.9; T0.4 item status remains in_progress with a note that completion
+    is gated only on CD.28 ratification; the platform-roadmap validation (VP step 4) passes
+    (closes_criteria refs, rehomed c4, and met_by resolution all valid).
+verification_plan:
+  - step: 1
+    phase: post-deploy
+    action: Re-run the Tier-1 DeepSeek smoke-test end-to-end (fetch secret as PlatformDev, LiteLLM call).
+    command: bin/venv-python -m scripts.smoke_test_inference_credentials --provider deepseek
+    expected: >-
+      Exit code 0; stdout ends with "PASS [deepseek] deepseek/deepseek-chat -> '<text>'". Confirms c1
+      and exercises the InferenceCredentialsRead grant live (GetSecretValue as PlatformDev).
+    fix_if: >-
+      Non-zero exit or a FAIL line. AccessDenied -> IAM grant regressed (c3); ResourceNotFound ->
+      secret missing; empty value -> secret value unset; auth error -> DeepSeek key invalid/revoked.
+      STOP and RCA (Decision 55); do not patch inline.
+  - step: 2
+    phase: post-deploy
+    action: Re-run the Tier-2 Anthropic smoke-test end-to-end.
+    command: bin/venv-python -m scripts.smoke_test_inference_credentials --provider anthropic
+    expected: >-
+      Exit code 0; stdout ends with "PASS [anthropic] anthropic/claude-haiku-4-5 -> '<text>'".
+      Confirms c2.
+    fix_if: >-
+      Non-zero exit or FAIL line; same diagnostics as step 1 for the Anthropic secret/key. STOP and
+      RCA (Decision 55); do not patch inline.
+  - step: 3
+    phase: post-deploy
+    action: Assert the live InferenceCredentialsRead IAM grant is ARN-scoped to both secret ARNs (explicit c3 check).
+    command: >-
+      aws iam get-role-policy --role-name PlatformDev --policy-name DailyOps --profile agent_platform
+      --query "PolicyDocument.Statement[?Sid=='InferenceCredentialsRead']" --output json
+    expected: >-  # pragma: allowlist secret
+      A single statement with Effect=Allow, Action including secretsmanager:GetSecretValue, and a
+      Resource list naming exactly the two inference-credential secret ARNs (deepseek + anthropic),
+      with no wildcard.
+    fix_if: >-
+      Statement absent, wildcarded, or missing one of the two ARNs -> c3 not satisfied; STOP and RCA.
+      If the profile chain is unavailable, steps 1-2 already exercise the grant live (AccessDenied on
+      a missing grant) -- treat them as the authoritative c3 signal and note the skipped explicit check.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      After the roadmap bookkeeping edit, run the platform-roadmap schema + criteria-integrity checks
+      directly. NOTE: validate_platform_roadmap runs in full presubmit only (not --pre), so invoke it
+      directly rather than via `validate --pre`.
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_platform_roadmap as v; f=[];
+      v(f); import sys; sys.exit(1 if f else 0)"
+    expected: >-
+      Exit code 0. The platform-roadmap validation (T-1.5 schema + T-1.23 assertions i/ii/iii) accepts
+      c1/c2/c3 status=met with a resolvable met_by (this plan exists at
+      docs/plans/PLAN-deepseek-anthropic-api-keys.yaml), c4 status=rehomed (a known tier_item id),
+      and the plan's closes_criteria refs (T0.4:c1, T0.4:c2, T0.4:c3) resolving to real item:criteria.
+    fix_if: >-
+      Non-zero exit. met_by does not resolve (set met_by=deepseek-anthropic-api-keys, matching the
+      plan slug); bare-string criteria warning on the touched T0.4 item (keep all criteria as
+      structured ExitCriterion objects); or a closes_criteria referential-integrity FAIL.
+constraints:
+  - >-
+    Criterion status flips happen ONLY in /implement's bookkeeping walk, on a verified VP pass, for
+    the declared closes_criteria (Status-Trusted-Never-Inferred). The c4 rehome annotation lands in
+    the same bookkeeping walk. /plan never flipped them.
+  - >-
+    met criteria MUST set met_by to a resolvable plan slug (deepseek-anthropic-api-keys) or a 40-hex
+    commit sha (validate.py T-1.23 assertion (i)).
+  - >-
+    No new terraform apply and no Lambda deploy; no .tf content changes (infra already applied in
+    sandbox per Decision 77). Secret values stay out-of-band; never Terraform-managed (Decision 37).
+  - >-
+    Do NOT build or modify T2.9's rotation-automation surface (terraform/personal/secrets_rotation.tf,
+    docs/contracts/secrets-rotation.md, .github/workflows/secrets-rotation-reminder.yml). Key rotation
+    is deferred_post_mvp (human decision 2026-06-28); c4 is rehomed to T2.9, which already owns the
+    DeepSeek + Anthropic rotation cadence + reminder.
+  - >-
+    Do NOT ratify CD.28. It gates multiple items (T0.4, T4.1, T4.2, T4.3, T4.4); ratification is a
+    separate governance action via the ops-portal vehicle. This plan only surfaces it as the remaining
+    T0.4 completion gate.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    T0.4 is in_progress. progress_note (2026-06-21) records that c1-c3 shipped and were verified
+    end-to-end in the sandbox/personal account (PR #201 + tag-fix #204 + CI recovery #206). All code
+    is present in the working tree: terraform/personal/inference_credentials.tf (both envelopes +
+    ARN outputs), terraform/personal/platform_roles.tf:174 (InferenceCredentialsRead),
+    scripts/smoke_test_inference_credentials.py + 100%-coverage test, requirements-dev.txt (litellm).
+  - >-
+    CD.28 (state: pending) gates T0.4 completion (gates: [T0.4, T4.1, T4.2, T4.3, T4.4]). The item
+    stays in_progress until CD.28 ratifies via the portal vehicle (roadmap agent_instructions
+    "ratification vehicle"). Starting/closing criteria is allowed under the bootstrap allowance; item
+    COMPLETION is gated.
+  - >-
+    CD.28's discipline-point (ROADMAP-PLATFORM.yaml line 1139) mandates quarterly, calendar-reminded
+    rotation for the DeepSeek and Anthropic credentials. That rotation work is deferred_post_mvp and
+    owned by T2.9 ("Secrets rotation policy + automation", ROADMAP line 4164), whose exit_criteria
+    already name "DeepSeek + Anthropic API keys (per CD.28 / T0.4) documented as Secrets Manager
+    versioned with quarterly rotation cadence" and "Calendar-cron files a rec ... before rotation due".
+    Per human decision (2026-06-28) key rotation stays post-MVP, so c4 is rehomed to T2.9 rather than
+    built/closed here. Mirrors the T2.14 broker-credential precedent and the Decision 93
+    deferred_post_mvp boundary.
+  - >-
+    ci-rca deferral rationale (Related-Work check). rec-2382 (Critical, source=ci_rca,
+    scripts/session_preflight.py, _check_endstate_drift subprocess.run missing encoding='utf-8') is
+    OPEN at planning time. This plan satisfies none of the three Related-Work conditions: different
+    source_file, no shared Decision Record, and a different failure category (rec-2382 is a
+    session_preflight subprocess-encoding defect, not a DQ/schema/validate.py/terraform/pytest/mypy/
+    prompt-compliance/V3-harness failure shared with this closeout). Deferral approved by the human
+    2026-06-28; rec-2382 follows the ci-rca forward-fix protocol and gets its own /plan review
+    (Decision 55 / Decision 72), not an inline patch here.
+  - >-
+    Decision scout (Step 6a) returned NO_FLAGS. CITE: CD.28, Decision 37 (out-of-band secret values),
+    Decision 77 (sandbox apply posture), Decision 55 / Decision 72 (ci-rca forward-fix). RELATED:
+    Decision 93 (deferred_post_mvp precedent), CD.6, Decision 79, Decision 47.
+  - >-
+    Smoke-test model IDs are valid current LiteLLM strings: deepseek/deepseek-chat (Tier 1) and
+    anthropic/claude-haiku-4-5 (Tier 2; Haiku 4.5 is an active model).
+  - >-
+    Main divergence: branch was 0 commits behind origin/main at planning time (preflight
+    main_freshness=ok); no scope-file overlap.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/deepseek-anthropic-api-keys-44zt2n)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS context surfaced via decision-scout (NO_FLAGS); CITE list recorded
+  - Scope file (docs/ROADMAP-PLATFORM.yaml) and read-only references located and readable
+  - closes_criteria (T0.4:c1, T0.4:c2, T0.4:c3) understood; c4 rehome understood
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Execute VP steps 1-3 (DeepSeek smoke-test, Anthropic smoke-test, InferenceCredentialsRead IAM
+    check) and confirm c1/c2/c3 hold today. On any failure, STOP and RCA (Decision 55) -- do not patch
+    inline.
+  - >-
+    Roadmap bookkeeping walk in docs/ROADMAP-PLATFORM.yaml: set T0.4 c1/c2/c3 status=met with
+    met_by=deepseek-anthropic-api-keys; set c4 status=rehomed and prepend an annotation to its text,
+    e.g. "[Rehomed 2026-06-28: quarterly-rotation calendar reminder is post-MVP, owned by T2.9
+    (Secrets rotation policy + automation, deferred_post_mvp), whose criteria already cover the
+    DeepSeek + Anthropic key rotation cadence + reminder; not required for T0.4 MVP completion per
+    human decision]"; refresh progress_note to record this closeout; leave item status=in_progress
+    and add a note that all active criteria (c1-c3) are met, c4 is rehomed, and completion is gated
+    solely on CD.28 ratification.
+  - >-
+    Execute VP step 4 (validate_platform_roadmap invoked directly -- it does not run under --pre) to
+    confirm roadmap schema + criteria integrity.
+  - >-
+    Surface CD.28 ratification as the sole remaining T0.4 completion gate (do NOT ratify it). Note it
+    in the Report for the human / a future governance action.
+  - 'Report: criteria flipped (c1-c3 met, c4 rehomed), verification results, and the remaining CD.28 gate.'
+work_areas: []
+rollback: >-
+  The only mutation is the docs/ROADMAP-PLATFORM.yaml bookkeeping edit; revert that commit to restore
+  the prior open/in_progress state. No infra, secrets, or deployed artifacts are touched.

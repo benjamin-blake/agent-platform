@@ -146,6 +146,25 @@ class TestValidContracts:
         assert gov.table_class == "SCD2_append_only"
         assert gov.auth_type == "AWS_IAM"
 
+    def test_governance_merge_key_accepted(self) -> None:
+        gov = ContractGovernance(table_class="SCD2", merge_key="id")
+        assert gov.merge_key == "id"
+
+    def test_governance_merge_key_defaults_none(self) -> None:
+        gov = ContractGovernance(table_class="SCD2")
+        assert gov.merge_key is None
+
+    def test_governance_merge_key_in_full_contract(self) -> None:
+        doc = _class_a_doc()
+        doc["governance"] = {"table_class": "SCD2", "merge_key": "id"}
+        validated = ContractDocument.model_validate(doc)
+        assert validated.governance is not None
+        assert validated.governance.merge_key == "id"
+
+    def test_governance_unknown_key_still_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ContractGovernance.model_validate({"merge_key": "id", "unknown_key": "oops"})
+
     def test_verbspec_defaults(self) -> None:
         verb = VerbSpec()
         assert verb.payload_schema_ref is None

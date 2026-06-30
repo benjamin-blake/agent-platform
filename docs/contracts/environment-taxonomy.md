@@ -31,6 +31,7 @@ from re-conflating.
 
 | environment | money real? | code vs infra | apply gating | account |
 |-------------|-------------|---------------|--------------|---------|
+| bootstrap | N/A (CI/CD own IAM + authority budget) | `terraform/bootstrap/` only | admin-only (`agent_platform_admin`), NEVER auto-apply, out-of-band from CD pipeline (CD.35 Wave 4 / T2.23) | current personal account |
 | sandbox | no (mocked) | same code path, mocked externals | auto-apply on push to main behind the deterministic guard (Decision 77); fail-closed set (IAM/trust/destroy) routes to gated-apply job requiring tf-gated-apply Environment reviewer approval (CD.35 Wave 3 / T2.22) | current personal account |
 | SIT | no (system-integration, mocked capital) | same code path | manual apply after review | future dedicated account (not yet stood up) |
 | PROD | yes (real capital) | same code path | manual apply + second approver | future dedicated account (not yet stood up) |
@@ -38,16 +39,44 @@ from re-conflating.
 The platform split is mock-vs-real at ONE code version, not version-skew tiers. The same code path
 runs in each environment; only the externals (mocked vs real) and the apply gate differ.
 
-**Sandbox gated-apply path (CD.35 Wave 3 / T2.22 / Decision 92):** When the deterministic guard
-exits 2 (IAM/trust/destroy diff), the `apply-sandbox` job sets `routed=true` and exits green
-(routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`, `environment:
-tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On approval, it
-applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU) and writes
-the convergence record green/red via the T2.20 always-run write. The Environment is the
-authorization boundary; the OIDC sub stays pinned to `refs/heads/main` (not an environment claim).
-This gates the apply JOB, NOT a PR status check (adding it to required checks would wedge
-autonomous fix-merges, Decision 83). IAM changes beyond `github_ci_apply`'s current scope remain
-admin-gated until T2.23 (bootstrap root + authority budget).
+**Sandbox gated-apply path (CD.35 Wave 3 / T2.22 / Decision 92, trust corrected by Decision 94):**
+When the deterministic guard exits 2 (IAM/trust/destroy diff), the `apply-sandbox` job sets
+`routed=true` and exits green (routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`,
+`environment: tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On
+approval, it applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU)
+and writes the convergence record green/red via the T2.20 always-run write. The Environment is the
+authorization boundary -- the required reviewer gates JOB EXECUTION. Because the `gated-apply` job
+declares `environment: tf-gated-apply`, GitHub sets its OIDC sub to
+`repo:OWNER/REPO:environment:tf-gated-apply` (the env claim REPLACES the ref claim), so
+`github_ci_apply`'s trust lists BOTH `refs/heads/main` (routine path) and the environment sub
+(gated path). Trusting the environment sub is safe: it can only be minted by an approval-gated job
+(Decision 94 corrects the original "sub stays refs/heads/main" claim, which VP9 disproved). This
+gates the apply JOB, NOT a PR status check (adding it to required checks would wedge autonomous
+fix-merges, Decision 83). The bootstrap root (CD.35 Wave 4 / T2.23) owns `github_ci_apply`'s own IAM + authority budget
+(permissions boundary + propagation condition keys) in `terraform/bootstrap/`. In-budget IAM
+auto-apply (guard-consumption) landed in T2.25 -- see the Guard classification subsection below.
+
+**Guard classification -- in-budget vs out-of-budget (T2.25 / Decision 92 point 5 -- SOLE SoT):**
+
+The deterministic guard (`scripts/terraform_apply_guard.py`) narrows from blocking ALL IAM diffs
+to budget-based classification. Evaluation order: delete -> neon -> trust-diff -> IAM.
+
+| classification | criteria | guard verdict |
+|----------------|----------|---------------|
+| in-budget | resource type in `in_budget_resource_types`, action set == `in_budget_actions` (["update"]), target role name in `in_budget_managed_roles` | exit 0 (auto-apply, still subject to subagent review) |
+| out-of-budget | any IAM-sensitive type+action not matching all three in-budget criteria | exit 2 -> tf-gated-apply Environment |
+| trust-diff | `assume_role_policy` differs on ANY resource (checked BEFORE IAM) | exit 2 always, even on in-budget resource types |
+| destroy/replace | "delete" in actions | exit 2 always |
+| neon update/delete | non-create neon_* action | exit 2 always |
+
+The machine-readable budget table lives at `terraform/bootstrap/authority_budget.json`
+(override via `TF_AUTHORITY_BUDGET` env var for testing). Missing or unparseable table = fail
+closed (all IAM treated as out-of-budget, Decision 77). `scripts/validate.py:validate_authority_budget`
+asserts the table stays in sync with the IAMRoleWriteBounded SCP in `terraform/bootstrap/github_ci_apply.tf`.
+
+Conservative v1 narrowing: role CREATES stay gated (new trust surface). The ratchet widens
+on track record (Decision 92 point 5): budget amendments via the bootstrap tier only; subagent
+review advises, never locks.
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 

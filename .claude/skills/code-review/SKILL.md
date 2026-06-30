@@ -169,7 +169,7 @@ Structure your report exactly as follows:
 | LLM Maintainability                 | X     |                          |
 
 ### Plan Acceptance Criteria Check
-[If `docs/plans/PLAN-{slug}.md` was present: list each criterion and whether the implementation satisfied it]
+[If `docs/plans/PLAN-{slug}.yaml` was present: list each criterion and whether the implementation satisfied it]
 
 ### Critical Issues (fix immediately)
 [Bulleted list — each item cites file:line and explains the risk]

@@ -62,7 +62,8 @@ def _require_duckdb() -> Any:
         # never silently degrading to an Athena fallback.
         raise RuntimeError(
             "DuckLake spike requires duckdb but import failed. "
-            "Ensure duckdb is installed in the venv: pip install 'duckdb>=1.5.3'."
+            "Ensure duckdb is installed in the venv: see requirements.txt / "
+            "config/lambda/ducklake/version.yaml for the pinned version."
         ) from exc
 
 

@@ -7,15 +7,19 @@
 # have their own Class A contracts. Tables with Class A contracts are indexed there.
 #
 # For DuckLake-boundary tables: see docs/contracts/read-engine.yaml (version 3).
-# For Iceberg-boundary tables pending T2.26 disposition: see docs/INTENT-ducklake-consolidation.md.
+# For Iceberg-boundary tables pending T2.26 disposition: see tier_item T2.26.
 #
 # Class A contracts (authoritative, not indexed here):
-#   ops_recommendations -> docs/contracts/ops_recommendations.yaml (T0.12.5)
-#   ops_decisions       -> docs/contracts/ops_decisions.yaml (T0.12.5)
+#   ops_recommendations    -> docs/contracts/ops_recommendations.yaml (T0.12.5)
+#   ops_decisions          -> docs/contracts/ops_decisions.yaml (T0.12.5)
+#   telemetry_sessions     -> docs/contracts/telemetry_sessions.yaml (T0.12.6)
+#   telemetry_observations -> docs/contracts/telemetry_observations.yaml (T0.12.6)
+#   telemetry_transcripts  -> docs/contracts/telemetry_transcripts.yaml (T0.12.6)
+#   telemetry_agents       -> docs/contracts/telemetry_agents.yaml (T0.12.6)
 #
 version: 1
-updated_at: "2026-06-20"
-updated_by: "PLAN-ratify-ops-class-a-contracts (T0.12.5)"
+updated_at: "2026-06-24"
+updated_by: "PLAN-ratify-class-a-telemetry-contracts (T0.12.6)"
 
 tables:
   # ---------------------------------------------------------------------------
@@ -33,6 +37,20 @@ tables:
     graduation_blocker: CD.17 reversal + executor resume
 
   # ---------------------------------------------------------------------------
+  # DuckLake append-only tables (event-journal write mode, T1.14)
+  # ---------------------------------------------------------------------------
+  ops_smoke_events:
+    substrate: DuckLake-on-Neon
+    status: smoke
+    write_mode: append_only
+    write_mode_invariant: "history table only; no current write-through projection (ScdTableSpec.current_table=None)"
+    write_boundary: ducklake_writer Lambda (action_write_ops) -- append events only; require_exists=True illegal
+    read_boundary: direct DuckDB ATTACH (ops_smoke_events_history) -- no reader Lambda verb for current
+    merge_key: event_id
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_smoke_events
+    note: platform-generic append_only kernel proof (T1.14); no current_table in ScdTableSpec
+
+  # ---------------------------------------------------------------------------
   # Iceberg/Athena tables pending T2.26 disposition
   # ---------------------------------------------------------------------------
   ops_session_log:
@@ -43,7 +61,7 @@ tables:
     read_boundary: DuckDBIcebergReader (primary) / Athena fallback (CD.8/CD.15 escape hatch)
     merge_key: session_id
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_session_log
-    migration_ref: docs/INTENT-ducklake-consolidation.md
+    migration_ref: tier_item T2.26
     disposition: T2.26 -- may retire per T-1.9; DuckLake migration or retirement TBD
 
   ops_execution_plans:
@@ -54,30 +72,55 @@ tables:
     read_boundary: DuckDBIcebergReader / Athena fallback
     merge_key: rec_id
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_execution_plans
-    migration_ref: docs/INTENT-ducklake-consolidation.md
+    migration_ref: tier_item T2.26
     disposition: T2.26 -- DuckLake migration pending executor resume
 
   # ---------------------------------------------------------------------------
-  # Telemetry tables (7 tables -- all Iceberg/Athena, Phase 4 pending)
+  # Telemetry tables -- canonical 4-table trace/observation model (Decision 95);
+  # live draft is 7 Iceberg/Athena tables, dead pending Phase 4 (Decision 84).
   # ---------------------------------------------------------------------------
   telemetry_tables:
     note: >-
-      Seven telemetry tables (telemetry_ prefix) in trading_formulas_db (Glue catalog,
-      Athena engine v3, personal account). Schema definitions in scripts/telemetry_schemas.py.
-      Class A contracts planned for T0.12.6 (not yet authored). Substrate index entry is a placeholder until T0.12.6.
+      CANONICAL model (Decision 95): four tables -- telemetry_sessions, telemetry_observations,
+      telemetry_transcripts, telemetry_agents -- each with a ratified Class A contract authored at
+      T0.12.6 (those four are indexed in the "Class A contracts (authoritative)" header above, NOT in
+      this substrate table). The LIVE implementation is still the seven-table DRAFT (telemetry_ prefix)
+      in trading_formulas_db (Glue, Athena engine v3, personal account); schema in
+      scripts/telemetry_schemas.py. The draft collapses to the canonical four at the Phase 4 rebuild:
+      telemetry_phases/_steps/_process_events/_model_calls -> telemetry_observations (observation_type
+      discriminator); telemetry_agent_invocations -> rooted telemetry_agents. This index entry covers the
+      live draft substrate until that rebuild retires it. (Corrected 2026-06-24: the prior 7 names --
+      telemetry_trades/_feature_vectors/etc. -- were a stale placeholder matching neither the DDL nor
+      the dataclasses.)
     substrate: Iceberg/Athena
-    status: live
-    write_boundary: OpsWriter (scripts/ops_writer.py) -> S3 staging -> Iceberg
-    read_boundary: DuckDBIcebergReader / Athena fallback
+    status: draft_dead
+    reason: >-
+      Athena telemetry tables never migrated to the personal account (2026-05-28); writers still emit to
+      S3 staging but the destination tables are dead. config/agent/data_quality/telemetry.yaml is empty.
+    write_boundary: OpsWriter (scripts/ops_writer.py) -> S3 staging -> Iceberg (dead)
+    read_boundary: DuckDBIcebergReader / Athena fallback (dead)
     schema_ref: scripts/telemetry_schemas.py
-    contract_plan: T0.12.6 (telemetry Class A contracts -- not yet authored)
-    migration_ref: docs/INTENT-ducklake-consolidation.md
-    disposition: Phase 4 consolidation -- DuckLake migration TBD after T2.26
-    tables:
-      - telemetry_trades
-      - telemetry_feature_vectors
-      - telemetry_formula_discoveries
-      - telemetry_performance_metrics
-      - telemetry_data_quality
-      - telemetry_agent_runs
-      - telemetry_model_updates
+    contract_ref:
+      - docs/contracts/telemetry_sessions.yaml
+      - docs/contracts/telemetry_observations.yaml
+      - docs/contracts/telemetry_transcripts.yaml
+      - docs/contracts/telemetry_agents.yaml
+    migration_ref: "tier_item T2.36 + Decisions 95/96/97"
+    disposition: >-
+      Phase 4 consolidation (after T2.26): rebuild on the DuckLake telemetry substrate as the canonical
+      four-table model per the Class A contracts; partition day(started_at) / day(created_at)
+      (Decision 96, realized at Phase 4 using the DuckLake partition-as-code mechanism T2.33 established
+      for the ops tables); ULID identity (Decision 97, realized when open_session migrates).
+    live_draft_tables:
+      - telemetry_sessions
+      - telemetry_phases
+      - telemetry_steps
+      - telemetry_process_events
+      - telemetry_model_calls
+      - telemetry_transcripts
+      - telemetry_agent_invocations
+    canonical_tables:
+      - telemetry_sessions
+      - telemetry_observations
+      - telemetry_transcripts
+      - telemetry_agents

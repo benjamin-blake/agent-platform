@@ -103,3 +103,19 @@ tests:
     root_cause_class: live_network_call
     disposition: integration_exempt
     notes: Requires real S3; @pytest.mark.integration.
+
+  # ---------------------------------------------------------------------------
+  # Module-level pysr / juliapkg probe (fixed this session)
+  # ---------------------------------------------------------------------------
+
+  - file: tests/test_pysr_factory.py
+    class: module
+    root_cause_class: module_level_probe
+    disposition: fix
+    notes: >-
+      importing src.lab.pysr_factory triggered `from pysr import PySRRegressor`
+      at module load time, which juliapkg intercepts to query Julia versions from
+      julialang-s3.julialang.org -- a live network call during pytest collection.
+      Fixed by lazy-loading PySRRegressor via _load_pysrregressor() called only
+      inside discover_formulas(); the module-level name stays as a None sentinel
+      so patch("src.lab.pysr_factory.PySRRegressor") continues to work in tests.

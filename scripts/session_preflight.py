@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -229,31 +230,61 @@ def check_main_freshness() -> dict:
     }
 
 
-def check_terraform_pending() -> bool | None:
-    """Return True if terraform has pending changes, False if clean, None if unavailable.
+def check_terraform_pending() -> tuple[bool | None, dict | None]:
+    """Read the sandbox convergence record and derive pending-change state.
 
-    Runs ``terraform -chdir=terraform plan -detailed-exitcode`` and interprets:
-    - exit code 0: no changes pending
-    - exit code 2: changes pending
-    - exit code 1 or FileNotFoundError: terraform not available or plan error
+    Replaces the retired ``terraform -chdir=terraform plan`` invocation (CD.21:
+    the terraform/ root is no longer applied; the personal/ sandbox root is
+    managed by the CD pipeline). The convergence record at
+    convergence/personal/sandbox.json is the authoritative truth for the
+    applied-vs-code delta.
+
+    Returns a tuple (pending, convergence_health) where:
+      - pending: bool | None
+          True  = record is red or unapplied_backlog > 0 (changes pending)
+          False = record is green with no backlog
+          None  = unavailable (S3 read failed / no credentials)
+      - convergence_health: dict | None
+          Sub-object surfaced in the preflight report:
+          {status, red_age_hours, unapplied_backlog, stuck_approvals, severity}
+          or None when the record cannot be fetched.
     """
     try:
-        result = subprocess.run(
-            ["terraform", "-chdir=terraform", "plan", "-detailed-exitcode", "-no-color"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-            cwd=ROOT,
+        import boto3  # noqa: PLC0415
+
+        from scripts.convergence_health import (  # noqa: PLC0415
+            assess_health,
+            find_stuck_gated_approvals,
+            read_convergence_record,
         )
-        if result.returncode == 0:
-            return False
-        if result.returncode == 2:
-            return True
-        return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+
+        profile = resolve_aws_profile()
+        session = boto3.Session(profile_name=profile)
+        s3 = session.client("s3")
+
+        record = read_convergence_record(s3)
+        stuck = find_stuck_gated_approvals()
+        verdict = assess_health(record, stuck_approvals=stuck)
+
+        health: dict = {
+            "status": verdict.status,
+            "red_age_hours": verdict.red_age_hours,
+            "unapplied_backlog": verdict.unapplied_backlog,
+            "stuck_approvals": len(verdict.stuck_approvals),
+            "severity": verdict.severity,
+        }
+
+        if verdict.status == "unknown":
+            pending = None
+        elif verdict.status == "red" or verdict.unapplied_backlog > 0:
+            pending = True
+        else:
+            pending = False
+
+        return pending, health
+
+    except Exception:  # noqa: BLE001
+        return None, None
 
 
 def check_credentials() -> str:
@@ -400,6 +431,21 @@ def _derive_ci_rca_open(rows: list[dict]) -> list[dict]:
             "priority": r.get("priority", ""),
             "created_timestamp": r.get("created_timestamp"),
             "file": r.get("file", ""),
+        }
+        for r in matched[:5]
+    ]
+
+
+def _derive_ci_rca_dispute_open(rows: list[dict]) -> list[dict]:
+    """Client-side derive: open/in-progress ci_rca_evidence_dispute recs, newest first, capped at 5."""
+    matched = [r for r in rows if r.get("source") == "ci_rca_evidence_dispute" and r.get("status") in ("open", "in_progress")]
+    matched.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return [
+        {
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "priority": r.get("priority", ""),
+            "created_timestamp": r.get("created_timestamp"),
         }
         for r in matched[:5]
     ]
@@ -785,6 +831,35 @@ def _fetch_ci_rca_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
     return []
 
 
+def _fetch_ci_rca_dispute_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
+    """Return up to 5 open ci_rca_evidence_dispute recs -- from the warm-pulled cache rows only.
+
+    cache_rows (neon-egress-reduction D4 / Decision 88 egress invariant): a supplied row list is
+    served via _derive_ci_rca_dispute_open (zero reader call); a supplied None means the warm-up
+    pull failed -> []. Omitted (sentinel) -> [] (no new DuckLake reader named-verb for dispute recs;
+    the dispute section derives from the same warm cache used by _fetch_ci_rca_recs).
+    """
+    if cache_rows is not _READER_SENTINEL:
+        return [] if cache_rows is None else _derive_ci_rca_dispute_open(cache_rows)  # type: ignore[arg-type]
+    return []
+
+
+def print_ci_rca_dispute_recs(recs: list[dict]) -> None:
+    """Print the CI-RCA Dispute Recs section to terminal."""
+    print("\n--- CI-RCA Dispute Recs (open) ---")
+    if not recs:
+        print("  (none)")
+        print()
+        return
+    for rec in recs:
+        rec_id = rec.get("id", "unknown")
+        title = rec.get("title", "")
+        priority = rec.get("priority", "")
+        created = rec.get("created_timestamp", "")
+        print(f"  {rec_id} [{priority}] {created}: {title}")
+    print()
+
+
 def _check_non_automatable_softcap(non_auto_count: int) -> bool:
     """Return True when non-automatable rec count exceeds the soft cap."""
     return non_auto_count > _NON_AUTOMATABLE_SOFTCAP
@@ -1029,33 +1104,33 @@ def _file_paths_correlate(rec_file: str, changed: str) -> bool:
     return parts_rec[-n:] == parts_changed[-n:]
 
 
-def correlate_ci_rca_with_main(
+def correlate_recs_with_commits(
     recs: list[dict],
     commits: list[dict],
-    closed_ci_rca_recs: list[dict] | None = None,
+    closed_recs: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
-    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+    """Classify open recs as LIKELY-RESOLVED or UNRESOLVED from commit history.
+
+    General engine for all rec sources (generalised from the ci_rca path, T3.8).
+    Served from the already-warmed read-cache; never performs a warehouse re-fetch
+    or acceptance-command execution (Decision 88).
 
     A rec is LIKELY-RESOLVED when any commit on origin/main whose date is
     AFTER the rec's created_timestamp either:
       - modified the rec's ``file`` field (path-suffix / basename match), or
       - mentions the rec's ``id`` in its subject line.
 
-    When ``closed_ci_rca_recs`` is provided (cache path only), a rec that is
+    When ``closed_recs`` is provided (cache path only), a rec that is
     still uncorrelated after the commit loop is also classified LIKELY-RESOLVED
-    when a closed ci_rca sibling on the same file has a sufficiently similar
+    when a closed sibling on the same file has a sufficiently similar
     title and was closed at/after this rec's creation (window-independent
     closed-sibling cluster signal). The matched sibling id is recorded on the
     rec as ``_resolved_reason`` for the operator's verify-and-close prompt.
 
-    Recs whose file/id cannot be correlated by either signal retain the HARD
-    BLOCK designation (UNRESOLVED).
-
     Args:
-        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
-        commits:           Recent main commits from _get_recent_main_commits().
-        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path),
-                           or None to skip cluster detection.
+        recs:         Open recs to classify.
+        commits:      Recent main commits from _get_recent_main_commits().
+        closed_recs:  Closed recs (cache path), or None to skip cluster detection.
 
     Returns:
         Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
@@ -1075,18 +1150,15 @@ def correlate_ci_rca_with_main(
         for commit in commits:
             commit_dt = _parse_ts_utc(commit.get("date") or "")
 
-            # Only consider commits that landed AFTER the rec was created.
             if rec_created_dt is not None and commit_dt is not None:
                 if commit_dt <= rec_created_dt:
                     continue
 
-            # Check subject for explicit rec id mention.
             subject_lower = (commit.get("subject") or "").lower()
             if rec_id and rec_id in subject_lower:
                 correlated = True
                 break
 
-            # Check changed files for the rec's source file.
             if rec_file:
                 for changed in commit.get("files") or []:
                     if _file_paths_correlate(rec_file, changed):
@@ -1097,8 +1169,8 @@ def correlate_ci_rca_with_main(
 
         # Closed-sibling cluster: window-independent signal (Decision 88 invariant ii --
         # served from the already-pulled cache, never a fresh reader call).
-        if not correlated and closed_ci_rca_recs and rec_file:
-            for sibling in closed_ci_rca_recs:
+        if not correlated and closed_recs and rec_file:
+            for sibling in closed_recs:
                 sib_file = (sibling.get("file") or "").strip()
                 if not sib_file:
                     continue
@@ -1107,9 +1179,6 @@ def correlate_ci_rca_with_main(
                 if _title_jaccard(rec.get("title") or "", sibling.get("title") or "") < 0.5:
                     continue
                 sib_closed_dt = _row_ts(sibling, "last_updated_timestamp")
-                # Require a dateable closure. No timestamp means we cannot
-                # confirm the sibling was closed after this rec was created;
-                # skip it to avoid false positives from undated historical closes.
                 if sib_closed_dt is None:
                     continue
                 if rec_created_dt is not None and sib_closed_dt < rec_created_dt:
@@ -1124,6 +1193,66 @@ def correlate_ci_rca_with_main(
             unresolved.append(rec)
 
     return {"likely_resolved": likely_resolved, "unresolved": unresolved}
+
+
+def correlate_ci_rca_with_main(
+    recs: list[dict],
+    commits: list[dict],
+    closed_ci_rca_recs: list[dict] | None = None,
+) -> dict[str, list[dict]]:
+    """Classify open ci_rca recs as LIKELY-RESOLVED or UNRESOLVED.
+
+    Thin wrapper around correlate_recs_with_commits() for backward compatibility.
+    See that function for signal documentation.
+
+    Args:
+        recs:              Open ci_rca recs from _fetch_ci_rca_recs().
+        commits:           Recent main commits from _get_recent_main_commits().
+        closed_ci_rca_recs: Closed ci_rca recs from _derive_ci_rca_closed() (cache path).
+
+    Returns:
+        Dict with keys ``likely_resolved`` and ``unresolved``, each a list of recs.
+    """
+    return correlate_recs_with_commits(recs, commits, closed_recs=closed_ci_rca_recs)
+
+
+def surface_queue_relevance_triage(
+    cache_rows: list[dict],
+    commits: list[dict],
+    *,
+    exclude_sources: frozenset[str] = frozenset({"ci_rca"}),
+    cap: int = 10,
+) -> list[dict]:
+    """Return queue-wide likely-resolved recs for operator triage (read-cache only, Decision 88).
+
+    Runs cheap commit-file correlation on all open recs EXCEPT those in ``exclude_sources``
+    (ci_rca has its own dedicated triage block). Never calls the warehouse reader and never
+    executes acceptance probes -- surfacing-only per Decision 55.
+
+    Args:
+        cache_rows:      All rows from the warmed read-cache (logs/.recommendations-log.jsonl).
+        commits:         Recent main commits already fetched by the caller.
+        exclude_sources: Source tags that have their own triage block (default: ci_rca).
+        cap:             Maximum recs returned.
+
+    Returns:
+        Likely-resolved recs (up to ``cap``), newest first.
+    """
+    open_non_ci = [r for r in cache_rows if r.get("status") == "open" and (r.get("source") or "") not in exclude_sources]
+    closed_recs = [
+        {
+            "id": r.get("id", ""),
+            "file": r.get("file", ""),
+            "title": r.get("title", ""),
+            "last_updated_timestamp": r.get("last_updated_timestamp"),
+        }
+        for r in cache_rows
+        if r.get("status") == "closed" and (r.get("source") or "") not in exclude_sources
+    ]
+    result = correlate_recs_with_commits(open_non_ci, commits, closed_recs=closed_recs)
+    likely = result.get("likely_resolved") or []
+    likely.sort(key=lambda r: _row_ts(r) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return likely[:cap]
 
 
 def _print_recent_main_commits(commits: list[dict]) -> None:
@@ -1382,32 +1511,6 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
     }
 
 
-def sync_copilot_instructions() -> None:
-    """Check that the two instructions files are not accidentally identical.
-
-    copilot_instructions.md (underscore) — loaded by VS Code Copilot Chat.
-      Full developer context: rules, workflow checklists, AWS details, all gotchas.
-
-    copilot-instructions.md (hyphen) — loaded by the `gh copilot` CLI.
-      Lean task-execution context: code style rules, File Router, coding gotchas.
-      Does NOT contain pre-implementation checklists or branch-check workflows,
-      because each CLI call is a single-shot self-contained task.
-
-    These two files serve different purposes and must NOT be kept in sync.
-    This function emits a warning if they are accidentally made identical again.
-    """
-    src = ROOT / ".github" / "copilot_instructions.md"
-    dst = ROOT / ".github" / "copilot-instructions.md"
-    if src.exists() and dst.exists():
-        if src.read_bytes() == dst.read_bytes():
-            print(
-                "WARNING: .github/copilot_instructions.md and .github/copilot-instructions.md "
-                "are identical. They serve different purposes (VS Code vs gh copilot CLI) and "
-                "should have separate content. The CLI version should NOT contain "
-                "pre-implementation checklists or branch-check workflows."
-            )
-
-
 def check_telemetry_health() -> dict:
     """Telemetry health stub: the Athena telemetry tables died with the 2026-05-28 account
     migration, so the previous implementation polled TABLE_NOT_FOUND for ~a minute every
@@ -1531,10 +1634,61 @@ def _get_latest_decision_ts(cache_rows: object = _READER_SENTINEL) -> str | None
     return str(ts) if ts else None
 
 
-def main() -> int:
-    session_start = datetime.now(timezone.utc).isoformat()
+def _check_endstate_drift() -> dict:
+    """Advisory drift check: compare the sha256 fingerprint stamped in PROJECT_CONTEXT.md
+    against the current sha256 of the sorted ROADMAP-PLATFORM.yaml tier_item ID set.
 
-    sync_copilot_instructions()
+    Returns a dict {stale, synthesized_hash, current_hash, new_ids}.
+    Fail-open: any parse/IO error returns a non-stale result with a soft note.
+    Never raises, never changes the preflight exit code.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+
+        context_text = (ROOT / "docs" / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
+        stamp_match = re.search(r"roadmap_tier_id_set sha256:\s*([a-f0-9]{64})", context_text)
+        if not stamp_match:
+            return {"stale": False, "synthesized_hash": None, "current_hash": None, "new_ids": [], "note": "stamp absent"}
+        stamped_hash = stamp_match.group(1)
+
+        roadmap = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        _items = roadmap.get("tier_items", [])
+        current_ids = sorted({str(i["id"]) for i in _items if isinstance(i, dict) and "id" in i})
+        current_hash = hashlib.sha256("\n".join(current_ids).encode()).hexdigest()
+
+        if current_hash == stamped_hash:
+            return {"stale": False, "synthesized_hash": current_hash, "current_hash": current_hash, "new_ids": []}
+
+        commit_match = re.search(r"ROADMAP-PLATFORM\.yaml\s*@\s*([0-9a-f]{7,40})", context_text)
+        new_ids: list[str] = []
+        if commit_match:
+            ref = commit_match.group(1)
+            try:
+                result = subprocess.run(
+                    ["git", "show", f"{ref}:docs/ROADMAP-PLATFORM.yaml"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    cwd=str(ROOT),
+                )
+                if result.returncode == 0:
+                    old_roadmap = yaml.safe_load(result.stdout)
+                    _old_items = old_roadmap.get("tier_items", [])
+                    old_ids = sorted({str(i["id"]) for i in _old_items if isinstance(i, dict) and "id" in i})
+                    if hashlib.sha256("\n".join(old_ids).encode()).hexdigest() == stamped_hash:
+                        new_ids = sorted(set(current_ids) - set(old_ids))
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {"stale": True, "synthesized_hash": stamped_hash, "current_hash": current_hash, "new_ids": new_ids}
+    except Exception:  # noqa: BLE001
+        return {"stale": False, "synthesized_hash": None, "current_hash": None, "new_ids": [], "note": "parse error"}
+
+
+def main(roadmap_detail: str = "slim") -> int:
+    session_start = datetime.now(timezone.utc).isoformat()
 
     # Telemetry health runs early so it appears in output
     telemetry_health = check_telemetry_health()
@@ -1566,7 +1720,13 @@ def main() -> int:
         fut_terraform = phase_a.submit(check_terraform_pending)
         creds_result = fut_creds.result()
         main_freshness = fut_freshness.result()
-        terraform_pending = fut_terraform.result()
+        terraform_result = fut_terraform.result()
+
+    # check_terraform_pending now returns (bool|None, dict|None)
+    if isinstance(terraform_result, tuple):
+        terraform_pending, convergence_health_data = terraform_result
+    else:
+        terraform_pending, convergence_health_data = terraform_result, None
 
     creds_status = _handle_credentials_startup(creds_result)
     s3_log_bucket_set = bool(os.environ.get("S3_LOG_BUCKET", "").strip())
@@ -1632,6 +1792,7 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=4) as phase_b:
         fut_rec_count = phase_b.submit(_count_recommendations_reader, recs_cache)
         fut_ci_rca = phase_b.submit(_fetch_ci_rca_recs, recs_cache)
+        fut_ci_rca_dispute = phase_b.submit(_fetch_ci_rca_dispute_recs, recs_cache)
         fut_pq = phase_b.submit(read_priority_queue, 5, creds_status, pq_cache)
         fut_commits = phase_b.submit(_get_recent_main_commits)
         fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
@@ -1641,6 +1802,7 @@ def main() -> int:
 
         _rec_result = fut_rec_count.result()
         ci_rca_recs = fut_ci_rca.result()
+        ci_rca_dispute_recs = fut_ci_rca_dispute.result()
         priority_queue = fut_pq.result()
         recent_main_commits = fut_commits.result()
         latest_decision_ts = fut_decision_ts.result()
@@ -1659,6 +1821,7 @@ def main() -> int:
     closed_ci_rca_recs = _derive_ci_rca_closed(recs_cache) if recs_cache is not None else None
     correlation = correlate_ci_rca_with_main(ci_rca_recs, recent_main_commits, closed_ci_rca_recs=closed_ci_rca_recs)
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
+    print_ci_rca_dispute_recs(ci_rca_dispute_recs)
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
 
@@ -1699,6 +1862,7 @@ def main() -> int:
         "s3_log_bucket_set": s3_log_bucket_set,
         "ops_outbox": outbox,
         "terraform_pending": terraform_pending,
+        "convergence_health": convergence_health_data,
         "last_session": last_session,
         "open_recommendations": open_recommendations,
         "aging_recommendations": aging_recommendations,
@@ -1709,6 +1873,7 @@ def main() -> int:
         "ci_rca_recs": ci_rca_recs,
         "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
         "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
+        "ci_rca_dispute_recs": ci_rca_dispute_recs,
         "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,
@@ -1716,7 +1881,7 @@ def main() -> int:
         "telemetry_health": telemetry_health,
         "data_quality": check_data_quality_coverage(),
         "context": context,
-        "platform_roadmap": _slim_roadmap_state(platform_roadmap_state),
+        "platform_roadmap": _slim_roadmap_state(platform_roadmap_state, full=(roadmap_detail == "full")),
         "product_roadmap": _slim_roadmap_state(product_roadmap_state),
         "session_start": session_start,
     }
@@ -1733,6 +1898,14 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    endstate_drift = _check_endstate_drift()
+    report["endstate_drift"] = endstate_drift
+    if endstate_drift.get("stale"):
+        new_ids = endstate_drift.get("new_ids") or []
+        ids_note = f" (new ids: {new_ids})" if new_ids else ""
+        _msg = f"Advisory: Platform End-State fingerprint stale -- roadmap has new tier_item IDs since the stamp.{ids_note}"
+        print(_msg, file=sys.stderr)
+
     # Ensure logs/ directory exists
     PREFLIGHT_REPORT.parent.mkdir(parents=True, exist_ok=True)
     PREFLIGHT_REPORT.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -1742,15 +1915,26 @@ def main() -> int:
     return 0 if venv_ok else 1
 
 
-def _slim_roadmap_state(state: dict) -> dict:
-    """Keep only the actionable subsets the workflows actually consume.
+def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
+    """Return actionable roadmap subsets for session workflows.
 
-    The full state from compute_state_dict() includes in_progress, blocked,
-    active_tier/layer, and consumer maps -- ~8k tokens combined across both
-    roadmaps. Workflows only branch on next_eligible and strategic_pending.
-    Dropping the rest is recoverable: call platform_roadmap.compute_state_dict()
-    or product_roadmap.compute_state_dict() directly if a session needs detail.
+    slim (full=False, default -- used by /plan): next_eligible + strategic_pending only.
+    Keeps the planning agent's payload lean; blocked_on_cd and gate_evaluations are absent.
+
+    full (full=True -- used by /orient): entire computed state including in_progress, blocked,
+    active_tier, blocked_on_cd, and gate_evaluations. Uses .get() defaults so product_roadmap
+    (no candidate_decisions / cross_tier_gates) is unaffected (Decision 93).
     """
+    if full:
+        return {
+            "next_eligible": state.get("next_eligible", []),
+            "strategic_pending": state.get("strategic_pending", []),
+            "in_progress": state.get("in_progress", []),
+            "blocked": state.get("blocked", []),
+            "active_tier": state.get("active_tier"),
+            "blocked_on_cd": state.get("blocked_on_cd", []),
+            "gate_evaluations": state.get("gate_evaluations", []),
+        }
     return {
         "next_eligible": state.get("next_eligible", []),
         "strategic_pending": state.get("strategic_pending", []),
@@ -1864,6 +2048,17 @@ if __name__ == "__main__":
         default="",
         help="Branch name for telemetry (used with --open-session; defaults to current git branch)",
     )
+    parser.add_argument(
+        "--roadmap-detail",
+        choices=["slim", "full"],
+        default="slim",
+        dest="roadmap_detail",
+        help=(
+            "Roadmap projection depth written to platform_roadmap in the preflight report. "
+            "'slim' (default, used by /plan): next_eligible + strategic_pending only. "
+            "'full' (used by /orient): adds in_progress, blocked, active_tier, blocked_on_cd, gate_evaluations."
+        ),
+    )
     args = parser.parse_args()
 
     if args.health:
@@ -1887,4 +2082,4 @@ if __name__ == "__main__":
         print(sid)
         sys.exit(0)
 
-    sys.exit(main())
+    sys.exit(main(roadmap_detail=args.roadmap_detail))

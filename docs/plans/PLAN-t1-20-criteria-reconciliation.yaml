@@ -1,0 +1,237 @@
+schema_version: 1
+slug: t1-20-criteria-reconciliation
+intent: >-
+  Reconcile the T-1.20 exit-criteria ledger with reality: the preflight roadmap-state contract work
+  (blocked-on-CD computation, GateRuleEvaluator cross-tier gate evaluation, user_action_required
+  threading, full-state preflight projection, unit + integration tests) already landed in commit
+  0061521 (merged to origin/main) and is fully verified (148 tests green), but the five structured
+  criteria still read open. Close c1-c5 via /implement's verified closes_criteria bookkeeping walk,
+  so in_progress becomes resolvable as exactly the set of remaining (open) criteria (CD.39).
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-t1-20-criteria-reconciliation.yaml
+phase: >-
+  PLATFORM tier_item T-1.20 (tier T-1, F-010 documented-vs-implemented closeout series). depends_on []
+  (satisfied). Reconciliation-only follow-on: the implementation landed in commit 0061521; this plan
+  closes the five open criteria via /implement's verified closes_criteria bookkeeping walk. Not on the
+  product-roadmap critical path.
+closes_criteria:
+  - "T-1.20:c1"
+  - "T-1.20:c2"
+  - "T-1.20:c3"
+  - "T-1.20:c4"
+  - "T-1.20:c5"
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Sole change surface. /implement's closes_criteria bookkeeping walk flips T-1.20 c1-c5
+      open -> met (met_by = this plan slug) on a verified VP pass, and updates the progress_note to
+      record the ledger reconciliation. NO status: complete flip -- T-1.20 is non-exempt
+      (bootstrap_completion_exempt defaults false) in tier T-1, which CD.1 (state: pending, gates: [T-1])
+      gates for COMPLETION; all-criteria-met QUALIFIES for the gate but the item stays in_progress until
+      CD.1 ratifies. No hand-edit by /plan (Status-Trusted-Never-Inferred / T2.20); no source-code
+      changes (the implementation landed in 0061521).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    c1: compute_state_dict(docs/ROADMAP-PLATFORM.yaml) output includes a blocked_on_cd[] list (item id +
+    blocking CD ids for items eligible-by-deps with pending gating CDs), and the blocked-on-CD unit
+    tests pass on the current tree.
+  - >-
+    c2: compute_state_dict output includes a gate_evaluations[] list (cross-tier gate verdicts from the
+    static-helper GateRuleEvaluator), item_field_eq resolves to the deferred verdict and is documented
+    as runtime-deferred in the agent_instructions, and the GateRuleEvaluator unit tests pass.
+  - >-
+    c3: the preflight report keys and the agent_instructions consumer-contract text agree -- the slim
+    (plan) projection omits blocked_on_cd / gate_evaluations and the full (orient) projection includes
+    them, exactly as the agent_instructions describe (no promised-but-unimplemented key in either
+    direction).
+  - >-
+    c4: compute_state_dict next_eligible[] entries each carry a user_action_required field threaded from
+    the tier_item.
+  - >-
+    c5: tests/test_platform_roadmap.py and tests/test_session_preflight_platform_roadmap.py cover
+    blocked-on-CD computation and gate evaluation, and both suites pass; the implementing commit 0061521
+    is an ancestor of origin/main (merged with green CI).
+  - >-
+    On the verified VP pass /implement flips T-1.20:c1-c5 open -> met with met_by set to this plan's
+    slug; it does NOT stage T-1.20 status: complete (non-exempt, CD.1 state: pending gates T-1
+    completion); the progress_note is updated to record the reconciliation.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      c1 -- compute_state_dict emits blocked_on_cd[] and the blocked-on-CD unit tests pass.
+    command: |-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); assert 'blocked_on_cd' in s and isinstance(s['blocked_on_cd'], list), list(s); print('c1-key OK')" && bin/venv-python -m pytest tests/test_platform_roadmap.py -k "blocked_on_cd or BlockedOnCd" -q
+    expected: Prints "c1-key OK" and the blocked-on-CD unit tests pass.
+    fix_if: >-
+      A missing key or a test failure means c1 does NOT hold -- the implementation regressed or is
+      incomplete; STOP and escalate (the criterion is genuinely open). Do not flip c1 and do not patch
+      source in this plan (Decision 55, fail loud).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      c2 -- compute_state_dict emits gate_evaluations[], item_field_eq is documented runtime-deferred,
+      and the GateRuleEvaluator unit tests pass.
+    command: |-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); assert 'gate_evaluations' in s and isinstance(s['gate_evaluations'], list), list(s); txt=open('docs/ROADMAP-PLATFORM.yaml').read(); assert 'item_field_eq' in txt and 'deferred' in txt, 'item_field_eq deferred not documented'; print('c2-key OK')" && bin/venv-python -m pytest tests/test_platform_roadmap.py -k "GateRuleEvaluator or item_field_eq" -q
+    expected: >-
+      Prints "c2-key OK" (gate_evaluations present; item_field_eq + deferred documented) and the
+      GateRuleEvaluator / item_field_eq unit tests pass.
+    fix_if: >-
+      A missing key, missing documentation, or a test failure means c2 does NOT hold -- STOP and
+      escalate, do not flip c2 (Decision 55).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      c3 -- the slim (plan) projection omits blocked_on_cd / gate_evaluations and the full (orient)
+      projection includes them, matching the agent_instructions consumer-contract text.
+    command: |-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict; from scripts.session_preflight import _slim_roadmap_state; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); slim=_slim_roadmap_state(s); full=_slim_roadmap_state(s, full=True); assert 'blocked_on_cd' not in slim and 'gate_evaluations' not in slim, list(slim); assert 'blocked_on_cd' in full and 'gate_evaluations' in full, list(full); print('c3 OK')"
+    expected: >-
+      Prints "c3 OK" (slim projection lacks both keys; full projection carries both -- the contract the
+      agent_instructions promise).
+    fix_if: >-
+      A key present in slim or absent in full means the report keys and the consumer-contract text
+      disagree; c3 does NOT hold -- STOP and escalate, do not flip c3 (Decision 55).
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      c4 -- next_eligible[] entries each carry user_action_required.
+    command: |-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap import compute_state_dict; s=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml')); ne=s['next_eligible']; assert ne and all('user_action_required' in e for e in ne), 'user_action_required missing on next_eligible'; print('c4 OK', [e['id'] for e in ne if e['user_action_required']])"
+    expected: >-
+      Prints "c4 OK" with the list of next_eligible ids that set user_action_required (e.g. T5.2).
+    fix_if: >-
+      A missing field means user_action_required is not threaded; c4 does NOT hold -- STOP and escalate,
+      do not flip c4 (Decision 55).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      c5 -- the full unit + integration suites pass and the implementing commit 0061521 is merged to
+      origin/main.
+    command: |-
+      bash -lc 'bin/venv-python -m pytest tests/test_platform_roadmap.py tests/test_session_preflight_platform_roadmap.py -q && git fetch origin main --quiet && git merge-base --is-ancestor 0061521 origin/main && echo "c5 OK"'
+    expected: >-
+      Both suites pass and prints "c5 OK" (0061521 is an ancestor of origin/main -> merged with green
+      CI).
+    fix_if: >-
+      A test failure means the contract regressed on main (re-open as real work); an ancestor failure
+      means 0061521 is not on origin/main (re-investigate the merge state). Either way STOP, do not flip
+      c5.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Ledger integrity -- after /implement stages the open -> met flips, the roadmap still validates
+      (met criteria carry a met_by; closes_criteria refs resolve).
+    command: |-
+      bin/venv-python -m scripts.validate --pre
+    expected: >-
+      validate.py --pre passes (criteria-status integrity holds: each met criterion has a non-empty
+      met_by; T-1.20:c1-c5 resolve to real criteria; no bare strings on the touched item).
+    fix_if: >-
+      A ledger-integrity failure means a met criterion is missing met_by or a closes_criteria ref does
+      not resolve; fix the staged edit (set met_by = this plan slug) -- never weaken validate.py.
+constraints:
+  - >-
+    This plan changes NO source code. The implementation (blocked_on_cd, GateRuleEvaluator,
+    user_action_required threading, full-state projection, tests) landed in commit 0061521 (merged to
+    origin/main). Re-implementing is forbidden; if any VP step shows a criterion does not hold, STOP and
+    escalate -- the criterion is genuinely open, not a flip candidate (Decision 55: no workaround loops,
+    fail loud).
+  - >-
+    Criterion flips happen ONLY via /implement's closes_criteria bookkeeping walk on a verified VP pass,
+    with met_by set to this plan's slug (Status-Trusted-Never-Inferred / T2.20). /plan does not flip
+    criterion or item status.
+  - >-
+    T-1.20 status MUST stay in_progress. It is non-exempt (bootstrap_completion_exempt defaults false)
+    in tier T-1, which CD.1 (state: pending, gates: [T-1]) gates for COMPLETION. All-criteria-met
+    QUALIFIES for the completion gate but does NOT auto-flip and MUST NOT be hand-flipped; T-1.20 sweeps
+    to complete only when CD.1 ratifies (at T-1.1 completion), per the Bootstrap COMPLETION exemption
+    clause.
+  - Only modify the file in the Scope table (docs/ROADMAP-PLATFORM.yaml).
+context:
+  - >-
+    Silent-completion finding (Tier Item Freshness Gate): T-1.20's five criteria all hold against
+    current main; they read open only because the exit-criteria ledger (T-1.23, #258, 2026-06-24)
+    promoted bare-string criteria to {id,text,status} with status defaulting open and refuses to infer
+    met from commit activity (T2.20). The T-1.20 progress_note (2026-06-24) already attests all five
+    were implemented and verified; this plan performs the contract-honoring verified flip the ledger
+    requires. Evidence: scripts/platform_roadmap.py (GateRuleEvaluator, blocked_on_cd, gate_evaluations,
+    user_action_required); scripts/session_preflight.py (_slim_roadmap_state full/slim projection);
+    agent_instructions consumer-contract text (ROADMAP-PLATFORM.yaml ll.44-58); 148 tests green; commit
+    0061521 on origin/main.
+  - >-
+    Decisions to cite: CD.39 (exit-criteria ledger -- the closes_criteria / met_by / open->met-on-
+    verified-VP / never-auto-flip-to-complete mechanism this plan executes; carries the deterministic
+    remaining-work-as-open-criteria semantics); Decision 87 (plans/ledger are git-authoritative
+    projection-until-T4.x -- the basis for editing the ledger in the roadmap YAML rather than a
+    warehouse table); Decision 86 (closeout writes status to the machine-parseable tier_item ledger and
+    rationale to the plan/commit -- creates no standing prose doc, intent-doc-freeze compliant);
+    Decision 80 (validate.py is the single source of truth -- the ledger-integrity VP leans on
+    validate.py --pre). Related/context only: CD.1 (T-1 completion gating, state: pending -- why T-1.20
+    stays in_progress), CD.13, Decision 84 (DuckLake sole ops-backend; not violated -- the roadmap YAML
+    ledger is git-authoritative per Decision 87 cl.3, not a warehouse read-cache), Decision 90
+    (/implement makes changes directly during the freeze), Status-Trusted-Never-Inferred / T2.20 (the
+    reason this plan exists).
+  - >-
+    Decision-scout NOTE (reference correction): an earlier framing cited "Decision 59 (in_progress
+    resolvable = open criteria)", but ratified Decision 59 in DECISIONS.md is unrelated (retrospective /
+    step validation). The deterministic-remaining-work semantics live in CD.39's detail text; this plan
+    cites CD.39, not ratified Decision 59.
+  - >-
+    Verification-tier rationale (Decision 48): V1 because the ONLY in-scope (Modify) file is
+    docs/ROADMAP-PLATFORM.yaml (roadmap config). scripts/platform_roadmap.py,
+    scripts/session_preflight.py, tests/test_platform_roadmap.py, and
+    tests/test_session_preflight_platform_roadmap.py are READ-ONLY verification targets, not modified,
+    so Decision 48's highest-tier-wins does not fire. Decision 79 compute_affected_artifacts is
+    satisfied: config/agent/ is not in scope and no active Lambda manifest file is modified.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok;
+    main_files_changed_since_branch empty) -- no scope-overlap risk on docs/ROADMAP-PLATFORM.yaml.
+  - >-
+    No open ci-rca recs at planning time (ci_rca_unresolved_recs empty) -- no HARD BLOCK, no deferral
+    rationale required.
+pre_implementation_checklist:
+  - Branch confirmed not main (harness branch claude/roadmap-state-reconciliation-19lmaf).
+  - docs/PROJECT_CONTEXT.md read.
+  - >-
+    CD.39 + Decisions 87/86/80 + T2.20 + CD.1 understood (verified flip not inference; fail loud;
+    git-authoritative ledger; CD.1 gates T-1 completion so T-1.20 stays in_progress).
+  - >-
+    All VP target files located and readable: scripts/platform_roadmap.py, scripts/session_preflight.py,
+    tests/test_platform_roadmap.py, tests/test_session_preflight_platform_roadmap.py.
+  - >-
+    closes_criteria refs (T-1.20:c1-c5) resolve to real criteria in docs/ROADMAP-PLATFORM.yaml
+    (validate.py enforces referential integrity).
+  - Acceptance criteria understood and each maps to a verification_plan step.
+execution_steps:
+  - >-
+    Run the Verification Plan in order (steps 1-5). Each is idempotent and read-only against
+    already-landed artefacts. If every step passes, c1-c5 hold.
+  - >-
+    On the verified VP pass, /implement's closes_criteria bookkeeping walk flips T-1.20:c1, T-1.20:c2,
+    T-1.20:c3, T-1.20:c4, T-1.20:c5 from status: open to status: met, setting met_by to this plan's slug
+    (t1-20-criteria-reconciliation), in a single staged docs/ROADMAP-PLATFORM.yaml edit, and updates the
+    progress_note to record the reconciliation.
+  - >-
+    All five criteria now met -> the item QUALIFIES for completion but MUST NOT be flipped: T-1.20 is
+    non-exempt (bootstrap_completion_exempt defaults false) and CD.1 (state: pending) gates tier T-1
+    completion. Leave status: in_progress; it sweeps to complete when CD.1 ratifies.
+  - >-
+    Run VP step 6 (validate.py --pre) after the staged flip to confirm ledger integrity (met_by present
+    on each met criterion; closes_criteria refs resolve).
+  - >-
+    If ANY VP step (1-5) fails, STOP -- do not flip the corresponding criterion. Escalate per Decision 55
+    (the criterion is genuinely open; reconciliation is not applicable). Do not patch source in this plan.
+  - >-
+    Report: which criteria were verified and flipped, the met_by value, that T-1.20 stayed in_progress
+    (completion gated by CD.1), and the bookkeeping commit sha.
+work_areas: []
+rollback: >-
+  Pure roadmap-bookkeeping change. Revert the single bookkeeping commit to restore T-1.20's criteria to
+  status: open. The item was in_progress before and stays in_progress, so no item-status rollback is
+  needed. No code, data, or deployed-function change is involved.

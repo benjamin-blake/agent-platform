@@ -1,0 +1,102 @@
+schema_version: 1
+slug: "field-semantics-stale-gate"
+intent: >-
+  Restore main to a green merge gate by deleting a stale one-shot T1.14 landing-gate test
+  that inverts from pass to permanent-fail after merge, so CI stays a trustworthy gate for all
+  platform/product work. Resolves ci-rca rec-2325, rec-2328, rec-2329 (one root cause, three runs).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-field-semantics-stale-gate.yaml
+phase: >-
+  CI-health remediation (ci-rca forward-fix per Decision 73). Not a roadmap tier_item; it restores
+  the merge gate that gates all tier work. Triggered by the full-tier red on main after #231 (T2.14
+  broker-credential Phase 2, CI run 27977687156) re-ran the stale gate introduced by T1.14 (commit 2481e8c).
+scope:
+  - file: tests/test_schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      Delete the stale one-shot method `test_full_document_data_equivalence_vs_origin_main`
+      (lines 271-298) and its orphaned module-docstring bullet (line 13). The steady-state
+      equivalence it asserted is independently covered by validate_field_semantics_drift()
+      and the surviving TestGenerateIntegration / TestCheckMode tests, so deletion loses no coverage.
+bundled_recommendations:
+  - rec-2325
+  - rec-2328
+  - rec-2329
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The method `test_full_document_data_equivalence_vs_origin_main` and the assertion string "origin/main predates the ops_smoke_events addition" no longer exist in tests/test_schema_to_field_semantics.py.
+  - "`bin/venv-python -m pytest tests/test_schema_to_field_semantics.py` reports 0 failures (the previously-red gate is gone; all remaining tests pass)."
+  - "Steady-state coverage preserved: `bin/venv-python -m scripts.schema_to_field_semantics --check` exits 0 (committed field_semantics.yaml still matches generator output)."
+  - "`test_smoke_ops_tables_spliced_append_only` still passes (ops_smoke_events append-only shape coverage retained)."
+  - "ruff check and ruff format --check are clean on the edited file (no orphaned imports after method removal)."
+  - rec-2325, rec-2328, rec-2329 are closed via the `Resolves:` squash-merge trailer (rec-autoclose, Decision 70).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the stale one-shot method and its assertion string are gone from the file (stale-reference sweep).
+    command: grep -nE "origin/main predates|def test_full_document_data_equivalence_vs_origin_main" tests/test_schema_to_field_semantics.py || echo ABSENT
+    expected: Prints ABSENT (no matches).
+    fix_if: Either pattern still matches -- the deletion did not land; remove the method body (lines 271-298) and the docstring bullet.
+  - step: 2
+    phase: pre-deploy
+    action: Run the full test file; the previously-red test is gone and every remaining test passes.
+    command: bin/venv-python -m pytest tests/test_schema_to_field_semantics.py -q 2>&1 | tail -3
+    expected: Summary shows passed with 0 failed (e.g. "N passed in ...s"); no "failed" token.
+    fix_if: Any test fails -- a surviving test must not depend on the deleted method (none does); investigate the named failure before proceeding.
+  - step: 3
+    phase: pre-deploy
+    action: Prove coverage preservation -- the steady-state drift gate (committed file vs generator output) still passes without the deleted test.
+    command: bin/venv-python -m scripts.schema_to_field_semantics --check; echo "exit=$?"
+    expected: Exit code 0 with an up-to-date / no-drift message for config/lambda/ducklake/field_semantics.yaml.
+    fix_if: Non-zero exit or a drift message -- committed file and generator diverged (unrelated to this change); STOP and reconcile by re-running the generator. Do NOT hand-edit field_semantics.yaml (Decision 55).
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the surviving steady-state coverage for the T1.14 addition still holds.
+    command: bin/venv-python -m pytest "tests/test_schema_to_field_semantics.py::TestGenerateIntegration::test_smoke_ops_tables_spliced_append_only" -q 2>&1 | tail -3
+    expected: A single test passes (reported as 1 passed).
+    fix_if: Fails or 0 collected -- the surviving ops_smoke_events shape coverage is broken; do not proceed.
+  - step: 5
+    phase: pre-deploy
+    action: Lint and format the edited file (tests/CLAUDE.md requires ruff check --fix after removing a test method to catch F401).
+    command: bin/venv-python -m ruff check tests/test_schema_to_field_semantics.py && bin/venv-python -m ruff format --check tests/test_schema_to_field_semantics.py
+    expected: ruff reports all checks passed and the file is already formatted (no reformat needed).
+    fix_if: ruff reports an unused import (F401) or a format diff -- run `ruff check --fix` then `ruff format` and re-run this step.
+  - step: 6
+    phase: post-deploy
+    action: After the squash-merge with the Resolves trailer, confirm rec-autoclose closed all three recs.
+    command: |-
+      bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; for r in rec-2325 rec-2328 rec-2329; do printf '%s -> ' "$r"; grep -oE "\"id\": \"$r\".*\"status\": \"[a-z]+\"" logs/.recommendations-log.jsonl | grep -oE '"status": "[a-z]+"' | tail -1; done
+    expected: Each rec id is printed followed by a closed status token.
+    fix_if: Any rec still shows "open" after the merge landed -- the trailer did not fire; close manually via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "stale one-shot T1.14 landing gate deleted"`.
+constraints:
+  - Modify only tests/test_schema_to_field_semantics.py. Any out-of-scope issue becomes a recommendation, not an inline fix.
+  - Do NOT hand-edit config/lambda/ducklake/field_semantics.yaml -- it is generator-owned (Decision 55). This change does not touch it.
+  - No rescue agents or workaround loops (Decision 55). This deletion is a sanctioned ci-rca forward-fix (Decision 73), not test-suppression -- the deleted assertion is structurally unsatisfiable post-merge and its steady-state intent is covered elsewhere.
+  - Tests-only change -- no source/product code, no Lambda artifact (config/agent is not Lambda-packaged; this file is not Lambda-packaged), no .tf. No build/deploy/smoke-test step required.
+  - ruff line length 127; no emojis; ASCII hyphens only.
+context:
+  - "Root cause: test_full_document_data_equivalence_vs_origin_main was a one-shot T1.14 landing gate. Line 292 asserts origin/main lacks ops_smoke_events to prove the splice was the sole additive delta. After T1.14 merged (commit 2481e8c) origin/main contains ops_smoke_events, so the premise is permanently false and the test fails on every main CI run. #231 (T2.14 Phase 2) re-ran it red -- the latest of three identical failures."
+  - "forward_fix_recursion_alert tripped (count=3, threshold=3) for this file: rec-2325/2328/2329 are duplicate ci-rca recs for one root cause across successive main runs, not three distinct defects. Routing through /plan (vs an inline patch) is mandated by Decision 72."
+  - "Coverage preservation (verified live at planning time): validate_field_semantics_drift() in scripts/validate.py (~line 2704) regenerates field_semantics.yaml in-memory and byte-compares the committed file in BOTH --pre and full presubmit -- confirmed PASS (no drift). test_smoke_ops_tables_spliced_append_only covers the ops_smoke_events append-only shape. ~16 other TestGenerateIntegration tests plus TestCheckMode cover generator correctness (roles/sql_types/partitions/table-names/structure). Deletion loses no real coverage."
+  - "Decisions cited (decision-scout NO_FLAGS): Decision 72 (RCA-as-Plan-Source -- /plan is the sanctioned consumption path for ci-rca recs), Decision 73 (forward-fix recovers red main via rec -> plan -> implement), Decision 55 (root-cause, no workaround automation), Decision 75 (frame-lock -- delete preferred over carrying a frozen pre-T1.14 snapshot to re-prove a historical delta), Decision 70 (lifecycle closure via Resolves trailer, not row deletion)."
+  - "Systemic lesson for future authors (not in scope, recorded here): one-shot landing gates that assert origin/main lacks the PR's own addition invert from pass to permanent-fail at merge. Author them to self-skip post-merge, or delete them in the same landing PR. This is the only such test in the suite (grep-confirmed); deletion clears the recursion."
+  - "Branch was 0 commits behind origin/main at planning time (main_freshness.commits_behind=0); no rebase needed. tests/test_schema_to_field_semantics.py is not in main_files_changed_since_branch."
+  - "Related-Work / HARD BLOCK satisfied: scope is the exact source_file all three open ci-rca recs cite (Condition 1, same file); also same failure category (pytest regression / stale guard)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/loving-curie-ahi7nj)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the decision-scout gate (Verdict NO_FLAGS)
+  - tests/test_schema_to_field_semantics.py located and readable; stale method at lines 271-298, docstring bullet at line 13
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Edit tests/test_schema_to_field_semantics.py: delete the entire `test_full_document_data_equivalence_vs_origin_main` method (lines 271-298, including its docstring and the local `import subprocess`), and remove the orphaned module-docstring bullet at line 13 (\"full-document data-equivalence vs the pre-change committed file (keystone safety gate)\"). Leave all other tests and the module-level imports unchanged -- _emit_yaml is still used by TestCheckMode."
+  - "Run `bin/venv-python -m ruff check --fix tests/test_schema_to_field_semantics.py` then `bin/venv-python -m ruff format tests/test_schema_to_field_semantics.py` to clear any F401 and normalize formatting (tests/CLAUDE.md rule)."
+  - "Execute the Verification Plan -- run each pre-deploy step (1-5) in order; loop until all pass. If step 3 (steady-state drift gate) fails, STOP and RCA; do not hand-edit field_semantics.yaml (Decision 55)."
+  - "Commit on the harness branch, push, and open the PR. Emit a `Resolves: rec-2325, rec-2328, rec-2329` trailer in the squash-merge body so rec-autoclose closes all three (Decision 70). After merge, run post-deploy VP step 6 to confirm closure."
+  - "Report: what was deleted, verification results for steps 1-6, and confirmation that main full-tier is green."
+work_areas: []
+rollback: >-
+  Revert the single-file change (git restore tests/test_schema_to_field_semantics.py). Reverting
+  reintroduces the permanently-failing one-shot gate, so rollback is only appropriate if deletion
+  somehow broke an unrelated test; it restores no lost coverage (none was lost).

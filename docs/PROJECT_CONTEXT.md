@@ -1,19 +1,20 @@
 # Machine Learning Trading System - Project Context
 
-> **Canonical project knowledge base for Claude Code.** `.github/copilot-instructions.md` is a deep-frozen fallback for the legacy GitHub Copilot CLI surface — do not edit it. Update this file only.
+> **Canonical project knowledge base for Claude Code.** Update this file only.
 
 You are a Lead Software Developer writing production-quality Python. You are operating on a Linux container (Ubuntu 24.04) with bash; use `bin/venv-python` for all Python invocations (Python 3.12+).
-See docs/contracts/instruction-architecture.md for the full information architecture.
+See docs/contracts/instruction-architecture.yaml for the full information architecture.
 
 ## Rules
 
+- **PUBLIC repository (Decisions 73, 83, 101):** This repo is public. Never commit AWS account IDs, IAM ExternalIds, credentials/keys, trading alpha/performance data, or internal hostnames. Confidential data lives only in the personal AWS account (Secrets Manager, gitignored tfvars) and gitignored local files. Market platform engineering, not trading alpha.
 - **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. The static-key assume-role chain auto-refreshes; verify it with `aws sts get-caller-identity --profile agent_platform` (refresh `~/.aws/credentials` if the `agent_static` key was rotated).
 - No emojis in code, scripts, or documentation
 - Python 3.12+, type hints required, async for I/O
 - **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
 - Formula evaluation: `sympy.sympify()` + `sympy.lambdify()` only -- never `eval()`/`exec()`
 - No Docker in this environment -- Lambdas use zip packaging via S3
-- **Branching:** On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`); agents work on that branch. Do NOT create `agent/{slug}` branches. Never commit directly to `main`. Plans are merged to `main` via a GitHub MCP PR and handed off to `/implement` by explicit path. (Local-dev `agent/{slug}` branches remain a supported fallback in `find_plan.py`.)
+- **Branching:** On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`); agents work on that branch. Do NOT create `agent/{slug}` branches. Never commit directly to `main`. Plans are merged to `main` via a GitHub MCP PR and handed off to `/implement` by explicit path.
 - **Context budget:** Files loaded at session start must stay concise. `ROADMAP.md` keeps only current and adjacent phases (completed phases archived to `ROADMAP_ARCHIVE.md`). `SESSION_LOG.md` keeps only the last 5 entries. `DECISIONS.md` keeps only open decisions (resolved decisions archived to `DECISIONS_ARCHIVE.md`). `strategic_review` enforces this during periodic checks.
 - **Refactoring Protocol:** When performing complex, non-contiguous edits, verify structural integrity immediately after. Never proceed to logic verification (e.g., merge or test) until the structural integrity of the edit is confirmed.
 - **Agent-First:** This repository is designed for agent consumption. Artefacts at all
@@ -33,7 +34,7 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 
 ### Recommendation & Decision Logging
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
-- **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See `docs/INTENT-ducklake-consolidation.md`.
+- **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See Decision 84 / tier_item T2.26.
 - **ID Authority (Decision 84 I-2):** Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`); decision numbering authority is DECISIONS.md (callers supply `decision_id`). The local JSONL files are read-only caches, not the source of truth.
 - **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Reads and writes transit the closed DuckLake reader/writer boundary via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
 - **Failure mode (Decision 84 I-4):** there is NO offline outbox. A write that cannot complete FAILS LOUDLY at the call site (after an idempotent transient-5xx retry); re-file after restoring connectivity (verify with `aws sts get-caller-identity --profile agent_platform`). `sync()` only refreshes the local read cache and returns `{"pulled": ...}`.
@@ -105,10 +106,10 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
   - `agent-platform-production` (engine v3) -- used for OPTIMIZE, MERGE writes, and all production queries
   - `agent-platform-lab` (engine v3) -- used for PySR formula discovery queries
   - `primary` (engine v2, default) -- **do not use** for Iceberg operations; does not support `VACUUM` or full Iceberg DML
-- **S3 bucket**: `agent-platform-data-lake` -- Iceberg data lake, Athena query results, and agent/cron log storage (set as `s3_agent_logs_bucket` in `config.personal.yaml`; see `scripts/s3_log_store.py`). Legacy work-account `formulas-*` buckets are not provisioned in the personal account.
+- **S3 bucket**: `agent-platform-data-lake` -- Iceberg data lake, Athena query results, and agent/cron log storage (set as `s3_agent_logs_bucket` in `config.personal.yaml`; see `scripts/s3_log_store.py`).
 - **Lambda runtime**: Python 3.12
 - **Lambda layers**: AWSSDKPandas-Python312:22 (managed) + extras (yfinance/pyyaml, ~11 MB)
-- **Bedrock inference**: Personal account REDACTED-PERSONAL-ACCOUNT, profile `personal-bedrock-profile`, model `deepseek.v3.2` (DeepSeek V3.2 via Converse API). See Decision 52. **Dormant for executor** -- executor now uses Gemini CLI (Decision 53).
+- **LLM substrate**: DeepSeek-direct via LiteLLM (Tier 1) + Anthropic-direct Claude (Tier 2 escape hatch); Bedrock is fully retired for the dev surface (CD.28). Executor is FROZEN (Decision 67); when unfrozen it will consume this substrate, not Gemini CLI or Bedrock.
 - **CI runner**: GitHub-hosted `ubuntu-latest` with OIDC to the personal account (CD.21; superseded Decision 68). Branch role `agent-platform-github-ci-branch`, PR role `agent-platform-github-ci-pr`. See `terraform/personal/oidc.tf`.
 
 ## File Router
@@ -137,34 +138,31 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Lambda build and deploy | [scripts/build_lambda.py](../scripts/build_lambda.py) |
 | S3 log store (agent logs) | [scripts/s3_log_store.py](../scripts/s3_log_store.py) |
 | Rec/Decision write portal | [scripts/ops_data_portal.py](../scripts/ops_data_portal.py) |
-| LLM client (Bedrock + Gemini transport) | [scripts/llm_client.py](../scripts/llm_client.py) |
+| LLM client (LiteLLM / provider-agnostic) | [scripts/llm_client.py](../scripts/llm_client.py) |
 | LLM utilities (parsing/errors) | [scripts/llm_utils.py](../scripts/llm_utils.py) |
-| Bedrock Converse API client | [scripts/bedrock_client.py](../scripts/bedrock_client.py) |
+| Bedrock Converse API client (retired; retained as architectural artefact) | [scripts/bedrock_client.py](../scripts/bedrock_client.py) |
 | Tool runtime (agentic tools) | [scripts/tool_runtime.py](../scripts/tool_runtime.py) |
 | Model routing config (provider + tier mapping) | [config/agent/copilot/model_routing.yaml](../config/agent/copilot/model_routing.yaml) |
 | Model registry (resolver, escalation) | [scripts/model_registry.py](../scripts/model_registry.py) |
 | Gemini CLI context file | [GEMINI.md](../GEMINI.md) |
-| Instruction architecture contract | [docs/contracts/instruction-architecture.md](../docs/contracts/instruction-architecture.md) |
+| Instruction architecture contract | [docs/contracts/instruction-architecture.yaml](../docs/contracts/instruction-architecture.yaml) |
 | Interactive orientation workflow | [.claude/commands/orient.md](../.claude/commands/orient.md) (canonical). Read-only; run before `/plan` to choose what to work on. |
 | Interactive planning workflow | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
 | Interactive implementation workflow | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
 | Interactive workflow skills (methodology) | [.claude/skills/](../.claude/skills/) (canonical) |
-| Legacy Antigravity workflows/skills | [.agents/workflows/](../.agents/workflows/), [.agents/skills/](../.agents/skills/) (legacy -- not synced, may be stale) |
-| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical). `.github/prompts/plan.prompt.md` is VS Code legacy |
+| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
 | Branch-specific plan files | `docs/plans/PLAN-{slug}.md` (merged to main; handed off to `/implement` by path) |
-| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical). `.github/prompts/implement.prompt.md` is VS Code legacy |
+| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
 | Pre-session checks (env, recs, friction) | [scripts/session_preflight.py](../scripts/session_preflight.py) |
 | Post-session automation (validate, commit, push) | [scripts/session_postflight.py](../scripts/session_postflight.py) |
-| Subagents and Reviewers | [.github/agents/*.agent.md](../.github/agents/) (VS Code legacy -- use `.agents/skills/` for Antigravity) |
+| Subagents and Reviewers | [.claude/skills/](../.claude/skills/) (canonical) |
 | Plan execution audit | [scripts/plan_audit.py](../scripts/plan_audit.py) |
 | Session metrics | [scripts/session_metrics.py](../scripts/session_metrics.py) |
 | Test coverage enforcement | [scripts/test_coverage_checker.py](../scripts/test_coverage_checker.py) -- AST-based; validates test file existence and per-file 100% coverage for new code |
 | Prompt compliance verification | [scripts/prompt_compliance.py](../scripts/prompt_compliance.py) -- Parses `## Behavioural Invariants` YAML from prompts; validates against retro-lite log and execution state |
 | North Star tracker | [scripts/north_star_tracker.py](../scripts/north_star_tracker.py) |
 | Human workflow guide | [docs/AGENT_WORKFLOW.md](../docs/AGENT_WORKFLOW.md) |
-| Strategic review (Opus) | [.github/prompts/strategic_review.prompt.md](../.github/prompts/strategic_review.prompt.md) |
-| CI triage protocol | [.github/prompts/implement.prompt.md](../.github/prompts/implement.prompt.md) -- Session Close Phase |
-| CI triage (standalone) | [.github/prompts/ci_triage.prompt.md](../.github/prompts/ci_triage.prompt.md) |
+| CI triage | [.claude/skills/orient/SKILL.md](../.claude/skills/orient/SKILL.md) -- CI RCA Recs surfaced in orient |
 | GitHub MCP config | [.mcp.json](../.mcp.json) |
 | Session continuity log | [docs/SESSION_LOG.md](../docs/SESSION_LOG.md) |
 | Scheduled agent manifest | [.github/agents/schedule.yaml](../.github/agents/schedule.yaml) |
@@ -174,7 +172,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Copilot SDK client (Lambda) | [scripts/copilot_sdk_client.py](../scripts/copilot_sdk_client.py) |
 | Scheduled agent local runner | [scripts/run_scheduled_agent.py](../scripts/run_scheduled_agent.py) |
 | Scheduled agent prompts | [.github/prompts/scheduled/](../.github/prompts/scheduled/) -- doc-freshness, orphan-code, transcript-review, code-smell, findings-compare |
-| Scheduled agent infrastructure | [terraform/scheduled_agents.tf](../terraform/scheduled_agents.tf) -- work-account Lambda dispatcher; deploy per-Lambda via manifest-derived gating (Decision 79, CD.16) |
+| Scheduled agent infrastructure | [terraform/scheduled_agents.tf](../terraform/scheduled_agents.tf) -- Lambda dispatcher for scheduled agents; deploy per-Lambda via manifest-derived gating (Decision 79, CD.16) |
 | CI runner infrastructure | [terraform/personal/oidc.tf](../terraform/personal/oidc.tf) -- GitHub-hosted runners + OIDC roles (CD.21). [terraform/ec2_runner.tf](../terraform/ec2_runner.tf) retained as a retired-runner artefact |
 | Customisations manifest script | [scripts/list_customizations.py](../scripts/list_customizations.py) |
 | Recommendations migration script | [scripts/migrate_recommendations.py](../scripts/migrate_recommendations.py) |
@@ -188,6 +186,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Execution checkpoint state | [logs/.execution-state.json](../logs/.execution-state.json) |
 | Execution state management | [scripts/execution_state.py](../scripts/execution_state.py) |
 | Session telemetry (executor) | [scripts/executor/telemetry.py](../scripts/executor/telemetry.py) |
+| PR template | [.github/pull_request_template.md](../.github/pull_request_template.md) |
 
 ## Recommendations Log Schema
 
@@ -236,7 +235,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Git branching workflow:** On Claude Code on the web the harness creates the per-session branch; do NOT create `agent/` branches. Never commit directly to `main`. Merge via a GitHub MCP PR (no local `gh`); wait for CI event-driven via `subscribe_pr_activity`, then squash-merge via `merge_pull_request`. See Decision 76.
 
-- **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `.github/prompts/develop-executor.prompt.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
+- **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
 
 - **Venv and Python:** Python 3.12+ on Linux container. Always invoke via `bin/venv-python` (wrapper auto-resolves the venv). Verify: `bin/venv-python -c "import sys; print(sys.executable)"`. If the venv is missing, run `bin/setup-cloud-env.sh` (canonical CC-web/Linux setup). Do not use `source .venv/bin/activate` -- each Bash tool invocation is independent; the wrapper handles activation.
 
@@ -278,7 +277,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **S3 backend + local mocking pattern (Medium):** Use a `get_backend()` switch so local mode preserves original file paths that tests mock. Bypassing mocked paths via absolute paths causes silent test failures.
 
-- **CI runner credential pattern (Important):** GitHub-hosted runners (CD.21) assume the OIDC role `agent-platform-github-ci-branch` (or `-pr` on pull requests) via `aws-actions/configure-aws-credentials`, which exports standard AWS credential env vars. There is no `~/.aws/config` on the runner, so code resolving a named SSO profile (`agent_platform`) must fall back to boto3's default credential chain when those env vars are present. Local and Claude-Code-on-web dev still resolve via the named profile.
+- **CI runner credential pattern (Important):** GitHub-hosted runners (CD.21) assume the OIDC role `agent-platform-github-ci-branch` (or `-pr` on pull requests) via `aws-actions/configure-aws-credentials`, which exports standard AWS credential env vars. There is no `~/.aws/config` on the runner, so code resolving a named SSO profile (`agent_platform`) must fall back to boto3's default credential chain when those env vars are present. The CC-web container resolves via the named profile.
 
 - **Terraform workflow integration (Important):** Plans with `.tf` files require `terraform plan` output presented to human before applying. Apply is human-gated EXCEPT the sandbox PLATFORM environment, where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, which fails closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD stay human-gated (and are future-state). See `plan.prompt.md` Step 4 (Infrastructure Assessment).
 
@@ -316,4 +315,164 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 ---
 
-**Last Updated**: April 27, 2026
+## Platform End-State (derived from ROADMAP-PLATFORM.yaml)
+
+Derived from ROADMAP-PLATFORM.yaml @ e588678 (2026-06-28). NON-AUTHORITATIVE cache: a materialized query of the roadmap, NOT a source of truth; re-synthesize via a fresh subagent to refresh. roadmap_tier_id_set sha256: f5072e405c65dee3c5cd216d11ef6bf1e9fedfe80bf628b63cf1c4be7db946c6
+
+This is the destination: what the platform looks like once the entire ROADMAP-PLATFORM.yaml
+work-list is implemented. PLATFORM = the infrastructure/governance/automation substrate
+underneath the trading system (ROADMAP-PRODUCT.yaml is the sibling product axis). Present tense
+describes the target; "[future]" marks parts not yet live.
+
+North Star (NS.1-NS.5): storage durable / compute interchangeable; personal AWS account (IP
+ownership); hybrid compute (cloud orchestration + local rig for CPU-bound batch); the repo is for
+agents; the agent surface is self-describing typed verbs over HTTPS with Pydantic schema-as-code.
+
+### 1. Self-improvement / recursive loop
+The four-tier workflow (Decision 90) runs end-to-end with no human in the critical path of one
+iteration (the Platform-MVP boundary, Decision 93):
+- /orient (read-only) surfaces eligible work, CI-RCA triage, and ranked /plan prompts -> /plan
+  produces a schema-validated PLAN-{slug}.yaml (PlanDocument, Decision 85/CD.22) -> /implement
+  executes or scopes -> /develop-executor supervises the autonomous executor [future].
+- Recommendations and decisions are the loop's currency. Findings (code review, scheduled agents,
+  CI-RCA, telemetry analysis) become ops_recommendations rows via the portal; architectural
+  commitments become ops_decisions rows.
+- The autonomous executor (T4) is the end-state consumer of the rec queue. Today it is FROZEN
+  (Decision 67 STRATEGIC-plan clause, reversed only by CD.17 when T4.2 is stable +14d, T3.2
+  verifier PASS, T3.3 +7d). In the end-state, recs flow queue -> executor -> plan/critique/
+  revision -> GitHub Actions verification -> merge, with RCA-on-failure (Decision 55: stop
+  cleanly, diagnose, file a permanent-fix rec; never inline-patch).
+- Plans, plan-critiques, and revisions graduate to first-class warehouse entities (ops_plans,
+  ops_plan_revisions; T4.5/T4.6, Decision 87), with git authoritative until the autonomous
+  producer flips authority [future]. Autonomy escalates through maturity gates A0-A5 (T4.4) keyed
+  to verifier pass-rates and drift silence.
+
+### 2. Operational data backbone
+- ops_recommendations, ops_decisions, ops_priority_queue live on DuckLake-on-Neon as the SOLE
+  backend (Decision 84/CD.31/CD.33/CD.34). No Athena path, no rollback flag. Neon serverless
+  Postgres is the DuckLake catalog (replaced RDS, ~$0; egress budgeted per Decision 88).
+- Closed reader/writer boundary: reads transit ducklake_reader via NAMED VERBS only (no caller
+  SQL); writes transit ducklake_writer with OCC-retry, writer-owned rec-ID keyspace (file_ops
+  allocates rec-NNNN in-transaction), and a "current" projection replacing SCD2 _current views.
+  Append-only/event-journal write mode coexists with SCD2 per table (T1.14).
+- Agent surface = typed Lambda verbs (CD.10, shape per Decision 91): the verb set fronts the
+  closed boundary (extensible; not a fixed six). Agents call file_rec/update_rec/sync (and query
+  verbs) via boto3+sigv4 over Function URLs with AWS_IAM auth, through the agent_platform
+  (PlatformDev) role; PlatformAdmin handles import-mode/break-glass. An agent SDK shim (T0.8)
+  hides URL discovery, signing, retry, and idempotency (T1.10).
+- Single Portal Invariant + warehouse-as-source-of-truth: all ops writes go through the portal;
+  local logs/*.jsonl are read-only caches rebuilt downstream via sync. Writes FAIL LOUDLY (no
+  offline outbox, Decision 84 I-4).
+- Telemetry: canonical 4-table trace/observation model (Decisions 95-97: ULID keys minted at the
+  boundary, event-time day(started_at) UTC partitioning, no downstream re-derivation). Telemetry
+  tables migrate onto DuckLake; Phase E (cloud analysis agent, T3.3) reads them. ops_session_log
+  / ops_execution_plans are the last Athena/Iceberg holdouts, retired/migrated by T2.26
+  (ops_compaction retires with them); docs/DECISIONS.md (T5.4) and docs/SESSION_LOG.md retire
+  once ops_decisions is canonical.
+- DQ-as-code (CD.12): Annotated-Pydantic models (DqNotNull, DqUnique, ...) are the single source
+  of schema + DQ; Iceberg DDL is generated by walking model_fields (T0.13). The DQ runner is a
+  SCHEDULED DRIFT ALARM that files recs (T1.6), NOT a merge gate; stateful invariants
+  (uniqueness/FK/status-DAG) run in-handler pre-commit and return typed 4xx.
+
+### 3. Trading data / compute pipeline and lakehouse
+- S3 + open table formats at every scale (NS.1): Iceberg for market-data/product tables; DuckLake
+  for ops/telemetry (Decision 78). Every table is partitioned (CD.9: day(trade_date) market
+  data, day(...) event-time ops/telemetry). No unpartitioned-table path.
+- DuckDB is the default operational read engine (CD.8, CD.15): embedded, sub-second, queries
+  snapshots/DuckLake directly inside the query Lambda; agents see verbs, not SQL or the engine.
+  Athena _current views are retired in the personal account; in the DuckLake end-state there is
+  no Athena escape hatch (OQ.7 option a) -- ad-hoc scans live behind ducklake_reader; break-glass
+  = the audited PlatformAdmin / Neon credential.
+- Compute is hybrid (NS.3): PySR formula discovery runs overnight on the local compute node
+  (VPN+SSH; T2.6, deferred post-MVP), writing to S3; cloud holds orchestration and state.
+- Workflow orchestration is Step Functions (Decision 39), with TCA/cost-curve aggregation Lambdas
+  (T3.5) feeding product cost models. Glue database agent_platform, bucket agent-platform-data-lake,
+  region eu-west-2.
+
+### 4. Environments and promotion (two-axis taxonomy, Decision 77)
+- Platform axis (infrastructure): bootstrap (admin-only, owns the CI/CD role's own IAM, never
+  auto-applies) -> sandbox (current personal account, mocked externals, auto-apply on
+  push-to-main behind the deterministic guard) -> SIT [future account, manual apply] -> PROD
+  [future account, real capital, second approver]. Same code path everywhere; only externals
+  (mocked vs real) and apply-gate differ. Single-account until the product axis reaches live_full
+  nearing full capital -- that event triggers standing up SIT then PROD.
+- Product axis (strategy lifecycle): research -> backtest_canonical -> paper -> live_small ->
+  live_full. Advancement is a capital_allocation config change (single-account, never a
+  deploy/infra spin-up).
+- "promotion" is always axis-qualified; environment and phase are reserved, lint-enforced vocabulary.
+
+### 5. Infrastructure-as-code and convergence (CD.35 waves, Decision 92/94)
+- All infra is Terraform under terraform/personal/ (full re-deploy in personal account, not state
+  migration; CD.6). Apply is agent-native CI/CD, never from a laptop:
+  - PRs run a speculative terraform plan under a least-privilege github_ci_plan role (refs/pull/*
+    trust, read-only state, fork-safe).
+  - Routine merges to main auto-apply the SAVED plan.bin behind a deterministic guard
+    (scripts/terraform_apply_guard.py, fail-closed on any IAM/trust/destroy diff) plus
+    subagent plan review.
+  - Guard-flagged (fail-closed) applies route to a gated-apply job under the tf-gated-apply GitHub
+    Environment, blocking on a required reviewer; on approval it applies the same reviewed plan
+    (no re-plan, no TOCTOU).
+  - A durable S3 convergence record (green/red, always-written, pipeline-identity-only) makes
+    apply outcomes sticky and observed; a scheduled drift detector runs terraform plan
+    (alarm-only, exit-code-typed); a convergence-health staleness sensor (T2.35) re-fires if the
+    latch goes quiet.
+  - Privilege tiering / bootstrap root (T2.23): the CI/CD role's OWN IAM (permissions boundary +
+    authority budget) lives in terraform/bootstrap/, breaking the self-grant; in-budget IAM
+    auto-apply (guard-consumption) is pending T2.25. CI-role IAM is DRY-composed with
+    invoke-implies-permission to prevent drift (T2.34).
+- IAM/OIDC roles: runtime agent_platform / agent_platform_admin; CI agent-platform-github-ci-branch
+  / -pr; apply-path github_ci_plan / github_ci_apply / convergence-writer (admin-created per
+  Decision 98). Lambda code deploys are decoupled from infra applies (ignore_changes =
+  [source_code_hash]).
+
+### 6. CI/CD and governance
+- Two-tier presubmit (Decision 60/73): validate.py --pre (diff-aware, authoritative on PR CI) +
+  full validate.py post-merge. validate.py is the single source of truth -- no CI check exists
+  without it.
+- CI runs on GitHub-hosted ubuntu-latest + OIDC (self-hosted EC2 runner retired, CD.21). Branch
+  protection is live (Decision 83): main-protection ruleset (required: pr-validate +
+  terraform-validate), Dependabot, GHAS secret-scanning/push-protection/CodeQL.
+- CI-RCA forward-fix (Decision 72): a failed main CI auto-files a source=ci_rca, priority=critical
+  rec and hard-blocks /plan until reviewed; fixes are forward-only, never auto-revert, never
+  inline-patched ahead of architectural review.
+- Merge flow: harness claude/* branch -> push -> GitHub MCP create_pull_request ->
+  subscribe_pr_activity + end turn -> CI-green-comment wake -> confirm check runs -> squash-merge
+  with Resolves: rec-NNNN trailer (triggers rec-autoclose).
+- Validation is a curated asset (CD.29/CD.30): graduated/deduplicated, hard-gate behind a
+  hermeticity precondition (T3.6 audit), diff-line-coverage ratchet (CD.30), and meta-validated by
+  scheduled mutation testing + deterministic dead-test detection (T3.7).
+
+### 7. Verifier harness / typed checks / graduation registry (T3)
+- Filesystem-as-registry verifiers in scripts/verifiers/, exit-code-as-verdict, with a same-PR
+  guard (an author cannot weaken their own verifier) and a graduation registry where proven
+  verifiers graduate into validation (T3.1, CD.29).
+- A causal-chain verifier (T3.2) proves a telemetry record flows PRODUCE -> TRANSPORT -> PERSIST
+  -> QUERY -> ASSERT atomically; its latest-run PASS is the gate (G.8) that unblocks the Phase E
+  cloud analysis agent (T3.3) and is a precondition for executor autonomy (CD.17).
+- Recommendation relevance is a governed lifecycle state (CD.36): a freshness/relevance gate
+  prevents starting stale recs (T3.8) and post-merge reconciliation prevents stale recs
+  accumulating (T3.9).
+
+### 8. Agent / instruction architecture end-state
+- 5-layer instruction model (docs/contracts/instruction-architecture.yaml): L1 universal rules
+  (AGENTS.md/CLAUDE.md, ambient) / L2 project knowledge (docs/PROJECT_CONTEXT.md, on-demand) / L3
+  slash commands (.claude/commands/) / L4 skills (.claude/skills/) / L5 executor prompts
+  (config/agent/executor/prompts/). .claude/ is canonical (Decision 76); legacy top-level
+  .github/prompts/*.prompt.md + .github/agents/*.agent.md + .agents/ were deleted at T-1.13;
+  .github/prompts/scheduled/ + .github/agents/schedule.yaml survive for scheduled agents;
+  full directory deletion remains owned by T5.3 pending scheduled-agent decoupling.
+- Agent-first repository (NS.4, CD.13): all artefacts machine-parseable. Standing
+  prose-architecture docs are forbidden (Decision 86) -- intent routes to tier_items, rationale to
+  Decisions, field semantics to contracts (Class A data schemas, Class B Lambda-verb, Class C
+  cross-system). INTENT-*.md docs are fully extracted and deleted (T5.5). Contracts are converted
+  to .yaml and wired to their code consumers (T-1.13..T-1.19).
+- LLM substrate (CD.28): DeepSeek-direct via LiteLLM (Tier 1) + Anthropic-direct Claude (Tier 2
+  warm-fetched escape hatch); Bedrock fully retired. Keys in Secrets Manager (T0.4). Precision
+  Context Injection (Decision 66): field semantics surfaced at agent write time.
+- Multi-product topology (CD.32): a unified project_id data plane with an IP-boundary-only repo
+  axis [future]. Dev surface is Claude Code on the web only (CD.2; Windows VM decommissioned at
+  T5.1, legacy dev account retired at T5.2 after 30d grace).
+
+---
+
+**Last Updated**: June 28, 2026

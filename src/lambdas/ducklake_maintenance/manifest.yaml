@@ -9,6 +9,7 @@ includes:
   - src/common/ducklake_scd2_schema.py
   - src/common/ducklake_maintenance.py
   - src/common/ducklake_spike.py  # transitive: ducklake_runtime.open_connection imports ducklake_spike
+  - src/common/ducklake_version.py
   - src/common/catalog_dr.py  # T2.19: restore_drill uses build_pg_dump_cmd / run_pg_restore
   - src/common/__init__.py
   - src/lambdas/ducklake_maintenance/__init__.py
@@ -17,6 +18,7 @@ includes:
   - scripts/aws_profile.py
 assets:
   - config/lambda/ducklake/field_semantics.yaml  # T2.19: seed/catalog actions schema_gate + write_scd2
+  - config/lambda/ducklake/version.yaml
 config: []
 pip_packages: []
 runtime_config: []
@@ -26,8 +28,8 @@ notes: >-
   non-destructive merge cadence (action=merge) and weekly guarded destructive GC with circuit
   breaker (action=gc). reserved_concurrent_executions=1 (singleton per Decision 81 clause 6 --
   the maintenance pipeline must not run concurrently; this differs from the writer's OCC
-  concurrency model per Decision 81 clause 3). duckdb==1.5.3 + psycopg2-binary + python-ulid
-  live in the ducklake-deps layer; the ducklake/httpfs/postgres extensions live in the
+  concurrency model per Decision 81 clause 3). duckdb (pinned via config/lambda/ducklake/version.yaml)
+  + psycopg2-binary + python-ulid live in the ducklake-deps layer; the ducklake/httpfs/postgres extensions live in the
   ducklake-extensions layer. Function URL is AWS_IAM for the post-deploy smoke-test invoke gates.
   Scheduled table scope: ducklake_smoke_* under the ducklake_smoke meta-schema. T2.19 adds the
   operational catalog_reinit / restore_drill actions (invoked via `aws lambda invoke`); restore_drill

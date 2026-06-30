@@ -28,6 +28,10 @@ contract:
     arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2 (Semantic Definition) is a
     blocking gate on semantic migration -- open questions (dual id/decision_id keyspace,
     status str not Literal, DqXxx with enforced=False) are explicitly deferred.
+  projects_to:
+    artifact: config/lambda/ducklake/field_semantics.yaml
+    table: ops_decisions
+    generator: scripts/schema_to_field_semantics.py
 fields:
   ulid:
     type: str
@@ -42,6 +46,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: python-ulid monotonic generation; minted once at op-start by ducklake_runtime._derive_fields()
+      inputs: []
+      realized: true
 
   id:
     type: str
@@ -211,6 +219,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: high-precision now() minted ONCE at op-start by ducklake_runtime._derive_fields(); carried unchanged on UPDATE
+      inputs: []
+      realized: true
 
   last_updated_timestamp:
     type: datetime
@@ -224,6 +236,10 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    derivation:
+      formula: high-precision now() minted ONCE at op-start by ducklake_runtime._derive_fields(); stable across OCC retries
+      inputs: []
+      realized: true
 
   _contract_version:
     type: str
@@ -261,6 +277,7 @@ governance:
     action_file_ops REJECTED (Decision 84 I-2 exception -- ops_decisions rebuilds from
     DECISIONS.md rather than migrating, so file_ops would conflict with the existing
     number space).
+  merge_key: id
 
 governance_notes: >-
   Decision 65: This contract is the canonical field-semantic authority for ops_decisions.
@@ -273,5 +290,19 @@ governance_notes: >-
   (3) DqXxx fields with enforced=False. Do NOT apply DQ enforcement to these fields until
   Phase 2 ratifies the semantic definitions.
 
-amendment_log: []
+amendment_log:
+  - date: "2026-06-21"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      CD.25 additive amendment (T2.33): add contract.projects_to, governance.merge_key=id,
+      and realized=true markers on SCD2 envelope fields. No column added or removed.
+    migration_story: >-
+      Adds contract.projects_to pointing field_semantics.yaml at this contract + its generator
+      (scripts/schema_to_field_semantics.py); governance.merge_key=id for the generator
+      partition-synthesis rule; realized=true on ulid/created_timestamp/last_updated_timestamp
+      (SCD2 envelope fields derived by ducklake_runtime._derive_fields()). No deferred-
+      derivation fields on ops_decisions (no effort/priority/automatable/risk). The runtime
+      schema gate, DDL, partition transforms and MERGE behavior are unchanged.
+      semantic_break=false.
 previous_versions: []

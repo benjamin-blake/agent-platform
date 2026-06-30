@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import stat
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -364,6 +365,15 @@ def upsert_cache_row(table: str, row: dict, *, merge_key: str = "id", path: Path
         return 0
 
     local_path = path if path is not None else _LOGS_DIR / local_rel
+    # No-op for /dev/null sentinel or character devices -- real-path write errors still propagate (Decision 55).
+    if str(local_path) == os.devnull:
+        return 0
+    try:
+        is_chardev = local_path.exists() and stat.S_ISCHR(os.stat(local_path).st_mode)
+    except OSError:
+        is_chardev = False
+    if is_chardev:
+        return 0
     by_key: dict[str, dict] = {}
     if local_path.exists():
         for line in local_path.read_text(encoding="utf-8").splitlines():

@@ -8,7 +8,8 @@ Creates these zip artifacts:
   2. ops-compaction.zip                     -- minimal ops compaction handler
   3. data-pipeline-deps-layer.zip           -- dependencies layer (yfinance, pyyaml, etc.)
   4. ducklake-{writer,reader,maintenance,catalog-dr}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
-  5. ducklake-{deps,extensions}-layer.zip   -- duckdb==1.5.3 + baked extensions (--ducklake-only)
+  5. ducklake-{deps,extensions}-layer.zip   -- duckdb (pinned via config/lambda/ducklake/version.yaml)
+                                               + baked extensions (--ducklake-only)
   6. ducklake-pgclient-layer.zip            -- pg_dump 16 + libpq.so (--ducklake-only, T2.18 FP-B)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
@@ -34,8 +35,13 @@ OUTPUT_DIR = ROOT / "lambda-packages"
 LAMBDA_SIZE_LIMIT_BYTES = 262144000  # 262 MB
 LAMBDA_SIZE_WARN_BYTES = 250 * 1024 * 1024  # early warning before the hard ceiling
 
-# DuckLake lockstep pin (OQ.12): the layer pins duckdb exactly; ducklake_runtime asserts equality.
-PINNED_DUCKDB_VERSION = "1.5.3"
+# DuckLake lockstep pin (OQ.12): derived from the SSOT (config/lambda/ducklake/version.yaml).
+from src.common.ducklake_version import (  # noqa: E402, I001
+    extension_platform as _extension_platform,
+    pinned_duckdb_version as _pinned_duckdb_version,
+)
+
+PINNED_DUCKDB_VERSION = _pinned_duckdb_version()
 
 PROD_DEPS = [
     "numpy>=1.24.0",
@@ -70,9 +76,9 @@ DUCKLAKE_DEPS = [
 
 # DuckLake extensions baked into the ducklake-extensions layer: (LOAD name, published file stem).
 # DuckDB publishes the Postgres extension binary as postgres_scanner.duckdb_extension even though it
-# LOADs as `postgres` (verified against v1.5.3/linux_amd64).
+# LOADs as `postgres` (verified against the pinned duckdb / config/lambda/ducklake/version.yaml).
 DUCKLAKE_EXTENSIONS = (("ducklake", "ducklake"), ("httpfs", "httpfs"), ("postgres", "postgres_scanner"))
-DUCKLAKE_EXT_PLATFORM = "linux_amd64"
+DUCKLAKE_EXT_PLATFORM = _extension_platform()  # derived from config/lambda/ducklake/version.yaml
 DUCKLAKE_EXT_URL_BASE = f"https://extensions.duckdb.org/v{PINNED_DUCKDB_VERSION}/{DUCKLAKE_EXT_PLATFORM}"
 # Vendored fallback prefix (raw .duckdb_extension files), seeded when egress to the CDN is blocked.
 DUCKLAKE_EXT_S3_PREFIX = f"ducklake-extensions/v{PINNED_DUCKDB_VERSION}"
@@ -95,6 +101,13 @@ _DUCKLAKE_FUNCTION_ZIP_KEYS = {
 # Seeded by the operator via: aws s3 cp pg_dump s3://<bucket>/ducklake-pgclient/pg_dump16 --profile agent_platform
 DUCKLAKE_PGCLIENT_S3_PREFIX = "ducklake-pgclient"
 PINNED_PG_MAJOR = "16"
+
+# The three DuckLake Lambda layers (deps + extensions + pgclient). Used by publish_canary_layers.
+DUCKLAKE_LAYER_NAMES = (
+    "ducklake-deps-layer",
+    "ducklake-extensions-layer",
+    "ducklake-pgclient-layer",
+)
 
 # Retained for backward compatibility with external callers and tests.
 _LAMBDA_SCRIPTS = [
@@ -121,6 +134,73 @@ _LAMBDA_FUNCTION_NAMES = [
 
 _OPS_COMPACTION_FUNCTION_NAME = "agent-platform-ops-compaction"
 _OPS_COMPACTION_ZIP_KEY = "lambda-packages/ops-compaction.zip"
+
+
+# ---------------------------------------------------------------------------
+# Build contract loader (T-1.16): lazy, cached, import-safe.
+# Falls through to in-code FALLBACK_* constants on ANY read/parse failure.
+# ---------------------------------------------------------------------------
+
+_BUILD_CONTRACT_PATH = ROOT / "docs" / "contracts" / "build-lambda.yaml"
+_BUILD_CONTRACT_REGISTRY: dict | None = None  # None until first accessor call
+
+
+def _fallback_build_registry() -> dict:
+    return {
+        "size_limit_bytes": LAMBDA_SIZE_LIMIT_BYTES,
+        "deploy_targets": {
+            "prod_functions": list(_LAMBDA_FUNCTION_NAMES),
+            "ops_compaction": {
+                "function": _OPS_COMPACTION_FUNCTION_NAME,
+                "zip_key": _OPS_COMPACTION_ZIP_KEY,
+            },
+            "ducklake_function_zip_keys": dict(_DUCKLAKE_FUNCTION_ZIP_KEYS),
+            "ducklake_layer_names": list(DUCKLAKE_LAYER_NAMES),
+        },
+    }
+
+
+def _load_build_contract() -> dict:
+    global _BUILD_CONTRACT_REGISTRY
+    if _BUILD_CONTRACT_REGISTRY is not None:
+        return _BUILD_CONTRACT_REGISTRY
+    try:
+        import yaml  # noqa: PLC0415
+
+        raw = yaml.safe_load(_BUILD_CONTRACT_PATH.read_text(encoding="utf-8"))
+        registry = {
+            "size_limit_bytes": raw["size_limit_bytes"],
+            "deploy_targets": {
+                "prod_functions": list(raw["deploy_targets"]["prod_functions"]),
+                "ops_compaction": dict(raw["deploy_targets"]["ops_compaction"]),
+                "ducklake_function_zip_keys": dict(raw["deploy_targets"]["ducklake_function_zip_keys"]),
+                "ducklake_layer_names": list(raw["deploy_targets"]["ducklake_layer_names"]),
+            },
+        }
+        _BUILD_CONTRACT_REGISTRY = registry
+    except Exception:
+        _BUILD_CONTRACT_REGISTRY = _fallback_build_registry()
+    return _BUILD_CONTRACT_REGISTRY
+
+
+def _build_size_limit_bytes() -> int:
+    return _load_build_contract()["size_limit_bytes"]
+
+
+def _build_prod_function_names() -> list[str]:
+    return list(_load_build_contract()["deploy_targets"]["prod_functions"])
+
+
+def _build_ops_compaction() -> dict:
+    return dict(_load_build_contract()["deploy_targets"]["ops_compaction"])
+
+
+def _build_ducklake_function_zip_keys() -> dict[str, str]:
+    return dict(_load_build_contract()["deploy_targets"]["ducklake_function_zip_keys"])
+
+
+def _build_ducklake_layer_names() -> list[str]:
+    return list(_load_build_contract()["deploy_targets"]["ducklake_layer_names"])
 
 
 def _get_lambda_file_patterns() -> list[str]:
@@ -274,11 +354,12 @@ def assert_within_size_limit(zip_path: Path) -> None:
     must stop here rather than ship a zip that cannot be deployed.
     """
     size = zip_path.stat().st_size
-    if size > LAMBDA_SIZE_LIMIT_BYTES:
+    limit = _build_size_limit_bytes()
+    if size > limit:
         mb = round(size / 1024 / 1024, 2)
         print(
             f"ERROR: {zip_path.name} is {mb} MB ({size} bytes), over the "
-            f"{LAMBDA_SIZE_LIMIT_BYTES} byte (262 MB) Lambda zip/layer limit. Build failed.",
+            f"{limit} byte (262 MB) Lambda zip/layer limit. Build failed.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -296,7 +377,8 @@ def build_ducklake_function_package(temp_dir: Path, slug: str, zip_name: str) ->
 
 
 def build_ducklake_deps_layer(temp_dir: Path) -> Path:
-    """Create ducklake-deps-layer.zip (duckdb==1.5.3 + psycopg2-binary + python-ulid + pyyaml)."""
+    """Create ducklake-deps-layer.zip (duckdb pinned via config/lambda/ducklake/version.yaml
+    + psycopg2-binary + python-ulid + pyyaml)."""
     site_packages = temp_dir / "ducklake-deps" / "python" / "lib" / "python3.12" / "site-packages"
     site_packages.mkdir(parents=True)
 
@@ -304,7 +386,7 @@ def build_ducklake_deps_layer(temp_dir: Path) -> Path:
     req_file.write_text("\n".join(DUCKLAKE_DEPS), encoding="utf-8")
 
     print("  Installing DuckLake deps to Lambda layer structure...")
-    # duckdb 1.5.3 publishes a manylinux_2_28 wheel (no manylinux2014/2_17 wheel above 1.2.2);
+    # duckdb publishes a manylinux_2_28 wheel (no manylinux2014/2_17 wheel above 1.2.2);
     # Lambda python3.12 runs on Amazon Linux 2023 (glibc 2.34), compatible with 2_28. Offer both
     # tags newest-first so each dep resolves to its best available wheel.
     pip_result = subprocess.run(
@@ -538,6 +620,57 @@ def build_pgclient_layer(
     return zip_path
 
 
+def publish_canary_layers(*, bucket: str, profile: str = "agent_platform", region: str = "eu-west-2") -> dict[str, str]:
+    """Publish the three DuckLake layer zips (already in S3) as new aws_lambda layer versions.
+
+    Calls ``aws lambda publish-layer-version`` for each of the three DuckLake layers (deps, extensions,
+    pgclient) using the S3 zips that ``--ducklake-only`` already uploaded. Prints JSON mapping layer
+    name -> version ARN for the canary orchestrator to consume.
+
+    Layer zips must already be in S3 (run ``--ducklake-only`` first). Fails closed if any publish
+    fails. Returns the same ARN dict.
+    """
+    import json as _json  # noqa: PLC0415
+
+    arns: dict[str, str] = {}
+    for layer_name in _build_ducklake_layer_names():
+        s3_key = f"lambda-packages/{layer_name}.zip"
+        result = subprocess.run(
+            [
+                "aws",
+                "lambda",
+                "publish-layer-version",
+                "--layer-name",
+                layer_name,
+                "--content",
+                f"S3Bucket={bucket},S3Key={s3_key}",
+                "--region",
+                region,
+                "--profile",
+                profile,
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if result.returncode != 0:
+            print(
+                f"ERROR: failed to publish layer {layer_name}: {result.stderr.strip()[:500]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        data = _json.loads(result.stdout)
+        arn = data["LayerVersionArn"]
+        arns[layer_name] = arn
+        print(f"  OK {layer_name}: {arn}")
+    print(_json.dumps(arns))
+    return arns
+
+
 def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
     """Upload package to S3."""
     s3_key = f"lambda-packages/{zip_path.name}"
@@ -578,10 +711,11 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     if only_ducklake:
         # Scope the deploy to the two DuckLake functions ONLY: data-pipeline + ops-compaction are
         # NOT redeployed by a T2.17 deploy (Decision 79 affected-artifact hygiene).
-        function_zip_map = dict(_DUCKLAKE_FUNCTION_ZIP_KEYS)
+        function_zip_map = dict(_build_ducklake_function_zip_keys())
     else:
-        function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _LAMBDA_FUNCTION_NAMES}
-        function_zip_map[_OPS_COMPACTION_FUNCTION_NAME] = _OPS_COMPACTION_ZIP_KEY
+        function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _build_prod_function_names()}
+        ops = _build_ops_compaction()
+        function_zip_map[ops["function"]] = ops["zip_key"]
 
     for fn_name, s3_key in function_zip_map.items():
         print(f"  Updating {fn_name}...")
@@ -763,7 +897,7 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
         print("[4/4] DuckLake build complete.")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build Lambda deployment packages")
     parser.add_argument("--skip-upload", action="store_true", help="Build zips only, skip S3 upload")
     parser.add_argument("--bucket", default="", help="S3 bucket name (default: from terraform output)")
@@ -787,10 +921,28 @@ def main() -> None:
         help="Stage a manifest-driven bundle and emit its static file list (skip_pip=True). "
         "ARTIFACT_SLUG is the src/lambdas/<name>/ directory name (e.g. data-pipeline).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--ducklake-publish-canary-layers",
+        action="store_true",
+        dest="ducklake_publish_canary_layers",
+        help="Publish the three DuckLake layer zips (already uploaded to S3 by --ducklake-only) as new "
+        "aws_lambda layer versions. Prints JSON mapping layer name -> version ARN for the canary "
+        "orchestrator (OQ.12 clone-rehearsal). Run after --ducklake-only to get candidate layer ARNs.",
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     if args.list_bundle:
         list_bundle(args.list_bundle)
+        return
+
+    if args.ducklake_publish_canary_layers:
+        args.profile = _resolve_ducklake_profile(args.profile)
+        bucket = args.bucket or resolve_bucket(args.profile)
+        publish_canary_layers(bucket=bucket, profile=args.profile, region=args.region)
         return
 
     print("Lambda Package Builder (Manifest-Driven, CD.24)")

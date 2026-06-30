@@ -61,6 +61,43 @@ STOP and wait. Do not auto-rebase. If the human chooses (2), proceed with a logg
 
 If `main_freshness.status != "ok"`, this check cannot run -- surface the fetch failure to the human and continue.
 
+## Bundled Recommendation Relevance Re-check (Workflow Step 3 -- fires after plan load)
+
+Before writing any code, re-check every rec in the plan's `bundled_recommendations` field.
+A rec can become stale between `/plan` and `/implement` (target file deleted, decision
+ratified, a sibling plan already satisfied it). Implementing stale work wastes the session.
+
+### Protocol
+For each rec id in `bundled_recommendations`:
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+from scripts.ops_data_portal import propose_or_close_rec
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=True)
+det = (verdict == 'satisfied' and evidence.startswith('acceptance probe passed:'))
+proposal = propose_or_close_rec('rec-NNNN', verdict, evidence, deterministic=det)
+print(f'verdict={verdict} det={det}')
+if proposal: print('proposal:', proposal)
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; implement as planned.
+- **`satisfied` (deterministic -- acceptance probe passed)** -- `propose_or_close_rec` auto-closes
+  the rec via the portal. Remove it from the effective bundled list, skip its implementation step,
+  and record in chat: "rec-NNNN auto-closed as satisfied ([evidence]); skipping implementation."
+- **`satisfied` (semantic)** -- present the proposal command; wait for operator confirmation.
+  Do NOT skip implementation until operator explicitly confirms closure.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- present
+  the proposal command and wait for operator decision before removing from the implementation list.
+
+**Decision 55 compliance:** auto-closure fires ONLY for deterministic `satisfied`. All semantic
+verdicts route to the operator -- the agent never auto-acts on semantic judgment.
+
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
 After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
 
@@ -155,8 +192,33 @@ For each identified tier_item, load its `exit_criteria[]` from `docs/ROADMAP-PLA
 - **Executable criteria** (shell one-liners, `grep`, `test -f`, `pytest`, `bin/venv-python -c "..."`) -- run via subprocess; pass if exit code is 0.
 - **Prose criteria** -- fall through to agent judgement with a **conservative bias**: when in doubt about whether a prose criterion is satisfied, do NOT count it as passing. This produces under-counting (false in_progress) rather than over-counting (false complete), which is the safer failure mode. Never auto-flip a prose-gated item to `complete` without explicit evidence in the current session's artefacts.
 
+### closes_criteria flip (T-1.23)
+
+Before evaluating Outcome rules, flip the criterion statuses declared in the plan's
+`closes_criteria` field. This step fires ONLY on a verified VP pass; never on FAIL or BLOCKED.
+
+1. **Read the plan's `closes_criteria` list** (each entry `"<item-id>:<crit-id>"`). If the list is
+   empty or absent, skip this step.
+2. **For each ref**, locate the named criterion in `docs/ROADMAP-PLATFORM.yaml`:
+   - Set `status: met`
+   - Set `met_by: <plan-slug>` (the current plan's slug, e.g. `exit-criteria-ledger-orient-followon`)
+3. **Stage these criterion flips** in the same YAML edit as the subsequent Outcome rules (single
+   staged edit). The criterion flips happen BEFORE the whole-item Outcome rules run -- so that the
+   Outcome rules read the updated `criterion.status == met` values (not a fresh prose re-adjudication).
+4. **Only declared criteria flip.** Never flip criteria not named in `closes_criteria`. Never infer
+   `met` from prose, file existence, or commit activity (Status-Trusted-Never-Inferred / T2.20).
+5. **All-criteria-met after the flip?** An item whose ALL criteria are now `status: met` (or `rehomed`)
+   QUALIFIES for the completion gate -- do NOT auto-flip it to `status: complete`. Surface it to the
+   operator: "All criteria on <item-id> are now met or rehomed -- QUALIFIES for status: complete via
+   the bookkeeping Outcome rules (manual confirmation required, per Status-Trusted-Never-Inferred)."
+   The operator then confirms, and the Outcome rules stage `status: complete`.
+
 ### Outcome rules
 - **All criteria pass** -> stage `status: complete` + `completed_at: "<today ISO date>"` in `docs/ROADMAP-PLATFORM.yaml`.
+  For `in_progress` items with a structured ledger: "all criteria pass" means every ExitCriterion has
+  `status: met` or `status: rehomed` after applying the closes_criteria flip above. Prose re-adjudication
+  on the updated statuses confirms; do NOT re-adjudicate the raw criterion text if the status already
+  reads `met`.
 - **Strict subset pass (>=1 but not all)** -> stage `status: in_progress` + `progress_note: "<one-line description of what shipped this session>"`. If the item already has a `progress_note`, append a dated bullet (e.g., `"- 2026-05-20: shipped criteria 1, 3"`) rather than overwriting.
 - **Zero criteria pass** -> no YAML change.
 
@@ -282,7 +344,7 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 ## Commit Flows (Workflow Step 7 -- MANDATORY)
 **Once validation passes (Step 6), execute the appropriate commit flow autonomously. Do not stop to ask permission -- the plan was approved during /plan.**
 
-This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Squash-merge after CI passes is preserved policy (Decision 89 "Branch Protection Not Available", clause 4); the transport is now the GitHub MCP `merge_pull_request` tool (Decision 76).
+This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Decision 83 (2026-06-08) reversed Decision 89's "Branch Protection Not Available" premise -- branch protection is now LIVE. The squash-merge-after-CI gate design is PRESERVED (Decision 89 stays as audit history; Decision 83 amends its premise only). The transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
@@ -290,8 +352,9 @@ The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on ma
 ### Wait-for-CI: event-driven, never polled
 The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
 1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
-2. **End your turn.** Do NOT busy-wait: no background sleep timer, no recurring scheduled re-check, no manual status polling -- the harness forbids busy-waiting on external events and a timer keeps the container awake for nothing. CI completion arrives as a `<github-webhook-activity>` event that WAKES this session.
-3. On wake, confirm status (`mcp__github__pull_request_read` with `method=get_status`/`get_check_runs`):
+2. **End your turn.** Do NOT busy-wait: no background sleep timer, no manual status polling -- the harness forbids busy-waiting on external events. A single low-frequency (~1h) best-effort one-shot `send_later` backstop is permitted for a dropped signal-green comment (see AGENTS.md `## Git-ops procedure` step 4 for bounds and the harness-vs-repo server distinction); it is NOT a recurring poll loop (Decision 55).
+3. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`.github/workflows/ci.yml` lines 157-178, `continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment IS the pass wake signal. The comment is unverified: on wake, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
+4. On wake, confirm status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).
    - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
    - **Still running** -> end the turn; a later event wakes you.
@@ -313,17 +376,22 @@ only via the `workflow_dispatch` acknowledge-and-retry path (naming the red comm
 reviewed -- never an inline workaround (Decision 55). Unsubscribe once the record is green (apply converged)
 or the next planning session has assumed the baseline.
 
-**Fail-closed set (IAM/trust/destroy diffs -- CD.35 Wave 3 / T2.22):** if the change hits the guard's
-fail-closed set (guard exits 2), the post-merge path routes to the `gated-apply` job rather than auto-applying.
-The job declares `environment: tf-gated-apply` and **blocks until benjamin-blake approves in GitHub Actions**
-(Actions tab -> select the run -> Review pending deployments -> Approve). This is NOT a PR required status
-check -- the PR merges normally; the gated apply is a separate post-merge job. After approval, the gated-apply
-job applies the same saved plan.bin and writes the convergence record. The authoritative baseline is still
-the next planning session's convergence-record re-check (not the wake). The gated apply gates the JOB, never
-from a laptop.
+**Gated set (out-of-budget IAM / trust / destroy -- CD.35 Wave 3 / T2.22 + T2.25 narrowing):** if the
+change hits the guard's gated set (guard exits 2), the post-merge path routes to the `gated-apply` job rather
+than auto-applying. In-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying CI roles
+(T2.25 / Decision 92 point 5) now exit 0 and auto-apply; role CREATES, trust diffs, destroys, and
+out-of-budget IAM still exit 2 and route here. The job declares `environment: tf-gated-apply` and **blocks
+until benjamin-blake approves in GitHub Actions** (Actions tab -> select the run -> Review pending deployments
+-> Approve). This is NOT a PR required status check -- the PR merges normally; the gated apply is a separate
+post-merge job. After approval, the gated-apply job applies the same saved plan.bin and writes the convergence
+record. The authoritative baseline is still the next planning session's convergence-record re-check (not the
+wake). The gated apply gates the JOB, never from a laptop.
 
 ### Pre-Push Rebase (applies to both flows)
-After the local commit, before pushing, refresh and rebase so the PR opens against current main:
+**Rebase phase distinction** -- two rules, not one:
+- **Assessment time (planning / Main Divergence Check)**: do NOT auto-rebase. Surface the divergence to the human; wait for their choice (rebase now / proceed / abort). This is because rebasing mid-plan can silently invalidate scoping decisions made against the old tree.
+- **Commit-flow time (here, after all code changes are done)**: DO rebase automatically before pushing. After the local commit, before pushing, refresh and rebase so the PR opens against current main:
+
 ```bash
 git fetch origin main
 git rebase origin/main   # STOP on conflict; do not auto-resolve -- surface to the human

@@ -80,6 +80,34 @@ def classify_failure(
     return ("unknown", "unknown", "taxonomy_fallback")
 
 
+def classify_failures(
+    log_text: str,
+    jobs: list[dict] | None = None,
+    path: Path | None = None,
+) -> list[tuple[str, str, str]]:
+    """Enumerate all distinct failed checks in the run.
+
+    Returns a list of (failure_category, failed_check, classification_source) tuples,
+    one per distinct failed check. The single-failure path still returns a list with one
+    element. classify_failure is retained for backward compatibility.
+    """
+    taxonomy = _cached_taxonomy(path)
+    func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
+
+    results: list[tuple[str, str, str]] = []
+    seen_checks: set[str] = set()
+
+    for func_name, category in func_map.items():
+        if func_name in log_text and func_name not in seen_checks:
+            results.append((category, func_name, "function_to_category"))
+            seen_checks.add(func_name)
+
+    if not results:
+        results.append(classify_failure(log_text, jobs, path))
+
+    return results
+
+
 def resolve_workflow_tier(workflow_name: str, path: Path | None = None) -> str:
     """Map a workflow name to its tier string. Returns 'unknown' for misses and 'not_a_gate' sentinels."""
     taxonomy = _cached_taxonomy(path)

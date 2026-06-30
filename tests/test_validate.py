@@ -21,6 +21,7 @@ validate_scheduled_agent_logs = _validate.validate_scheduled_agent_logs
 validate_cli_tools_in_prompts = _validate.validate_cli_tools_in_prompts
 validate_test_coverage = _validate.validate_test_coverage
 validate_prompt_compliance = _validate.validate_prompt_compliance
+validate_instruction_architecture_layers = _validate.validate_instruction_architecture_layers
 validate_invariants = _validate.validate_invariants
 validate_no_underscore_instructions = _validate.validate_no_underscore_instructions
 validate_recommendations_schema = _validate.validate_recommendations_schema
@@ -54,6 +55,115 @@ validate_lambda_deploy_gating = _validate.validate_lambda_deploy_gating
 validate_intent_doc_freeze = _validate.validate_intent_doc_freeze
 validate_ci_rca_taxonomy = _validate.validate_ci_rca_taxonomy
 validate_verifier_hermeticity = _validate.validate_verifier_hermeticity
+validate_field_semantics_drift = _validate.validate_field_semantics_drift
+validate_broker_env_reads = _validate.validate_broker_env_reads
+validate_platform_roadmap = _validate.validate_platform_roadmap
+validate_ducklake_version_lockstep = _validate.validate_ducklake_version_lockstep
+validate_verifier_same_pr_guard = _validate.validate_verifier_same_pr_guard
+validate_verification_registry = _validate.validate_verification_registry
+validate_differential_gate_baseline = _validate.validate_differential_gate_baseline
+validate_rec_relevance_contract = _validate.validate_rec_relevance_contract
+_extract_verifier_covers = _validate._extract_verifier_covers
+_load_sloc_budgets = _validate._load_sloc_budgets
+_update_sloc_budgets = _validate._update_sloc_budgets
+validate_dependency_graph_freshness = _validate.validate_dependency_graph_freshness
+
+
+class TestDependencyGraphFreshness:
+    """Tests for validate_dependency_graph_freshness() -- the Decision 80 freshness gate."""
+
+    def test_no_op_when_export_absent(self, tmp_path: Path) -> None:
+        """No failure when docs/dependency-graph.json does not exist."""
+        from unittest.mock import patch as _patch
+
+        missing = tmp_path / "nonexistent.json"
+        with _patch("scripts.dependency_graph._EXPORT_PATH", missing):
+            failed: list[str] = []
+            validate_dependency_graph_freshness(failed)
+        assert not failed
+
+    def test_fails_when_export_is_stale(self, tmp_path: Path) -> None:
+        """A failure is appended when the committed export differs from the current graph."""
+        import json
+        from unittest.mock import patch as _patch
+
+        export_path = tmp_path / "dependency-graph.json"
+        stale = {"nodes": ["stale.module"], "edges": [], "roots": [], "metadata": {}, "symbol_nodes": []}
+        export_path.write_text(json.dumps(stale), encoding="utf-8")
+        with _patch("scripts.dependency_graph._EXPORT_PATH", export_path):
+            failed: list[str] = []
+            validate_dependency_graph_freshness(failed)
+        assert len(failed) == 1
+        msg = failed[0].lower()
+        assert "stale" in msg or "drift" in msg or "dependency graph" in msg
+
+
+class TestFieldSemanticsDriftGate:
+    """Tests for validate_field_semantics_drift() -- the T2.33 fail-closed drift gate."""
+
+    def test_passes_when_committed_matches_generator(self, tmp_path: Path) -> None:
+        """If the committed file matches what the generator would produce: no failure."""
+        import importlib.util as _ilu
+
+        gen_path = ROOT / "scripts" / "schema_to_field_semantics.py"
+        spec = _ilu.spec_from_file_location("_gen", gen_path)
+        gen = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(gen)  # type: ignore[union-attr]
+
+        # Write the exact generator output to tmp_path
+        output = tmp_path / "field_semantics.yaml"
+        output.write_text(gen._emit_yaml(gen.generate(include_prose=False)), encoding="utf-8")
+
+        import unittest.mock as _m
+
+        with _m.patch("scripts.schema_to_field_semantics._OUTPUT_PATH", output):
+            failed: list[str] = []
+            validate_field_semantics_drift(failed)
+        assert failed == [], f"Expected no failure but got: {failed}"
+
+    def test_fails_when_committed_has_drift(self, tmp_path: Path) -> None:
+        """If the committed file has extra content vs the generator output: failure appended."""
+        import importlib.util as _ilu
+        import unittest.mock as _m
+
+        gen_path = ROOT / "scripts" / "schema_to_field_semantics.py"
+        spec = _ilu.spec_from_file_location("_gen2", gen_path)
+        gen = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(gen)  # type: ignore[union-attr]
+
+        output = tmp_path / "field_semantics.yaml"
+        output.write_text(
+            gen._emit_yaml(gen.generate(include_prose=False)) + "\n# injected drift\n",
+            encoding="utf-8",
+        )
+
+        with _m.patch("scripts.schema_to_field_semantics._OUTPUT_PATH", output):
+            failed: list[str] = []
+            validate_field_semantics_drift(failed)
+        assert len(failed) == 1, f"Expected exactly one failure but got: {failed}"
+        assert "drift" in failed[0].lower() or "Field semantics" in failed[0]
+
+    def test_does_not_auto_write_on_drift(self, tmp_path: Path) -> None:
+        """The drift gate MUST NOT auto-write (Decision 55)."""
+        import importlib.util as _ilu
+        import unittest.mock as _m
+
+        gen_path = ROOT / "scripts" / "schema_to_field_semantics.py"
+        spec = _ilu.spec_from_file_location("_gen3", gen_path)
+        gen = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(gen)  # type: ignore[union-attr]
+
+        injected = gen._emit_yaml(gen.generate(include_prose=False)) + "\n# injected drift\n"
+        output = tmp_path / "field_semantics.yaml"
+        output.write_text(injected, encoding="utf-8")
+
+        with _m.patch("scripts.schema_to_field_semantics._OUTPUT_PATH", output):
+            failed: list[str] = []
+            validate_field_semantics_drift(failed)
+
+        assert output.read_text(encoding="utf-8") == injected, (
+            "validate_field_semantics_drift must NOT auto-write the file (Decision 55 fail-closed)"
+        )
 
 
 class TestClaudeMdPointerInvariant:
@@ -229,15 +339,16 @@ class TestValidatePromptCompliance:
     """Tests for validate_prompt_compliance()."""
 
     def test_passes_when_no_violations(self, tmp_path: Path) -> None:
-        """No failures when compliance checker reports no violations."""
-        prompt_dir = tmp_path / ".github" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "impl.prompt.md").write_text(
+        """No failures when compliance checker reports no violations (YAML-sourced discovery)."""
+        skill_dir = tmp_path / ".claude" / "skills" / "implement"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
             "## Behavioural Invariants\n```yaml\nretro_lite_per_step: true\n```\n",
             encoding="utf-8",
         )
 
         mock_compliance = MagicMock()
+        mock_compliance.get_behavioural_invariant_sources.return_value = [".claude/skills/*/SKILL.md"]
         mock_compliance.parse_invariants.return_value = {"retro_lite_per_step": True}
         mock_compliance.parse_retro_lite_log.return_value = []
         mock_compliance.parse_execution_state.return_value = None
@@ -253,15 +364,16 @@ class TestValidatePromptCompliance:
         assert failed == []
 
     def test_fails_when_violations_found(self, tmp_path: Path) -> None:
-        """Appends to failed list when compliance violations are found."""
-        prompt_dir = tmp_path / ".github" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "impl.prompt.md").write_text(
+        """Appends to failed list when compliance violations are found (YAML-sourced discovery)."""
+        skill_dir = tmp_path / ".claude" / "skills" / "implement"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
             "## Behavioural Invariants\n```yaml\nretro_lite_per_step: true\n```\n",
             encoding="utf-8",
         )
 
         mock_compliance = MagicMock()
+        mock_compliance.get_behavioural_invariant_sources.return_value = [".claude/skills/*/SKILL.md"]
         mock_compliance.parse_invariants.return_value = {"retro_lite_per_step": True}
         mock_compliance.parse_retro_lite_log.return_value = []
         mock_compliance.parse_execution_state.return_value = {"total_steps": 5, "current_step": 1}
@@ -282,6 +394,45 @@ class TestValidatePromptCompliance:
         with patch("validate._load_prompt_compliance", return_value=None):
             failed: list[str] = []
             validate_prompt_compliance(failed)
+
+        assert failed == []
+
+
+class TestValidateInstructionArchitectureLayers:
+    """Tests for validate_instruction_architecture_layers()."""
+
+    def test_passes_when_all_layers_resolve(self, tmp_path: Path) -> None:
+        """No failures when every layer's content_locations resolves."""
+        mock_compliance = MagicMock()
+        mock_compliance._load_instruction_architecture.return_value = {
+            "layers": [{"layer": 1, "name": "Universal rules", "content_locations": []}]
+        }
+        mock_compliance.check_layer_compliance.return_value = []
+
+        with patch("validate._load_prompt_compliance", return_value=mock_compliance):
+            failed: list[str] = []
+            _validate.validate_instruction_architecture_layers(failed)
+
+        assert failed == []
+
+    def test_fails_when_layer_glob_unresolved(self, tmp_path: Path) -> None:
+        """Appends to failed list when a layer glob resolves to nothing."""
+        mock_compliance = MagicMock()
+        mock_compliance._load_instruction_architecture.return_value = {"layers": []}
+        mock_compliance.check_layer_compliance.return_value = ["layer 99 (Ghost): no files match 'ghost/*.md'"]
+
+        with patch("validate._load_prompt_compliance", return_value=mock_compliance):
+            failed: list[str] = []
+            _validate.validate_instruction_architecture_layers(failed)
+
+        assert len(failed) == 1
+        assert "Instruction architecture layer claims" in failed[0]
+
+    def test_skips_when_compliance_not_found(self) -> None:
+        """No failures when prompt_compliance.py is absent."""
+        with patch("validate._load_prompt_compliance", return_value=None):
+            failed: list[str] = []
+            _validate.validate_instruction_architecture_layers(failed)
 
         assert failed == []
 
@@ -453,7 +604,7 @@ class TestRunTerraformChecks:
         assert failed == []
 
     def test_creds_free_covers_both_roots(self) -> None:
-        """run_terraform_creds_free() runs init -backend=false + validate + fmt for BOTH roots, no plan."""
+        """run_terraform_creds_free() runs init -backend=false + validate + fmt for ALL roots, no plan."""
         calls: list[list] = []
 
         def mock_run(cmd: list, **kwargs: object) -> MagicMock:
@@ -475,6 +626,7 @@ class TestRunTerraformChecks:
         flat = [tok for cmd in calls for tok in cmd]
         assert "-chdir=terraform" in chdirs
         assert "-chdir=terraform/personal" in chdirs
+        assert "-chdir=terraform/bootstrap" in chdirs
         assert any("-backend=false" in cmd for cmd in calls)  # creds-free init
         assert all("plan" not in cmd for cmd in calls)  # no creds-needing plan here
         assert "init" in flat and "validate" in flat and "fmt" in flat
@@ -964,7 +1116,7 @@ class TestValidateSlocLimits:
         assert "SLOC limits" in failed[0]
 
     def test_allows_waivered_file(self, tmp_path: Path) -> None:
-        """Files with waiver annotation are allowed over limit."""
+        """Bare waiver alone is insufficient for >500 SLOC files; budget registration required (Decision 102)."""
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         big_file = scripts_dir / "waivered.py"
@@ -977,7 +1129,8 @@ class TestValidateSlocLimits:
             failed: list[str] = []
             validate_sloc_limits(failed)
 
-        assert failed == []
+        assert len(failed) == 1
+        assert "SLOC limits" in failed[0]
 
     def test_allows_under_limit_file(self, tmp_path: Path) -> None:
         """Files under 500 SLOC pass without waiver."""
@@ -1004,6 +1157,134 @@ class TestValidateSlocLimits:
             validate_sloc_limits(failed)
 
         assert failed == []
+
+    def _write_budget(self, tmp_path: Path, entries: dict[str, int]) -> None:
+        """Write a sloc_budgets.yaml into tmp_path/config/."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        lines = ["budgets:"]
+        for k, v in entries.items():
+            lines.append(f"  {k}: {v}")
+        (config_dir / "sloc_budgets.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_registered_file_exceeds_budget_fails(self, tmp_path: Path) -> None:
+        """A registered file whose current SLOC exceeds its budget fails the gate."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "heavy.py").write_text("x = 1\n" * 601, encoding="utf-8")
+        self._write_budget(tmp_path, {"scripts/heavy.py": 600})
+
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert len(failed) == 1
+        assert "SLOC limits" in failed[0]
+
+    def test_registered_file_at_budget_passes(self, tmp_path: Path) -> None:
+        """A registered file at exactly its budget does not fail."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "heavy.py").write_text("x = 1\n" * 600, encoding="utf-8")
+        self._write_budget(tmp_path, {"scripts/heavy.py": 600})
+
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert failed == []
+
+    def test_registered_file_below_budget_passes_advisory(self, tmp_path: Path) -> None:
+        """A registered file below its budget passes (advisory only, no failure)."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "heavy.py").write_text("x = 1\n" * 550, encoding="utf-8")
+        self._write_budget(tmp_path, {"scripts/heavy.py": 600})
+
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert failed == []
+
+    def test_oversized_unregistered_with_waiver_fails(self, tmp_path: Path) -> None:
+        """A file >500 SLOC with a waiver but no budget registration fails (Decision 102)."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "old_waiver.py").write_text(
+            "# complexity-waiver: decision-43\n" + "x = 1\n" * 510,
+            encoding="utf-8",
+        )
+        self._write_budget(tmp_path, {})
+
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert len(failed) == 1
+        assert "SLOC limits" in failed[0]
+
+    def test_stale_waiver_under_limit_is_advisory_not_failure(self, tmp_path: Path) -> None:
+        """A file <=500 SLOC with a waiver is a stale-waiver advisory, not a failure."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "small_waiver.py").write_text(
+            "# complexity-waiver: decision-43\n" + "x = 1\n" * 100,
+            encoding="utf-8",
+        )
+
+        with patch("validate.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert failed == []
+
+    def test_update_sloc_budgets_downward_only(self, tmp_path: Path) -> None:
+        """_update_sloc_budgets never raises an existing budget below current SLOC."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (scripts_dir / "growing.py").write_text("x = 1\n" * 600, encoding="utf-8")
+        # Seed a budget BELOW current SLOC -- regen must not raise it
+        self._write_budget(tmp_path, {"scripts/growing.py": 580})
+
+        with patch("validate.ROOT", tmp_path):
+            _update_sloc_budgets()
+            result = _load_sloc_budgets()
+
+        assert result["scripts/growing.py"] == 580
+
+    def test_update_sloc_budgets_seeds_new_oversized(self, tmp_path: Path) -> None:
+        """_update_sloc_budgets seeds a newly-oversized file at its current SLOC."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (scripts_dir / "new_big.py").write_text("x = 1\n" * 620, encoding="utf-8")
+        self._write_budget(tmp_path, {})
+
+        with patch("validate.ROOT", tmp_path):
+            _update_sloc_budgets()
+            result = _load_sloc_budgets()
+
+        assert "scripts/new_big.py" in result
+        assert result["scripts/new_big.py"] == 620
+
+    def test_update_sloc_budgets_drops_shrunken_file(self, tmp_path: Path) -> None:
+        """_update_sloc_budgets drops a file that shrank to <=500 SLOC."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (scripts_dir / "shrunken.py").write_text("x = 1\n" * 100, encoding="utf-8")
+        self._write_budget(tmp_path, {"scripts/shrunken.py": 600})
+
+        with patch("validate.ROOT", tmp_path):
+            _update_sloc_budgets()
+            result = _load_sloc_budgets()
+
+        assert "scripts/shrunken.py" not in result
 
 
 class TestValidateCcLimits:
@@ -1574,6 +1855,16 @@ def _mock_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
 
 class TestEnsureFreshDqResults:
     """Tests for ensure_fresh_dq_results() — the DQ runner auto-invoke."""
+
+    @pytest.fixture(autouse=True)
+    def _inject_boto3_stub(self):
+        """Ensure boto3 is in sys.modules so patch("boto3.Session") resolves on CI runners where boto3 is not installed."""
+        if "boto3" not in sys.modules:
+            sys.modules["boto3"] = MagicMock()
+            yield
+            del sys.modules["boto3"]
+        else:
+            yield
 
     def test_ensure_fresh_dq_runs_when_cache_missing(self, tmp_path: Path, capsys) -> None:
         """No dq-latest.json on disk: credential check runs, then data_quality_runner is invoked."""
@@ -2514,10 +2805,10 @@ class TestPreModeDiffAware:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c and "--picked" in c]
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
         assert not pytest_cmds
 
-    def test_invokes_pytest_picked_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_invokes_pytest_with_explicit_files_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("CI", raising=False)
@@ -2541,12 +2832,13 @@ class TestPreModeDiffAware:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c and "--picked" in c]
-        assert pytest_cmds, "pytest --picked not invoked"
-        assert "--mode=branch" in pytest_cmds[0]
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert pytest_cmds, "pytest not invoked"
+        assert "tests/test_validate.py" in pytest_cmds[0], "explicit test file path not in pytest argv"
+        assert "--picked" not in pytest_cmds[0], "--picked must not appear in pytest argv"
         assert "not integration" in pytest_cmds[0]
 
-    def test_treats_pytest_exit_5_as_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_treats_pytest_exit_5_as_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("CI", raising=False)
@@ -2554,7 +2846,7 @@ class TestPreModeDiffAware:
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.stdout = "agent/test-branch\n"
-            result.returncode = 5 if ("pytest" in cmd and "--picked" in cmd) else 0
+            result.returncode = 5 if "pytest" in cmd else 0
             return result
 
         with (
@@ -2569,7 +2861,98 @@ class TestPreModeDiffAware:
         ):
             _validate.main()
 
+        assert exc_info.value.code != 0
+
+
+class TestPreModePytestSelection:
+    """Regression tests locking the explicit-file pytest selection contract.
+
+    Acceptance criteria from PLAN-ci-pre-gate-pytest-picked-noop:
+    (a) changed test file -> pytest invoked with that explicit path, no --picked
+    (b) exit 5 / 0-collected with changed test files -> failure (gate reddens)
+    (c) no test files changed -> pytest not invoked at all
+    """
+
+    def test_explicit_path_in_argv_no_picked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        captured_cmds: list[list[str]] = []
+
+        def tracking_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            return _pre_mock_run(cmd, **kwargs)
+
+        with (
+            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("validate.run", side_effect=tracking_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
         assert exc_info.value.code == 0
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert pytest_cmds, "pytest was not invoked despite changed test file"
+        assert "tests/test_x.py" in pytest_cmds[0], "explicit file path missing from pytest argv"
+        assert "--picked" not in pytest_cmds[0], "--picked must not appear (explicit-file transport)"
+
+    def test_exit_5_with_changed_tests_reddens_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            result.returncode = 5 if "pytest" in cmd else 0
+            return result
+
+        with (
+            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("validate.run", side_effect=exit5_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code != 0, "exit 5 / 0-collected with changed test files must redden the gate"
+
+    def test_no_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        captured_cmds: list[list[str]] = []
+
+        def tracking_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            return _pre_mock_run(cmd, **kwargs)
+
+        with (
+            patch("validate.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
+            patch("validate.run", side_effect=tracking_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
+        assert not pytest_cmds, f"pytest must not run when no test files changed, got: {pytest_cmds}"
 
 
 class TestBudgetAssertion:
@@ -3541,3 +3924,739 @@ class TestVerifierHermeticity:
         with patch("validate.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert failed == [], f"SyntaxError file must be skipped, got: {failed}"
+
+
+class TestBrokerEnvReadGuard:
+    """Tests for validate_broker_env_reads -- RESOLVE-BY-KEY-ONLY invariant (T2.14 exit criterion 3)."""
+
+    def test_clean_tree_passes(self) -> None:
+        """The live src/ + scripts/ tree contains no direct broker env reads."""
+        failed: list[str] = []
+        validate_broker_env_reads(failed)
+        assert failed == [], f"Expected no failures against real tree, got: {failed}"
+
+    def test_planted_environ_bracket_violation_is_flagged(self, tmp_path: Path) -> None:
+        """os.environ["ALPACA_API_KEY"] in a src file is flagged."""
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "bad_adapter.py").write_text(
+            'import os\nkey = os.environ["ALPACA_API_KEY"]\n',
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
+            f"Expected broker env-read violation, got: {failed}"
+        )
+
+    def test_planted_getenv_violation_is_flagged(self, tmp_path: Path) -> None:
+        """os.getenv("ALPACA_SECRET") in a scripts file is flagged."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "bad_script.py").write_text(
+            'import os\nsecret = os.getenv("ALPACA_SECRET_KEY")\n',
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
+            f"Expected broker env-read violation, got: {failed}"
+        )
+
+    def test_planted_environ_get_violation_is_flagged(self, tmp_path: Path) -> None:
+        """os.environ.get("ALPACA_API_KEY") in a scripts file is flagged."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "bad_script.py").write_text(
+            'import os\nkey = os.environ.get("ALPACA_API_KEY", "")\n',
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
+            f"Expected broker env-read violation, got: {failed}"
+        )
+
+    def test_broker_secrets_py_is_self_excluded(self, tmp_path: Path) -> None:
+        """scripts/broker_secrets.py is excluded even if it contains the pattern string."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "broker_secrets.py").write_text(
+            '# patterns: os.environ["ALPACA_API_KEY"] os.getenv("ALPACA_SECRET")\n',
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert failed == [], f"broker_secrets.py must be self-excluded, got: {failed}"
+
+    def test_validate_py_is_self_excluded(self, tmp_path: Path) -> None:
+        """scripts/validate.py is excluded even though it contains the pattern strings."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "validate.py").write_text(
+            "patterns = [r'os\\.environ\\[\\s*[\"\\']ALPACA_']\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert failed == [], f"validate.py must be self-excluded, got: {failed}"
+
+    def test_tests_dir_is_not_scanned(self, tmp_path: Path) -> None:
+        """Files under tests/ are not scanned (test fixtures may plant violations intentionally)."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_adapter.py").write_text(
+            'key = os.environ["ALPACA_API_KEY"]  # planted fixture\n',
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_broker_env_reads(failed)
+        assert failed == [], f"tests/ must not be scanned, got: {failed}"
+
+
+class TestPlatformRoadmapCriteriaIntegrity:
+    """Tests for validate_platform_roadmap() criteria-status integrity assertions (T-1.23).
+
+    Check (i)  -- met criterion met_by resolves to a real plan file or 40-hex sha.
+    Check (iii) -- every PLAN-*.yaml closes_criteria ref resolves to a real item:criterion.
+    """
+
+    _MINIMAL_ROADMAP = (
+        "document:\n  id: test-roadmap\n  version: 1\n  status: draft\n  filed_via: pending_log_decision_lambda\n"
+    )
+
+    def _setup_dirs(self, tmp_path: Path, roadmap_extra: str = "") -> None:
+        """Write a minimal ROADMAP-PLATFORM.yaml and create docs/plans/ under tmp_path."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+        (docs_dir / "ROADMAP-PLATFORM.yaml").write_text(self._MINIMAL_ROADMAP + roadmap_extra, encoding="utf-8")
+
+    @staticmethod
+    def _no_diff_ctx():
+        """Patch subprocess.run so the git-diff check (ii) sees an empty diff."""
+        return patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=""))
+
+    def test_met_criterion_dangling_met_by_fails(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by names no real plan and is not a 40-hex SHA -> failure."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            "        met_by: nonexistent-plan\n",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_met_criterion_valid_plan_file_passes(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by points to an existing PLAN-*.yaml -> pass."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            "        met_by: real-plan\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-real-plan.yaml").write_text("slug: real-plan\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed
+
+    def test_met_criterion_valid_sha_passes(self, tmp_path: Path) -> None:
+        """Check (i): met criterion whose met_by is a 40-hex commit SHA -> pass."""
+        sha = "a" * 40
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: Some criterion\n"
+            "        status: met\n"
+            f"        met_by: '{sha}'\n",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+
+    def test_closes_criteria_unknown_item_fails(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria refs a tier_item id absent from the roadmap -> failure."""
+        self._setup_dirs(tmp_path)  # roadmap has no tier_items
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T999.1:c1\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_closes_criteria_unknown_criterion_fails(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria refs a criterion id absent from a known item -> failure."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: criterion 1\n"
+            "        status: open\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c999\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_closes_criteria_valid_ref_passes(self, tmp_path: Path) -> None:
+        """Check (iii): PLAN closes_criteria ref resolves to a real item:criterion -> pass."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: criterion 1\n"
+            "        status: open\n",
+        )
+        (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c1\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed
+
+    def test_diff_touched_item_with_bare_string_criterion_fails(self, tmp_path: Path) -> None:
+        """Check (ii): a tier_item appearing in the git diff that retains a bare-string criterion -> failure.
+
+        The Pydantic normalizer converts bare strings at load time, but check (ii) reads the raw YAML
+        to detect whether the on-disk representation still has unstructured criteria on touched items.
+        """
+        self._setup_dirs(
+            tmp_path,
+            # Bare-string criterion: Pydantic normalizes it but the raw YAML still has a string.
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - criterion that was never converted to ExitCriterion format\n",
+        )
+        # Simulate a git diff that names T0.1 as a modified tier_item.
+        mock_diff = "+  - id: T0.1\n+    status: in_progress\n"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
+        ):
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" in failed
+
+    def test_diff_touched_item_with_structured_criteria_passes(self, tmp_path: Path) -> None:
+        """Check (ii): a tier_item in the diff with fully-structured criteria -> pass (no failure)."""
+        self._setup_dirs(
+            tmp_path,
+            "tier_items:\n"
+            "  - id: T0.1\n"
+            "    tier: T0\n"
+            "    name: Test item\n"
+            "    exit_criteria:\n"
+            "      - id: c1\n"
+            "        text: structured criterion\n"
+            "        status: open\n",
+        )
+        mock_diff = "+  - id: T0.1\n"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
+        ):
+            validate_platform_roadmap(failed)
+        assert "Platform roadmap criteria integrity" not in failed
+        assert "Platform roadmap schema validation" not in failed
+
+
+class TestDucklakeVersionLockstepGate:
+    """Tests for validate_ducklake_version_lockstep() -- the OQ.12 SSOT drift gate."""
+
+    def test_passes_on_coherent_tree(self, tmp_path: Path) -> None:
+        """Gate passes when requirements.txt is in sync and no literal in derive surfaces."""
+        import scripts.sync_ducklake_version as _sdv_inner  # noqa: PLC0415
+
+        # coherent requirements.txt
+        req = tmp_path / "requirements.txt"
+        req.write_text(_sdv_inner._expected_floor_line("1.5.4") + "\n", encoding="utf-8")
+
+        src = tmp_path / "src" / "common"
+        src.mkdir(parents=True)
+        runtime = src / "ducklake_runtime.py"
+        no_literal = (
+            "# no literal\n"
+            "from src.common.ducklake_version import pinned_duckdb_version as _p\n"
+            "_PINNED_DUCKDB_VERSION = None\n"
+        )
+        runtime.write_text(no_literal, encoding="utf-8")
+
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        build = scripts / "build_lambda.py"
+        build.write_text(
+            "from src.common.ducklake_version import pinned_duckdb_version as _p\nPINNED_DUCKDB_VERSION = _p()\n",
+            encoding="utf-8",
+        )
+
+        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
+            with patch("validate.ROOT", tmp_path):
+                validate_ducklake_version_lockstep(failed)
+        assert failed == [], failed
+
+    def test_fails_when_requirements_drifts(self, tmp_path: Path) -> None:
+        """Gate fails when requirements.txt has old floor."""
+        req = tmp_path / "requirements.txt"
+        req.write_text("duckdb>=1.5.3  # old\n", encoding="utf-8")
+
+        src = tmp_path / "src" / "common"
+        src.mkdir(parents=True)
+        (src / "ducklake_runtime.py").write_text("# no literal\n", encoding="utf-8")
+
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
+
+        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
+            with patch("validate.ROOT", tmp_path):
+                validate_ducklake_version_lockstep(failed)
+        assert any("duckdb floor" in f or "requirements" in f for f in failed), failed
+
+    def test_fails_when_literal_in_derive_surface(self, tmp_path: Path) -> None:
+        """Gate fails when a raw PINNED_DUCKDB_VERSION = '...' literal is in a derive surface."""
+        import scripts.sync_ducklake_version as _sdv_inner  # noqa: PLC0415
+
+        req = tmp_path / "requirements.txt"
+        req.write_text(_sdv_inner._expected_floor_line("1.5.4") + "\n", encoding="utf-8")
+
+        src = tmp_path / "src" / "common"
+        src.mkdir(parents=True)
+        # reintroduce a hardcoded literal
+        (src / "ducklake_runtime.py").write_text('PINNED_DUCKDB_VERSION = "1.5.3"\n', encoding="utf-8")
+
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
+
+        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+
+        failed: list[str] = []
+        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
+            with patch("validate.ROOT", tmp_path):
+                validate_ducklake_version_lockstep(failed)
+        assert any("hardcoded" in f or "literal" in f or "ducklake_runtime" in f for f in failed), failed
+
+
+class TestPreModeChecks:
+    """Assert validate_subprocess_encoding runs in the --pre tier (rec-2382 RCA fix)."""
+
+    def test_pre_mode_calls_subprocess_encoding(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """validate_subprocess_encoding must be invoked during --pre (tier-membership regression guard)."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        encoding_called = []
+
+        def capture_encoding(failed: list[str]) -> None:
+            encoding_called.append(True)
+
+        with (
+            patch("validate.get_changed_files", return_value=[]),
+            patch("validate.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_copilot_multipliers"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        assert encoding_called, "validate_subprocess_encoding was NOT called in --pre mode"
+
+
+# ---------------------------------------------------------------------------
+# same_pr_guard tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestSamePrGuard:
+    """Tests for validate_verifier_same_pr_guard() in validate.py --pre tier."""
+
+    def test_no_violations_when_no_verifier_in_diff(self) -> None:
+        failed: list[str] = []
+        with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_no_violation_when_verifier_newly_added(self, tmp_path: Path) -> None:
+        """Exception (b): a brand-new verifier file is exempt from the guard."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "new_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['**']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/new_verifier.py"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, "scripts/validate.py"]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=rel + "\n"),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed, f"Expected no violation for newly-added verifier: {failed}"
+
+    def test_no_violation_exception_c_no_covered_in_diff(self, tmp_path: Path) -> None:
+        """Exception (c): verifier modified but no covered file in diff."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "my_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['scripts/some_module.py']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/my_verifier.py"
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, "scripts/other.py"]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=""),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed, f"Expected no violation when no covered file in diff: {failed}"
+
+    def test_violation_detected_when_verifier_and_covered_both_modified(self, tmp_path: Path) -> None:
+        """Same-PR guard fires when an existing verifier AND a file it covers are both in diff."""
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        verifier_file = verifier_src / "my_verifier.py"
+        verifier_file.write_text(
+            "class MyVerifier:\n    covers = ['scripts/target.py']\n",
+            encoding="utf-8",
+        )
+        rel = "scripts/verifiers/my_verifier.py"
+        target = "scripts/target.py"
+        (tmp_path / "scripts" / "target.py").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "scripts" / "target.py").write_text("# target\n", encoding="utf-8")
+        failed: list[str] = []
+        with (
+            patch("validate.ROOT", tmp_path),
+            patch("validate.get_changed_files", return_value=[rel, target]),
+            patch(
+                "validate.run",
+                return_value=MagicMock(returncode=0, stdout=""),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert "Verifier same-PR guard" in failed
+
+
+# ---------------------------------------------------------------------------
+# verification_registry tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationRegistry:
+    """Tests for validate_verification_registry() in validate.py --pre tier."""
+
+    def test_pass_with_empty_entries(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert not failed
+
+    def test_fail_missing_file(self, tmp_path: Path) -> None:
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("not found" in f for f in failed)
+
+    def test_fail_invalid_yaml(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries: [\n  - invalid: yaml: :", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("YAML" in f for f in failed)
+
+    def test_fail_missing_required_field(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            "entries:\n  - check_id: x\n    primitive_slot: grep_count\n",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_fail_unknown_slot(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            (
+                "entries:\n"
+                "  - check_id: x\n"
+                "    primitive_slot: unknown_slot\n"
+                "    guard_target: scripts/foo.py\n"
+                "    plan_slug: my-plan\n"
+                "    graduated_at: '2026-06-29'\n"
+            ),
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_fail_duplicate_check_id(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        entry = (
+            "  - check_id: dup\n"
+            "    primitive_slot: grep_count\n"
+            "    guard_target: scripts/foo.py\n"
+            "    plan_slug: my-plan\n"
+            "    graduated_at: '2026-06-29'\n"
+        )
+        (reg / "registry.yaml").write_text(f"entries:\n{entry}{entry}", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
+
+    def test_pass_valid_entry(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(
+            (
+                "entries:\n"
+                "  - check_id: my-check\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: scripts/foo.py\n"
+                "    plan_slug: my-plan\n"
+                "    graduated_at: '2026-06-29'\n"
+            ),
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert not failed
+
+
+# ---------------------------------------------------------------------------
+# differential_gate_step tests (T3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestDifferentialGateStep:
+    """Tests for validate_differential_gate_baseline() in validate.py full tier."""
+
+    def test_passes_when_kernel_file_contains_sentinel(self) -> None:
+        """Gate passes when scripts/verification_checks.py exists and has SLOT_COUNT: int = 6."""
+        failed: list[str] = []
+        validate_differential_gate_baseline(failed)
+        assert not failed, f"Differential gate baseline failed: {failed}"
+
+    def test_fails_when_sentinel_absent(self, tmp_path: Path) -> None:
+        """Gate fails if the kernel file lacks the expected sentinel line."""
+        kernel_dir = tmp_path / "scripts"
+        kernel_dir.mkdir()
+        (kernel_dir / "verification_checks.py").write_text("# no sentinel here\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_differential_gate_baseline(failed)
+        assert any("Differential gate baseline" in f for f in failed)
+
+
+# ---------------------------------------------------------------------------
+# platform_roadmap ExitCriterion tests (T3.1 structured criteria)
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformRoadmapT31Criteria:
+    """Tests that T3.1's exit_criteria are now structured ExitCriterion objects."""
+
+    def test_t31_exit_criteria_are_structured(self) -> None:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+        assert t31 is not None, "T3.1 not found in ROADMAP-PLATFORM.yaml"
+        criteria = t31["exit_criteria"]
+        assert isinstance(criteria, list)
+        assert len(criteria) == 7
+        for crit in criteria:
+            assert isinstance(crit, dict), f"Criterion is not a dict: {crit!r}"
+            assert "id" in crit, f"Criterion missing 'id': {crit}"
+            assert "text" in crit, f"Criterion missing 'text': {crit}"
+            assert "status" in crit, f"Criterion missing 'status': {crit}"
+
+    def test_t31_criterion_ids_are_c1_through_c7(self) -> None:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+        t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+        ids = [c["id"] for c in t31["exit_criteria"]]
+        assert ids == ["c1", "c2", "c3", "c4", "c5", "c6", "c7"]
+
+
+# ---------------------------------------------------------------------------
+# VP selector hooks for test_validate.py
+# Standalone functions named so that `pytest -k <selector>` collects them.
+# ---------------------------------------------------------------------------
+
+
+def test_verification_registry_accepts_empty_file(tmp_path: Path) -> None:
+    """VP step 5: registry guard accepts an empty well-formed entries list."""
+    reg = tmp_path / "config" / "agent" / "verification_registry"
+    reg.mkdir(parents=True)
+    (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    failed: list = []
+    with patch("validate.ROOT", tmp_path):
+        validate_verification_registry(failed)
+    assert not failed
+
+
+def test_same_pr_guard_passes_on_no_verifier_in_diff() -> None:
+    """VP step 6: same-PR guard passes when no verifier file is in the diff."""
+    failed: list = []
+    with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+        validate_verifier_same_pr_guard(failed)
+    assert not failed
+
+
+def test_differential_gate_step_passes_on_live_tree() -> None:
+    """VP step 9: differential gate baseline step passes on the live code tree."""
+    failed: list = []
+    validate_differential_gate_baseline(failed)
+    assert not failed
+
+
+def test_platform_roadmap_t31_criteria_are_structured() -> None:
+    """VP step 10: T3.1 exit_criteria are structured ExitCriterion objects, not bare strings."""
+    import yaml  # noqa: PLC0415
+
+    data = yaml.safe_load((ROOT / "docs" / "ROADMAP-PLATFORM.yaml").read_text(encoding="utf-8"))
+    t31 = next((item for item in data["tier_items"] if item.get("id") == "T3.1"), None)
+    assert t31 is not None
+    for crit in t31["exit_criteria"]:
+        assert isinstance(crit, dict)
+        assert {"id", "text", "status"} <= crit.keys()
+
+
+class TestValidateRecRelevanceContract:
+    """Tests for validate_rec_relevance_contract() -- T3.8 enum-drift guard."""
+
+    def test_passes_on_live_contract(self) -> None:
+        """The live recommendation-relevance.yaml passes the guard (no drift)."""
+        failed: list[str] = []
+        validate_rec_relevance_contract(failed)
+        assert not failed, f"unexpected failures: {failed}"
+
+    def test_fails_when_contract_missing(self, tmp_path: Path) -> None:
+        """Missing contract file -> failure appended."""
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            (tmp_path / "docs" / "contracts").mkdir(parents=True)
+            validate_rec_relevance_contract(failed)
+        assert any("not found" in f for f in failed)
+
+    def test_fails_when_contract_unparseable(self, tmp_path: Path) -> None:
+        """Unparseable YAML -> failure appended."""
+        (tmp_path / "docs" / "contracts").mkdir(parents=True)
+        (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(": invalid: [yaml", encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_rec_relevance_contract(failed)
+        assert any("parse error" in f for f in failed)
+
+    def test_fails_when_contract_declares_columns(self, tmp_path: Path) -> None:
+        """Contract with 'columns' key -> Decision 84 violation."""
+        import yaml  # noqa: PLC0415
+
+        (tmp_path / "docs" / "contracts").mkdir(parents=True)
+        contract = {"verdicts": ["relevant", "unknown"], "columns": {"foo": "bar"}}
+        (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_rec_relevance_contract(failed)
+        assert any("Decision 84" in f or "columns" in f for f in failed)
+
+    def test_fails_when_verdict_enum_drifts(self, tmp_path: Path) -> None:
+        """Contract verdicts != RELEVANCE_VERDICTS -> drift failure."""
+        import yaml  # noqa: PLC0415
+
+        (tmp_path / "docs" / "contracts").mkdir(parents=True)
+        contract = {"verdicts": ["relevant", "satisfied", "unknown"]}  # missing 5 verdicts
+        (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_rec_relevance_contract(failed)
+        assert any("drift" in f for f in failed)
+
+    def test_fails_when_verdicts_empty(self, tmp_path: Path) -> None:
+        """Contract with empty verdicts -> failure."""
+        import yaml  # noqa: PLC0415
+
+        (tmp_path / "docs" / "contracts").mkdir(parents=True)
+        contract = {"verdicts": []}
+        (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
+        failed: list[str] = []
+        with patch("validate.ROOT", tmp_path):
+            validate_rec_relevance_contract(failed)
+        assert failed

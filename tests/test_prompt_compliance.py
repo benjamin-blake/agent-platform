@@ -4,6 +4,9 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "prompt_compliance.py"
 _spec = importlib.util.spec_from_file_location("prompt_compliance", _SCRIPT_PATH)
@@ -16,6 +19,220 @@ parse_retro_lite_log = _compliance.parse_retro_lite_log
 parse_execution_state = _compliance.parse_execution_state
 check_retro_lite_compliance = _compliance.check_retro_lite_compliance
 check_plan_compliance = _compliance.check_plan_compliance
+_load_instruction_architecture = _compliance._load_instruction_architecture
+get_behavioural_invariant_sources = _compliance.get_behavioural_invariant_sources
+check_layer_compliance = _compliance.check_layer_compliance
+
+
+@pytest.fixture(autouse=True)
+def reset_registry():
+    """Reset the module-level cache before each test."""
+    _compliance._INSTRUCTION_ARCH_REGISTRY = None
+    yield
+    _compliance._INSTRUCTION_ARCH_REGISTRY = None
+
+
+class TestLoadInstructionArchitecture:
+    """Tests for _load_instruction_architecture()."""
+
+    def test_no_io_at_import(self) -> None:
+        """_INSTRUCTION_ARCH_REGISTRY is None at import -- loader is lazy."""
+        _compliance._INSTRUCTION_ARCH_REGISTRY = None
+        assert _compliance._INSTRUCTION_ARCH_REGISTRY is None
+
+    def test_reads_yaml_from_disk(self) -> None:
+        """Loader reads the real instruction-architecture.yaml and caches it."""
+        data = _load_instruction_architecture()
+        assert isinstance(data, dict)
+        assert "layers" in data
+        assert "behavioural_invariant_sources" in data
+        # Verify it is cached after first call
+        assert _compliance._INSTRUCTION_ARCH_REGISTRY is data
+
+    def test_absent_yaml_returns_fallback(self, tmp_path: Path) -> None:
+        """Missing YAML returns fallback without raising."""
+        orig = _compliance._INSTRUCTION_ARCH_PATH
+        _compliance._INSTRUCTION_ARCH_PATH = tmp_path / "nope.yaml"
+        try:
+            data = _load_instruction_architecture()
+        finally:
+            _compliance._INSTRUCTION_ARCH_PATH = orig
+        assert data == {"behavioural_invariant_sources": [".claude/skills/*/SKILL.md"], "layers": []}
+
+    def test_unparseable_yaml_returns_fallback(self, tmp_path: Path) -> None:
+        """YAML with a parse error returns fallback without raising."""
+        bad_yaml = tmp_path / "bad.yaml"
+        bad_yaml.write_text(": : invalid\n", encoding="utf-8")
+        orig = _compliance._INSTRUCTION_ARCH_PATH
+        _compliance._INSTRUCTION_ARCH_PATH = bad_yaml
+        try:
+            data = _load_instruction_architecture()
+        finally:
+            _compliance._INSTRUCTION_ARCH_PATH = orig
+        assert data["behavioural_invariant_sources"] == [".claude/skills/*/SKILL.md"]
+
+    def test_yaml_import_unavailable_returns_fallback(self, tmp_path: Path) -> None:
+        """If yaml is unavailable (ImportError), loader returns fallback."""
+        orig_path = _compliance._INSTRUCTION_ARCH_PATH
+        contract_file = tmp_path / "ia.yaml"
+        contract_file.write_text(
+            "behavioural_invariant_sources: ['.claude/skills/*/SKILL.md']\nlayers: []\n", encoding="utf-8"
+        )
+        _compliance._INSTRUCTION_ARCH_PATH = contract_file
+
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "yaml":
+                raise ImportError("yaml not available")
+            return real_import(name, *args, **kwargs)
+
+        try:
+            with patch("builtins.__import__", side_effect=mock_import):
+                data = _load_instruction_architecture()
+        finally:
+            _compliance._INSTRUCTION_ARCH_PATH = orig_path
+
+        assert data["behavioural_invariant_sources"] == [".claude/skills/*/SKILL.md"]
+
+    def test_caches_result(self) -> None:
+        """Second call returns the same object without re-reading disk."""
+        data1 = _load_instruction_architecture()
+        data2 = _load_instruction_architecture()
+        assert data1 is data2
+
+
+class TestGetBehaviouralInvariantSources:
+    """Tests for get_behavioural_invariant_sources()."""
+
+    def test_reads_from_yaml(self) -> None:
+        """Returns the list from the real instruction-architecture.yaml."""
+        sources = get_behavioural_invariant_sources()
+        assert isinstance(sources, list)
+        assert len(sources) >= 1
+        assert ".claude/skills" in "".join(sources)
+
+    def test_fallback_when_yaml_absent(self, tmp_path: Path) -> None:
+        """Returns default fallback when YAML is missing."""
+        orig = _compliance._INSTRUCTION_ARCH_PATH
+        _compliance._INSTRUCTION_ARCH_PATH = tmp_path / "nope.yaml"
+        try:
+            sources = get_behavioural_invariant_sources()
+        finally:
+            _compliance._INSTRUCTION_ARCH_PATH = orig
+        assert sources == [".claude/skills/*/SKILL.md"]
+
+    def test_fallback_when_sources_empty(self) -> None:
+        """Returns default fallback when YAML has empty behavioural_invariant_sources."""
+        _compliance._INSTRUCTION_ARCH_REGISTRY = {"behavioural_invariant_sources": [], "layers": []}
+        sources = get_behavioural_invariant_sources()
+        assert sources == [".claude/skills/*/SKILL.md"]
+
+
+class TestCheckLayerCompliance:
+    """Tests for check_layer_compliance()."""
+
+    def test_passes_against_live_repo(self) -> None:
+        """No violations on the real repo -- every declared layer resolves."""
+        contract = _load_instruction_architecture()
+        violations = check_layer_compliance(contract)
+        assert violations == [], violations
+
+    def test_violation_when_glob_matches_nothing(self, tmp_path: Path) -> None:
+        """Returns a violation when a layer content_locations glob matches nothing."""
+        contract = {
+            "layers": [
+                {
+                    "layer": 99,
+                    "name": "Ghost layer",
+                    "content_locations": ["does/not/exist/*.md"],
+                }
+            ]
+        }
+        orig_root = _compliance.ROOT
+        _compliance.ROOT = tmp_path
+        try:
+            violations = check_layer_compliance(contract)
+        finally:
+            _compliance.ROOT = orig_root
+        assert len(violations) == 1
+        assert "layer 99" in violations[0]
+        assert "does/not/exist/*.md" in violations[0]
+
+    def test_venv_files_excluded(self, tmp_path: Path) -> None:
+        """Files under .venv/ do not satisfy a content_locations glob."""
+        venv_claude = tmp_path / ".venv" / "some_pkg"
+        venv_claude.mkdir(parents=True)
+        (venv_claude / "CLAUDE.md").write_text("# pkg claude", encoding="utf-8")
+
+        contract = {
+            "layers": [
+                {
+                    "layer": 1,
+                    "name": "Universal rules",
+                    "content_locations": ["**/CLAUDE.md"],
+                }
+            ]
+        }
+        orig_root = _compliance.ROOT
+        _compliance.ROOT = tmp_path
+        try:
+            violations = check_layer_compliance(contract)
+        finally:
+            _compliance.ROOT = orig_root
+        # Only file under .venv -- should not count as satisfying the glob
+        assert len(violations) == 1
+        assert "layer 1" in violations[0]
+
+    def test_git_files_excluded(self, tmp_path: Path) -> None:
+        """Files under .git/ do not satisfy a content_locations glob."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "CLAUDE.md").write_text("# git claude", encoding="utf-8")
+
+        contract = {
+            "layers": [
+                {
+                    "layer": 1,
+                    "name": "Universal rules",
+                    "content_locations": ["**/CLAUDE.md"],
+                }
+            ]
+        }
+        orig_root = _compliance.ROOT
+        _compliance.ROOT = tmp_path
+        try:
+            violations = check_layer_compliance(contract)
+        finally:
+            _compliance.ROOT = orig_root
+        assert len(violations) == 1
+
+    def test_first_party_files_count(self, tmp_path: Path) -> None:
+        """A first-party CLAUDE.md (not under .venv/.git) satisfies the glob."""
+        (tmp_path / "CLAUDE.md").write_text("# root", encoding="utf-8")
+
+        contract = {
+            "layers": [
+                {
+                    "layer": 1,
+                    "name": "Universal rules",
+                    "content_locations": ["**/CLAUDE.md"],
+                }
+            ]
+        }
+        orig_root = _compliance.ROOT
+        _compliance.ROOT = tmp_path
+        try:
+            violations = check_layer_compliance(contract)
+        finally:
+            _compliance.ROOT = orig_root
+        assert violations == []
+
+    def test_empty_layers_no_violations(self) -> None:
+        """Empty layers list produces no violations."""
+        assert check_layer_compliance({"layers": []}) == []
 
 
 class TestParseInvariants:

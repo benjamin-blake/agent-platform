@@ -33,17 +33,19 @@ locals {
   ducklake_writer_function  = "agent-platform-ducklake-writer"
   ducklake_reader_function  = "agent-platform-ducklake-reader"
   ducklake_extension_dir    = "/opt/duckdb_extensions"
+  # SSOT pin: config/lambda/ducklake/version.yaml -- must be try()-wrapped (validate_terraform_try gate)
+  ducklake_version = try(yamldecode(file("${path.module}/../../config/lambda/ducklake/version.yaml")).duckdb_version, "")
 }
 
 # ---------------------------------------------------------------------------
-# Layers (from S3) -- duckdb==1.5.3 + deps, and the 3 baked extensions. The layer zips are uploaded
-# to S3 by build_lambda BEFORE the apply; the source_code_hash is try()-guarded so a plan without the
-# local zip (e.g. CI validate) does not fail.
+# Layers (from S3) -- duckdb (pinned via config/lambda/ducklake/version.yaml) + deps, and the 3
+# baked extensions. The layer zips are uploaded to S3 by build_lambda BEFORE the apply; the
+# source_code_hash is try()-guarded so a plan without the local zip (e.g. CI validate) does not fail.
 # ---------------------------------------------------------------------------
 
 resource "aws_lambda_layer_version" "ducklake_deps" {
   layer_name          = "ducklake-deps"
-  description         = "DuckLake deps: duckdb==1.5.3, psycopg2-binary, python-ulid, pyyaml (T2.17)"
+  description         = "DuckLake deps: duckdb==${local.ducklake_version}, psycopg2-binary, python-ulid, pyyaml (T2.17)"
   s3_bucket           = aws_s3_bucket.data_lake.id
   s3_key              = "lambda-packages/ducklake-deps-layer.zip"
   compatible_runtimes = ["python3.12"]
@@ -52,7 +54,7 @@ resource "aws_lambda_layer_version" "ducklake_deps" {
 
 resource "aws_lambda_layer_version" "ducklake_extensions" {
   layer_name          = "ducklake-extensions"
-  description         = "Baked DuckDB v1.5.3 linux_amd64 extensions: ducklake, httpfs, postgres_scanner (T2.17)"
+  description         = "Baked DuckDB v${local.ducklake_version} linux_amd64 extensions: ducklake, httpfs, postgres_scanner (T2.17)"
   s3_bucket           = aws_s3_bucket.data_lake.id
   s3_key              = "lambda-packages/ducklake-extensions-layer.zip"
   compatible_runtimes = ["python3.12"]

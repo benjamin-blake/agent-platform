@@ -1,0 +1,129 @@
+schema_version: 1
+slug: "pr-template"
+intent: >-
+  Add a lean, agent-first GitHub PR template so the harness "mirror the template when present"
+  instruction has a canonical layout to anchor on, advancing the agent-first repository North Star
+  (NS.4) by making PR bodies structurally consistent and machine-aligned.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-pr-template.yaml
+phase: >-
+  Platform / agent + instruction architecture (PROJECT_CONTEXT End-State section 8). No tier_item
+  closure -- additive instruction-surface artefact; not on the ROADMAP-PLATFORM critical path.
+scope:
+  - file: .github/pull_request_template.md
+    action: Create
+    purpose: >-
+      The PR template. Lean structured sections (Summary, Changes, Verification, Decisions,
+      Resolves) plus a public-repo boundary reminder. References AGENTS.md conventions rather
+      than duplicating them (Decision 86 no-second-surface discipline).
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Add a single File Router row pointing at the new PR template for discoverability. Edit to an
+      existing grandfathered doc -- does not create a new standing prose-architecture doc, so it does
+      not trip the Decision 86 intent-doc-freeze guard.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - ".github/pull_request_template.md exists at the repo-root .github/ path GitHub recognises."
+  - "The template contains the section headings: Summary, Changes, Verification, Resolves."
+  - "The template includes the literal guidance string 'Resolves: rec-' pointing at the squash-merge trailer."
+  - "The template includes a public-repo boundary reminder citing Decision 101 (no account IDs / secrets / alpha)."
+  - "The template references AGENTS.md for commit-message and Resolves conventions rather than restating them."
+  - "The template contains no field that solicits a secret/credential/token value as input."
+  - "docs/PROJECT_CONTEXT.md File Router includes a row referencing pull_request_template."
+  - "bin/venv-python -m scripts.validate --pre passes."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the template file exists at the GitHub-recognised path.
+    command: test -f .github/pull_request_template.md && echo EXISTS
+    expected: "Prints EXISTS."
+    fix_if: "File missing or at the wrong path (must be repo-root .github/pull_request_template.md)."
+  - step: 2
+    phase: pre-deploy
+    action: Confirm all required section headings are present.
+    command: grep -Eq '^## Summary' .github/pull_request_template.md && grep -Eq '^## Changes' .github/pull_request_template.md && grep -Eq '^## Verification' .github/pull_request_template.md && grep -Eq '^## Resolves' .github/pull_request_template.md && echo HEADINGS_OK
+    expected: "Prints HEADINGS_OK."
+    fix_if: "A heading is missing or misspelled; add the missing section."
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the Resolves-trailer guidance string is present.
+    command: "grep -q 'Resolves: rec-' .github/pull_request_template.md && echo TRAILER_OK"
+    expected: "Prints TRAILER_OK."
+    fix_if: "The 'Resolves: rec-NNNN' trailer guidance is absent; add it to the Resolves section."
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the public-repo boundary reminder cites Decision 101 and names account IDs.
+    command: grep -q 'Decision 101' .github/pull_request_template.md && grep -iq 'account id' .github/pull_request_template.md && echo BOUNDARY_OK
+    expected: "Prints BOUNDARY_OK."
+    fix_if: "Boundary reminder missing or does not cite Decision 101 / account IDs; add it."
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the template references AGENTS.md (conventions are referenced, not duplicated).
+    command: grep -q 'AGENTS.md' .github/pull_request_template.md && echo REFERENCES_OK
+    expected: "Prints REFERENCES_OK."
+    fix_if: "No AGENTS.md reference; the template either omits the pointer or duplicates the prose table -- fix to reference."
+  - step: 6
+    phase: pre-deploy
+    action: Negative check -- confirm no line is a field label soliciting a secret/credential value.
+    command: "! grep -iqE '^[[:space:]]*(token|password|api[ _-]?key|secret|credential)[[:space:]]*[:=]' .github/pull_request_template.md && echo NO_SECRET_FIELD"
+    expected: "Prints NO_SECRET_FIELD (no secret-soliciting input field present)."
+    fix_if: "A line solicits a secret value as a field; remove it (prose boundary mentions are fine, field labels are not)."
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the File Router row was added to PROJECT_CONTEXT.md.
+    command: grep -q 'pull_request_template' docs/PROJECT_CONTEXT.md && echo ROUTER_OK
+    expected: "Prints ROUTER_OK."
+    fix_if: "File Router row missing; add a single row pointing at .github/pull_request_template.md."
+  - step: 8
+    phase: pre-deploy
+    action: Run the authoritative fast-tier presubmit.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0 -- no validation regressions introduced by the new doc artefact."
+    fix_if: "validate --pre fails; read the failing check and fix (e.g. a docs/markdown lint or File Router structural check)."
+constraints:
+  - "PUBLIC repository (Decisions 73/83/101): the template must never solicit AWS account IDs/ARNs, IAM ExternalIds, secrets/keys, trading alpha/performance, or internal hostnames -- and must carry a boundary reminder."
+  - "Agent-first / no second surface (Decision 86): the template REFERENCES AGENTS.md commit + Resolves conventions; it does not restate them. No duplicated prose that would drift."
+  - "Scope is exactly the two files listed. Do NOT add a .gitmessage commit template, a commit-message validator, or any scripts/validate.py check (out of scope per the planning decision -- agents commit with `git commit -m`, so an editor template has no leverage)."
+  - "No CI gate is added. The PR template is advisory layout only; required checks remain pr-validate + terraform-validate (Decision 83). validate.py stays the single source of truth -- nothing is added to it."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "No PR template currently exists anywhere (.github/pull_request_template.md and all sibling paths are absent, confirmed at planning time)."
+  - "PRs in this repo are created programmatically by agents via mcp__github__create_pull_request with an explicit body -- GitHub does NOT auto-populate pull_request_template.md for API-created PRs. The template's value is as the canonical layout the harness is already instructed to mirror when present (see the create-PR harness instruction), and as a UI convenience for any human-opened PR."
+  - "The Resolves: rec-NNNN trailer is the one machine-consumed commit element: .github/workflows/rec-autoclose.yml parses it from the squash-merge commit body via scripts/rec_trailer.py (parse_resolves_trailer) to auto-close recs. The template reminds the author to place it in the squash-merge commit body, and points at AGENTS.md / the ops_data_portal fallback (Decision 70) rather than re-documenting closure."
+  - "Decision-scout gate verdict: NO_FLAGS. CITE list: Decision 86 (reference-not-duplicate), Decision 101 (public-repo boundary), Decision 73 (two-tier advisory CI), Decision 70 (Resolves trailer / portal closure). Related: 83 (branch protection -- template is advisory, not a required check), 84 (writer-allocated rec-NNNN ids, machine-consumed trailer), 90 (mirror-when-present lands in the /implement commit flow)."
+  - "Additive plan: resolves no recs and retires no surface, so the Closure Obligation is exempt. No open ci-rca recs at planning time (HARD BLOCK not in effect)."
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main divergence."
+  - "No .py source is created or modified, so test_coverage_checker (AST-based, source-file scoped) requires no new test files. Verification is V1 static (PROJECT_CONTEXT.md Verification Tier: V1 = docs/configs/markdown)."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scope confirmed via decision-scout gate (NO_FLAGS)
+  - All files in scope located and readable (.github/ dir exists; PROJECT_CONTEXT.md present)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create .github/pull_request_template.md with lean, agent-first sections in this order:
+    (1) "## Summary" -- one-line what/why; (2) "## Changes" -- bullet list of substantive changes;
+    (3) "## Verification" -- what was run (e.g. `bin/venv-python -m scripts.validate --pre`) and the
+    result, framed as advisory context (CI runs the authoritative pr-validate gate); (4) "## Decisions"
+    -- optional, decision IDs this change references, omit if none; (5) "## Resolves" -- reminder to add
+    "Resolves: rec-NNNN[, rec-MMMM]" to the SQUASH-MERGE commit body (not only the PR description) to
+    trigger rec-autoclose, pointing at AGENTS.md "Resolves: trailer" and the ops_data_portal fallback.
+    End with a horizontal-rule footer note: public-repo boundary reminder citing Decision 101 (never
+    include AWS account IDs/ARNs, IAM ExternalIds, secrets/keys, trading alpha/performance, or internal
+    hostnames), a pointer to AGENTS.md "Commit-message conventions" for the feat/plan/roadmap/scope
+    prefixes, and an instruction to drop any section above that does not apply. Use HTML comments
+    (<!-- ... -->) for all guidance so the rendered body stays clean. No secret-soliciting field labels.
+  - >-
+    Add one File Router row to docs/PROJECT_CONTEXT.md (in the "## File Router" table) mapping a topic
+    like "PR template" to "[.github/pull_request_template.md](../.github/pull_request_template.md)".
+    Do not otherwise edit PROJECT_CONTEXT.md.
+  - "Execute Verification Plan -- run each step 1-8; loop until all pass. V1 static; no deploy. On any failure, fix within scope and re-run."
+  - "Report: the template content created, the File Router row added, and the verification results (each VP step's output)."
+work_areas: []
+rollback: >-
+  Delete .github/pull_request_template.md and revert the single File Router row in
+  docs/PROJECT_CONTEXT.md. No state, no CI gate, no deployed artefact -- removal is clean and total.

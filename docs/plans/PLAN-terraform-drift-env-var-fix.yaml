@@ -1,0 +1,163 @@
+schema_version: 1
+slug: "terraform-drift-env-var-fix"
+intent: >-
+  Restore the terraform-drift alarm's ability to flip the convergence record red and file a
+  tf_drift rec when out-of-band infra drift is detected, by fixing a bash quoting bug that aborts
+  the Handle drift step. A working drift alarm is part of the agent-native Terraform CI/CD safety
+  net (Decision 92) that keeps the sandbox environment converged.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-terraform-drift-env-var-fix.yaml
+phase: >-
+  PLATFORM tier T2.24 (CD.35 Wave 5, Decision 92) -- agent-native Terraform CI/CD alarm-only drift
+  detector. ci_rca forward-fix for rec-2353.
+scope:
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Move the EXISTING/TS/RUN_URL env-var assignments in the Handle drift step from after the
+      python3 -c "..." string (where bash treats them as positional argv) to before the python3
+      command word (where they become environment variables), fixing the KeyError: 'TS' crash.
+bundled_recommendations:
+  - rec-2353
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The Handle drift step's python3 -c invocation receives EXISTING, TS, and RUN_URL as environment
+    variables (assignments precede python3), so it no longer raises KeyError: 'TS' and produces a
+    JSON convergence record with status=red plus drift_detected_at/drift_run_url/drift_reason,
+    preserving any pre-existing record fields.
+  - >-
+    The buggy trailing-assignment form (a closing double-quote followed by EXISTING=.. TS=.. RUN_URL=..
+    and a close paren) is no longer present in .github/workflows/terraform-drift.yml.
+  - .github/workflows/terraform-drift.yml remains valid YAML with the Handle drift step intact.
+  - rec-2353 is closed via the Resolves trailer (rec-autoclose) at squash-merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Behavioral test of the corrected invocation form -- set EXISTING/TS/RUN_URL as environment
+      variables BEFORE python3 (mirroring the fixed step) and run the record-building snippet. Proves
+      os.environ reads them (no KeyError), status is flipped red, drift fields are set, and existing
+      record fields are preserved.
+    command: >-
+      EXISTING='{"foo":"bar"}' TS='2026-01-01T00:00:00Z' RUN_URL='https://x/run/1' python3 -c "import
+      json,os; e=json.loads(os.environ.get('EXISTING','{}') or '{}'); e['status']='red';
+      e['drift_detected_at']=os.environ['TS']; e['drift_run_url']=os.environ['RUN_URL'];
+      e['drift_reason']='drift (T2.24)'; print(json.dumps(e))"
+    expected: >-
+      Exit 0; prints JSON containing "foo": "bar", "status": "red", "drift_detected_at":
+      "2026-01-01T00:00:00Z", "drift_run_url": "https://x/run/1", "drift_reason": "drift (T2.24)".
+    fix_if: >-
+      A KeyError on TS or RUN_URL means the assignments are still positional (placed after python3);
+      re-check that the fix moved them before the python3 command word.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Structural anti-regression check on the real file -- assert the fixed form (assignments before
+      python3) is present AND the buggy trailing-assignment form is absent.
+    command: >-
+      grep -qF 'EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" python3 -c'
+      .github/workflows/terraform-drift.yml && ! grep -qF '" EXISTING="$EXISTING" TS="$TS"
+      RUN_URL="$RUN_URL")' .github/workflows/terraform-drift.yml && echo PASS
+    expected: Prints PASS; exit 0.
+    fix_if: >-
+      If the first grep fails the fixed form is missing; if the negated second grep fails the buggy
+      trailing form is still present -- the edit was not applied correctly.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      YAML validity check -- confirm the edit did not corrupt YAML structure/indentation and the
+      Handle drift step still parses.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('.github/workflows/terraform-drift.yml'));
+      s=[x for x in d['jobs']['drift-detect']['steps'] if
+      str(x.get('name','')).startswith('Handle drift')]; assert s, 'Handle drift step missing';
+      print('YAML OK; Handle drift step parsed')"
+    expected: Prints "YAML OK; Handle drift step parsed"; exit 0.
+    fix_if: >-
+      A yaml.YAMLError or AssertionError means the edit broke YAML structure or removed/renamed the
+      step -- re-inspect indentation around lines 266 and 274.
+  - step: 4
+    phase: post-deploy
+    action: >-
+      Rec-closure verification after merge -- sync the local cache from the warehouse and confirm
+      rec-2353 is closed (driven by the Resolves: rec-2353 squash-merge trailer via rec-autoclose).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && grep -F '"id": "rec-2353"'
+      logs/.recommendations-log.jsonl | python3 -c "import json,sys;
+      r=json.loads(sys.stdin.read().splitlines()[-1]); print('status=', r['status']); assert
+      r['status']=='closed', 'rec-2353 not closed'"
+    expected: Prints "status= closed"; exit 0.
+    fix_if: >-
+      If status is still open, the Resolves: rec-2353 trailer was not emitted in the squash-merge body
+      or rec-autoclose has not run yet -- verify the merge commit body contains the trailer and re-run
+      after the workflow completes, or close via the portal fallback (ops_data_portal --update-rec
+      rec-2353 --status closed --resolution "...").
+constraints:
+  - >-
+    Only modify .github/workflows/terraform-drift.yml; the change is limited to the two lines
+    bracketing the RECORD python3 invocation in the Handle drift step (no other step, no design change).
+  - >-
+    No rescue agents or workaround loops (Decision 55) -- this is the RCA-first forward-fix for
+    rec-2353, applied via /plan -> /implement, not an inline hot-patch (Decision 72/73).
+  - >-
+    Preserve the alarm-only design (Decision 92) -- do not add a terraform apply step; the fix only
+    restores the red-flip + tf_drift rec-filing path.
+  - >-
+    No IAM/trust/role changes -- the github_ci_drift role and OIDC trust (Decision 94/98) are untouched.
+  - ASCII only; no emojis or em dashes (AGENTS.md code style).
+context:
+  - >-
+    rec-2353 (ci_rca, High, file .github/workflows/terraform-drift.yml): KeyError 'TS' in the Handle
+    drift step. Root cause -- env-var assignments placed after python3 -c "..." become positional argv,
+    not environment. During the T2.24 c1 live drift demo (PLAN-t2-24-drift-live-demo, run 28176334480)
+    the step aborted before the S3 write, so the convergence record was never written red and no
+    tf_drift rec was filed; the sandbox ended falsely green.
+  - >-
+    Decision 92 (CD.35 Wave 5 / T2.24): alarm-only scheduled drift detector. This step is the literal
+    realization of "drift flips the record red and files a tf_drift rec via the ops portal"; the fix
+    restores that behavior.
+  - "Decision 55: forward-fix via rec, never auto-revert. This plan is the forward-fix for rec-2353."
+  - >-
+    Decision 84 (I-4): Single Portal Invariant / fail-loud at the call site. The tf_drift
+    ops_data_portal --file-rec write that the crash blocks is the Single-Portal path; the fix re-enables it.
+  - >-
+    Decision 76 + Decision 70: web merge flow (PR via GitHub MCP, event-driven subscribe_pr_activity,
+    squash-merge) plus the Resolves: rec-2353 trailer drives rec-autoclose lifecycle closure.
+  - >-
+    Decision 48: V2 tier is correct -- .github/workflows/*.yml is not a V3 trigger and no
+    AWS/cross-service contract is touched. Verification is a local hermetic python-snippet behavioral
+    test plus YAML/structural checks; no live AWS run is required or available pre-merge. The fix is
+    exercised live on the next scheduled drift tick (cron '17 * * * *') or workflow_dispatch.
+  - >-
+    Sibling scan: no other workflow has this antipattern (terraform-apply-sandbox.yml:653 correctly
+    places its env-var assignments before the command).
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no scope-file overlap with recent main
+    changes. decision-scout gate returned NO_FLAGS (CITE 92/55/84-I4/76).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/stoic-rubin-qncr07)
+  - docs/PROJECT_CONTEXT.md reviewed for drift/convergence context (no special handling beyond Decision 92)
+  - DECISIONS.md alignment checked via decision-scout gate (NO_FLAGS; CITE 92/55/84-I4/76)
+  - File in scope located and readable (.github/workflows/terraform-drift.yml, Handle drift step lines 245-303)
+  - Acceptance criteria understood and verifiable (behavioral + structural + YAML + rec-closure)
+execution_steps:
+  - >-
+    Modify .github/workflows/terraform-drift.yml Handle drift step: move EXISTING="$EXISTING"
+    TS="$TS" RUN_URL="$RUN_URL" from after the python3 -c "..." string to before python3. Line 266
+    becomes 'RECORD=$(EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" python3 -c "' and line 274
+    (the closing line that currently reads '" EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL")')
+    becomes '")'.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55).
+  - 'Report: what was implemented, verification results.'
+  - >-
+    At merge, include 'Resolves: rec-2353' in the squash-merge commit body so rec-autoclose closes
+    the rec.
+work_areas: []
+rollback: >-
+  Revert the single commit touching .github/workflows/terraform-drift.yml (git revert <sha>). The
+  prior state is the known-broken Handle drift step, so rollback re-opens the rec-2353 failure --
+  prefer forward-fix over rollback.

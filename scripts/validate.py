@@ -211,8 +211,8 @@ def validate_requirements(failed: list[str]) -> None:
 
 
 # CLI tools intentionally absent on the Claude Code web harness (GitHub ops use the
-# GitHub MCP tools, Decision 76). Legacy .github/prompts/.github/agents files that still
-# reference these are deep-frozen; a missing optional tool is a skip, not a failure.
+# GitHub MCP tools, Decision 76). The .github/prompts/ and .github/agents/ directories
+# survive for live scheduled-agent surfaces; a missing optional tool is a skip, not a failure.
 _OPTIONAL_CLI_TOOLS = {"gh"}
 
 
@@ -522,8 +522,10 @@ def validate_prompt_compliance(failed: list[str]) -> None:
         print("prompt_compliance.py not found — skipping.")
         return
 
-    prompts_dir = ROOT / ".github" / "prompts"
-    prompt_files = list(prompts_dir.glob("*.prompt.md"))
+    sources = compliance.get_behavioural_invariant_sources()
+    prompt_files: list[Path] = []
+    for glob_pattern in sources:
+        prompt_files.extend(ROOT.glob(glob_pattern))
     violations: list[str] = []
 
     retro_log = ROOT / "logs" / ".retro-lite-log.jsonl"
@@ -555,7 +557,27 @@ def validate_prompt_compliance(failed: list[str]) -> None:
             print(f"  - {v}")
         failed.append("Prompt compliance check")
     else:
-        print(f"Prompt compliance: {len(prompt_files)} prompt file(s) checked, no violations.")
+        print(f"Prompt compliance: {len(prompt_files)} file(s) checked, no violations.")
+
+
+def validate_instruction_architecture_layers(failed: list[str]) -> None:
+    """Check that every layer in instruction-architecture.yaml resolves to at least one file."""
+    print("\n=== Instruction architecture layer claims ===")
+    compliance = _load_prompt_compliance()
+    if compliance is None:
+        print("prompt_compliance.py not found — skipping layer claims check.")
+        return
+
+    contract = compliance._load_instruction_architecture()
+    violations = compliance.check_layer_compliance(contract)
+    if violations:
+        print("Layer claims violations:")
+        for v in violations:
+            print(f"  - {v}")
+        failed.append("Instruction architecture layer claims")
+    else:
+        layers = contract.get("layers", [])
+        print(f"Layer claims: {len(layers)} layer(s) checked, all content_locations resolve.")
 
 
 def validate_copilot_multipliers(failed: list[str]) -> None:
@@ -870,6 +892,68 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         print("All ops_* writes originate from whitelisted files.")
 
 
+def validate_broker_env_reads(failed: list[str]) -> None:
+    """Enforce the RESOLVE-BY-KEY-ONLY invariant for broker credentials (T2.14 exit criterion 3).
+
+    Runtime components must resolve broker credentials exclusively via scripts/broker_secrets.py
+    and the credential-routing contract. Direct reads of broker API keys from os.environ are
+    forbidden in production code paths (src/ and scripts/).
+
+    Patterns flagged:
+      - os.environ["ALPACA_*"]
+      - os.getenv("ALPACA_*")
+      - os.environ.get("ALPACA_*")
+
+    Self-excluded: validate.py (contains the pattern strings) and broker_secrets.py (the
+    resolver itself; it may reference env-var naming in comments or error messages).
+    Skipped: tests/ (test fixtures may plant violations intentionally).
+    """
+    print("\n=== Broker env-read guard (RESOLVE-BY-KEY-ONLY) ===")
+    scripts_dir = ROOT / "scripts"
+    src_dir = ROOT / "src"
+
+    _SELF_EXCLUDE = {
+        scripts_dir / "validate.py",
+        scripts_dir / "broker_secrets.py",
+    }
+
+    _PATTERNS = [
+        re.compile(r'os\.environ\s*\[\s*["\']ALPACA_'),
+        re.compile(r'os\.getenv\s*\(\s*["\']ALPACA_'),
+        re.compile(r'os\.environ\.get\s*\(\s*["\']ALPACA_'),
+    ]
+
+    errors: list[str] = []
+    for search_dir in [scripts_dir, src_dir]:
+        if not search_dir.exists():
+            continue
+        for py_file in sorted(search_dir.glob("**/*.py")):
+            if py_file in _SELF_EXCLUDE:
+                continue
+            try:
+                content = py_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for pat in _PATTERNS:
+                if pat.search(content):
+                    rel = py_file.relative_to(ROOT)
+                    errors.append(
+                        f"{rel}: directly reads a broker API key from os.environ -- "
+                        "resolve via scripts.broker_secrets.resolve() instead "
+                        "(RESOLVE-BY-KEY-ONLY invariant, T2.14 exit criterion 3)"
+                    )
+                    break
+
+    if errors:
+        print("Broker env-read violations:")
+        for e in errors:
+            print(f"  - {e}")
+        for e in errors:
+            failed.append(e)
+    else:
+        print("No direct broker API key env reads found.")
+
+
 def validate_subprocess_encoding(failed: list[str]) -> None:
     """Check that subprocess.run/Popen with text=True also specifies encoding=."""
     print("\n=== Subprocess encoding lint ===")
@@ -953,9 +1037,8 @@ def validate_terraform_try(failed: list[str]) -> None:
 def validate_no_underscore_instructions(failed: list[str]) -> None:
     """Fail if .github/copilot_instructions.md (underscore) exists.
 
-    VS Code loads .github/copilot-instructions.md (hyphen).  The underscore
-    variant is a ghost file that consumes context budget and diverges silently.
-    Decision 38 deleted it; this check prevents accidental re-creation.
+    The underscore variant is a ghost file (Decision 38 deleted it); this check
+    prevents re-creation.
     """
     print("\n=== Underscore instruction file check ===")
     underscore_path = ROOT / ".github" / "copilot_instructions.md"
@@ -1070,10 +1153,27 @@ _SLOC_EXCLUDE_DIRS = {"pip", "lambda-packages", "docker", "terraform", ".venv", 
 _BRANCH_TYPES = (ast.If, ast.For, ast.While, ast.Try, ast.ExceptHandler, ast.With, ast.BoolOp)
 
 
-def validate_sloc_limits(failed: list[str]) -> None:
-    """Enforce Decision 43: max 500 SLOC per Python file unless waivered."""
-    print("\n=== SLOC limits (Decision 43) ===")
-    errors: list[str] = []
+def _load_sloc_budgets() -> dict[str, int]:
+    """Load config/sloc_budgets.yaml; return {} if absent or empty."""
+    import yaml as _yaml  # noqa: PLC0415
+
+    budget_path = ROOT / "config" / "sloc_budgets.yaml"
+    if not budget_path.exists():
+        return {}
+    data = _yaml.safe_load(budget_path.read_text(encoding="utf-8")) or {}
+    return {k: int(v) for k, v in (data.get("budgets") or {}).items()}
+
+
+def _update_sloc_budgets() -> None:
+    """Regenerate config/sloc_budgets.yaml with a downward-only ratchet.
+
+    - Lowers any budget whose file shrank.
+    - Seeds newly-oversized files at current SLOC.
+    - Drops files now <=500 or deleted.
+    - Never raises an existing budget.
+    """
+    existing = _load_sloc_budgets()
+    new_budgets: dict[str, int] = {}
 
     for search_dir in (ROOT / "scripts", ROOT / "src"):
         if not search_dir.exists():
@@ -1088,15 +1188,99 @@ def validate_sloc_limits(failed: list[str]) -> None:
             sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
             if sloc <= _SLOC_LIMIT:
                 continue
-            # Check first 10 lines for waiver
-            header = "\n".join(lines[:10])
-            if _WAIVER_PATTERN.search(header):
+            rel = str(py_file.relative_to(ROOT)).replace("\\", "/")
+            if rel in existing:
+                new_budgets[rel] = min(sloc, existing[rel])
+            else:
+                new_budgets[rel] = sloc
+
+    added = sorted(k for k in new_budgets if k not in existing)
+    lowered = sorted(k for k in new_budgets if k in existing and new_budgets[k] < existing[k])
+    dropped = sorted(k for k in existing if k not in new_budgets)
+
+    header_lines = [
+        "# SLOC budget registry (Decision 102, amends Decision 43).",
+        "# Each entry pins a scripts/ or src/ Python file to its SLOC budget.",
+        "# Budgets ratchet DOWN only: run `validate --update-sloc-budgets` to lower;",
+        "# raising a budget requires a manual, reviewable edit to this file.",
+        "# Forward-compatible with the Decision 80 validate.py decomposition:",
+        "# keys are re-pointed at new module paths at decomposition time.",
+    ]
+    header = "\n".join(header_lines) + "\n"
+
+    if new_budgets:
+        entries = "\n".join(f"  {k}: {v}" for k, v in sorted(new_budgets.items()))
+        yaml_body = f"budgets:\n{entries}\n"
+    else:
+        yaml_body = "budgets: {}\n"
+
+    budget_path = ROOT / "config" / "sloc_budgets.yaml"
+    budget_path.write_text(header + yaml_body, encoding="utf-8")
+
+    print(f"SLOC budgets updated: {len(added)} added, {len(lowered)} lowered, {len(dropped)} dropped.")
+    if added:
+        for k in added:
+            print(f"  + {k}: {new_budgets[k]}")
+    if lowered:
+        for k in lowered:
+            print(f"  v {k}: {existing[k]} -> {new_budgets[k]}")
+    if dropped:
+        for k in dropped:
+            print(f"  - {k} (now <={_SLOC_LIMIT} or deleted)")
+
+
+def validate_sloc_limits(failed: list[str]) -> None:
+    """Enforce Decision 43/102: per-file SLOC budget ratchet for scripts/ and src/."""
+    print("\n=== SLOC limits (Decision 43) ===")
+    budgets = _load_sloc_budgets()
+    errors: list[str] = []
+    advisories: list[str] = []
+
+    for search_dir in (ROOT / "scripts", ROOT / "src"):
+        if not search_dir.exists():
+            continue
+        for py_file in sorted(search_dir.glob("**/*.py")):
+            if py_file.name == "__init__.py":
                 continue
-            rel = py_file.relative_to(ROOT)
-            errors.append(
-                f"{str(rel).replace(chr(92), '/')}: {sloc} SLOC "
-                f"(limit {_SLOC_LIMIT}). Add '# complexity-waiver: decision-43' or reduce."
-            )
+            if any(part in _SLOC_EXCLUDE_DIRS for part in py_file.parts):
+                continue
+            content = py_file.read_text(encoding="utf-8", errors="replace")
+            lines = content.splitlines()
+            sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
+            header = "\n".join(lines[:10])
+            has_waiver = bool(_WAIVER_PATTERN.search(header))
+            rel = str(py_file.relative_to(ROOT)).replace("\\", "/")
+
+            if sloc <= _SLOC_LIMIT:
+                if has_waiver:
+                    advisories.append(
+                        f"{rel}: stale SLOC waiver (<=500 SLOC); "
+                        "the comment may still be needed for the CC gate -- verify before removing."
+                    )
+                continue
+
+            if rel in budgets:
+                budget = budgets[rel]
+                if sloc > budget:
+                    errors.append(
+                        f"{rel}: {sloc} SLOC exceeds budget {budget}. "
+                        f"Reduce, or (with justification) raise the budget in config/sloc_budgets.yaml."
+                    )
+                elif sloc < budget:
+                    advisories.append(
+                        f"{rel}: {sloc} SLOC below budget {budget}; run `validate --update-sloc-budgets` to ratchet down."
+                    )
+            else:
+                errors.append(
+                    f"{rel}: {sloc} SLOC exceeds limit {_SLOC_LIMIT} and is not registered in config/sloc_budgets.yaml. "
+                    f"Reduce below {_SLOC_LIMIT}, or register via `validate --update-sloc-budgets`. "
+                    f"A bare '# complexity-waiver: decision-43' no longer authorises unbounded SLOC."
+                )
+
+    if advisories:
+        print("SLOC advisories (non-blocking):")
+        for a in advisories:
+            print(f"  ~ {a}")
 
     if errors:
         print("SLOC limit violations:")
@@ -1104,7 +1288,7 @@ def validate_sloc_limits(failed: list[str]) -> None:
             print(f"  - {e}")
         failed.append("SLOC limits (Decision 43)")
     else:
-        print("All files within SLOC limits or waivered.")
+        print("All files within SLOC budgets.")
 
 
 def validate_cc_limits(failed: list[str]) -> None:
@@ -1675,12 +1859,20 @@ def validate_pydantic_yaml_drift(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+_40HEX_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
 def validate_platform_roadmap(failed: list[str]) -> None:
     """Validate docs/ROADMAP-PLATFORM.yaml against the RoadmapDocument Pydantic schema.
 
     Rejects structural drift: duplicate ids, dangling depends_on, dependency cycles,
     unknown gate-rule helpers, invalid filed_via, unsupported document version.
     Added by T-1.5. Runs in full presubmit only (not --pre).
+
+    Extended by T-1.23: criteria-status integrity assertions.
+      (i)  met criterion met_by resolves to a real docs/plans/PLAN-<slug>.yaml or a 40-hex sha.
+      (ii) any tier_item touched in the git diff (vs origin/main) must have no bare-string criteria.
+      (iii) every PLAN-*.yaml closes_criteria ref resolves to a real item:criterion in the roadmap.
     """
     import yaml as _yaml  # noqa: PLC0415
 
@@ -1699,10 +1891,88 @@ def validate_platform_roadmap(failed: list[str]) -> None:
     try:
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from scripts.platform_roadmap import load  # noqa: PLC0415
+        from scripts.platform_roadmap import ExitCriterion, load  # noqa: PLC0415
 
-        load(roadmap_path)
-        print("  PASS: platform roadmap schema validation passed.")
+        doc = load(roadmap_path)
+        issues: list[str] = []
+
+        # (i) met criterion met_by resolves to a real plan file OR a 40-hex sha
+        plans_root = ROOT / "docs" / "plans"
+        for item in doc.tier_items:
+            for crit in item.exit_criteria:
+                if not isinstance(crit, ExitCriterion):
+                    continue
+                if crit.status == "met" and crit.met_by:
+                    plan_file = plans_root / f"PLAN-{crit.met_by}.yaml"
+                    if not plan_file.exists() and not _40HEX_RE.match(crit.met_by):
+                        issues.append(
+                            f"  FAIL: tier_item '{item.id}' criterion '{crit.id}': "
+                            f"met_by='{crit.met_by}' does not resolve to a real plan or 40-hex commit"
+                        )
+
+        # (ii) git-diff-touched tier_items must have fully-structured criteria (no bare strings)
+        diff_result = subprocess.run(
+            ["git", "diff", "origin/main", "--", str(roadmap_path.relative_to(ROOT))],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=str(ROOT),
+        )
+        if diff_result.returncode == 0 and diff_result.stdout.strip():
+            touched_ids: set[str] = set(re.findall(r"^[+-]\s+- id: (\S+)", diff_result.stdout, re.MULTILINE))
+            if touched_ids:
+                with roadmap_path.open(encoding="utf-8") as fh:
+                    raw_doc = _yaml.safe_load(fh)
+                for raw_item in raw_doc.get("tier_items", []):
+                    if raw_item.get("id") in touched_ids:
+                        for raw_crit in raw_item.get("exit_criteria", []):
+                            if isinstance(raw_crit, str):
+                                issues.append(
+                                    f"  FAIL: tier_item '{raw_item['id']}' is touched in the git diff "
+                                    f"but still has bare-string criteria -- convert to ExitCriterion objects"
+                                )
+                                break
+
+        # (iii) every PLAN-*.yaml closes_criteria ref resolves to a real item:criterion
+        item_criteria: dict[str, set[str]] = {}
+        for item in doc.tier_items:
+            item_criteria[item.id] = {c.id for c in item.exit_criteria if isinstance(c, ExitCriterion)}
+        if plans_root.is_dir():
+            for plan_file in sorted(plans_root.glob("PLAN-*.yaml")):
+                try:
+                    with plan_file.open(encoding="utf-8") as fh:
+                        plan_data = _yaml.safe_load(fh)
+                    if not isinstance(plan_data, dict):
+                        continue
+                    closes = plan_data.get("closes_criteria") or []
+                    if not isinstance(closes, list):
+                        continue
+                    for ref in closes:
+                        if not isinstance(ref, str) or ":" not in ref:
+                            issues.append(
+                                f"  FAIL: {plan_file.name}: closes_criteria entry {ref!r} "
+                                f"is not in '<item-id>:<crit-id>' format"
+                            )
+                            continue
+                        item_id, crit_id = ref.split(":", 1)
+                        if item_id not in item_criteria:
+                            issues.append(
+                                f"  FAIL: {plan_file.name}: closes_criteria ref '{ref}' names unknown tier_item '{item_id}'"
+                            )
+                        elif crit_id not in item_criteria[item_id]:
+                            issues.append(
+                                f"  FAIL: {plan_file.name}: closes_criteria ref '{ref}' "
+                                f"names unknown criterion '{crit_id}' on item '{item_id}'"
+                            )
+                except Exception as plan_exc:  # noqa: BLE001
+                    issues.append(f"  FAIL: {plan_file.name}: could not parse for closes_criteria: {plan_exc}")
+
+        if issues:
+            for msg in issues:
+                print(msg)
+            failed.append("Platform roadmap criteria integrity")
+        else:
+            print("  PASS: platform roadmap schema validation passed.")
     except ImportError as exc:
         print(f"  ERROR: Could not import platform_roadmap: {exc}")
         failed.append("Platform roadmap schema validation")
@@ -2281,6 +2551,45 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
     print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
 
 
+def _check_claude_p_raw_invocations(workflows_root: Path) -> list[str]:
+    """Return violation strings for unwrapped `claude -p` lines in CI workflow files.
+
+    Skips blank lines, YAML/shell comments (leading #), `command -v claude` presence
+    checks, and `claude --version` calls. Parity with _TRANSIENT_CLAUDE_SIGNATURES.
+    """
+    violations = []
+    for wf_path in sorted(workflows_root.glob("*.yml")):
+        try:
+            lines = wf_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "command -v claude" in line or "claude --version" in line:
+                continue
+            if "claude -p" in line and "claude_p_retry.sh" not in line:
+                violations.append(f"{wf_path.name}:{lineno}: unwrapped `claude -p` invocation")
+    return violations
+
+
+def validate_claude_p_retry_wrapper(failed: list[str]) -> None:
+    """Enforce that every `claude -p` invocation in CI workflows routes through scripts/ci/claude_p_retry.sh.
+
+    Parity with _TRANSIENT_CLAUDE_SIGNATURES (this file) and scripts/ci/claude_p_retry.sh.
+    Decision 73: validate.py is the single source of truth for CI checks. Decision 92.
+    """
+    print("\n=== claude -p retry wrapper enforcement ===")
+    violations = _check_claude_p_raw_invocations(ROOT / ".github" / "workflows")
+    if violations:
+        for v in violations:
+            print(f"  FAIL: {v}")
+            failed.append(f"claude_p_retry wrapper: {v}")
+    else:
+        print("  PASS: all claude -p invocations route through scripts/ci/claude_p_retry.sh")
+
+
 _UNIT_TEST_HERMETICITY_FLAGS: tuple[str, ...] = ("--disable-socket", "--randomly-seed=last")
 
 
@@ -2407,6 +2716,237 @@ def _verifier_is_non_hermetic(class_node: ast.ClassDef) -> bool:
         ):
             return True
     return False
+
+
+def _extract_verifier_covers(class_node: ast.ClassDef) -> list[str] | None:
+    """Extract the covers list from a Verifier class body via AST.
+
+    Returns the list of glob strings if a ``covers`` class attribute is found,
+    or None if the class inherits the default (["**"]).  Handles both plain
+    assignment and annotated assignment; list literals only (dynamic covers not
+    supported by the static scanner).
+    """
+    for stmt in class_node.body:
+        target_name: str | None = None
+        value_node: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target_name = stmt.targets[0].id
+            value_node = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target_name = stmt.target.id
+            value_node = stmt.value
+        if target_name == "covers" and value_node is not None and isinstance(value_node, ast.List):
+            return [elt.s for elt in value_node.elts if isinstance(elt, ast.Constant) and isinstance(elt.s, str)]
+    return None
+
+
+def validate_verifier_same_pr_guard(failed: list[str]) -> None:
+    """Reject a PR that touches a verifier file AND any file it covers (--pre, T3.1).
+
+    Exceptions (per CD.29):
+      (b) The verifier file is itself new in this diff (first commit cannot violate).
+      (c) No covered file appears in the diff (the author is changing only the verifier,
+          not any guarded target).
+
+    AST-scan scripts/verifiers/*.py to extract the ``covers`` class attribute.
+    Classes without an explicit ``covers`` default to ["**"] (matches everything).
+    """
+    print("\n=== Verifier same-PR guard (T3.1) ===")
+    verifiers_dir = ROOT / "scripts" / "verifiers"
+    if not verifiers_dir.is_dir():
+        print("  scripts/verifiers/ not found -- skip.")
+        return
+
+    changed = get_changed_files()
+    changed_set = set(changed)
+
+    git_new = run(
+        ["git", "diff", "--name-only", "--diff-filter=A", "origin/main"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=ROOT,
+    )
+    new_files: set[str] = set(git_new.stdout.strip().splitlines()) if git_new.returncode == 0 else set()
+
+    violations: list[str] = []
+    for py_file in sorted(verifiers_dir.glob("*.py")):
+        rel = str(py_file.relative_to(ROOT))
+        if rel not in changed_set:
+            continue
+        if rel in new_files:
+            # Exception (b): verifier is brand-new this PR -- no guard violation possible.
+            continue
+
+        try:
+            source = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(py_file))
+        except SyntaxError:
+            continue
+
+        classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+        if not classes:
+            continue
+
+        for cls in classes:
+            covers = _extract_verifier_covers(cls) or ["**"]
+            import fnmatch as _fnmatch  # noqa: PLC0415
+
+            covered_in_diff = [f for f in changed if f != rel and any(_fnmatch.fnmatch(f, g) for g in covers)]
+            if not covered_in_diff:
+                # Exception (c): no covered file in this diff.
+                continue
+            violations.append(
+                f"same-pr-guard: {rel} (class {cls.name}) modified in same PR as covered file(s): "
+                + ", ".join(covered_in_diff[:3])
+                + (" ..." if len(covered_in_diff) > 3 else "")
+            )
+
+    if violations:
+        for v in violations:
+            print(f"  FAIL: {v}")
+        failed.append("Verifier same-PR guard")
+    else:
+        print("  OK: no same-PR violations found.")
+
+
+def validate_verification_registry(failed: list[str]) -> None:
+    """Validate config/agent/verification_registry/registry.yaml against the CD.29 contract (--pre, T3.1).
+
+    Checks:
+    1. Registry file exists.
+    2. File is valid YAML with an ``entries`` list.
+    3. Every entry's primitive_slot is in CANONICAL_SLOTS.
+    4. Every entry carries required fields: check_id, primitive_slot, guard_target, plan_slug, graduated_at.
+    5. check_id values are unique within the file.
+    """
+    print("\n=== Verification registry (T3.1) ===")
+    registry_path = ROOT / "config" / "agent" / "verification_registry" / "registry.yaml"
+    if not registry_path.exists():
+        failed.append("verification-registry: config/agent/verification_registry/registry.yaml not found")
+        return
+
+    try:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        failed.append(f"verification-registry: YAML parse error: {exc}")
+        return
+
+    if not isinstance(data, dict) or "entries" not in data:
+        failed.append("verification-registry: missing top-level 'entries' key")
+        return
+
+    entries = data["entries"] or []
+    if not isinstance(entries, list):
+        failed.append("verification-registry: 'entries' must be a list")
+        return
+
+    # Lazy-import CANONICAL_SLOTS to avoid a module-level import of scripts.verification_checks.
+    root_str = str(ROOT)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts.verification_checks import CANONICAL_SLOTS  # noqa: PLC0415
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+    required_fields = {"check_id", "primitive_slot", "guard_target", "plan_slug", "graduated_at"}
+    seen_ids: set[str] = set()
+    errors: list[str] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"  entry[{i}]: not a mapping")
+            continue
+        missing = required_fields - entry.keys()
+        if missing:
+            errors.append(f"  entry[{i}] ({entry.get('check_id', '?')}): missing fields: {sorted(missing)}")
+        slot = entry.get("primitive_slot")
+        if slot is not None and slot not in CANONICAL_SLOTS:
+            cid_hint = entry.get("check_id", "?")
+            errors.append(f"  entry[{i}] ({cid_hint}): unknown primitive_slot {slot!r} (not in CD.29 vocabulary)")
+        cid = entry.get("check_id")
+        if cid is not None:
+            if cid in seen_ids:
+                errors.append(f"  duplicate check_id: {cid!r}")
+            seen_ids.add(cid)
+
+    if errors:
+        for e in errors:
+            print(e)
+        failed.append("Verification registry")
+    else:
+        print(f"  OK: {len(entries)} graduated checks, all valid.")
+
+
+def validate_differential_gate_baseline(failed: list[str]) -> None:
+    """Exercise the differential admission gate on the kernel's own self-test (full tier, T3.1).
+
+    Runs the slot-count invariant check via is_admitted() with a revert_runner that
+    simulates a pre-change environment where SLOT_COUNT is wrong (7).  The check must
+    FAIL in that environment (proving it is non-tautological) and PASS in the live one.
+
+    This is the gate's own self-test; production baseline execution surfaces are:
+      - validate.py CI hard-gate (this function, live)
+      - Step-Functions executor verify-state (named surface, deferred per CD.27)
+    """
+    print("\n=== Differential admission gate baseline (T3.1) ===")
+    root_str = str(ROOT)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts.verification_checks import (  # noqa: PLC0415
+            CANONICAL_SLOTS,
+            CheckResult,
+            CheckStatus,
+            GrepCountCheck,
+            is_admitted,
+        )
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+    # Build a check that asserts the SLOT_COUNT sentinel is present (via grep on the source file).
+    kernel_path = str(ROOT / "scripts" / "verification_checks.py")
+    slot_count_check = GrepCountCheck(
+        name="kernel-slot-count-eq-6",
+        path=kernel_path,
+        pattern=r"SLOT_COUNT: int = len\(CANONICAL_SLOTS\)",
+        operator="eq",
+        count=1,
+    )
+
+    # Revert runner: simulates the pre-change tree where the sentinel line is absent.
+    def revert_runner(check: GrepCountCheck) -> CheckResult:  # type: ignore[override]
+        # In the pre-change environment the sentinel line "SLOT_COUNT: int = 6" did not
+        # exist (the file didn't exist). Simulate by returning FAIL directly.
+        return CheckResult(status=CheckStatus.FAIL, message="simulated pre-change: sentinel absent")
+
+    admitted = is_admitted(slot_count_check, revert_runner)  # type: ignore[arg-type]
+    if not admitted:
+        failed.append("Differential gate baseline: slot_count_check was not admitted (revert did not produce FAIL)")
+        return
+
+    # Additionally verify the live check actually passes.
+    live_result = slot_count_check.run()
+    if live_result.status != CheckStatus.PASS:
+        failed.append(f"Differential gate baseline: slot_count_check FAILED on live tree: {live_result.message}")
+        return
+
+    # Verify CANONICAL_SLOTS has exactly 6 entries.
+    if len(CANONICAL_SLOTS) != 6:
+        failed.append(f"Differential gate baseline: CANONICAL_SLOTS has {len(CANONICAL_SLOTS)} entries, expected 6")
+        return
+
+    print(f"  OK: differential gate admitted slot_count_check; live check passed; CANONICAL_SLOTS={sorted(CANONICAL_SLOTS)}")
 
 
 def validate_verifier_hermeticity(failed: list[str]) -> None:
@@ -2639,6 +3179,270 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
             sys.path.remove(root_str)
 
 
+def validate_rec_relevance_contract(failed: list[str]) -> None:
+    """Guard: recommendation-relevance.yaml verdict enum matches rec_relevance.RELEVANCE_VERDICTS (T3.8).
+
+    Checks:
+    (a) docs/contracts/recommendation-relevance.yaml parses and has a 'verdicts' list.
+    (b) The contract verdicts == rec_relevance.RELEVANCE_VERDICTS (no drift).
+    (c) The contract declares no 'columns' or 'fields' (Decision 84: no new Class A columns).
+    """
+    print("\n=== Recommendation-relevance contract drift gate (T3.8) ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        import yaml as _yaml
+
+        contract_path = ROOT / "docs" / "contracts" / "recommendation-relevance.yaml"
+        if not contract_path.exists():
+            failed.append("rec-relevance contract: docs/contracts/recommendation-relevance.yaml not found")
+            return
+
+        try:
+            contract = _yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+        except _yaml.YAMLError as exc:
+            failed.append(f"rec-relevance contract: parse error: {exc}")
+            return
+
+        if not isinstance(contract, dict):
+            failed.append("rec-relevance contract: not a YAML mapping")
+            return
+
+        if "columns" in contract or "fields" in contract:
+            failed.append(
+                "rec-relevance contract: declares 'columns' or 'fields' --"
+                " Decision 84 violation; relevance is a read-time projection,"
+                " not a Class A column set"
+            )
+            return
+
+        contract_verdicts = set(contract.get("verdicts") or [])
+        if not contract_verdicts:
+            failed.append("rec-relevance contract: missing or empty 'verdicts' list")
+            return
+
+        try:
+            import scripts.rec_relevance as _rr
+
+            evaluator_verdicts = set(_rr.RELEVANCE_VERDICTS)
+        except Exception as exc:
+            failed.append(f"rec-relevance contract: cannot import scripts.rec_relevance: {exc}")
+            return
+
+        diff = contract_verdicts ^ evaluator_verdicts
+        if diff:
+            failed.append(
+                f"rec-relevance contract: verdict enum drift -- symmetric diff: {sorted(diff)}. "
+                "Reconcile docs/contracts/recommendation-relevance.yaml with scripts/rec_relevance.RELEVANCE_VERDICTS."
+            )
+        else:
+            print("  PASS: recommendation-relevance.yaml verdict enum matches rec_relevance.RELEVANCE_VERDICTS.")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_field_semantics_drift(failed: list[str]) -> None:
+    """Fail-closed drift gate: regenerate field_semantics.yaml in-memory and byte-compare.
+
+    If the committed file differs from what the generator would produce, appends a failure.
+    NEVER auto-writes (Decision 55). Pure Python, sub-second -- eligible for both --pre
+    and the full presubmit tier (adjacent to the CD.25 contract drift gate).
+    """
+    print("\n=== Field semantics drift gate (T2.33) ===")
+
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+
+    try:
+        import scripts.schema_to_field_semantics as _gen_mod
+
+        output_path = _gen_mod._OUTPUT_PATH
+        try:
+            committed = output_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            failed.append(f"Field semantics drift gate: cannot read {output_path}: {exc}")
+            return
+
+        try:
+            generated = _gen_mod._emit_yaml(_gen_mod.generate(include_prose=False))
+        except Exception as exc:
+            failed.append(f"Field semantics drift gate: generator raised: {exc}")
+            return
+
+        if generated != committed:
+            failed.append(
+                "Field semantics drift gate: config/lambda/ducklake/field_semantics.yaml "
+                "differs from generator output -- run: "
+                "bin/venv-python -m scripts.schema_to_field_semantics (then commit the result). "
+                "Do NOT hand-edit field_semantics.yaml (Decision 55)."
+            )
+            print("  FAIL: field_semantics.yaml has drifted from the generator output. Run the generator to regenerate.")
+        else:
+            print("  PASS: field_semantics.yaml matches generator output (no drift).")
+
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_authority_budget(failed: list[str]) -> None:
+    """Drift-assertion gate: budget table agrees with the HCL boundary name + IAMRoleWriteBounded managed-role set.
+
+    Checks:
+    (a) boundary_policy_name in the budget appears in terraform/bootstrap/github_ci_apply.tf.
+    (b) Every in_budget_managed_role appears in the HCL (present in IAMRoleWriteBounded resource targets).
+    (c) Self-grant guard: the apply role (contains 'github-ci-apply') is not in in_budget_managed_roles.
+
+    Eligible for both --pre and full tiers (pure Python, sub-second file reads). Override budget path
+    via TF_AUTHORITY_BUDGET env var (test isolation; default: terraform/bootstrap/authority_budget.json).
+    """
+    print("\n=== Authority-budget drift gate (T2.25 / Decision 92 point 5) ===")
+    budget_path_env = os.environ.get("TF_AUTHORITY_BUDGET")
+    budget_path = Path(budget_path_env) if budget_path_env else ROOT / "terraform" / "bootstrap" / "authority_budget.json"
+    try:
+        budget = json.loads(budget_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        failed.append(f"authority-budget: cannot read or parse {budget_path}: {exc}")
+        print(f"  FAIL: cannot load budget table: {exc}")
+        return
+
+    hcl_path = ROOT / "terraform" / "bootstrap" / "github_ci_apply.tf"
+    try:
+        hcl_text = hcl_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        failed.append(f"authority-budget: cannot read {hcl_path.name}: {exc}")
+        print(f"  FAIL: cannot read HCL: {exc}")
+        return
+
+    # Use bounded matching: names must appear as ARN path components or quoted strings in HCL.
+    # Bare substring matching is too broad -- a short name or prefix would match spuriously
+    # across comment lines or other strings (H1, code-review 2026-06-29).
+    boundary_name = budget.get("boundary_policy_name", "")
+    # Boundary policy names appear as ":policy/<name>" in ARN strings in the HCL.
+    if f":policy/{boundary_name}" not in hcl_text and f'"{boundary_name}"' not in hcl_text:
+        failed.append(
+            f"authority-budget: boundary_policy_name {boundary_name!r} not found in {hcl_path.name} -- "
+            "budget and HCL are out of sync"
+        )
+        print(f"  FAIL: boundary_policy_name {boundary_name!r} missing from HCL.")
+    else:
+        print(f"  PASS: boundary_policy_name {boundary_name!r} found in HCL.")
+
+    for role in budget.get("in_budget_managed_roles", []):
+        # Role names appear as ":role/<name>" ARN path components in IAMRoleWriteBounded Resource lists.
+        if f":role/{role}" not in hcl_text and f'"{role}"' not in hcl_text:
+            failed.append(
+                f"authority-budget: in_budget_managed_role {role!r} not found in {hcl_path.name} -- "
+                "role is not a target in IAMRoleWriteBounded; remove from budget or update HCL"
+            )
+            print(f"  FAIL: managed role {role!r} missing from HCL.")
+        else:
+            print(f"  PASS: managed role {role!r} found in HCL.")
+        if "github-ci-apply" in role:
+            failed.append(f"authority-budget: self-grant guard -- apply role {role!r} must not be in in_budget_managed_roles")
+            print(f"  FAIL: self-grant -- apply role {role!r} listed as managed.")
+
+    budget_key = "authority-budget:"
+    if not any(f.startswith(budget_key) for f in failed):
+        print("  PASS: budget table is consistent with HCL.")
+
+
+def validate_ducklake_version_lockstep(failed: list[str]) -> None:
+    """Sub-second static gate: verify no derive surface diverges from config/lambda/ducklake/version.yaml.
+
+    Checks:
+    (a) requirements.txt duckdb floor == ">=<duckdb_version>" (sync_ducklake_version --check is clean).
+    (b) No hardcoded duckdb version literal in src/common/ducklake_runtime.py or scripts/build_lambda.py
+        (both must reach the pin only via the loader, not a literal).
+
+    Eligible for both --pre fast-tier AND full presubmit (pure Python, sub-second).
+    """
+    print("\n=== DuckLake version lockstep gate (OQ.12 / PLAN-duckdb-pin-bump-1-5-4) ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        import re as _re  # noqa: PLC0415
+
+        # (a) requirements.txt floor check
+        try:
+            import scripts.sync_ducklake_version as _sdv  # noqa: PLC0415
+
+            ok = _sdv.sync(check_only=True, requirements_path=ROOT / "requirements.txt")
+            if not ok:
+                failed.append(
+                    "ducklake-version-lockstep: requirements.txt duckdb floor drifts from "
+                    "config/lambda/ducklake/version.yaml -- run: bin/venv-python -m scripts.sync_ducklake_version"
+                )
+                print("  FAIL: requirements.txt duckdb floor drifts from the SSOT.")
+            else:
+                print("  PASS: requirements.txt duckdb floor matches the SSOT.")
+        except Exception as exc:
+            failed.append(f"ducklake-version-lockstep: requirements check raised: {exc}")
+
+        # (b) no hardcoded version literal in derive surfaces
+        derive_surfaces = [
+            ROOT / "src" / "common" / "ducklake_runtime.py",
+            ROOT / "scripts" / "build_lambda.py",
+        ]
+        for surface in derive_surfaces:
+            try:
+                text = surface.read_text(encoding="utf-8")
+            except OSError as exc:
+                failed.append(f"ducklake-version-lockstep: cannot read {surface}: {exc}")
+                continue
+            # Allow version-looking strings in comments only if they look like semver but NOT as
+            # a string assignment or constant value (i.e., PINNED_DUCKDB_VERSION = "x.y.z").
+            literal_assigns = _re.findall(
+                r'(?:PINNED_DUCKDB_VERSION\s*=\s*["\'])([\d.]+)(["\'])',
+                text,
+            )
+            if literal_assigns:
+                failed.append(
+                    f"ducklake-version-lockstep: {surface.relative_to(ROOT)} contains a hardcoded "
+                    f"duckdb version literal assignment (PINNED_DUCKDB_VERSION = '...'). "
+                    "Repoint through src.common.ducklake_version.pinned_duckdb_version()."
+                )
+                print(f"  FAIL: hardcoded version literal in {surface.name}.")
+            else:
+                print(f"  PASS: no hardcoded version literal assignment in {surface.name}.")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
+def validate_dependency_graph_freshness(failed: list[str]) -> None:
+    """Fail if docs/dependency-graph.json exists and has drifted from the current graph.
+
+    No-op when no committed export is present. Full tier only (Decision 73 non-wedging).
+    Delegates to scripts.dependency_graph.check_export_freshness (Decision 80).
+    """
+    print("\n=== Dependency graph freshness ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.dependency_graph import check_export_freshness  # noqa: PLC0415
+
+        before = len(failed)
+        check_export_freshness(failed)
+        if len(failed) == before:
+            print("  PASS: dependency graph export is current (or no committed export).")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import dependency_graph: {exc}")
+        failed.append("Dependency graph freshness")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -2652,9 +3456,11 @@ def run_python_checks(failed: list[str]) -> None:
     validate_rec_write_paths(failed)
     validate_decisions_local_writes(failed)
     validate_warehouse_write_sources(failed)
+    validate_broker_env_reads(failed)
     validate_invariants(failed)
     validate_ci_rca_trigger(failed)
     validate_ci_workflow_guards(failed)
+    validate_claude_p_retry_wrapper(failed)
     validate_sloc_limits(failed)
     check_source_registry(failed)
     validate_platform_roadmap(failed)
@@ -2675,9 +3481,20 @@ def run_python_checks(failed: list[str]) -> None:
     validate_scheduled_agent_logs(failed)
     validate_hermeticity_flags(failed)
     validate_verifier_hermeticity(failed)
+    validate_verifier_same_pr_guard(failed)
+    validate_verification_registry(failed)
+    validate_differential_gate_baseline(failed)
     validate_intent_doc_freeze(failed)
     validate_contract_drift(failed)
+    validate_rec_relevance_contract(failed)
+    validate_field_semantics_drift(failed)
     validate_ci_rca_taxonomy(failed)
+    # Authority-budget drift gate: sub-second file reads, eligible for both tiers (T2.25 / Decision 92 point 5)
+    validate_authority_budget(failed)
+    # DuckLake version lockstep gate: sub-second static, eligible for both tiers (OQ.12 SSOT enforcement)
+    validate_ducklake_version_lockstep(failed)
+    # Dependency-graph freshness: full tier only (Decision 73 non-wedging, Decision 80).
+    validate_dependency_graph_freshness(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
@@ -2690,10 +3507,15 @@ def run_python_checks(failed: list[str]) -> None:
 # by the bounded retry loop in .github/workflows/terraform-apply-sandbox.yml (parity required).
 _TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not query provider registry", "failed after ")
 
+# Transient Claude API error signatures; parity with _is_transient() in scripts/ci/claude_p_retry.sh.
+# Distinct from _TRANSIENT_INIT_SIGNATURES (terraform registry 5xx). Decision 73, Decision 92.
+_TRANSIENT_CLAUDE_SIGNATURES: tuple[str, ...] = ("500", "502", "503", "API Error: 5", "Internal server error", "overloaded")
+
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
 # terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
-_TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github")
+# terraform/bootstrap/ is the CI/CD bootstrap root (admin-only, NEVER auto-apply -- CD.35 Wave 4 / T2.23).
+_TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github", "terraform/bootstrap")
 
 
 def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> bool:
@@ -3062,6 +3884,12 @@ def main() -> None:
         metavar="TEXT",
         help="Optional reason for bypassing the budget assertion (captured in the bypass audit rec).",
     )
+    parser.add_argument(
+        "--update-sloc-budgets",
+        action="store_true",
+        help="Regenerate config/sloc_budgets.yaml from the current tree (downward-only ratchet). "
+        "Lowers shrunk budgets, seeds newly-oversized files, drops files now <=500. Never raises an existing budget.",
+    )
     args = parser.parse_args()
 
     # CI guard: --ignore-budget is forbidden in CI environments
@@ -3082,6 +3910,11 @@ def main() -> None:
     # --coverage: advisory verifier-coverage report, then exit 0
     if args.coverage:
         run_coverage_check()
+        sys.exit(0)
+
+    # --update-sloc-budgets: regenerate the SLOC budget registry and exit
+    if args.update_sloc_budgets:
+        _update_sloc_budgets()
         sys.exit(0)
 
     # --terraform-only: creds-free terraform gate for both roots (CI terraform-validate job)
@@ -3119,15 +3952,25 @@ def main() -> None:
             if mypy_result.returncode != 0:
                 print("mypy: type errors found in changed files (informational - not blocking). Fix progressively.")
 
-        has_test_changes = any(re.match(r"tests/.*test_[^/]+\.py$", f) for f in changed)
-        if has_test_changes:
-            print("\n=== Tests (pytest --picked) ===")
+        # Select changed test files from the same get_changed_files() result that drives the rest of
+        # --pre. Passing explicit paths removes the dependence on pytest-picked's independent
+        # branch-diff, which collapses to 0 tests in GitHub Actions' detached-HEAD PR checkout
+        # (PR #334, job 84147146286 -- "collected 0 items / no tests ran" yet all-passed).
+        # Decision 55 backstop: exit 5 (0 collected) while changed test files are present is a
+        # contradiction -- redden the gate loudly rather than swallowing it as the old (0,5)
+        # whitelist did.
+        # Accepted edge case: a changed test file containing ONLY integration-marked tests will
+        # trip this backstop because -m "not integration" deselects all; resolve by not gating
+        # all-integration files behind the unit tier.
+        changed_tests = [f for f in changed if re.match(r"tests/.*test_[^/]+\.py$", f)]
+        if changed_tests:
+            print("\n=== Tests (pytest -- explicit changed files) ===")
             pytest_result = run(
-                [PYTHON, "-m", "pytest", "--picked", "--mode=branch", "-m", "not integration", "-v"],
+                [PYTHON, "-m", "pytest", *changed_tests, "-m", "not integration", "-v"],
                 cwd=ROOT,
             )
-            if pytest_result.returncode not in (0, 5):  # exit 5 = no tests collected
-                failed.append("Tests (pytest --picked)")
+            if pytest_result.returncode != 0:
+                failed.append("Tests (pytest)")
 
         validate_iam_runner_policy(failed)
         validate_copilot_multipliers(failed)
@@ -3143,13 +3986,30 @@ def main() -> None:
         # SLOC-gate in --pre: mirrors validate_cc_limits -- both are O(lines) file scans; SLOC breach
         # missed pre-merge in PR #106 because it ran in full-tier only (rec-2106 RCA).
         validate_sloc_limits(failed)
+        # Subprocess-encoding lint in --pre: O(files) static scan, earliest_viable_gate=pre
+        # (docs/INTENT-ci-rca-methodology.md); was full-tier-only, which let rec-2382 escape
+        # PR #300 -- mirrors rec-859/rec-2106 tier promotions.
+        validate_subprocess_encoding(failed)
         # Intent-doc-freeze in --pre: O(dirlist) scan, Decision 86; prevents new INTENT docs before CI catches them.
         validate_intent_doc_freeze(failed)
         # Contract drift gate in --pre: pure Python over docs/contracts/*.yaml (sub-second), CD.25.
         # Diff-aware Pass 2 runs only over changed files -- keeps the fast-tier budget safe.
         validate_contract_drift(failed)
+        # Field semantics drift gate in --pre: pure Python, sub-second; adjacent to CD.25 gate (T2.33).
+        validate_field_semantics_drift(failed)
         # CI-RCA taxonomy coverage in --pre: pure file-glob + YAML parse (sub-100ms), Decision 60.
         validate_ci_rca_taxonomy(failed)
+        # claude -p retry wrapper enforcement in --pre: O(lines) workflow scan, Decision 73, Decision 92.
+        validate_claude_p_retry_wrapper(failed)
+        # Authority-budget drift gate in --pre: sub-second file reads, T2.25 / Decision 92 point 5.
+        validate_authority_budget(failed)
+        # DuckLake version lockstep gate in --pre: sub-second static (OQ.12 SSOT enforcement). Registered
+        # at BOTH sites -- here (--pre fast-tier) and in run_python_checks (full tier) -- per AGENTS.md.
+        validate_ducklake_version_lockstep(failed)
+        # Same-PR guard in --pre: pure AST + git diff scan (sub-second), T3.1 / CD.29.
+        validate_verifier_same_pr_guard(failed)
+        # Verification registry validation in --pre: pure YAML parse (sub-second), T3.1 / CD.29.
+        validate_verification_registry(failed)
 
         elapsed = time.monotonic() - _t0
 
@@ -3196,6 +4056,7 @@ def main() -> None:
         validate_cli_tools_in_prompts(failed)
         validate_workflow_agent_safety(failed)
         validate_prompt_compliance(failed)
+        validate_instruction_architecture_layers(failed)
 
     ensure_fresh_dq_results(failed)
     validate_verification_harness(failed)

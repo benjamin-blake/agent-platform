@@ -1,0 +1,305 @@
+schema_version: 1
+slug: "t2-14-closeout"
+intent: >-
+  Complete platform tier_item T2.14 (Broker credential routing via AWS Secrets Manager + Class C
+  credential-routing contract). All four exit criteria are already status: met (verified live
+  2026-06-25 by PLAN-broker-credential-criteria-closeout); open_criteria_count is 0. This is the
+  manual completion confirmation CD.39 authorizes for an all-criteria-met item: re-run the live V3
+  verification, then flip T2.14 status in_progress -> complete on a green pass. The flip clears a
+  trustworthy "what's left" signal for downstream L3.exec broker-adapter work, which depends on this
+  surface.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-14-closeout.yaml
+phase: >-
+  Platform tier_item T2.14 -- completion closeout. Follows PLAN-broker-credential-routing (Phase 1,
+  Class C contract) and PLAN-broker-credential-codegen (Phase 2, secrets + resolver + guard) and
+  PLAN-broker-credential-criteria-closeout (criteria ledger reconciliation, all four -> met). This
+  plan completes the item itself: status -> complete on a verified live re-pass.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      On a verified live VP pass, flip T2.14 status in_progress -> complete, set completed_at, and
+      replace T2.14's progress_note so it records the completion rationale and SUPERSEDES the prior
+      "stays in_progress until CD.25 is ratified" sentences (decision-scout NOTE resolution). Only
+      T2.14's status, completed_at, and progress_note change. No exit_criteria, depends_on,
+      files_in_scope, intent, bootstrap_completion_exempt, or any other tier_item is touched. CD.25
+      stays state: pending; bootstrap_completion_exempt stays false.
+bundled_recommendations: []
+infrastructure_dependencies: []
+closes_criteria: []
+acceptance_criteria:
+  - >-
+    The live V3 verification re-passes: c1 holds (Alpaca paper secret resolves by routing key and
+    GetSecretValue returns >=1 field under PlatformDev; Alpaca live envelope returns the AWSCURRENT
+    staging-label "envelope-exists, value-absent" form, NOT the "can't find the specified secret"
+    missing form); c2 holds (credential-routing.yaml loads Class C, contract_version 1, status
+    ratified); c3 holds (resolver returns the NoBrokerCredentials sentinel for an unmapped phase
+    without raising AND validate_broker_env_reads flags a planted direct broker-API-key env read);
+    c4 holds (PLAN-broker-credential-routing.yaml exists and the contract records the Step 10
+    multi-perspective critique as its ratification vehicle).
+  - >-
+    After the flip: T2.14 status == complete, completed_at is set to the actual completion-commit date
+    (planned 2026-06-28; use the real date if /implement runs later), and all four exit_criteria
+    remain status: met with met_by resolving to the
+    delivering plans (c1/c3 broker-credential-codegen; c2/c4 broker-credential-routing). No criterion
+    is re-opened or re-touched.
+  - >-
+    T2.14's progress_note records: all four criteria verified live this session and the item completed
+    on explicit human governance direction; and it EXPLICITLY SUPERSEDES the prior "completion remains
+    gated ONLY on CD.25 ratification ... status stays in_progress until CD.25 is ratified" sentences,
+    citing the override basis (sibling precedent T2.27/T2.33; bootstrap_completion_exempt governs the
+    CD.25-producing bootstrap set, not a general related-CD gate; INTENT-pre-codegen Part 11 -- pending
+    CD.25 alongside active contracts is by design; CD.39 manual-confirm completion gate).
+  - >-
+    CD.25 remains state: pending and T2.14 bootstrap_completion_exempt remains false in the
+    candidate_decisions / tier_item blocks (this plan does not ratify CD.25 and does not change the
+    exemption flag). No other tier_item is modified.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml still loads (scripts.platform_roadmap.load) and bin/venv-python -m
+    scripts.validate --pre passes (plan-document schema, roadmap validators, CD.39 criteria
+    enforcement, contract-drift) with docs/ROADMAP-PLATFORM.yaml the only roadmap change.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Re-verify c1 (paper): the Alpaca paper secret envelope is provisioned and PlatformDev's
+      ARN-scoped GetSecretValue grant resolves it by routing key.
+    command: bin/venv-python -m scripts.broker_secrets --broker alpaca --phase paper --fetch
+    expected: >-
+      Prints "resolved OK: broker='alpaca' phase='paper'" then a "fetch OK: GetSecretValue returned N
+      field(s)" line (N>=1); exits 0.
+    fix_if: >-
+      AccessDenied -> the BrokerCredentialsRead grant regressed. ResourceNotFoundException (missing
+      secret) -> the paper envelope was removed. Either means c1 no longer holds -- do NOT flip status
+      to complete; stop and RCA (Decision 55), the criterion is genuinely open again.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Re-verify c1 (live envelope): the Alpaca live secret envelope is provisioned but intentionally
+      value-less until product live_small (Decision 37). Under PlatformDev (no Describe grant), prove
+      envelope existence via the GetSecretValue staging-label error-form. Do not print secret material.
+    command: |-
+      bin/venv-python - <<'PY'
+      import sys, boto3, botocore
+      c = boto3.Session(profile_name="agent_platform").client("secretsmanager", region_name="eu-west-2")
+      try:
+          c.get_secret_value(SecretId="agent-platform-broker-alpaca-live")
+          print("OK c1-live: envelope provisioned, value present")
+      except botocore.exceptions.ClientError as e:
+          code = e.response["Error"]["Code"]; msg = e.response["Error"]["Message"]
+          if code == "ResourceNotFoundException" and "staging label" in msg:
+              print("OK c1-live: envelope provisioned, value intentionally absent (AWSCURRENT staging-label form)")
+          else:
+              print("FAIL c1-live:", code, msg); sys.exit(1)
+      PY
+    expected: >-
+      Prints an "OK c1-live: envelope provisioned ..." line and exits 0 -- either the value is present
+      or the error is the staging-label (envelope-exists, no-value) form.
+    fix_if: >-
+      "FAIL c1-live: ... can't find the specified secret" or AccessDenied -> the live envelope is
+      missing or the grant regressed; c1 no longer holds. Do NOT flip status to complete; stop and RCA.
+  - step: 3
+    phase: pre-deploy
+    action: Re-verify c2 -- the credential-routing contract loads as Class C, contract_version 1, status ratified.
+    command: |-
+      bin/venv-python - <<'PY'
+      import pathlib
+      from scripts.contracts import load_contract
+      d = load_contract(pathlib.Path("docs/contracts/credential-routing.yaml"))
+      assert d.contract.class_.value == "C", d.contract.class_
+      assert d.contract.contract_version == 1, d.contract.contract_version
+      assert d.contract.status.value == "ratified", d.contract.status
+      print("OK c2: credential-routing Class C contract_version 1 ratified")
+      PY
+    expected: 'Prints "OK c2: credential-routing Class C contract_version 1 ratified"; exits 0.'
+    fix_if: >-
+      AssertionError or ContractValidationError -> the contract regressed from ratified v1; c2 no
+      longer holds. Do NOT flip status to complete.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Re-verify c3 (resolver): routing-key resolution works and an unmapped product phase returns the
+      NoBrokerCredentials sentinel without raising.
+    command: bin/venv-python -m scripts.broker_secrets --broker alpaca --phase backtest_canonical
+    expected: >-
+      Prints the NoBrokerCredentials sentinel line for phase='backtest_canonical'; exits 0 (no
+      exception, no secret resolved).
+    fix_if: >-
+      The CLI raises or resolves a secret for the unmapped phase -> the resolve-by-key / sentinel path
+      regressed; c3 no longer holds.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Re-verify c3 (guard): scripts/validate.py validate_broker_env_reads is live and flags a planted
+      direct broker-API-key env read (positive, negative, self-exclusion).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestBrokerEnvReadGuard -v
+    expected: >-
+      All TestBrokerEnvReadGuard cases pass: a planted os.environ["ALPACA_API_KEY"] is flagged, the
+      clean tree passes, and broker_secrets.py / validate.py are self-excluded. Exits 0.
+    fix_if: A failure or zero tests collected -> the guard regressed or was removed; c3 no longer holds.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Re-verify c4: the Phase 1 plan exists and the ratified contract records ratification via the Step
+      10 multi-perspective critique (the converged critique is the ratification vehicle).
+    command: 'test -f docs/plans/PLAN-broker-credential-routing.yaml && grep -q "Step 10 multi-perspective critique" docs/contracts/credential-routing.yaml && echo "OK c4: Step 10 critique converged (ratified_via)"'
+    expected: 'Prints "OK c4: Step 10 critique converged (ratified_via)"; exits 0.'
+    fix_if: >-
+      Non-zero exit -> the Phase 1 plan is missing or the contract no longer records the Step 10
+      ratification vehicle; c4 provenance cannot be established. Do NOT flip status to complete.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      After staging the status -> complete + completed_at + progress_note edit, confirm the completed
+      state programmatically: T2.14 status == complete, completed_at set, all four criteria still met
+      with met_by, and CD.25 still state: pending.
+    command: |-
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      doc = load("docs/ROADMAP-PLATFORM.yaml")
+      t = {i.id: i for i in doc.tier_items}["T2.14"]
+      assert t.status == "complete", t.status
+      assert t.completed_at, "completed_at unset"
+      assert [c.id for c in t.exit_criteria if c.status == "open"] == [], "open criteria remain"
+      assert all(c.status == "met" and c.met_by for c in t.exit_criteria), "criteria not all met/met_by"
+      assert t.bootstrap_completion_exempt is False, "exempt flag changed"
+      cd25 = {c.id: c for c in doc.candidate_decisions}["CD.25"]
+      assert cd25.state == "pending", cd25.state
+      print(f"OK complete: T2.14 status=complete completed_at={t.completed_at}; 4 met; CD.25 still pending")
+      PY
+    expected: >-
+      Prints "OK complete: T2.14 status=complete completed_at=... ; 4 met; CD.25 still pending"; exits 0.
+    fix_if: >-
+      AssertionError -> the staged edit is wrong (status not complete, completed_at unset, a criterion
+      re-opened, exempt flag changed, or CD.25 accidentally flipped). Correct the edit and re-run.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Validate the artifacts post-flip: the plan-document schema and the full --pre presubmit (roadmap
+      validators, CD.39 criteria enforcement, contract-drift) pass with the roadmap as the only change.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-14-closeout.yaml && bin/venv-python -m scripts.validate --pre
+    expected: >-
+      plan_document prints PASS; validate --pre exits 0 (plan-document, platform-roadmap, contract-drift,
+      and CD.39 criteria gates green).
+    fix_if: >-
+      A schema/validator failure -> fix per its message and re-run; remote CI is authoritative.
+constraints:
+  - >-
+    Status flips to complete ONLY on a green VP (steps 1-6 all pass). If any criterion fails live, that
+    criterion is genuinely open again -- do NOT flip status; stop and RCA (Decision 55,
+    Status-Trusted-Never-Inferred / T2.20). Never infer completion from prose / file-existence /
+    commit-activity.
+  - >-
+    Only docs/ROADMAP-PLATFORM.yaml is in scope, and within it ONLY T2.14's status, completed_at, and
+    progress_note. Do NOT re-touch T2.14 exit_criteria (already met), depends_on ([T2.1] per Decision
+    93), files_in_scope, intent, or bootstrap_completion_exempt; do NOT touch any other tier_item or
+    candidate_decision.
+  - >-
+    Do NOT ratify CD.25 and do NOT change CD.25 state or T2.14 bootstrap_completion_exempt. CD.25 stays
+    state: pending by design (INTENT-pre-codegen Part 11). This plan's completion of T2.14 is decoupled
+    from CD.25 ratification on explicit human governance direction.
+  - >-
+    The new progress_note MUST explicitly supersede the prior "completion remains gated ONLY on CD.25
+    ratification ... status stays in_progress until CD.25 is ratified" sentences -- do not leave the
+    contradicting prior rationale standing in the same field (decision-scout NOTE resolution). Record
+    the override basis succinctly.
+  - >-
+    This is a status-flip closeout, not new feature work: no Terraform apply, no code edits to
+    broker_secrets.py / validate.py / the contract, no Lambda deploy. The broker surface already
+    shipped and the criteria already passed; this plan only re-verifies live and completes the item.
+  - >-
+    The exit-criteria ledger and tier_item status are git-authoritative (Decision 87 / Decision 84
+    warehouse-SoT NOT triggered for this ledger until T4.x); reconcile by editing
+    docs/ROADMAP-PLATFORM.yaml directly, NOT via the ops portal.
+  - No new standing prose-architecture docs under docs/ (Decision 86) -- the only edit is the existing roadmap YAML.
+context:
+  - >-
+    Why this plan exists: T2.14's four exit criteria were verified live and flipped open->met on
+    2026-06-25 (PLAN-broker-credential-criteria-closeout), but that plan deliberately left the item
+    in_progress, asserting CD.25 (state: pending) gated completion because bootstrap_completion_exempt:
+    false. On review, that gate was over-conservative; this plan completes the item on explicit human
+    governance direction after a live re-pass.
+  - >-
+    Override basis (decision-scout NOTE, well-founded, no BLOCK): (a) sibling tier_items T2.27 (complete
+    2026-06-11) and T2.33 (complete 2026-06-22) are both related_candidate_decisions: [CD.25] and were
+    marked complete while CD.25 stayed pending; neither carries bootstrap_completion_exempt: true (the
+    field defaults false), so the field was not their completion gate. (b) bootstrap_completion_exempt
+    governs the CD.25/CD.1 bootstrap circular-dependency exemption set (the ritual items that PRODUCE
+    CD.25), not a general "complete only after related CD ratifies" rule; no validate.py guard enforces
+    a related-CD-pending completion block (Decision 80). (c) docs/INTENT-pre-codegen-contract-ratification.md
+    Part 11 (round-3 M7) states CD.25 is designed to remain state: pending "for the full project
+    lifetime" alongside fully-active contract YAMLs ("the bootstrap-clause operating as designed"); its
+    designed ratification vehicle (T0.7b log-decision Lambda) is itself blocked behind T1.12 -> CD.16.
+    (d) CD.39 defines completion as an all-criteria-met item QUALIFYING via manual human confirmation
+    (Status-Trusted-Never-Inferred / T2.20), never auto-flipped -- which this human-directed closeout
+    satisfies. (e) Decision 59 -- remaining work = the open-criteria set; open_criteria_count is 0.
+  - >-
+    Verification tier V3 (Decision 48): c1 re-verification performs a live AWS Secrets Manager
+    GetSecretValue round-trip. All VP steps run under the agent_platform (PlatformDev) profile --
+    agent_platform_admin is NOT available in-session, and PlatformDev intentionally has GetSecretValue
+    only (no Describe/List) per the credential-routing contract, which is why c1's live check uses
+    --fetch and the GetSecretValue error-form rather than describe-secret. Secret material is never
+    printed or asserted on (Decision 37).
+  - >-
+    After this plan lands, T2.14 leaves the in_progress set; /orient stops surfacing it as in_progress
+    and the false follow-on signal is fully cleared. Downstream PRODUCT L3.exec.4/5 broker adapters
+    (which depend on this credential-routing surface) read T2.14 as complete.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (one NOTE on CD.25, no BLOCK). CITE: CD.39 (completion gate
+    satisfied), CD.25 (related candidate, state: pending -- explain why pending does not gate this
+    completion), Decision 59 (remaining work = open criteria), Decision 48 (V3 tier), Decision 37
+    (out-of-band secret values; no secret material printed), Decision 86 (no new prose docs -- compliant).
+    RELATED: Decision 77 (paper/live are product phases/account-types), Decision 84 (warehouse-SoT not
+    triggered; ledger git-authoritative), Decision 87 (ledger git-authoritative until T4.x), Decision 80
+    (validate.py single source of truth -- no guard blocks this), Decision 93 (T2.14 depends_on [T2.1]),
+    T2.20 / Status-Trusted-Never-Inferred. Cite CD.25 / CD.39 as candidate decisions, not "Decision N".
+  - >-
+    Branch claude/t2-14-closeout-verification-rsf2ij was 0 commits behind origin/main at planning time
+    (preflight main_freshness ok); docs/ROADMAP-PLATFORM.yaml had no overlapping main change since
+    branch. ci_rca_unresolved_recs empty -- no CI-RCA block.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/t2-14-closeout-verification-rsf2ij)
+  - docs/PROJECT_CONTEXT.md read
+  - CD.39, CD.25, and the cited Decisions (59/48/37/86; RELATED 77/84/87/80/93) understood via the decision-scout gate
+  - "T2.14 status/exit_criteria/progress_note located in docs/ROADMAP-PLATFORM.yaml; all four criteria confirmed status met with met_by"
+  - The delivering plans (PLAN-broker-credential-routing.yaml, PLAN-broker-credential-codegen.yaml) exist for met_by
+  - AWS static-key chain verified (aws sts get-caller-identity --profile agent_platform); agent_platform_admin NOT required (all VP steps run under PlatformDev)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    No code / Terraform / contract changes -- this plan's substance is the live re-verification plus
+    the status-flip bookkeeping. Begin by running the Verification Plan steps 1-6 under the
+    agent_platform (PlatformDev) profile; loop until all pass. A genuine criterion failure means that
+    criterion is actually open again -- stop and RCA (Decision 55), do NOT flip status.
+  - >-
+    On the verified VP pass (steps 1-6 green), edit docs/ROADMAP-PLATFORM.yaml T2.14: set status:
+    complete, set completed_at to the actual completion-commit date (planned 2026-06-28; use the real
+    date if /implement runs later), and REPLACE the progress_note
+    so it (a) records all four criteria verified live this session and the item completed on explicit
+    human governance direction, and (b) explicitly supersedes the prior "completion remains gated ONLY
+    on CD.25 ratification ... status stays in_progress until CD.25 is ratified" sentences, recording the
+    override basis (sibling precedent T2.27/T2.33; bootstrap_completion_exempt governs the CD.25-producing
+    bootstrap set, not a general related-CD gate; INTENT-pre-codegen Part 11 pending-by-design; CD.39
+    manual-confirm gate). Do NOT touch exit_criteria, depends_on, files_in_scope, intent, or
+    bootstrap_completion_exempt; do NOT change CD.25 state; do NOT touch any other tier_item.
+  - >-
+    Run Verification Plan step 7 (programmatic completed-state confirmation) -- expect the OK line. If
+    it fails, correct the staged edit (e.g. status not complete, completed_at unset, a criterion
+    re-opened, exempt flag or CD.25 accidentally changed) and re-run.
+  - >-
+    Run Verification Plan step 8 (plan_document + validate --pre) after the flip; confirm CD.39
+    enforcement (met_by resolves to the delivering plans, no bare-string criteria) and the roadmap
+    validators pass with docs/ROADMAP-PLATFORM.yaml the only roadmap change.
+  - >-
+    Commit with a feat({slug}) message, push, open the PR, and follow the event-driven CI->squash-merge
+    flow (AGENTS.md Git-ops procedure). No bundled recommendations, so no Resolves: trailer.
+  - 'Report: the live criteria re-verification results (c1-c4), the status flip + completed_at, the progress_note supersession, confirmation that CD.25 remains pending and no other tier_item changed, and the validate --pre result.'
+work_areas: []
+rollback: >-
+  The only change is the T2.14 status -> complete + completed_at + progress_note edit in
+  docs/ROADMAP-PLATFORM.yaml. Rollback = revert that single staged edit (git checkout --
+  docs/ROADMAP-PLATFORM.yaml before commit, or revert the completion commit after). No runtime, infra,
+  or contract state is touched, so rollback is side-effect-free; the item simply returns to in_progress
+  with all four criteria still met.

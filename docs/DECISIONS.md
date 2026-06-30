@@ -2,6 +2,593 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 103: Recommendation relevance is a governed lifecycle state (CD.36 ratification) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-30
+**Warehouse ID:** dec-103 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The roadmap had a Tier Item Freshness Gate (T-1.21) and implement-side truth-maintenance rules,
+but no governed relevance discipline for operational recommendations. Open recommendations were
+actioned solely on status="open", without checking whether the underlying need was still valid.
+At 2026-06-24, 273 of 505 open recommendations were aging (>60 days), and no automated path
+existed to surface or close satisfied/superseded work.
+
+**Decision:**
+Ratifies CD.36. Recommendation relevance is a governed lifecycle verdict -- distinct from the
+rec lifecycle status (open/closed/failed/declined/superseded). The verdict set is:
+`{relevant, satisfied, superseded, duplicate, contradicted, stale_target, blocked_by_decision, unknown}`.
+
+Key constraints (binding):
+- The deterministic probe is the rec's existing `acceptance` shell-command oracle. No new
+  acceptance machinery is introduced.
+- Deterministic satisfaction (acceptance probe passes; target file/symbol present) may auto-close
+  with a recorded proof. All semantic verdicts (superseded, duplicate, contradicted, etc.)
+  produce a `close_proposed` command for human or policy confirmation -- never a direct close
+  (Decision 70: closure requires a closure proof, not an LLM assertion).
+- Relevance state is computed READ-TIME or stored in a named projection
+  (`docs/contracts/recommendation-relevance.yaml`) -- NO new Class A columns on
+  `ops_recommendations` (Decision 84: the ducklake_writer owns the keyspace).
+- Queue-wide relevance surfacing serves the warmed read-cache only -- no per-session warehouse
+  re-fetch (Decision 88).
+
+**Implementation (T3.8, landed 2026-06-30):**
+`scripts/rec_relevance.py` evaluator (deterministic-first: acceptance probe -> target-existence
+-> decision-contradiction scan -> semantic fallback); `docs/contracts/recommendation-relevance.yaml`
+projection contract; `scripts/session_preflight.py` generalised correlation engine;
+`scripts/ops_data_portal.py` `propose_or_close_rec()` lifecycle helper; planning and implement
+skill freshness gates.
+
+**Related:** Decision 70 (closure-proof requirement), Decision 84 (named projection / read-only
+boundary), Decision 88 (read-cache surfacing), Decision 55 (no auto-action on semantic judgment),
+T3.8 (implementation item), T3.9 (post-merge reconciliation complement).
+
+## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-29
+**Warehouse ID:** dec-102 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 43 introduced a binary SLOC waiver: any scripts/ or src/ Python file carrying a
+`# complexity-waiver: decision-43` header comment was entirely exempt from the 500-SLOC cap,
+allowing unbounded growth. Seventeen files currently exceed 500 SLOC under this exemption.
+The waiver mechanism provided no ratchet, no visibility into file growth, and no pressure
+toward the reduction that Decision 43 itself mandated.
+
+**Decision:**
+The `# complexity-waiver: decision-43` comment no longer authorises unbounded SLOC growth.
+Oversized scripts/ and src/ Python files are instead pinned to their current size in a
+checked-in registry (`config/sloc_budgets.yaml`) and enforced by `validate_sloc_limits` at
+`current SLOC <= budget`. Budgets ratchet DOWN only:
+
+- Raising a budget requires a manual, reviewable edit to `config/sloc_budgets.yaml`.
+- Shrinking a file and re-running `validate --update-sloc-budgets` automatically lowers the
+  registered budget to the new size.
+- Files that shrink to <=500 SLOC are dropped from the registry automatically.
+- A file >500 SLOC that is NOT registered in `config/sloc_budgets.yaml` fails the gate,
+  regardless of whether it carries the waiver comment.
+- A file <=500 SLOC that still carries the waiver comment is a stale-waiver advisory (not a
+  failure), because the comment may still be load-bearing for the cyclomatic-complexity gate
+  (validate_cc_limits). Do not remove the comment without verifying the CC gate first.
+
+**Preserved from Decision 43:**
+The cyclomatic-complexity (CC) row of Decision 43 is UNCHANGED. The `_WAIVER_PATTERN` and the
+`validate_cc_limits` gate are not modified by this decision. The shared waiver comment still
+waives the CC gate; its SLOC semantics are amended here only.
+
+**Forward-compatibility (Decision 80):**
+`config/sloc_budgets.yaml` keys are repo-relative forward-slash paths. When `scripts/validate.py`
+is decomposed per Decision 80, keys are re-pointed at the new module paths via
+`validate --update-sloc-budgets`. No other migration is required.
+
+**Deferred breakdown program:**
+The breakdown of registered files below 500 SLOC (split each file, drop from registry,
+until `budgets: {}`) is tracked as rec-2414. This decision creates the registry that rec-2414
+consumes; it does not resolve rec-2414.
+
+**Related:** Decision 43 (amended SLOC row), Decision 80 (validate.py decomposition direction),
+Decision 73 (one-directional enforced-budget ratchet precedent), Decision 86 (rationale routed
+to this numbered Decision).
+
+## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-28
+**Warehouse ID:** dec-101 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The platform and its trading product were operating under purely internal identifiers (repo
+`agent-platform`, AWS prefixes `agent-platform-*`, profile `agent_platform`, project_id
+`trading-system`). As the system matures toward MVP, external-facing brand identity and a
+public documentation/marketing presence are needed. No ratified decision named the external
+brands or governed what may and may not be published publicly.
+
+**Decision:**
+
+**(a) Naming hierarchy:**
+- **Theseus** = external brand for the PLATFORM (the self-improving host system).
+- **Guerdon** = external brand for the trading PRODUCT (product #1 built on Theseus).
+- **Semanto** = the external-facing marketing/comms system and the name of its roadmap
+  (`docs/ROADMAP-SEMANTO.yaml`). Semanto is a PRESENTATION-LAYER-ONLY brand for the
+  marketing and communications surface; it is not a product or a subsystem.
+
+**(b) Presentation-layer only -- internal identifiers unchanged:**
+The external brands apply exclusively to external/marketing surfaces. ALL internal identifiers
+are unchanged by this decision and must not be altered without a separate explicit decision:
+- Repository name: `agent-platform`
+- AWS resource prefixes: `agent-platform-*`
+- IAM profile: `agent_platform`
+- Glue database: `agent_platform`
+- Project ID: `trading-system` (per the INTENT-multi-product-platform origin model, which is
+  unbuilt and unchanged here)
+
+A deep internal rename (aligning identifiers to `theseus-*`) is a recognised high-blast-radius
+future item DEFERRED to a post-MVP tightening refactor. Citing Decision 75 (Frame-Lock): no
+fixed internal-rename scope is committed here; the scope will be bounded in a future plan.
+
+**(c) Scoped Decision-86 marketing-prose exception:**
+Decision 86 (Agent-First repository) mandates machine-parseable artefacts over narrative prose
+and bans standing human-readable companion documents. Marketing prose is hereby granted a
+SCOPED EXCEPTION under the following conditions:
+- Marketing content lives OUTSIDE `docs/` -- the canonical directory is the top-level
+  `marketing/` directory.
+- Marketing content is NOT consumed by internal agents as a source of truth. It is strictly
+  one-way downstream: it renders internal artefacts; it never feeds back into agent context.
+- Marketing content is never a warehouse write source (Decision 84). It is read-only from the
+  warehouse's perspective.
+- This exception is scoped to marketing prose only and does not extend to any other
+  human-readable content under `docs/`.
+
+**(d) Public-content boundary:**
+The public site (theseus.support) must enforce the following boundary at all times:
+- Never publish AWS account specifics: account IDs, infra topology, VPC details, secret
+  names, decision logs, or any content from `docs/` or `logs/`.
+- Market the platform engineering and architecture; never publish Guerdon's trading
+  alpha, performance figures, or returns. Publishing performance claims exposes
+  investment-solicitation and securities-law risk.
+
+**(e) Hosting:**
+The public site is a static site on Cloudflare Pages, built with Astro and Starlight
+(both free/MIT-licensed). Cloudflare Pages is the native managed primitive for static-site
+hosting -- consistent with Decision 100 (use managed primitives, no client-tooling substitution
+for native operations). No hand-rolled build or hosting tooling is permitted.
+Domain: `theseus.support` (Cloudflare-managed DNS, already owned).
+
+**(f) Positioning:**
+- Primary audience: data-engineering hiring managers (portfolio and technical credibility signal).
+- Secondary aspiration: open-source community (transparency, contribution).
+- Deferred, separately gated: a paid service offering (requires its own decision and plan;
+  not in scope for the MVP marketing surface).
+
+**Scope of this decision:**
+This decision ratifies branding and governance only. It DOES NOT provision any infrastructure,
+deploy any site, or change any internal identifier. The theseus.support site and DNS are
+deferred_post_mvp items (S1.2/S1.3 in `docs/ROADMAP-SEMANTO.yaml`). The deep internal rename
+is explicitly deferred. This session's only artefacts are this decision and `docs/ROADMAP-SEMANTO.yaml`.
+
+**Affected files:**
+`docs/DECISIONS.md` (this decision), `docs/ROADMAP-SEMANTO.yaml` (new third sibling roadmap).
+
+---
+
+## Decision 100: Managed services own their primitives -- no client-tooling substitution for native operations (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-26
+**Warehouse ID:** dec-100 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+PR #273 introduced a `pg_dump -> scratch-DB -> pg_restore` mechanism for the OQ.12 pre-deploy
+clone-rehearsal, despite Neon providing native copy-on-write branching (HTTPS/443 REST API,
+no TCP/5432 egress required). Three compounding factors allowed this:
+1. The mechanism was recorded as a "human decision" (HYBRID pg_dump->pg_restore framing),
+   which was then treated as exempt from architectural review.
+2. Decision 75 (Frame-Lock) was scoped to AWS-native primitives, leaving Neon's native
+   primitives uncovered by an explicit decision.
+3. The pg_dump egress smell was mis-resolved by citing Decision 88 (which governs the
+   unavoidable DR backup egress, not the avoidable read-clone egress).
+
+**Decision:**
+Extends Decision 75 (Frame-Lock) to all managed services: when a managed service exposes a
+native primitive (branching, snapshots, PITR, replication, versioning, cloning), the system
+must use that primitive rather than vendoring client tooling or custom scripts to replicate
+the capability outside the managed boundary. A mechanism recorded as a "human decision"
+does NOT exempt it from this principle -- the decision record is evidence of a choice made,
+not a permanent seal against architectural correction.
+
+Canonical instance: OQ.12 clone-rehearsal uses Neon's native copy-on-write branching
+(POST /api/v2/projects/{project_id}/branches over HTTPS/443), not pg_dump -> pg_restore.
+The orchestrator owns the branch lifecycle (create before invoke, delete in finally).
+The Lambda action only ATTACHes to the branch endpoint and reads catalog metadata read-only.
+
+Decision 88 governs the DR pg_dump-to-S3 backup pipeline, which remains real and unchanged
+(unavoidable egress for an offline backup). Decision 88 never applied to the read-clone path.
+
+**Enforcement (Decision 100 procedure guard):**
+The `decision-scout` skill (Phase 2 triage) is updated with a WARN check: flag any plan that
+vendors client tooling or custom scripts to replicate a capability a managed service exposes
+natively. Cross-references Decision 100 and Decision 75.
+
+**Rationale:**
+- Native primitives are lower-latency, eliminate operational complexity (no scratch DB lifecycle,
+  no pg_restore binary dependency in Lambda layers), and stay within the managed boundary.
+- The pg_dump -> pg_restore path required pg_restore in the Lambda pgclient layer, imposing a
+  non-CC-web operator rebuild constraint and blocking the "DEFERRED at sign-off" restore-drill gate.
+  Removing it unblocks both constraints simultaneously.
+- Zero new IAM: the orchestrator's `agent_platform_admin` profile already holds
+  `secretsmanager:GetSecretValue` on `neon-api-key` (no new grants needed).
+
+**Affected files:**
+`src/common/neon_api.py` (new -- Neon REST client),
+`src/lambdas/ducklake_maintenance/handler.py` (action_clone_catalog rewritten),
+`scripts/ducklake_neon_smoke_test.py` (canary_rehearsal branch lifecycle),
+`scripts/build_lambda.py` (pg_restore guard removed from build_pgclient_layer),
+`docs/runbooks/ducklake-catalog-operations.md` (Section 2 step 4 rewritten),
+`.claude/skills/decision-scout/SKILL.md` (managed-service-native WARN check added).
+
+---
+
+## Decision 99: DuckDB/DuckLake lockstep version SSOT + first exercised version bump 1.5.3->1.5.4 (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-26
+**Warehouse ID:** dec-099 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The DuckDB lockstep version (`1.5.3`) was hardcoded as a literal string in four places:
+`src/common/ducklake_runtime.py::PINNED_DUCKDB_VERSION`, `scripts/build_lambda.py::PINNED_DUCKDB_VERSION`,
+the `requirements.txt` floor, and implicitly the S3 extension URLs. A version bump required four
+coordinated edits with no machine-enforced invariant that all surfaces agreed. Additionally the
+local venv ran DuckDB 1.5.4 while the pin was 1.5.3, causing `assert_duckdb_version` loud-failures
+on every local DuckLake connection (PLAN-t2-28 VP6 blocker).
+
+**Decision:**
+Collapse to a single machine-readable SSOT (`config/lambda/ducklake/version.yaml`) with a shared
+loader (`src/common/ducklake_version.py::pinned_duckdb_version()`). All derive surfaces read the pin
+via the loader; no literal survives outside `version.yaml`. A `ducklake-version-lockstep` gate in
+`validate.py` enforces drift-free coherence at every PR. The pending 1.5.3->1.5.4 bump is executed
+as the cascade proof: one edit to `version.yaml`, then `sync_ducklake_version` to update
+`requirements.txt`, then rebuild + redeploy the four active DuckLake Lambda artifacts.
+
+**Rehearsal evidence (OQ.12 clone-rehearsal gate):**
+- VP3 sentinel override (`DUCKLAKE_VERSION_CONFIG` env) confirmed all derive surfaces read `9.9.9`
+  when the override YAML contains that value -- cascade proof PASS.
+- VP8: local DuckDB 1.5.4 matches `pinned_duckdb_version()` -- assert_duckdb_version PASS.
+- Clone-rehearsal (VP13-14) and production redeploy (VP15) are post-code V3 steps gated on
+  AWS credentials + interactive Terraform loop (human-confirmed before merge per Decision 77).
+
+**Rationale:**
+- A single-value edit is the correct abstraction: the bump procedure now touches exactly one file,
+  with machine-enforced downstream coherence (the validate gate catches any reintroduced literal).
+- The SSOT pattern mirrors the existing `field_semantics.yaml` / `_load_field_semantics_cached`
+  pattern in `src/common/ducklake_scd2_schema.py` -- same module-relative path resolution,
+  same `lru_cache`, same env override.
+- Test files may retain `1.5.3` as fixture values (testing the upgrade FROM `1.5.3`) -- the
+  zero-stray gate explicitly scopes to `src/ scripts/ requirements.txt terraform/personal/` only.
+
+**Affected files:**
+`config/lambda/ducklake/version.yaml` (new SSOT), `src/common/ducklake_version.py` (new loader),
+`scripts/sync_ducklake_version.py` (new sync helper), `scripts/validate.py` (new gate),
+`src/common/ducklake_runtime.py`, `scripts/build_lambda.py`, `requirements.txt`,
+`terraform/personal/ducklake_lambdas.tf`, four Lambda manifests.
+
+---
+
+## Decision 98: Provisioning model for convergence-writer and peer CI roles -- admin-create in terraform/personal, read-only bootstrap IAMRolesRead grant (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-24
+**Warehouse ID:** dec-098 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The post-merge gated-apply for PR #250 (CD.35 Wave 5 / T2.24) failed with an explicit deny on
+`iam:CreateRole` for `agent-platform-github-ci-drift`. The deny originates from the T2.23 authority
+budget (`agent-platform-github-ci-apply-boundary`): `IAMRoleCreateBounded` conditions
+`iam:CreateRole` on a `iam:PermissionsBoundary` propagation constraint scoped to branch+pr roles,
+implicitly denying creation of any new peer CI role (e.g. drift). The same apply also failed
+`iam:PutRolePolicy` on `github_ci_plan`, leaving both the drift role and the github_ci_plan
+IAMCIRolesRead drift-ARN addition unapplied to AWS.
+
+Additionally, `IAMRolesRead` in `terraform/bootstrap/github_ci_apply.tf` did not include the drift
+role ARN, meaning every future `github_ci_apply` pipeline plan would fail AccessDenied on
+`iam:GetRole/GetRolePolicy` when refreshing the now-in-state drift role (GAP 3).
+
+**Decision:**
+1. New peer CI roles (convergence-writer + any future equivalent) are admin-provisioned in
+   `terraform/personal/` via `agent_platform_admin` with `-target` apply -- NOT minted by the
+   pipeline (`github_ci_apply`). This is the same pattern used for branch/pr/plan roles.
+2. After admin-create, the new role's ARN is added to `IAMRolesRead` in
+   `terraform/bootstrap/github_ci_apply.tf` as a read-only refresh grant
+   (`iam:GetRole/GetRolePolicy/ListRolePolicies/ListAttachedRolePolicies` only). This grant does
+   NOT widen the IAM-WRITE budget (`IAMRoleWriteBounded` / `IAMRoleCreateBounded` unchanged).
+3. In-budget IAM auto-apply (the pipeline minting roles under the permissions boundary) remains
+   gated to T2.25 and is out of scope here.
+4. Procedure: (a) present `terraform plan` to the human (Decision 77); (b) admin-apply; (c) verify
+   global convergence (`terraform plan -detailed-exitcode` exits 0) BEFORE any dispatch-ack; (d)
+   add the ARN to `IAMRolesRead` in the bootstrap root and admin-apply that root separately.
+
+**Rationale:**
+- Path B (widen pipeline to mint roles) is premature T2.25 work and couples the drift role to the
+  apply boundary -- rejected (Decision 55 / 72 RCA-first, no inline hot-patch).
+- Path C (re-home to bootstrap root) is more churn with no architectural benefit -- rejected.
+- The branch/pr/plan roles were all admin-created and all appear in `IAMRolesRead`. Adding drift
+  follows the same precedent (Decision 94 pattern).
+
+**Related:** Decision 92 (authority budget), Decision 94 (github_ci_apply OIDC trust correction --
+same admin-create pattern), Decision 55/72 (no inline hot-patch / no autonomous workaround), T2.23
+(bootstrap authority budget), T2.24 (drift role this applies to), T2.25 (in-budget IAM auto-apply).
+
+---
+
+## Decision 97: Telemetry identity + determinism standard -- ULID keys, boundary-minting, no downstream re-derivation (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-097 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The draft telemetry pipeline has no canonical identity or determinism standard. session_id is a random
+UUID4 (`str(uuid.uuid4())`), which is unsortable and gives no time-ordering for partition pruning or
+ORDER BY; the draft child event tables (phases / steps / process_events / model_calls) have no ratified
+primary-key scheme at all. Nothing states WHERE an id or an event timestamp is minted, so a child row
+could re-derive its own id or `now()` timestamp instead of receiving them from its parent -- the same
+non-determinism / FK-mismatch class that CD.33 / Decision 82 already closed for ducklake_writer (mint
+ULID + `now()` ONCE, outside the OCC-retry loop). Telemetry needs the same rule settled before per-table
+contracts are ratified, or each table re-invents it inconsistently.
+
+**Decision:**
+1. **ULID for all telemetry identity keys.** Every telemetry primary key -- session_id (target, see
+   clause 4), observation_id, parent_observation_id (a reference to an observation_id), transcript_id,
+   and any telemetry_agents key -- is a Crockford-base32 ULID. ULIDs are lexicographically sortable and
+   time-ordered (k-sortable), so `day()`-partition pruning and natural chronological ORDER BY fall out of
+   the key itself. This aligns telemetry with the ops-table identity convention already live in the
+   warehouse (the `ulid` SCD2 envelope field on ops_recommendations / ops_decisions, Decision 84).
+
+2. **Boundary-minting (mint-once).** Identity keys and event timestamps are minted exactly ONCE, at the
+   boundary call that opens the entity (`open_session` / `open_observation`), and never re-derived
+   downstream. A retried or resumed write reuses the already-minted id and timestamp. This restates
+   CD.33 clause 2 / Decision 82 (D-2) for the telemetry path.
+
+3. **Boundary-injection (propagate, never re-derive).** Child rows receive session_id (and
+   parent_observation_id) from their parent as foreign keys; a child never re-mints a correlation key it
+   did not originate. This generalises the propagation rule already in session-id.yaml ("created in the
+   parent session and propagated to child telemetry rows as a foreign key") to the whole trace tree.
+
+4. **session_id realization.** ULID is the ratified TARGET format for session_id. Existing UUID4 session
+   ids are grandfathered: the format flips when the boundary-minting code
+   (`scripts/executor/telemetry.py::open_session`) is migrated to mint ULIDs. session-id.yaml records
+   ULID as the canonical target via an additive governance note (Decision 95); the live format stays
+   UUID4 until that code lands. The flip is a downstream code-migration concern, not part of this
+   REPORT-ONLY decision.
+
+**Rationale:**
+UUID4 was never chosen for telemetry -- it is the default `str(uuid.uuid4())` the draft happened to emit.
+ULID costs nothing extra to mint, removes the need for a separate ordering column, and makes keys
+partition-prune-friendly. Folding the determinism rule in now, before per-table ratification, stops four
+observation sub-types from each re-deriving mint / propagation semantics (the shallow-ratification
+anti-pattern T0.12.6's decomposition exists to avoid).
+
+**Related:** Decision 95 (the trace/observation model these keys identify; session-id.yaml additive
+amendment), Decision 96 (temporal standard -- the event timestamps minted under clause 2), Decision 84
+(ULID SCD2 envelope on ops tables -- the identity convention extended here), Decision 82 / CD.33 clause 2
+(mint-once-outside-retry precedent for ducklake_writer), CD.9 (partition-everything -- ULID time-ordering
+serves `day()` pruning), docs/contracts/session-id.yaml, docs/contracts/telemetry-lexicon.yaml, T0.12.6
+(per-table contracts author these keys).
+
+---
+
+## Decision 96: Telemetry temporal + partition standard -- event-time day(started_at) UTC, no trade_date (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-096 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Two temporal defects sit in the draft telemetry design. (1) `trade_date` -- a market-data partition
+concept -- leaked into telemetry scaffolding, where it has no meaning: a telemetry session is not scoped
+to a trading day. (2) the original T2.4 (partition-everything) framing prescribed
+`day(last_updated_timestamp)` for "ops/telemetry" jointly, conflating two different table shapes:
+ops_recommendations / ops_decisions are
+SCD2 tables whose `last_updated_timestamp` is the mutation-envelope partition basis, whereas telemetry is
+insert-once EVENT data with no SCD2 envelope. Partitioning telemetry by `last_updated_timestamp` is wrong
+twice over -- the column is an ops-SCD2 concept, and event data should partition by event time, not
+mutation time. Timestamp typing (tz-awareness, UTC) is also unspecified.
+
+**Decision:**
+1. **Telemetry is event-time data.** Each telemetry table partitions by `day()` of its OWN event-time
+   column in UTC -- the session / observation start. Canonical: telemetry_sessions -> `day(started_at)`;
+   telemetry_observations -> `day(started_at)`; telemetry_transcripts -> `day(created_at)`;
+   telemetry_agents -> `day(started_at)` (or none if realized as a pure dimension; settled at T0.12.6).
+   `started_at` is the canonical telemetry event-time column.
+
+2. **No trade_date in telemetry.** `trade_date` is a market-data concept and is absent from every
+   telemetry contract. Any draft carrying it drops it.
+
+3. **last_updated_timestamp is an ops-SCD2 concept, not telemetry.** Telemetry rows are insert-once; they
+   carry no SCD2 mutation envelope and do not partition on `last_updated_timestamp`. A correction to a
+   telemetry row is a new append governed by Decision 97's mint-once rule, not an SCD2 update.
+
+4. **Timestamps are timezone-aware UTC, ISO-8601.** Every telemetry timestamp (started_at, ended_at,
+   created_at, per-observation times) is stored UTC, tz-aware. Naive or local-time timestamps are
+   rejected at the boundary.
+
+**Realization -- T2.33 / DuckLake, not T2.4:**
+T2.4 (the Iceberg partition sweep) was CLOSED on 2026-06-23 (PR #239) and re-grounded to the 3 live
+personal-account ops Iceberg tables, explicitly moving ops/telemetry to DuckLake-on-Neon (Decision 78/84)
+and DuckLake partition-as-code to T2.33 (ALTER-conditional per Decision 81). Telemetry is therefore not in
+the Iceberg sweep's scope: this standard (`day(started_at)` UTC for telemetry) is realized when telemetry
+is rebuilt on its DuckLake substrate via T2.33's partition-as-code, ALTER-conditional per Decision 81 and
+not warranted below the row/file-count threshold. No T2.4 edit is made; T2.4's closeout already separates
+the ops-SCD2 (`day(last_updated_timestamp)`) basis from the telemetry event-time basis, corroborating this
+decision.
+
+**Related:** Decision 95 (the tables this partitions), Decision 97 (boundary-minted event timestamps),
+CD.9 (partition-everything -- this supplies the telemetry column choice CD.9 left per-table), T2.4
+(Iceberg partition sweep, CLOSED 2026-06-23 / PR #239 -- telemetry moved to DuckLake / T2.33, not this
+sweep), T2.33 (DuckLake partition-as-code -- the telemetry realization path), Decision 81 (CD.9
+ALTER-partitioning mechanism), Decision 78 (DuckLake adoption), Decision 84 (ops SCD2
+`last_updated_timestamp` envelope -- the concept kept distinct from telemetry),
+docs/contracts/telemetry-lexicon.yaml.
+
+---
+
+## Decision 95: Canonical telemetry trace/observation model -- 4 tables, root unification, canonical lexicon (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-23
+**Warehouse ID:** dec-095 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The draft telemetry pipeline (the seven `telemetry_*` tables T0.12.6 was scoped to ratify) is a star
+schema that grew by accretion, not design, with three structural defects:
+- **Rootless agent invocations.** telemetry_agent_invocations carries no session_id, so sub-agent work
+  does not join the session star schema at all -- observability that cannot be correlated to the run that
+  produced it.
+- **Four sibling event tables with one shape.** telemetry_phases, telemetry_steps,
+  telemetry_process_events, and telemetry_model_calls are all "a timed thing that happened during a
+  session" -- the same node shape with different attributes. Four sibling tables force four near-duplicate
+  contracts, four sets of joins, and shallow ratification (the failure mode T0.12.6's per-table
+  decomposition was meant to avoid, revealed here as a modelling problem, not a plan-granularity problem).
+- **No canonical vocabulary.** "phase", "step", "event", "span", "trace", "invocation" are used loosely
+  and inconsistently across the draft, prompts, and DQ scaffolding, with nothing authoritative to anchor
+  the per-table contracts to.
+
+Ratifying seven contracts over this draft would ratify the accretion. The model must be settled first.
+
+**Decision:**
+Adopt a session-rooted trace/observation model (the OpenTelemetry / Langfuse shape) and collapse the
+seven draft tables to FOUR canonical tables:
+
+1. **telemetry_sessions** -- the trace ROOT. One row per session; PK session_id. Root-unification anchor:
+   every telemetry row traces back to a session. A spawned sub-agent gets its own session linked to its
+   parent via `parent_session_id` (nullable), so agent work is rooted, not orphaned. Carries project_id
+   as a forward-declared field (realized at T2.17, per the project-id.yaml Class C pattern).
+
+2. **telemetry_observations** -- the unified node table. One row per observation (a timed node in the
+   session's trace tree); PK observation_id; FK session_id (root); FK parent_observation_id (nullable
+   self-reference, building the tree). An `observation_type` discriminator
+   (phase | step | process_event | model_call | ...) absorbs the four collapsed sibling tables. This is
+   the core unification: one node table with a type column and a parent pointer, not four sibling tables.
+
+3. **telemetry_transcripts** -- large-payload sidecar. Prompt / response / transcript blobs, linked by FK
+   to observation_id (and session_id), kept OUT of telemetry_observations so the node table stays small
+   and hot. One row per blob.
+
+4. **telemetry_agents** -- the agent dimension. Identifies WHICH agent (agent_type, model, version) a
+   session / observation belongs to, joined by session_id / observation_id. Replaces
+   telemetry_agent_invocations: agent identity becomes a rooted dimension, and the agent's WORK is
+   captured as observations / linked sub-sessions, resolving the rootless-invocation defect.
+
+**Root unification rule:**
+Every telemetry row is reachable from a telemetry_sessions row. There are no rootless telemetry entities.
+Cross-agent linkage uses `parent_session_id` (sub-agent session -> spawning session); in-session
+structure uses `parent_observation_id` (observation -> parent observation). The two pointers together
+form one connected trace tree per top-level run.
+
+**Collapse rule:**
+telemetry_phases, telemetry_steps, telemetry_process_events, telemetry_model_calls are NOT separate
+tables. They are values of `telemetry_observations.observation_type`. The discriminator's accepted-value
+set is ratified per-table at T0.12.6.
+
+**Canonical lexicon:**
+The canonical vocabulary (session / trace, observation, observation_type, transcript, root unification,
+parent_observation_id, and the deliberately-unused "span") is promoted now to
+docs/contracts/telemetry-lexicon.yaml -- a free-form (non-ritual) vocabulary registry the CD.25 drift
+gate skips (no top-level `contract:` / `class:`, per the read-engine.yaml / storage-substrate.yaml
+precedent). The lexicon is term-level only: per-field DQ checks live in
+config/agent/data_quality/telemetry.yaml and per-field contract semantics in the Class A contracts. It
+exists so every downstream telemetry contract, prompt, and agent ratifies against ONE vocabulary.
+
+**session-id.yaml amendment (recorded; executed at T0.12.6):**
+session-id.yaml (Class C, ratified at T0.12.7) is amended ADDITIVELY -- semantic_break: false -- when the
+new contracts land: a `prose_improvement` entry updates its stale six-table star-schema description to the
+four-table model, and a `governance_note_add` entry records ULID as the canonical target for session_id
+(Decision 97). No format flip and no field change occur in the amendment; the closed CD.25 change_class
+vocabulary (INTENT Part 4 Invariant 3) carries no breaking-format class precisely because such a change is
+forward-declared, not applied in place. The edit is coupled to the new Class A contracts and is therefore
+part of the re-scoped T0.12.6, not this REPORT-ONLY decision.
+
+**Decision 67 reversal-predicate restatement:**
+Decision 67's STRATEGIC-clause reversal condition names the draft tables telemetry_process_events,
+telemetry_model_calls, telemetry_phases, telemetry_steps -- which this decision collapses into
+telemetry_observations. Left unamended, the predicate would name tables the canonical model deletes and
+become unsatisfiable. It is restated to track the canonical model: "telemetry_sessions,
+telemetry_observations, telemetry_transcripts (and telemetry_agents) confirmed operational end-to-end with
+passing data quality checks, AND executor re-enabled per CD.17 / T4.2." The four named draft tables are
+replaced by telemetry_observations; telemetry_sessions is retained; telemetry_transcripts /
+telemetry_agents are added. The AND-executor-re-enabled clause and the CD.17 / T4.2 gate are unchanged.
+Decision 67's reversal-condition text gets an inline pointer to this restatement.
+
+**T0.12.6 re-scope:**
+T0.12.6 (Ratify Class A telemetry table contracts) is re-scoped in this plan from seven per-table plans
+to: four table contracts (telemetry_sessions, telemetry_observations, telemetry_transcripts,
+telemetry_agents), two new Class C key contracts (observation-id.yaml, parent-observation-id.yaml at
+contract_version: 1), and the additive session-id.yaml amendment above. decomposition_hints, exit_criteria,
+name, and intent are updated; related_decisions records this decision. The roadmap edit lands with this
+decision.
+
+**Scope:**
+REPORT-ONLY. No code or runtime behaviour changes. Deliverables are this decision (95-97), the
+platform-roadmap edits (T0.12.6 re-scope, T2.4 alignment), and the canonical lexicon. The new Class A /
+Class C contracts and the session-id.yaml amendment are authored later under the re-scoped T0.12.6; this
+decision settles the model they ratify to.
+
+**Related:** Decision 96 (telemetry temporal / partition standard), Decision 97 (telemetry identity +
+determinism -- ULID, boundary-minting), Decision 67 (STRATEGIC-clause reversal predicate restated here
+against the canonical model), CD.25 (pre-codegen contract ratification ritual -- the model these contracts
+ratify under), Decision 84 (DuckLake substrate; ULID envelope; backfill-from-DECISIONS.md path), Decision
+86 (rationale-to-decisions, model-to-tier_items, no new prose-architecture doc -- the lexicon is a
+machine-parseable registry, not prose), T0.12.6 (re-scoped here), T0.12.7 (session-id.yaml / project-id.yaml
+Class C precedents), T2.17 (project_id realization), docs/contracts/session-id.yaml,
+docs/contracts/telemetry-lexicon.yaml, docs/ROADMAP-PLATFORM.yaml.
+
+---
+
+## Decision 94: Correct Decision 92 point 3 -- github_ci_apply OIDC trust must also trust the environment sub (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-22
+**Warehouse ID:** dec-094 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 92 point 3 ratified the CD.35 Wave 3 / T2.22 security model with the clause "The privileged
+role OIDC trust stays pinned to refs/heads/main," on the stated premise that a GitHub Environment's
+required-reviewer gate does NOT change the OIDC token's sub claim. The live VP7-VP11 end-to-end test
+(2026-06-22) disproved that premise. When a job declares `environment: tf-gated-apply`, GitHub
+OVERRIDES the OIDC sub to `repo:OWNER/REPO:environment:tf-gated-apply` (the environment claim REPLACES
+the ref claim). With trust pinned to `refs/heads/main` only, the `gated-apply` job could never assume
+`github_ci_apply` -- it failed `sts:AssumeRoleWithWebIdentity` (AccessDenied) on every run. The
+T2.22 gated-apply path was non-functional as merged; all static gates (validate, terraform-validate,
+unit tests, code review) passed and only live verification caught it.
+
+**Decision:**
+Correct Decision 92 point 3. `github_ci_apply`'s OIDC trust `sub` condition is a two-value
+exact-match list, trusting BOTH:
+- `repo:OWNER/REPO:ref:refs/heads/main` -- the routine auto-apply path (apply-sandbox job, no
+  job-level environment), and
+- `repo:OWNER/REPO:environment:tf-gated-apply` -- the gated-apply job (whose declared environment
+  overrides the sub).
+
+This is SAFE and does not weaken the security model: a token bearing
+`sub=...:environment:tf-gated-apply` can ONLY be minted by a job that declares that environment, and
+such a job cannot begin until the Environment's required reviewer approves. The environment sub is
+therefore itself approval-gated -- belt-and-braces with the guard's fail-closed routing. The
+Environment-gates-EXECUTION model of Decision 92 is unchanged; what is corrected is the false claim
+that the sub stays `refs/heads/main`. `agent/*` and `pull/*` remain unable to assume the role.
+
+The trust change is an IAM/trust change and was admin-applied locally (the gated CD path it fixes
+could not apply it), then confirmed by a no-op merge (PR #222). Re-running VP7-VP11 with a throwaway
+IAM tag then proved the gated path applies end-to-end: routed green -> reviewer approval -> assume-role
+success -> saved plan.bin applied verbatim (no re-plan) -> convergence record green with plan_sha.
+
+Secondary correction (VP10): the gated-apply always-run red-on-failure convergence write depends on
+the same OIDC apply-role creds; a failure AT OR BEFORE the credentials step cannot write the red
+record. The backstop is ci-rca, which triggers on the terraform-apply-sandbox workflow_run failure
+conclusion independent of the record -- so a creds-stage failure still files a source=ci_rca rec and
+is not silently masked. Documented at the record_write step; no code change required.
+
 ## Decision 93: Platform-MVP boundary + deferred_post_mvp lifecycle status (Decided)
 
 **Status:** Decided
@@ -79,17 +666,41 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
    DIRECTION for Waves 2-5, INTENT 5.4 + 5.6):** routine (guard-PASS, non-IAM) changes ride the
    record-backed pipeline; high-blast changes (IAM/trust/destroy) route to a GitHub Environment whose
    required reviewer gates JOB EXECUTION. The privileged role OIDC trust stays pinned to refs/heads/main.
+   [CORRECTED by Decision 94 (2026-06-22): the trust clause here is wrong. A job declaring
+   environment: tf-gated-apply gets sub=repo:OWNER/REPO:environment:tf-gated-apply, so github_ci_apply
+   must ALSO trust the environment sub (proven by VP9). The Environment-gates-EXECUTION model is
+   unchanged; the environment sub is approval-gated and safe. See Decision 94.]
 
 4. **Rejected guard-self-grant exception + privilege-tiering (INTENT 5.8, Wave 4):** the CI/CD role's
    own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
    cycle. Without that separation any automated handling of the fail-closed set is self-approval.
 
-5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
-   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
-   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
-   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
-   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
-   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+5. **Authority-budget + ratchet model (CD.35 points 6-9, IMPLEMENTED by T2.25 / 2026-06-29):**
+   an explicit permissions boundary on github_ci_apply plus boundary-propagation condition keys
+   and deterministic in-budget/out-of-budget diff classification shipped in T2.25.
+
+   Concrete in-budget classification (machine-readable: `terraform/bootstrap/authority_budget.json`):
+   - **In-budget** (auto-apply, still subject to subagent review): resource type
+     `aws_iam_role_policy` or `aws_iam_role_policy_attachment`, action set `["update"]`,
+     target role name `agent-platform-github-ci-branch` or `agent-platform-github-ci-pr`
+     (managed boundary-carrying roles). No trust diff (trust check runs BEFORE IAM classification
+     in the guard; a trust change on an in-budget resource type is always gated).
+   - **Out-of-budget / gated** (routes to tf-gated-apply Environment): trust diffs, destroys,
+     role CREATES (new trust surface), or any IAM change not matching all three in-budget
+     criteria above. Role creates stay gated in this v1 narrowing.
+   - **Fail-closed**: missing or unparseable budget table = all IAM treated as out-of-budget
+     (Decision 77). Budget path overridable via `TF_AUTHORITY_BUDGET` env var (test isolation).
+
+   Ratchet criteria: autonomy is earned and revocable PER CHANGE-CLASS -- the budget widens on
+   measured track record (per change-class, after N incident-free auto-applies) and narrows on
+   incident. Budget amendments via the bootstrap tier only (`terraform/bootstrap/`); subagent
+   review advises, never locks. The drift gate (`scripts/validate.py:validate_authority_budget`)
+   asserts the budget table stays in sync with the IAMRoleWriteBounded SCP in
+   `terraform/bootstrap/github_ci_apply.tf` (pre and full tiers).
+
+   The sole SoT for the apply-model and guard-classification rules is
+   `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection.
+   CD.35 is fully ratified (no re-ratification via this amendment).
 
 6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
    drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
@@ -337,7 +948,7 @@ The T2.19 recs-first cutover left the ops store straddling two warehouses. The r
 
 **Operational consequences:** destructive Lambda actions gain explicit-confirm guards (create_ops_tables force_recreate; catalog_reinit loses its production-schema default); the telemetry preflight health check is stubbed until telemetry re-lands on DuckLake (Phase 4); catalog DR remains the existing ducklake_catalog_dr nightly pg_dump, with the restore-drill format gap tracked as rec-2113.
 
-**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27 (roadmap carriers), docs/INTENT-ducklake-consolidation.md (full program).
+**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27/T2.28 (roadmap carriers), T2.36 (Phase 4 telemetry re-lands on DuckLake).
 
 ---
 
@@ -1197,6 +1808,12 @@ The blanket DEFERRED marker is no longer acceptable in lieu of active per-Lambda
 **Reversal condition:** Telemetry Athena tables (`telemetry_sessions`, `telemetry_process_events`,
 `telemetry_model_calls`, `telemetry_phases`, `telemetry_steps`) confirmed operational end-to-end
 with passing data quality checks AND executor re-enabled per CD.17 / T4.2.
+
+[RESTATED by Decision 95 (2026-06-23): the draft tables telemetry_process_events / telemetry_model_calls /
+telemetry_phases / telemetry_steps collapse into the unified telemetry_observations table; the reversal
+condition now tracks the canonical four-table model -- telemetry_sessions, telemetry_observations,
+telemetry_transcripts (and telemetry_agents) operational with passing DQ checks AND executor re-enabled per
+CD.17 / T4.2. The executor-re-enabled clause and the CD.17 / T4.2 gate are unchanged. See Decision 95.]
 
 **Effect on planning (STRATEGIC clause only):**
 - STRATEGIC plans are blocked. All plans must be IMPLEMENTATION type.

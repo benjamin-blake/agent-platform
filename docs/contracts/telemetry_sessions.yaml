@@ -1,0 +1,412 @@
+---
+# Class A data contract for telemetry_sessions -- the trace ROOT table of the canonical
+# session-rooted trace/observation model (Decision 95 clause 1).
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T0.12.6).
+#
+# GREENFIELD (Decision 95): the canonical 4-table model exists only as spec
+# (docs/contracts/telemetry-lexicon.yaml). This contract is TARGET-STATE, grounded in the live draft
+# (scripts/telemetry_schemas.py::TelemetrySessions + terraform/iceberg_tables.tf DDL) with documented
+# live-vs-target skew. The draft is a DEAD path pending DuckLake consolidation Phase 4 (Decision 84):
+# Athena tables unmigrated since 2026-05-28; config/agent/data_quality/telemetry.yaml is empty.
+# Per-field DQ ENFORCEMENT lands in telemetry.yaml when telemetry re-provisions; this contract carries
+# dq_INTENT only (the lexicon authority boundary).
+#
+# Live-vs-target skew (encoded, NOT implemented here):
+#   - session_id: live UUID4 (str(uuid.uuid4())) -> target ULID (Decision 97 cl.4; flips when
+#     telemetry.py::open_session is migrated).
+#   - partition: live day(trade_date) -> target day(started_at) UTC (Decision 96); trade_date DROPPED.
+contract:
+  id: telemetry_sessions
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-24"
+  ratified_via: "Step 10 multi-perspective critique + PLAN-ratify-class-a-telemetry-contracts merge to main (T0.12.6)"
+  description: >-
+    Class A schema contract for telemetry_sessions, the trace ROOT: one row per top-level workflow run.
+    Root-unification anchor (Decision 95) -- every telemetry row traces back to a session via session_id;
+    a spawned sub-agent gets its OWN session linked to the spawner via parent_session_id, so agent work
+    is rooted, not orphaned. Insert-once event data (Decision 96): partitioned by day(started_at) UTC,
+    no SCD2 envelope, no trade_date. Identity is ULID-target (Decision 97). Grounded in the draft
+    TelemetrySessions dataclass; the four draft child event tables collapse into telemetry_observations
+    and the rootless telemetry_agent_invocations becomes the rooted telemetry_agents dimension.
+  projects_to:
+    note: >-
+      No generated artifact yet. Unlike the ops Class A contracts (which project_to
+      config/lambda/ducklake/field_semantics.yaml), telemetry is not on DuckLake; there is NO telemetry
+      field_semantics.yaml. This contract IS the authoritative telemetry field-semantic source until the
+      Phase 4 rebuild (post-T2.26) lands a generator, applying the DuckLake schema-as-code mechanism
+      T2.33 established for the ops tables. The live draft schema is scripts/telemetry_schemas.py.
+fields:
+  session_id:
+    $ref: session-id.yaml#/contract/fields/session_id
+    dq_intent_local:
+      not_null:
+        enforced: true
+    governance_notes_local: >-
+      PRIMARY KEY of the trace root: tightened to not_null enforced:true over the session-id.yaml loosest
+      baseline (Invariant 5: overrides tighten). Target format ULID (Decision 97 cl.4); live format UUID4,
+      grandfathered until open_session mints ULID. The root every other telemetry row joins back to.
+    joins:
+      - session_id_join_telemetry_sessions_to_observations
+  parent_session_id:
+    $ref: session-id.yaml#/contract/fields/session_id
+    governance_notes_local: >-
+      Nullable self-reference into the session keyspace: the session_id of the run that SPAWNED this
+      session (sub-agent -> spawner), or NULL for a top-level run. The cross-agent half of the
+      root-unification rule (Decision 95): parent_session_id links sub-agent sessions; parent_observation_id
+      links in-session structure. Stays nullable (NOT tightened) -- a top-level session has no parent.
+      Holds a session_id value, hence $ref session-id.yaml (Invariant 5 single-definition); the
+      parent-pointer nuance is recorded here, not as a separate Class C contract.
+    joins:
+      - parent_session_id_join_sessions_self_spawn
+  project_id:
+    $ref: project-id.yaml#/contract/fields/project_id
+    governance_notes_local: >-
+      FORWARD-DECLARED (Decision 95 cl.1): not present in the draft TelemetrySessions; realized at T2.17
+      (project-id.yaml two-phase pattern -- Phase A Optional default "trading-system", Phase B not-null).
+      Added to the root so every telemetry row inherits a project partition once T2.17 lands. Stays
+      nullable per the project-id.yaml baseline.
+  workflow:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      The workflow that opened the session (Decision 90 four-tier vocabulary): orient | plan | implement |
+      develop-executor, plus operational runners (executor-supervision, scheduled-agent, ...).
+    semantics: >-
+      Required dimension; the primary grouping key for per-workflow analytics (duration, rework, outcome
+      rates). REQUIRED in the draft (TelemetrySessions.REQUIRED_FIELDS). accepted_values are NOT closed in
+      the contract -- the workflow set evolves with Decision 90; the closed enum (if any) is ratified into
+      config/agent/data_quality/telemetry.yaml at the Phase 4 rebuild, not here.
+    populated_by: >-
+      telemetry.py::open_session(workflow=...); set by session_preflight.py --open-session --workflow NAME.
+    dq_intent:
+      not_null:
+        enforced: false
+      accepted_values:
+        values: [orient, plan, implement, develop-executor, executor-supervision, scheduled-agent]
+        enforced: false
+        note: open set (Decision 90 evolves it); enforcement deferred to telemetry.yaml at Phase 4.
+  outcome:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Terminal (or in-flight) disposition of the session: running | success | failed | cancelled.
+      "running" is written by open_session and overwritten by close_session.
+    semantics: >-
+      Required lifecycle field. The draft writes outcome="running" at open and the terminal value at
+      close; session_postflight.py --close-session --outcome success|cancelled supplies the terminal
+      value. Because telemetry is insert-once (Decision 96 cl.3), the "running"->terminal transition is a
+      new append under Decision 97's mint-once rule, NOT an SCD2 update; the close row reuses session_id.
+    populated_by: telemetry.py::open_session (running) / close_session (terminal); session_postflight.
+    dq_intent:
+      not_null:
+        enforced: false
+      accepted_values:
+        values: [running, success, failed, cancelled]
+        enforced: false
+  started_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC, tz-aware ISO-8601 timestamp the session opened. The CANONICAL telemetry event-time column and
+      the partition basis: telemetry_sessions partitions by day(started_at) (Decision 96 cl.1).
+    semantics: >-
+      Event-time, minted ONCE at the open_session boundary (Decision 97 cl.2), never re-derived. Naive or
+      local-time values are rejected at the boundary (Decision 96 cl.4). NOT last_updated_timestamp
+      (telemetry is insert-once, carries no SCD2 mutation envelope -- Decision 96 cl.3).
+    populated_by: telemetry.py::open_session -- minted once at session start.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: tz-aware UTC now() minted ONCE at the open_session boundary; never re-derived (Decision 97)
+      inputs: []
+      realized: false
+  ended_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: true
+    description: UTC tz-aware timestamp the session closed. NULL while outcome=running.
+    semantics: >-
+      Set by close_session. tz-aware UTC (Decision 96 cl.4). Not a partition basis (started_at is).
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  duration_seconds:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Wall-clock session duration in seconds (ended_at - started_at). NULL while running.
+    semantics: >-
+      Derived at close. bigint per the Iceberg integer-promotion gotcha (all draft int columns are
+      bigint, TELEMETRY_TABLE_DTYPES). Null until the session closes.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+    derivation:
+      formula: int((ended_at - started_at).total_seconds()) at close_session
+      inputs: [started_at, ended_at]
+      realized: false
+  process_event_count:
+    type: int
+    iceberg_type: bigint
+    nullable: false
+    description: Count of process_event observations recorded in the session (rework/exception/anomaly tally root).
+    semantics: >-
+      Required roll-up (TelemetrySessions.REQUIRED_FIELDS). In the canonical model these correspond to
+      telemetry_observations rows with observation_type=process_event; the count is denormalised onto the
+      session root for cheap session-level triage without scanning the observations table.
+    populated_by: telemetry.py::close_session -- tallied from emitted process events.
+    dq_intent:
+      not_null:
+        enforced: false
+  rework_count:
+    type: int
+    iceberg_type: bigint
+    nullable: false
+    description: Count of rework-tier process events (retries / re-attempts) in the session.
+    semantics: Required roll-up; a key self-improvement-loop friction signal. Denormalised session-level tally.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  exception_count:
+    type: int
+    iceberg_type: bigint
+    nullable: false
+    description: Count of exception-tier process events in the session.
+    semantics: Required roll-up; denormalised exception tally for session-level triage.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  execution_attempt:
+    type: int
+    iceberg_type: bigint
+    nullable: false
+    description: Which attempt this session is for the same unit of work (1-based; >1 on resume/retry).
+    semantics: >-
+      Required. Distinguishes a fresh run from a resumed/retried one. Under Decision 97 mint-once, a
+      resumed session reuses session_id; execution_attempt disambiguates the appended rows.
+    populated_by: telemetry.py::open_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  branch:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The git branch the session ran on (e.g. claude/focused-bell-5onhvu).
+    semantics: Optional provenance; the harness session branch. Null when not applicable.
+    populated_by: telemetry.py::open_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  rec_ids:
+    type: "list[str]"
+    iceberg_type: "array<string>"
+    nullable: true
+    description: Recommendation ids this session addressed (e.g. ["rec-2335"]).
+    semantics: >-
+      Optional cross-reference into ops_recommendations.id. array<string> declared explicitly
+      (TELEMETRY_TABLE_DTYPES) to avoid awswrangler null-inference failures on all-null batches.
+    populated_by: telemetry.py::open_session / close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  plan_slug:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The plan slug an implement/plan session is bound to (e.g. ratify-class-a-telemetry-contracts).
+    semantics: Optional; links a session to docs/plans/PLAN-{slug}.yaml. Null for non-plan workflows.
+    populated_by: telemetry.py::open_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  failure_reason:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: Free-text reason when outcome=failed. NULL on success.
+    semantics: Optional failure diagnostic; consumed by ci-rca / friction analysis.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  failure_phase:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The phase/observation name active when the session failed. NULL on success.
+    semantics: >-
+      Optional; correlates to a telemetry_observations.name (observation_type=phase). rec-275 (open) asks
+      that step-level failure telemetry also populate outcome/failure_phase on the failure path -- a CODE
+      change to telemetry.py, NOT this contract; recorded as a KNOWN GAP.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  files_changed:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Number of files changed in the session's diff.
+    semantics: Optional code-impact metric. bigint (integer-promotion safety).
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  lines_added:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Lines added across the session's diff.
+    semantics: Optional code-impact metric.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  lines_removed:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Lines removed across the session's diff.
+    semantics: Optional code-impact metric.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  steps_total:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Total planned steps for the session (denormalised from the plan / observations).
+    semantics: Optional progress metric; pairs with steps_completed for completion ratio.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  steps_completed:
+    type: int
+    iceberg_type: bigint
+    nullable: true
+    description: Steps actually completed in the session.
+    semantics: Optional progress metric. steps_completed/steps_total is the session completion ratio.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  scope_drift_files:
+    type: "list[str]"
+    iceberg_type: "array<string>"
+    nullable: true
+    description: Files touched outside the plan's declared scope (scope-drift detector output).
+    semantics: >-
+      Optional governance signal (plan Scope vs actual diff). array<string> declared explicitly
+      (null-inference safety). Empty/null when no drift.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  pr_url:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: URL of the PR the session opened/merged.
+    semantics: Optional provenance link to GitHub.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  ci_outcome:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: CI result for the session's PR (e.g. success | failure | pending). NULL if no PR.
+    semantics: Optional; the CI verdict correlated to the session. Open set; enforcement deferred to Phase 4.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  model_primary:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: The primary model that drove the session (e.g. claude-opus-4-8).
+    semantics: >-
+      Optional; the headline model for the run. Per-call model attribution lives on
+      telemetry_observations (observation_type=model_call) and telemetry_agents.model.
+    populated_by: telemetry.py::open_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  coverage_before:
+    type: float
+    iceberg_type: double
+    nullable: true
+    description: Test coverage fraction before the session's changes.
+    semantics: Optional quality metric; pairs with coverage_after for a coverage delta. double-typed.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  coverage_after:
+    type: float
+    iceberg_type: double
+    nullable: true
+    description: Test coverage fraction after the session's changes.
+    semantics: Optional quality metric; coverage_after - coverage_before is the session coverage delta.
+    populated_by: telemetry.py::close_session.
+    dq_intent:
+      not_null:
+        enforced: false
+  ingested_at:
+    type: datetime
+    iceberg_type: timestamptz
+    nullable: false
+    description: >-
+      UTC tz-aware timestamp the row was ingested to the warehouse (write/append time), distinct from the
+      event-time started_at.
+    semantics: >-
+      Operational ingestion stamp (the writer always injects it; default_factory=_now_iso in the draft).
+      NOT the partition basis (started_at is, Decision 96) and NOT an SCD2 last_updated_timestamp
+      (telemetry is insert-once). Retained from the draft as the append-time marker.
+    populated_by: the telemetry write path (OpsWriter today; the Phase 4 DuckLake writer tomorrow).
+    dq_intent:
+      not_null:
+        enforced: false
+governance:
+  table_class: event
+  partition_by: "day(started_at)"
+  write_path: >-
+    LIVE (draft, dead): telemetry.py::open_session/close_session -> OpsWriter.emit('telemetry_sessions')
+    -> S3 staging -> Iceberg (Athena, unmigrated since 2026-05-28). TARGET (Phase 4): the DuckLake
+    telemetry writer boundary (Phase 4, post-T2.26). Insert-once; no SCD2 merge.
+governance_notes: >-
+  Decision 95: telemetry_sessions is the trace ROOT; root-unification means no rootless telemetry
+  entities. Decision 96: insert-once EVENT data -- partition day(started_at) UTC, no trade_date, no
+  last_updated_timestamp, tz-aware UTC timestamps. Decision 97: ULID-target identity, boundary-minted
+  once, propagated to children as FKs. There is NO merge_key (insert-once, not SCD2). dq_INTENT only is
+  recorded here; per-field DQ ENFORCEMENT lands in config/agent/data_quality/telemetry.yaml at the
+  Phase 4 rebuild (the lexicon authority boundary). Live-vs-target skew (UUID4->ULID; trade_date->
+  day(started_at); 7 draft tables -> 4 canonical) is documented, NOT implemented (REPORT-ONLY).
+  ROLL-UP RECONCILIATION: process_event_count / rework_count / exception_count are denormalised tallies
+  of telemetry_observations rows with observation_type=process_event (rework_count = tier=rework;
+  exception_count = tier=exception, via the promoted telemetry_observations.tier column).
+  telemetry_observations is AUTHORITATIVE on disagreement; a DQ relationships/expression check reconciles
+  them at the Phase 4 rebuild. The "running"->terminal close appends a SECOND session row (Decision 97
+  mint-once reuses session_id); the terminal row carries the final tallies.
+  NULLABILITY AXES: `nullable` is the TARGET-SCHEMA column constraint (Phase 4 DDL); `dq_intent.not_null.
+  enforced` is the CURRENT DQ posture (false everywhere now). A `nullable: false` + `enforced: false`
+  field is "required in the target schema, not yet DQ-enforced", NOT a contradiction.
+  KNOWN GAPS (open recs, future CODE work, not this contract): rec-275 (failure-path step telemetry),
+  rec-2173 (preflight telemetry health re-enable), rec-014 (merge telemetry modules).
+amendment_log: []
+previous_versions: []

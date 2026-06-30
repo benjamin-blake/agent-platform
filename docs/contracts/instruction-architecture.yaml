@@ -1,0 +1,122 @@
+version: 1
+contract_version: 1
+status: ratified
+ratified_at: "2026-06-29"
+ratified_via: "PLAN-instruction-architecture-yaml (T-1.13)"
+decisions_cited:
+  - Decision-38
+  - Decision-58
+  - Decision-76
+  - Decision-86
+  - CD.25
+
+cross_cutting_principle:
+  name: Agent-First
+  description: >-
+    All artefacts at all layers are designed for agent loading efficiency, not human
+    readability; prefer machine-parseable formats; collocate semantic definitions with
+    enforcement; a new file is warranted only when it has a distinct machine-parseable role
+
+layers:
+  - layer: 1
+    name: Universal rules
+    content_locations:
+      - CLAUDE.md
+      - AGENTS.md
+      - "**/CLAUDE.md"
+    load_time: ambient
+    consumers:
+      - claude_code_interactive
+      - executor
+    contains: "Code style, safety constraints, merge protocol, operational data governance (Single Portal Invariant, ID Authority)"
+    excludes: "Routing logic, project context, agent methodology, file router"
+
+  - layer: 2
+    name: Project knowledge base
+    content_locations:
+      - docs/PROJECT_CONTEXT.md
+    load_time: on_demand
+    consumers:
+      - claude_code_interactive
+    contains: "North Star goals, AWS configuration, file router, recommendation schemas, known gotchas"
+    excludes: "Workflow steps, agent methodology"
+
+  - layer: 3
+    name: Slash commands
+    content_locations:
+      - ".claude/commands/*.md"
+    load_time: on_user_invocation
+    consumers:
+      - claude_code_interactive
+    contains: "Thin orchestration step-sequences referencing skills + explicit human confirmation gates"
+    excludes: "Deep methodology or project context"
+
+  - layer: 4
+    name: Skills (methodology)
+    content_locations:
+      - ".claude/skills/*/SKILL.md"
+    load_time: on_skill_invocation
+    consumers:
+      - claude_code_interactive
+    contains: "Self-contained skill definitions invocable via the Skill tool; must declare required-context frontmatter"
+    excludes: "Project context better suited for Layer 2"
+
+  - layer: 5
+    name: Executor role prompts
+    content_locations:
+      - "config/agent/executor/prompts/*.prompt.md"
+    load_time: by_execute_recommendation
+    consumers:
+      - executor
+    contains: "Minimal task-specific context for autonomous execution"
+    excludes: "Universal rules or project context (Layers 1/2)"
+
+consumers:
+  claude_code_interactive:
+    consumes_layers: [1, 2, 3, 4]
+    notes: >-
+      Reads CLAUDE.md/AGENTS.md automatically; slash commands load docs/PROJECT_CONTEXT.md
+      and invoke skills via the Skill tool; canonical interactive surface (Decision 76)
+  executor:
+    consumes_layers: [1, 5]
+    notes: >-
+      Reads universal rules automatically; execution scripts read role prompts and JIT
+      contexts; frozen pending Decision 67 reversal
+
+behavioural_invariant_sources:
+  - ".claude/skills/*/SKILL.md"
+
+anti_patterns:
+  - pattern: "Routing logic in Layer 1"
+    why: "Layer 1 is for universal rules only"
+    correct_location: "Layer 3 (.claude/commands/)"
+  - pattern: "Methodology in Layer 2"
+    why: "Bloats the context window"
+    correct_location: "Layer 4 (.claude/skills/)"
+  - pattern: "Project context in Layer 1"
+    why: "Project context should be loaded on-demand"
+    correct_location: "Layer 2 (docs/PROJECT_CONTEXT.md)"
+  - pattern: "Missing required-context in SKILL.md"
+    why: "The skill loader needs to know what context to load"
+    correct_location: "Layer 4 (.claude/skills/)"
+  - pattern: "Direct recommendation writes in workflows/skills"
+    why: "Bypasses ID authority, outbox handling, and SCD2 semantics"
+    correct_location: "scripts/ops_data_portal.py"
+  - pattern: "Human-readable companion doc alongside machine-readable source"
+    why: "Creates a second surface that agents must sync; semantic context belongs as metadata fields in the machine-readable source (Decision 86)"
+    correct_location: "Extend the machine-readable source"
+
+legacy_surfaces_retired:
+  note: >-
+    Legacy cross-harness instruction mirrors (.agents/ Antigravity workflows+skills,
+    top-level .github/prompts/*.prompt.md, .github/agents/*.agent.md,
+    the legacy gh-copilot CLI instruction file) were DELETED in T-1.13 per Decision 76
+    (legacy demotion) + Decision 58 retirement + user directive 2026-06-29. The
+    .github/prompts/ and .github/agents/ directories survive only for the live
+    scheduled-agent surface (.github/prompts/scheduled/, .github/agents/schedule.yaml)
+    and the executor instruction files (.github/instructions/executor-*.instructions.md);
+    full directory deletion remains owned by T5.3 pending scheduled-agent decoupling
+
+verified_against:
+  - "scripts/prompt_compliance.py (get_behavioural_invariant_sources / check_layer_compliance)"
+  - "scripts/validate.py (validate_prompt_compliance / validate_instruction_architecture_layers)"

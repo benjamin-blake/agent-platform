@@ -19,6 +19,7 @@ import pytest
 
 from src.common import ducklake_runtime as rt
 from src.common import ducklake_scd2_schema as schema
+from src.common.ducklake_version import pinned_duckdb_version
 
 pytestmark = pytest.mark.unit
 
@@ -120,19 +121,21 @@ def test_mint_write_identity_explicit_now():
 
 
 def test_assert_duckdb_version_match():
-    fake = types.SimpleNamespace(__version__="1.5.3")
-    assert rt.assert_duckdb_version(fake) == "1.5.3"
+    pin = pinned_duckdb_version()
+    fake = types.SimpleNamespace(__version__=pin)
+    assert rt.assert_duckdb_version(fake) == pin
 
 
 def test_assert_duckdb_version_mismatch_raises():
-    fake = types.SimpleNamespace(__version__="1.5.2")
+    fake = types.SimpleNamespace(__version__=pinned_duckdb_version() + "-mismatch")
     with pytest.raises(rt.VersionMismatchError, match="version mismatch"):
         rt.assert_duckdb_version(fake)
 
 
 def test_assert_duckdb_version_resolves_default(monkeypatch):
-    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__="1.5.3"))
-    assert rt.assert_duckdb_version() == "1.5.3"
+    pin = pinned_duckdb_version()
+    monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: types.SimpleNamespace(__version__=pin))
+    assert rt.assert_duckdb_version() == pin
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +215,7 @@ def test_libpq_conninfo_honours_connect_timeout_env(monkeypatch):
 
 
 def _patch_duckdb(monkeypatch, con):
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     monkeypatch.setattr(rt.ducklake_spike, "_set_s3_credentials", lambda c, profile=None: None)
 
@@ -257,7 +260,7 @@ def test_open_connection_baked_mode_failclosed(monkeypatch):
 
 def test_open_connection_with_shared_creds(monkeypatch):
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     creds = ("AKIA", "secret", "token", "eu-west-2")  # pragma: allowlist secret
     rt.open_connection(dsn=_DSN, data_path="s3://x/y/", _creds=creds)
@@ -268,7 +271,7 @@ def test_open_connection_with_shared_creds(monkeypatch):
 
 def test_open_connection_shared_creds_no_token(monkeypatch):
     con = FakeCon()
-    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__="1.5.3")
+    fake_duckdb = types.SimpleNamespace(connect=lambda: con, __version__=pinned_duckdb_version())
     monkeypatch.setattr(rt.ducklake_spike, "_require_duckdb", lambda: fake_duckdb)
     creds = ("AKIA", "secret", None, "eu-west-2")  # pragma: allowlist secret
     rt.open_connection(dsn=_DSN, data_path="s3://x/y/", _creds=creds)
@@ -792,12 +795,13 @@ def test_create_scd2_tables_ops_ddl_has_real_types(monkeypatch):
     assert any("bucket(8, id)" in s for s in alters)
 
 
-def test_ops_table_names_lists_all_five():
+def test_ops_table_names_lists_all_six():
     names = rt.ops_table_names()
     assert "ops_recommendations" in names
     assert "ops_decisions" in names
     assert "ops_priority_queue" in names
-    assert len(names) == 5
+    assert "ops_smoke_events" in names
+    assert len(names) == 6
 
 
 def test_read_current_ops_table_projects_and_filters():
@@ -1123,6 +1127,17 @@ def test_file_scd2_gate_blocks_before_catalog():
     assert con.executed == []
 
 
+def test_file_scd2_sequential_allocations_are_distinct_and_monotonic():
+    """c2 distinct-id lock (T2.28): sequential file_scd2 allocations yield distinct, monotonic rec-NNN ids."""
+    con = FileOpsCon(counter_value=2170)
+    r1 = rt.file_scd2(con, {"status": "open", "title": "first"}, table="ops_recommendations")
+    r2 = rt.file_scd2(con, {"status": "open", "title": "second"}, table="ops_recommendations")
+    assert r1.rec_id != r2.rec_id, "sequential allocations must be distinct"
+    n1 = int(r1.rec_id.split("-")[1])
+    n2 = int(r2.rec_id.split("-")[1])
+    assert n2 > n1, f"allocations must be monotonic: {r1.rec_id} then {r2.rec_id}"
+
+
 class NamedReadCon:
     def __init__(self, rows=None, cols=("id",)):
         self.executed: list[tuple[str, list | None]] = []
@@ -1176,3 +1191,173 @@ def test_read_current_binds_named_column():
     sql, params = con.executed[0]
     assert "WHERE status = ?" in sql
     assert params == ["open"]
+
+
+# ---------------------------------------------------------------------------
+# append_only write mode -- runtime-layer tests
+# ---------------------------------------------------------------------------
+
+_APPEND_ONLY_RT_SEMANTICS: dict = {
+    "fields": {
+        "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+        "rec_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+        "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+        "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+    },
+    "ops_tables": {
+        "ops_smoke_events": {
+            "write_mode": "append_only",
+            "status": "smoke",
+            "merge_key": "event_id",
+            "history_table": "ops_smoke_events_history",
+            "partition": {"history": "day(created_timestamp)"},
+            "columns": {
+                "ulid": {"role": "derived", "sql_type": "VARCHAR", "nullable": False},
+                "event_id": {"role": "input", "sql_type": "VARCHAR", "nullable": False},
+                "event_type": {"role": "input", "sql_type": "VARCHAR", "nullable": True},
+                "created_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+                "last_updated_timestamp": {"role": "derived", "sql_type": "TIMESTAMP WITH TIME ZONE", "nullable": False},
+            },
+        }
+    },
+}
+
+
+def test_write_scd2_append_only_skips_current_merge():
+    """append_only write issues history MERGE only; no current write-through MERGE or SELECT existing."""
+    con = FakeCon()
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-001", "event_type": "smoke"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    sql_stmts = [sql for sql, _ in con.executed]
+    assert any("ops_smoke_events_history" in s and s.startswith("MERGE INTO") for s in sql_stmts)
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+    # No SELECT created_timestamp (no existing-row lookup on append_only path)
+    assert not any(s.startswith("SELECT created_timestamp") for s in sql_stmts)
+
+
+def test_write_scd2_append_only_require_exists_raises():
+    """write_scd2 with require_exists=True on an append_only table raises AppendOnlyUpdateError before SQL."""
+    con = FakeCon()
+    with pytest.raises(rt.AppendOnlyUpdateError, match="append_only"):
+        rt.write_scd2(
+            con,
+            {"event_id": "ev-002", "event_type": "smoke"},
+            table="ops_smoke_events",
+            semantics=_APPEND_ONLY_RT_SEMANTICS,
+            require_exists=True,
+        )
+    # Guard fires before any catalog work
+    executed_sql = [sql for sql, _ in con.executed]
+    assert not any(s.startswith("BEGIN") for s in executed_sql)
+
+
+def test_create_scd2_tables_append_only_single_table():
+    """create_scd2_tables for an append_only table creates only the history table."""
+    con = FakeCon()
+    rt.create_scd2_tables(con, table="ops_smoke_events")
+    sql_stmts = [sql for sql, _ in con.executed]
+    creates = [s for s in sql_stmts if s.startswith("CREATE TABLE")]
+    alters = [s for s in sql_stmts if "SET PARTITIONED BY" in s]
+    assert len(creates) == 1
+    assert "ops_smoke_events_history" in creates[0]
+    assert len(alters) == 1
+    assert "ops_smoke_events_history" in alters[0]
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+
+
+def test_create_scd2_tables_append_only_force_recreate_single_drop():
+    """force_recreate on an append_only table drops only the history table."""
+    con = FakeCon()
+    rt.create_scd2_tables(con, table="ops_smoke_events", force_recreate=True)
+    sql_stmts = [sql for sql, _ in con.executed]
+    drops = [s for s in sql_stmts if s.startswith("DROP TABLE")]
+    assert len(drops) == 1
+    assert "ops_smoke_events_history" in drops[0]
+    assert not any("ops_smoke_events_current" in s for s in sql_stmts)
+
+
+# H1: read_current / query_current guard for append_only tables
+
+
+def test_read_current_append_only_raises():
+    """read_current loud-fails for append_only tables (no current write-through projection, Decision 55)."""
+    con = FakeCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="append_only"):
+        rt.read_current(con, table="ops_smoke_events")
+
+
+def test_query_current_append_only_raises():
+    """query_current loud-fails for append_only tables (no current write-through projection)."""
+    con = FakeCon()
+    with pytest.raises(rt.DuckLakeRuntimeError, match="append_only"):
+        rt.query_current(con, table="ops_smoke_events", sql="SELECT {tbl}.ulid FROM {tbl}")
+
+
+# H2: ULID idempotency + second distinct event append
+
+
+def test_write_scd2_append_only_ulid_idempotency():
+    """Retrying write_scd2 with the same WriteIdentity produces identical ULID in both MERGEs.
+    DuckLake MERGE-on-ULID (WHEN NOT MATCHED only) makes the second MERGE a no-op -- one row."""
+    fixed_identity = rt.mint_write_identity(now=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    con1, con2 = FakeCon(), FakeCon()
+    rt.write_scd2(
+        con1,
+        {"event_id": "ev-idem", "event_type": "t"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+        identity=fixed_identity,
+    )
+    rt.write_scd2(
+        con2,
+        {"event_id": "ev-idem", "event_type": "t"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+        identity=fixed_identity,
+    )
+
+    def _merge_ulid(con: FakeCon) -> str | None:
+        for sql, params in con.executed:
+            if sql.startswith("MERGE INTO") and "ops_smoke_events_history" in sql:
+                return params[0] if params else None  # ulid is ordered first in _write_params
+        return None
+
+    assert _merge_ulid(con1) == _merge_ulid(con2) == fixed_identity.ulid
+
+
+def test_write_scd2_append_only_second_distinct_event_appends():
+    """Two distinct event_ids each generate a separate history MERGE; neither collapses into the other."""
+    con = FakeCon()
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-first", "event_type": "a"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    rt.write_scd2(
+        con,
+        {"event_id": "ev-second", "event_type": "b"},
+        table="ops_smoke_events",
+        semantics=_APPEND_ONLY_RT_SEMANTICS,
+    )
+    history_merges = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO") and "_history" in sql]
+    current_merges = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO") and "_current" in sql]
+    assert len(history_merges) == 2, f"expected 2 history MERGEs; got {len(history_merges)}"
+    assert len(current_merges) == 0, "append_only: no current write-through MERGE"
+
+
+# H3: reconcile_table_columns skips current table for append_only
+
+
+def test_reconcile_table_columns_append_only_history_only():
+    """reconcile_table_columns for append_only tables issues ALTER TABLE only on history; added_current is empty."""
+    con = FakeCon()
+    result = rt.reconcile_table_columns(con, table="ops_smoke_events")
+    alters = [sql for sql, _ in con.executed if sql.startswith("ALTER TABLE") and "ADD COLUMN" in sql]
+    assert all("_history" in sql for sql in alters), f"All ALTERs must target history table; got: {alters}"
+    assert not any("_current" in sql for sql in alters), "No ALTER should target a current table"
+    assert result["added_current"] == [], "added_current must be empty for append_only tables"

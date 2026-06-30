@@ -1,13 +1,13 @@
 ---
-description: Interactive planning session. Run this before any implementation work. Clarifies intent, loads project context, checks phase alignment, and produces PLAN-{slug}.md — a self-contained implementation brief for the next agent chat. Use when starting a new feature, fix, or any code change.
+description: Interactive planning session. Run this before any implementation work. Clarifies intent, loads project context, checks phase alignment, and produces PLAN-{slug}.yaml — a self-contained implementation brief for the next agent chat. Use when starting a new feature, fix, or any code change.
 model: opus[1m]
 ---
 
 # Plan Workflow
 
-**Intent**: Clarify the human's intent, orient against the project, and produce a complete self-contained `PLAN-{slug}.md` that any agent can execute without further interaction. Does not implement anything.
+**Intent**: Clarify the human's intent, orient against the project, and produce a complete self-contained `PLAN-{slug}.yaml` that any agent can execute without further interaction. Does not implement anything.
 
-*Note: For detailed guidelines on complexity, verification tiers, preflight constraints, and the plan template, invoke your `planning` skill via the Skill tool.*
+*Note: For detailed guidelines on complexity, verification tiers, preflight constraints, and the plan template, invoke your `planning` skill via the Skill tool. For the canonical git-ops procedure (branching, rebase rules, PR/CI/merge flow), see AGENTS.md `## Git-ops procedure`.*
 
 ## Step 1: Run Preflight
 
@@ -100,14 +100,14 @@ git branch --show-current
 If the result is `main`, STOP. Derive the plan slug from the task description (independent of the branch name).
 
 
-## Step 8: Write PLAN-{slug}.md (and any REPORT-ONLY deliverable)
-Write the file `docs/plans/PLAN-{slug}.md` using the exact structure and template provided in your `planning` skill.
+## Step 8: Write PLAN-{slug}.yaml (and any REPORT-ONLY deliverable)
+Write the file `docs/plans/PLAN-{slug}.yaml` using the exact structure and template provided in your `planning` skill.
 
 **If Plan Type is REPORT-ONLY:** Additionally write the report deliverable file(s) referenced in the PLAN's Scope table (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`). The deliverable IS the substantive output of a REPORT-ONLY plan; the PLAN file itself is just the planning artefact that points at it. Both files land in the same initial commit.
 
 After writing, commit to the branch:
 ```bash
-git add docs/plans/PLAN-{slug}.md   # plus any REPORT-ONLY deliverable file(s)
+git add docs/plans/PLAN-{slug}.yaml   # plus any REPORT-ONLY deliverable file(s)
 git commit -m "plan({slug}): initial plan"
 ```
 
@@ -121,7 +121,7 @@ Substitute `{slug}` with the actual branch slug (e.g. `bootstrap-speedup`). Invo
 - `prompt:` a self-contained brief that (a) names the target plan absolute path, (b) instructs the subagent to invoke the `plan-critique` skill via the `Skill` tool against that path, (c) lists the required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`), (d) requires the subagent to read every file in the plan's Scope table for IMPLEMENTATION plans, (e) requires the subagent to return the skill's structured output verbatim including the final `Recommendation: PROCEED / REVISE` line, and (f) forbids the subagent from editing any files.
 
 Example prompt body (adapt the path):
-> "You are running the plan-critique gate. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current -- the branch may have been open long enough for main to have moved. Then invoke the `plan-critique` skill via the Skill tool to critique `/home/user/agent-platform/docs/plans/PLAN-{slug}.md`. Read the skill's required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`). For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows differences, note in your critique that the working-tree versions used for evaluation may lag main. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict. Do not edit any files."
+> "You are running the plan-critique gate. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current -- the branch may have been open long enough for main to have moved. Then invoke the `plan-critique` skill via the Skill tool to critique `/home/user/agent-platform/docs/plans/PLAN-{slug}.yaml`. Read the skill's required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`). For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows differences, note in your critique that the working-tree versions used for evaluation may lag main. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict. Do not edit any files."
 
 Read the critique output returned by the subagent.
 If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan.
@@ -132,16 +132,16 @@ Note: this gate reviews the PLAN artefact, not the report deliverable. For REPOR
 ## Step 10: Multi-Perspective Report Critique Gate (REPORT-ONLY only, MANDATORY)
 **If Plan Type is IMPLEMENTATION or STRATEGIC, SKIP this step entirely and proceed to Step 11.**
 
-For REPORT-ONLY plans, the Step 9 plan-critique gate reviewed the planning artefact (PLAN-{slug}.md) but NOT the report deliverable itself. The deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent zero-context critique.
+For REPORT-ONLY plans, the Step 9 plan-critique gate reviewed the planning artefact (PLAN-{slug}.yaml) but NOT the report deliverable itself. The deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent zero-context critique.
 
 Apply the **Report Critique Gate** methodology from your `planning` skill. Summary: launch AT LEAST 2 zero-context subagents IN PARALLEL via the `Agent` tool, each with a distinct perspective on the deliverable (architect/risk/etc.), synthesize their findings, present to the human, iterate based on human direction, re-launch critiques after each revision until convergence.
 
 Convergence rule: both agents return PROCEED on a fresh round, OR the human explicitly accepts the current state with a defined deferral (e.g. "fix the HIGH-severity items and defer the rest to phase plans"). Each material revision lands as its own commit on the branch during the loop.
 
-## Step 11: Commit approved PLAN-{slug}.md and merge to main
+## Step 11: Commit approved PLAN-{slug}.yaml and merge to main
 After all critique gates have approved the work, commit any uncommitted changes to the branch:
 ```bash
-git add docs/plans/PLAN-{slug}.md   # plus any REPORT-ONLY deliverable file(s)
+git add docs/plans/PLAN-{slug}.yaml   # plus any REPORT-ONLY deliverable file(s)
 git commit -m "plan({slug}): approved plan"
 ```
 If revisions were committed incrementally during Step 10's iteration loop, this commit may be empty -- in that case, skip it.
@@ -157,10 +157,10 @@ Then push and merge the plan to `main` via GitHub MCP so the next `/implement` s
 Output the final confirmation message based on Plan Type (IMPLEMENTATION / STRATEGIC / REPORT-ONLY) exactly as specified in your `planning` skill. The handoff message must name the explicit plan path so the human can paste it directly:
 
 ```
-Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.md.
+Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.yaml.
 To implement, open a NEW Claude Code session and paste:
 
-    /implement docs/plans/PLAN-{slug}.md
+    /implement docs/plans/PLAN-{slug}.yaml
 
 Summary: {one line on what the plan does}.
 ```

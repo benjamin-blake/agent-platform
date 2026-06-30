@@ -1,0 +1,303 @@
+name: terraform-drift
+
+# Alarm-only scheduled drift detector (CD.35 Wave 5 / T2.24, Decision 92).
+#
+# Runs terraform plan -detailed-exitcode against the sandbox root module on a cron schedule
+# (and on demand via workflow_dispatch) to surface out-of-band infra drift without auto-applying.
+#
+# Exit-code semantics:
+#   0 = no change  -> no-op; cycle is clean.
+#   2 = drift      -> convergence record flipped red + tf_drift rec filed via ops portal (ONLY
+#                     on a green->red transition; already-red record is not re-written and no
+#                     duplicate rec is filed -- "one red = one signal").
+#   1 = error      -> if stderr matches "Error acquiring the state lock", the cycle is skipped
+#                     (an in-flight apply holds the lock; exit 0, no alarm, no rec, record untouched).
+#                     Any other error fails the run LOUDLY (no rec filed, no red flip, no masking).
+#
+# Recovery: a drift-flipped red record clears via the same dispatch-ack path as an apply failure
+# (terraform-apply-sandbox workflow_dispatch naming the red commit or rec id). The tf_drift rec is
+# closed via the standard portal close path (Resolves: trailer / update_rec).
+#
+# Design invariants:
+#   - NO terraform apply step (alarm-only; Decision 55/92).
+#   - Drift NEVER writes the record green -- green is written solely by a converged apply.
+#   - github_ci_drift is least-privilege: tfstate READ + scoped .tflock write + convergence
+#     read+write + ducklake-WRITER invoke ONLY. No state-object write, no tfplan, no IAM.
+#   - The new github_ci_drift role is guard-BLOCKED (IAM CreateRole, exit 2) and must be
+#     created via the human-gated apply BEFORE the first real scheduled run.
+#   - continue-on-error on the assume-role step covers the bootstrap window (role does not
+#     yet exist until the gated apply lands; pre-apply ticks no-op instead of erroring).
+#   - Serialisation with apply: via the native S3 lock only (NOT a shared GHA concurrency group
+#     with terraform-apply-sandbox). This concurrency group serialises overlapping drift ticks.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Prevent overlapping drift ticks from stacking. cancel-in-progress: false because a running
+  # drift cycle should always complete -- a stale plan or a mid-run lock-skip must not be dropped.
+  group: terraform-drift
+  cancel-in-progress: false
+
+env:
+  CONVERGENCE_BUCKET: agent-platform-data-lake
+  CONVERGENCE_KEY: convergence/personal/sandbox.json
+  WORKDIR: terraform/personal
+
+jobs:
+  drift-detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write  # REQUIRED for OIDC token minting
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+      TF_VAR_aws_profile: ""
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials (OIDC -- drift role, main only)
+        # Bootstrap-window guard: before the gated apply creates agent-platform-github-ci-drift,
+        # the assume-role fails. continue-on-error keeps the job from failing; subsequent steps
+        # gate on steps.oidc_drift.outcome == 'success' and are skipped when creds are absent,
+        # so the job ends green-with-skipped rather than hard-failing during the bootstrap window.
+        id: oidc_drift
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-drift
+          aws-region: eu-west-2
+
+      - name: Read pinned Terraform version
+        id: tfver
+        if: steps.oidc_drift.outcome == 'success'
+        run: echo "version=$(cat config/terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        if: steps.oidc_drift.outcome == 'success'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Setup Python 3.12
+        if: steps.oidc_drift.outcome == 'success'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies (venv)
+        if: steps.oidc_drift.outcome == 'success'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Materialise tfvars from Secrets Manager
+        if: steps.oidc_drift.outcome == 'success'
+        run: |
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
+            --secret-id agent-platform-terraform-personal-tfvars \
+            --query SecretString --output text \
+            > terraform/personal/terraform.personal.tfvars
+
+      - name: Mask secret-sourced tfvars values in logs
+        # rec-2285: split on first '=' only so values containing '=' are not truncated.
+        if: steps.oidc_drift.outcome == 'success'
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            key=${line%%=*}
+            value=${line#*=}
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+            case "$key" in
+              account_id|platform_dev_external_id|platform_admin_external_id)
+                if [ -n "$value" ]; then
+                  echo "::add-mask::${value}"
+                fi
+                ;;
+            esac
+          done < terraform/personal/terraform.personal.tfvars
+
+      - name: Assert tfvars file is non-empty (fail-closed)
+        if: steps.oidc_drift.outcome == 'success'
+        run: |
+          test -s terraform/personal/terraform.personal.tfvars || {
+            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+            exit 1
+          }
+
+      - name: Terraform init (S3 backend, sandbox)
+        if: steps.oidc_drift.outcome == 'success'
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          # Bounded retry for transient registry.terraform.io 5xx (parity with
+          # _TRANSIENT_INIT_SIGNATURES in scripts/validate.py and terraform-apply-sandbox.yml).
+          # Signatures: "502", "Bad Gateway", "could not query provider registry", "failed after "
+          set +e
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"
+              break
+            fi
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+              if [ "$attempt" -lt 3 ]; then
+                delay=$(( 2 ** attempt ))
+                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+                echo "$out" >&2
+                sleep "$delay"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+            echo "$out" >&2
+            set -e
+            exit "$rc"
+          done
+          set -e
+
+      - name: Read current convergence record (prior_status)
+        id: prior_status
+        if: steps.oidc_drift.outcome == 'success'
+        run: |
+          # pass-on-absent: a missing record (NoSuchKey / 404) is treated as green (first-run).
+          # Any OTHER S3 error (transient 5xx, network, etc.) is treated as unknown; the drift
+          # handler skips when unknown to preserve the one-red=one-signal dedup invariant.
+          set +e
+          TMP_S3_ERR=$(mktemp)
+          REC_JSON=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>"$TMP_S3_ERR")
+          RC=$?
+          S3_STDERR=$(cat "$TMP_S3_ERR")
+          rm -f "$TMP_S3_ERR"
+          set -e
+
+          if [ "$RC" -ne 0 ]; then
+            if echo "$S3_STDERR" | grep -qi "NoSuchKey\|404"; then
+              echo "prior_status=green" >> "$GITHUB_OUTPUT"
+              echo "No convergence record found (pass-on-absent / NoSuchKey); treating prior_status as green."
+            else
+              echo "prior_status=unknown" >> "$GITHUB_OUTPUT"
+              echo "S3 read failed (non-NoSuchKey error): treating prior_status as unknown to preserve dedup invariant."
+            fi
+          elif [ -z "$REC_JSON" ]; then
+            echo "prior_status=unknown" >> "$GITHUB_OUTPUT"
+            echo "Empty convergence record body; treating prior_status as unknown."
+          else
+            PRIOR=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown")
+            echo "prior_status=${PRIOR}" >> "$GITHUB_OUTPUT"
+            echo "Prior convergence record status: ${PRIOR}"
+          fi
+
+      - name: Terraform plan (drift check, -detailed-exitcode)
+        id: plan
+        if: steps.oidc_drift.outcome == 'success'
+        working-directory: ${{ env.WORKDIR }}
+        # Explicit exit-code handling (set +e): terraform exits 2 on drift (changes detected),
+        # 0 on no change, 1 on error. We capture both stdout/stderr and the exit code.
+        # Lock: -lock=true with 120s timeout (mirrors apply). An in-flight apply holds the native
+        # S3 lock -> plan exits 1 with "Error acquiring the state lock" -> skip-this-cycle.
+        run: |
+          set +e
+          STDERR_FILE=$(mktemp)
+          terraform plan -detailed-exitcode -lock=true -lock-timeout=120s -input=false \
+            -var-file=terraform.personal.tfvars 2>"$STDERR_FILE"
+          PLAN_EC=$?
+          PLAN_STDERR=$(cat "$STDERR_FILE")
+          rm -f "$STDERR_FILE"
+          set -e
+
+          echo "plan_ec=${PLAN_EC}" >> "$GITHUB_OUTPUT"
+
+          if [ "$PLAN_EC" -eq 0 ]; then
+            echo "Drift check: no changes detected (exit 0); cycle is clean."
+            exit 0
+          fi
+
+          if [ "$PLAN_EC" -eq 2 ]; then
+            echo "Drift check: changes detected (exit 2); drift found."
+            exit 0
+          fi
+
+          # exit 1 -- distinguish lock-acquisition-failure (skip) from genuine error (fail loud).
+          if printf '%s' "$PLAN_STDERR" | grep -q "Error acquiring the state lock"; then
+            echo "::notice::Lock held by an in-flight apply; skipping this drift cycle (exit 0, no alarm)."
+            echo "plan_ec=lock_skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Genuine error: fail loudly with NO rec filed and NO red flip (drift != error).
+          echo "::error::Terraform plan returned exit 1 (genuine error, not a lock conflict): ${PLAN_STDERR}"
+          exit 1
+
+      - name: Handle drift (ec=2 -- flip record red and file rec)
+        if: >-
+          steps.oidc_drift.outcome == 'success' &&
+          steps.plan.outputs.plan_ec == '2'
+        env:
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          PRIOR_STATUS: ${{ steps.prior_status.outputs.prior_status }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+
+          if [ "$PRIOR_STATUS" = "red" ] || [ "$PRIOR_STATUS" = "unknown" ]; then
+            echo "Convergence record is ${PRIOR_STATUS}; not re-alarming (dedup invariant: one red = one signal; unknown = transient S3 read failure)."
+            exit 0
+          fi
+
+          # Read the existing record to preserve fields; merge-write red + drift markers.
+          EXISTING=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "{}")
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RECORD=$(EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" python3 -c "
+          import json, sys, os
+          existing = json.loads(os.environ.get('EXISTING', '{}') or '{}')
+          existing['status'] = 'red'
+          existing['drift_detected_at'] = os.environ['TS']
+          existing['drift_run_url'] = os.environ['RUN_URL']
+          existing['drift_reason'] = 'out-of-band infra drift detected by scheduled terraform plan (T2.24)'
+          print(json.dumps(existing))
+          ")
+
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" \
+            --content-type application/json
+          echo "Wrote red convergence record: ${RECORD}"
+
+          # Read-back verify (mirrors apply-sandbox write-verify pattern, rec-2211).
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c \
+            "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "red" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != 'red'; record may be corrupt."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status=red"
+
+          # File the drift rec via the ops portal (Single Portal Invariant -- no outbox, fail loud).
+          # source=tf_drift is a CLI arg validated against source_registry.yaml at write time.
+          .venv/bin/python -m scripts.ops_data_portal \
+            --file-rec \
+            --source tf_drift \
+            --priority High \
+            --effort S \
+            --risk medium \
+            --verification-tier V2 \
+            --title "Terraform drift detected in sandbox: out-of-band infra change" \
+            --file ".github/workflows/terraform-drift.yml" \
+            --context "Scheduled terraform plan (T2.24) detected a state-vs-code delta in the sandbox environment. The convergence record has been flipped red. Review the drift in GitHub Actions run ${RUN_URL} and resolve via the dispatch-ack apply path (terraform-apply-sandbox workflow_dispatch naming this run URL or the rec id)." \
+            --acceptance "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - | grep -q green"
+          echo "tf_drift rec filed via ops portal."

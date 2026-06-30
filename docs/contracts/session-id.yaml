@@ -14,27 +14,31 @@ contract:
   description: >-
     Canonical cross-system session correlation identifier. Generated once per session
     and propagated to child telemetry rows as a foreign key. The joining key across
-    the telemetry star schema (telemetry_sessions / _phases / _steps / _process_events
-    / _model_calls / _transcripts) and the (dormant) ops_session_log table.
+    the canonical four-table telemetry trace/observation model (telemetry_sessions /
+    telemetry_observations / telemetry_transcripts / telemetry_agents, Decision 95) and
+    the (dormant) ops_session_log table.
 fields:
   session_id:
     type: str
     iceberg_type: string
     nullable: true
     description: >-
-      UUID4 string correlating all rows emitted within one session. Primary key of
-      telemetry_sessions; foreign key on the child telemetry tables. Distinct from
-      the Copilot CLI `session_id` (docs/contracts/cli-json-output.md), which is an
-      external CLI session id, NOT this telemetry session.
+      Session correlation id (canonical TARGET format ULID per Decision 97 cl.4; live format UUID4,
+      str(uuid.uuid4()), grandfathered until open_session mints ULID) correlating all rows emitted
+      within one session. Primary key of telemetry_sessions; foreign key on telemetry_observations,
+      telemetry_transcripts, and telemetry_agents. Distinct from the Copilot CLI `session_id`
+      (docs/contracts/cli-json-output.md), which is an external CLI session id, NOT this telemetry
+      session.
     semantics: >-
-      Format: UUID4 (str(uuid.uuid4())), generator-guaranteed. Created in the parent
-      session and propagated to phases/steps/events as a foreign key. The Class C
-      baseline nullability is the LOOSEST common value so per-table contracts can
-      TIGHTEN via dq_intent_local without violating Invariant 5 (overrides must
-      tighten, never loosen). Per-table nullability: REQUIRED in telemetry_sessions
-      (PK), telemetry_phases, telemetry_steps; OPTIONAL in telemetry_process_events,
-      telemetry_model_calls, telemetry_transcripts; ABSENT in
-      telemetry_agent_invocations.
+      Live format: UUID4 (str(uuid.uuid4())), generator-guaranteed; canonical TARGET format ULID
+      (Decision 97 cl.4), flipping when scripts/executor/telemetry.py::open_session is migrated. Created
+      in the parent session and propagated to child observations as a foreign key (Decision 95
+      root-unification). The Class C baseline nullability is the LOOSEST common value so per-table
+      contracts TIGHTEN via dq_intent_local without violating Invariant 5 (overrides must tighten, never
+      loosen). Per-table nullability in the canonical four-table model: REQUIRED (not_null enforced) in
+      telemetry_sessions (PK), telemetry_observations (FK root), telemetry_transcripts (FK root), and
+      telemetry_agents (FK root -- the rootless telemetry_agent_invocations is replaced by the rooted
+      telemetry_agents, so session_id is now PRESENT and REQUIRED there, no longer absent).
     populated_by: >-
       scripts/executor/telemetry.py::open_session() mints the UUID4; entered via
       scripts/session_preflight.py --open-session or the executor; closed via
@@ -47,21 +51,60 @@ fields:
         enforced: false
     governance_notes: >-
       Loosest baseline (not_null not enforced) by design: the owning/required tables
-      (telemetry_sessions PK, telemetry_phases, telemetry_steps) and the dormant
-      ops_session_log (merge_key session_id, partition bucket(8, session_id), VARCHAR
-      not-null) tighten to enforced not-null via dq_intent_local; optional-FK tables
-      pass through; telemetry_agent_invocations omits the field entirely.
-      ops_session_log is DORMANT/unprovisioned as of 2026-06-19; its per-table
-      contract tightens when the table is provisioned.
-    amendment_log: []
+      (telemetry_sessions PK, telemetry_observations, telemetry_transcripts, telemetry_agents -- the
+      Decision 95 four-table model) and the dormant ops_session_log (merge_key session_id, partition
+      bucket(8, session_id), VARCHAR not-null) tighten to enforced not-null via dq_intent_local.
+      ULID NOTE (Decision 97 cl.4): ULID is the canonical TARGET format for session_id; existing UUID4
+      ids are grandfathered and the format flips only when scripts/executor/telemetry.py::open_session is
+      migrated to mint ULIDs -- a downstream code-migration concern, NOT a format change in this contract.
+      ops_session_log is DORMANT/unprovisioned; its per-table contract tightens when the table is
+      provisioned.
+    amendment_log:
+      - date: "2026-06-24"
+        semantic_break: false
+        change_class: prose_improvement
+        summary: >-
+          T0.12.6 additive amendment: re-ground the stale six-table star-schema description to the
+          canonical four-table trace/observation model (telemetry_sessions / telemetry_observations /
+          telemetry_transcripts / telemetry_agents), per Decision 95. Per-table nullability list and the
+          joins_using_this_key entries re-grounded (telemetry_phases/_steps/_process_events/_model_calls
+          collapsed into telemetry_observations; rootless telemetry_agent_invocations replaced by the
+          rooted telemetry_agents).
+        migration_story: >-
+          Prose-only: no field, type, format, or nullability change to the session_id column. Only the
+          contract's description of WHICH telemetry tables consume session_id is corrected from the draft
+          seven-table model to the ratified four-table model. semantic_break=false.
+      - date: "2026-06-24"
+        semantic_break: false
+        change_class: governance_note_add
+        summary: >-
+          T0.12.6 additive amendment: record ULID as the canonical TARGET format for session_id
+          (Decision 97 cl.4); the live UUID4 format is grandfathered until open_session is migrated.
+        migration_story: >-
+          Governance note only: NO format flip in this contract. type stays str; the live format stays
+          UUID4. The note forward-declares the ULID target so the per-table telemetry contracts and the
+          future open_session migration ratify to one identity standard. semantic_break=false.
 joins_using_this_key:
-  # Forward-declared. The _joins.yaml entry lands with the telemetry Class A contracts
-  # (T0.12.6), per INTENT Part 5 incremental-landing; not created by this plan.
-  - session_id_join_telemetry_sessions_to_phases
+  # Landed in docs/contracts/_joins.yaml by T0.12.6 (the telemetry Class A contracts ratified in the
+  # same wave). _phases collapsed into _observations (Decision 95 collapse rule).
+  - session_id_join_telemetry_sessions_to_observations
+  - session_id_join_telemetry_sessions_to_transcripts
+  - session_id_join_telemetry_sessions_to_agents
 governance_notes: >-
   Single-hop leaf invariant (no chained $ref; Class C contracts are leaf nodes,
-  Invariant 5). Telemetry Class A contracts (T0.12.6) reference
-  contract.fields.session_id; the cross-contract join entries land in
-  docs/contracts/_joins.yaml only when both referenced contracts ratify.
-amendment_log: []
+  Invariant 5). The telemetry Class A contracts (T0.12.6) reference
+  contract.fields.session_id; the cross-contract join entries are recorded in
+  docs/contracts/_joins.yaml (landed by T0.12.6, now that the referenced contracts ratify).
+amendment_log:
+  - date: "2026-06-24"
+    semantic_break: false
+    change_class: prose_improvement
+    summary: >-
+      T0.12.6: the contract-level description was re-grounded from the stale six-table star-schema list
+      to the canonical four-table trace/observation model (Decision 95). This contract-level entry
+      accompanies the contract.description change (CD.25 category-6 gate requires a document-level
+      amendment_log entry for a contract-level description change); it mirrors the field-level
+      prose_improvement on fields.session_id.amendment_log.
+    migration_story: >-
+      Prose-only: no field, type, format, or contract_version change. semantic_break=false.
 previous_versions: []

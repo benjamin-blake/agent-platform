@@ -1,0 +1,79 @@
+---
+# Non-ritual build registry. NOT a Class A/B/C ritual contract (no contract: block with class: field).
+# The CD.25 drift gate skips files that lack a contract: mapping with a class: field.
+#
+# Purpose: machine-readable build/deploy workflow registry for scripts/build_lambda.py.
+# Authored fresh from the live script (2026-06-29); the superseded .md documented a removed
+# --handler/--output/--layer CLI and is NOT carried forward.
+
+version: 1
+contract_version: 1
+status: ratified
+ratified_at: "2026-06-29"
+ratified_via: "PLAN-build-lambda-yaml (T-1.16)"
+last_verified: "2026-06-29"
+decisions_cited:
+  - Decision-79  # build_lambda.py is not Lambda-packaged; reads-YAML at build time is safe
+  - Decision-80  # equivalence check lives in pytest only, not a bespoke validate.py check
+  - Decision-86  # prose->contract extract-and-retire routing
+  - Decision-99  # DuckDB version pin stays SSOT'd in config/lambda/ducklake/version.yaml
+  - CD.24        # manifest-driven artifact bundling
+  - CD.25        # pre-codegen contract ratification series
+note: >-
+  Authored fresh from live build_lambda.py (2026-06-29). DuckDB version pin omitted -- SSOT
+  in config/lambda/ducklake/version.yaml per Decision 99. PROD_DEPS/DUCKLAKE_DEPS omitted as
+  volatile implementation detail. CLI flag defaults (--profile, --region) are OUT of registry
+  scope; the equivalence test compares flag-name sets only.
+tool: scripts/build_lambda.py
+
+size_limit_bytes: 262144000  # 262 MB hard ceiling; exceeding fails the build (not a warn)
+
+pipelines:
+  prod:
+    invocation: "python -m scripts.build_lambda"
+    artifacts:
+      - data-pipeline.zip
+      - ops-compaction.zip
+      - data-pipeline-deps-layer.zip
+  ducklake:
+    invocation: "python -m scripts.build_lambda --ducklake-only"
+    artifacts:
+      - ducklake-writer.zip
+      - ducklake-reader.zip
+      - ducklake-maintenance.zip
+      - ducklake-catalog-dr.zip
+      - ducklake-deps-layer.zip
+      - ducklake-extensions-layer.zip
+      - ducklake-pgclient-layer.zip
+
+deploy_targets:
+  prod_functions:  # each deploys data-pipeline.zip
+    - agent-platform-scheduled-agent-dispatcher
+    - agent-platform-findings-processor
+  ops_compaction:
+    function: agent-platform-ops-compaction
+    zip_key: lambda-packages/ops-compaction.zip
+  ducklake_function_zip_keys:
+    agent-platform-ducklake-writer: lambda-packages/ducklake-writer.zip
+    agent-platform-ducklake-reader: lambda-packages/ducklake-reader.zip
+    agent-platform-ducklake-maintenance: lambda-packages/ducklake-maintenance.zip
+    agent-platform-ducklake-catalog-dr: lambda-packages/ducklake-catalog-dr.zip
+  ducklake_layer_names:
+    - ducklake-deps-layer
+    - ducklake-extensions-layer
+    - ducklake-pgclient-layer
+
+# Flag DEFAULTS (--profile=company-aws-profile, --region=eu-west-2) are OUT of registry scope.
+# The equivalence test compares flag-name sets only.
+cli_flags:
+  - --skip-upload
+  - --bucket
+  - --profile
+  - --region
+  - --deploy
+  - --ducklake-only
+  - --list-bundle
+  - --ducklake-publish-canary-layers
+
+verified_against:
+  - "scripts/build_lambda.py (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS, DUCKLAKE_LAYER_NAMES, build_parser() flags)"

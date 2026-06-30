@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -13,6 +14,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+boto3 = pytest.importorskip("boto3")
 
 # Load the module under test
 _MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_preflight.py"
@@ -147,31 +150,85 @@ class TestGetGitStatus:
 
 
 class TestCheckTerraformPending:
-    def test_returns_false_when_exit_code_0(self) -> None:
-        mock_result = MagicMock(returncode=0)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is False
+    """check_terraform_pending() reads the sandbox convergence record (CD.35 Wave 6 / T2.35).
 
-    def test_returns_true_when_exit_code_2(self) -> None:
-        mock_result = MagicMock(returncode=2)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is True
+    The retired ``terraform -chdir=terraform plan`` invocation was replaced by a
+    convergence-record read. The function now returns a tuple
+    (pending: bool | None, convergence_health: dict | None).
+    """
 
-    def test_returns_none_when_exit_code_1(self) -> None:
-        mock_result = MagicMock(returncode=1)
-        with patch("session_preflight.subprocess.run", return_value=mock_result):
-            assert _preflight.check_terraform_pending() is None
+    from contextlib import contextmanager
 
-    def test_returns_none_when_terraform_not_found(self) -> None:
-        with patch("session_preflight.subprocess.run", side_effect=FileNotFoundError):
-            assert _preflight.check_terraform_pending() is None
+    @staticmethod
+    @contextmanager
+    def _patched(verdict):
+        """Patch the convergence-record read path so assess_health returns ``verdict``."""
+        from contextlib import ExitStack
 
-    def test_returns_none_on_timeout(self) -> None:
-        with patch(
-            "session_preflight.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="terraform", timeout=120),
-        ):
-            assert _preflight.check_terraform_pending() is None
+        with ExitStack() as stack:
+            stack.enter_context(patch("session_preflight.resolve_aws_profile", return_value="agent_platform"))
+            stack.enter_context(patch("boto3.Session"))
+            stack.enter_context(patch("scripts.convergence_health.read_convergence_record", return_value={}))
+            stack.enter_context(patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]))
+            stack.enter_context(patch("scripts.convergence_health.assess_health", return_value=verdict))
+            yield
+
+    def test_returns_false_when_green(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is False
+        assert health["status"] == "green"
+        assert health["red_age_hours"] == 0.0
+
+    def test_returns_true_when_red(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="red", red_age_hours=24.27, unapplied_backlog=0, severity="high")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is True
+        assert health["status"] == "red"
+        assert health["severity"] == "high"
+
+    def test_returns_true_when_backlog_nonzero_even_if_green(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=3, severity="low")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is True
+        assert health["unapplied_backlog"] == 3
+
+    def test_returns_none_when_status_unknown(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(status="unknown", red_age_hours=0.0, unapplied_backlog=0, severity="none")
+        with self._patched(verdict):
+            pending, health = _preflight.check_terraform_pending()
+        assert pending is None
+        assert health["status"] == "unknown"
+
+    def test_stuck_approvals_count_surfaced(self) -> None:
+        from scripts.convergence_health import HealthVerdict
+
+        verdict = HealthVerdict(
+            status="red",
+            red_age_hours=2.0,
+            unapplied_backlog=0,
+            stuck_approvals=[{"run_id": 1}, {"run_id": 2}],
+            severity="high",
+        )
+        with self._patched(verdict):
+            _, health = _preflight.check_terraform_pending()
+        assert health["stuck_approvals"] == 2
+
+    def test_returns_none_none_on_exception(self) -> None:
+        with patch("session_preflight.resolve_aws_profile", side_effect=RuntimeError("creds down")):
+            result = _preflight.check_terraform_pending()
+        assert result == (None, None)
 
 
 class TestCheckMainFreshness:
@@ -1452,7 +1509,6 @@ class TestCredentialsOrderingInMain:
 
         with (
             patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.sync_copilot_instructions"),
             patch(
                 "session_preflight.check_telemetry_health",
                 return_value={"friction_patterns": [], "overall": "ok", "checks": []},
@@ -2147,6 +2203,114 @@ class TestPrintCiRcaRecsWithCorrelation:
         assert "(none)" in output
 
 
+class TestCorrelateRecsWithCommits:
+    """Tests for correlate_recs_with_commits() -- general engine (T3.8)."""
+
+    def _rec(self, rec_id: str, file: str = "scripts/foo.py", created: str = "2026-06-10T10:00:00Z") -> dict:
+        return {"id": rec_id, "file": file, "title": "Some recommendation", "created_timestamp": created}
+
+    def _commit(self, sha: str, date: str, files: list[str]) -> dict:
+        return {"sha": sha, "date": date, "subject": f"fix: {sha}", "files": files}
+
+    def test_file_correlation_marks_likely_resolved(self) -> None:
+        rec = self._rec("rec-001", file="scripts/foo.py")
+        commit = self._commit("abc12345", "2026-06-11T10:00:00+00:00", ["scripts/foo.py"])
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+        assert result["unresolved"] == []
+
+    def test_id_in_commit_subject_marks_likely_resolved(self) -> None:
+        rec = self._rec("rec-042")
+        commit = {"sha": "bbb", "date": "2026-06-11T10:00:00+00:00", "subject": "fix: resolves rec-042", "files": []}
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["likely_resolved"] == [rec]
+
+    def test_no_match_marks_unresolved(self) -> None:
+        rec = self._rec("rec-002", file="scripts/bar.py")
+        commit = self._commit("ccc12345", "2026-06-11T10:00:00+00:00", ["scripts/other.py"])
+        result = _preflight.correlate_recs_with_commits([rec], [commit])
+        assert result["unresolved"] == [rec]
+
+    def test_closed_sibling_cluster_signal(self) -> None:
+        rec = self._rec("rec-003", file="scripts/foo.py", created="2026-06-10T10:00:00Z")
+        rec["title"] = "Fix foo module failure"
+        sibling = {
+            "id": "rec-sib",
+            "file": "scripts/foo.py",
+            "title": "Fix foo module error",
+            "last_updated_timestamp": "2026-06-11T10:00:00Z",
+        }
+        result = _preflight.correlate_recs_with_commits([rec], [], closed_recs=[sibling])
+        assert len(result["likely_resolved"]) == 1
+
+    def test_no_reader_call_made(self) -> None:
+        """Serving from read-cache only; no warehouse re-fetch (Decision 88)."""
+        rec = self._rec("rec-004", file="scripts/foo.py")
+        commit = self._commit("ddd12345", "2026-06-11T10:00:00+00:00", ["scripts/foo.py"])
+        with patch("session_preflight._make_reader") as mock_reader:
+            _preflight.correlate_recs_with_commits([rec], [commit])
+        mock_reader.assert_not_called()
+
+    def test_correlate_ci_rca_wrapper_delegates(self) -> None:
+        """correlate_ci_rca_with_main delegates to correlate_recs_with_commits."""
+        rec = self._rec("rec-005", file="scripts/ci.py")
+        commit = self._commit("eee12345", "2026-06-11T10:00:00+00:00", ["scripts/ci.py"])
+        result = _preflight.correlate_ci_rca_with_main([rec], [commit], closed_ci_rca_recs=None)
+        assert result["likely_resolved"] == [rec]
+
+
+class TestSurfaceQueueRelevanceTriage:
+    """Tests for surface_queue_relevance_triage() (T3.8 queue-wide surfacing)."""
+
+    def _row(self, rec_id: str, status: str, source: str, file: str, created: str) -> dict:
+        return {
+            "id": rec_id,
+            "status": status,
+            "source": source,
+            "file": file,
+            "title": f"title {rec_id}",
+            "created_timestamp": created,
+            "last_updated_timestamp": created,
+        }
+
+    def test_returns_likely_resolved_for_open_non_ci_rca(self) -> None:
+        cache = [
+            self._row("rec-101", "open", "planning", "scripts/foo.py", "2026-06-10T10:00:00Z"),
+        ]
+        commits = [{"sha": "abc12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/foo.py"]}]
+        result = _preflight.surface_queue_relevance_triage(cache, commits)
+        assert any(r["id"] == "rec-101" for r in result)
+
+    def test_ci_rca_recs_excluded_by_default(self) -> None:
+        cache = [
+            self._row("rec-200", "open", "ci_rca", "scripts/foo.py", "2026-06-10T10:00:00Z"),
+        ]
+        commits = [{"sha": "abc12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/foo.py"]}]
+        result = _preflight.surface_queue_relevance_triage(cache, commits)
+        assert all(r["id"] != "rec-200" for r in result)
+
+    def test_no_reader_call_during_surfacing(self) -> None:
+        """Surfacing is read-cache only; no DuckLake reader call (Decision 88)."""
+        cache = [self._row("rec-300", "open", "planning", "scripts/bar.py", "2026-06-10T10:00:00Z")]
+        commits = [{"sha": "def12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/bar.py"]}]
+        with patch("session_preflight._make_reader") as mock_reader:
+            _preflight.surface_queue_relevance_triage(cache, commits)
+        mock_reader.assert_not_called()
+
+    def test_cap_limits_results(self) -> None:
+        cache = [self._row(f"rec-{i}", "open", "planning", f"scripts/f{i}.py", "2026-06-01T00:00:00Z") for i in range(20)]
+        commits = [
+            {
+                "sha": "fff12345",
+                "date": "2026-06-10T00:00:00+00:00",
+                "subject": "fix all",
+                "files": [f"scripts/f{i}.py" for i in range(20)],
+            }
+        ]
+        result = _preflight.surface_queue_relevance_triage(cache, commits, cap=5)
+        assert len(result) <= 5
+
+
 class TestSyncCollapse:
     """sync_ops.sync is called exactly once; the standalone _sync_ops_pull is not called in main()."""
 
@@ -2446,3 +2610,280 @@ class TestGetRecentMainCommits:
         with patch("session_preflight.subprocess.run", return_value=self._make_git_result("")):
             result = _preflight._get_recent_main_commits()
         assert result == []
+
+
+class TestEndstateDrift:
+    """Tests for _check_endstate_drift() -- VP step 6 (endstate drift cases)."""
+
+    _OLD_IDS = ["T1.1", "T1.2"]
+    _NEW_ID = "ZZ9.99"
+    _STAMP_COMMIT = "abc1234"
+
+    def _make_old_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: not_started\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+        )
+
+    def _make_new_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: not_started\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+            "  - id: ZZ9.99\n"
+            "    name: New Item\n"
+            "    status: not_started\n"
+        )
+
+    def _make_completed_roadmap_yaml(self) -> str:
+        return (
+            "tier_items:\n"
+            "  - id: T1.1\n"
+            "    name: Item 1\n"
+            "    status: complete\n"
+            "  - id: T1.2\n"
+            "    name: Item 2\n"
+            "    status: not_started\n"
+        )
+
+    def _hash_of(self, ids: list[str]) -> str:
+        return hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest()
+
+    def _make_context_md(self, stamped_hash: str, commit: str = "abc1234") -> str:
+        return f"Derived from ROADMAP-PLATFORM.yaml @ {commit} (2026-06-28).\nroadmap_tier_id_set sha256: {stamped_hash}\n"
+
+    def _setup_tmpdir(self, tmp_path: Path, context_text: str, roadmap_yaml: str) -> None:
+        (tmp_path / "docs").mkdir(parents=True)
+        (tmp_path / "docs" / "PROJECT_CONTEXT.md").write_text(context_text, encoding="utf-8")
+        (tmp_path / "docs" / "ROADMAP-PLATFORM.yaml").write_text(roadmap_yaml, encoding="utf-8")
+
+    def test_endstate_in_sync_not_stale(self, tmp_path: Path) -> None:
+        """Identical ID set: stamped hash matches current roadmap -> not stale, no warning."""
+        current_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(current_hash)
+        roadmap = self._make_old_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        with patch("session_preflight.ROOT", tmp_path):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is False
+        assert result["current_hash"] == current_hash
+        assert result["new_ids"] == []
+
+    def test_endstate_new_id_stale_names_new_id(self, tmp_path: Path) -> None:
+        """New tier_item ID added to roadmap -> stale=True, new_ids contains the new ID."""
+        old_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(old_hash, self._STAMP_COMMIT)
+        roadmap = self._make_new_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        git_result = MagicMock()
+        git_result.returncode = 0
+        git_result.stdout = self._make_old_roadmap_yaml()
+
+        with patch("session_preflight.ROOT", tmp_path), patch("session_preflight.subprocess.run", return_value=git_result):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is True
+        assert self._NEW_ID in result["new_ids"]
+        assert result["current_hash"] != old_hash
+
+    def test_endstate_completed_item_unchanged_ids_not_stale(self, tmp_path: Path) -> None:
+        """Completing an item changes status but NOT the ID set -> hash unchanged -> not stale."""
+        current_hash = self._hash_of(self._OLD_IDS)
+        context = self._make_context_md(current_hash)
+        roadmap = self._make_completed_roadmap_yaml()
+        self._setup_tmpdir(tmp_path, context, roadmap)
+
+        with patch("session_preflight.ROOT", tmp_path):
+            result = _preflight._check_endstate_drift()
+
+        assert result["stale"] is False
+        assert result["new_ids"] == []
+
+
+class TestDeriveCiRcaDisputeOpen:
+    """Unit tests for _derive_ci_rca_dispute_open() -- filter/sort/cap."""
+
+    def _make_row(
+        self,
+        rec_id: str,
+        source: str = "ci_rca_evidence_dispute",
+        status: str = "open",
+        created: str = "2026-06-29T10:00:00Z",
+        title: str = "Dispute rec",
+        priority: str = "low",
+    ) -> dict:
+        return {
+            "id": rec_id,
+            "source": source,
+            "status": status,
+            "created_timestamp": created,
+            "title": title,
+            "priority": priority,
+        }
+
+    def test_filters_by_source_and_open_status(self) -> None:
+        """Only source=ci_rca_evidence_dispute + status in (open, in_progress) rows are returned."""
+        rows = [
+            self._make_row("rec-101", status="open"),
+            self._make_row("rec-102", status="in_progress"),
+            self._make_row("rec-103", status="closed"),
+            self._make_row("rec-104", source="ci_rca", status="open"),
+            self._make_row("rec-105", source="planning", status="open"),
+        ]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert {r["id"] for r in result} == {"rec-101", "rec-102"}
+
+    def test_newest_first_ordering(self) -> None:
+        """Results are ordered newest-first by created_timestamp."""
+        rows = [
+            self._make_row("rec-201", created="2026-06-27T08:00:00Z"),
+            self._make_row("rec-202", created="2026-06-29T12:00:00Z"),
+            self._make_row("rec-203", created="2026-06-28T06:00:00Z"),
+        ]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert [r["id"] for r in result] == ["rec-202", "rec-203", "rec-201"]
+
+    def test_capped_at_five(self) -> None:
+        """Result is capped at 5 rows."""
+        rows = [self._make_row(f"rec-{300 + i}", created=f"2026-06-2{i}T00:00:00Z") for i in range(7)]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert len(result) == 5
+
+    def test_projects_expected_fields(self) -> None:
+        """Each returned dict has id, title, priority, created_timestamp."""
+        rows = [self._make_row("rec-401", title="My dispute", priority="Low", created="2026-06-29T10:00:00Z")]
+        result = _preflight._derive_ci_rca_dispute_open(rows)
+        assert len(result) == 1
+        assert set(result[0].keys()) == {"id", "title", "priority", "created_timestamp"}
+        assert result[0]["id"] == "rec-401"
+        assert result[0]["title"] == "My dispute"
+
+    def test_empty_rows_returns_empty(self) -> None:
+        assert _preflight._derive_ci_rca_dispute_open([]) == []
+
+
+class TestFetchCiRcaDisputeRecs:
+    """Unit tests for _fetch_ci_rca_dispute_recs() -- cache-row path."""
+
+    def _make_dispute_row(self, rec_id: str, status: str = "open") -> dict:
+        return {
+            "id": rec_id,
+            "source": "ci_rca_evidence_dispute",
+            "status": status,
+            "title": "Dispute rec",
+            "priority": "low",
+            "created_timestamp": "2026-06-29T10:00:00Z",
+        }
+
+    def test_cache_rows_supplied_returns_derived(self) -> None:
+        """When cache_rows is a list, returns _derive_ci_rca_dispute_open result (no reader call)."""
+        rows = [self._make_dispute_row("rec-501")]
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=rows)
+        assert len(result) == 1
+        assert result[0]["id"] == "rec-501"
+
+    def test_cache_rows_none_returns_empty(self) -> None:
+        """When cache_rows is None (warm-pull failed), returns []."""
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=None)
+        assert result == []
+
+    def test_sentinel_returns_empty(self) -> None:
+        """When called with the sentinel (no cache_rows arg), returns [] -- no reader call."""
+        result = _preflight._fetch_ci_rca_dispute_recs()
+        assert result == []
+
+    def test_filters_closed_rows_from_cache(self) -> None:
+        """Closed dispute recs are excluded from the cache-path result."""
+        rows = [
+            self._make_dispute_row("rec-601", status="open"),
+            self._make_dispute_row("rec-602", status="closed"),
+        ]
+        result = _preflight._fetch_ci_rca_dispute_recs(cache_rows=rows)
+        assert [r["id"] for r in result] == ["rec-601"]
+
+
+class TestPrintCiRcaDisputeRecs:
+    """Unit tests for print_ci_rca_dispute_recs() -- section rendering."""
+
+    def test_empty_prints_none_line(self, capsys: pytest.CaptureFixture) -> None:
+        """When recs is empty, prints the header and '(none)'."""
+        _preflight.print_ci_rca_dispute_recs([])
+        out = capsys.readouterr().out
+        assert "CI-RCA Dispute Recs (open)" in out
+        assert "(none)" in out
+
+    def test_renders_rec_ids(self, capsys: pytest.CaptureFixture) -> None:
+        """Each rec is rendered with its id, priority, timestamp, and title."""
+        recs = [
+            {
+                "id": "rec-701",
+                "title": "Bundle wrong on earliest_viable_gate",
+                "priority": "low",
+                "created_timestamp": "2026-06-29T10:00:00Z",
+            },
+        ]
+        _preflight.print_ci_rca_dispute_recs(recs)
+        out = capsys.readouterr().out
+        assert "CI-RCA Dispute Recs (open)" in out
+        assert "rec-701" in out
+        assert "Bundle wrong on earliest_viable_gate" in out
+
+    def test_header_printed_before_entries(self, capsys: pytest.CaptureFixture) -> None:
+        """The section header appears before any rec lines."""
+        recs = [{"id": "rec-801", "title": "Dispute", "priority": "low", "created_timestamp": "2026-06-29T10:00:00Z"}]
+        _preflight.print_ci_rca_dispute_recs(recs)
+        out = capsys.readouterr().out
+        header_pos = out.index("CI-RCA Dispute Recs (open)")
+        rec_pos = out.index("rec-801")
+        assert header_pos < rec_pos
+
+
+class TestPreflightReportDisputeKey:
+    """The preflight report JSON must include ci_rca_dispute_recs."""
+
+    def test_report_json_contains_ci_rca_dispute_recs(self, tmp_path: Path) -> None:
+        """session_preflight.py writes ci_rca_dispute_recs to the report JSON.
+
+        The autouse fixture stubs _make_reader, warm_sync, check_main_freshness, and
+        _sync_ops_pull; we only need to patch the infrastructure that main() calls directly.
+        """
+        preflight_report = tmp_path / ".preflight-report.json"
+        dispute_recs = [
+            {"id": "rec-901", "title": "Dispute rec", "priority": "low", "created_timestamp": "2026-06-29T10:00:00Z"}
+        ]
+
+        with (
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("session_preflight._fetch_ci_rca_dispute_recs", return_value=dispute_recs),
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("session_preflight.read_context_files", return_value={}),
+            patch(
+                "session_preflight.check_telemetry_health",
+                return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        assert preflight_report.exists()
+        report = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert "ci_rca_dispute_recs" in report, f"ci_rca_dispute_recs missing from report keys: {list(report)[:30]}"
+        assert report["ci_rca_dispute_recs"] == dispute_recs

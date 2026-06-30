@@ -1,0 +1,282 @@
+schema_version: 1
+slug: "iceberg-ddl-generator-rescope"
+intent: >-
+  Deliver the T0.13 capability - a Pydantic-to-Iceberg DDL generator - re-anchored off the
+  now-stale ops_recommendations round-trip onto the Iceberg surfaces that actually remain
+  (product D.lake.* + market_data, per CD.31/KG.1), so future Iceberg tables are schema-as-code
+  from a single typed source rather than hand-maintained DDL that drifts.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-iceberg-ddl-generator-rescope.yaml
+phase: >-
+  Platform tier T0.13 (Iceberg DDL generator from Pydantic models). PLATFORM-only: no
+  ROADMAP-PRODUCT.yaml phase is touched - the KG.1 platform/product boundary is respected
+  (the ~17 product items keep their cross_roadmap_depends_on PLATFORM:T0.13 edge unchanged).
+scope:
+  - file: scripts/schema_to_iceberg.py
+    action: Create
+    purpose: >-
+      The generator. Walks an Annotated-Pydantic model's model_fields and emits Athena Iceberg
+      CREATE TABLE DDL text in the repo house convention (terraform/personal/main.tf:206-285):
+      type map str->string, int->bigint (Iceberg promotion-safe), float->double, bool->boolean,
+      datetime->timestamp, date->date, list[T]->array<inner>, Literal->string; PARTITIONED BY from
+      the class-level @partition_by(...) decorator; LOCATION + TBLPROPERTIES(table_type=ICEBERG,
+      format=parquet, write_compression=gzip). Builds a pyiceberg Schema as the validity oracle
+      (DqNotNull -> required field). Non-destructive: DqDeleted fields excluded from CREATE, never
+      auto-dropped; deployed column absent from the model and not DqDeleted raises; standalone
+      --emit-drop FIELD emits ALTER TABLE DROP COLUMN only for a DqDeleted-marked field. Exposes
+      main(argv) for in-process testing; pyiceberg imported lazily (never at module import).
+  - file: src/schemas/annotations.py
+    action: Modify
+    purpose: >-
+      Add the partition_by(spec) class decorator next to migrating() - sets cls.__partition_by__.
+      It is a class-level schema decorator, NOT a Dq* field marker, so CD.12's closed 7-marker DQ
+      vocabulary is untouched (test_seven_markers_exposed counts names starting with "Dq").
+      Docstring updated to distinguish field-level DQ markers (closed at 7) from class-level
+      schema decorators (migrating, partition_by).
+  - file: tests/fixtures/iceberg_fixture.py
+    action: Create
+    purpose: >-
+      Synthetic type-coverage fixture: CoverageModel(BaseModel) decorated
+      @partition_by('day(last_updated_timestamp)') with one field per supported type (str/int/
+      float/bool/datetime/date/list[str]/Literal/Optional), a DqNotNull field, the SCD2
+      created_timestamp/last_updated_timestamp pair, and one retired DqDeleted field. Deliberately
+      synthetic - NOT a product/market_data schema - so platform-tool delivery stays decoupled from
+      product schema authoring (KG.1).
+  - file: tests/fixtures/iceberg/coverage_model.ddl.sql
+    action: Create
+    purpose: >-
+      Checked-in golden DDL fragment - the byte-exact expected generator output for CoverageModel.
+      The stability contract the tests and the end-to-end CLI VP step assert against.
+  - file: tests/test_schema_to_iceberg.py
+    action: Create
+    purpose: >-
+      Generator test suite (100% coverage of scripts/schema_to_iceberg.py): golden byte-match,
+      type matrix, pyiceberg Schema validity + required==DqNotNull, DqDeleted exclusion,
+      non-destructive raise, --emit-drop guard, missing/unknown partition raises, unsupported-type
+      raise, and the main(argv) CLI path in-process.
+  - file: tests/test_annotations.py
+    action: Modify
+    purpose: >-
+      Add a partition_by decorator test asserting __partition_by__ is set; confirm the existing
+      test_seven_markers_exposed still counts exactly 7 Dq markers.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-scope tier item T0.13 (the roadmap correction this plan carries). Replace the two stale
+      RecPayload/ops_recommendations round-trip exit criteria with fixture+golden+pyiceberg
+      criteria; drop T0.12.5 from depends_on (keep T0.12); rewrite intent to name the product/
+      market_data Iceberg consumers and the T0.13(Iceberg)-vs-T2.33(DuckLake field_semantics)
+      split; add CD.31 to related_candidate_decisions and cite Decision 84/78 in the intent prose;
+      update files_in_scope; defer terraform/iceberg_tables_generated.tf to the first product
+      consumer (OQ.5 stays open). ROADMAP-PRODUCT.yaml is NOT touched.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/schema_to_iceberg.py emits Athena Iceberg CREATE TABLE DDL for an Annotated-Pydantic
+    model in the repo house convention (CREATE TABLE IF NOT EXISTS <db>.<table>, PARTITIONED BY,
+    LOCATION, TBLPROPERTIES('table_type'='ICEBERG','format'='parquet','write_compression'='gzip')),
+    byte-identical to tests/fixtures/iceberg/coverage_model.ddl.sql for the synthetic CoverageModel.
+  - >-
+    Type matrix is correct: str->string, int->bigint (never int), float->double, bool->boolean,
+    datetime->timestamp, date->date, list[T]->array<inner>, Literal->string. DqNotNull maps to a
+    pyiceberg required field plus a column COMMENT - never a SQL NOT NULL (Athena Iceberg has none).
+  - >-
+    The emitted column set builds a valid pyiceberg Schema (type oracle); the set of required
+    fields equals exactly the set of fields carrying DqNotNull.
+  - >-
+    PARTITIONED BY is emitted from the class-level @partition_by(...); a model without it raises
+    (CD.9 partition-every-table), and a partition transform referencing a column absent from the
+    model raises.
+  - >-
+    Non-destructive guarantee: a column present in a supplied deployed schema but absent from the
+    model and not covered by a DqDeleted field raises; DqDeleted fields are excluded from CREATE and
+    never auto-dropped; --emit-drop FIELD emits ALTER TABLE ... DROP COLUMN only for a DqDeleted
+    field and is never invoked during CREATE generation.
+  - >-
+    partition_by lives in src/schemas/annotations.py, sets __partition_by__, and does not change the
+    closed 7-marker DQ vocabulary (test_seven_markers_exposed stays green).
+  - >-
+    100% test coverage of scripts/schema_to_iceberg.py; the full scripts.validate presubmit passes
+    (including validate_platform_roadmap over the re-scoped T0.13).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T0.13 is re-scoped (stale ops round-trip criteria removed, depends_on
+    drops T0.12.5, intent/related decisions updated) and docs/ROADMAP-PRODUCT.yaml is unchanged.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Lint and format (fast edit-loop tier).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "PASS - ruff format/lint clean, no em dashes, line length <=127."
+    fix_if: "ruff reports format/lint errors -> fix and re-run."
+  - step: 2
+    phase: pre-deploy
+    action: Run the generator unit suite.
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py -q"
+    expected: "All tests pass."
+    fix_if: "A behavioural test fails -> fix the generator (not the test) unless the test encodes a wrong expectation."
+  - step: 3
+    phase: pre-deploy
+    action: End-to-end golden match - run the real CLI and diff stdout against the checked-in golden.
+    command: "bin/venv-python -m scripts.schema_to_iceberg --model tests.fixtures.iceberg_fixture:CoverageModel --table coverage_model --database agent_platform --location s3://agent-platform-data-lake/iceberg/coverage_model/ | diff -u tests/fixtures/iceberg/coverage_model.ddl.sql -"
+    expected: "No diff, exit 0 - emitted DDL is byte-identical to the golden (CREATE TABLE IF NOT EXISTS, bigint columns, PARTITIONED BY (day(last_updated_timestamp)), TBLPROPERTIES table_type=ICEBERG)."
+    fix_if: "diff shows drift -> reconcile generator output; only update the golden if the change is an intentional contract change."
+  - step: 4
+    phase: pre-deploy
+    action: pyiceberg Schema oracle and type-matrix / NOT NULL mapping.
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py::test_pyiceberg_schema_valid tests/test_schema_to_iceberg.py::test_type_matrix -q"
+    expected: "Pass - emitted columns build a valid pyiceberg Schema; required fields == DqNotNull fields; int->bigint, datetime->timestamp, list[str]->array<string>, Literal->string."
+    fix_if: "Type maps wrong or required set mismatches -> fix iceberg_type()/required derivation."
+  - step: 5
+    phase: pre-deploy
+    action: Non-destructive guarantee, DqDeleted exclusion, and emit-drop guard.
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py::test_nondestructive tests/test_schema_to_iceberg.py::test_dqdeleted_excluded tests/test_schema_to_iceberg.py::test_emit_drop_requires_dqdeleted -q"
+    expected: "Pass - deployed col absent from model and not DqDeleted raises; DqDeleted col excluded from CREATE; --emit-drop emits DROP COLUMN only for a DqDeleted field."
+    fix_if: "A silent-drop path exists or emit-drop accepts a non-DqDeleted field -> add the guard."
+  - step: 6
+    phase: pre-deploy
+    action: Partition enforcement (CD.9).
+    command: "bin/venv-python -m pytest tests/test_schema_to_iceberg.py::test_missing_partition_raises tests/test_schema_to_iceberg.py::test_partition_unknown_column_raises -q"
+    expected: "Pass - model without @partition_by raises MissingPartitionSpec; partition referencing an unknown column raises."
+    fix_if: "Enforcement missing -> add the __partition_by__ presence check and the partition-column existence check."
+  - step: 7
+    phase: pre-deploy
+    action: Closed DQ vocabulary intact (CD.12) + partition_by decorator behaviour.
+    command: "bin/venv-python -m pytest tests/test_annotations.py -q"
+    expected: "Pass - new partition_by decorator test green AND test_seven_markers_exposed still counts exactly 7 Dq markers."
+    fix_if: "Marker count changed -> ensure the decorator symbol is not Dq-prefixed and adds no Dq* dataclass."
+  - step: 8
+    phase: pre-deploy
+    action: 100% coverage of new code (AST coverage checker).
+    command: "bin/venv-python -m scripts.test_coverage_checker"
+    expected: "PASS - scripts/schema_to_iceberg.py and the src/schemas/annotations.py additions are 100% covered."
+    fix_if: "Coverage <100% -> exercise the missing branch via main(argv) in-process; mark only the `if __name__ == __main__` guard with a no-cover pragma. If it needs a base ref, pass origin/main."
+  - step: 9
+    phase: pre-deploy
+    action: Full presubmit (CI parity) - includes validate_platform_roadmap over the re-scoped T0.13.
+    command: "bin/venv-python -m scripts.validate"
+    expected: "PASS - full suite, incl. platform roadmap schema validation (T0.13 edit parses, depends_on graph consistent), coverage, prompts, full pytest."
+    fix_if: "Any check fails -> address before merge. A RoadmapDocument schema error means the T0.13 YAML edit is malformed (e.g. an unsupported key) -> fix the edit."
+constraints:
+  - >-
+    PLATFORM-only (human-reinforced, KG.1 boundary): edit docs/ROADMAP-PLATFORM.yaml only, NEVER
+    docs/ROADMAP-PRODUCT.yaml. Validate on the synthetic tests/fixtures/iceberg_fixture.py model;
+    do NOT author or import any product/market_data table schema in this plan.
+  - >-
+    int -> bigint is deliberate (Iceberg integer-promotion gotcha, terraform/CLAUDE.md): the
+    generator never emits `int`. This intentionally differs from the legacy hand-written ops DDL
+    (which used int and is now DuckLake/retired); the synthetic golden is internally consistent.
+  - >-
+    No SQL NOT NULL: Athena Iceberg CREATE TABLE has no NOT NULL constraint. DqNotNull maps to a
+    pyiceberg required field plus a column COMMENT; logical not-null is enforced by the DQ runner,
+    not physical DDL.
+  - >-
+    pyiceberg is imported lazily inside functions (never at module import) per the import-safety
+    rule - the module must import cleanly even where pyiceberg is absent. pyiceberg 0.11.1 is
+    verified importable in this container; sqlglot/hcl2 are absent, so the validity oracle is
+    pyiceberg Schema construction, not a SQL/HCL parser.
+  - >-
+    No new prose-architecture docs (Decision 86): all re-scope rationale lives in the T0.13
+    tier_item intent and Decision/CD references - author no docs/INTENT-*.md or companion doc.
+  - >-
+    T0.12.5 is intentionally dropped from T0.13 depends_on (a CD.25-ritual-added edge) because the
+    re-scoped validation uses a synthetic fixture, not the ratified ops Class A contract; T0.12 (the
+    Annotated vocabulary foundation) is kept.
+  - >-
+    No AWS/Lambda/Terraform in scope - no file is Lambda-packaged (config/agent and scripts/ are not
+    bundled) and no .tf is created. No rescue agents or workaround loops (Decision 55).
+  - >-
+    Code style: Python 3.12+, type hints, ruff line length 127, ASCII hyphens only, no emojis,
+    bin/venv-python for all invocations.
+context:
+  - >-
+    Re-scope rationale: T0.13's original exit criteria validate by round-tripping the
+    ops_recommendations Iceberg schema, but Decision 84 moved ops (and ops_decisions/
+    ops_priority_queue) to DuckLake as the sole backend - that table is no longer Iceberg. CD.31
+    (ratified by Decision 78) keeps product D.lake.* + market_data on Iceberg under the KG.1
+    boundary, so the generator capability is still needed there. The validation method is what is
+    stale, not the capability.
+  - >-
+    Decision-scout gate verdict: NO_FLAGS. Decisions this plan must reference: Decision 84
+    (ops off Iceberg), CD.12 (DQ-as-Annotated-Pydantic; generator walks model_fields; closed
+    7-marker vocabulary; non-destructive DqDeleted rule), CD.9 (partition-every-table; Iceberg
+    CREATE-time PARTITIONED BY), CD.31 (product + market_data remain Iceberg; KG.1), and Decision 78
+    (CD.31's ratified parent).
+  - >-
+    Tier Item Freshness Gate: stale-reference re-grounding applied (the ops round-trip exit
+    criteria + the T0.12.5 dependency reference a substrate ratified decisions retired). Not a
+    silent-completion (no generator exists yet). Not superseded - T2.33 owns DuckLake schema-as-code
+    (field_semantics.yaml); T0.13 is Iceberg-only. The plan names that boundary in the T0.13 intent.
+  - >-
+    House DDL template: terraform/personal/main.tf:206-285 (ops_recommendations / ops_decisions /
+    ops_priority_queue CREATE TABLE blocks) is the shape the generator reproduces. Those ops tables
+    are now DuckLake, so their Iceberg DDL is legacy reference only.
+  - >-
+    pyiceberg 0.11.1 verified importable in the CC-web container (unlike duckdb, which was
+    declared-but-absent in a prior spike); sqlglot and hcl2 are not installed. The generator uses
+    pyiceberg for the type oracle and renders the Athena DDL text itself.
+  - >-
+    This plan resolves no open recommendations and retires no surface (additive code + roadmap
+    re-grounding) - the closure obligation does not trigger. No ci-rca recs are in scope.
+  - >-
+    OQ.5 (commit vs gitignore the generated terraform/iceberg_tables_generated.tf) stays open: the
+    lean scope emits no committed generated .tf - the generator is exercised via tests + golden +
+    CLI only. The first product Iceberg table (authoring a real Annotated model and generating its
+    .tf) is a separate PRODUCT plan, later.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/upbeat-fermi-0xd8r0)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scoped via the decision-scout gate (NO_FLAGS); CITE list captured in context
+  - All files in scope located and readable; house DDL template (terraform/personal/main.tf:206-285) and annotations.py marker vocabulary reviewed
+  - pyiceberg import verified in-container; sqlglot/hcl2 confirmed absent
+  - Acceptance criteria understood and independently verifiable
+execution_steps:
+  - >-
+    Create scripts/schema_to_iceberg.py: iceberg_type(annotation)->str mapping (str/int->bigint/
+    float/bool/datetime/date/list[T]->array<inner>/Literal->string; Optional unwrap; unknown ->
+    raise UnsupportedFieldType); model_to_iceberg_schema(model)->pyiceberg Schema (skip DqDeleted;
+    required from DqNotNull); model_to_iceberg_ddl(model, table, *, database='agent_platform',
+    location, deployed_columns=None)->str rendering the house-convention CREATE TABLE text;
+    @partition_by required (MissingPartitionSpec if absent, CD.9) with partition-column existence
+    check; deployed_columns non-destructive guard (DestructiveSchemaChange); emit_drop(model,
+    table, field) guarded to DqDeleted fields; main(argv)->int with argparse (--model module:Class,
+    --table, --database, --location, --emit-drop). pyiceberg imported lazily; no raise at import;
+    `if __name__ == __main__` guard with no-cover pragma.
+  - >-
+    Modify src/schemas/annotations.py: add partition_by(spec: str) returning a class decorator that
+    sets cls.__partition_by__ = spec (mirror migrating()); update the module docstring to
+    distinguish the closed 7 field-level DQ markers from class-level schema decorators
+    (migrating, partition_by). Do not add any Dq*-prefixed symbol.
+  - >-
+    Create tests/fixtures/iceberg_fixture.py (CoverageModel with @partition_by, one field per type,
+    a DqNotNull field, SCD2 timestamps, and a DqDeleted retired field, each with Field(description=)
+    for column comments) and tests/fixtures/iceberg/coverage_model.ddl.sql (the golden, generated
+    once from the finished generator and then committed as the contract).
+  - >-
+    Create tests/test_schema_to_iceberg.py covering: golden byte-match (via API and via main(argv)
+    in-process), type matrix, pyiceberg Schema validity + required==DqNotNull, DqDeleted exclusion,
+    non-destructive raise (and the DqDeleted-covered no-raise case), emit-drop guard, missing /
+    unknown-column partition raises, unsupported-type raise. Target 100% coverage of the module.
+  - >-
+    Modify tests/test_annotations.py: add test_partition_by_decorator_sets_attr; keep
+    test_seven_markers_exposed green.
+  - >-
+    Modify docs/ROADMAP-PLATFORM.yaml T0.13 (lines ~2908-2931): rewrite intent (Athena Iceberg DDL
+    for product/market_data Iceberg consumers; int->bigint; @partition_by/CD.9; DqDeleted
+    non-destructive; T0.13-is-Iceberg-only vs T2.33 DuckLake field_semantics; cite Decision 84/78);
+    depends_on -> [T0.12] with an explanatory comment; files_in_scope -> the actual scope files,
+    with terraform/iceberg_tables_generated.tf annotated as deferred to the first product consumer
+    (OQ.5 open); exit_criteria -> replace the two RecPayload/ops round-trip items with
+    fixture+golden+pyiceberg criteria, keep/strengthen the type-matrix, partition, non-destructive,
+    and emit-drop criteria; related_candidate_decisions -> [CD.9, CD.12, CD.31]. Verify the
+    RoadmapDocument schema accepts every key before committing; do NOT add an unsupported key (keep
+    Decision 84/78 citations in the intent prose). Do NOT touch docs/ROADMAP-PRODUCT.yaml.
+  - 'Execute the Verification Plan - run each step in order; loop until pass. V2: no deploy.'
+  - 'Report: what was implemented, the golden DDL, and the verification results.'
+work_areas: []
+rollback: >-
+  Pure additive code plus a roadmap-text edit. Revert by deleting scripts/schema_to_iceberg.py, the
+  two fixtures, and tests/test_schema_to_iceberg.py, reverting the src/schemas/annotations.py and
+  tests/test_annotations.py additions, and restoring the original T0.13 block in
+  docs/ROADMAP-PLATFORM.yaml. No infrastructure, data, or deployed artefact is affected.

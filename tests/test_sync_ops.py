@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -998,3 +999,29 @@ class TestDrainSkipsRecsOutbox:
             assert (tmp_path / name / "entry.jsonl").exists(), f"{name} entry must be left in place"
         warned = " ".join(r.message for r in caplog.records)
         assert "DuckLake" in warned and "outbox is retired" in warned
+
+
+# ---------------------------------------------------------------------------
+# upsert_cache_row() tests
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertCacheRow:
+    def test_devnull_sentinel_returns_zero_no_tmp_written(self) -> None:
+        """upsert_cache_row with path=Path(os.devnull) returns 0 and writes no .tmp file."""
+        from scripts import sync_ops
+
+        result = sync_ops.upsert_cache_row("ops_recommendations", {"id": "rec-9999", "title": "t"}, path=Path(os.devnull))
+        assert result == 0
+        assert not Path(os.devnull + ".tmp").exists()
+
+    def test_real_path_writes_cache_row(self, tmp_path: Path) -> None:
+        """upsert_cache_row with a real path writes the row and returns row count."""
+        from scripts import sync_ops
+
+        cache_file = tmp_path / "recs.jsonl"
+        result = sync_ops.upsert_cache_row("ops_recommendations", {"id": "rec-0001", "title": "hello"}, path=cache_file)
+        assert result == 1
+        assert cache_file.exists()
+        row = json.loads(cache_file.read_text(encoding="utf-8").strip())
+        assert row["id"] == "rec-0001"

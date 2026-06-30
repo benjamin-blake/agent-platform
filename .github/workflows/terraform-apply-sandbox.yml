@@ -304,14 +304,14 @@ jobs:
 
       - name: Deterministic apply guard (fail-closed)
         id: guard
-        # Three-way exit code branch (CD.35 Wave 3 / T2.22 -- shell-layer routing only; guard unmodified):
-        #   exit 0 -- guard PASS, apply may proceed on the auto path
-        #   exit 2 -- guard BLOCKED (IAM/trust/destroy diff); sets routed=true output and exits 0
-        #             (routing is not a failure -- the gated-apply job takes over); record_write
-        #             and apply SKIP when routed (anti-masking, Decision 55)
+        # Three-way exit code branch (CD.35 Wave 3 / T2.22 + T2.25 guard narrowing):
+        #   exit 0 -- guard PASS; non-IAM or in-budget IAM (inline-policy/attachment UPDATE on
+        #             managed boundary-carrying role, T2.25 / Decision 92 point 5); apply proceeds
+        #   exit 2 -- guard BLOCKED (out-of-budget IAM / trust diff / destroy); sets routed=true
+        #             output and exits 0 (routing is not a failure -- the gated-apply job takes
+        #             over); record_write and apply SKIP when routed (anti-masking, Decision 55)
         #   exit 1 -- internal guard error; apply blocked, record_write writes red (fail-closed,
         #             Decision 77 / Decision 55 anti-masking)
-        # B1: scripts/terraform_apply_guard.py is NOT modified -- exit-2 wiring is shell-layer only.
         if: success()
         working-directory: ${{ env.WORKDIR }}
         run: |
@@ -320,7 +320,7 @@ jobs:
           rc=$?
           set -e
           if [ "$rc" -eq 2 ]; then
-            echo "Guard BLOCKED (exit 2): IAM/trust/destroy diff detected; routing to gated-apply job." >&2
+            echo "Guard BLOCKED (exit 2): out-of-budget IAM / trust diff / destroy; routing to gated-apply job." >&2
             echo "routed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -346,11 +346,10 @@ jobs:
           if ! command -v claude &> /dev/null; then
             sudo npm install -g @anthropic-ai/claude-code@2.1.148 --omit=dev --omit=optional && sudo npm cache clean --force
           fi
-          claude -p \
+          ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review.txt -- \
             --output-format text \
             --max-turns 10 \
-            "Review the terraform plan in plan.json for the sandbox auto-apply pipeline. It has already passed the deterministic guard (no destroy, no IAM/trust change). Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not." \
-            > review.txt 2>&1 || true
+            "Review the terraform plan in plan.json for the sandbox auto-apply pipeline. It has already passed the deterministic guard (no destroy, no out-of-budget IAM/trust change; may include in-budget IAM inline-policy or attachment UPDATEs on managed boundary-carrying CI roles per T2.25). Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not." || true
           cat review.txt
           if ! grep -qx "PROCEED" review.txt; then
             echo "Subagent did not return PROCEED; failing closed." >&2
@@ -444,10 +443,11 @@ jobs:
             exit 0
           fi
           if [ "$ROUTED" = "true" ]; then
-            # Guard exit 2 (IAM/trust/destroy diff) -> routed to gated-apply job. The convergence
-            # record is NOT touched; the gated-apply job pending reviewer approval handles the apply.
-            # Distinct message so the held subscription knows a human action is required (T2.22).
-            MSG="sandbox terraform-apply guard routed ${SHA} to the tf-gated-apply job (IAM/trust/destroy diff). Pending reviewer approval in GitHub Actions -- the convergence record is unchanged until the gated apply completes. Approve at: Actions -> gated-apply job. (Best-effort wake.)"
+            # Guard exit 2 (out-of-budget IAM / trust / destroy) -> routed to gated-apply job.
+            # The convergence record is NOT touched; the gated-apply job pending reviewer approval
+            # handles the apply. Distinct message so the held subscription knows a human action is
+            # required (T2.22).
+            MSG="sandbox terraform-apply guard routed ${SHA} to the tf-gated-apply job (out-of-budget IAM / trust / destroy diff). Pending reviewer approval in GitHub Actions -- the convergence record is unchanged until the gated apply completes. Approve at: Actions -> gated-apply job. (Best-effort wake.)"
           elif [ "$APPLY_OUTCOME" = "success" ]; then
             MSG="sandbox terraform-apply converged GREEN for ${SHA}; convergence record updated. (Best-effort wake; next planning session re-checks the record.)"
           else
@@ -587,9 +587,10 @@ jobs:
 
       - name: Deterministic apply guard (predicted verdict)
         id: pred_guard
-        # Captures the PREDICTED verdict from the unmodified guard. This is advisory -- the
+        # Captures the PREDICTED verdict from the guard. This is advisory -- the
         # authoritative verdict is the guard re-run at merge time on the saved plan. Exit codes:
-        #   0 = PASS, 2 = BLOCKED (IAM/trust/destroy), 1 = internal error.
+        #   0 = PASS (non-IAM or in-budget IAM, T2.25), 2 = BLOCKED (out-of-budget IAM/trust/destroy),
+        #   1 = internal error.
         if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |
@@ -888,6 +889,16 @@ jobs:
         # A workflow_dispatch ack run also queues behind this job (same group). This is an implicit
         # serialization invariant, not an explicit read-then-refuse gate -- accepted design tradeoff
         # for the gated path where the concurrency group provides the safety guarantee.
+        #
+        # Red-write dependency (VP10, 2026-06-22): this step writes the red record using the SAME
+        # OIDC apply-role creds configured in the "Configure AWS credentials" step. If the failure
+        # occurs AT OR BEFORE that creds step (e.g. the OIDC trust regresses, as VP9 first found),
+        # this step cannot reach S3 ("Unable to locate credentials") and the record stays at its
+        # prior value rather than going red. The backstop for that pre-creds window is ci-rca:
+        # ci-rca.yml triggers on the terraform-apply-sandbox workflow_run conclusion == failure
+        # (independent of the record), so a creds-stage gated-apply failure still files a rec and is
+        # NOT silently masked. Failures AT the apply stage (creds already configured) DO red the
+        # record here as intended.
         if: always()
         env:
           SHA: ${{ github.sha }}

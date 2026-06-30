@@ -7,16 +7,16 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 ## Hard rules
 - **Optional artifacts**: Always wrap `filemd5()` and `file()` calls on optional artifacts with `try()`. Bad: `source_code_hash = filemd5("build/lambda.zip")`. Good: `source_code_hash = try(filemd5("build/lambda.zip"), md5(file("module_file.tf")))`.
 - **ASCII tag values**: Plain ASCII hyphens (`-`) only in Lambda tag values. No em dashes — they fail in AWS API serialisation.
-- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
+- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply model: see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection (sole SoT, Decision 77). Short form: sandbox auto-applies behind the deterministic guard; in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25); trust/destroy/out-of-budget IAM route to gated-apply. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
 - **IAM precedence**: If a change modifies IAM (`*.tf` IAM resources or roles attached to Lambdas), `terraform apply` must precede any Lambda code deploy.
 
 ## AWS context
 - Region: `eu-west-2`
 - Account: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed).
 - Profile: `agent_platform` (PlatformDev, runtime) for agent operations; `agent_platform_admin` (PlatformAdmin) for provisioning (creates IAM + OIDC).
-- Glue database: `agent_platform` (personal module). Retained work-root `.tf` files still reference `trading_formulas_db`.
-- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). The work-account files in `terraform/` are retained per CD.21 but no longer applied.
-- The personal account has no SCP restricting IAM users or external OIDC (the Decisions 36/37 SCP block was work-account-only). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
+- Glue database: `agent_platform` (personal module). Retained legacy `.tf` files at the repo root still reference `trading_formulas_db` (artefacts from a prior account; not applied).
+- Personal-account infra lives in the isolated `terraform/personal/` root module (own provider + state). Legacy `.tf` files in `terraform/` are retained as architectural-evolution artefacts per CD.21 but no longer applied; only `terraform/personal/` is live.
+- The personal account has no SCP restricting IAM users or external OIDC (Decisions 36/37 do not apply to this account). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
 ## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
 **This project runs ONLY on Claude Code on the web. There is no operator local machine.** The agent
@@ -38,19 +38,18 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
 - **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
   trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
 
-**Apply posture (current -- guard-PASS changes):** routine (guard-PASS, non-IAM/trust/destroy) changes
-auto-apply via CD (`terraform-apply-sandbox.yml`). The CC-web agent presents the plan on PRs via the
-speculative-plan comment; at merge the SAME reviewed plan.bin is applied (no re-plan, T2.21). The
-deterministic `scripts/terraform_apply_guard.py` (fail-closed on any destroy/IAM/trust change) is the
-authoritative gate.
+**Apply posture:** see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection
+for the authoritative in-budget/out-of-budget classification (T2.25 / Decision 92 point 5). Short form:
 
-**Apply posture (fail-closed set: IAM/trust/destroy, CD.35 Wave 3 / T2.22):** when the guard exits 2,
-the `gated-apply` job in `terraform-apply-sandbox.yml` takes over. After the merge, the job blocks on
-the `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
-the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
-`workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec. Broader IAM changes
-beyond `github_ci_apply`'s current scope (e.g. creating a brand-new IAM role) remain AccessDenied and
-admin-gated until T2.23 (bootstrap root + authority budget).
+- Guard-PASS (non-IAM or in-budget IAM) changes auto-apply via CD (`terraform-apply-sandbox.yml`).
+  The CC-web agent presents the plan on PRs via the speculative-plan comment; at merge the SAME
+  reviewed plan.bin is applied (no re-plan, T2.21).
+- Out-of-budget IAM, trust diffs, destroys (guard exits 2): the `gated-apply` job blocks on the
+  `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
+  the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
+  `workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec.
+- Bootstrap root (`terraform/bootstrap/`) is admin-only out-of-band (agent_platform_admin), NEVER auto-applies.
+  The bootstrap root owns `github_ci_apply`'s own IAM + authority budget (T2.23/T2.25).
 
 **Concurrency tradeoff (correct-by-design):** a gated-apply job pending human approval holds the
 `terraform-apply-sandbox` concurrency group (`cancel-in-progress: false`), so later auto-applies queue
@@ -74,7 +73,7 @@ credential env vars take effect). Wave 1 made the apply outcome **sticky and obs
 job reads a durable convergence record as a precondition and refuses on red, writes the record green/red
 (always-run) after apply, and apply failures wire into `ci-rca` -- so a later green run can no longer mask
 an earlier apply failure. The interactive human-gated loop above remains the path for **IAM/trust/destroy**
-changes (the guard fail-closes them; they never auto-apply) and is still valid for any change you want to
+changes (out-of-budget IAM / trust / destroy -- the guard exits 2 and routes to gated-apply) and is still valid for any change you want to
 apply by hand. Routine (guard-PASS, non-IAM) changes are designed to ride the record-backed pipeline.
 
 ### Speculative plan + apply-the-saved-plan (CD.35 / T2.21 Wave 2)
@@ -122,6 +121,74 @@ SAME reviewed plan.bin is applied -- not a re-plan.
 **Role creation is guard-BLOCKED**:
 - `github_ci_plan` is a new IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). It lands via `agent_platform_admin` apply BEFORE the first PR that exercises the speculative-plan job. The job's `continue-on-error` on the assume-role step covers the bootstrap window.
 
+### Alarm-only scheduled drift detection (CD.35 Wave 5 / T2.24)
+
+Closes the last convergence gap: an hourly scheduled workflow (`terraform-drift.yml`) detects
+out-of-band infra drift without auto-applying.
+
+**Cron cadence:** `17 * * * *` (hourly, offset off the top of the hour).
+
+**Exit-code semantics:**
+- `0` -- no change; cycle is clean, no action.
+- `2` -- drift (changes detected); see "Drift signal" below.
+- `1` -- error; if stderr matches `"Error acquiring the state lock"` it is a lock-held skip
+  (an in-flight apply holds the native S3 lock -> exit 0, no alarm, no rec, record untouched).
+  Any other `exit 1` is a genuine error: the run fails loudly; no rec is filed and no red flip
+  occurs (drift != error).
+
+**Native-lock coexistence:** the drift plan runs `-lock=true -lock-timeout=120s`. The
+`github_ci_drift` role has `s3:PutObject + s3:DeleteObject` scoped to the EXACT lock object key
+`tfstate/personal/sandbox/terraform.tfstate.tflock` (terraform's conditional-put acquire + delete
+release), and NO write on the state object `terraform.tfstate` itself. Serialisation with apply
+is via the native S3 lock only -- there is no shared GHA concurrency group between
+`terraform-drift` and `terraform-apply-sandbox`.
+
+**Drift signal (ec=2):** on a green->red transition:
+1. Merge-write the convergence record red (preserves all existing fields; adds `drift_detected_at`,
+   `drift_run_url`, `drift_reason`).
+2. File a rec directly via the ops portal: `source=tf_drift`, `priority=High`.
+
+**Dedup -- one red = one signal:** if the record is already red (from a prior drift cycle OR a
+failed apply), the workflow logs "already red; not re-alarming" and exits 0. No duplicate rec is
+filed. The already-red state folds all concurrent or subsequent drift signals into one open rec
+until the apply-dispatch unlatch clears it.
+
+**Drift NEVER writes the record green.** Green is written solely by a converged apply
+(`terraform-apply-sandbox`), so a clean drift cycle can never mask a prior apply-failure red.
+The convergence writer set is now `{github_ci_apply (Wave 1), github_ci_drift (Wave 5)}`.
+
+**Recovery -- dispatch-ack unlatch:** resolve the drift by running `terraform-apply-sandbox`
+via `workflow_dispatch` (naming the red commit or the open rec id in `acknowledge_red_commit`).
+A successful apply writes green; close the `tf_drift` rec via the `Resolves:` trailer or
+`update_rec` portal call.
+
+**github_ci_drift IAM (least-privilege):** tfstate READ + scoped `.tflock` PutObject/DeleteObject +
+`convergence/personal/*` GetObject/PutObject + ducklake-WRITER InvokeFunction/InvokeFunctionUrl
+(NOT the reader; Decision 84 closed boundary) + same refresh-time read surface as
+`github_ci_plan`. No state-object write, no tfplan, no resource mutation, no IAM write.
+
+**Role creation is guard-BLOCKED (admin-create path -- Decision 98):** `github_ci_drift` is a new
+IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). The T2.23 authority budget (IAMRoleCreateBounded)
+scopes in-budget CreateRole to branch+pr only, so the gated-apply pipeline CANNOT mint a new peer CI
+role. The ONLY working create path for `github_ci_drift` is `agent_platform_admin` (-target apply of
+`terraform/personal/oidc.tf`). Procedure:
+(1) Probe whether `github_ci_plan`'s `IAMCIRolesRead` already includes the drift ARN:
+    `aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name agent-platform-github-ci-plan --profile agent_platform_admin | python3 -c "import sys,json,urllib.parse; d=json.load(sys.stdin); s=next(x for x in json.loads(urllib.parse.unquote(d['PolicyDocument']))['Statement'] if x.get('Sid')=='IAMCIRolesRead'); print('PRESENT' if any('drift' in r for r in s['Resource']) else 'ABSENT')"`
+(2) Always include `aws_iam_role.github_ci_drift` and `aws_iam_role_policy.github_ci_drift`; include
+    `-target=aws_iam_role_policy.github_ci_plan` ONLY if the probe returned ABSENT (the failed
+    apply may have landed it; a PRESENT result means a no-op target is harmless but not required).
+(3) Present the plan to the human (Decision 77), apply under `agent_platform_admin`.
+(4) Add the drift ARN to `IAMRolesRead` in `terraform/bootstrap/github_ci_apply.tf`
+    (read-only refresh grant; does NOT widen the IAM-WRITE budget) and admin-apply that root
+    separately.
+(5) Verify global convergence (untargeted `terraform plan -detailed-exitcode` exits 0) BEFORE
+    dispatching the acknowledge-and-retry.
+The workflow carries `continue-on-error` on the assume-role step to cover the bootstrap window.
+
+**Drift recs vs ci-rca recs:** drift recs use `source=tf_drift` and are filed DIRECTLY via the
+ops portal (no ci-rca agent). ci-rca's model is log-RCA over a FAILED CI run; drift is a
+state-vs-code delta from a SUCCESSFUL plan (ec=2) and has no failure log to RCA (Decision 72/92).
+
 ### Convergence anchor (CD.35 / T2.20 Wave 1)
 
 The server-side anti-masking anchor. All four pieces live in `terraform-apply-sandbox.yml` + `oidc.tf`:
@@ -129,13 +196,14 @@ The server-side anti-masking anchor. All four pieces live in `terraform-apply-sa
 - **Durable record:** `s3://agent-platform-data-lake/convergence/personal/sandbox.json`
   (`{status, commit_sha, run_id, run_url, timestamp, plan_sha}`; `plan_sha` is null until Wave 2 saved
   plans). Its OWN S3 prefix, **outside `tfstate/`**, so the read-only PR role reads it without ever seeing
-  tfstate. Write-IAM is **apply-identity-only among the CI roles** -- enforced in `oidc.tf` by
-  `ConvergenceRecordWrite` on `github_ci_apply` (the writer), the explicit `DenyConvergenceRecordWrite` on
+  tfstate. Write-IAM is the **sanctioned writer set {github_ci_apply, github_ci_drift} among the CI
+  roles** -- enforced in `oidc.tf` / `terraform/bootstrap/github_ci_apply.tf` by `ConvergenceRecordWrite`
+  on each writer (apply: Wave 1; drift: Wave 5 / T2.24), the explicit `DenyConvergenceRecordWrite` on
   `github_ci_branch` (ci-rca / `agent/*` CI keep read, never write/delete the record), and the PR role's
   read-only `S3ReadConvergenceRecord`. This is the integrity anchor -- a commit status alone is spoofable.
   (The residual admin / `platform_breakglass` write path is not yet IAM-fenced; full privilege-tiering --
-  the pipeline's own IAM to a bootstrap root -- lands at Wave 4 / T2.23. "Unbypassable" is scoped to
-  merge-path CI actors, per CD.35 5.5d.)
+  the pipeline's own IAM to a bootstrap root -- landed at Wave 4 / T2.23 (`terraform/bootstrap/`).
+  "Unbypassable" is scoped to merge-path CI actors, per CD.35 5.5d.)
 - **Red-record refusal = the SOLE hard block.** The apply job's read-precondition refuses (emits the
   distinguishable marker `CONVERGENCE_RED`, exits non-zero, and does **NOT** overwrite the record) when the
   record is red. Unbypassable by any merge-path actor. An **absent** record = first-apply-allowed
@@ -208,7 +276,7 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
   `SecretsManagerNeonAPIKeyRead`, `SecretsManagerTfvarsRead`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
   `CloudWatchAlarmsWrite`, `LambdaPermissionWrite`, `SSMFeatureFlagsManage`, `ConvergenceRecordWrite`,
   `IAMRoleReconcile`, `OIDCProviderReconcile`) remain enumerated and ARN-scoped (no wildcards). IAM read Sids
-  (`IAMPlatformRolesRead`) remain enumerated per Decision 35.
+  (`IAMRolesRead`) remain enumerated per Decision 35 (policy defined in `terraform/bootstrap/github_ci_apply.tf`).
   `SSMParameterRead` grants `ssm:Get*/Describe*/List*` scoped to `parameter/agent-platform/*` (the original
   closure shipped `Get*/Describe*`; `ssm:ListTagsForResource` is a `List*`-class action the AWS provider calls
   on every `aws_ssm_parameter` refresh, surfaced by rec-2276 as a missed gap on the first apply-sandbox run

@@ -590,3 +590,70 @@ class TestOpsWriterWriteThrough:
             result = append_jsonl(".recommendations-log.jsonl", {"id": "rec-001"})
 
         assert result is True  # local write succeeded even though ops failed
+
+
+# ---------------------------------------------------------------------------
+# Log-storage YAML registry loader tests (T-1.15)
+# ---------------------------------------------------------------------------
+
+
+class TestLogStorageRegistry:
+    """Tests for the lazy YAML loader and routing accessors in s3_log_store."""
+
+    @pytest.fixture(autouse=True)
+    def reset_registry(self):
+        """Save and restore the cached registry and contract path around each test."""
+        original_registry = store_mod._LOG_STORAGE_REGISTRY
+        original_path = store_mod._LOG_STORAGE_CONTRACT_PATH
+        store_mod._LOG_STORAGE_REGISTRY = None
+        yield
+        store_mod._LOG_STORAGE_REGISTRY = original_registry
+        store_mod._LOG_STORAGE_CONTRACT_PATH = original_path
+
+    def test_reads_yaml(self, tmp_path: Path) -> None:
+        """Loader reads the YAML contract and returns routing values from the file."""
+        contract = tmp_path / "log-storage.yaml"
+        contract.write_text(
+            "routing:\n  ops_table_routing:\n    .foo.jsonl: foo_table\n  priority_queue_key: queue/key.jsonl\n",
+            encoding="utf-8",
+        )
+        store_mod._LOG_STORAGE_CONTRACT_PATH = contract
+        assert store_mod.get_ops_table_routing() == {".foo.jsonl": "foo_table"}
+        assert store_mod.get_priority_queue_key() == "queue/key.jsonl"
+
+    def test_anti_drift(self) -> None:
+        """YAML routing block equals the in-code fallback constants (no silent divergence)."""
+        import yaml  # noqa: PLC0415
+
+        doc = yaml.safe_load(store_mod._LOG_STORAGE_CONTRACT_PATH.read_text(encoding="utf-8"))
+        assert store_mod.FALLBACK_OPS_TABLE_ROUTING == doc["routing"]["ops_table_routing"]
+        assert store_mod.FALLBACK_PRIORITY_QUEUE_KEY == doc["routing"]["priority_queue_key"]
+
+    def test_absent_yaml_fallback(self, tmp_path: Path) -> None:
+        """Returns fallback constants when the contract file does not exist."""
+        store_mod._LOG_STORAGE_CONTRACT_PATH = tmp_path / "does-not-exist.yaml"
+        assert store_mod.get_ops_table_routing() == store_mod.FALLBACK_OPS_TABLE_ROUTING
+        assert store_mod.get_priority_queue_key() == store_mod.FALLBACK_PRIORITY_QUEUE_KEY
+
+    def test_unparseable_yaml_fallback(self, tmp_path: Path) -> None:
+        """Returns fallback constants when the contract file contains invalid YAML."""
+        contract = tmp_path / "log-storage.yaml"
+        contract.write_text("}{invalid yaml{", encoding="utf-8")
+        store_mod._LOG_STORAGE_CONTRACT_PATH = contract
+        assert store_mod.get_ops_table_routing() == store_mod.FALLBACK_OPS_TABLE_ROUTING
+        assert store_mod.get_priority_queue_key() == store_mod.FALLBACK_PRIORITY_QUEUE_KEY
+
+    def test_yaml_import_unavailable_fallback(self) -> None:
+        """Returns fallback constants when yaml is not importable (Lambda runtime safety)."""
+        import sys  # noqa: PLC0415
+
+        original_yaml = sys.modules.get("yaml")
+        sys.modules["yaml"] = None  # type: ignore[assignment]
+        try:
+            assert store_mod.get_ops_table_routing() == store_mod.FALLBACK_OPS_TABLE_ROUTING
+            assert store_mod.get_priority_queue_key() == store_mod.FALLBACK_PRIORITY_QUEUE_KEY
+        finally:
+            if original_yaml is not None:
+                sys.modules["yaml"] = original_yaml
+            else:
+                del sys.modules["yaml"]
