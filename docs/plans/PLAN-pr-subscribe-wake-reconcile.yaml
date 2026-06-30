@@ -1,0 +1,193 @@
+schema_version: 1
+slug: "pr-subscribe-wake-reconcile"
+intent: >-
+  Reconcile the Claude-Code-web harness's generic `subscribe_pr_activity` wake message (which
+  tells a subscribed agent webhooks do not deliver CI success and to schedule a recurring
+  `send_later` self-check-in) with this repo's deliberate event-driven CI-wake design, so a
+  watching session follows the repo contract instead of standing up redundant polling.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-pr-subscribe-wake-reconcile.yaml
+phase: >-
+  Operational CI/CD instruction hardening. No roadmap tier_item (user-requested; soft-warn
+  exception category user_explicit_out_of_scope). Adjacent to Decision 76 (web merge flow) and
+  PLAN-green-ci-wake-gate (the signal-green wake this note documents). Current roadmap phase:
+  Phase 1 Core Infrastructure (complete).
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      In the `## Git-ops procedure` -> "Push -> PR -> CI -> merge flow" step 4 (CI-green-comment
+      wake), add a reconciliation note: the harness `subscribe_pr_activity` message is generic
+      and not repo-editable; in this repo CI success IS delivered via the signal-green comment so
+      the event-driven wake is the primary routine mechanism; permit exactly one low-frequency
+      best-effort one-shot `send_later` backstop for a dropped signal-green comment; name
+      GitHub-native auto-merge as the durable successor.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Align the wait-for-CI section (~lines 317-327, esp. line 318's "no recurring scheduled
+      re-check") so it forbids busy-wait / tight polling while permitting the single low-frequency
+      best-effort backstop, and points to AGENTS.md step 4 as the canonical reconciliation
+      (no restatement, per the Git-ops-procedure header rule).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    AGENTS.md `## Git-ops procedure` step 4 states the harness `subscribe_pr_activity` wake
+    message is generic/repo-unaware and cannot be edited in-repo because it is a server-side
+    string from the harness `github` MCP server, distinct from the repo's `github-full` server
+    configured in `.mcp.json`.
+  - >-
+    The note states that in this repo CI success IS delivered via the signal-green comment
+    (`.github/workflows/ci.yml` signal-green job), so the event-driven wake (failure event +
+    signal-green comment) is the primary and routine wake mechanism -- not `send_later` polling.
+  - >-
+    The note permits exactly one low-frequency (~1h) best-effort one-shot `send_later`
+    self-check-in as a backstop for a dropped (best-effort `continue-on-error`) signal-green
+    comment, explicitly bounded as NOT a recurring poll loop (Decision 55) and NOT the
+    CI-status mechanism; it is re-armed only if the PR is genuinely still pending.
+  - >-
+    The note names GitHub-native auto-merge (`enable_pr_auto_merge`; Decision 83 / CD.20 /
+    rec-940) as the durable successor that retires the comment-wake + backstop once adopted.
+  - >-
+    The `implement` skill wait-for-CI section no longer flatly contradicts the backstop: the
+    "no recurring scheduled re-check" wording is reconciled to forbid busy-wait / tight polling
+    while permitting the single low-frequency backstop, and points to AGENTS.md step 4 as canonical.
+  - >-
+    No new files are created and only AGENTS.md and `.claude/skills/implement/SKILL.md` are
+    modified (Decision 86 forward-routing: ambient instruction content goes to AGENTS.md, not a
+    new doc).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: AGENTS.md step 4 documents the harness-vs-repo server distinction and non-editability
+    command: >-
+      grep -nE "subscribe_pr_activity|github-full|server-side" AGENTS.md
+    expected: >-
+      Matches in the `## Git-ops procedure` region naming subscribe_pr_activity, the github-full
+      server, and the server-side/non-editable nature of the harness message
+    fix_if: No match -> add the harness-vs-repo MCP-server distinction to step 4
+  - step: 2
+    phase: pre-deploy
+    action: AGENTS.md backstop is present and bounded (one-shot / best-effort / not-a-poll)
+    command: >-
+      grep -nE "send_later|backstop|one-shot|best-effort" AGENTS.md
+    expected: >-
+      Matches showing a single low-frequency one-shot best-effort send_later backstop bounded
+      against poll loops
+    fix_if: No match or unbounded language -> add the bounded backstop carve-out citing Decision 55
+  - step: 3
+    phase: pre-deploy
+    action: AGENTS.md names the durable successor (GitHub-native auto-merge)
+    command: >-
+      grep -nE "enable_pr_auto_merge|auto-merge" AGENTS.md
+    expected: Match naming GitHub-native auto-merge (Decision 83 / CD.20 / rec-940) as the successor
+    fix_if: No match -> add the durable-successor sentence
+  - step: 4
+    phase: pre-deploy
+    action: implement skill wait-for-CI is reconciled and points to AGENTS.md as canonical
+    command: >-
+      grep -nE "send_later|backstop|AGENTS.md" .claude/skills/implement/SKILL.md
+    expected: >-
+      Match in the wait-for-CI section permitting the bounded backstop and referencing AGENTS.md
+      step 4 as the canonical reconciliation
+    fix_if: No match or still a flat "no recurring scheduled re-check" -> reconcile the wording and add the pointer
+  - step: 5
+    phase: pre-deploy
+    action: Scope discipline -- only the two scoped files changed, no new files
+    command: >-
+      git diff --name-only origin/main...HEAD -- ':!docs/plans/PLAN-pr-subscribe-wake-reconcile.yaml'
+    expected: >-
+      Exactly `AGENTS.md` and `.claude/skills/implement/SKILL.md` (the plan file is excluded by the
+      pathspec); no other paths, no new files
+    fix_if: Any other path appears -> revert the out-of-scope edit
+  - step: 6
+    phase: pre-deploy
+    action: Fast-tier presubmit passes (instruction-architecture + prompt-compliance guards)
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, no failures (this is the gate PR CI runs)
+    fix_if: Any failure -> address the specific failing check before opening the PR
+constraints:
+  - Only modify AGENTS.md and .claude/skills/implement/SKILL.md (AGENTS.md "Only modify files explicitly in scope").
+  - >-
+    The harness `subscribe_pr_activity` message itself is NOT editable in-repo (it is a
+    server-side string from the harness `github` MCP server, not the repo's `github-full` server
+    in `.mcp.json`). Do NOT attempt to patch MCP server config or add a hook to rewrite another
+    server's tool-result text -- the fix lives only in the ambient instruction layer.
+  - >-
+    Backstop language must be bounded: one-shot, low-frequency (~1h), best-effort, re-armed only
+    if the PR is genuinely still pending -- never a tight poll loop (Decision 55, Decision 76).
+  - >-
+    AGENTS.md is canonical for git-ops; the implement skill points to it and does not restate the
+    full reconciliation (the `## Git-ops procedure` header rule: other surfaces point here).
+  - >-
+    No new standing prose doc (Decision 86 forward-routing -- ambient instruction content goes to AGENTS.md).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    The subscribe_pr_activity / unsubscribe_pr_activity tools are emitted by the Claude-Code-web
+    harness `github` MCP server (prefix mcp__github__), NOT the repo-configured `github-full`
+    server in `.mcp.json` (`github-mcp-server stdio --toolsets all`), which has no PR-activity
+    subscription concept. The wake message is therefore a harness backend string, not
+    repo-editable. Verified during planning.
+  - >-
+    signal-green job at `.github/workflows/ci.yml` (lines 152-178) posts the "CI green" comment on
+    claude/* PRs (continue-on-error, best-effort). It is the repo's CI-success wake; because it is
+    best-effort, a dropped comment is the lost-wake case the bounded send_later backstop covers.
+  - >-
+    Decision 76 clause 4 -- event-driven wait-for-CI (end the turn; the webhook wakes), never
+    sleep/loop. CITE (the contract this note refines).
+  - >-
+    Decision 83 / T2.12 / CD.20 / rec-940 -- branch protection live; GitHub-native auto-merge
+    unblocked as the durable successor to the comment-based wake. CITE.
+  - Decision 73 (two-tier CI), Decision 86 (forward-routing / no new prose docs), Decision 90 (four-tier workflow). RELATED.
+  - >-
+    Decision-scout gate verdict FLAGS_FOUND. CITE = Decision 76, Decision 83. One NOTE (Decision
+    55): the send_later backstop edges toward the poll-loop anti-pattern, resolved by bounding it
+    as one-shot / low-frequency / best-effort with the event-driven path remaining primary.
+  - >-
+    CI-RCA deferral (Related-Work Check): 2 unresolved ci-rca recs at planning time -- rec-2425
+    and rec-2426, both `/dev/null` sentinel pytest failures in tests/test_ops_data_portal.py. This
+    plan does NOT satisfy any Related-Work condition: different source_file (AGENTS.md and the
+    implement skill, not tests/test_ops_data_portal.py), different Decision Record, and different
+    failure category (instruction/documentation, not pytest regression). Deferred under the
+    user_explicit_out_of_scope soft-warn category -- this is a user-requested instruction-layer
+    reconciliation unrelated to the ops-portal test fixtures. Rationale logged here per the
+    Related-Work Check; the ci-rca recs are addressed in their own /plan session.
+  - Branch was 0 commits behind origin/main at planning time; no Scope-file divergence.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    DECISIONS.md reviewed (handled via the decision-scout gate at planning time -- FLAGS_FOUND;
+    CITE Decision 76, 83; NOTE Decision 55)
+  - AGENTS.md and .claude/skills/implement/SKILL.md located and readable
+  - Acceptance Criteria understood and verifiable
+execution_steps:
+  - >-
+    In AGENTS.md `## Git-ops procedure` -> "Push -> PR -> CI -> merge flow" step 4 (CI-green-comment
+    wake), append a reconciliation note that: (a) the harness `subscribe_pr_activity` wake message
+    is generic and not repo-editable -- it is a server-side string from the harness `github` MCP
+    server, distinct from the repo's `github-full` server in `.mcp.json`; (b) in this repo CI
+    success IS delivered as the signal-green comment, so the event-driven wake (failure event +
+    signal-green comment) is the primary routine wake mechanism and recurring `send_later`
+    polling for CI status is NOT used; (c) exactly ONE low-frequency (~1h) best-effort one-shot
+    `send_later` self-check-in is permitted as a backstop for a dropped (best-effort) signal-green
+    comment -- bounded as not a poll loop (Decision 55), re-armed only if the PR is genuinely still
+    pending, and never the CI-status mechanism; (d) GitHub-native auto-merge (`enable_pr_auto_merge`;
+    Decision 83 / CD.20 / rec-940) is the durable successor that retires this comment-wake + backstop.
+    Keep the prose tight and machine-parseable, matching the surrounding style.
+  - >-
+    In `.claude/skills/implement/SKILL.md` wait-for-CI section (~lines 317-327, esp. line 318),
+    reconcile "no recurring scheduled re-check" so it forbids busy-wait / tight polling while
+    permitting the single low-frequency best-effort one-shot backstop, and add a pointer to
+    AGENTS.md `## Git-ops procedure` step 4 as the canonical reconciliation (do not restate it).
+  - >-
+    Execute Verification Plan -- run each step; loop until pass. V1: if a grep/validate step fails,
+    correct the wording and re-run.
+  - 'Report: what was implemented and verification results.'
+work_areas: []
+rollback: >-
+  Revert the two-file diff; the harness message and signal-green wake are unaffected (this plan
+  changes only repo instruction text).
