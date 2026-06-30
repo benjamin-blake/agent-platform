@@ -89,10 +89,13 @@ scope:
       c7+c9. instruct the agent to MIRROR earliest_viable_gate and escape_mode from the bundle (not
       free-choose), set rca_confidence=undetermined when the bundle abstains, and file a typed
       failure_category dispute rather than burying a category disagreement in free text. STALE-
-      INSTRUCTION SWEEP (required): DELETE the current "fall back to 'CI' as a safe default" instruction
-      (~lines 101-104) that directs the agent to free-choose the gate on a null bundle value -- it
-      directly contradicts the new mirror rule -- and bump the hardcoded `"schema_version": 1` example
-      (~line 78) to 2.
+      INSTRUCTION SWEEP (required, ALL occurrences): DELETE every "fall back to 'CI' as a safe default"
+      free-choose-on-null directive -- there are at least TWO: the main instruction (~lines 101-104) AND
+      the duplicate in the Hard Rules > Graceful degradation block (~lines 173-175); add "undetermined"
+      to the bundle-field description that currently enumerates earliest_viable_gate as "(pre, presubmit,
+      or CI)" (~line 49); and bump the hardcoded `"schema_version": 1` example (~line 78) to 2. A
+      surviving free-choose directive silently reopens the c7 gap, so the sweep must be exhaustive (VP
+      step 9 greps for residuals).
   - file: docs/INTENT-ci-rca-methodology.md
     action: Modify
     purpose: >-
@@ -139,8 +142,9 @@ acceptance_criteria:
     taxonomy_fallback) the evidence bundle emits earliest_viable_gate="undetermined" (never null);
     CiRcaContext accepts "undetermined" and carries a typed rca_confidence field; file_rec requires
     the agent value to mirror the bundle's "undetermined" (strict raises on a non-mirrored value,
-    warn logs); and session_preflight hard-surfaces open ci_rca recs with rca_confidence=undetermined
-    under a "mandatory human review" section.
+    warn logs); session_preflight hard-surfaces open ci_rca recs with rca_confidence=undetermined
+    under a "mandatory human review" section; and the ci-rca agent prompt carries NO residual
+    free-choose-CI fallback directive (all occurrences swept, VP step 9).
   - >-
     c9: detection_gap.escape_mode exists as a bundle-derived, agent-mirrored, portal-cross-checked
     (bundle-wins) enum {check_absent, check_ran_vacuously, tier_misplaced, no_premerge_gate_by_design,
@@ -255,6 +259,20 @@ verification_plan:
     fix_if: >-
       A field is missing -- add it to the schema_fields guidance dict for the relevant source in
       scripts/executor/rec_write_guidance.py.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      c7 -- no residual free-choose-CI fallback survives in the ci-rca agent prompt (would silently
+      reopen the gap), and "undetermined" is documented in the bundle-field list.
+    command: >-
+      bash -c 'grep -nEi "fall back to .?CI|safe default|default to .?CI" .claude/agents/scheduled/ci-rca.md
+      && exit 1; grep -q "undetermined" .claude/agents/scheduled/ci-rca.md'
+    expected: >-
+      No match for any free-choose-CI fallback directive (grep finds nothing, so the && branch does not
+      fire), and "undetermined" IS present in the prompt -- overall exit 0.
+    fix_if: >-
+      A free-choose-CI directive still matches (e.g. the Hard Rules > Graceful degradation block at
+      ~lines 173-175) -- delete it; if "undetermined" is absent, add it to the bundle-field description.
 constraints:
   - >-
     Decision 86: AMEND docs/INTENT-ci-rca-methodology.md in place; NEVER create a new docs/INTENT-*.md
