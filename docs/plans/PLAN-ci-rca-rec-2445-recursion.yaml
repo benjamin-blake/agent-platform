@@ -1,0 +1,207 @@
+schema_version: 1
+slug: "ci-rca-rec-2445-recursion"
+intent: >-
+  Converge the tests/test_ops_data_portal.py forward-fix recursion (3 reactive
+  patches and counting) by removing its root cause in source: the module-level
+  CI_RCA_STRICT_MODE cache that ignores the test-patched feature-flags path.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-rec-2445-recursion.yaml
+phase: >-
+  Platform CI-RCA hardening (Decision 73 forward-fix lifecycle). Resolves ci-rca
+  rec-2445; verify-closes already-resolved rec-2425/rec-2426.
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Make get_ci_rca_strict_mode()'s module-level cache path-aware -- store the
+      resolved _FEATURE_FLAGS_YAML path alongside the cached value and re-read
+      when the currently-bound path differs. Removes the test-isolation foot-gun
+      at the source so no test class needs a manual cache reset.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Raise the scripts/ops_data_portal.py SLOC budget (currently 1349, zero
+      headroom) to the post-change SLOC. Justified reviewable raise per Decision
+      102 -- the +lines implement the rec-2445 forward-fix root-cause convergence.
+bundled_recommendations:
+  - rec-2445
+  - rec-2425
+  - rec-2426
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The four strict-mode tests TestCiRcaCrossCheckSpine::test_check1..4 raise
+    ValueError under the cited failing random seed 2228014220 (they currently log
+    a warning and DID NOT RAISE).
+  - >-
+    get_ci_rca_strict_mode() returns a fresh read when _FEATURE_FLAGS_YAML is
+    rebound to a different path, while a constant path (production) keeps the
+    warm cached value (no-hot-reload contract preserved, Decision 88).
+  - >-
+    Misconfiguration stays loud -- an unrecognised CI_RCA_STRICT_MODE value still
+    raises ValueError (Decision 55).
+  - >-
+    No edits are made to tests/test_ops_data_portal.py -- the recursion loop is
+    broken with a source-side fix, not a 4th reactive test patch.
+  - >-
+    scripts/ops_data_portal.py stays within its SLOC budget and validate --pre
+    passes (Decision 102 SLOC gate green).
+  - >-
+    rec-2425 and rec-2426 are verified green (TestCiRcaEvidenceDispute passes)
+    and closed via the squash-merge Resolves: trailer (closure proof, Decision 70).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the whole test file under the exact failing random seed from the rec.
+      The 4 previously-failing strict-mode tests must now raise.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -p randomly --randomly-seed=2228014220 -q
+    expected: 0 failed; TestCiRcaCrossCheckSpine::test_check1..4 all pass.
+    fix_if: >-
+      Any check1..4 reports "DID NOT RAISE ValueError" -- the cache is still
+      frozen; confirm the path comparison reads the rebound module-level
+      _FEATURE_FLAGS_YAML and that the new path variable is assigned on every read.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the cross-check spine class in definition order (the rec's intended
+      acceptance, made runnable by neutralising the --randomly-seed=last addopt).
+    command: bin/venv-python -m pytest "tests/test_ops_data_portal.py::TestCiRcaCrossCheckSpine" -o addopts="" -p no:randomly -q
+    expected: 8 passed.
+    fix_if: >-
+      4 failed -- the first in-class test (no evidence_bundle_ref) still freezes
+      the cache before the strict tests run; the path-aware re-read is not firing.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm misconfiguration still raises (loud-fail preserved).
+    command: bin/venv-python -m pytest "tests/test_ops_data_portal.py::TestCiRcaSchemaEnforcement::test_flag_rejects_unknown_value" -o addopts="" -p no:randomly -q
+    expected: 1 passed.
+    fix_if: Test fails -- the ValueError branch for unrecognised modes was altered.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the test file was NOT modified by this change (convergence
+      discipline -- the fix is source-side only).
+    command: bin/venv-python -c "import subprocess,sys; d=subprocess.run(['git','diff','--name-only','origin/main','--','tests/test_ops_data_portal.py'],capture_output=True,text=True).stdout.strip(); print('CHANGED' if d else 'CLEAN'); sys.exit(1 if d else 0)"
+    expected: CLEAN
+    fix_if: >-
+      CHANGED -- the fix leaked into the test file; move the change into
+      scripts/ops_data_portal.py so the recursion is genuinely converged.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Verify the already-resolved carve-out recs (rec-2425/rec-2426) are green --
+      the closure proof for the Resolves: trailer.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaEvidenceDispute -o addopts="" -p no:randomly -q
+    expected: 11 passed.
+    fix_if: >-
+      Any carve-out test fails -- rec-2425/rec-2426 are NOT actually resolved; do
+      not include them in the Resolves: trailer and re-triage.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the full fast tier; the SLOC gate (Decision 102) must pass after the
+      budget is set to the post-change SLOC.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; no "scripts/ops_data_portal.py: NNNN SLOC exceeds budget" error in
+      the SLOC limits section.
+    fix_if: >-
+      SLOC error -- set the scripts/ops_data_portal.py entry in
+      config/sloc_budgets.yaml to the exact SLOC reported by the error message
+      (justified raise, Decision 102); do not reduce unrelated code to fit.
+constraints:
+  - >-
+    Diff confined strictly to get_ci_rca_strict_mode() and its module-level cache
+    globals -- do NOT touch any portal write/read-verb boundary, id-allocation,
+    or warehouse path (Decision 84 Single-Portal Invariant).
+  - >-
+    Preserve the no-hot-reload production contract -- a constant _FEATURE_FLAGS_YAML
+    path must keep returning the warm cached value (Decision 88).
+  - Preserve the ValueError loud-fail for unrecognised flag values (Decision 55).
+  - >-
+    Do NOT edit tests/test_ops_data_portal.py. Adding a per-class setup_method
+    reset would be the 4th reactive test patch and perpetuate the recursion.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Root cause -- get_ci_rca_strict_mode() (scripts/ops_data_portal.py:108-126)
+    caches at module level and short-circuits on _ci_rca_strict_mode_cache, never
+    re-reading the test-patched _FEATURE_FLAGS_YAML. _run_ci_rca_cross_check calls
+    it at line 294 BEFORE its evidence_bundle_ref early-return, so the first test
+    in TestCiRcaCrossCheckSpine freezes the cache to 'warn' (the real flag value)
+    and the strict-mode tests never raise. Reproduced under seed 2228014220:
+    4 failed, 122 passed. The rec's stated -p no:randomly command also fails
+    (definition order, 4 of 8) because the cache bites without randomization too.
+  - >-
+    Convergence rationale -- TestCiRcaSchemaEnforcement (line 1536-1539) carries a
+    setup_method that resets the cache; TestCiRcaCrossCheckSpine does not. The
+    fix is NOT to copy that reset (4th test-file edit; forward_fix_recursion_alert
+    is at count 3/threshold 3 for this file; c3a3f9b already reactively patched it
+    for /dev/null sentinels). Making the cache path-aware in source removes the
+    foot-gun for all current and future callers with zero test edits. The existing
+    setup_method (set cache=None) remains valid and harmless.
+  - >-
+    Prior art -- Decision 99 (DuckDB version SSOT) ratified the same shape
+    (module-relative cached config read with a path/env override). lru_cache keyed
+    on path was rejected because cache_clear() would break the existing
+    setup_method and force the test-file edits this plan avoids.
+  - >-
+    SLOC -- scripts/ops_data_portal.py is at exactly 1349 SLOC = budget (zero
+    headroom). The path-aware change adds ~2 SLOC, so config/sloc_budgets.yaml
+    must be raised to the post-change SLOC; this is a justified reviewable raise
+    under Decision 102 (ratchet-down-only is amended to allow justified raises).
+  - >-
+    rec-2425/rec-2426 (/dev/null-sentinel carve-out tests) are already resolved on
+    main and pass now (11 passed). This plan does not change their code; it
+    verify-closes them via the Resolves: trailer with a green-test closure proof
+    (Decision 70). Both are ci-rca recs on the same test surface.
+  - >-
+    OUT OF SCOPE -- the terraform pipeline is red because of ci-rca rec-2446
+    (gated-apply AccessDenied on iam:PutRolePermissionsBoundary, 2026-06-30
+    15:27Z; convergence record red, unapplied_backlog=0, stuck_approvals=0). That
+    is an IAM widening on terraform/bootstrap/github_ci_apply.tf owned by the
+    bootstrap-root admin apply path (T2.23 authority budget) and is planned
+    separately (PLAN-ci-rca-rec-2446-ci-apply-boundary.yaml). This plan touches no
+    terraform and does not unblock convergence on its own.
+  - >-
+    HARD BLOCK note -- ci_rca_unresolved_recs = [rec-2445, rec-2446] at planning
+    time. This plan addresses rec-2445 directly (Related-Work: same source_file
+    scripts/ops_data_portal.py; same failure category pytest regression). rec-2446
+    is addressed by its own plan.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-rec-2445-recursion-czptw1)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision context confirmed (55, 88, 70, 99, 73, 102, 84)
+  - scripts/ops_data_portal.py located and readable; cache site at lines 48-53, 108-126
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In scripts/ops_data_portal.py add a module-level
+    `_ci_rca_strict_mode_cache_path: Optional[Path] = None` next to
+    `_ci_rca_strict_mode_cache` (after line 53).
+  - >-
+    In get_ci_rca_strict_mode() declare the new global, change the short-circuit
+    guard to `if _ci_rca_strict_mode_cache is not None and
+    _ci_rca_strict_mode_cache_path == _FEATURE_FLAGS_YAML: return ...`, and after
+    computing/validating value assign both `_ci_rca_strict_mode_cache = value` and
+    `_ci_rca_strict_mode_cache_path = _FEATURE_FLAGS_YAML`. Preserve the
+    ValueError-on-unknown branch and the FileNotFoundError/OSError/YAMLError
+    fallback to 'warn'.
+  - >-
+    Run validate --pre; if the SLOC gate reports ops_data_portal.py over budget,
+    set its config/sloc_budgets.yaml entry to the exact reported SLOC (justified
+    raise, Decision 102).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an
+    unrecoverable failure stop and RCA (Decision 55). Do NOT edit
+    tests/test_ops_data_portal.py.
+  - >-
+    Commit with `feat(ci-rca-rec-2445-recursion):` and include the squash-merge
+    trailer `Resolves: rec-2445, rec-2425, rec-2426`.
+  - "Report: what was implemented, verification results, and the final SLOC value."
+work_areas: []
+rollback: >-
+  Single-file source change plus a one-line budget edit; revert the commit to
+  restore the prior caching behaviour. No data or infrastructure state changes.
