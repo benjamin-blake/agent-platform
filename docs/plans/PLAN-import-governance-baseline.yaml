@@ -126,7 +126,8 @@ acceptance_criteria:
   - >-
     The full validate suite (bin/venv-python -m scripts.validate) passes green, including validate_sloc_limits (the
     Decision-102 budget raise absorbs validate.py growth), validate_platform_roadmap (T3.11 criteria structured, no
-    bare strings, closes_criteria resolve), test_coverage_checker, and all unit tests.
+    bare strings, closes_criteria resolve), test_coverage_checker, and all unit tests. The advisory Lambda deploy-gating
+    line for data-pipeline (docs/ROADMAP-PLATFORM.yaml asset) is expected and non-blocking per the exemption in context.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -235,7 +236,26 @@ context:
   - >-
     import-linter is invoked as a local static analyzer (no network, no LLM); it reads .importlinter and builds its grimp
     graph from ast, counting function-local deferred imports as edges -- which is exactly why the three known cycles must be
-    allowlisted up front. This static-tool delivery is why the tier is V2, not V3 (no external system / Lambda / Terraform).
+    allowlisted up front. The plan adds no new external system / Lambda code / Terraform, which is why the tier is V2.
+  - >-
+    Lambda deploy-gating exemption (Decision 79 / CD.16 -- explicit, do NOT promote to V3): docs/ROADMAP-PLATFORM.yaml is a
+    declared assets[] entry of the ACTIVE artifact data-pipeline.zip (src/lambdas/data-pipeline/manifest.yaml:44,
+    status: active), so compute_affected_artifacts() returns {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} and
+    validate_lambda_deploy_gating prints an advisory line for it. No build/deploy/smoke-test step is added, and the tier
+    stays V2, for four reasons: (a) validate_lambda_deploy_gating is ADVISORY-ONLY -- it never fails the build (confirmed
+    in scripts/validate.py), so the capstone VP step 11 stays green; (b) the roadmap edit is criteria-metadata/structural
+    (bare-string -> ExitCriterion objects + c2 wording re-grounding), not a behavioral code change to the Lambda; (c) the
+    scheduled-agent dispatcher that bundles the roadmap is DISABLED (SCHEDULED_AGENTS_ENABLED=false and the EventBridge
+    rules are state:DISABLED per terraform/scheduled_agents.tf; May 2026 migration to Claude Code scheduled agents per
+    AGENTS.md), so there is no live consumer of a stale bundled copy; (d) precedent: T3.12 (commit 156e7fb,
+    dependency_graph oracle) and T3.8 (commit 849fd7d) both edited docs/ROADMAP-PLATFORM.yaml and merged with no Lambda
+    redeploy. If the scheduled-agent dispatcher is ever re-enabled, a roadmap-content refresh redeploy is handled by that
+    re-enable runbook, not this plan.
+  - >-
+    Fast-tier cost note (non-blocking, c1 both-tier wiring): the import-linter/grimp graph build over src/ + scripts/
+    (~36.5k SLOC) runs on every --pre invocation, which carries the 300s _FAST_TIER_BUDGET_SECONDS budget. Expected
+    sub-minute, but /implement should record a measured --pre wall-clock at VP step 11 time to confirm headroom; if it
+    ever approaches the budget, the contract check can be narrowed or moved full-tier-only with a noted rationale.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/import-governance-baseline-pf1pxc)
   - docs/PROJECT_CONTEXT.md read
