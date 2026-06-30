@@ -47,7 +47,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (consolidation Phase 4, docs/INTENT-ducklake-consolidation.md). Until then, do not gate plans on session counts/staleness.
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (Decision 84 Phase 4 / tier_item T2.36). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 
@@ -180,6 +180,40 @@ Search `logs/.recommendations-log.jsonl` for open recommendations that align wit
 > - **rec-XXX**: [title] (effort: [effort], priority: [priority])
 >
 > Want to bundle any into this session? Say 'include rec-XXX' or 'skip'."
+
+## Recommendation Relevance Gate (Workflow Step 3, fires before bundling any rec)
+
+Before adding any open recommendation to the plan's `bundled_recommendations` list, re-check
+its relevance using `scripts/rec_relevance.py`. Recs can go stale between filing and the
+current session (target file deleted, decision ratified, sibling plan already fixed it).
+
+### Protocol
+For each candidate rec identified via "Suggest Aligned Recommendations":
+```bash
+bin/venv-python -c "
+from scripts.rec_relevance import evaluate_rec_relevance
+import json, pathlib
+cache = pathlib.Path('logs/.recommendations-log.jsonl')
+rows = [json.loads(l) for l in cache.read_text().splitlines() if l.strip()]
+rec = next((r for r in rows if r.get('id') == 'rec-NNNN'), None)
+verdict, evidence = evaluate_rec_relevance(rec, run_acceptance_probe=False)
+print(verdict, '|', evidence[:120])
+"
+```
+
+**Verdict handling:**
+- **`relevant` or `unknown`** -- proceed; offer to bundle normally.
+- **`satisfied`** -- do NOT bundle. Surface the evidence and the proposal command from
+  `propose_or_close_rec(rec_id, 'satisfied', evidence, deterministic=False)` (planning time:
+  never deterministic). Wait for operator to run the closure command, then proceed without bundling.
+- **`superseded`, `duplicate`, `contradicted`, `stale_target`, `blocked_by_decision`** -- do NOT
+  bundle. Present the `propose_or_close_rec` output and wait for operator decision. Remove from
+  candidate list regardless of outcome.
+
+**Constraints:**
+- `run_acceptance_probe=False` is mandatory at planning time (Decision 55: no auto-closure from
+  semantic judgment). Acceptance probes run only at `/implement` time.
+- Never call `_make_reader()` inside this gate (Decision 88: use read-cache only).
 
 ## Documentation Artefact Design
 

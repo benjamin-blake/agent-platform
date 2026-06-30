@@ -1,0 +1,221 @@
+schema_version: 1
+slug: "stale-prs-branches-cleanup"
+intent: >-
+  Reduce repository-maintenance drag and keep the dependency surface current by resolving the open
+  Dependabot backlog (merging the bumps), reflecting the retired yfinance data pipeline as disabled
+  in code, and pruning abandoned branches -- platform hygiene that keeps the agent-facing repo legible.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-stale-prs-branches-cleanup.yaml
+phase: >-
+  Platform repository hygiene (ad-hoc maintenance; user_explicit_out_of_scope soft-warn category; no tier_item).
+scope:
+  - file: terraform/variables.tf
+    action: Modify
+    purpose: >-
+      Flip the data_pipeline_schedule_enabled default from true to false, reflecting that the
+      yfinance market-data pipeline is no longer live. The EventBridge rule in
+      terraform/data_pipeline.tf reads this var (state = var.data_pipeline_schedule_enabled ?
+      "ENABLED" : "DISABLED"), so the schedule resolves to DISABLED. This module is the legacy
+      repo-root terraform (CD.21) which is NOT applied; the flip is code-state hygiene only, not
+      a terraform apply.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/variables.tf is in the legacy repo-root terraform module (CD.21), which is NOT
+    applied post-account-migration; only terraform/personal/ is live. The yfinance data pipeline
+    (terraform/data_pipeline.tf, src/data/) exists ONLY in this legacy module, so there is no live
+    AWS infrastructure to disable. The flip is code-state hygiene -- NO terraform apply, NO live
+    AWS infra affected (Decision 77 apply model deliberately not engaged).
+  - >-
+    The variable-flip PR must pass BOTH required checks -- pr-validate AND terraform-validate
+    (Decision 83 main-protection ruleset) -- before squash-merge.
+acceptance_criteria:
+  - >-
+    Each of the 7 Dependabot PRs (#213, #216, #218, #307, #308, #309, #310) is either squash-merged
+    to main, or -- if its bump broke a required CI check -- left open with a surfaced failure report.
+    No PR is force-merged past a red required check.
+  - Every Dependabot PR that was merged has had its head branch deleted from origin.
+  - >-
+    terraform/variables.tf data_pipeline_schedule_enabled default is false on main, and the
+    EventBridge rule expression in terraform/data_pipeline.tf still consumes that variable (so it
+    resolves to DISABLED); the legacy terraform root still passes terraform validate.
+  - Orphan branches fix/dispute-fields-dead-code and claude/ducklake-maintenance-plan-Sexl7 are deleted from origin.
+  - PR #320 and its branch claude/intent-doc-extraction-retirement-f20tcu remain open and untouched.
+  - The terraform variable-flip change is merged to main via a green-CI squash-merge PR.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the variable flip is correct AND that the EventBridge rule still consumes it (so the
+      schedule semantically resolves to DISABLED).
+    command: >-
+      cd /home/user/agent-platform && grep -A3 'variable "data_pipeline_schedule_enabled"'
+      terraform/variables.tf | grep -q 'default     = false' && grep -q 'var.data_pipeline_schedule_enabled
+      ? "ENABLED" : "DISABLED"' terraform/data_pipeline.tf && echo OK
+    expected: >-
+      Prints OK -- the default is false and the EventBridge rule state is still driven by the
+      variable, so it resolves to DISABLED.
+    fix_if: >-
+      Default is still true, or the state expression no longer references the variable (gating
+      removed): re-apply the one-line default flip; do not edit the EventBridge expression.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the legacy terraform root still parses with the change.
+    command: >-
+      cd /home/user/agent-platform && terraform -chdir=terraform init -backend=false -input=false
+      >/dev/null 2>&1 && terraform -chdir=terraform validate
+    expected: >-
+      "Success! The configuration is valid." If the terraform CLI is unavailable locally, this is
+      deferred to the variable-flip PR's terraform-validate required check (Decision 83), which is authoritative.
+    fix_if: >-
+      validate reports an error anchored in variables.tf or data_pipeline.tf -- the flip introduced
+      a type/syntax problem; correct it (default must be the bool literal false).
+  - step: 3
+    phase: post-deploy
+    action: >-
+      Confirm the Dependabot backlog is resolved -- no dependabot/* branch remains on origin except
+      any whose PR was intentionally left open due to surfaced CI breakage.
+    command: cd /home/user/agent-platform && git ls-remote --heads origin 'dependabot/*'
+    expected: >-
+      Empty output (all 7 merged + branches deleted), OR only the head ref(s) of PR(s) explicitly
+      reported as left-open-due-to-red-CI in the implementation report.
+    fix_if: >-
+      A dependabot/* branch remains whose PR is already merged/closed -- delete it
+      (git push origin --delete <branch>). A branch remains with no merge and no surfaced report --
+      the PR was skipped silently; process it or add it to the report.
+  - step: 4
+    phase: post-deploy
+    action: Confirm the two orphan branches are deleted from origin.
+    command: >-
+      cd /home/user/agent-platform && git ls-remote --heads origin fix/dispute-fields-dead-code
+      claude/ducklake-maintenance-plan-Sexl7
+    expected: Empty output (both branches gone from origin).
+    fix_if: >-
+      Either ref still prints -- delete it with git push origin --delete <branch> (or the GitHub
+      API ref-delete if push-delete is denied).
+  - step: 5
+    phase: post-deploy
+    action: Confirm PR #320's branch is preserved (not collateral-deleted).
+    command: cd /home/user/agent-platform && git ls-remote --heads origin claude/intent-doc-extraction-retirement-f20tcu
+    expected: Exactly one ref printed for claude/intent-doc-extraction-retirement-f20tcu.
+    fix_if: >-
+      No ref printed -- the live plan branch was deleted in error; restore it from its last known
+      SHA (20b309d1b26ccec361752dd860766fbb861d8feb) and re-open PR #320 if it was closed.
+  - step: 6
+    phase: post-deploy
+    action: Confirm the terraform variable-flip change landed on main.
+    command: >-
+      cd /home/user/agent-platform && git fetch origin main -q && git show
+      origin/main:terraform/variables.tf | grep -A3 'variable "data_pipeline_schedule_enabled"' |
+      grep -q 'default     = false' && echo MERGED
+    expected: Prints MERGED -- the flip is on main.
+    fix_if: >-
+      Not MERGED -- the variable-flip PR has not been squash-merged yet (confirm its required checks
+      are green, then merge), or the merge targeted the wrong file.
+constraints:
+  - >-
+    Never force-merge past a red required check, and do not use admin bypass to merge red CI
+    (Decision 73 PR-CI authoritative pre-merge gate; Decision 83 main-protection).
+  - >-
+    STOP-and-surface on any CI breakage; no workaround loops, no auto-revert, no rescue agents
+    (Decision 55 forward-fix). A bump that breaks a required check is left open and reported, not coerced.
+  - >-
+    Do NOT modify src/data/ yfinance pipeline code or any file outside scope. yfinance 1.x API
+    compatibility is explicitly deferred to future pipeline reactivation (operator decision); the
+    floor-bump merge does not activate anything.
+  - >-
+    No terraform apply -- the legacy repo-root module is not applied (CD.21); the variable flip is
+    code-state hygiene only (Decision 77 apply model deliberately not engaged).
+  - Do NOT touch PR #320 or branch claude/intent-doc-extraction-retirement-f20tcu (live plan work).
+  - >-
+    Branch deletions go via git push origin --delete <branch> (GitHub API ref-delete as fallback);
+    never delete main or the active session branch.
+  - >-
+    Dependency-manifest diffs (requirements.txt, requirements-fast.txt, .github/workflows/*) arrive
+    via the Dependabot PR merges, not direct edits; terraform/variables.tf is the ONLY file this
+    plan directly edits.
+context:
+  - >-
+    Decisions to cite -- 73 (PR-CI authoritative pre-merge gate; forward-fix), 83 (branch protection
+    active: required checks pr-validate + terraform-validate, strict=false, admin bypass non-wedging;
+    Dependabot is the sanctioned bump mechanism), 55 (RCA-first / loud-failure / no workaround /
+    never auto-revert), 77 (two-axis apply taxonomy -- deliberately NOT engaged here because the
+    edited .tf is in the non-applied legacy root). Related -- CD.21 (legacy repo-root terraform
+    retained as architectural-evolution artefact but no longer applied; only terraform/personal/ is live).
+  - >-
+    yfinance pipeline verified present ONLY in legacy repo-root terraform (terraform/data_pipeline.tf)
+    and src/data/; absent from live terraform/personal/. No live AWS infra to disable -- the disable
+    is the data_pipeline_schedule_enabled default flip (code-state hygiene).
+  - >-
+    Dependency risk segmentation -- boto3 (#310 ->=1.43.36), beautifulsoup4 (#218 ->=4.15.0),
+    python-ulid (#216 ->=3.1.0), yfinance (#309 ->=1.5.1) are `>=` floor raises; CI already installs
+    latest, so they cannot independently break CI. ruff (#308 ==0.15.18 -> 0.15.20, pinned in BOTH
+    requirements.txt and requirements-fast.txt) carries small risk of new lint failures.
+    actions/checkout 6->7 (#213) and actions/cache 5->6 (#307) are exact GitHub Actions major bumps
+    in workflow files -- real behavior-change risk. Recommended order: merge the four floor bumps
+    first, then ruff, then the two GHA majors, so a breaking major never blocks the easy wins.
+  - >-
+    Orphan branches verified -- fix/dispute-fields-dead-code (PR #336 closed unmerged; its change,
+    removing _DISPUTE_FIELDS, is already absent from current main -- re-confirmed at plan time);
+    claude/ducklake-maintenance-plan-Sexl7 (no PR ever opened, 97 commits, last commit 2026-06-08, abandoned).
+  - >-
+    ci-rca deferral (Related-Work check) -- rec-2425 and rec-2426 (test_file_rec_carve_out failures)
+    showed status=open in the ops warehouse at plan-writing time, re-verified after a fresh
+    `sync_ops sync` on 2026-06-30, despite being reported resolved by the operator. This cleanup is
+    user_explicit_out_of_scope of those recs: it shares none of their source files, Decision Records,
+    or failure category (pytest/cache-refresh failure vs PR/branch hygiene). Deferral logged per the
+    planning skill's Related-Work check; operator to close the recs via the ops portal if intended.
+  - >-
+    Branch rebased to origin/main at plan time (0 behind / 0 ahead). Main's only scope-relevant
+    change since branch point was adding networkx>=3.0 to requirements.txt / requirements-fast.txt;
+    none of the five target deps moved and terraform/variables.tf was untouched, so the proposal is unaffected.
+  - >-
+    Dependabot recreation -- not a concern here: merged bumps do not recreate. Config left unchanged
+    per operator (weekly cadence retained); this is a one-time backlog resolution.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (citing 73, 83, 55, 77; related CD.21)
+  - terraform/variables.tf located and readable; data_pipeline.tf gating expression confirmed
+  - The 7 Dependabot PR numbers and target versions confirmed against open PRs
+  - Orphan-branch obsolescence re-confirmed against current main
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    On the implementation session branch (not main), edit terraform/variables.tf: change the
+    data_pipeline_schedule_enabled `default = true` to `default = false`. Do not edit the EventBridge
+    expression in data_pipeline.tf. Commit with prefix feat(stale-prs-branches-cleanup):.
+  - >-
+    Resolve the 7 Dependabot PRs in low-risk-first order (#310 boto3, #218 beautifulsoup4, #216
+    python-ulid, #309 yfinance, then #308 ruff, then #213 actions/checkout, #307 actions/cache).
+    For EACH PR: update the branch onto current main (mcp__github__update_pull_request_branch),
+    wait for pr-validate AND terraform-validate to go green (confirm via
+    mcp__github__pull_request_read get_status / get_check_runs -- do NOT trust a CI-green comment
+    alone), squash-merge (mcp__github__merge_pull_request merge_method=squash), then delete the head
+    branch (git push origin --delete <branch>, or GitHub API ref-delete). If a required check goes
+    red, STOP that PR: leave it open, capture the failure summary, and move on -- do NOT force-merge,
+    do NOT admin-bypass, do NOT edit code to make the bump compatible (Decision 55).
+  - >-
+    Delete the two orphan branches: git push origin --delete fix/dispute-fields-dead-code ;
+    git push origin --delete claude/ducklake-maintenance-plan-Sexl7.
+  - >-
+    Do NOT touch PR #320 or branch claude/intent-doc-extraction-retirement-f20tcu.
+  - >-
+    Push the terraform-flip session branch, open a PR (base main), subscribe to PR activity, and on
+    green required checks (pr-validate + terraform-validate) squash-merge to main. No Resolves: trailer
+    (bundled_recommendations is empty).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
+    and RCA (Decision 55).
+  - >-
+    'Report: which Dependabot PRs merged, which (if any) were left open due to red CI with their
+    failure summaries, which branches were deleted, and the terraform-flip merge status.'
+work_areas: []
+rollback: >-
+  The terraform default flip is a one-line revert (false -> true) on a non-applied module -- no live
+  effect either way. Merged Dependabot bumps are reverted by a normal forward-fix PR if a bump later
+  proves problematic (never auto-revert; Decision 55). Deleted branches: dependabot branches are
+  regenerated by Dependabot when a newer version is released; the two orphan branches are recoverable
+  from their last-known SHAs within git's reflog/remote-tracking retention if deletion proves premature
+  (claude/ducklake-maintenance-plan-Sexl7 @ 4ac2999, fix/dispute-fields-dead-code @ 8812b78).

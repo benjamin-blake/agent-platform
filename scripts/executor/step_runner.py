@@ -74,10 +74,6 @@ _EXECUTOR_ACC_VARS = frozenset(
 # Keys are matched as prefixes first, then as substrings, against the step's
 # target file path. Entries are ordered from most-specific to least-specific.
 _GOTCHA_MAP: dict[str, list[str]] = {
-    ".github/copilot-instructions.md": [
-        "replace_string_in_file context boundary: Include 3-5 lines of unchanged code before "
-        "and after target text. Weak boundaries cause wrong-occurrence matches or silent formatting changes.",
-    ],
     "scripts/executor/": [
         "replace_string_in_file context boundary: Include 3-5 lines of unchanged code before "
         "and after target text. Weak boundaries cause wrong-occurrence matches or silent formatting changes.",

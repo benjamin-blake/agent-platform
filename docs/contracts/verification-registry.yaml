@@ -1,0 +1,154 @@
+---
+# Class A data contract for the verification graduation registry.
+# Ratified under the CD.25 pre-codegen contract ratification ritual (tier_item T3.1).
+# Records every graduated verification check admitted by the differential admission gate.
+# At least one field ($ref graduated_by) draws chain-depth-1 $ref into Class C source-lineage.
+contract:
+  id: verification-registry
+  class: A
+  contract_version: 1
+  status: ratified
+  ratified_at: "2026-06-29"
+  ratified_via: "dec-102: PLAN-t3-1-verifier-harness merge to main (T3.1 CD.25 ritual)"
+  description: >-
+    Class A schema contract for the verification graduation registry: the cumulative
+    record of deterministic checks that have been admitted by the differential admission
+    gate (T3.1 / CD.29). Each row represents one graduated verification check and names
+    the primitive slot it occupies (one of the six canonical CD.29 slots), the artefact
+    it guards, and the plan that authored it. Indexed by guard_target + guard_symbol so
+    downstream orphan detection (T3.7) is deterministic. Data file:
+    config/agent/verification_registry/registry.yaml.
+fields:
+  check_id:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Unique, stable identifier for this graduated check. Human-readable slug, e.g.
+      "kernel-slot-count-eq-6" or "same-pr-guard-verifier-not-in-diff".
+    semantics: >-
+      PRIMARY KEY of the registry. Stable across plan iterations; changing a check
+      implementation requires a new check_id (immutable identity of the test, not the
+      implementation). Must be unique within the data file.
+    populated_by: >-
+      Plan author at graduation time. The implementing agent sets this when authoring
+      the check definition and inserting the row into
+      config/agent/verification_registry/registry.yaml.
+    dq_intent:
+      not_null:
+        enforced: true
+  primitive_slot:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      Which of the six canonical CD.29 primitive slots this check occupies. One of:
+      command_exit_zero, command_output_matches, file_presence, grep_count,
+      test_selector, metric_under_threshold.
+    semantics: >-
+      ENUM KEY into the closed CD.29 slot vocabulary. Exactly six values are legal
+      (SLOT_COUNT == 6 in scripts/verification_checks.py). Adding a seventh slot
+      requires a new CD; reject any value not in CANONICAL_SLOTS at registry load time.
+    populated_by: >-
+      Plan author at graduation time. Must match one of the six slot strings in
+      scripts.verification_checks.CANONICAL_SLOTS; the registry validator enforces this.
+    dq_intent:
+      not_null:
+        enforced: true
+      accepted_values:
+        enforced: true
+        values:
+          - command_exit_zero
+          - command_output_matches
+          - file_presence
+          - grep_count
+          - test_selector
+          - metric_under_threshold
+  guard_target:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      The primary artefact this check guards -- a file path, module name, or logical
+      subsystem identifier (e.g. "scripts/verification_checks.py",
+      "scripts/verifiers/harness.py", "validate.py:same_pr_guard").
+    semantics: >-
+      GUARD SCOPE KEY. Used by T3.7 orphan detection to determine whether a
+      guard_target that has been deleted or refactored still has live checks pointing
+      at it. Values are relative paths from the repo root (no leading slash) or a
+      dotted Python module name for in-process checks.
+    populated_by: >-
+      Plan author at graduation time. Set to the canonical relative path or module
+      name of the artefact this check defends.
+    dq_intent:
+      not_null:
+        enforced: true
+  guard_symbol:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Optional sub-symbol within guard_target that this check specifically guards,
+      e.g. a function name, class name, or configuration key. Null when the check
+      covers the entire guard_target.
+    semantics: >-
+      NARROWING KEY. When present, orphan detection (T3.7) uses guard_target +
+      guard_symbol to pinpoint which symbol within a file is no longer present.
+      Null means the check is file-level; non-null means the check would need
+      re-authoring if the named symbol is renamed or removed.
+    populated_by: >-
+      Plan author at graduation time, or null if the check covers the full
+      guard_target without drilling into a specific symbol.
+    dq_intent:
+      not_null:
+        enforced: false
+  plan_slug:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      The plan slug that authored and graduated this check, e.g.
+      "t3-1-verifier-harness". Links a graduated check back to its originating
+      IMPLEMENTATION plan document in docs/plans/.
+    semantics: >-
+      PROVENANCE KEY. Not a FK enforced at write time but useful for audit trails.
+      Matches the slug component of docs/plans/PLAN-{slug}.yaml. Future T3.7 orphan
+      scans can use this to find the plan that would need updating if the check is
+      invalidated.
+    populated_by: >-
+      Plan author at graduation time. Set to the slug of the IMPLEMENTATION plan
+      executing the graduation (e.g. "t3-1-verifier-harness").
+    dq_intent:
+      not_null:
+        enforced: true
+  graduated_at:
+    type: str
+    iceberg_type: string
+    nullable: false
+    description: >-
+      ISO-8601 date when this check was admitted by the differential admission gate
+      and added to the registry (e.g. "2026-06-29").
+    semantics: >-
+      AUDIT TIMESTAMP. Calendar date (not datetime) to avoid timezone ambiguity in
+      the filesystem-backed YAML data file. Populated at plan execution time; not
+      updated on re-runs.
+    populated_by: >-
+      Plan author at graduation time. Set to the ISO date of the implementing session
+      (today's date when the row is written).
+    dq_intent:
+      not_null:
+        enforced: true
+  graduated_by:
+    $ref: source-lineage.yaml#/contract/fields/registry_key
+    dq_intent_local:
+      not_null:
+        enforced: false
+    governance_notes_local: >-
+      The agent type or author identity that ran the differential admission gate and
+      inserted this row. Draws from the canonical source-lineage registry (Decision 66):
+      values are canonical_id entries from config/agent/data_quality/source_registry.yaml.
+      Nullable for bootstrap rows authored before the gate was live; all post-T3.1 rows
+      should carry a value. Chain-depth-1 $ref satisfies the CD.25 cross-system $ref
+      requirement for Class A graduation.
+amendment_log: []
+previous_versions: []

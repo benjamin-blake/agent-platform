@@ -1,9 +1,9 @@
 # Machine Learning Trading System - Project Context
 
-> **Canonical project knowledge base for Claude Code.** `.github/copilot-instructions.md` is a deep-frozen fallback for the legacy GitHub Copilot CLI surface — do not edit it. Update this file only.
+> **Canonical project knowledge base for Claude Code.** Update this file only.
 
 You are a Lead Software Developer writing production-quality Python. You are operating on a Linux container (Ubuntu 24.04) with bash; use `bin/venv-python` for all Python invocations (Python 3.12+).
-See docs/contracts/instruction-architecture.md for the full information architecture.
+See docs/contracts/instruction-architecture.yaml for the full information architecture.
 
 ## Rules
 
@@ -34,7 +34,7 @@ If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` a
 
 ### Recommendation & Decision Logging
 - **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
-- **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See `docs/INTENT-ducklake-consolidation.md`.
+- **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See Decision 84 / tier_item T2.26.
 - **ID Authority (Decision 84 I-2):** Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`); decision numbering authority is DECISIONS.md (callers supply `decision_id`). The local JSONL files are read-only caches, not the source of truth.
 - **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Reads and writes transit the closed DuckLake reader/writer boundary via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
 - **Failure mode (Decision 84 I-4):** there is NO offline outbox. A write that cannot complete FAILS LOUDLY at the call site (after an idempotent transient-5xx retry); re-file after restoring connectivity (verify with `aws sts get-caller-identity --profile agent_platform`). `sync()` only refreshes the local read cache and returns `{"pulled": ...}`.
@@ -145,27 +145,24 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Model routing config (provider + tier mapping) | [config/agent/copilot/model_routing.yaml](../config/agent/copilot/model_routing.yaml) |
 | Model registry (resolver, escalation) | [scripts/model_registry.py](../scripts/model_registry.py) |
 | Gemini CLI context file | [GEMINI.md](../GEMINI.md) |
-| Instruction architecture contract | [docs/contracts/instruction-architecture.md](../docs/contracts/instruction-architecture.md) |
+| Instruction architecture contract | [docs/contracts/instruction-architecture.yaml](../docs/contracts/instruction-architecture.yaml) |
 | Interactive orientation workflow | [.claude/commands/orient.md](../.claude/commands/orient.md) (canonical). Read-only; run before `/plan` to choose what to work on. |
 | Interactive planning workflow | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
 | Interactive implementation workflow | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
 | Interactive workflow skills (methodology) | [.claude/skills/](../.claude/skills/) (canonical) |
-| Legacy Antigravity workflows/skills | [.agents/workflows/](../.agents/workflows/), [.agents/skills/](../.agents/skills/) (legacy -- not synced, may be stale) |
-| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical). `.github/prompts/plan.prompt.md` is VS Code legacy |
+| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
 | Branch-specific plan files | `docs/plans/PLAN-{slug}.md` (merged to main; handed off to `/implement` by path) |
-| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical). `.github/prompts/implement.prompt.md` is VS Code legacy |
+| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
 | Pre-session checks (env, recs, friction) | [scripts/session_preflight.py](../scripts/session_preflight.py) |
 | Post-session automation (validate, commit, push) | [scripts/session_postflight.py](../scripts/session_postflight.py) |
-| Subagents and Reviewers | [.github/agents/*.agent.md](../.github/agents/) (VS Code legacy -- use `.agents/skills/` for Antigravity) |
+| Subagents and Reviewers | [.claude/skills/](../.claude/skills/) (canonical) |
 | Plan execution audit | [scripts/plan_audit.py](../scripts/plan_audit.py) |
 | Session metrics | [scripts/session_metrics.py](../scripts/session_metrics.py) |
 | Test coverage enforcement | [scripts/test_coverage_checker.py](../scripts/test_coverage_checker.py) -- AST-based; validates test file existence and per-file 100% coverage for new code |
 | Prompt compliance verification | [scripts/prompt_compliance.py](../scripts/prompt_compliance.py) -- Parses `## Behavioural Invariants` YAML from prompts; validates against retro-lite log and execution state |
 | North Star tracker | [scripts/north_star_tracker.py](../scripts/north_star_tracker.py) |
 | Human workflow guide | [docs/AGENT_WORKFLOW.md](../docs/AGENT_WORKFLOW.md) |
-| Strategic review (Opus) | [.github/prompts/strategic_review.prompt.md](../.github/prompts/strategic_review.prompt.md) |
-| CI triage protocol | [.github/prompts/implement.prompt.md](../.github/prompts/implement.prompt.md) -- Session Close Phase |
-| CI triage (standalone) | [.github/prompts/ci_triage.prompt.md](../.github/prompts/ci_triage.prompt.md) |
+| CI triage | [.claude/skills/orient/SKILL.md](../.claude/skills/orient/SKILL.md) -- CI RCA Recs surfaced in orient |
 | GitHub MCP config | [.mcp.json](../.mcp.json) |
 | Session continuity log | [docs/SESSION_LOG.md](../docs/SESSION_LOG.md) |
 | Scheduled agent manifest | [.github/agents/schedule.yaml](../.github/agents/schedule.yaml) |
@@ -189,6 +186,7 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 | Execution checkpoint state | [logs/.execution-state.json](../logs/.execution-state.json) |
 | Execution state management | [scripts/execution_state.py](../scripts/execution_state.py) |
 | Session telemetry (executor) | [scripts/executor/telemetry.py](../scripts/executor/telemetry.py) |
+| PR template | [.github/pull_request_template.md](../.github/pull_request_template.md) |
 
 ## Recommendations Log Schema
 
@@ -237,7 +235,7 @@ The file `logs/.recommendations-log.jsonl` is used in nearly every session. When
 
 - **Git branching workflow:** On Claude Code on the web the harness creates the per-session branch; do NOT create `agent/` branches. Never commit directly to `main`. Merge via a GitHub MCP PR (no local `gh`); wait for CI event-driven via `subscribe_pr_activity`, then squash-merge via `merge_pull_request`. See Decision 76.
 
-- **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `.github/prompts/develop-executor.prompt.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
+- **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `.github/instructions/executor-*.instructions.md`, `scripts/copilot_wrapper.py`, `scripts/llm_client.py`, `scripts/llm_utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_copilot_wrapper.py`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. See Decision 44. Enforced by `validate_executor_boundary()` in `validate.py`.
 
 - **Venv and Python:** Python 3.12+ on Linux container. Always invoke via `bin/venv-python` (wrapper auto-resolves the venv). Verify: `bin/venv-python -c "import sys; print(sys.executable)"`. If the venv is missing, run `bin/setup-cloud-env.sh` (canonical CC-web/Linux setup). Do not use `source .venv/bin/activate` -- each Bash tool invocation is independent; the wrapper handles activation.
 
@@ -456,11 +454,13 @@ iteration (the Platform-MVP boundary, Decision 93):
   accumulating (T3.9).
 
 ### 8. Agent / instruction architecture end-state
-- 5-layer instruction model (instruction-architecture contract): L1 universal rules
+- 5-layer instruction model (docs/contracts/instruction-architecture.yaml): L1 universal rules
   (AGENTS.md/CLAUDE.md, ambient) / L2 project knowledge (docs/PROJECT_CONTEXT.md, on-demand) / L3
   slash commands (.claude/commands/) / L4 skills (.claude/skills/) / L5 executor prompts
-  (config/agent/executor/prompts/). .claude/ is canonical (Decision 76); .agents/ and
-  .github/prompts|agents/ are deep-frozen legacy, retired at T5.3.
+  (config/agent/executor/prompts/). .claude/ is canonical (Decision 76); legacy top-level
+  .github/prompts/*.prompt.md + .github/agents/*.agent.md + .agents/ were deleted at T-1.13;
+  .github/prompts/scheduled/ + .github/agents/schedule.yaml survive for scheduled agents;
+  full directory deletion remains owned by T5.3 pending scheduled-agent decoupling.
 - Agent-first repository (NS.4, CD.13): all artefacts machine-parseable. Standing
   prose-architecture docs are forbidden (Decision 86) -- intent routes to tier_items, rationale to
   Decisions, field semantics to contracts (Class A data schemas, Class B Lambda-verb, Class C

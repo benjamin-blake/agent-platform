@@ -1210,6 +1210,31 @@ class TestComputeFollowonState:
         result = compute_followon_state(doc, tmp_path)
         assert result["A"]["needs_followon_plan"] is True
 
+    def test_plans_dir_default_is_absolute_repo_anchored(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Default plans_dir resolves to repo-anchored absolute path, not CWD-relative (rec-2349)."""
+        import inspect
+
+        src = inspect.getsource(PlatformRoadmapState.to_preflight_dict)
+        assert 'Path("docs/plans")' not in src, "Default plans_dir must not be CWD-relative string literal"
+
+        # Behavioral: from a different CWD the default must still reach the real plans dir.
+        roadmap = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
+        doc = load(roadmap)
+        state = PlatformRoadmapState(doc)
+
+        real_plans_dir = Path(__file__).parent.parent / "docs" / "plans"
+        baseline = state.to_preflight_dict(plans_dir=real_plans_dir)
+
+        monkeypatch.chdir(tmp_path)
+        default = state.to_preflight_dict()
+
+        baseline_map = {i["id"]: i for i in baseline["in_progress"]}
+        for item in default["in_progress"]:
+            if item["id"] in baseline_map:
+                assert item["needs_followon_plan"] == baseline_map[item["id"]]["needs_followon_plan"], (
+                    f"{item['id']}: default plans_dir produced different needs_followon_plan than explicit absolute path"
+                )
+
     def test_plan_closes_different_item_does_not_suppress(self, tmp_path: Path) -> None:
         doc = self._make_doc(
             [
@@ -1237,3 +1262,70 @@ class TestComputeFollowonState:
         result = compute_followon_state(doc, tmp_path)
         assert result["A"]["needs_followon_plan"] is True, "A's criterion not covered by the B plan"
         assert result["B"]["needs_followon_plan"] is False, "B's criterion is covered"
+
+
+# ---------------------------------------------------------------------------
+# TestCompletionBlockedOnCd -- T-1.20:c6
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionBlockedOnCd:
+    """completion_blocked_on_cd field on in_progress items in to_preflight_dict."""
+
+    def _make_state(self, items: list[dict], cds: list[dict] | None = None) -> PlatformRoadmapState:
+        d = _doc(tier_items=items, candidate_decisions=cds or [])
+        return PlatformRoadmapState(RoadmapDocument.model_validate(d))
+
+    def test_completion_blocked_on_cd_non_exempt_with_pending_cd(self, tmp_path: Path) -> None:
+        """in_progress item with pending related_candidate_decisions surfaces the CD id."""
+        items = [{**_item("T0.1", status="in_progress"), "related_candidate_decisions": ["CD.99"]}]
+        state = self._make_state(items, [_cd("CD.99")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == ["CD.99"]
+
+    def test_completion_blocked_on_cd_exempt_always_empty(self, tmp_path: Path) -> None:
+        """bootstrap_completion_exempt=True -> completion_blocked_on_cd is [] even with pending CD."""
+        items = [
+            {
+                **_item("T0.1", status="in_progress"),
+                "related_candidate_decisions": ["CD.99"],
+                "bootstrap_completion_exempt": True,
+            }
+        ]
+        state = self._make_state(items, [_cd("CD.99")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == []
+
+    def test_completion_blocked_on_cd_no_pending_cd_empty(self, tmp_path: Path) -> None:
+        """in_progress item, not exempt, but no pending gating CD -> []."""
+        items = [{**_item("T0.1", status="in_progress"), "related_candidate_decisions": ["CD.99"]}]
+        state = self._make_state(items, [_cd("CD.99", state="ratified")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == []
+
+    def test_completion_blocked_on_cd_gates_tier_shortcut(self, tmp_path: Path) -> None:
+        """CD.gates tier shortcut gating the item's tier is surfaced in completion_blocked_on_cd."""
+        items = [_item("T0.1", tier="T0", status="in_progress")]
+        state = self._make_state(items, [_cd("CD.99", gates=["T0"])])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == ["CD.99"]
+
+    def test_completion_blocked_on_cd_is_sorted(self, tmp_path: Path) -> None:
+        """Multiple pending CDs appear in sorted (lexicographic) order."""
+        items = [{**_item("T0.1", status="in_progress"), "related_candidate_decisions": ["CD.99", "CD.13"]}]
+        state = self._make_state(items, [_cd("CD.99"), _cd("CD.13")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == ["CD.13", "CD.99"]
+
+    def test_completion_blocked_on_cd_decision_required_before_source(self, tmp_path: Path) -> None:
+        """decision_required_before referencing a pending CD is surfaced in completion_blocked_on_cd."""
+        items = [{**_item("T0.1", status="in_progress"), "decision_required_before": ["Requires CD.77"]}]
+        state = self._make_state(items, [_cd("CD.77")])
+        result = state.to_preflight_dict(plans_dir=tmp_path)
+        ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
+        assert ip["completion_blocked_on_cd"] == ["CD.77"]
