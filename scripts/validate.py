@@ -3352,6 +3352,32 @@ def validate_ducklake_version_lockstep(failed: list[str]) -> None:
             sys.path.remove(root_str)
 
 
+def validate_dependency_graph_freshness(failed: list[str]) -> None:
+    """Fail if docs/dependency-graph.json exists and has drifted from the current graph.
+
+    No-op when no committed export is present. Full tier only (Decision 73 non-wedging).
+    Delegates to scripts.dependency_graph.check_export_freshness (Decision 80).
+    """
+    print("\n=== Dependency graph freshness ===")
+    root_str = str(ROOT)
+    injected = root_str not in sys.path
+    if injected:
+        sys.path.insert(0, root_str)
+    try:
+        from scripts.dependency_graph import check_export_freshness  # noqa: PLC0415
+
+        before = len(failed)
+        check_export_freshness(failed)
+        if len(failed) == before:
+            print("  PASS: dependency graph export is current (or no committed export).")
+    except ImportError as exc:
+        print(f"  ERROR: Could not import dependency_graph: {exc}")
+        failed.append("Dependency graph freshness")
+    finally:
+        if injected and root_str in sys.path:
+            sys.path.remove(root_str)
+
+
 def run_python_checks(failed: list[str]) -> None:
     run_lint_checks(failed)
     validate_subprocess_encoding(failed)
@@ -3401,6 +3427,8 @@ def run_python_checks(failed: list[str]) -> None:
     validate_authority_budget(failed)
     # DuckLake version lockstep gate: sub-second static, eligible for both tiers (OQ.12 SSOT enforcement)
     validate_ducklake_version_lockstep(failed)
+    # Dependency-graph freshness: full tier only (Decision 73 non-wedging, Decision 80).
+    validate_dependency_graph_freshness(failed)
     invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
     print("\n=== mypy (informational) ===")
