@@ -1,0 +1,63 @@
+[importlinter]
+root_packages =
+    src
+    scripts
+
+[importlinter:contract:no-cycles-execute-recommendation-executor-batch]
+name = scripts.execute_recommendation is above scripts.executor.batch (Strangler Fig -- no upward imports)
+type = layers
+layers =
+    scripts.execute_recommendation
+    scripts.executor.batch
+ignore_imports =
+    # scripts.executor.batch imports scripts.execute_recommendation in function bodies (Strangler Fig pattern:
+    # batch.py was extracted FROM execute_recommendation.py; deferred imports prevent module-load cycles
+    # during the ongoing strangling migration).
+    scripts.executor.batch -> scripts.execute_recommendation
+
+[importlinter:contract:no-cycles-ops-data-portal-executor]
+name = scripts.ops_data_portal is above scripts.executor (no upward imports; delegation via deferred imports)
+type = layers
+layers =
+    scripts.ops_data_portal
+    scripts.executor
+ignore_imports =
+    # scripts.executor.jsonl_store imports scripts.ops_data_portal in function bodies (update_rec, file_rec,
+    # find_open_postmortem_for): the jsonl_store delegates write operations upward to the authoritative portal.
+    # ops_data_portal imports executor submodules at module level for type and schema access (the intended
+    # direction). Deferred imports prevent module-load-order cycles.
+    scripts.executor.jsonl_store -> scripts.ops_data_portal
+    # scripts.executor.batch and scripts.executor (via __init__.py) import scripts.execute_recommendation in
+    # function bodies (Strangler Fig pattern); these create a transitive path
+    # executor -> execute_recommendation -> ops_data_portal that would appear to violate the
+    # ops_data_portal > executor layering. Deferred imports are intentional migration scaffolding.
+    scripts.executor.batch -> scripts.execute_recommendation
+    scripts.executor -> scripts.execute_recommendation
+
+[importlinter:contract:no-cycles-verifiers-executor]
+name = scripts.verifiers is above scripts.executor (verifiers use executor infrastructure; not vice versa)
+type = layers
+layers =
+    scripts.verifiers
+    scripts.executor
+ignore_imports =
+    # scripts.executor.postflight imports scripts.verifiers and scripts.verifiers.harness in a function body
+    # (_run_verifiers_gate): executor bootstraps the verification gate without creating a module-load cycle.
+    # verifiers import executor submodules at module level (the intended direction).
+    scripts.executor.postflight -> scripts.verifiers
+    scripts.executor.postflight -> scripts.verifiers.harness
+
+[importlinter:contract:src-schemas-is-pure-data-layer]
+name = src.schemas is a pure data layer -- no imports from other first-party packages
+type = forbidden
+source_modules =
+    src.schemas
+forbidden_modules =
+    scripts
+    src.common
+    src.data
+    src.execution
+    src.lab
+    src.live
+    src.meta_learner
+    src.lambdas
