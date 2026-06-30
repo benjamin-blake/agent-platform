@@ -6,14 +6,12 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.ci_rca_vacuous_pass import (  # noqa: E402
-    _UNDETERMINED,
     _TEST_FILE_RE,
+    _UNDETERMINED,
     compute_coverage_regression,
     compute_merge_gate_test_coverage,
     deleted_test_files,

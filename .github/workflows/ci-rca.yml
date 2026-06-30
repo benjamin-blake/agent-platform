@@ -197,7 +197,7 @@ jobs:
           CATEGORIES=""
           if ls /tmp/ci-rca-bundles/*.json 2>/dev/null | head -1 > /dev/null; then
             CATEGORIES=$(for f in /tmp/ci-rca-bundles/*.json; do
-              python3 -c "import json; print(json.load(open('$f'))['failure_category'])" 2>/dev/null || echo "unknown"
+              .venv/bin/python -c "import json,pathlib; print(json.loads(pathlib.Path('$f').read_text(encoding='utf-8'))['failure_category'])" 2>/dev/null || echo "unknown"
             done | sort -u | paste -sd ',' -)
           fi
           echo "bundle_sha=${BUNDLE_SHA}" >> "$GITHUB_OUTPUT"
@@ -253,8 +253,11 @@ jobs:
           BUNDLE_PATH="${{ steps.evidence.outputs.bundle_path }}"
           BUNDLE_LOCAL="${{ steps.evidence.outputs.bundle_local }}"
           EVIDENCE_CONTEXT=""
-          if [ -n "$BUNDLE_SHA" ]; then
-            EVIDENCE_CONTEXT=" Evidence bundle SHA: ${BUNDLE_SHA}. S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local bundle path: ${BUNDLE_LOCAL}."
+          if ls /tmp/ci-rca-bundles/*.json 2>/dev/null >/dev/null 2>&1; then
+            # Reference the emit-dir so multi-failure runs expose all N bundles to the agent.
+            # For a single-failure run BUNDLE_SHA is the only SHA; for N>1 the agent enumerates
+            # /tmp/ci-rca-bundles/*.json to find each bundle's sha256 and failure_category.
+            EVIDENCE_CONTEXT=" Evidence bundle(s) are at /tmp/ci-rca-bundles/ -- enumerate *.json for multi-failure runs (one JSON per failed check). Primary bundle SHA: ${BUNDLE_SHA}. Primary S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local path: ${BUNDLE_LOCAL}."
           fi
           # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
           # trailing positional prompt, leaving claude with no input ("Input must be provided
