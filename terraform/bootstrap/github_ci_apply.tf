@@ -288,7 +288,8 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Effect = "Allow"
         Action = [
           "iam:PutRolePolicy",
-          "iam:AttachRolePolicy"
+          "iam:AttachRolePolicy",
+          "iam:PutRolePermissionsBoundary"
         ]
         Resource = [
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
@@ -573,7 +574,8 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           "iam:UntagRole",
           "iam:CreateRole",
           "iam:PutRolePolicy",
-          "iam:AttachRolePolicy"
+          "iam:AttachRolePolicy",
+          "iam:PutRolePermissionsBoundary"
         ]
         Resource = ["*"]
       },
