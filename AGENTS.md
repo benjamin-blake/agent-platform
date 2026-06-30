@@ -29,7 +29,7 @@ You are a Lead Software Developer writing production-quality Python. The user is
 - Never `eval()` or `exec()`. Use `sympy.sympify()` + `sympy.lambdify()` for formula evaluation.
 - Never raise exceptions during module import. Defer validation to explicit calls.
 - Always wrap `filemd5()` and `file()` Terraform calls on optional artifacts with `try()`.
-- Terraform apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state. The guard's fail-closed set (IAM/trust/destroy diffs, exit 2) now routes to the `tf-gated-apply` GitHub Environment in CD: after merge, the `gated-apply` job blocks until benjamin-blake approves in GitHub Actions, then applies the same reviewed plan.bin in CD (never from a laptop). The bootstrap root (CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget (permissions boundary); in-budget IAM auto-apply pending T2.25.
+- Terraform apply model: see `docs/contracts/environment-taxonomy.md` (Axis A + Guard classification subsection) -- that file is the sole SoT. Short form: sandbox auto-applies behind the deterministic guard (Decision 77); in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25 / Decision 92 point 5); trust/destroy/out-of-budget IAM route to the `tf-gated-apply` Environment. Bootstrap root is admin-only out-of-band.
 - Windows subprocess: pass `encoding='utf-8', errors='replace'` with `text=True`. Use `sys.executable` — not the string `'python'` or `'pip'`.
 - Only modify files explicitly in scope. Out-of-scope bugs become recommendations via `scripts/ops_data_portal.py`, not inline fixes.
 
@@ -113,7 +113,7 @@ This is an append-only lakehouse. The warehouse is the single source of truth fo
 
 **Source-of-truth by table (Decision 84 consolidation, 2026-06-11):**
 - **`ops_recommendations`, `ops_decisions`, `ops_priority_queue` = DuckLake-on-Neon, SOLE backend.** Reads transit the closed `ducklake_reader` boundary via NAMED VERBS (Decision 84 I-3; no caller SQL); writes transit `ducklake_writer` (`file_ops` allocates rec ids in-transaction). There is NO Athena path and NO rollback flag (`OPS_STORAGE_BACKEND` retired -- the frozen Iceberg copy stopped being coherent the day writes moved). `ops_decisions` rebuilds from `DECISIONS.md` via `ops_data_portal --backfill-decisions-md`.
-- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (`docs/INTENT-ducklake-consolidation.md`).
+- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (Decision 84 Phase 4 / tier_item T2.36).
 
 Local files have exactly two valid roles:
 
@@ -164,6 +164,9 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 2. `mcp__github__create_pull_request(owner, repo, head=<branch>, base="main", title=<per conventions table>, body=...)`
 3. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)` and **end your turn** -- do NOT busy-wait with sleep or polling; the harness forbids it.
 4. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment is the pass wake signal. The comment is unverified: on wake, confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
+   - **Harness message vs. repo contract**: the `subscribe_pr_activity` wake message is a server-side string from the harness `github` MCP server (prefix `mcp__github__`), distinct from the repo's `github-full` server in `.mcp.json`; it is not repo-editable. In this repo CI success IS delivered via the signal-green comment, so the event-driven wake (failure event + signal-green comment) is the primary routine mechanism -- `send_later` polling for CI status is NOT used.
+   - **Dropped-signal backstop**: exactly one low-frequency (~1h) best-effort one-shot `send_later` self-check-in is permitted to guard against a dropped (best-effort `continue-on-error`) signal-green comment. It is NOT a poll loop (Decision 55), NOT the CI-status mechanism, and is re-armed only if the PR is genuinely still pending after waking.
+   - **Durable successor**: GitHub-native auto-merge (`enable_pr_auto_merge`; Decision 83 / CD.20 / rec-940) retires the comment-wake + backstop once adopted.
 5. On green confirmation: `mcp__github__merge_pull_request(..., merge_method="squash")` then `mcp__github__unsubscribe_pr_activity(...)`.
 6. On red: diagnose, fix on branch, commit, push (re-triggers CI). Stay subscribed. End your turn.
 
@@ -184,7 +187,7 @@ Triggers `rec-autoclose.yml` to close each rec via the ops portal. Fallback: `bi
 - Manual confirmation: if `validate.py` appears to skip tests, run `pytest` directly to confirm.
 
 ## Instruction architecture
-The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude Code is the 4th consumer. Layers:
+The 5-layer contract is at `docs/contracts/instruction-architecture.yaml`. Claude Code is the 4th consumer. Layers:
 
 | Layer | Location | When loaded |
 |---|---|---|
@@ -194,7 +197,7 @@ The 5-layer contract is at `docs/contracts/instruction-architecture.md`. Claude 
 | 4. Skills (methodology) | `.claude/skills/*/SKILL.md` | When agent invokes `Skill` tool |
 | 5. Executor prompts | `config/agent/executor/prompts/*.prompt.md` | By `execute_recommendation.py` |
 
-Legacy fallbacks at `.github/prompts/` and `.github/agents/` are deep-frozen — do not edit them unless explicitly asked.
+The `.github/prompts/scheduled/` and `.github/agents/schedule.yaml` surfaces are retained for live scheduled agents. The legacy top-level `.github/prompts/*.prompt.md` and `.github/agents/*.agent.md` files were deleted at T-1.13.
 
 ## Operational runbooks
 

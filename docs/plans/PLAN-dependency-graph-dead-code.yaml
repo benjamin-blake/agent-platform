@@ -1,0 +1,94 @@
+schema_version: 1
+slug: "dependency-graph-dead-code"
+intent: >-
+  Capture, as governed roadmap forward intent, the deterministic dependency-graph + source dead-code
+  detection + context-budget governance the repo lacks, so it stays lean, maintainable, and scalable --
+  treating agent context as a first-class resource that dead code erodes. Sequences the orphaned Decision 80
+  do-less baseline and builds the dependency oracle Decision 80 noted is "already computable" but nobody owns.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-dependency-graph-dead-code.yaml
+phase: >-
+  Phase Platform (automation infrastructure). Platform tier T3 (code-health / verification). No product-phase
+  dependency. Extends Decision 80 (build-tooling direction / do-less baseline) and Decision 43 (directed-growth
+  governance); the dead-code root-set honours Decision 79 per-Lambda manifests.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add 4 tier_items (all status: not_started, all citing Decision 80 via related_decisions): T3.11 do-less
+      import-governance baseline (import-linter + lockfile + edit-scope hook + Bazel-revisit wiring -- the
+      Decision 80 clause-2 obligation never sequenced); T3.12 deterministic first-party dependency graph
+      (compute-on-demand, agent-consumable); T3.13 source-code dead/orphan detection (graph-reachability +
+      grep cross-check, disjoint from T3.7); T3.14 context-budget as a tracked metric (extends Decision 43).
+      This is the REPORT-ONLY deliverable (roadmap forward-intent DATA); no code, contracts, or skills change.
+  - file: docs/plans/PLAN-dependency-graph-dead-code.yaml
+    action: Create
+    purpose: This planning artefact.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema (scripts.platform_roadmap PASS, exit 0)
+  - Tier items T3.11, T3.12, T3.13, T3.14 are present with status == not_started
+  - Each of T3.11-T3.14 cites Decision 80 in related_decisions (no new Decision is authored this session)
+  - No live (not_started/in_progress) tier_item depends_on a deferred_post_mvp item (platform_roadmap.py model_validator passes at load)
+  - T3.13 depends_on T3.12 and T3.14 depends_on [T3.12, T3.13]; T3.11 and T3.12 have no new dependencies (eligible now)
+  - The change is confined to docs/ROADMAP-PLATFORM.yaml -- no code, contract, or skill file is modified (nothing implemented)
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Validate the roadmap against the RoadmapDocument Pydantic schema and the no-live-dep model_validator
+    command: bin/venv-python -m scripts.platform_roadmap
+    expected: "Prints 'PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.' and exits 0"
+    fix_if: "Schema error, unknown key, or a model_validator failure (e.g. a live item depending on a deferred_post_mvp item) -- fix the offending tier_item block"
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the 4 new ids are present with status not_started and each cites Decision 80
+    command: 'bin/venv-python -m scripts.platform_roadmap && grep -cE "id: T3\.1[1234]" docs/ROADMAP-PLATFORM.yaml && grep -c "related_decisions: \[80" docs/ROADMAP-PLATFORM.yaml'
+    expected: "platform_roadmap PASS, then grep count == 4 (T3.11-T3.14), then a related_decisions:[80...] count >= 4"
+    fix_if: "Count < 4 means an id is missing or mis-indented, or a tier_item omits Decision 80; re-check the inserted blocks"
+  - step: 3
+    phase: pre-deploy
+    action: Run the fast presubmit tier over the edited tree (lint/format/prompts/roadmap)
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exits 0 (no lint/format/prompt-compliance/roadmap regressions); full validate on CI is the authoritative gate"
+    fix_if: "Address the reported issue in docs/ROADMAP-PLATFORM.yaml"
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the change is purely additive -- no pre-existing tier_item was mutated or deleted
+    command: 'git fetch origin main --quiet && git diff origin/main -- docs/ROADMAP-PLATFORM.yaml | grep -cE "^-[^-]"'
+    expected: "Prints 0 -- no deletion lines; the roadmap change adds only the T3.11-T3.14 blocks"
+    fix_if: "A non-zero count means a pre-existing block was altered or the base is stale -- rebase onto origin/main (common cause) and re-diff; revert any genuine unintended edit"
+constraints:
+  - REPORT-ONLY -- the deliverable is roadmap forward-intent DATA; nothing is implemented this session
+  - No new Decision (operator decision) -- the four tier_items cite Decision 80 via related_decisions; docs/DECISIONS.md stays out of scope
+  - No new standing prose-architecture docs (Decision 86) -- forward intent routes to tier_items, not a docs/REPORT-*.md
+  - Build orchestrators (Bazel/Pants) stay deferred (Decision 80) -- these items are the do-less path, gated behind the wired revisit trigger; no item re-litigates Bazel
+  - Dead-code root-set is sourced from per-Lambda manifests with no transitive resolution (Decision 79)
+  - The dependency graph is compute-on-demand, not a committed artifact (operator decision + Decision 80 lean posture); any export is drift-guarded
+  - No live (not_started/in_progress) tier_item may depend_on a deferred_post_mvp item (Decision 93, enforced at load)
+  - Tool selection (import-linter/grimp/vulture/custom ast) is a decomposition_hint, not ratified mechanism (Decision 75 frame-challenge preserved)
+  - Edits confined to docs/ROADMAP-PLATFORM.yaml; no code, contract, or skill file is touched
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - "Origin: operator scoping conversation 2026-06-29 on a deterministic dependency graph + dead-code discovery, framed by 'agent context is a first-class resource and dead code eats it'. Ground-truthed against the repo: the Lambda manifest system (compute_affected_artifacts) is the only active dependency mechanism; extract_imports.py is an unintegrated ast utility (src.* only); the orphan-code scheduled agent is grep-only and disabled; import-linter/grimp/vulture are unmentioned and unused."
+  - "Decision Scout gate: FLAGS_FOUND (2 NOTE). Flag 1 (Decision 75 frame-lock) resolved by keeping tool choice in decomposition_hints, not ratified in item prose. Flag 2 (Decision 80 artifact-drift) resolved by scoping the graph compute-on-demand (T3.12), not a committed file. CITE list incorporated: Decisions 80 (originating direction), 43 (context-budget baseline), 86 (deliverable shape), 79 (root-set). RELATED noted: 84 (ops-portal if T3.14 metric persisted), 67/CD.17 (STRATEGIC freeze permits this IMPLEMENTATION-typed roadmap authoring)."
+  - "Why these gaps exist: Decision 80 named PLAN-do-less-baseline (import-linter + lockfile + revisit trigger + edit-scope hook) as the immediate-next plan but it was never sequenced into the roadmap (no .importlinter, no lockfile on disk -- verified); Decision 80 also called the dependency-closure oracle 'already computable (ast/networkx)' but no tier_item builds/exports it; T3.7 covers dead TESTS only and is deferred_post_mvp; 'dead code eats agent context' had no tracked metric beyond Decision 43's per-file SLOC caps."
+  - "Group shape: T3.11 is the keystone (no deps, eligible now); T3.12 is the foundational graph (no deps); T3.13 consumes T3.12; T3.14 consumes T3.12+T3.13. All not_started (live), deps live->live, so no Decision 93 violation. Each decomposes into atomic IMPLEMENTATION plans at /implement time per the freeze override."
+  - "Graph+grep is primary+fallback, not co-equal: the ast graph is the structural source of truth (knows an import from a docstring substring -- the grep-only orphan agent's core weakness); grep is recall insurance for dynamic references the static graph cannot see (getattr, YAML-manifest handler names, string-keyed dispatch, importlib.spec_from_file_location -- which validate.py itself uses). T3.13's two-layer verdict encodes exactly this."
+  - "Branch was 1 commit behind origin/main at planning time (orient-command-improvements #331); no overlap with docs/ROADMAP-PLATFORM.yaml expected. Pre-push rebase will reconcile (commit-flow time, per AGENTS.md git-ops)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dependency-graph-dead-code-6sf88h)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS scouted via the decision-scout gate (FLAGS_FOUND; both NOTE flags resolved; CITE list incorporated)
+  - Scope file docs/ROADMAP-PLATFORM.yaml located and readable
+  - Acceptance criteria understood and verifiable (platform_roadmap PASS + status/dependency/citation outcome confirmed)
+execution_steps:
+  - "Deliverable authored DURING this planning session (REPORT-ONLY): docs/ROADMAP-PLATFORM.yaml gains tier_items T3.11 (do-less import-governance baseline), T3.12 (deterministic dependency graph, compute-on-demand), T3.13 (source dead/orphan detection, graph+grep), T3.14 (context-budget metric) -- all not_started, all citing Decision 80. Verified: platform_roadmap PASS, all 4 ids present, additive-only diff, no live->deferred edges."
+  - "No /implement required for this plan -- it captures roadmap forward intent. Per-item implementation is a separate future plan when each item is scheduled (T3.11 and T3.12 are eligible now; pick up via /orient -> /plan when repo-leanness work is prioritised)."
+  - "Execute the Verification Plan; run the Step 10 multi-perspective REPORT critique against the roadmap additions; merge to main."
+work_areas: []
+rollback: >-
+  Revert the single additive edit to docs/ROADMAP-PLATFORM.yaml (the T3.11-T3.14 tier_item blocks). Purely
+  additive forward-intent DATA; no runtime or code impact, so reverting has no downstream consequence beyond
+  removing the roadmap entries.

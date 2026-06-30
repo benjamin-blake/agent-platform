@@ -7,7 +7,7 @@ capture. Mitigation: capture the PR URL from CLI output, poll via gh CLI for
 merge status, and write commit/diff stats to logs/.delegate-telemetry.jsonl.
 
 Windows subprocess: uses subprocess.Popen + proc.communicate(timeout=N) +
-kill_process_tree(pid) as required by the Known Gotchas in copilot-instructions.md.
+kill_process_tree(pid) as required by AGENTS.md/PROJECT_CONTEXT.md Known Gotchas.
 subprocess.run(timeout=N) does NOT cascade termination on Windows.
 """
 

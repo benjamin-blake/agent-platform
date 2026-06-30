@@ -1,0 +1,357 @@
+schema_version: 1
+slug: "t3-1-verifier-harness"
+intent: >-
+  Land the T3.1 verification foundation -- a typed-checks kernel, a Class A graduation
+  registry, a same-PR guard, and a differential admission gate -- so the validation suite
+  becomes a graduated, deduplicated, machine-curated asset with deterministic admission
+  control (CD.29). This is the verification substrate the rest of Tier 3 (causal-chain
+  verifier T3.2, orphan detection T3.7) builds on.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-t3-1-verifier-harness.yaml
+phase: >-
+  Platform tier_item T3.1 (Tier 3 -- programmatic verification system). Deps T2.1 / T0.12.6 /
+  T3.6 all complete, so behavioural-tier hard-gating is now safe. Gates CD.29 alongside
+  T3.7 / T0.12.5.
+scope:
+  - file: scripts/verification_checks.py
+    action: Create
+    purpose: >-
+      Typed-checks kernel -- the CD.29 closed 6-primitive vocabulary (command_exit_zero,
+      command_output_matches, file_exists/file_absent, grep_count, test_selector,
+      metric_under_threshold), each a typed check with a deterministic comparator and a
+      CheckResult; plus the differential admission gate (fail-on-revert) logic. Closed
+      vocabulary -- a 7th primitive requires a new CD. Import-safe (no AWS creds, no eval/exec).
+  - file: docs/contracts/verification-registry.yaml
+    action: Create
+    purpose: >-
+      Class A graduation-registry contract ratified at contract_version 1 under the full CD.25
+      ritual. Defines the schema of a graduated-check row via `fields:`; governance.registry_path
+      points at the data file and governance.validation_path names the validate.py guard; at
+      least one cross-system field $ref's into an existing Class C contract at chain-depth 1.
+      Indexed by guard target so T3.7 orphan-detection is deterministic.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Create
+    purpose: >-
+      The graduation-registry DATA file (`entries: []` at birth), mirroring the
+      config/agent/data_quality/source_registry.yaml precedent. Forward-populated only by the
+      differential admission gate -- no hand-seeded rows.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Wire the same-PR guard (--pre fast tier), registry schema validation (--pre), and the
+      differential-gate baseline-execution step (full tier). validate.py is the single source
+      of truth -- checks land here, never ci.yml-first (Decision 80).
+  - file: tests/test_verification_checks.py
+    action: Create
+    purpose: >-
+      Unit tests for the kernel (each primitive against known-good and known-bad inputs, real
+      comparators), the closed-vocabulary discipline, and the differential admission gate.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Unit tests for the same-PR guard (verifier+covered-file same diff -> FAIL; initial-add
+      and verifier-only diffs -> PASS) and the registry schema-validation guard (well-formed
+      registry -> PASS; malformed row -> FAIL).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T3.1 exit-criterion 7 only: the original "hard-gate wiring into executor
+      postflight" named the monolithic executor's postflight surface, which is being replaced
+      by a Step-Functions-orchestrated Lambda executor. Re-ground to the validate.py CI
+      hard-gate (implemented here) + the future Step-Functions executor verify-state
+      (named/deferred). Roadmap-bookkeeping edit only -- no other roadmap change.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Lambda-affectedness carve-out (asset-only, no deploy): the docs/ROADMAP-PLATFORM.yaml
+    criterion-7 re-grounding makes compute_affected_artifacts() return {'data-pipeline':
+    ['docs/ROADMAP-PLATFORM.yaml']} because that artifact (status: active) bundles the roadmap
+    under its manifest `assets:` block. NO build/deploy/smoke-test step is required here because
+    the edit is a pure documentation-asset change with no handler, import-contract, or behavioural
+    delta; the scheduled-agent dispatcher is disabled/frozen (AGENTS.md "Re-enable Lambda
+    scheduled agents" runbook); and validate_lambda_deploy_gating is advisory-only (never fails
+    CI). A redeploy would at most refresh a bundled reference document for a disabled Lambda.
+acceptance_criteria:
+  - >-
+    scripts/verification_checks.py implements EXACTLY the CD.29 closed vocabulary of SIX primitive
+    slots: command_exit_zero, command_output_matches, the paired file_exists/file_absent slot,
+    grep_count, test_selector, metric_under_threshold. (file_exists and file_absent are two member
+    functions of one slot, so the registry may expose seven symbols but counts as six slots.) Each
+    has a deterministic comparator; the module imports without AWS credentials and contains no
+    eval/exec.
+  - >-
+    The closed vocabulary is enforced in code against the SIX-SLOT count, not the symbol count: a
+    test asserts the canonical six slots are present and fails if a SEVENTH slot is added without an
+    accompanying new-CD reference (mirrors the CD.12 marker-budget discipline; orthogonal to and not
+    consuming the CD.12 budget). The guard must key on slots so it does not misfire on the
+    file_exists/file_absent pair -- a naive `len(symbols) == 6` assertion against a seven-symbol
+    registry is wrong.
+  - >-
+    docs/contracts/verification-registry.yaml loads and schema-validates as a Class A contract
+    (scripts.contracts.load_contract succeeds) at contract_version 1, status ratified, with a
+    top-level amendment_log using the closed change_class vocabulary and previous_versions: [].
+  - >-
+    At least one cross-system field in the registry contract is a $ref into an existing Class C
+    contract and resolves at chain-depth 1 (scripts.contracts.resolve_refs succeeds; no chained
+    or dangling ref).
+  - >-
+    config/agent/verification_registry/registry.yaml exists with entries: [] and validates
+    against the contract schema via the new validate.py guard; a malformed entry is rejected.
+  - >-
+    Same-PR guard: validate.py fails when a scripts/verifiers/*.py file and any file matched by
+    that verifier's `covers` globs appear in the same git diff, and PASSES for the two exceptions
+    (verifier file is newly added; or no covered file is in the diff). Behaviour is unit-tested
+    against git-diff fixtures.
+  - >-
+    Differential admission gate: a candidate check that does NOT fail on revert of its guarded
+    change is rejected; one that fails on revert is admitted. Gate logic is unit-tested AND its
+    production baseline-execution surface is named -- the full-tier validate.py step (live) plus
+    the future Step-Functions Lambda executor verify-state (specified, deferred).
+  - >-
+    validate.py wires the same-PR guard and registry validation into the --pre fast tier and the
+    differential-gate baseline into the full tier; `validate.py --pre` exits 0 within the 5-minute
+    fast-tier budget.
+  - >-
+    T3.1 exit-criterion 7 in docs/ROADMAP-PLATFORM.yaml is re-grounded to the validate.py CI
+    hard-gate + future Step-Functions surface, and the roadmap still passes its schema/referential
+    validation.
+  - >-
+    Every source file modified/created on the branch has corresponding test coverage of the new
+    code (tests/CLAUDE.md coverage policy).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the typed kernel end to end -- each of the six primitives is run against a
+      known-good and a known-bad input and the comparator verdict is asserted (real behaviour,
+      not mocks). E.g. command_exit_zero on `true` -> PASS and on `false` -> FAIL;
+      file_exists/file_absent on a real/missing path; grep_count threshold boundary.
+    command: bin/venv-python -m pytest tests/test_verification_checks.py -v
+    expected: All kernel primitive tests pass; each primitive returns the correct verdict for both good and bad inputs.
+    fix_if: A primitive returns PASS on a known-bad input (comparator inverted) or raises instead of returning a CheckResult.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the closed-vocabulary discipline by SLOT count -- the registry exposes exactly the six
+      canonical slots (file_exists/file_absent counted as one) and the guard test fails if a seventh
+      SLOT is introduced without a new-CD reference.
+    command: bin/venv-python -m pytest tests/test_verification_checks.py -k closed_vocabulary -v
+    expected: Test passes; the registered slot set equals the canonical six (the file_exists/file_absent pair counts once).
+    fix_if: The slot set has drifted, the guard counts symbols instead of slots (mis-tripping on the paired slot), or it does not trip when a seventh slot is added.
+  - step: 3
+    phase: pre-deploy
+    action: Load and schema-validate the registry contract as a ratified Class A document.
+    command: >-
+      bin/venv-python -c "from scripts.contracts import load_contract; d =
+      load_contract('docs/contracts/verification-registry.yaml'); assert d.contract.class_.value
+      == 'A' and d.contract.contract_version == 1 and d.contract.status.value == 'ratified';
+      print('contract-ok')"
+    expected: Prints contract-ok (Class A, version 1, ratified).
+    fix_if: load_contract raises ContractValidationError (unknown key, wrong class shape, missing contract_version) or the assertions fail.
+  - step: 4
+    phase: pre-deploy
+    action: Resolve the contract's $ref cross-system field(s) and confirm chain-depth 1 with no dangling/chained refs.
+    command: >-
+      bin/venv-python -c "from scripts.contracts import load_contract, resolve_refs; d =
+      load_contract('docs/contracts/verification-registry.yaml'); assert any(s.ref is not None for
+      s in (d.fields or {}).values()), 'no $ref field present'; r = resolve_refs(d,
+      'docs/contracts'); assert all(s.ref is None for s in r.values()); print('refs-ok')"
+    expected: Prints refs-ok; at least one field carried a $ref and every $ref resolved to a Class C leaf field (none left unresolved).
+    fix_if: resolve_refs raises (dangling target, chained Class-C ref, or a $ref carrying an inline definition).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Validate the registry DATA file against the contract via the new validate.py guard --
+      well-formed empty registry passes; a malformed/extra-field entry is rejected (unit-tested
+      with a temp fixture).
+    command: bin/venv-python -m pytest tests/test_validate.py -k verification_registry -v
+    expected: "Guard accepts the empty registry (entries: []) and rejects a malformed entry."
+    fix_if: The guard accepts a malformed row or rejects the valid empty registry.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Exercise the same-PR guard against git-diff fixtures -- (a) a verifier file plus a file in
+      its covers globs in the same diff -> FAIL; (b) the verifier file newly added -> PASS;
+      (c) verifier-only diff (no covered file) -> PASS.
+    command: bin/venv-python -m pytest tests/test_validate.py -k same_pr_guard -v
+    expected: All three scenarios produce the documented verdict.
+    fix_if: The conflict-of-interest case passes, or either exception is mis-classified as a violation.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Exercise the differential admission gate -- a tautological candidate (passes on both the
+      pre- and post-change tree) is rejected; a candidate that fails on revert of its guarded
+      change is admitted.
+    command: bin/venv-python -m pytest tests/test_verification_checks.py -k differential_admission -v
+    expected: Tautological candidate rejected; fail-on-revert candidate admitted.
+    fix_if: A candidate that does not fail on revert is admitted (the gate guards nothing).
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Run the fast tier end to end -- contract-drift gate accepts the new Class A contract, the
+      same-PR guard and registry validation run, and the tier completes within its 5-minute budget.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exits 0 (All checks passed) within the fast-tier budget.
+    fix_if: The contract-drift gate rejects the new contract, a new guard errors, or the budget assertion trips.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the differential-gate baseline-execution step is registered in the full tier and
+      runs (revert-and-rerun mechanism executes against the pre-change tree).
+    command: bin/venv-python -m pytest tests/test_validate.py -k differential_gate_step -v
+    expected: The full-tier step invokes the gate and reports a verdict.
+    fix_if: The step is absent from the full-tier registration or never invokes the gate.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Confirm the T3.1 criterion-7 re-grounding landed and the platform roadmap still passes its
+      schema and referential-integrity validation (closes_criteria refs, etc.).
+    command: bin/venv-python -m pytest tests/test_validate.py -k platform_roadmap -v
+    expected: Roadmap validation passes; criterion 7 text references the validate.py CI hard-gate and the future Step-Functions surface.
+    fix_if: Roadmap fails validation (malformed criterion) or the re-grounded text is missing.
+constraints:
+  - >-
+    Closed kernel vocabulary (CD.29): exactly the six primitives. Adding a seventh requires a new
+    candidate decision -- do not extend the vocabulary in this plan. Orthogonal to the CD.12 DQ
+    markers; does not consume the CD.12 marker budget.
+  - >-
+    No eval/exec (AGENTS.md). The kernel compares command exit codes / output / file state /
+    grep counts / test selectors / metrics; it never constructs executable code from runtime data.
+  - >-
+    Import safety: scripts/verification_checks.py must not touch the filesystem or raise at import
+    time; defer any subprocess/IO to explicit calls (AGENTS.md).
+  - >-
+    Registry is forward-populated ONLY through the differential admission gate. Do NOT hand-seed
+    historical verifiers -- fail-on-revert is PR-scoped and cannot be applied retroactively;
+    seeding would bypass the admission invariant the registry exists to enforce.
+  - >-
+    validate.py is the single source of truth -- every new check lands in validate.py first,
+    never ci.yml-first (Decision 80). Tier placement respects the Decision 73 two-tier model: the
+    same-PR guard and registry validation are cheap (--pre); the differential-gate baseline is
+    full tier.
+  - >-
+    Verifier machinery and the graduation registry are platform machinery -- any follow-on rec
+    touching them is automatable: false (Decision 44 / CD.29). The executor cannot modify its own
+    verification gate.
+  - >-
+    No rescue agents or workaround loops (Decision 55). A flaky behavioural check files a rec
+    (RCA-first) and may enter transient quarantine; it never becomes a permanent advisory.
+  - >-
+    The new contract is machine-parseable single-surface (Decision 86): schema in
+    verification-registry.yaml, data in the registry_path file. No prose companion doc; no second
+    drift surface.
+  - >-
+    Behavioural-tier hard-gating is safe only because T3.6 hermeticity is complete; verifiers and
+    checks are authored hermetic from the start.
+context:
+  - >-
+    CD.29 (graduated-validation candidate decision) is state: pending and its gates are
+    [T3.1, T3.6, T3.7, T0.12.5]. T3.1 is a GATE on CD.29, not a ratification of it. Ratifying the
+    registry contract while CD.29 stays pending is internally consistent with CD.29's own gates
+    model and is exactly what T3.1 exit-criterion 5 asks for.
+  - >-
+    Ratification posture (human-confirmed): ratify verification-registry.yaml at contract_version
+    1; `ratified_via` points at a numbered ops_decisions ratification that /implement allocates
+    THROUGH THE OPS PORTAL at implementation time (file the decision via
+    scripts.ops_data_portal, then write the returned dec id into ratified_via). Do NOT invent a
+    ratification pointer at authoring time.
+  - >-
+    Executor surface (human-confirmed): the current frozen executor (Decision 67) is explicitly
+    NOT a test target. The future autonomous executor will be a series of Lambdas orchestrated by
+    Step Functions and will not resemble the frozen monolith. The live hard-gate enforcement
+    surface in this plan is the validate.py CI step; the executor verify-state is named/deferred.
+  - >-
+    The verifier-harness FOUNDATION already exists (Wave 1 of docs/INTENT-verification-system.md):
+    scripts/verifiers/ + harness.py + __init__.py (REGISTRY, run_all_verifiers, check_coverage),
+    wired into validate.py's full tier (validate_verification_harness) and the T3.6 hermeticity
+    AST gate (validate_verifier_hermeticity). This plan adds the kernel, registry, same-PR guard,
+    and differential gate on top -- it does not rebuild the harness.
+  - >-
+    Stale-reference note: docs/INTENT-verification-system.md predates CD.29 and lists
+    "Filesystem as registry (no YAML)" as a design decision. CD.29 supersedes that point with a
+    YAML governed registry; the implementation follows CD.29, not the stale INTENT line.
+  - >-
+    Storage precedent: docs/contracts/source-lineage.yaml (Class C) points governance.registry_path
+    at config/agent/data_quality/source_registry.yaml (an `entries:`-bearing data file) and names
+    its validate.py guard via governance.validation_path. The graduation registry mirrors this
+    schema-vs-data separation. ContractDocument has extra="forbid", so rows MUST live in the
+    registry_path data file, never inline in the contract.
+  - >-
+    Decisions to cite: CD.29, CD.25, Decision 44, Decision 55, Decision 67, Decision 73,
+    Decision 80, Decision 86. Decision-scout verdict was FLAGS_FOUND (NOTE-level only; no BLOCK).
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no Scope-file overlap with main.
+  - >-
+    Execution-time note (drift gate runs in --pre): validate_contract_drift validates
+    docs/contracts/*.yaml in the fast tier, so docs/contracts/verification-registry.yaml must pass
+    the drift gate at EVERY intermediate commit -- not only after the portal-allocated dec id is
+    written into ratified_via. Author the contract with a syntactically valid placeholder
+    ratified_via plus status: ratified, contract_version: 1, previous_versions: [] from the first
+    commit so no intermediate `validate.py --pre` run fails the drift gate. Also: the drift gate's
+    Pass 1 (check_required_inline_fields, run unconditionally) requires EVERY inline Class A field
+    to carry description, semantics, populated_by, AND dq_intent -- populate all four on each inline
+    registry field (check_id, primitive_slot, guard_target, guard_symbol, plan_slug, graduated_at,
+    graduated_by) or the first --pre run fails. Implementation note: field names evolved from the
+    draft list (primitive_type -> primitive_slot; dropped input_closure/severity/fail_on_revert_verified;
+    added guard_symbol/plan_slug/graduated_by) for better CD.29 semantic alignment; dec-102 ratifies
+    the implemented field set.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/t3-1-verifier-harness-unny29)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (CITE + FLAGS surfaced)
+  - All files in scope located and readable (existing harness, contracts loader, validate.py, source_registry precedent)
+  - Acceptance criteria understood and each independently verifiable
+  - Closed 6-primitive vocabulary and CD.25 contract ritual understood before authoring the kernel/contract
+execution_steps:
+  - >-
+    Create scripts/verification_checks.py -- the closed six-slot kernel. Define a primitive
+    registry of exactly six slots: command_exit_zero, command_output_matches, the paired
+    file_exists/file_absent slot, grep_count, test_selector, metric_under_threshold. Model the
+    file_exists/file_absent pair as ONE slot (e.g. a single primitive parameterised by polarity, or
+    two symbols mapped to a shared slot id) so the closed-vocabulary guard counts six slots, not
+    seven symbols. Each primitive is a typed check carrying its inputs and a deterministic
+    comparator; running it returns a CheckResult (verdict + message). Import-safe, no eval/exec.
+  - >-
+    In scripts/verification_checks.py, add the differential admission gate: given a candidate
+    check and a revert target (the change it guards), check out the pre-change tree, run the
+    candidate, and assert FAIL; admit only if it fails on revert. Specify the revert-and-rerun
+    mechanism and name the two production surfaces (live: validate.py full-tier step; deferred:
+    Step-Functions Lambda executor verify-state).
+  - >-
+    Create docs/contracts/verification-registry.yaml -- Class A, contract_version 1, status
+    ratified. fields: define a graduated-check row (check_id, primitive_slot, guard_target,
+    guard_symbol, plan_slug, graduated_at, graduated_by as a $ref into an existing Class C contract
+    at chain-depth 1; field names evolved from draft per implementation note in Context). governance.registry_path
+    -> config/agent/verification_registry/registry.yaml; governance.validation_path -> the
+    validate.py guard. Top-level amendment_log (closed change_class) + previous_versions: [].
+    Leave ratified_via as the placeholder to be filled with the portal-allocated dec id (see Context).
+  - >-
+    Create config/agent/verification_registry/registry.yaml with `entries: []` and a header
+    comment citing CD.29 / CD.25 and the validate.py guard. No hand-seeded rows.
+  - >-
+    Modify scripts/validate.py -- add validate_verifier_same_pr_guard (git-diff: verifier vs its
+    covers, with the initial-add and verifier-only exceptions) and a registry schema-validation
+    guard, both registered in the --pre fast tier; add the differential-gate baseline-execution
+    step in the full tier. Land checks in validate.py only (never ci.yml-first, Decision 80).
+  - >-
+    Create tests/test_verification_checks.py and extend tests/test_validate.py per tests/CLAUDE.md
+    (100% coverage of new code): kernel primitives (good/bad inputs), closed-vocabulary guard,
+    differential admission gate, same-PR guard scenarios, registry validation guard, roadmap
+    re-grounding.
+  - >-
+    Modify docs/ROADMAP-PLATFORM.yaml -- re-ground T3.1 exit-criterion 7 only (validate.py CI
+    hard-gate live + future Step-Functions executor verify-state named/deferred). No other roadmap change.
+  - >-
+    Ratify the registry contract: file the ratification decision via scripts.ops_data_portal,
+    then write the returned dec id into the contract's ratified_via field.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure
+    stop and run RCA (Decision 55), do not paper over with a workaround.
+  - 'Report: what was implemented, verification results, and the ratified_via dec id.'
+work_areas: []
+rollback: >-
+  All scope files are additive except the validate.py wiring and the single roadmap criterion-7
+  edit. To roll back: revert the branch commit; the new files (kernel, contract, registry data)
+  are unreferenced once the validate.py registrations are removed. No infrastructure or data
+  migration to unwind.

@@ -7,7 +7,7 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 ## Hard rules
 - **Optional artifacts**: Always wrap `filemd5()` and `file()` calls on optional artifacts with `try()`. Bad: `source_code_hash = filemd5("build/lambda.zip")`. Good: `source_code_hash = try(filemd5("build/lambda.zip"), md5(file("module_file.tf")))`.
 - **ASCII tag values**: Plain ASCII hyphens (`-`) only in Lambda tag values. No em dashes — they fail in AWS API serialisation.
-- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply is human-gated EXCEPT the sandbox PLATFORM environment (`terraform/personal/**`), where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, fail-closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
+- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply model: see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection (sole SoT, Decision 77). Short form: sandbox auto-applies behind the deterministic guard; in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25); trust/destroy/out-of-budget IAM route to gated-apply. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
 - **IAM precedence**: If a change modifies IAM (`*.tf` IAM resources or roles attached to Lambdas), `terraform apply` must precede any Lambda code deploy.
 
 ## AWS context
@@ -38,19 +38,18 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
 - **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
   trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
 
-**Apply posture (current -- guard-PASS changes):** routine (guard-PASS, non-IAM/trust/destroy) changes
-auto-apply via CD (`terraform-apply-sandbox.yml`). The CC-web agent presents the plan on PRs via the
-speculative-plan comment; at merge the SAME reviewed plan.bin is applied (no re-plan, T2.21). The
-deterministic `scripts/terraform_apply_guard.py` (fail-closed on any destroy/IAM/trust change) is the
-authoritative gate.
+**Apply posture:** see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection
+for the authoritative in-budget/out-of-budget classification (T2.25 / Decision 92 point 5). Short form:
 
-**Apply posture (fail-closed set: IAM/trust/destroy, CD.35 Wave 3 / T2.22):** when the guard exits 2,
-the `gated-apply` job in `terraform-apply-sandbox.yml` takes over. After the merge, the job blocks on
-the `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
-the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
-`workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec. The bootstrap root
-(CD.35 Wave 4 / T2.23) now owns `github_ci_apply`'s own IAM + authority budget in `terraform/bootstrap/`;
-in-budget IAM auto-apply (guard-consumption) is pending T2.25.
+- Guard-PASS (non-IAM or in-budget IAM) changes auto-apply via CD (`terraform-apply-sandbox.yml`).
+  The CC-web agent presents the plan on PRs via the speculative-plan comment; at merge the SAME
+  reviewed plan.bin is applied (no re-plan, T2.21).
+- Out-of-budget IAM, trust diffs, destroys (guard exits 2): the `gated-apply` job blocks on the
+  `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
+  the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
+  `workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec.
+- Bootstrap root (`terraform/bootstrap/`) is admin-only out-of-band (agent_platform_admin), NEVER auto-applies.
+  The bootstrap root owns `github_ci_apply`'s own IAM + authority budget (T2.23/T2.25).
 
 **Concurrency tradeoff (correct-by-design):** a gated-apply job pending human approval holds the
 `terraform-apply-sandbox` concurrency group (`cancel-in-progress: false`), so later auto-applies queue
@@ -74,7 +73,7 @@ credential env vars take effect). Wave 1 made the apply outcome **sticky and obs
 job reads a durable convergence record as a precondition and refuses on red, writes the record green/red
 (always-run) after apply, and apply failures wire into `ci-rca` -- so a later green run can no longer mask
 an earlier apply failure. The interactive human-gated loop above remains the path for **IAM/trust/destroy**
-changes (the guard fail-closes them; they never auto-apply) and is still valid for any change you want to
+changes (out-of-budget IAM / trust / destroy -- the guard exits 2 and routes to gated-apply) and is still valid for any change you want to
 apply by hand. Routine (guard-PASS, non-IAM) changes are designed to ride the record-backed pipeline.
 
 ### Speculative plan + apply-the-saved-plan (CD.35 / T2.21 Wave 2)

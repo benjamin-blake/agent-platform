@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Prompt compliance checker.
 
-Parses ``## Behavioural Invariants`` YAML blocks from prompt files and
+Parses ``## Behavioural Invariants`` YAML blocks from skill files and
 validates them against session data (retro-lite log, execution state).
+Reads docs/contracts/instruction-architecture.yaml for the canonical
+behavioural_invariant_sources list and layer content_locations.
 
 Usage:
-    python scripts/prompt_compliance.py --prompt .github/prompts/implement.prompt.md
+    python scripts/prompt_compliance.py --prompt .claude/skills/implement/SKILL.md
     python scripts/prompt_compliance.py --all
     python scripts/prompt_compliance.py --all --session agent/infra-testing-enforcement
 """
@@ -36,6 +38,72 @@ _INVARIANTS_PATTERN = re.compile(
     r"##\s+Behavioural Invariants\s*\n+```ya?ml\n(.*?)```",
     re.DOTALL,
 )
+
+_INSTRUCTION_ARCH_PATH = ROOT / "docs" / "contracts" / "instruction-architecture.yaml"
+_INSTRUCTION_ARCH_REGISTRY: dict | None = None
+
+
+def _load_instruction_architecture() -> dict:
+    """Load and cache the instruction-architecture.yaml contract.
+
+    Lazy import of yaml happens here; no I/O at module import time.
+    On any failure (absent file, parse error, yaml unavailable) returns a
+    fallback dict with behavioural_invariant_sources=['.claude/skills/*/SKILL.md']
+    and empty layers.
+    """
+    global _INSTRUCTION_ARCH_REGISTRY
+    if _INSTRUCTION_ARCH_REGISTRY is not None:
+        return _INSTRUCTION_ARCH_REGISTRY
+
+    _fallback: dict = {"behavioural_invariant_sources": [".claude/skills/*/SKILL.md"], "layers": []}
+
+    try:
+        import yaml as _yaml  # lazy -- never import at module level for side-effect safety
+
+        raw = _INSTRUCTION_ARCH_PATH.read_text(encoding="utf-8")
+        data = _yaml.safe_load(raw)
+        if not isinstance(data, dict):
+            _INSTRUCTION_ARCH_REGISTRY = _fallback
+            return _fallback
+        _INSTRUCTION_ARCH_REGISTRY = data
+        return data
+    except Exception:
+        _INSTRUCTION_ARCH_REGISTRY = _fallback
+        return _fallback
+
+
+def get_behavioural_invariant_sources() -> list[str]:
+    """Return the list of glob patterns for files that carry Behavioural Invariants blocks.
+
+    Reads behavioural_invariant_sources from instruction-architecture.yaml.
+    Falls back to ['.claude/skills/*/SKILL.md'] if the YAML is absent or unparseable.
+    """
+    contract = _load_instruction_architecture()
+    sources = contract.get("behavioural_invariant_sources")
+    if isinstance(sources, list) and sources:
+        return [str(s) for s in sources]
+    return [".claude/skills/*/SKILL.md"]
+
+
+def check_layer_compliance(contract: dict) -> list[str]:
+    r"""Check that every layer's content_locations resolve to at least one file.
+
+    Excludes matches under .venv/ and .git/ so vendored CLAUDE.md files do
+    not satisfy the Layer 1 '**\/CLAUDE.md' existence check.
+
+    Returns a list of violation strings (empty = all layers resolve).
+    """
+    violations: list[str] = []
+    layers = contract.get("layers", [])
+    for layer_entry in layers:
+        layer_num = layer_entry.get("layer", "?")
+        layer_name = layer_entry.get("name", "")
+        for glob_pattern in layer_entry.get("content_locations", []):
+            candidates = list(ROOT.glob(glob_pattern))
+            live = [p for p in candidates if ".venv" not in p.parts and ".git" not in p.parts]
+            if not live:
+                violations.append(f"layer {layer_num} ({layer_name}): no files match {glob_pattern!r}")
+    return violations
 
 
 def parse_invariants(prompt_path: Path) -> dict[str, bool]:
@@ -116,7 +184,7 @@ def check_retro_lite_compliance(
 
     Validates that per-step friction entries exist in the retro-lite log for
     completed sessions. Entries may be written by the parent agent directly
-    (``run_retro_lite.py --append``) or via the @retro-lite subagent — the
+    (``run_retro_lite.py --append``) or via the @retro-lite subagent -- the
     check is mechanism-agnostic.
 
     Returns a list of violation strings (empty = compliant).
@@ -182,12 +250,12 @@ def main() -> None:
     group.add_argument(
         "--prompt",
         type=Path,
-        help="Path to a specific prompt file to check.",
+        help="Path to a specific skill or prompt file to check.",
     )
     group.add_argument(
         "--all",
         action="store_true",
-        help="Check all .prompt.md files in .github/prompts/.",
+        help="Check all files listed in behavioural_invariant_sources (from instruction-architecture.yaml).",
     )
     parser.add_argument(
         "--session",
@@ -200,10 +268,20 @@ def main() -> None:
     session_log = ROOT / "docs" / "SESSION_LOG.md"
 
     if args.all:
-        prompts_dir = ROOT / ".github" / "prompts"
-        prompt_files = list(prompts_dir.glob("*.prompt.md"))
+        sources = get_behavioural_invariant_sources()
+        prompt_files: list[Path] = []
+        for glob_pattern in sources:
+            prompt_files.extend(ROOT.glob(glob_pattern))
+        # Also run layer-claims check
+        contract = _load_instruction_architecture()
+        layer_violations = check_layer_compliance(contract)
+        if layer_violations:
+            print("Layer claims violations:")
+            for v in layer_violations:
+                print(f"  - {v}")
     else:
         prompt_files = [args.prompt]
+        layer_violations = []
 
     retro_entries = parse_retro_lite_log(retro_log, session_filter=args.session)
     execution_state = parse_execution_state(state_path)
@@ -219,6 +297,8 @@ def main() -> None:
         combined = step_violations + plan_violations
         for v in combined:
             all_violations.append(f"{prompt_file.name}: {v}")
+
+    all_violations.extend(layer_violations)
 
     if all_violations:
         print("Prompt compliance violations:")

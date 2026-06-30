@@ -26,8 +26,9 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_branch" {
-  name        = "agent-platform-github-ci-branch"
-  description = "GitHub Actions CI (write): main + agent/* branches via OIDC"
+  name                 = "agent-platform-github-ci-branch"
+  description          = "GitHub Actions CI (write): main + agent/* branches via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -192,8 +193,9 @@ resource "aws_iam_role_policy" "github_ci_branch" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_pr" {
-  name        = "agent-platform-github-ci-pr"
-  description = "GitHub Actions CI (read-only): PR context via OIDC"
+  name                 = "agent-platform-github-ci-pr"
+  description          = "GitHub Actions CI (read-only): PR context via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
