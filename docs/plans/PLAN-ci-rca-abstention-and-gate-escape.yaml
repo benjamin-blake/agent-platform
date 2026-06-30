@@ -1,0 +1,372 @@
+schema_version: 1
+slug: "ci-rca-abstention-and-gate-escape"
+intent: >-
+  Make the T1.13 CI-RCA evidence load-bearing: build the cross-check spine that compares the
+  agent's RCA against the deterministic evidence bundle (bundle-wins), close the probe-abstention
+  silent-skip, and reject author-discipline RCAs over vacuous gate escapes -- so the self-improving
+  loop optimises the true failure mode instead of an LLM guess.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-abstention-and-gate-escape.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract) -- post-incident hardening wave, follow-on
+  plan P2. Closes exit criteria c7 (probe-abstention fail-loud), c9 (failure-category integrity +
+  gate-escape modeling), c10 (bind vacuous_pass into the cross-check spine). Sequenced after P1
+  (PLAN-ci-rca-vacuous-pass-evidence, c8+c11, landed 2026-06-30) whose vacuous_pass +
+  merge_gate_test_coverage datums c10 consumes.
+closes_criteria:
+  - "T1.13:c7"
+  - "T1.13:c9"
+  - "T1.13:c10"
+scope:
+  - file: scripts/ci_rca_tier_map.py
+    action: Modify
+    purpose: >-
+      c7. compute_earliest_viable_gate returns the literal "undetermined" (a new enum value) on
+      every abstention path (AST parse error, probe_failed, dispersion_too_high, taxonomy_fallback)
+      instead of None, so the silent-skip in the cross-check has nothing to key off (no dead null
+      branch, Decision 60 enum governance).
+  - file: scripts/ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      c9b. classify_failure(s) prefers the structured failed-step list (jobs JSON) over the naive
+      substring scan of free log text (the likely cause of the rec-2423/rec-2424 sloc_violation
+      mislabel); add test_collection_empty and gate_escape failure categories.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: c9b. register the new test_collection_empty and gate_escape failure categories.
+  - file: scripts/ci_rca_vacuous_pass.py
+    action: Modify
+    purpose: >-
+      c9c. add compute_escape_mode(vacuous_pass, merge_gate_test_coverage, gate_is_postmerge_canary,
+      coverage_regression) -> escape_mode enum {check_absent, check_ran_vacuously, tier_misplaced,
+      no_premerge_gate_by_design, undetermined} as a pure deterministic function.
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      c7+c9. bump bundle schema_version 2->3; propagate earliest_viable_gate="undetermined";
+      emit the bundle-derived escape_mode field via compute_escape_mode; keep N-failure enumeration
+      intact.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c7+c9+c10. CiRcaContext._DetectionGap.earliest_viable_gate enum gains "undetermined" and a new
+      escape_mode field; add typed rca_confidence field on CiRcaContext; bump CiRcaContext
+      schema_version le 1->2; widen CiRcaEvidenceDispute.disputed_field to include failure_category;
+      BUILD the cross-check spine in file_rec -- load the local canonical bundle (verify SHA-256
+      against evidence_bundle_ref.sha256), compare earliest_viable_gate + escape_mode bundle-wins,
+      require the agent to mirror "undetermined", and reject an author-discipline RCA when
+      vacuous_pass=true unless escape_mode=check_ran_vacuously or a typed dispute is filed. All new
+      enforcement honors CI_RCA_STRICT_MODE (warn logs / strict raises).
+  - file: scripts/executor/rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      Decision 66. surface write-time semantics for the new fields (escape_mode, rca_confidence,
+      earliest_viable_gate="undetermined" mirror rule) under source='ci_rca' and the failure_category
+      disputed_field under source='ci_rca_evidence_dispute'.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      c7. hard-surface open source=ci_rca recs carrying rca_confidence=undetermined as an enforced
+      "mandatory human review" marker (new derive/fetch/print trio served from the warm read-cache,
+      Decision 88 -- no new reader verb), analogous to the existing dispute-rec surfacing.
+  - file: .claude/agents/scheduled/ci-rca.md
+    action: Modify
+    purpose: >-
+      c7+c9. instruct the agent to MIRROR earliest_viable_gate and escape_mode from the bundle (not
+      free-choose), set rca_confidence=undetermined when the bundle abstains, and file a typed
+      failure_category dispute rather than burying a category disagreement in free text.
+  - file: config/ops.yaml
+    action: Modify
+    purpose: >-
+      Decision 65/66. add description+semantics metadata for the new context_v2_json fields
+      (escape_mode, rca_confidence) so Tier-A precision injection has an authoritative source.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Decision 86. AMEND the grandfathered INTENT in place -- Section 1 schema (escape_mode,
+      rca_confidence, undetermined), Section 2/4 cross-check (spine is now code; bundle-wins on
+      earliest_viable_gate + escape_mode; vacuous_pass rejection rule), Section 3.4 abstention
+      (emit "undetermined", no silent skip), dispute disputed_field enum. No new doc is created.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      c9b. extend validate_ci_rca_taxonomy coverage to assert the new categories are present in
+      config/ci_rca_taxonomy.yaml (keeps the taxonomy validator authoritative over the enum set).
+  - file: tests/test_ci_rca_tier_map.py
+    action: Modify
+    purpose: c7 unit coverage -- every abstention path returns "undetermined", not None.
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: c9b unit coverage -- jobs-JSON-preferred classification + new categories.
+  - file: tests/test_ci_rca_vacuous_pass.py
+    action: Modify
+    purpose: c9c unit coverage -- compute_escape_mode truth table across vacuous_pass/coverage combos.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: c7+c9 unit coverage -- schema_version 3, undetermined propagation, escape_mode emission.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c7+c9+c10 unit coverage -- the cross-check spine (bundle load + SHA verify, bundle-wins
+      mismatch reject in strict / log in warn, undetermined mirror enforcement, vacuous_pass
+      author-discipline rejection, dispute failure_category accepted, SHA-mismatch loud-fail).
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: c7 unit coverage -- rca_confidence=undetermined recs hard-surfaced in the preflight trio.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    c7: on every abstention path (AST parse error, probe_failed, dispersion_too_high,
+    taxonomy_fallback) the evidence bundle emits earliest_viable_gate="undetermined" (never null);
+    CiRcaContext accepts "undetermined" and carries a typed rca_confidence field; file_rec requires
+    the agent value to mirror the bundle's "undetermined" (strict raises on a non-mirrored value,
+    warn logs); and session_preflight hard-surfaces open ci_rca recs with rca_confidence=undetermined
+    under a "mandatory human review" section.
+  - >-
+    c9: detection_gap.escape_mode exists as a bundle-derived, agent-mirrored, portal-cross-checked
+    (bundle-wins) enum {check_absent, check_ran_vacuously, tier_misplaced, no_premerge_gate_by_design,
+    undetermined}; classify_failure prefers the structured jobs JSON over the substring scan and the
+    taxonomy carries test_collection_empty + gate_escape; CiRcaEvidenceDispute.disputed_field accepts
+    failure_category.
+  - >-
+    c10: file_rec BUILDS and runs the cross-check spine -- it loads the local canonical evidence
+    bundle, verifies its SHA-256 against evidence_bundle_ref.sha256 (loud-fail on mismatch), compares
+    earliest_viable_gate and escape_mode bundle-wins, and rejects an author-discipline RCA when the
+    bundle's vacuous_pass=true unless the rec carries escape_mode=check_ran_vacuously or files a typed
+    failure_category/gate dispute. All enforcement is gated by CI_RCA_STRICT_MODE (warn logs / strict
+    raises). The ci_rca_evidence_dispute carve-out remains the only bypass.
+  - >-
+    The rec-2423/rec-2424 scenario (vacuous_pass=true + agent claims earliest_viable_gate=pre /
+    "author did not run --pre" with escape_mode unset) is deterministically rejected in strict mode
+    by a regression test, even when the probe succeeds.
+  - >-
+    INTENT-ci-rca-methodology.md is amended in place (no new doc); validate.py --pre passes including
+    the intent-doc-freeze guard and the extended validate_ci_rca_taxonomy coverage check.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: c7 -- every tier_map abstention path emits the literal "undetermined", not None.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_tier_map.py -q -k "abstention or undetermined or
+      probe_failed or dispersion or parse"
+    expected: >-
+      Tests pass; each abstention branch asserts compute_earliest_viable_gate(...)[0] == "undetermined".
+    fix_if: >-
+      A branch still returns None or a rationale string in the gate slot -- trace the decision tree in
+      scripts/ci_rca_tier_map.py and replace the None return with "undetermined".
+  - step: 2
+    phase: pre-deploy
+    action: c9c -- compute_escape_mode truth table is exhaustive and deterministic.
+    command: bin/venv-python -m pytest tests/test_ci_rca_vacuous_pass.py -q -k "escape_mode"
+    expected: >-
+      Passes: vacuous_pass=true+selected -> check_ran_vacuously; not_selected/source-only ->
+      no_premerge_gate_by_design; tri-state "undetermined" inputs -> "undetermined"; canary modeled.
+    fix_if: >-
+      A combination yields the wrong escape_mode or raises on a tri-state input -- correct the
+      branching in compute_escape_mode (no silent default; abstain to "undetermined").
+  - step: 3
+    phase: pre-deploy
+    action: c9b -- classifier prefers jobs JSON and the new categories round-trip through the taxonomy.
+    command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -q
+    expected: >-
+      Passes including a case where free log text mentions a validator name but the structured
+      failed-step is a pytest failure -> classified as the pytest category (not the substring match);
+      test_collection_empty and gate_escape resolve from config/ci_rca_taxonomy.yaml.
+    fix_if: >-
+      Substring scan still wins or a new category is unknown -- make classify_failures consume the
+      jobs-JSON failed-step list first and add the categories to config/ci_rca_taxonomy.yaml.
+  - step: 4
+    phase: pre-deploy
+    action: c7+c9 -- the emitted bundle is schema_version 3 with undetermined + escape_mode populated.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_evidence.py -q -k "schema_version or undetermined or
+      escape_mode"
+    expected: >-
+      Passes; a synthesized abstention run yields bundle["schema_version"]==3,
+      bundle["earliest_viable_gate"]=="undetermined", and bundle["escape_mode"] set from the
+      vacuous_pass inputs.
+    fix_if: >-
+      schema_version unbumped or escape_mode absent -- wire compute_escape_mode into the bundle dict in
+      scripts/ci_rca_evidence.py and bump the version constant.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      c10 -- the cross-check spine rejects the rec-2423/rec-2424 shape in strict mode and loads/verifies
+      the local bundle; warn mode logs without raising; SHA mismatch loud-fails.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q -k "cross_check or ci_rca or escape or vacuous or undetermined or dispute"
+    expected: >-
+      Passes: (a) strict-mode file_rec rejects vacuous_pass=true + escape_mode unset/no_premerge author
+      RCA; (b) bundle-wins mismatch on earliest_viable_gate/escape_mode rejects in strict, logs in warn;
+      (c) non-mirrored "undetermined" rejected in strict; (d) SHA-256 mismatch between bundle file and
+      evidence_bundle_ref raises regardless of mode; (e) a ci_rca_evidence_dispute with
+      disputed_field=failure_category validates and bypasses checks 1-7; (f) a conformant rec
+      (escape_mode=check_ran_vacuously) is accepted.
+    fix_if: >-
+      Any branch passes a rec it should reject (or rejects a conformant one) -- correct the spine logic
+      in file_rec; ensure the bundle is loaded from the local path and SHA-verified before comparison.
+  - step: 6
+    phase: pre-deploy
+    action: c7 -- preflight hard-surfaces rca_confidence=undetermined recs.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -q -k "undetermined or rca_confidence or hard_surface"
+    expected: >-
+      Passes; a cache row with source=ci_rca and rca_confidence=undetermined appears in the new
+      "mandatory human review" preflight section and the report JSON key.
+    fix_if: >-
+      The rec is not surfaced -- add the derive/fetch/print trio mirroring the dispute-rec path and the
+      report-JSON key in scripts/session_preflight.py.
+  - step: 7
+    phase: pre-deploy
+    action: Full presubmit gate, including intent-doc-freeze and validate_ci_rca_taxonomy coverage.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; INTENT amended in place passes the intent-doc-freeze guard; the taxonomy coverage check
+      asserts the new categories; ruff/format clean at line-length 127.
+    fix_if: >-
+      intent-doc-freeze fails -- confirm no NEW docs/INTENT-*.md was created and the manifest grandfather
+      entry is intact; taxonomy coverage fails -- align config/ci_rca_taxonomy.yaml with the validator.
+  - step: 8
+    phase: pre-deploy
+    action: Decision 66 -- write-time guidance returns the new field semantics for both sources.
+    command: >-
+      bin/venv-python -c "from scripts.executor.rec_write_guidance import get_rec_write_guidance as g;
+      import json; a=json.dumps(g('ci_rca')); b=json.dumps(g('ci_rca_evidence_dispute'));
+      assert 'escape_mode' in a and 'rca_confidence' in a and 'undetermined' in a, a;
+      assert 'failure_category' in b, b; print('guidance OK')"
+    expected: Prints "guidance OK".
+    fix_if: >-
+      A field is missing -- add it to the schema_fields guidance dict for the relevant source in
+      scripts/executor/rec_write_guidance.py.
+constraints:
+  - >-
+    Decision 86: AMEND docs/INTENT-ci-rca-methodology.md in place; NEVER create a new docs/INTENT-*.md
+    or prose-architecture doc (validate.py intent-doc-freeze guard blocks it). Route new field
+    semantics to config/ops.yaml + the contract, not new INTENT prose.
+  - >-
+    Decision 84: the cross-check reads the bundle but is NEVER a warehouse write source; rec writes
+    still transit file_rec -> file_ops with writer-allocated ids. No client-side keyspace mutation.
+  - >-
+    Decision 88: file_rec loads the LOCAL canonical bundle (--emit-dir) + SHA-256 verify -- no per-write
+    S3/network fetch; preflight surfacing serves the warm read-cache with NO new reader verb.
+  - >-
+    Decision 60: "undetermined" extends the earliest_viable_gate enum and bumps schema_version with no
+    dead enum branch; every enum value has a live consumer in the cross-check.
+  - >-
+    Decision 55: bundle-wins rejection is loud-fail at write time -- no silent skip, no workaround loop;
+    the ci_rca_evidence_dispute carve-out is the only legitimate bypass.
+  - >-
+    Decision 72: the agent diagnoses and MIRRORS only (never free-chooses the gate/escape_mode); c7's
+    human-route restores the human-consumer model on abstention.
+  - >-
+    All new enforcement is gated by CI_RCA_STRICT_MODE (warn logs deficiencies, strict raises) to
+    preserve the warn->strict back-validation window; this plan does NOT flip the flag to strict (c2).
+  - Only modify files listed in Scope. Out-of-scope issues become recommendations, not inline fixes.
+  - No emojis; ASCII hyphens only; ruff line-length 127; bin/venv-python for all Python invocations.
+context:
+  - >-
+    Follow-on P2 of T1.13. P1 (PLAN-ci-rca-vacuous-pass-evidence) landed the deterministic evidence
+    (vacuous_pass, merge_gate_test_coverage, gate_is_postmerge_canary, coverage_regression, bundle
+    schema_version 2). This plan makes that evidence load-bearing.
+  - >-
+    Round-2 review finding confirmed in code (scripts/ops_data_portal.py:573 file_rec): the Section 2/4
+    "cross-check" is INTENT PROSE, not code -- file_rec does shape-only CiRcaContext validation and
+    never fetches/compares the bundle. So c10 BUILDS the spine; it is not "add one branch".
+  - >-
+    Incident this closes: rec-2423/rec-2424. The /dev/null sentinel regression reached main because
+    --pre's pytest collected 0 tests yet reported success; the probe then abstained
+    ("could not convert string to float"), the cross-check was silently skipped (INTENT 3.4), and the
+    agent asserted "author did not run --pre" unchecked. c7 removes the silent skip; c10 rejects the
+    author-discipline RCA via vacuous_pass even if the probe had succeeded (the two conditions do not
+    coincide).
+  - >-
+    Bundle delivery decision (operator-confirmed at planning): local --emit-dir bundle file +
+    SHA-256 verify against evidence_bundle_ref.sha256 (not S3 GetObject) -- avoids new CI-role S3 IAM,
+    keeps the path gh-free, stays V2 (no live AWS boundary, Decision 48/79). The bundle is already
+    written locally by ci_rca_evidence.py --emit-dir in the same workflow run (Phase-3 prompt rewrite).
+  - >-
+    Abstention decision (operator-confirmed): warn mode surfaces + requires mirror (mismatch logged) +
+    preflight hard-surface for mandatory human review; strict mode raises on non-mirror. No auto-reject
+    of abstention recs (would wedge the autonomous filing path on probe flakes; contradicts forward-fix).
+  - >-
+    Deferred to P3: rec-2415 dispute-frequency throttle (gated on the Section-7.1 dispute gauge that
+    P3 lands) and c12 observability (abstention-rate gauge, bundle-absent fail-loud, Decision-57
+    back-validation loop). The c2 strict-mode flip is a separate bookkeeping pass once P2 + P3 land and
+    c3/c4/c5 satisfy.
+  - >-
+    Decision-scout verdict for this approach: NO_FLAGS. Two NOTE surfaces, both resolved by the chosen
+    options: Decision 48 (bundle is an in-repo Pydantic contract round-trip-tested producer<->consumer,
+    not a deployed cross-service surface -> V2 holds) and Decision 88 (local-bundle path chosen over S3).
+  - >-
+    Related-work (open ci_rca recs rec-2425/rec-2426, likely-resolved): same-file condition satisfied
+    -- this plan's scope includes tests/test_ops_data_portal.py, the file those recs cite.
+  - >-
+    Branch is 0 commits behind origin/main at planning time; no Scope-file divergence. Main Divergence
+    Assessment: clean.
+  - >-
+    INTENT-ci-rca-methodology.md is grandfathered in docs/intent-migration/MANIFEST.yaml
+    (disposition=extract_to_contract, target docs/contracts/ci-rca.yaml, Wave 3). Land new
+    schema/enum semantics so a later extraction can lift them; do not re-narrate.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-followup-xd89oi)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md scouted via decision-scout gate (CITE 86, 84, 88, 66, 55, 72, 48)"
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - P1 evidence fields (vacuous_pass, merge_gate_test_coverage) confirmed present in the bundle
+execution_steps:
+  - >-
+    scripts/ci_rca_tier_map.py -- replace the four None-returning abstention branches in
+    compute_earliest_viable_gate (AST parse error, probe_failed, dispersion_too_high, taxonomy_fallback)
+    with the literal "undetermined" while preserving the rationale string in slot 2.
+  - >-
+    scripts/ci_rca_taxonomy.py + config/ci_rca_taxonomy.yaml -- make classify_failures consume the
+    structured failed-step (jobs JSON) list before the substring log scan; add test_collection_empty and
+    gate_escape categories to both the code and the YAML; extend validate.py validate_ci_rca_taxonomy.
+  - >-
+    scripts/ci_rca_vacuous_pass.py -- add compute_escape_mode(vacuous_pass, merge_gate_test_coverage,
+    gate_is_postmerge_canary, coverage_regression) returning the escape_mode enum (abstain to
+    "undetermined" on tri-state inputs; never silently default).
+  - >-
+    scripts/ci_rca_evidence.py -- bump bundle schema_version 2->3; propagate the tier_map
+    "undetermined"; call compute_escape_mode and emit bundle["escape_mode"]; keep N-failure enumeration.
+  - >-
+    scripts/ops_data_portal.py -- extend _DetectionGap.earliest_viable_gate regex with "undetermined";
+    add detection_gap.escape_mode (enum) and CiRcaContext.rca_confidence (typed) fields; bump
+    CiRcaContext schema_version bound le 1->2; widen CiRcaEvidenceDispute.disputed_field to include
+    failure_category; BUILD the cross-check spine in file_rec -- a helper that loads the local canonical
+    bundle, verifies SHA-256 against evidence_bundle_ref.sha256 (loud-fail on mismatch), compares
+    earliest_viable_gate + escape_mode bundle-wins, enforces the "undetermined" mirror, and rejects an
+    author-discipline RCA when bundle.vacuous_pass=true unless escape_mode=check_ran_vacuously or a typed
+    dispute is filed; gate every new rejection on get_ci_rca_strict_mode() (warn logs / strict raises);
+    keep the check-8 dispute carve-out short-circuiting first.
+  - >-
+    scripts/executor/rec_write_guidance.py -- add escape_mode, rca_confidence, and the
+    earliest_viable_gate "undetermined" mirror rule to source='ci_rca' guidance; add the
+    failure_category disputed_field to source='ci_rca_evidence_dispute' guidance (Decision 66).
+  - >-
+    config/ops.yaml -- add description+semantics metadata for escape_mode and rca_confidence so Tier-A
+    precision injection has an authoritative source (Decision 65/66).
+  - >-
+    scripts/session_preflight.py -- add the rca_confidence=undetermined derive/fetch/print trio
+    (warm-cache served, Decision 88) and a report-JSON key; render a "mandatory human review" section.
+  - >-
+    .claude/agents/scheduled/ci-rca.md -- instruct the agent to mirror earliest_viable_gate + escape_mode
+    from the bundle, set rca_confidence=undetermined on bundle abstention, and file a typed
+    failure_category dispute instead of free-text burial.
+  - >-
+    docs/INTENT-ci-rca-methodology.md -- AMEND Sections 1, 2, 3.4, 4 in place to document the new
+    schema fields, the now-coded cross-check spine, the bundle-wins + vacuous_pass rejection rules, the
+    "undetermined" emission, and the widened dispute enum. Create no new doc.
+  - >-
+    Update all tests in scope to cover the new behaviour; achieve real-path coverage (not mocked-only)
+    for the cross-check spine and compute_escape_mode.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; out-of-scope issues become
+    recommendations, not inline fixes (Decision 55).
+  - 'Report: what was implemented, verification results, which criteria (c7/c9/c10) are ready to flip.'
+rollback: >-
+  All changes are additive/behind CI_RCA_STRICT_MODE=warn (default), so a revert of the branch
+  restores prior behaviour with no data migration. The bundle schema_version bump is forward-only but
+  consumed only by this plan's cross-check; reverting the portal + evidence changes together is
+  self-consistent.
