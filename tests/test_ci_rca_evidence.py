@@ -376,6 +376,141 @@ class TestBundleToSchema:
         assert validated.detection_gap.earliest_viable_gate == earliest
 
 
+class TestNewBundleFields:
+    """schema_version=2 and the four new evidence fields are present in every bundle."""
+
+    def test_schema_version_is_2(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert bundles[0]["schema_version"] == 2
+
+    def test_new_fields_present(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        b = bundles[0]
+        for field in ("vacuous_pass", "merge_gate_test_coverage", "gate_is_postmerge_canary", "coverage_regression"):
+            assert field in b, f"bundle missing field {field!r}"
+
+    def test_gate_is_postmerge_canary_true_for_ci(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert bundles[0]["gate_is_postmerge_canary"] is True
+
+    def test_gate_is_postmerge_canary_false_for_unknown_workflow(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="UnknownWorkflow",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert bundles[0]["gate_is_postmerge_canary"] is False
+
+    def test_taxonomy_error_bundle_schema_version_is_2(self, tmp_path, log_file):
+        bundles = generate_bundles(
+            log_file=log_file,
+            workflow_name="CI",
+            workflow_run_id=99,
+            taxonomy_path=tmp_path / "nonexistent.yaml",
+        )
+        assert bundles[0]["schema_version"] == 2
+
+
+MULTI_TAXONOMY = {
+    "schema_version": 1,
+    "taxonomy_version": 1,
+    "function_to_category": {
+        "validate_sloc_limits": "sloc_violation",
+        "validate_iam_runner_policy": "iam_policy_gap",
+    },
+    "log_pattern_to_category": [],
+    "workflow_to_tier": {"CI": "CI"},
+}
+
+
+class TestMultiFailureEnumeration:
+    """N distinct failed checks -> N bundles with distinct sha256 and shared workflow_run_id."""
+
+    @pytest.fixture
+    def multi_taxonomy_file(self, tmp_path):
+        p = tmp_path / "multi_taxonomy.yaml"
+        p.write_text(yaml.dump(MULTI_TAXONOMY))
+        return p
+
+    @pytest.fixture
+    def multi_failure_log_file(self, tmp_path):
+        p = tmp_path / "multi_failure.log"
+        p.write_text(
+            "validate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC\n"
+            "validate_iam_runner_policy FAILED -- missing iam:PutRolePolicy\n"
+        )
+        return p
+
+    def test_multi_failure_enumeration_yields_n_bundles(self, multi_failure_log_file, multi_taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=multi_failure_log_file,
+                    workflow_name="CI",
+                    workflow_run_id=42,
+                    taxonomy_path=multi_taxonomy_file,
+                )
+        assert len(bundles) == 2
+
+    def test_multi_failure_distinct_sha256(self, multi_failure_log_file, multi_taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=multi_failure_log_file,
+                    workflow_name="CI",
+                    workflow_run_id=42,
+                    taxonomy_path=multi_taxonomy_file,
+                )
+        shas = [b["sha256"] for b in bundles]
+        assert len(set(shas)) == 2
+
+    def test_multi_failure_shared_workflow_run_id(self, multi_failure_log_file, multi_taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=multi_failure_log_file,
+                    workflow_name="CI",
+                    workflow_run_id=42,
+                    taxonomy_path=multi_taxonomy_file,
+                )
+        assert all(b["workflow_run_id"] == 42 for b in bundles)
+
+    def test_single_failure_still_yields_one_bundle(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert len(bundles) == 1
+
+
 @pytest.mark.skipif(not os.environ.get("RUN_LIVE_S3"), reason="RUN_LIVE_S3 not set")
 @pytest.mark.integration
 class TestLiveS3Roundtrip:
