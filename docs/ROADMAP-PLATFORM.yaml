@@ -3806,6 +3806,8 @@ tier_items:
       - terraform/personal/feature_flags.tf    # new (Decision 77: auto-applies under terraform/personal/)
       - scripts/validate.py    # validate_ci_rca_taxonomy coverage check; validate_ci_rca_trigger wired in by PLAN-ci-rca-workflow-correctness
       - tests/test_ci_rca_evidence_ast.py    # new contract test for AST walker
+      - scripts/ci_rca_gate_evidence.py    # new (HARDENING c8: fetch PR pr-validate job log, compute vacuous_pass)
+      - config/ci_rca_taxonomy.yaml    # HARDENING c9: recurrence_class gains gate_escape value
     exit_criteria:
       - id: c1
         text: >-
@@ -3835,6 +3837,41 @@ tier_items:
           PLAN-ci-rca-workflow-correctness landed: ci-rca.yml rca job if: gates on head_branch==default_branch
           (main-only trigger); filing detection uses scripts/ci_rca_filing.py FILED: marker (not grep);
           ci-rca-filter guard wired into scripts/validate.py presubmit tier
+        status: open
+      - id: c7
+        text: >-
+          Probe-abstention fail-loud (H1): when the evidence bundle cannot deterministically compute
+          earliest_viable_gate (runtime_confidence=probe_failed, dispersion_too_high, AST parse error, or
+          taxonomy_fallback -- bundle value null) the contract MUST NOT silently fall back to unverified
+          agent judgment. Today INTENT Section 3.4 (lines ~371/409) SKIPS the cross-check whenever the
+          bundle value is null, leaving the agent free to assert any earliest_viable_gate with zero
+          deterministic check -- the exact path that produced the wrong rec-2423/rec-2424 RCA ("earliest=pre,
+          author did not run --pre"). Replace the silent skip with: detection_gap.earliest_viable_gate is
+          forced to a new "undetermined" enum value, the rec is stamped low-confidence, and a probe-failure
+          RCA is routed to mandatory human /plan review (not autonomously trusted). Landed via a follow-on
+          IMPLEMENTATION plan (provisional: PLAN-ci-rca-probe-abstention-failloud).
+        status: open
+      - id: c8
+        text: >-
+          Gate-execution evidence (H2): for a CI failure the evidence bundle records whether the PR's
+          earliest required gate (pr-validate / --pre) actually EXECUTED the failing check on the same head
+          SHA and with what result, by fetching that gate's job log. A required gate that reported success
+          without exercising the failing check is emitted as a deterministic vacuous_pass=true fact. This
+          turns "the required pre-merge gate passed vacuously / the regression escaped at pr-validate" into a
+          bundle-computed datum the cross-check can assert, instead of a conclusion the LLM must infer (and
+          got wrong for rec-2423/rec-2424, where pr-validate's pytest step collected 0 tests yet reported
+          "All checks passed"). Landed via a follow-on IMPLEMENTATION plan (provisional:
+          PLAN-ci-rca-gate-execution-evidence).
+        status: open
+      - id: c9
+        text: >-
+          Gate-escape class + failure_category dispute (H3): recurrence_class gains a gate_escape value whose
+          corrective_action targets the GATE (the check did not run / ran vacuously) rather than author
+          discipline; and the ci_rca_evidence_dispute disputed_field enum is extended from
+          {earliest_viable_gate, actual_gate_that_caught_it} to also include failure_category, so a bundle
+          MISCLASSIFICATION (e.g. the rec-2423/rec-2424 sloc_violation mislabel caused by the probe failure)
+          has a typed dispute route instead of being buried in free-text. Landed via a follow-on
+          IMPLEMENTATION plan (provisional: PLAN-ci-rca-gate-escape-class).
         status: open
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
     related_candidate_decisions: []
@@ -3876,11 +3913,34 @@ tier_items:
       rec-2415 (Low, planning, gated on PLAN-ci-rca-observability-dashboard Section 7.1 gauge). Advances
       c1 (5/6 follow-on plans landed; remaining: PLAN-ci-rca-observability-dashboard). Strict-mode flip
       (c2) prerequisites now met once PLAN-ci-rca-observability-dashboard lands and c3/c4/c5 satisfy.
+      2026-06-30: HARDENING WAVE opened (c7-c9) after the rec-2423/rec-2424 forward-fix session exposed
+      that the contract produced a WRONG RCA in production. The /dev/null sentinel regression reached main
+      because pr-validate's pytest step collected 0 tests yet reported success (pytest --picked --mode=branch
+      no-ops in CI's detached-HEAD checkout; see PLAN-ci-pre-gate-pytest-picked-noop). The ci-rca agent then
+      misdiagnosed the detection_gap as "author did not run --pre" -- because (a) the bundle's runtime probe
+      FAILED ("could not convert string to float") so per INTENT 3.4 the cross-check was SKIPPED, leaving the
+      agent's earliest_viable_gate claim unchecked (H1/c7); (b) nothing in the bundle inspects the PR's
+      PASSING pr-validate job log, so the vacuous-pass gate-escape was invisible to both bundle and agent
+      (H2/c8); and (c) the bundle MISCLASSIFIED the failure as sloc_violation with no typed dispute route for
+      failure_category, and "gate escaped / check ran vacuously" is not an expressible recurrence_class
+      (H3/c9). Net finding: the three existing mechanisms (schema, placement-evidence bundle, two-field
+      cross-check + dispute) are blind to a gate-escape whose deterministic probe abstains -- the cross-check
+      disables itself exactly when ground truth is hardest, falling back to LLM guesswork. Sequencing note:
+      c7 (fail-loud on abstention) SHOULD land before or with the c2 strict-mode flip -- flipping to strict
+      while probe-failure RCAs bypass enforcement would advertise a depth guarantee the contract does not
+      actually provide on the abstention path.
     note: |
-      Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze. Each follow-on plan is
-      independently authorable and the methodology is rolled out in phases via the CI_RCA_STRICT_MODE
-      feature flag (warn -> strict). See docs/INTENT-ci-rca-methodology.md "Follow-on plans" for the
-      decomposition contract.
+      Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
+      exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out
+      in phases via the CI_RCA_STRICT_MODE feature flag (warn -> strict). See
+      docs/INTENT-ci-rca-methodology.md "Follow-on plans" for the decomposition contract.
+      Post-incident HARDENING WAVE (exit criteria c7-c9, opened 2026-06-30): three further follow-on
+      IMPLEMENTATION plans (provisional names PLAN-ci-rca-probe-abstention-failloud,
+      PLAN-ci-rca-gate-execution-evidence, PLAN-ci-rca-gate-escape-class) close the gate-escape /
+      probe-abstention blind spot surfaced by rec-2423/rec-2424. The decomposition into three plans is
+      PROVISIONAL -- finalize the split (and whether H1+H3 merge into one plan) at /plan time. The INTENT
+      doc Section 3.4 (cross-check skip on null bundle value) and the ci_rca_evidence_dispute disputed_field
+      enum are the two contract surfaces these plans amend.
 
   - id: T1.14
     tier: T1
