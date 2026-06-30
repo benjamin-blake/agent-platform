@@ -3889,12 +3889,17 @@ tier_items:
           over the current naive substring scan of free log text (the substring scan is the likely cause of
           the rec-2423/rec-2424 sloc_violation mislabel -- any log mentioning a validator name miscategorizes
           the run); add test_collection_empty and gate_escape failure categories. (c) Model gate-escape as a
-          new detection_gap.escape_mode sub-field {check_absent, check_ran_vacuously, tier_misplaced},
-          NOT a recurrence_class value -- recurrence_class is the orthogonal temporal axis {novel,
-          instance_of_known_pattern, regression} and a gate-escape can itself be novel OR a regression.
-          escape_mode redirects corrective_action/preventive_action to target the GATE, not author
-          discipline. Landed via a follow-on IMPLEMENTATION plan (provisional: merge H1+H3 into one plan --
-          both amend ops_data_portal enums + the dispute schema; sequence H2 -> (H1+H3)).
+          new detection_gap.escape_mode sub-field {check_absent, check_ran_vacuously, tier_misplaced,
+          no_premerge_gate_by_design}, NOT a recurrence_class value -- recurrence_class is the orthogonal
+          temporal axis {novel, instance_of_known_pattern, regression} and a gate-escape can itself be novel
+          OR a regression. escape_mode forks corrective_action: check_ran_vacuously / check_absent /
+          tier_misplaced target the GATE (a real defect -- the rec-2423/rec-2424 case was
+          check_ran_vacuously: --pre's pytest WAS meant to run the changed test and collected 0); whereas
+          no_premerge_gate_by_design is the INTENDED architecture (see c11) -- the post-merge main-validate
+          canary catching a regression that --pre was never designed to block is the self-improvement loop
+          working as intended, so the corrective_action is the forward-fix itself (Decision 73), NOT an
+          author-discipline recommendation. Landed via a follow-on IMPLEMENTATION plan (provisional: merge
+          H1+H3 into one plan -- both amend ops_data_portal enums + the dispute schema; sequence H2 -> (H1+H3)).
         status: open
       - id: c10
         text: >-
@@ -3910,17 +3915,25 @@ tier_items:
         status: open
       - id: c11
         text: >-
-          Merge-gate coverage facts (closes gaps adjacent to the exit-5 bug that c7-c10 do not). The bundle
-          records, deterministically: (i) source-only-change-no-tests -- validate.py --pre only runs pytest
-          when a tests/*test_*.py file itself changed (has_test_changes), so a pure source change merges with
-          ZERO tests at the required gate; the bundle emits merge_gate_test_coverage=none when a main-validate
-          test failure corresponds to a test --pre would not have selected for the merged diff; (ii)
-          N-failure enumeration -- one bundle + one rec PER failed check (INTENT 3.3/4.9 promises this but
-          generate_bundles currently classifies only the FIRST failure, so a real regression co-occurring
-          with a SLOC line is silently dropped); (iii) coverage-removal -- tests deleted/skipped/xfail-added
-          in the diff (get_changed_files excludes deleted paths today), emitting coverage_regression=true when
-          a required gate goes green while net test count drops on a source-touching diff. Landed via a
-          follow-on IMPLEMENTATION plan (may co-locate with the H2 evidence-source plan).
+          Merge-gate coverage facts + canary-by-design encoding. DESIGN CONTEXT (operator-confirmed
+          2026-06-30): --pre is INTENTIONALLY the only required pre-merge CI gate and is diff-scoped; the
+          full validate.py suite is run pre-merge BEST-EFFORT by implementation agents in their own CC-web
+          containers (not an enforced CI check); main-validate (full suite, post-merge) is a CANARY whose
+          escapes are forward-fixed (Decision 73) -- this drives recursive self-improvement and is NOT a hole
+          to plug. The contract must ENCODE this model, not fight it: the bundle emits
+          gate_is_postmerge_canary=true for main-validate-tier failures so RCAs forward-fix rather than
+          recommend author-discipline fixes for canary catches. The bundle also records deterministically,
+          as INPUTS that feed c9's escape_mode and c10's cross-check: (i) merge_gate_test_coverage -- whether
+          the failing test was in --pre's diff-scoped selection for the merged diff; if --pre would not have
+          selected it (e.g. source-only change), escape_mode=no_premerge_gate_by_design (expected, forward-fix);
+          if --pre WAS meant to select it but collected 0 (vacuous_pass), escape_mode=check_ran_vacuously
+          (gate defect). (ii) N-failure enumeration -- one bundle + one rec PER failed check (INTENT 3.3/4.9
+          promises this but generate_bundles currently classifies only the FIRST failure, so a real regression
+          co-occurring with a SLOC line is silently dropped). (iii) coverage-removal -- tests
+          deleted/skipped/xfail-added in the diff (get_changed_files excludes deleted paths today), emitting
+          coverage_regression=true when a required gate goes green while net test count drops on a
+          source-touching diff. Landed via a follow-on IMPLEMENTATION plan (may co-locate with the H2
+          evidence-source plan).
         status: open
       - id: c12
         text: >-
@@ -4008,12 +4021,18 @@ tier_items:
       captures adjacent escape modes the exit-5 bug exposed (source-only-change-no-tests at --pre;
       N-failure-per-run enumeration, currently single-failure; coverage removal). (5) c12 adds the
       meta-failure observability + Decision-57 back-validation loop. c2 now hard-depends on c7 in its own
-      criterion text (not just this note). Further candidates noted but NOT yet promoted to criteria (decide
-      at /plan): G6 -- there is no pre-merge full-suite required check (main-validate is a post-merge canary),
-      arguably its own tier_item + a gate_is_postmerge_canary fact so RCAs stop blaming author discipline for
-      escapes no pre-merge gate could catch; dedup-by-status-context can suppress a second distinct RCA on
-      one SHA (add failure_category to the dedup key); flake-reproduction probe (reproduced=true|false);
-      /plan-review outcome capture for confidence calibration.
+      criterion text (not just this note). G6 RESOLVED by operator decision (2026-06-30): the
+      "no pre-merge full-suite required check" the adversary flagged is INTENTIONAL -- --pre is the required
+      pre-merge gate (diff-scoped), implementation agents run full validate.py best-effort in their CC-web
+      containers, and main-validate is a post-merge CANARY whose escapes are forward-fixed (Decision 73) to
+      drive recursive self-improvement. So G6 is NOT a new pre-merge-full-suite gate / sibling tier_item;
+      instead it is ENCODED into the contract (c11 gate_is_postmerge_canary + the no_premerge_gate_by_design
+      escape_mode in c9) so RCAs forward-fix rather than blame author discipline for canary catches. Note the
+      original rec-2423/rec-2424 was NOT a canary-by-design escape -- it was check_ran_vacuously (--pre's
+      pytest was meant to run the changed test and collected 0), a genuine gate defect. Further candidates
+      noted but NOT yet promoted to criteria (decide at /plan): dedup-by-status-context can suppress a second
+      distinct RCA on one SHA (add failure_category to the dedup key); flake-reproduction probe
+      (reproduced=true|false); /plan-review outcome capture for confidence calibration.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out
