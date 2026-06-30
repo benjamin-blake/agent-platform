@@ -22,6 +22,7 @@ Activation (how /implement sets CLAUDE_ACTIVE_PLAN or the marker file) is a sepa
 integration concern.  This baseline ships the mechanism + registration + tests, inert until
 a plan context is declared.
 """
+
 from __future__ import annotations
 
 import json

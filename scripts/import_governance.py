@@ -11,6 +11,7 @@ CLI flags (mutually exclusive):
   --check-lockfile    runs check_lockfile_sync();   exit 0 on pass, 1 on drift
   --revisit-trigger   runs evaluate_bazel_revisit_trigger(); exit 0 always (advisory, Decision 55)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,14 +34,17 @@ def run_import_contracts() -> tuple[bool, str]:
     """
     lint_imports_bin = Path(sys.executable).parent / "lint-imports"
     cmd: list[str] = [str(lint_imports_bin)] if lint_imports_bin.exists() else ["lint-imports"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=ROOT,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=ROOT,
+        )
+    except FileNotFoundError:
+        return False, "lint-imports not found: install import-linter (requirements.txt) and ensure the venv is active.\n"
     output = result.stdout + result.stderr
     return result.returncode == 0, output
 
@@ -173,9 +177,11 @@ def _fast_tier_budget_breach_open() -> bool:
                     rec = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("status") == "open" and "fast" in rec.get("title", "").lower() and "budget" in rec.get(
-                    "title", ""
-                ).lower():
+                if (
+                    rec.get("status") == "open"
+                    and "fast" in rec.get("title", "").lower()
+                    and "budget" in rec.get("title", "").lower()
+                ):
                     return True
     except Exception:
         return False
@@ -187,7 +193,11 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check-contracts", action="store_true", help="Run import-linter contracts (exit 0=pass)")
     group.add_argument("--check-lockfile", action="store_true", help="Verify requirements.lock sync (exit 0=pass)")
-    group.add_argument("--revisit-trigger", action="store_true", help="Evaluate Bazel revisit trigger (advisory; exit 0 always)")
+    group.add_argument(
+        "--revisit-trigger",
+        action="store_true",
+        help="Evaluate Bazel revisit trigger (advisory; exit 0 always)",
+    )
     args = parser.parse_args()
 
     if args.check_contracts:

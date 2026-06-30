@@ -1,12 +1,11 @@
 """Tests for scripts/import_governance.py -- 100% coverage including anti-vacuous-pass cases."""
+
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from scripts.import_governance import (
     _fast_tier_budget_breach_open,
@@ -76,6 +75,13 @@ class TestRunImportContracts:
         passed, output = run_import_contracts()
         assert len(output) > 0, "Expected non-empty output from lint-imports"
 
+    def test_lint_imports_not_found_returns_false(self) -> None:
+        """run_import_contracts returns (False, message) when lint-imports binary is missing."""
+        with patch("scripts.import_governance.subprocess.run", side_effect=FileNotFoundError("lint-imports: not found")):
+            passed, output = run_import_contracts()
+        assert not passed
+        assert "lint-imports not found" in output
+
 
 # ---------------------------------------------------------------------------
 # check_lockfile_sync
@@ -94,8 +100,9 @@ class TestCheckLockfileSync:
         req_txt = tmp_path / "requirements.txt"
         req_txt.write_text("requests>=2.0\n", encoding="utf-8")
 
-        with patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt), patch(
-            "scripts.import_governance._REQUIREMENTS_LOCK", tmp_path / "requirements.lock"
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", tmp_path / "requirements.lock"),
         ):
             in_sync, msg = check_lockfile_sync()
 
@@ -110,8 +117,9 @@ class TestCheckLockfileSync:
         # Lock only pins requests, missing mypackage
         req_lock.write_text("requests==2.31.0\n", encoding="utf-8")
 
-        with patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt), patch(
-            "scripts.import_governance._REQUIREMENTS_LOCK", req_lock
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
         ):
             in_sync, msg = check_lockfile_sync()
 
@@ -132,8 +140,9 @@ class TestCheckLockfileSync:
         req_lock = tmp_path / "requirements.lock"
         req_lock.write_text("pyiceberg[duckdb,glue]==0.11.1\n", encoding="utf-8")
 
-        with patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt), patch(
-            "scripts.import_governance._REQUIREMENTS_LOCK", req_lock
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
         ):
             in_sync, msg = check_lockfile_sync()
 
@@ -146,8 +155,9 @@ class TestCheckLockfileSync:
         req_lock = tmp_path / "requirements.lock"
         req_lock.write_text("requests==2.31.0\npytest==7.4.0\n", encoding="utf-8")
 
-        with patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt), patch(
-            "scripts.import_governance._REQUIREMENTS_LOCK", req_lock
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
         ):
             in_sync, msg = check_lockfile_sync()
 
@@ -233,7 +243,6 @@ class TestNormalizePkg:
 
 class TestReadExecutorConcurrency:
     def test_returns_one_when_no_capabilities(self, tmp_path: Path) -> None:
-        missing = tmp_path / "capabilities.yaml"
         with patch("scripts.import_governance.ROOT", tmp_path):
             val = _read_executor_concurrency()
         assert val == 1
