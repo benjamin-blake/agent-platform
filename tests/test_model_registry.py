@@ -64,7 +64,6 @@ _MINIMAL_CONFIG = {
                     {"pattern": ".github/prompts/", "min_tier": "pro"},
                     {"pattern": ".github/instructions/", "min_tier": "pro"},
                     {"pattern": ".github/agents/", "min_tier": "pro"},
-                    {"pattern": "copilot-instructions.md", "min_tier": "pro"},
                 ],
             },
             "review": {
@@ -241,12 +240,6 @@ class TestResolveModelImplementation:
         result = resolve_model("implementation", "S", file_path=".github/instructions/executor-review.instructions.md")
         assert result == "gemini-3-pro-preview"
 
-    def test_copilot_instructions_floor_endswith_match(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
-        monkeypatch.delenv("LLM_PROVIDER", raising=False)
-        monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        result = resolve_model("implementation", "XS", file_path=".github/copilot-instructions.md")
-        assert result == "gemini-3-pro-preview"
-
     def test_regular_file_no_floor(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
         monkeypatch.delenv("LLM_PROVIDER", raising=False)
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
@@ -374,7 +367,7 @@ class TestGetFloorTier:
     _PATTERNS = [
         {"pattern": "scripts/executor/", "min_tier": "pro"},
         {"pattern": "scripts/validate.py", "min_tier": "pro"},
-        {"pattern": "copilot-instructions.md", "min_tier": "pro"},
+        {"pattern": ".github/agents/", "min_tier": "pro"},
     ]
 
     def test_executor_dir_match(self) -> None:
@@ -383,8 +376,8 @@ class TestGetFloorTier:
     def test_exact_filename_match(self) -> None:
         assert _get_floor_tier("scripts/validate.py", self._PATTERNS) == "pro"
 
-    def test_endswith_match(self) -> None:
-        assert _get_floor_tier(".github/copilot-instructions.md", self._PATTERNS) == "pro"
+    def test_directory_prefix_match(self) -> None:
+        assert _get_floor_tier(".github/agents/schedule.yaml", self._PATTERNS) == "pro"
 
     def test_no_match_returns_none(self) -> None:
         assert _get_floor_tier("scripts/some_script.py", self._PATTERNS) is None

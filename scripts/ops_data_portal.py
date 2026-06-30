@@ -202,6 +202,31 @@ def _validate_ci_rca_context_v2(context_v2_json: dict) -> list[str]:
         return [str(e["msg"]) for e in exc.errors()]
 
 
+class CiRcaEvidenceDispute(BaseModel):
+    """Structured context schema for source=ci_rca_evidence_dispute recs (INTENT Section 4 check 8).
+
+    Hard-enforced regardless of CI_RCA_STRICT_MODE: there is no legacy free-text variant for the
+    dispute path, so no warn->strict migration window is needed. A malformed dispute payload always raises.
+    """
+
+    parent_rec_id: str = Field(pattern=r"^rec-\d+$")
+    disputed_field: str = Field(pattern=r"^(earliest_viable_gate|actual_gate_that_caught_it)$")
+    agent_value: str = Field(min_length=1)
+    bundle_value: str = Field(min_length=1)
+    evidence_for_dispute: str = Field(min_length=120)
+
+
+def _validate_ci_rca_dispute(context_v2_json: dict) -> list[str]:
+    """Validate a context_v2_json dict against CiRcaEvidenceDispute. Returns a list of error strings (empty = valid)."""
+    from pydantic import ValidationError as PydanticError  # noqa: PLC0415
+
+    try:
+        CiRcaEvidenceDispute.model_validate(context_v2_json)
+        return []
+    except PydanticError as exc:
+        return [str(e["msg"]) for e in exc.errors()]
+
+
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
     """Resolve the ducklake_writer Function URL.
 
@@ -597,6 +622,29 @@ def file_rec(
             "see .claude/agents/scheduled/ci-rca.md"
         )
 
+    # Section-4 check-8 carve-out: dispute recs are validated ONLY against CiRcaEvidenceDispute
+    # and NEVER subjected to the ci_rca checks 1-7 (no CiRcaContext, no source_file requirement).
+    # This MUST run before (and short-circuit) the source=='ci_rca' block below.
+    if fields.get("source") == "ci_rca_evidence_dispute":
+        if context_v2_json is None:
+            raise ValueError(
+                "source='ci_rca_evidence_dispute' requires context_v2_json carrying a CiRcaEvidenceDispute payload"
+            )
+        errors = _validate_ci_rca_dispute(context_v2_json)
+        if errors:
+            raise ValueError(f"[ci_rca_evidence_dispute] context_v2_json failed validation: {'; '.join(errors)}")
+        # Build >=80-char human summary for the legacy context column.
+        disp = context_v2_json
+        summary = (
+            f"Dispute on {disp.get('disputed_field', '')}: "
+            f"agent={disp.get('agent_value', '')!r} vs bundle={disp.get('bundle_value', '')!r}. "
+            f"Evidence: {disp.get('evidence_for_dispute', '')[:200]}"
+        )
+        if len(summary) < 80:
+            summary = summary + " [ci_rca_evidence_dispute -- see context_v2_json for full detail]"
+        if not fields.get("context") or len((fields.get("context") or "").strip()) < 80:
+            fields["context"] = summary
+
     # context_v2_json warn-mode validation for source=ci_rca (CI_RCA_STRICT_MODE; INTENT Section 1).
     # Must run before _validate_context_length so the human summary can satisfy the 80-char floor.
     if fields.get("source") == "ci_rca":
@@ -815,6 +863,45 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
     logger.info("[PORTAL] Updated %s: %s", rec_id, list(updates.keys()))
     _refresh_cache_after_write("ops_recommendations", merged, response, RECS_JSONL)
     return True
+
+
+def propose_or_close_rec(
+    rec_id: str,
+    verdict: str,
+    evidence: str,
+    *,
+    deterministic: bool = False,
+    profile: Optional[str] = None,
+) -> Optional[str]:
+    """Apply a relevance verdict to a rec (T3.8 / CD.36 close_proposed lifecycle support).
+
+    Decision 70: verdict and lifecycle status are orthogonal; no new status enum value.
+    CD.36 / Decision 55: only deterministic satisfied auto-closes; every semantically-judged
+    verdict emits a close_proposed proposal string for a human to run.
+
+    Args:
+        rec_id:       The rec ID to act on (e.g. 'rec-042').
+        verdict:      Relevance verdict from rec_relevance.evaluate_rec_relevance().
+        evidence:     Evidence/proof string from the evaluator.
+        deterministic: True when the verdict came from the acceptance probe (on-demand per-rec).
+                       False for semantic signals (commit correlation, Jaccard, etc.).
+        profile:      Optional AWS profile override for update_rec.
+
+    Returns:
+        None when the rec is auto-closed (deterministic satisfied) or no action is warranted
+        (verdict is 'relevant' or 'unknown').
+        A close_proposed command string for all other verdicts -- print this for the operator.
+    """
+    if verdict in ("relevant", "unknown"):
+        return None
+    if deterministic and verdict == "satisfied":
+        update_rec(rec_id, {"status": "closed", "resolution": evidence}, profile=profile)
+        return None
+    safe_evidence = evidence.replace('"', '\\"')
+    return (
+        f"bin/venv-python -m scripts.ops_data_portal --update-rec {rec_id}"
+        f' --status closed --resolution "{safe_evidence}"  # relevance={verdict}'
+    )
 
 
 def file_decision(
@@ -1252,6 +1339,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     rec.add_argument("--dependencies", nargs="*", default=None)
     rec.add_argument("--verification")
     rec.add_argument("--verification-tier", choices=["V1", "V2", "V3"], dest="verification_tier")
+    rec.add_argument(
+        "--context-v2-json",
+        dest="context_v2_json",
+        default=None,
+        help="JSON-encoded structured context dict: CiRcaContext for source=ci_rca recs,"
+        " or CiRcaEvidenceDispute for source=ci_rca_evidence_dispute recs",
+    )
 
     # update-rec fields
     upd = parser.add_argument_group("--update-rec fields")
@@ -1300,8 +1394,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             fields["verification"] = args.verification
         if args.verification_tier:
             fields["verification_tier"] = args.verification_tier
+        context_v2_parsed: dict | None = None
+        if args.context_v2_json is not None:
+            try:
+                context_v2_parsed = json.loads(args.context_v2_json)
+            except json.JSONDecodeError as exc:
+                print(f"ERROR: --context-v2-json is not valid JSON: {exc}", file=sys.stderr)
+                return 1
         try:
-            rec_id = file_rec(fields, profile=args.profile)
+            rec_id = file_rec(fields, context_v2_json=context_v2_parsed, profile=args.profile)
             print(rec_id)
             return 0
         except (ValidationError, ValueError) as exc:
@@ -1388,7 +1489,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.guidance:
         from scripts.executor.rec_write_guidance import get_rec_write_guidance
 
-        guidance = get_rec_write_guidance()
+        guidance = get_rec_write_guidance(source=args.source)
         print(yaml.dump(guidance, default_flow_style=False, sort_keys=True, allow_unicode=True))
         return 0
 

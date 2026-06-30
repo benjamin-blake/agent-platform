@@ -2,6 +2,96 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 103: Recommendation relevance is a governed lifecycle state (CD.36 ratification) (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-30
+**Warehouse ID:** dec-103 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The roadmap had a Tier Item Freshness Gate (T-1.21) and implement-side truth-maintenance rules,
+but no governed relevance discipline for operational recommendations. Open recommendations were
+actioned solely on status="open", without checking whether the underlying need was still valid.
+At 2026-06-24, 273 of 505 open recommendations were aging (>60 days), and no automated path
+existed to surface or close satisfied/superseded work.
+
+**Decision:**
+Ratifies CD.36. Recommendation relevance is a governed lifecycle verdict -- distinct from the
+rec lifecycle status (open/closed/failed/declined/superseded). The verdict set is:
+`{relevant, satisfied, superseded, duplicate, contradicted, stale_target, blocked_by_decision, unknown}`.
+
+Key constraints (binding):
+- The deterministic probe is the rec's existing `acceptance` shell-command oracle. No new
+  acceptance machinery is introduced.
+- Deterministic satisfaction (acceptance probe passes; target file/symbol present) may auto-close
+  with a recorded proof. All semantic verdicts (superseded, duplicate, contradicted, etc.)
+  produce a `close_proposed` command for human or policy confirmation -- never a direct close
+  (Decision 70: closure requires a closure proof, not an LLM assertion).
+- Relevance state is computed READ-TIME or stored in a named projection
+  (`docs/contracts/recommendation-relevance.yaml`) -- NO new Class A columns on
+  `ops_recommendations` (Decision 84: the ducklake_writer owns the keyspace).
+- Queue-wide relevance surfacing serves the warmed read-cache only -- no per-session warehouse
+  re-fetch (Decision 88).
+
+**Implementation (T3.8, landed 2026-06-30):**
+`scripts/rec_relevance.py` evaluator (deterministic-first: acceptance probe -> target-existence
+-> decision-contradiction scan -> semantic fallback); `docs/contracts/recommendation-relevance.yaml`
+projection contract; `scripts/session_preflight.py` generalised correlation engine;
+`scripts/ops_data_portal.py` `propose_or_close_rec()` lifecycle helper; planning and implement
+skill freshness gates.
+
+**Related:** Decision 70 (closure-proof requirement), Decision 84 (named projection / read-only
+boundary), Decision 88 (read-cache surfacing), Decision 55 (no auto-action on semantic judgment),
+T3.8 (implementation item), T3.9 (post-merge reconciliation complement).
+
+## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
+
+**Status:** Decided
+**Date:** 2026-06-29
+**Warehouse ID:** dec-102 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 43 introduced a binary SLOC waiver: any scripts/ or src/ Python file carrying a
+`# complexity-waiver: decision-43` header comment was entirely exempt from the 500-SLOC cap,
+allowing unbounded growth. Seventeen files currently exceed 500 SLOC under this exemption.
+The waiver mechanism provided no ratchet, no visibility into file growth, and no pressure
+toward the reduction that Decision 43 itself mandated.
+
+**Decision:**
+The `# complexity-waiver: decision-43` comment no longer authorises unbounded SLOC growth.
+Oversized scripts/ and src/ Python files are instead pinned to their current size in a
+checked-in registry (`config/sloc_budgets.yaml`) and enforced by `validate_sloc_limits` at
+`current SLOC <= budget`. Budgets ratchet DOWN only:
+
+- Raising a budget requires a manual, reviewable edit to `config/sloc_budgets.yaml`.
+- Shrinking a file and re-running `validate --update-sloc-budgets` automatically lowers the
+  registered budget to the new size.
+- Files that shrink to <=500 SLOC are dropped from the registry automatically.
+- A file >500 SLOC that is NOT registered in `config/sloc_budgets.yaml` fails the gate,
+  regardless of whether it carries the waiver comment.
+- A file <=500 SLOC that still carries the waiver comment is a stale-waiver advisory (not a
+  failure), because the comment may still be load-bearing for the cyclomatic-complexity gate
+  (validate_cc_limits). Do not remove the comment without verifying the CC gate first.
+
+**Preserved from Decision 43:**
+The cyclomatic-complexity (CC) row of Decision 43 is UNCHANGED. The `_WAIVER_PATTERN` and the
+`validate_cc_limits` gate are not modified by this decision. The shared waiver comment still
+waives the CC gate; its SLOC semantics are amended here only.
+
+**Forward-compatibility (Decision 80):**
+`config/sloc_budgets.yaml` keys are repo-relative forward-slash paths. When `scripts/validate.py`
+is decomposed per Decision 80, keys are re-pointed at the new module paths via
+`validate --update-sloc-budgets`. No other migration is required.
+
+**Deferred breakdown program:**
+The breakdown of registered files below 500 SLOC (split each file, drop from registry,
+until `budgets: {}`) is tracked as rec-2414. This decision creates the registry that rec-2414
+consumes; it does not resolve rec-2414.
+
+**Related:** Decision 43 (amended SLOC row), Decision 80 (validate.py decomposition direction),
+Decision 73 (one-directional enforced-budget ratchet precedent), Decision 86 (rationale routed
+to this numbered Decision).
+
 ## Decision 101: External brand identity (Theseus / Guerdon / Semanto) -- presentation-layer only, with a scoped Agent-First marketing-prose exception (Decided)
 
 **Status:** Decided
@@ -585,12 +675,32 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
    own IAM moves to a separate terraform/bootstrap/ root applied out-of-band, breaking the self-grant
    cycle. Without that separation any automated handling of the fail-closed set is self-approval.
 
-5. **Authority-budget + ratchet model (CD.35 points 6-9, ratified DIRECTION; concrete classification
-   deferred to T2.23/T2.25):** an explicit permissions boundary on github_ci_apply plus boundary-
-   propagation condition keys and deterministic in-budget/out-of-budget diff classification; auto-passes
-   in-budget IAM changes, routes out-of-budget/trust/destroy to the Environment gate. Autonomy is earned
-   and revocable PER CHANGE-CLASS: the budget widens on measured track record and narrows on incident
-   (budget amendments via the bootstrap tier only; subagent review advises, never locks).
+5. **Authority-budget + ratchet model (CD.35 points 6-9, IMPLEMENTED by T2.25 / 2026-06-29):**
+   an explicit permissions boundary on github_ci_apply plus boundary-propagation condition keys
+   and deterministic in-budget/out-of-budget diff classification shipped in T2.25.
+
+   Concrete in-budget classification (machine-readable: `terraform/bootstrap/authority_budget.json`):
+   - **In-budget** (auto-apply, still subject to subagent review): resource type
+     `aws_iam_role_policy` or `aws_iam_role_policy_attachment`, action set `["update"]`,
+     target role name `agent-platform-github-ci-branch` or `agent-platform-github-ci-pr`
+     (managed boundary-carrying roles). No trust diff (trust check runs BEFORE IAM classification
+     in the guard; a trust change on an in-budget resource type is always gated).
+   - **Out-of-budget / gated** (routes to tf-gated-apply Environment): trust diffs, destroys,
+     role CREATES (new trust surface), or any IAM change not matching all three in-budget
+     criteria above. Role creates stay gated in this v1 narrowing.
+   - **Fail-closed**: missing or unparseable budget table = all IAM treated as out-of-budget
+     (Decision 77). Budget path overridable via `TF_AUTHORITY_BUDGET` env var (test isolation).
+
+   Ratchet criteria: autonomy is earned and revocable PER CHANGE-CLASS -- the budget widens on
+   measured track record (per change-class, after N incident-free auto-applies) and narrows on
+   incident. Budget amendments via the bootstrap tier only (`terraform/bootstrap/`); subagent
+   review advises, never locks. The drift gate (`scripts/validate.py:validate_authority_budget`)
+   asserts the budget table stays in sync with the IAMRoleWriteBounded SCP in
+   `terraform/bootstrap/github_ci_apply.tf` (pre and full tiers).
+
+   The sole SoT for the apply-model and guard-classification rules is
+   `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection.
+   CD.35 is fully ratified (no re-ratification via this amendment).
 
 6. **Apply failures wire into ci-rca (Decision 72/55):** apply failures file source=ci_rca recs;
    drift detection (scheduled plan, alarm-only) files via the ops portal. Nothing auto-remediates.
@@ -838,7 +948,7 @@ The T2.19 recs-first cutover left the ops store straddling two warehouses. The r
 
 **Operational consequences:** destructive Lambda actions gain explicit-confirm guards (create_ops_tables force_recreate; catalog_reinit loses its production-schema default); the telemetry preflight health check is stubbed until telemetry re-lands on DuckLake (Phase 4); catalog DR remains the existing ducklake_catalog_dr nightly pg_dump, with the restore-drill format gap tracked as rec-2113.
 
-**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27 (roadmap carriers), docs/INTENT-ducklake-consolidation.md (full program).
+**Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27/T2.28 (roadmap carriers), T2.36 (Phase 4 telemetry re-lands on DuckLake).
 
 ---
 

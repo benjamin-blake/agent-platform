@@ -1,0 +1,337 @@
+schema_version: 1
+slug: "ci-rca-evidence-dispute"
+intent: >-
+  Land the source=ci_rca_evidence_dispute escape-hatch path for the T1.13 CI-RCA methodology
+  contract (INTENT Section 2 cross-check rule + Section 4 check 8 carve-out). When the ci-rca
+  agent's detection_gap cross-check disagrees with the deterministic evidence bundle, the
+  disagreement must route through human /plan review as a typed, schema-validated dispute rec
+  rather than a silent agent override. This plan registers the dispute source, defines the
+  CiRcaEvidenceDispute schema, adds the portal carve-out that validates a dispute rec against its
+  own schema while bypassing the ci_rca checks 1-7, surfaces dispute-field semantics at write time,
+  and surfaces open dispute recs in session_preflight so /plan sees them. It is a prerequisite for
+  the future Phase-4 strict-mode flip: hard cross-check rejections cannot safely fire without a
+  non-bypass dispute path first. CI_RCA_STRICT_MODE stays warn; this lands the machinery only.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-evidence-dispute.yaml
+phase: >-
+  PLATFORM tier_item T1.13 (CI-RCA methodology contract), per docs/INTENT-ci-rca-methodology.md
+  Section 2 / Section 4 check 8 / "Follow-on plans". Fourth depth follow-on landed; after
+  PLAN-ci-rca-schema-enforcement (Phase 1, 2026-06-15), PLAN-ci-rca-evidence-script (Phase 2,
+  2026-06-18), and PLAN-ci-rca-prompt-rewrite (Phase 3, 2026-06-29). Remaining successors after this:
+  PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre, then the Phase-4 strict-mode flip.
+scope:
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register a new canonical_id `ci_rca_evidence_dispute` (Decision 61: a new finding-class is a
+      new source value, not a new table). description names it the typed dispute path against an
+      existing source=ci_rca rec; signal_interpretation carries the review-resolution flow in prose
+      (open dispute recs surface in /plan; when the bundle SCRIPT logic is the defect, /plan scopes a
+      PLAN-ci-rca-evidence-script fix; when the AGENT value is wrong, the dispute is closed declined)
+      so the flow rides the registry per Decision 86 (no new standing prose doc). Note that dispute
+      recs do NOT hard-block the /plan queue (unlike source=ci_rca), since a dispute is a review
+      request, not a CI failure.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add a CiRcaEvidenceDispute Pydantic model (parent_rec_id ^rec-\d+$; disputed_field enum
+      {earliest_viable_gate, actual_gate_that_caught_it} -- the two Section-2 cross-check points;
+      agent_value str; bundle_value str; evidence_for_dispute str min 120 chars) and a
+      _validate_ci_rca_dispute(payload) helper mirroring _validate_ci_rca_context_v2. In file_rec(),
+      add the Section-4 check-8 carve-out BEFORE the existing source=='ci_rca' block: when
+      source=='ci_rca_evidence_dispute', validate the dispute payload (carried in the existing
+      context_v2_json kwarg) against CiRcaEvidenceDispute, build a >=80-char human summary into the
+      legacy context column, and RETURN past / SKIP the ci_rca checks 1-7 (the dispute rec is not a
+      ci_rca structured-context rec). Dispute-schema validation is hard-enforced regardless of
+      CI_RCA_STRICT_MODE (brand-new path, no legacy free-text variant to protect, so no warn window).
+      Also relax the line-594 guard so source=='ci_rca_evidence_dispute' is NOT forced to carry the
+      ci_rca source_file requirement (the dispute targets a rec, not a file path). Generalise the
+      --context-v2-json CLI help to cover both the ci_rca and dispute payloads.
+  - file: scripts/executor/rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      Add an `elif source == "ci_rca_evidence_dispute":` branch in get_rec_write_guidance() mirroring
+      the existing ci_rca branch (Decision 66 Precision Context Injection): return the dispute schema
+      field semantics (parent_rec_id, disputed_field allowed values, agent_value, bundle_value,
+      evidence_for_dispute) as authoritative write-time guidance so the agent composes a conformant
+      dispute before file_rec(). Dedicated code path (nested object), consistent with the ci_rca
+      branch and intentionally divergent from the flat-column ops.yaml auto-population (Decision 65).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Surface open dispute recs to /plan. Add _derive_ci_rca_dispute_open(rows) (filter
+      source=='ci_rca_evidence_dispute' AND status in (open,in_progress), newest first, cap 5)
+      mirroring _derive_ci_rca_open; add _fetch_ci_rca_dispute_recs(cache_rows) serving the
+      already-pulled warm cache rows client-side (NO new DuckLake reader named-verb -- upholds
+      Decision 84 I-3 and Decision 88 egress invariant); add print_ci_rca_dispute_recs() printing a
+      "--- CI-RCA Dispute Recs (open) ---" section; wire the fetch + print into main() alongside the
+      existing ci_rca surfacing and add a `ci_rca_dispute_recs` key to the preflight report JSON.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add CiRcaEvidenceDispute validation tests (valid payload passes; bad parent_rec_id pattern,
+      out-of-enum disputed_field, and too-short evidence_for_dispute each raise) and file_rec()
+      carve-out tests: a well-formed source=ci_rca_evidence_dispute rec validates against the dispute
+      schema and is NOT subject to the ci_rca CiRcaContext checks (e.g. it needs no why_chain /
+      detection_gap / evidence_bundle_ref), and a malformed dispute payload hard-raises even when
+      CI_RCA_STRICT_MODE=warn. Mock the writer call (no live AWS) -- assert on the validation/branch
+      behaviour, not on a real write.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Add tests for _derive_ci_rca_dispute_open (filters by source + status, caps at 5, newest first),
+      _fetch_ci_rca_dispute_recs (cache-row path returns derived rows; None cache -> []; sentinel ->
+      reader path), and print_ci_rca_dispute_recs (renders the section header and the empty-state
+      line). Assert the report JSON carries ci_rca_dispute_recs.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Append to the T1.13 progress_note a 2026-06-29 entry recording the dispute-path landing (source
+      registration, CiRcaEvidenceDispute schema + check-8 carve-out, write-guidance branch, preflight
+      dispute section) and that it is a Phase-4 strict-flip prerequisite. Note the remaining
+      successors (PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre, strict flip) and
+      that the deferred dispute-frequency throttle is now tracked as a filed rec. progress_note text
+      only; do NOT change files_in_scope, exit_criteria status, or status.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    None. No terraform, no Lambda build/deploy. compute_affected_artifacts(scope) returns empty --
+    none of the scope files are Lambda-packaged (verified at planning time): portal dispute-schema
+    validation runs client-side in scripts/ops_data_portal.file_rec() exactly like the existing
+    ci_rca context_v2_json validation, before the ducklake_writer Function-URL call. The dispute rec
+    writes through the normal file_rec / ducklake_writer path (Decision 84 I-2 writer-owned keyspace);
+    no warehouse schema change is needed (the dispute payload rides the existing context_v2_json
+    column added by PLAN-ci-rca-schema-enforcement, and the human summary rides the legacy context
+    column).
+acceptance_criteria:
+  - >-
+    config/agent/data_quality/source_registry.yaml contains a canonical_id ci_rca_evidence_dispute
+    with a description and a signal_interpretation that states the review-resolution flow and that
+    dispute recs do not hard-block the /plan queue; validate_source('ci_rca_evidence_dispute') no
+    longer raises.
+  - >-
+    A well-formed dispute payload (parent_rec_id=rec-N, disputed_field in {earliest_viable_gate,
+    actual_gate_that_caught_it}, agent_value, bundle_value, evidence_for_dispute >=120 chars) passes
+    CiRcaEvidenceDispute.model_validate; a bad parent_rec_id, an out-of-enum disputed_field, and a
+    too-short evidence_for_dispute each raise.
+  - >-
+    file_rec() with source=ci_rca_evidence_dispute and a valid dispute payload in context_v2_json is
+    accepted WITHOUT requiring any CiRcaContext field (no why_chain, detection_gap, recurrence_class,
+    evidence_bundle_ref) -- i.e. the ci_rca checks 1-7 are bypassed (Section 4 check 8) -- and without
+    the ci_rca source_file requirement; a malformed dispute payload hard-raises even under
+    CI_RCA_STRICT_MODE=warn.
+  - >-
+    get_rec_write_guidance(source='ci_rca_evidence_dispute') returns guidance entries for
+    parent_rec_id, disputed_field, agent_value, bundle_value, and evidence_for_dispute (the dispute
+    schema surfaced at write time, Decision 66).
+  - >-
+    session_preflight surfaces open dispute recs: _derive_ci_rca_dispute_open filters by
+    source=ci_rca_evidence_dispute + status in (open,in_progress), newest first, capped at 5; the
+    "CI-RCA Dispute Recs (open)" section prints (with an empty-state line when none); the preflight
+    report JSON carries a ci_rca_dispute_recs key. The derivation uses the already-pulled cache rows
+    (no new DuckLake reader named-verb; no extra egress).
+  - >-
+    A tracking recommendation is filed (source=planning, priority=low, file=scripts/ops_data_portal.py)
+    for the deferred hard dispute-frequency throttle, gated on PLAN-ci-rca-observability-dashboard
+    landing the Section 7.1 dispute-path-traffic gauge; its rec id is recorded in the T1.13
+    progress_note and in the implementer's report.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T1.13 progress_note records the dispute-path landing and the tracking
+    rec id; files_in_scope, exit_criteria status, and status are unchanged.
+  - >-
+    Per-file coverage and test-existence gates pass for every changed source file
+    (test_coverage_checker --check-tests --check-coverage), and full local presubmit is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-evidence-dispute.yaml
+    expected: Exit 0; prints validation success.
+    fix_if: Non-zero exit -- fix the named field; an unknown-key error means a stray top-level key.
+  - step: 2
+    phase: pre-deploy
+    action: The dispute source is registered and validate_source accepts it.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source; validate_source('ci_rca_evidence_dispute'); print('ok')"
+    expected: Prints ok (no ValueError).
+    fix_if: ValueError 'Unknown source' -- the canonical_id was not added to source_registry.yaml entries.
+  - step: 3
+    phase: pre-deploy
+    action: CiRcaEvidenceDispute schema accepts a valid payload and rejects each malformed variant.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -k dispute -q
+    expected: All dispute tests pass -- valid payload validates; bad parent_rec_id / out-of-enum disputed_field / too-short evidence_for_dispute each raise; the carve-out accepts a dispute rec with no CiRcaContext fields and hard-raises a malformed payload under warn mode.
+    fix_if: A CiRcaContext check fired on a dispute rec -- the check-8 carve-out must run BEFORE (and short-circuit) the source=='ci_rca' block; enum/pattern test fails -- tighten the Field constraints.
+  - step: 4
+    phase: pre-deploy
+    action: Write-time guidance surfaces the dispute schema fields (Decision 66).
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import get_rec_write_guidance as g; k=g(source='ci_rca_evidence_dispute'); assert all(f in k for f in ('parent_rec_id','disputed_field','agent_value','bundle_value','evidence_for_dispute')), sorted(k); print('ok')"
+    expected: Prints ok -- all five dispute fields are present in the returned guidance.
+    fix_if: KeyError/assert -- the elif source=='ci_rca_evidence_dispute' branch is missing or returns the wrong keys; mirror the ci_rca branch shape.
+  - step: 5
+    phase: pre-deploy
+    action: Preflight dispute derivation + section render unit tests pass.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -k dispute -q
+    expected: All pass -- _derive_ci_rca_dispute_open filters/caps/sorts; _fetch_ci_rca_dispute_recs serves cache rows (None -> []); print_ci_rca_dispute_recs renders the header + empty-state.
+    fix_if: Filter wrong -- match source=='ci_rca_evidence_dispute' AND status in (open,in_progress); ordering -- newest-first by created/updated timestamp; cap -- 5.
+  - step: 6
+    phase: pre-deploy
+    action: A live preflight run renders the new section and emits the report key (no extra reader egress).
+    command: bin/venv-python -m scripts.session_preflight 2>/dev/null | grep -F "CI-RCA Dispute Recs (open)" && bin/venv-python -c "import json; r=json.load(open('logs/.preflight-report.json')); assert 'ci_rca_dispute_recs' in r, list(r)[:40]; print('report-key-ok')"
+    expected: The section header prints AND report-key-ok prints (ci_rca_dispute_recs present in the JSON).
+    fix_if: Section absent -- the print call was not wired into main(); key absent -- add ci_rca_dispute_recs to the assembled report dict.
+  - step: 7
+    phase: pre-deploy
+    action: Test-existence + per-file coverage hold for every changed source file.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage --files scripts/ops_data_portal.py scripts/executor/rec_write_guidance.py scripts/session_preflight.py
+    expected: 0 missing test files; no changed file below its coverage gate.
+    fix_if: Below gate -- add tests for the new dispute branches (mock the writer / reader so no live AWS is needed).
+  - step: 8
+    phase: pre-deploy
+    action: Full local presubmit (CI mirror) is green before push.
+    command: bin/venv-python -m scripts.validate
+    expected: All checks pass (lint, format, tests, source-registry guard, sloc, coverage); exit 0.
+    fix_if: Any check fails -- fix before push; remote CI (Decision 83 required checks) is authoritative.
+  - step: 9
+    phase: post-deploy
+    action: File the deferred-throttle tracking rec via the ops portal and capture its id.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --file-rec --source planning --priority low --file scripts/ops_data_portal.py --title "Hard-gate ci_rca_evidence_dispute frequency once observability shows sustained dispute traffic" --status open --effort S --context "Deferred from PLAN-ci-rca-evidence-dispute per INTENT Known Gaps -- the typed dispute path cannot itself prevent dispute-as-bypass behaviour. Gated on PLAN-ci-rca-observability-dashboard landing the Section 7.1 dispute-path-traffic gauge; no empirical data to set a threshold until then. Action -- add a portal-level dispute-frequency rate limit (N disputes per agent per 7d) mirroring the why_chain_terminus_override rate limit, with a degraded-path branch so a blocked legitimate dispute is not a stuck rec." --acceptance "grep -nE 'dispute.*rate.?limit|rate.?limit.*dispute' scripts/ops_data_portal.py returns the throttle implementation"
+    expected: Portal returns an allocated rec id (rec-NNN); record it for the progress_note and report.
+    fix_if: Portal unreachable -- confirm the agent_platform chain (aws sts get-caller-identity --profile agent_platform) then re-file; a write that cannot complete fails loudly (Decision 84 I-4), there is no offline outbox -- re-file after restoring connectivity.
+constraints:
+  - >-
+    The Section-4 check-8 carve-out MUST run before (and short-circuit) the existing source=='ci_rca'
+    block in file_rec(): a dispute rec is validated ONLY against CiRcaEvidenceDispute and is NEVER
+    subjected to the ci_rca checks 1-7 (no CiRcaContext, no why_chain/detection_gap/evidence_bundle_ref
+    requirement, no ci_rca source_file requirement). This carve-out is the ONLY legitimate escape from
+    the ci_rca cross-check spine (INTENT Section 4 check 8).
+  - >-
+    Dispute-schema validation is hard-enforced regardless of CI_RCA_STRICT_MODE. Rationale: the dispute
+    path is brand-new with no legacy free-text variant, so there is no warn->strict migration window to
+    honour; a malformed dispute is always rejected. (The strict-mode flag still governs the ci_rca
+    structured-context path only.)
+  - >-
+    disputed_field is an ENUM constrained to the two Section-2 cross-check points {earliest_viable_gate,
+    actual_gate_that_caught_it} (explicit human direction). Widening the set later requires a schema bump.
+  - >-
+    No dispute-frequency throttle is implemented in THIS plan (explicit human direction). The deferral
+    is made trackable instead, as the filed source=planning rec (VP step 9), gated on the observability
+    dashboard's dispute-traffic gauge. Do not add rate-limiting logic here.
+  - >-
+    The preflight dispute section MUST derive from the already-pulled warm cache rows client-side
+    (mirror _derive_ci_rca_open); do NOT add a new DuckLake reader named-verb and do NOT issue an extra
+    reader call (Decision 84 I-3 named-verb boundary; Decision 88 catalog-egress invariant). A read
+    cache is never a write source (the dispute rec is WRITTEN via file_rec/ducklake_writer only).
+  - >-
+    No new standing prose-architecture doc (Decision 86): the review-resolution flow rides the
+    source_registry signal_interpretation text and the dispute-schema field semantics; only the T1.13
+    progress_note is edited in docs/. scripts/executor/rec_write_guidance.py is on the Decision 44
+    executor-boundary (scripts/executor/*.py) and is touched via the sanctioned /plan->/implement route,
+    not by the executor.
+  - >-
+    Ops/warehouse storage path is unchanged (Decision 84/81): the dispute payload rides the existing
+    context_v2_json column and the human summary rides the legacy context column; no column add, no
+    schema migration, no reader-verb change.
+  - IMPLEMENTATION type only (Decision 67 / CD.17; the STRATEGIC >5-file heuristic is suspended under the freeze -- this is a single coherent IMPLEMENTATION plan).
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable V2 failure, stop and RCA.
+context:
+  - >-
+    T1.13 (CI-RCA methodology contract) is in_progress, decomposed into atomic IMPLEMENTATION plans
+    (freeze override, strategic: false). Note the hyphen distinction: T1.13 (this item) is the CI-RCA
+    contract; the just-completed T-1.13 (with hyphen) was the unrelated instruction-architecture YAML
+    conversion. Phases 1-3 landed (schema-enforcement 2026-06-15; evidence-script 2026-06-18;
+    prompt-rewrite 2026-06-29). CI_RCA_STRICT_MODE is still warn. This plan lands the dispute escape
+    hatch -- a strict-flip prerequisite, since hard cross-check rejections (Section 2) must not fire
+    until agents have a non-bypass dispute route.
+  - >-
+    Surfaces verified at planning time: scripts/ops_data_portal.py already holds CiRcaContext +
+    _validate_ci_rca_context_v2 + the source=='ci_rca' file_rec block (lines ~147-203, ~594-634) and a
+    --context-v2-json CLI arg; both ops_data_portal.py and session_preflight.py already carry
+    complexity-waivers, so additive edits do not trip validate_sloc_limits.
+    scripts/executor/rec_write_guidance.py (~123 lines, no waiver) has the `if source == "ci_rca":`
+    branch at line 110 to mirror, and hosts validate_source(). session_preflight.py has the
+    _derive_ci_rca_open / _fetch_ci_rca_recs / print_ci_rca_recs trio and the cache_rows warm-pull
+    plumbing (neon-egress-reduction D4) to mirror for the dispute section.
+  - >-
+    Transport choice: the dispute payload reuses the existing context_v2_json kwarg/CLI arg (validated
+    against CiRcaEvidenceDispute when source is the dispute source) rather than adding a new kwarg --
+    minimal surface, and the human summary still lands in the legacy context column to satisfy the
+    80-char floor for existing free-text consumers.
+  - >-
+    Decisions cited (decision-scout NO_FLAGS gate, 2026-06-29): Decision 72 (RCA-as-Plan-Source -- the
+    governed workflow; dispute routes disagreement through /plan, never an autonomous fix), Decision 66
+    (Precision Context Injection -- get_rec_write_guidance surfaces the dispute schema at write time),
+    Decision 84 / Decision 81 (DuckLake sole ops backend; I-2 writer-owned keyspace, I-3 named-verb read
+    boundary, no read-cache-as-write-source), Decision 61 (new finding-class = new source value, not a
+    new table), Decision 55 (RCA-First -- route agent/bundle disagreement to human review, no silent
+    workaround). Acknowledged NOTEs: Decision 86 (semantics ride registry+schema, no new prose doc),
+    Decision 44 (rec_write_guidance.py touched via the sanctioned /plan->/implement route, not the
+    executor), Decision 88 (egress invariant -- client-side derive, no extra reader fan-out).
+  - >-
+    ci-rca block-respect (Related-Work check): preflight shows zero open source=ci_rca recs and zero
+    ci_rca_unresolved_recs at planning time, so no HARD BLOCK applies; this plan is itself T1.13 work.
+  - >-
+    Branch claude/t1-13-planning-y7qg10 was 0 commits behind origin/main at planning time
+    (main_freshness ok, no scope overlap), so no rebase was required during planning.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/t1-13-planning-y7qg10)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md adjudicated via the decision-scout gate (72/66/84/81/61/55 cited; 86/44/88 NOTE; Verdict NO_FLAGS)
+  - docs/INTENT-ci-rca-methodology.md Section 2 + Section 4 check 8 + "Follow-on plans" read in full
+  - All 7 files in scope located and confirmed editable
+  - No Lambda artifact affected (compute_affected_artifacts returns empty) -- V2 tier confirmed
+  - Both large scope files carry complexity-waivers (no SLOC risk from additive edits)
+  - AWS profile agent_platform reachable (aws sts get-caller-identity) for the VP-step-9 rec filing
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Add the ci_rca_evidence_dispute entry to config/agent/data_quality/source_registry.yaml
+    (description + signal_interpretation per scope; signal_interpretation states the review-resolution
+    flow and the no-hard-block property; added_date 2026-06-29).
+  - >-
+    In scripts/ops_data_portal.py: define CiRcaEvidenceDispute(BaseModel) (parent_rec_id pattern
+    ^rec-\d+$; disputed_field Literal/enum {earliest_viable_gate, actual_gate_that_caught_it};
+    agent_value str non-empty; bundle_value str non-empty; evidence_for_dispute str min_length 120) and
+    _validate_ci_rca_dispute(payload)->list[str] mirroring _validate_ci_rca_context_v2 (but
+    hard-raising form is applied at the call site).
+  - >-
+    In file_rec(): add the check-8 carve-out as a dedicated branch that runs BEFORE the
+    source=='ci_rca' block. When source=='ci_rca_evidence_dispute': require context_v2_json present;
+    model_validate against CiRcaEvidenceDispute (hard-raise on failure, mode-independent); compose a
+    >=80-char human summary (disputed_field + agent_value vs bundle_value + a clipped
+    evidence_for_dispute) into fields['context'] when absent/short; then proceed to the generic
+    write path, SKIPPING the ci_rca checks. Adjust the line-594 source_file guard so the dispute
+    source is exempt. Update the --context-v2-json CLI help to mention both payloads.
+  - >-
+    In scripts/executor/rec_write_guidance.py: add `elif source == "ci_rca_evidence_dispute":` after
+    the ci_rca branch, returning a dict keyed by the five dispute fields with description+semantics
+    each (parent_rec_id = the disputed source=ci_rca rec; disputed_field = which cross-check point;
+    agent_value/bundle_value = the disagreeing values; evidence_for_dispute = the reproducible argument
+    the bundle is wrong, min 120 chars).
+  - >-
+    In scripts/session_preflight.py: add _derive_ci_rca_dispute_open(rows), _fetch_ci_rca_dispute_recs(
+    cache_rows) and print_ci_rca_dispute_recs(recs) mirroring the ci_rca trio; wire the fetch (passing
+    the same warm cache_rows used by _fetch_ci_rca_recs -- no new reader call) and the print into
+    main(); add ci_rca_dispute_recs to the assembled report dict.
+  - >-
+    Add tests: tests/test_ops_data_portal.py (dispute schema valid/invalid + file_rec carve-out bypass
+    + warn-mode hard-raise, writer mocked) and tests/test_session_preflight.py (derive/fetch/print +
+    report key). Reach the per-file coverage gate for each changed module.
+  - >-
+    Append the T1.13 progress_note entry in docs/ROADMAP-PLATFORM.yaml (dispute-path landing +
+    strict-flip-prerequisite note + remaining successors + the filed throttle-tracking rec id from VP
+    step 9). Do not change files_in_scope, exit_criteria status, or status.
+  - >-
+    Execute the Verification Plan steps 1-8 in order; loop until green. Then run VP step 9 (file the
+    deferred-throttle tracking rec under AWS_PROFILE=agent_platform) and paste its rec id into the
+    progress_note. On unrecoverable V2 failure, stop and RCA (Decision 55) -- do not rescue-loop.
+  - "Report: source registered, CiRcaEvidenceDispute + carve-out landed, write-guidance branch added, preflight dispute section live, coverage/presubmit results, and the filed throttle-tracking rec id."
+work_areas: []
+rollback: >-
+  All edits are additive (one new model + one new file_rec branch + one guidance elif + one preflight
+  section trio + tests + a registry entry + a progress_note line). Revert via git. No infrastructure,
+  no Lambda deploy, no warehouse schema change to roll back (the dispute payload rides the existing
+  context_v2_json column). The only durable side effect is the VP-step-9 tracking rec in the
+  warehouse; if rolling back the whole plan, close that rec via
+  `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNN --status closed --resolution
+  "superseded: dispute path reverted"`.

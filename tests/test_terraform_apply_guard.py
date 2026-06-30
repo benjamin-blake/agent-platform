@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.terraform_apply_guard import _normalise_policy, _trust_changed, evaluate_plan, main
+import pytest
+
+from scripts.terraform_apply_guard import _classify_iam_change, _normalise_policy, _trust_changed, evaluate_plan, main
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "terraform_apply_guard"
 _REAL_CLEAN_CREATE = _FIXTURES / "clean_create_real.json"
@@ -209,3 +211,139 @@ def test_normalise_policy_non_string_passthrough() -> None:
 def test_trust_changed_handles_non_dict_states() -> None:
     assert _trust_changed(None, {"assume_role_policy": "{}"}) is False
     assert _trust_changed({"assume_role_policy": "{}"}, None) is False
+
+
+# ---------------------------------------------------------------------------
+# In-budget IAM classification (T2.25 / Decision 92 point 5): inline-policy /
+# attachment UPDATE on managed boundary-carrying role auto-applies; everything
+# else (wrong type, wrong action, unmanaged role, no budget) blocks.
+# ---------------------------------------------------------------------------
+
+_BUDGET = {
+    "schema_version": 1,
+    "boundary_policy_name": "agent-platform-github-ci-apply-boundary",
+    "in_budget_managed_roles": ["agent-platform-github-ci-branch", "agent-platform-github-ci-pr"],
+    "in_budget_resource_types": ["aws_iam_role_policy", "aws_iam_role_policy_attachment"],
+    "in_budget_actions": ["update"],
+}
+
+
+def _make_budget_file(tmp_path: Path) -> Path:
+    p = tmp_path / "authority_budget.json"
+    p.write_text(json.dumps(_BUDGET), encoding="utf-8")
+    return p
+
+
+def test_in_budget_inline_policy_update_on_branch_role_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    budget_path = _make_budget_file(tmp_path)
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy",
+                ["update"],
+                before={"role": "agent-platform-github-ci-branch", "policy": "{}"},
+                after={"role": "agent-platform-github-ci-branch", "policy": '{"Version":"2012-10-17"}'},
+                address="aws_iam_role_policy.ci_branch_inline",
+            )
+        ]
+    }
+    assert evaluate_plan(plan, _BUDGET) == []
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_in_budget_attachment_update_on_pr_role_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    budget_path = _make_budget_file(tmp_path)
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy_attachment",
+                ["update"],
+                before={"role": "agent-platform-github-ci-pr", "policy_arn": "arn:aws:iam::aws:policy/OldPolicy"},
+                after={"role": "agent-platform-github-ci-pr", "policy_arn": "arn:aws:iam::aws:policy/NewPolicy"},
+            )
+        ]
+    }
+    assert evaluate_plan(plan, _BUDGET) == []
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_out_of_budget_inline_policy_on_non_managed_role_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    budget_path = _make_budget_file(tmp_path)
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy",
+                ["update"],
+                before={"role": "some-other-role", "policy": "{}"},
+                after={"role": "some-other-role", "policy": '{"Version":"2012-10-17"}'},
+            )
+        ]
+    }
+    findings = evaluate_plan(plan, _BUDGET)
+    assert len(findings) == 1
+    assert "out-of-budget" in findings[0]["reason"]
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_trust_diff_on_managed_role_type_still_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Trust-diff check fires BEFORE IAM classification; a trust change on an in-budget type is gated.
+    budget_path = _make_budget_file(tmp_path)
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
+    before = {
+        "role": "agent-platform-github-ci-branch",
+        "assume_role_policy": json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]}),
+    }
+    after = {
+        "role": "agent-platform-github-ci-branch",
+        "assume_role_policy": json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Deny"}]}),
+    }
+    plan = {"resource_changes": [_rc("aws_iam_role_policy", ["update"], before=before, after=after)]}
+    findings = evaluate_plan(plan, _BUDGET)
+    assert len(findings) == 1
+    assert "trust-policy" in findings[0]["reason"]
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_iam_create_on_in_budget_type_still_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Creates are not in in_budget_actions (["update"]) -- role CREATES stay gated (new trust surface).
+    budget_path = _make_budget_file(tmp_path)
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy",
+                ["create"],
+                after={"role": "agent-platform-github-ci-branch", "policy": "{}"},
+            )
+        ]
+    }
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_fail_closed_on_missing_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(tmp_path / "does_not_exist.json"))
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy",
+                ["update"],
+                before={"role": "agent-platform-github-ci-branch", "policy": "{}"},
+                after={"role": "agent-platform-github-ci-branch", "policy": '{"Version":"2012-10-17"}'},
+            )
+        ]
+    }
+    # Without a valid budget table, all IAM changes are out-of-budget (fail-closed).
+    assert _classify_iam_change(plan["resource_changes"][0], None) is False
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_in_budget_fixture_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # VP step 2: the real fixture passes when the real budget table is loaded.
+    fixture = Path(__file__).parent / "fixtures" / "terraform_apply_guard" / "iam_inline_update_branch.json"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+    # Unset any override so the default budget path (the real authority_budget.json) is used.
+    monkeypatch.delenv("TF_AUTHORITY_BUDGET", raising=False)
+    assert main([str(fixture)]) == 0

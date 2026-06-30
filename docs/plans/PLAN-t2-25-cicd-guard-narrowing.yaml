@@ -1,0 +1,367 @@
+schema_version: 1
+slug: "t2-25-cicd-guard-narrowing"
+intent: >-
+  Close CD.35 "Wave X" (T2.25): consolidate the Terraform apply-model convention into a single
+  source of truth, narrow the sandbox auto-apply guard from blocking ALL IAM changes to
+  budget-based classification (in-budget IAM auto-applies; out-of-budget / trust / destroy route
+  to the tf-gated-apply Environment), and record the concrete authority-budget / ratchet
+  classification by amending Decision 92 -- earning bounded autonomy on the platform self-improvement
+  loop now that T2.23's authority budget exists.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-25-cicd-guard-narrowing.yaml
+phase: >-
+  Platform tier_item T2.25 (CD.35 Wave X). Dependencies T2.20-T2.23 all complete; the authority
+  budget (permissions boundary + IAMRoleWriteBounded / IAMRoleCreateBounded) is resident in
+  terraform/bootstrap/github_ci_apply.tf.
+scope:
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Sole source of truth for the apply-model statement. Extend Axis A apply-gating with the
+      in-budget / out-of-budget guard-classification rule and the ratchet note.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Reduce the Safety apply-model bullet to a one-line pointer to environment-taxonomy.md; flip
+      the "in-budget IAM auto-apply pending T2.25" sentinel to past-tense (landed).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Reduce the "Plan before apply" rule and the apply-posture restatement to a pointer to
+      environment-taxonomy.md; flip the pending-T2.25 sentinel to past-tense.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Light-touch the human-gated-action / gated-apply example: in-budget IAM may now auto-apply;
+      out-of-budget / trust / destroy still route to the tf-gated-apply Environment.
+  - file: terraform/bootstrap/authority_budget.json
+    action: Create
+    purpose: >-
+      Declarative authority-budget table the guard reads (boundary policy name, in-budget managed
+      roles, in-budget resource types / actions). Resident in bootstrap/ -> pipeline-unwritable.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Comment-only cross-reference: authority_budget.json is the guard's machine-readable mirror of
+      the IAMRoleWriteBounded / boundary definitions in this file (no terraform plan impact).
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Boundary propagation: attach the agent-platform-github-ci-apply-boundary permissions_boundary
+      to github_ci_branch + github_ci_pr so in-budget IAM writes succeed at the IAM layer.
+  - file: scripts/terraform_apply_guard.py
+    action: Modify
+    purpose: >-
+      Budget-based IAM classification: read the budget table; in-budget IAM exits 0, out-of-budget /
+      trust / destroy exit 2. Fail closed on a missing / unparseable table.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Drift-assertion gate: the budget table agrees with the HCL boundary name + IAMRoleWriteBounded
+      managed-role set in github_ci_apply.tf. Registered in both presubmit tiers.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Update the guard-step comments and the subagent plan-review prompt: in-budget IAM changes may
+      now PASS the guard and reach the subagent review.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Amend Decision 92 point 5 with the concrete in-budget / out-of-budget classification and the
+      ratchet criteria; confirm CD.35 is already ratified at Wave 1 (no re-ratification).
+  - file: tests/test_terraform_apply_guard.py
+    action: Modify
+    purpose: Unit tests for in-budget pass / out-of-budget block / fail-closed-on-missing-table.
+  - file: tests/test_validate_authority_budget.py
+    action: Create
+    purpose: Drift-assertion tests (positive agreement + deliberate-mismatch failure).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf boundary propagation (github_ci_branch + github_ci_pr gain
+    permissions_boundary) is an IAM change: the guard exits 2 -> it lands via the admin / gated-apply
+    path (agent_platform_admin or tf-gated-apply Environment) as a ONE-TIME prerequisite that MUST
+    apply BEFORE the in-budget live demonstration (otherwise an in-budget PutRolePolicy is IAM-denied).
+  - >-
+    Speculative-plan pipeline (CD.35 Wave 2 / T2.21): the oidc.tf PR gets a speculative plan with a
+    predicted BLOCKED verdict (IAM diff); at merge the saved plan.bin applies (no re-plan, Decision 77).
+  - >-
+    terraform/bootstrap/authority_budget.json is guard-read config, NOT a terraform resource -- no
+    bootstrap apply for it; it lives in bootstrap/ purely for pipeline-unwritability. The
+    github_ci_apply.tf change is comment-only (no terraform plan impact); bootstrap is never auto-applied.
+  - >-
+    Post-merge the guard narrowing changes auto-apply authorization behaviour: in-budget IAM
+    (inline-policy update on branch / pr) auto-applies (still subject to the subagent plan review);
+    out-of-budget / trust / destroy route to tf-gated-apply. Apply-failure -> ci-rca wiring
+    (Decision 92 point 6) is preserved unchanged.
+acceptance_criteria:
+  - >-
+    The apply-model statement lives in ONE source of truth (docs/contracts/environment-taxonomy.md);
+    AGENTS.md and terraform/CLAUDE.md carry one-line pointers, not the full restatement; prompt_compliance.py passes.
+  - >-
+    The guard is narrowed to budget-based plan-content classification: an in-budget IAM diff
+    (inline-policy / attachment UPDATE on a managed boundary-carrying role, no trust diff) exits 0;
+    out-of-budget IAM, any assume_role_policy / trust diff, and any destroy / replace exit 2. Native
+    controls (required checks + the tf-gated-apply Environment) own authorization (INTENT 5.9 division verified).
+  - >-
+    The guard classifies IAM diffs against the bootstrap-resident budget table: an in-budget IAM
+    change auto-applies and an out-of-budget change routes to the tf-gated-apply Environment (both
+    demonstrated live in the sandbox).
+  - >-
+    github_ci_branch and github_ci_pr carry the permissions boundary so in-budget writes apply at the
+    IAM layer (verified via simulate-principal-policy: an in-budget PutRolePolicy on branch is
+    allowed; a PutRolePolicy on a non-managed role / github_ci_plan is denied).
+  - >-
+    The validate.py drift-assertion holds: the budget table agrees with the HCL boundary name and the
+    IAMRoleWriteBounded managed-role set; a deliberate mismatch fails the check.
+  - >-
+    The guard fails closed: a missing or unparseable budget table classifies ALL IAM as out-of-budget
+    (unit-verified, exit 2).
+  - >-
+    Decision 92's amended text states the concrete in-budget / out-of-budget classification and the
+    ratchet criteria (widen-on-track-record per change-class, narrow-on-incident, budget amendments
+    via the bootstrap tier only); CD.35 is confirmed already ratified at Wave 1 (no re-ratification),
+    and the amendment is synced via ops_data_portal --backfill-decisions-md (Decision 84).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Guard unit suite incl. new in-budget pass / out-of-budget block / fail-closed cases passes.
+    command: bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q
+    expected: All tests pass, including in-budget inline-policy-update on branch (exit 0) and out-of-budget (exit 2).
+    fix_if: An in-budget update blocks, or an out-of-budget / trust / create change passes -- classification logic is wrong.
+  - step: 2
+    phase: pre-deploy
+    action: Guard fails closed when the budget table is absent (all IAM treated out-of-budget).
+    command: >-
+      TF_AUTHORITY_BUDGET=/nonexistent/authority_budget.json bin/venv-python scripts/terraform_apply_guard.py
+      tests/fixtures/terraform_apply_guard/iam_inline_update_branch.json; echo "exit=$?"
+    expected: "exit=2 -- a missing budget table routes the in-budget-shaped IAM change to gated (fail-closed)."
+    fix_if: exit=0 -- the guard trusts an absent table and auto-passes IAM; fail-closed is broken.
+  - step: 3
+    phase: pre-deploy
+    action: Drift-assertion agrees on the real tree (budget table matches the HCL boundary + managed-role set).
+    command: bin/venv-python -m pytest tests/test_validate_authority_budget.py -q && bin/venv-python -m scripts.validate --pre
+    expected: Drift-assertion tests pass and the full --pre presubmit tier passes (gate registered in both tiers).
+    fix_if: Drift gate reports a mismatch on the unmodified tree, or --pre fails -- table / HCL out of sync, or gate misregistered.
+  - step: 4
+    phase: pre-deploy
+    action: Negative drift test -- a deliberate table mismatch fails the gate.
+    command: >-
+      cp terraform/bootstrap/authority_budget.json /tmp/ab.bak &&
+      bin/venv-python -c "import json,pathlib; p=pathlib.Path('terraform/bootstrap/authority_budget.json'); d=json.loads(p.read_text()); d['in_budget_managed_roles'].append('agent-platform-github-ci-apply'); p.write_text(json.dumps(d))" &&
+      (bin/venv-python -m pytest tests/test_validate_authority_budget.py -q; echo "rc=$?") ;
+      cp /tmp/ab.bak terraform/bootstrap/authority_budget.json
+    expected: "rc=1 -- adding a non-managed (or self-grant) role to the table fails the drift-assertion; the table is then restored."
+    fix_if: rc=0 -- the drift gate does not catch a budget that exceeds the HCL managed-role set.
+  - step: 5
+    phase: pre-deploy
+    action: Convention sync -- the apply-model statement is consolidated, the others reference it.
+    command: >-
+      bin/venv-python -m scripts.prompt_compliance &&
+      grep -q "in-budget" docs/contracts/environment-taxonomy.md &&
+      grep -q "environment-taxonomy.md" AGENTS.md &&
+      grep -q "environment-taxonomy.md" terraform/CLAUDE.md
+    expected: prompt_compliance passes; the SoT carries the in-budget rule; AGENTS.md and terraform/CLAUDE.md point at it.
+    fix_if: prompt_compliance fails, or the pointer / SoT text is missing -- consolidation incomplete.
+  - step: 6
+    phase: pre-deploy
+    action: Terraform validity for both roots (boundary-propagation HCL + comment-only bootstrap edit parse).
+    command: terraform -chdir=terraform/personal validate && terraform -chdir=terraform/bootstrap validate
+    expected: Both roots validate (no HCL syntax / type errors from the permissions_boundary attribute or the comment edit).
+    fix_if: validate errors -- malformed permissions_boundary reference or a broken jsonencode comment.
+  - step: 7
+    phase: pre-deploy
+    action: Decision 92 amendment text is present (concrete classification + ratchet) before backfill.
+    command: >-
+      grep -q "in-budget" docs/DECISIONS.md &&
+      bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(); s=t[t.index('## Decision 92'):]; assert 'ratchet' in s.lower() and 'narrow-on-incident' in s.lower().replace(' ','-') or 'narrow on incident' in s.lower(); print('ok')"
+    expected: ok -- Decision 92 carries the concrete in-budget classification and the ratchet criteria.
+    fix_if: Assertion fails -- the amendment text was not added under Decision 92.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Apply the boundary-propagation prerequisite (oidc.tf: branch + pr gain the boundary) via the
+      admin / gated path, then verify the apply role can write branch in-budget but NOT a non-managed role.
+    command: >-
+      ACCT=$(aws sts get-caller-identity --query Account --output text --profile agent_platform);
+      aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply
+      --action-names iam:PutRolePolicy
+      --resource-arns arn:aws:iam::$ACCT:role/agent-platform-github-ci-branch arn:aws:iam::$ACCT:role/agent-platform-github-ci-plan
+      --profile agent_platform_admin --query 'EvaluationResults[].EvalDecision' --output text
+    expected: "First decision allowed (in-budget branch write), second denied/implicitDeny (out-of-budget plan write)."
+    fix_if: branch write is denied -- boundary not propagated; or plan write is allowed -- budget scope too wide.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Demonstrate in-budget auto-apply: open a PR adding a harmless refresh-read action to the
+      github_ci_branch inline policy; the speculative-plan predicts in-budget PASS. AUTHORITATIVE CHECK
+      via the GitHub MCP (pull_request_read get_check_runs + the workflow run's jobs): for that merge
+      commit's run, the apply-sandbox job concluded success on the AUTO path with routed != true and NO
+      gated-apply job ran. The convergence read below is necessary-but-not-sufficient corroboration --
+      a green record alone does not prove the change rode the auto path.
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print(d['status'], d.get('commit_sha','')[:8], 'plan_sha=' + str(d.get('plan_sha'))[:8])"
+    expected: >-
+      GitHub MCP shows apply-sandbox applied on the auto path (routed falsy, no gated-apply job for the
+      run); AND the convergence record is green at the in-budget commit with a non-null plan_sha.
+    fix_if: >-
+      The run routed to gated (routed=true / reviewer approval required) -- the guard mis-classified an
+      in-budget change as out-of-budget; or the record is red -- the IAM apply failed (confirm branch
+      boundary propagation from step 8 landed).
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Demonstrate out-of-budget routing: open a PR with an out-of-budget IAM diff (a trust /
+      assume_role_policy change, or an inline-policy change on github_ci_plan). AUTHORITATIVE CHECK via
+      the GitHub MCP: for that run the apply-sandbox job sets routed=true and the gated-apply job is in
+      the waiting / blocked state on the tf-gated-apply Environment reviewer (it has NOT applied). The
+      convergence read below confirms the record was untouched while pending.
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8])"
+    expected: >-
+      GitHub MCP shows routed=true and the gated-apply job blocked pending reviewer approval (not
+      applied); AND the convergence record is untouched (no auto-apply, unchanged commit_sha) while routed.
+    fix_if: >-
+      The change auto-applied (apply-sandbox applied without routing) -- out-of-budget classification
+      failed (authority breach / anti-masking failure).
+  - step: 11
+    phase: post-deploy
+    action: Sync the Decision 92 amendment to ops_decisions via the backfill ETL.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -m scripts.ops_data_portal --get-decision 92
+    expected: dec-092 in ops_decisions reflects the amended text (concrete classification + ratchet); CD.35 still filed_via dec-092.
+    fix_if: Backfill errors or dec-092 lacks the amendment -- DECISIONS.md edit malformed or ETL failed.
+constraints:
+  - >-
+    Public-repo boundary (Decision 101): never commit account IDs / ARNs / ExternalIds. oidc.tf uses
+    var.account_id; authority_budget.json stores role NAMES and the boundary policy NAME only (no
+    ARNs, no account id) so the pre-commit never-commit hook does not trip and the table stays portable.
+  - >-
+    Guard stays fail-closed (Decision 77): a missing / unparseable budget table classifies ALL IAM as
+    out-of-budget. Trust-diff and destroy / replace routing are preserved EXACTLY (Decision 94 trust
+    model intact); only the IAM-sensitive non-trust branch gains in-budget classification.
+  - >-
+    No re-ratification of CD.35 -- it is already ratified at Wave 1 (Decision 92). Amend Decision 92 in
+    place; DECISIONS.md is the numbering authority; sync via --backfill-decisions-md (Decision 84). Do
+    not file a new decision number.
+  - >-
+    Preserve the apply-failure -> ci-rca wiring (Decision 92 point 6); nothing auto-remediates
+    (Decision 55 / 72). The in-budget auto-apply still passes through the subagent plan review.
+  - >-
+    terraform/bootstrap/ is NEVER auto-applied (its README). authority_budget.json is read-only guard
+    config, not a terraform resource; the github_ci_apply.tf edit is comment-only (no plan impact).
+  - >-
+    Decision 86: no new prose-architecture doc under docs/. authority_budget.json is machine-readable
+    config (precedented by Decision 99 / 80 validate-gated SSOT), not prose.
+  - Conservative v1 narrowing only -- role CREATES stay gated (new trust surface); the ratchet widens later on track record.
+  - No rescue agents or workaround loops (Decision 55). Only modify files listed in Scope.
+context:
+  - >-
+    T2.25 = CD.35 "Wave X". Dependencies T2.20-T2.23 are all complete; the authority budget
+    (permissions boundary + IAMRoleCreateBounded / IAMRoleWriteBounded) is resident in
+    terraform/bootstrap/github_ci_apply.tf as of T2.23 closeout (2026-06-28).
+  - >-
+    Decision 98 point 3 EXPLICITLY deferred in-budget IAM auto-apply to T2.25 and documents the
+    branch + pr boundary-propagation constraint -- this plan implements exactly that deferred work.
+  - >-
+    Critical finding (verified): github_ci_branch / github_ci_pr carry NO permissions_boundary today
+    (only github_ci_apply does), so the IAMRoleWriteBounded conditional Allow would DENY an in-budget
+    write without the boundary-propagation step. That step (terraform/personal/oidc.tf) is an IAM diff
+    -> guard exit 2 -> admin / gated apply, applied as a one-time prerequisite before the live demo.
+  - >-
+    Conservative v1 in-budget definition: pure inline-policy / attachment UPDATE on a managed
+    boundary-carrying role (github_ci_branch / github_ci_pr), no assume_role_policy diff. This is the
+    high-frequency "add a refresh-read grant to a CI role" case. Everything else IAM stays gated.
+  - >-
+    Decisions this plan cites: 92 (amended -- point 5), 77 (guard fail-closed / no-TOCTOU), 98
+    (predecessor deferral + boundary-propagation constraint), 94 (trust two-sub model preserved), 84
+    (DECISIONS.md canonical + backfill ETL), 86 (no new prose docs), 83 (main-protection non-wedging),
+    35 (IAM enumerated least-privilege). Precedent for the validate drift-assertion: Decision 99 / 80.
+  - >-
+    Decision-scout gate (Step 6a) returned NO_FLAGS. Branch was 0 commits behind origin/main at
+    planning time; no Scope-file overlap with main_files_changed_since_branch.
+  - >-
+    The AGENTS.md and terraform/CLAUDE.md "in-budget IAM auto-apply pending T2.25" sentinels are the
+    on-disk markers this plan flips to past-tense on completion.
+  - >-
+    Implementation note (plan-critique): validate.py has a validate_claude_md_pointer_invariant check --
+    the AGENTS.md / terraform/CLAUDE.md reduction-to-pointer must satisfy it (verify --pre passes after
+    the edit). Decision 92's amendment target is point 5 (the authority-budget + ratchet model clause,
+    "concrete classification deferred to T2.23/T2.25") -- confirmed present in the Decision 92 body.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/terraform-cicd-convention-sync-toxf3p)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md Decision 92 / 94 / 98 read (amendment target + trust model + predecessor)
+  - All files in scope located and readable (terraform/bootstrap/github_ci_apply.tf authority budget confirmed)
+  - Acceptance criteria understood and verifiable; live sandbox demonstration path (steps 8-10) understood
+execution_steps:
+  - >-
+    docs/contracts/environment-taxonomy.md: extend Axis A apply-gating to be the SOLE source of truth
+    for the apply-model statement; add an in-budget / out-of-budget guard-classification subsection
+    (in-budget = inline-policy / attachment UPDATE on a managed boundary-carrying role, no trust diff,
+    auto-apply; out-of-budget / trust / destroy -> tf-gated-apply) and the ratchet note.
+  - >-
+    AGENTS.md: reduce the Safety apply-model bullet to a one-line pointer to environment-taxonomy.md;
+    flip the "in-budget IAM auto-apply pending T2.25" clause to past-tense (landed).
+  - >-
+    terraform/CLAUDE.md: reduce the "Plan before apply" hard rule and the apply-posture restatement to
+    a pointer to environment-taxonomy.md (keep directory-proximity note); flip the pending-T2.25 sentinel.
+  - >-
+    .claude/skills/implement/SKILL.md: light-touch the fail-closed-set / gated-apply example -- note
+    in-budget IAM may now auto-apply (subagent-reviewed); out-of-budget / trust / destroy still gated.
+  - >-
+    terraform/bootstrap/authority_budget.json (new): schema_version, boundary_policy_name
+    (agent-platform-github-ci-apply-boundary), in_budget_managed_roles
+    [agent-platform-github-ci-branch, agent-platform-github-ci-pr], in_budget_resource_types
+    [aws_iam_role_policy, aws_iam_role_policy_attachment], in_budget_actions [update], and a _comment
+    documenting semantics. NO account id / ARN.
+  - >-
+    terraform/bootstrap/github_ci_apply.tf: comment-only cross-reference noting authority_budget.json
+    is the guard's machine-readable mirror of IAMRoleWriteBounded + the boundary (no plan impact).
+  - >-
+    terraform/personal/oidc.tf: add permissions_boundary =
+    arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary to
+    aws_iam_role.github_ci_branch and aws_iam_role.github_ci_pr (boundary propagation).
+  - >-
+    scripts/terraform_apply_guard.py: load the budget table (path via TF_AUTHORITY_BUDGET env override,
+    default terraform/bootstrap/authority_budget.json resolved relative to the repo root); add
+    _classify_iam_change(change_entry, budget); reorder evaluate_plan to delete -> neon -> trust-diff
+    -> IAM (in-budget pass / out-of-budget block); fail closed (all IAM out-of-budget) on a missing or
+    unparseable table. Preserve neon, trust, and destroy behaviour byte-for-byte.
+  - >-
+    scripts/validate.py: add validate_authority_budget -- parse authority_budget.json and
+    github_ci_apply.tf; assert boundary_policy_name == the boundary resource name and
+    in_budget_managed_roles is a subset of the IAMRoleWriteBounded Resource role-name set (and excludes
+    the apply role's own name -- self-grant guard). Register in both presubmit tiers.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml: update the guard-step comments and the subagent
+    review prompt so it no longer asserts "no IAM/trust change" -- in-budget IAM may now PASS the guard
+    and reach the subagent review; out-of-budget still routes via routed=true.
+  - >-
+    docs/DECISIONS.md: amend Decision 92 (point 5) with the concrete in-budget / out-of-budget
+    classification and the ratchet criteria (widen-on-track-record per change-class, narrow-on-incident,
+    budget amendments via the bootstrap tier only); add a dated amendment note; confirm CD.35 ratified
+    at Wave 1 (no new decision number).
+  - >-
+    tests/test_terraform_apply_guard.py + tests/test_validate_authority_budget.py: add in-budget pass,
+    out-of-budget block, trust-diff-still-blocks, create-still-blocks, and fail-closed-on-missing-table
+    guard cases; add positive + deliberate-mismatch drift-assertion cases (with a small JSON fixture
+    under tests/fixtures/terraform_apply_guard/, the existing guard-fixture dir).
+  - >-
+    Run the pre-deploy Verification Plan (steps 1-7); on green, commit, push, open the PR, and merge
+    per the implement skill commit flow.
+  - >-
+    Post-merge: apply the boundary-propagation prerequisite (oidc.tf) via the admin / gated path, then
+    run the post-deploy demonstrations (steps 8-10) and backfill Decision 92 (step 11).
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55), never an inline workaround.
+  - "Report: what was implemented, verification results, and the live in-budget / out-of-budget demonstration outcomes."
+rollback: >-
+  The guard change is forward-only but reversible: reverting scripts/terraform_apply_guard.py to the
+  block-all-IAM behaviour restores the prior posture (all IAM routes to gated) without data loss. The
+  boundary propagation on branch / pr is a ceiling (>= their existing grants) so it removes no
+  capability; detaching it (admin apply) reverts. authority_budget.json is read-only config -- deleting
+  it makes the guard fail closed (all IAM gated), which is the safe direction.

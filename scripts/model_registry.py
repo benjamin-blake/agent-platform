@@ -218,8 +218,7 @@ def _get_floor_tier(file_path: str, patterns: list[dict]) -> str | None:
 
     Directory patterns (ending with ``/``) use ``startswith``. Filename
     patterns use ``startswith``, ``endswith``, or exact match so that both
-    ``copilot-instructions.md`` and ``.github/copilot-instructions.md`` match
-    the pattern ``"copilot-instructions.md"``.
+    a bare filename and a path ending with it match the pattern.
     """
     for entry in patterns:
         pattern = entry.get("pattern", "")
