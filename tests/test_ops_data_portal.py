@@ -14,8 +14,9 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import duckdb
 import pytest
+
+duckdb = pytest.importorskip("duckdb")
 from pydantic import ValidationError
 
 from src.common import ducklake_runtime as rt
