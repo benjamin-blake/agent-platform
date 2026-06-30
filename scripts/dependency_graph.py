@@ -270,11 +270,12 @@ def to_export_dict(graph: nx.DiGraph) -> dict[str, Any]:
     }
 
 
-def check_export_freshness(failed: list[str]) -> None:
+def check_export_freshness(failed: list[str], repo_root: Path | None = None) -> None:
     """No-op when no committed export exists; fails if the committed export drifts from current.
 
     Decision 80 lean posture: no file committed by default. Registered in the full
     presubmit tier only (Decision 73 non-wedging).
+    repo_root defaults to _REPO_ROOT when None (normal validate.py invocation).
     """
     if not _EXPORT_PATH.exists():
         return
@@ -283,7 +284,7 @@ def check_export_freshness(failed: list[str]) -> None:
     except (OSError, json.JSONDecodeError) as exc:
         failed.append(f"Dependency graph freshness: cannot read committed export: {exc}")
         return
-    current = to_export_dict(build_graph())
+    current = to_export_dict(build_graph(repo_root=repo_root))
     if committed != current:
         try:
             path_display = _EXPORT_PATH.relative_to(_REPO_ROOT)

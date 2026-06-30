@@ -189,13 +189,14 @@ class TestReachableFromRoots:
         assert reachable_from_roots(graph, "scripts.helper") is True
 
     def test_module_a_reachable_via_module_b_chain(self, tmp_path: Path) -> None:
-        """src.pkg.module_a is reachable via module_b if module_b is reachable."""
+        """src.pkg.module_a is reachable transitively: caller -> module_b -> module_a."""
         root = _make_fixture(tmp_path)
         (tmp_path / "scripts" / "caller.py").write_text(
-            "from src.pkg import module_b\n\ndef main():\n    pass\n", encoding="utf-8"
+            "from src.pkg.module_b import something\n\ndef main():\n    pass\n", encoding="utf-8"
         )
         graph = build_graph(repo_root=root)
-        assert reachable_from_roots(graph, "scripts.caller") is True
+        assert graph.has_edge("scripts.caller", "src.pkg.module_b"), "direct edge must exist"
+        assert reachable_from_roots(graph, "src.pkg.module_a") is True
 
     def test_root_itself_is_reachable(self, tmp_path: Path) -> None:
         """A root module is trivially reachable from the root set."""
