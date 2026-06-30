@@ -1,0 +1,263 @@
+schema_version: 1
+slug: "ci-rca-rec-2446-ci-apply-boundary"
+intent: >-
+  Unblock the red sandbox terraform convergence record by granting the
+  github_ci_apply role the iam:PutRolePermissionsBoundary permission it needs to
+  manage the permissions_boundary attribute on the ci-branch/ci-pr roles.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-rec-2446-ci-apply-boundary.yaml
+phase: >-
+  Platform Terraform CI/CD authority budget (T2.23 / T2.25, CD.35 / Decision 92).
+  Resolves ci-rca rec-2446 and clears the red convergence record.
+scope:
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Add the action "iam:PutRolePermissionsBoundary" to TWO Sids in this file,
+      because github_ci_apply carries the apply-boundary itself (line 31) and the
+      effective permission is identity-policy INTERSECT boundary. (1) Identity
+      policy IAMRoleWriteBounded Sid -- already scoped to the ci-branch/ci-pr ARNs
+      under the StringEquals iam:PermissionsBoundary = budget-ARN condition (which
+      for PutRolePermissionsBoundary constrains the boundary being SET to the
+      budget ARN). (2) Boundary policy aws_iam_policy.github_ci_apply_boundary
+      DataPlaneAllow Sid -- the unconditional Allow ceiling that must list the
+      action or the boundary caps it (mirrors the iam:PutRolePolicy /
+      iam:AttachRolePolicy precedent, which appear in both Sids). No new statement,
+      no resource/condition/trust changes; DenyIAMEscalation and DenyBoundaryRemoval
+      are NOT modified.
+bundled_recommendations:
+  - rec-2446
+infrastructure_dependencies:
+  - >-
+    Bootstrap root (terraform/bootstrap/) is admin-only and NEVER auto-applies.
+    The IAM-write change applies out-of-band under the agent_platform_admin
+    profile (ADMIN container). This DEV container (agent_platform only) CANNOT
+    apply it -- the apply is a human/admin action.
+  - >-
+    Apply ordering (two applies): (1) admin applies the bootstrap github_ci_apply
+    change (both the identity grant and the boundary-ceiling grant); (2) the
+    original terraform/personal/oidc.tf permissions_boundary change is re-applied
+    via the terraform-apply-sandbox workflow_dispatch acknowledge-and-retry path
+    (Decision 77 -- the only human-reviewed re-plan), which now succeeds and writes
+    the convergence record green.
+  - >-
+    authority_budget.json (the guard mirror) is UNCHANGED. The failed diff was an
+    aws_iam_role.permissions_boundary attribute (an aws_iam_role update), which
+    the guard already routes to gated-apply; only the apply role's permission was
+    missing. validate_authority_budget compares the boundary name + managed-role
+    set only (not the Action list), so adding the action does not trip the gate.
+  - No Lambda artifacts are affected by this change.
+acceptance_criteria:
+  - >-
+    terraform/bootstrap/github_ci_apply.tf grants iam:PutRolePermissionsBoundary in
+    BOTH the identity-policy IAMRoleWriteBounded Sid (scoped to the ci-branch/ci-pr
+    ARNs under the existing budget-ARN PermissionsBoundary condition) AND the
+    boundary-policy DataPlaneAllow Sid (the ceiling Allow). Granting only one is
+    insufficient -- effective permission is identity INTERSECT boundary.
+  - >-
+    iam:DeleteRolePermissionsBoundary is NOT added anywhere (it remains only in
+    the pre-existing DenyBoundaryRemoval Deny). Least-privilege (T2.23); the
+    boundary is permanent and DenyBoundaryRemoval blocks removal unconditionally.
+  - >-
+    DenyIAMEscalation is NOT extended -- iam:PutRolePermissionsBoundary is already
+    fully constrained by the identity policy (StringEquals budget-ARN + branch/pr
+    ARNs only) and can only ever SET the budget boundary (a restriction, not an
+    escalation), so the extra conditional deny is unnecessary.
+  - >-
+    The OIDC assume_role_policy trust block is byte-unchanged -- both subs
+    (refs/heads/main and environment:tf-gated-apply) preserved (Decision 94 VP9).
+  - >-
+    The authority-budget drift gate (validate_authority_budget) and validate --pre
+    stay green.
+  - >-
+    Post-admin-apply: simulate-principal-policy returns "allowed" for
+    iam:PutRolePermissionsBoundary on the ci-branch/ci-pr roles, and the re-run
+    gated-apply applies the oidc.tf boundary change with no AccessDenied, flipping
+    the convergence record to green.
+  - rec-2446 is closed with a recorded closure proof (Decision 70).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: rec-2446 acceptance -- the action is present in the HCL.
+    command: grep -q "iam:PutRolePermissionsBoundary" terraform/bootstrap/github_ci_apply.tf && echo PRESENT || echo ABSENT
+    expected: PRESENT
+    fix_if: ABSENT -- the action was not added.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the action is in BOTH required Sids -- the identity IAMRoleWriteBounded
+      AND the boundary DataPlaneAllow -- and that Delete was NOT added (Delete count
+      stays 1, the pre-existing DenyBoundaryRemoval).
+    command: awk '/Sid    = "IAMRoleWriteBounded"/{w=1} w&&/^      },/{w=0} w' terraform/bootstrap/github_ci_apply.tf | grep -q "iam:PutRolePermissionsBoundary" && awk '/Sid    = "DataPlaneAllow"/{d=1} d&&/^      },/{d=0} d' terraform/bootstrap/github_ci_apply.tf | grep -q "iam:PutRolePermissionsBoundary" && test "$(grep -c iam:DeleteRolePermissionsBoundary terraform/bootstrap/github_ci_apply.tf)" -eq 1 && echo OK || echo BAD
+    expected: OK
+    fix_if: >-
+      BAD -- the action is missing from one of the two Sids (identity grant alone
+      is capped by the boundary; boundary grant alone is unscoped at the identity
+      layer), or DeleteRolePermissionsBoundary was added. Add to both Allow Sids,
+      keep Delete out.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the change does NOT touch the OIDC trust block (Decision 94 VP9
+      two-sub guard).
+    command: git diff origin/main -- terraform/bootstrap/github_ci_apply.tf | grep -E '^\+' | grep -qE 'assume_role_policy|:sub|refs/heads/main|tf-gated-apply' && echo TRUST_TOUCHED || echo TRUST_CLEAN
+    expected: TRUST_CLEAN
+    fix_if: >-
+      TRUST_TOUCHED -- the diff altered the trust/sub block; revert that hunk. The
+      only intended change is the one action added to the two Allow Sids.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Authority-budget drift gate stays green and the full fast tier passes (the
+      added action must not desync the budget mirror).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; the "Authority-budget drift gate" section shows PASS lines and no
+      FAIL.
+    fix_if: >-
+      FAIL in the authority-budget section -- the gate compares more than the
+      boundary name + managed-role set; reconcile terraform/bootstrap/authority_budget.json.
+  - step: 5
+    phase: pre-deploy
+    action: Terraform formatting is clean (no init/credentials needed).
+    command: terraform -chdir=terraform/bootstrap fmt -check
+    expected: Exit 0 (no reformatting needed).
+    fix_if: >-
+      Non-zero -- run `terraform -chdir=terraform/bootstrap fmt`. Note: `terraform
+      validate` requires `init` and runs in the ADMIN container during apply prep.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      [ADMIN] After the bootstrap apply, confirm github_ci_apply is authorised for
+      iam:PutRolePermissionsBoundary on the ci-branch/ci-pr roles. This is the step
+      that proves BOTH the identity grant and the boundary-ceiling grant landed
+      (it evaluates identity INTERSECT boundary). Account id is resolved from STS
+      at runtime -- never written into the repo (Decision 101).
+    command: ACCT=$(aws sts get-caller-identity --query Account --output text --profile agent_platform_admin); aws iam simulate-principal-policy --policy-source-arn "arn:aws:iam::$ACCT:role/agent-platform-github-ci-apply" --action-names iam:PutRolePermissionsBoundary --resource-arns "arn:aws:iam::$ACCT:role/agent-platform-github-ci-branch" --context-entries "ContextKeyName=iam:PermissionsBoundary,ContextKeyValues=arn:aws:iam::$ACCT:policy/agent-platform-github-ci-apply-boundary,ContextKeyType=string" --query 'EvaluationResults[0].EvalDecision' --output text --profile agent_platform_admin
+    expected: allowed
+    fix_if: >-
+      implicitDeny -- the action is missing from the boundary DataPlaneAllow ceiling
+      (or the identity grant); explicitDeny -- it was added to a Deny Sid. Re-check
+      that the action is in BOTH Allow Sids and in no Deny Sid.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      [ADMIN] Re-run the sandbox gated-apply via workflow_dispatch
+      acknowledge-and-retry (naming rec-2446 / the red commit); the oidc.tf
+      permissions_boundary change applies with no AccessDenied and the convergence
+      record flips to green.
+    command: bin/venv-python -m scripts.convergence_health 2>&1 | grep -oE 'green|red' | head -1
+    expected: green
+    fix_if: >-
+      red -- inspect the dispatched apply run logs; the boundary change still
+      failed or a different AccessDenied surfaced. RCA before re-dispatch (Decision 55).
+constraints:
+  - >-
+    Add the action iam:PutRolePermissionsBoundary to exactly TWO Sids -- the
+    identity-policy IAMRoleWriteBounded and the boundary-policy DataPlaneAllow.
+    Do NOT add any other action; do NOT add DeleteRolePermissionsBoundary; do NOT
+    extend DenyIAMEscalation or DenyBoundaryRemoval (T2.23 least-privilege).
+  - >-
+    Do NOT modify the assume_role_policy / OIDC trust block -- both subs must be
+    preserved (Decision 94 VP9 regression guard).
+  - >-
+    IAM stays enumerated and ARN-scoped via ${var.account_id}; no wildcards on the
+    identity grant (Decision 35), no literal account IDs or ARNs in the repo
+    (Decision 101).
+  - >-
+    Bootstrap root is admin-only / out-of-band (agent_platform_admin); it NEVER
+    auto-applies. Present the `terraform -chdir=terraform/bootstrap plan` output to
+    the human and apply under agent_platform_admin (Decision 77). The interactive
+    plan->present->apply loop is mandatory.
+  - No rescue agents or workaround loops; this is the reviewed forward-fix for a
+    source=ci_rca rec (Decision 55 / 72), applied only after rec review.
+context:
+  - >-
+    Root cause -- CI run 28379330706 'gated-apply' failed 2026-06-30T15:27:19Z
+    with AccessDenied: agent-platform-github-ci-apply/GitHubActions is not
+    authorized to perform iam:PutRolePermissionsBoundary on roles
+    agent-platform-github-ci-branch and agent-platform-github-ci-pr. The plan
+    modifies the permissions_boundary attribute on those roles
+    (terraform/personal/oidc.tf:28 and :195, both pointing at
+    policy/agent-platform-github-ci-apply-boundary). The apply role's policy in
+    terraform/bootstrap/github_ci_apply.tf must grant the boundary-set action.
+  - >-
+    TWO-surface fix (critique finding) -- github_ci_apply itself carries
+    permissions_boundary = agent-platform-github-ci-apply-boundary
+    (github_ci_apply.tf:31). A permissions boundary is an explicit-allow CEILING:
+    an IAM action absent from the boundary's DataPlaneAllow Sid (lines 549-578) is
+    implicitly denied even when the identity policy grants it -- effective
+    permission is identity INTERSECT boundary. DataPlaneAllow currently lists
+    iam:PutRolePolicy / iam:AttachRolePolicy but NOT iam:PutRolePermissionsBoundary,
+    so the action must be added to BOTH the identity IAMRoleWriteBounded Sid and the
+    boundary DataPlaneAllow Sid. Adding it to only the identity policy would leave
+    VP6 at implicitDeny and VP7 failing with the same AccessDenied rec-2446 reports.
+  - >-
+    Placement -- IAMRoleWriteBounded (github_ci_apply.tf:287-302) already scopes
+    iam:PutRolePolicy/AttachRolePolicy to exactly the ci-branch/ci-pr ARNs under the
+    StringEquals iam:PermissionsBoundary = budget-ARN condition; for
+    PutRolePermissionsBoundary that condition constrains the boundary being SET to
+    the budget ARN. DataPlaneAllow is an unconditional Resource:* Allow ceiling. The
+    one added action inherits correct scope/budget enforcement from the identity
+    side with no structural change.
+  - >-
+    Why NOT DenyIAMEscalation -- that Deny (lines 585-597) narrows
+    CreateRole/PutRolePolicy/AttachRolePolicy because those can escalate by
+    attaching broad policies. PutRolePermissionsBoundary here is already capped by
+    the identity StringEquals=budget + branch/pr-only ARNs and can only ever SET the
+    budget boundary, which is a RESTRICTION not an escalation -- so the extra deny
+    is unnecessary. Delete stays only in DenyBoundaryRemoval (lines 602-605), which
+    blocks boundary removal unconditionally.
+  - >-
+    Guard mirror unchanged -- validate_authority_budget (validate.py:3335) checks
+    the boundary name + in_budget_managed_roles set against the HCL, NOT the Action
+    list, so adding the action does not desync authority_budget.json.
+  - >-
+    Apply is admin-gated -- terraform/bootstrap/ NEVER auto-applies and this DEV
+    container holds only the agent_platform profile. The implement session makes the
+    code change, runs the pre-deploy VP (steps 1-5), and opens the PR; the human
+    admin runs the bootstrap plan/apply under agent_platform_admin and the sandbox
+    workflow_dispatch acknowledge-and-retry. Post-deploy VP (steps 6-7) confirms.
+  - >-
+    HARD BLOCK note -- ci_rca_unresolved_recs = [rec-2445, rec-2446] at planning
+    time. This plan addresses rec-2446 directly (Related-Work: same source_file
+    terraform/bootstrap/github_ci_apply.tf; same failure category terraform/IAM
+    apply failure). rec-2445 (the cross-check cache foot-gun) is addressed by
+    PLAN-ci-rca-rec-2445-recursion.yaml.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md and terraform/CLAUDE.md read
+  - Decision context confirmed (92, 94, 98, 77, 35, 101, 55/72, 70)
+  - terraform/bootstrap/github_ci_apply.tf located; IAMRoleWriteBounded at 287-302, DataPlaneAllow at 549-578, trust at 43-68
+  - Admin-apply gating understood (agent_platform_admin, out-of-band, present-plan-first)
+execution_steps:
+  - >-
+    In terraform/bootstrap/github_ci_apply.tf, add "iam:PutRolePermissionsBoundary"
+    to the Action list of the IAMRoleWriteBounded statement (identity policy,
+    alongside iam:PutRolePolicy/AttachRolePolicy) AND to the Action list of the
+    DataPlaneAllow statement (the github_ci_apply_boundary policy ceiling, alongside
+    the same two actions). Make NO other change.
+  - >-
+    Do NOT add DeleteRolePermissionsBoundary, do NOT extend DenyIAMEscalation or
+    DenyBoundaryRemoval, and do NOT touch the trust block.
+  - >-
+    Run `terraform -chdir=terraform/bootstrap fmt` then execute pre-deploy VP steps
+    1-5; loop until they pass.
+  - >-
+    Commit with `feat(ci-rca-rec-2446-ci-apply-boundary):` and the squash-merge
+    trailer `Resolves: rec-2446`. Open the PR.
+  - >-
+    HANDOFF (admin, out-of-band): present `terraform -chdir=terraform/bootstrap
+    plan` to the human; apply under agent_platform_admin (Decision 77). Then re-run
+    the sandbox gated-apply via workflow_dispatch acknowledge-and-retry to apply the
+    oidc.tf boundary change and clear the red convergence record.
+  - >-
+    Execute post-deploy VP steps 6-7 (simulate-principal-policy allowed; convergence
+    record green). On an unrecoverable failure stop and RCA (Decision 55).
+  - "Report: the diff, pre-deploy verification results, and the post-apply convergence state."
+work_areas: []
+rollback: >-
+  Two-Sid single-action IAM grant; revert the commit and admin-re-apply the
+  bootstrap root to remove the permission. The convergence record is cleared only
+  by a successful dispatch-ack apply, so a rollback also requires re-running that path.
