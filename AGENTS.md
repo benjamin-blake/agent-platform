@@ -113,7 +113,7 @@ This is an append-only lakehouse. The warehouse is the single source of truth fo
 
 **Source-of-truth by table (Decision 84 consolidation, 2026-06-11):**
 - **`ops_recommendations`, `ops_decisions`, `ops_priority_queue` = DuckLake-on-Neon, SOLE backend.** Reads transit the closed `ducklake_reader` boundary via NAMED VERBS (Decision 84 I-3; no caller SQL); writes transit `ducklake_writer` (`file_ops` allocates rec ids in-transaction). There is NO Athena path and NO rollback flag (`OPS_STORAGE_BACKEND` retired -- the frozen Iceberg copy stopped being coherent the day writes moved). `ops_decisions` rebuilds from `DECISIONS.md` via `ops_data_portal --backfill-decisions-md`.
-- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (`docs/INTENT-ducklake-consolidation.md`).
+- **`ops_session_log`, `ops_execution_plans` = Athena (over Iceberg), pending T2.26 disposition** (session_log may retire per T-1.9). `ops_compaction` stays live for these only. Telemetry stays on its (dead, to-be-rebuilt) path until consolidation Phase 4 (Decision 84 Phase 4 / tier_item T2.36).
 
 Local files have exactly two valid roles:
 

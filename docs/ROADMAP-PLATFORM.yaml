@@ -5556,7 +5556,7 @@ tier_items:
       ops_execution_plans (live writers: executor plan.py + s3_log_store routing), queue producer flow
       repoint, ops_compaction retirement + view drops (human-gated applies), DynamoDB counters destroy
       (after the reseed-rollback window closes). OpsWriter survives for telemetry until Phase 4
-      (docs/INTENT-ducklake-consolidation.md).
+      (Decision 84 Phase 4 / tier_item T2.36).
 
   - id: T2.27
     tier: T2
@@ -6016,6 +6016,65 @@ tier_items:
       workflow_dispatch diagnose input). Pre-deploy VP1-6 green. Post-merge live smoke (VP7) via
       workflow_dispatch diagnose=true to confirm real-data parse path; run #1 green-state negative
       smoke (stuck_approvals=0, no false alarm) already on record as the negative case.
+
+  - id: T2.36
+    tier: T2
+    name: "Phase 4: telemetry re-lands on DuckLake"
+    intent: |
+      Rebuild the telemetry write path on the DuckLake closed boundary (Decision 84 Phase 4).
+      The seven-table Athena/Iceberg draft (dead since 2026-05-28 migration) collapses to the
+      canonical four-table model ratified at T0.12.6 (Decisions 95/96/97): telemetry_sessions,
+      telemetry_observations, telemetry_transcripts, telemetry_agents. Key deliverables:
+      (1) field_semantics.yaml entries for the four telemetry tables per Class A contracts;
+      (2) OpsWriter.emit replaced by ducklake_writer boundary writes (writer-boundary invariant);
+      (3) preflight telemetry health check re-enabled against the ducklake_reader boundary;
+      (4) OpsWriter staging outbox and VarChar coercion retired (no more S3 staging for telemetry);
+      (5) ducklake_maintenance merge/GC pointed at the production catalog BEFORE telemetry write
+      volume lands -- Neon storage and S3 small-file growth thresholds measured and set (per
+      Decision 88 / T2.18 cadence). Gated on T2.26 (Athena demolition + ops_compaction retirement)
+      and T2.18 (DuckLake maintenance pipeline).
+    depends_on: [T2.26, T2.18]
+    files_in_scope:
+      - scripts/ops_writer.py           # OpsWriter.emit -> writer-boundary; staging outbox retire
+      - src/data/handlers/agent_telemetry.py    # repoint to writer-boundary
+      - config/lambda/ducklake/field_semantics.yaml    # four telemetry table entries
+      - scripts/session_preflight.py    # health check re-enable against reader
+      - scripts/telemetry_schemas.py    # retain as DDL reference; may retire post-rebuild
+      - docs/contracts/storage-substrate.yaml    # telemetry_tables disposition update
+    exit_criteria:
+      - id: c1
+        text: >-
+          Four telemetry tables (telemetry_sessions, telemetry_observations, telemetry_transcripts,
+          telemetry_agents) created on DuckLake per Class A contracts (T0.12.6); field_semantics.yaml
+          carries their entries; partition day(started_at)/day(created_at) per Decision 96; ULID
+          identity per Decision 97
+        status: open
+      - id: c2
+        text: >-
+          OpsWriter.emit replaced by ducklake_writer boundary writes; scripts/ops_writer.py and
+          src/data/handlers/agent_telemetry.py no longer stage to S3; rg 'OpsWriter' finds no
+          telemetry emit callers on the S3-staging path
+        status: open
+      - id: c3
+        text: >-
+          Preflight telemetry health check re-enabled against the ducklake_reader boundary
+          (not Athena); telemetry-store preflight reports PASS when tables are populated
+        status: open
+      - id: c4
+        text: >-
+          OpsWriter staging outbox (logs/.ops-outbox/) and VarChar coercion retired; no S3 staging
+          path for any migrated table; rg 'ops-outbox' finds no active write callers
+        status: open
+      - id: c5
+        text: >-
+          ducklake_maintenance merge/GC confirmed pointed at the production catalog BEFORE the first
+          telemetry write lands; Neon storage and S3 small-file growth thresholds documented and
+          enforced in the maintenance circuit breaker (per T2.18 cadence, Decision 88)
+        status: open
+    related_decisions: [84, 88, 95, 96, 97]
+    effort: M
+    strategic: false
+    status: not_started
 
   # ----- T3: Trust loop closure -----
   - id: T3.1
@@ -7074,7 +7133,6 @@ tier_items:
       - docs/INTENT-ops-decisions-graduation.md
       - docs/INTENT-ci-cd-architecture.md
       - docs/INTENT-provider-agnostic-executor.md
-      - docs/INTENT-ducklake-consolidation.md
       - docs/INTENT-session-log-architecture.md
       - docs/INTENT-terraform-cicd-agent-native.md
       - docs/INTENT-pre-codegen-contract-ratification.md
@@ -7110,6 +7168,7 @@ tier_items:
       - 2026-06-12: WAVE-0 enforcement shipped: validate.py intent-doc-freeze guard wired, skills/AGENTS.md updated, CD.14 superseded.
       - 2026-06-18: WAVE-1 pilot shipped: bazel-feasibility INTENT doc retired (feasibility_graduated archetype, Decision 86). 1 of 18 docs retired.
       - 2026-06-29: WAVE-1 second doc retired: ops-pipeline-consolidation INTENT doc deleted (feasibility_graduated archetype, Decision 84 primary pointer, Decision 78 interim). 2 of 18 docs retired.
+      - 2026-06-30: WAVE-1 complete: ducklake-consolidation INTENT doc deleted (feasibility_graduated archetype, Decision 84 primary pointer; Phase-4 forward content carried by new T2.36; Phase-3 demolition carried by T2.26). 3 of 18 docs retired. WAVE-1 all three docs done.
 
 cross_tier_gates:
   - id: G.1
