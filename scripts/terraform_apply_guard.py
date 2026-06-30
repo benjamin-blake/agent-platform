@@ -9,9 +9,11 @@ deliberately non-wedging -- the guard + review remain the content gate. It MUST 
 
 Exit codes (consumed by .github/workflows/terraform-apply-sandbox.yml):
   0  plan is safe: only create / update / no-op / read on non-IAM resources, no trust diffs, and
-     any neon_* change is a pure create / no-op / read.
-  2  plan is BLOCKED: contains a destroy, a replacement, an IAM-sensitive change, a trust-policy
-     (assume_role_policy) diff, or a non-create neon_* change. Requires a manual admin apply.
+     any neon_* change is a pure create / no-op / read; OR an in-budget IAM inline-policy /
+     attachment UPDATE on a managed boundary-carrying role (T2.25 / Decision 92 point 5).
+  2  plan is BLOCKED: contains a destroy, a replacement, a trust-policy (assume_role_policy) diff,
+     an out-of-budget IAM-sensitive change, or a non-create neon_* change. Requires a manual
+     admin apply or a gated-apply Environment approval.
   1  internal / parse error (also blocks apply at the workflow level).
 
 Detection contract (against `terraform show -json`, iterating .resource_changes[]):
@@ -27,17 +29,25 @@ Detection contract (against `terraform show -json`, iterating .resource_changes[
     tier, and egress here is dynamic (REPORT R3 / CD.34). The compensating controls are enforced in
     neon_ducklake_catalog.tf, not introspected here, so the guard stays robust against the
     sensitive/unknown attribute values a Neon create reports at plan time.
-  - BLOCK if .type is IAM-sensitive AND .change.actions is not ["no-op"]/["read"].
   - BLOCK if a trust attribute (assume_role_policy) differs between .change.before and
     .change.after on ANY resource. assume_role_policy is serialised as a JSON-encoded string, so
     it is normalised via json.loads before comparison (key-order/whitespace differences do not
-    cause nuisance trips). Fail-closed makes a false positive safe -- it forces a manual apply.
+    cause nuisance trips). Trust check runs BEFORE IAM classification (T2.25) so a trust diff on
+    a managed role is always gated, never slips through as an in-budget update.
+  - PASS (in-budget) if .type is in in_budget_resource_types, .change.actions == in_budget_actions
+    (["update"]), AND the target role name (.change.after.role or .change.before.role) is in
+    in_budget_managed_roles (T2.25 / Decision 92 point 5). Budget table loaded from
+    terraform/bootstrap/authority_budget.json (override via TF_AUTHORITY_BUDGET env var). Missing
+    or unparseable table = fail closed (all IAM treated as out-of-budget, Decision 77).
+  - BLOCK if .type is IAM-sensitive AND .change.actions is not ["no-op"]/["read"] AND not in-budget.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 IAM_SENSITIVE_TYPES = frozenset(
@@ -67,6 +77,47 @@ NEON_PROVIDER_PREFIX = "neon_"
 # -- carry the posture (see the module docstring's Neon detection-contract bullet).
 _NEON_SAFE_ACTIONS = (["create"], ["no-op"], ["read"])
 
+# Default path for the authority budget table (T2.25 / Decision 92 point 5). Override via TF_AUTHORITY_BUDGET.
+_BUDGET_DEFAULT_PATH = Path(__file__).parent.parent / "terraform" / "bootstrap" / "authority_budget.json"
+
+
+def _load_budget() -> Optional[dict]:
+    """Load the authority budget table from TF_AUTHORITY_BUDGET or the default path.
+
+    Returns None on any failure (missing file, parse error). A None budget is fail-closed:
+    _classify_iam_change treats every IAM change as out-of-budget.
+    """
+    path_env = os.environ.get("TF_AUTHORITY_BUDGET")
+    path = Path(path_env) if path_env else _BUDGET_DEFAULT_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _classify_iam_change(change_entry: dict, budget: Optional[dict]) -> bool:
+    """Return True if this IAM change is in-budget (safe to auto-apply without gated-apply).
+
+    In-budget = resource type in in_budget_resource_types, action set equals in_budget_actions
+    (["update"]), and the target role name is in in_budget_managed_roles. Missing budget or
+    missing role attribute returns False (fail-closed).
+    """
+    if budget is None:
+        return False
+    rtype = change_entry.get("type", "")
+    if rtype not in budget.get("in_budget_resource_types", []):
+        return False
+    change = change_entry.get("change") or {}
+    if change.get("actions") != budget.get("in_budget_actions", []):
+        return False
+    after = change.get("after") or {}
+    before = change.get("before") or {}
+    role = after.get("role") or before.get("role")
+    if not role:
+        return False
+    return role in budget.get("in_budget_managed_roles", [])
+
 
 def _normalise_policy(value: Any) -> Any:
     """Return a comparable representation of a policy value.
@@ -94,10 +145,16 @@ def _trust_changed(before: Any, after: Any) -> bool:
     return False
 
 
-def evaluate_plan(plan: dict) -> list[dict]:
+def evaluate_plan(plan: dict, budget: Optional[dict] = None) -> list[dict]:
     """Return a list of blocking findings. An empty list means the plan is safe to auto-apply.
 
     Each finding is a dict with keys: address, type, actions, reason.
+
+    Pass the loaded authority budget (from _load_budget()) to enable in-budget IAM classification.
+    A None budget is fail-closed: all IAM changes are treated as out-of-budget and blocked.
+
+    Evaluation order (T2.25): delete -> neon -> trust-diff -> IAM (in-budget pass / out-of-budget block).
+    Trust check runs before IAM so a trust diff on a managed role is always gated.
     """
     findings: list[dict] = []
     for change_entry in plan.get("resource_changes") or []:
@@ -121,14 +178,19 @@ def evaluate_plan(plan: dict) -> list[dict]:
             )
             continue
 
-        if rtype in IAM_SENSITIVE_TYPES and actions not in _INERT_ACTIONS:
-            findings.append({"address": address, "type": rtype, "actions": actions, "reason": "IAM-sensitive change"})
-            continue
-
         if _trust_changed(change.get("before"), change.get("after")):
             findings.append(
                 {"address": address, "type": rtype, "actions": actions, "reason": "trust-policy (assume_role_policy) diff"}
             )
+            continue
+
+        if rtype in IAM_SENSITIVE_TYPES and actions not in _INERT_ACTIONS:
+            if _classify_iam_change(change_entry, budget):
+                continue  # in-budget inline-policy / attachment update on managed boundary-carrying role
+            findings.append(
+                {"address": address, "type": rtype, "actions": actions, "reason": "IAM-sensitive change (out-of-budget)"}
+            )
+            continue
 
     return findings
 
@@ -152,14 +214,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"terraform_apply_guard: expected a JSON object at the top level, got {type(plan).__name__}", file=sys.stderr)
         return 1
 
-    findings = evaluate_plan(plan)
+    budget = _load_budget()
+    findings = evaluate_plan(plan, budget)
     if findings:
-        print("terraform_apply_guard: BLOCKED -- this plan requires a manual admin apply:")
+        print("terraform_apply_guard: BLOCKED -- this plan requires a manual admin apply or gated-apply approval:")
         for finding in findings:
             print(f"  - {finding['address']} ({finding['type']}) actions={finding['actions']}: {finding['reason']}")
         return 2
 
-    print("terraform_apply_guard: OK -- create/update/no-op/read on non-IAM resources, no trust diffs.")
+    print("terraform_apply_guard: OK -- safe to auto-apply (non-IAM or in-budget IAM, no trust diffs).")
     return 0
 
 

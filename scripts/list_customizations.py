@@ -103,7 +103,13 @@ def build_entry(path: Path) -> dict[str, Any]:
 
 
 def scan_customizations() -> list[dict[str, Any]]:
-    """Scan .github/prompts/*.prompt.md and .github/agents/*.agent.md."""
+    """Scan .github/prompts/ and .github/agents/ for customisation files.
+
+    Only .github/prompts/scheduled/ and .github/agents/schedule.yaml remain
+    as live surfaces after T-1.13 retired the legacy top-level prompt/agent files.
+    Top-level *.prompt.md and *.agent.md no longer exist; the scan gracefully
+    returns an empty list without error when those globs match nothing.
+    """
     files: list[Path] = []
 
     prompts_dir = GITHUB_DIR / "prompts"

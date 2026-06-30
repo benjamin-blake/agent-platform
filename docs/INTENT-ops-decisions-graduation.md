@@ -5,7 +5,7 @@
 > ids follow DECISIONS.md numbering via `fields['decision_id']`, writes transit `ducklake_writer`,
 > reads transit the `decision_by_id`/`decisions_max_updated` verbs, and the backfill is
 > `ops_data_portal --backfill-decisions-md`. SURVIVING SCOPE: the DQ graduation arc and the
-> DECISIONS.md decommission question. See docs/INTENT-ducklake-consolidation.md.
+> DECISIONS.md decommission question. See Decision 84.
 
 # Intent: ops_decisions Graduation
 
