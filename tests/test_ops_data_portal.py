@@ -17,10 +17,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 duckdb = pytest.importorskip("duckdb")
-from pydantic import ValidationError
+from pydantic import ValidationError  # noqa: E402
 
-from src.common import ducklake_runtime as rt
-from src.common.ducklake_scd2_schema import load_field_semantics, resolve_table_spec
+from src.common import ducklake_runtime as rt  # noqa: E402
+from src.common.ducklake_scd2_schema import load_field_semantics, resolve_table_spec  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Minimal valid rec fields (all required Recommendation fields)

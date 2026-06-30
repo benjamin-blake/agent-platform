@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+boto3 = pytest.importorskip("boto3")
+
 # Load the module under test
 _MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_preflight.py"
 _spec = importlib.util.spec_from_file_location("session_preflight", _MODULE_PATH)
