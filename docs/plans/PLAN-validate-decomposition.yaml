@@ -101,10 +101,14 @@ scope:
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
-      Preserve behaviour. Bulk-migrate the shared-primitive patch targets that reference moved globals --
-      `patch("validate.run")` (~60) and `patch("validate.ROOT")` (~142) -> the canonical scripts.checks._common
-      targets (per tests/CLAUDE.md namespace-migration discipline). Check-name patches (`patch("validate.<check>")`)
-      stay as-is (facade + getattr preserves them). No assertion semantics change.
+      Preserve behaviour. Bulk-migrate EVERY shared-primitive patch target that references a moved global to the
+      canonical scripts.checks._common target (per tests/CLAUDE.md namespace-migration discipline): ROOT (143),
+      run (64), get_changed_files (33), invoke_step, PYTHON. ALSO repoint patch sites for module constants that
+      travel with a moved check (e.g. _KNOWN_CLI_TOOLS / _OPTIONAL_CLI_TOOLS -> checks/hygiene; KNOWN_MODELS,
+      _EXECUTOR_BOUNDARY_PATTERNS, the _SLOC_LIMIT/_CC_LIMIT/_WAIVER_PATTERN/_SLOC_EXCLUDE_DIRS/_BRANCH_TYPES set,
+      _TERRAFORM_ROOTS, _DQ_FRESHNESS_SECONDS -> their check's module). Check-name patches
+      (`patch("validate.<check>")`) and CLI-resident constants/helpers (_FAST_TIER_BUDGET_SECONDS,
+      _file_budget_bypass_rec / _file_budget_breach_rec) stay as-is. No assertion semantics change.
   - file: tests/test_checks_registry.py
     action: Create
     purpose: >-
@@ -146,7 +150,7 @@ acceptance_criteria:
   - The full existing tests/test_validate.py suite plus the three external importer suites (test_validate_authority_budget, test_plan_document, test_ci_claude_p_retry) pass unchanged in assertion semantics.
   - "The FULL ordered per-tier execution trace -- every emitted step label/section header for --pre AND for full, including non-check scaffolding steps (lint, precommit, mypy, pytest, unit-test invoke_step, dependency/coverage/terraform gates, budget assertion) -- is byte-for-byte identical before and after, proven by a frozen-baseline test. validate_complexity's advisory output is the sole documented exception (Decision 104)."
   - Every registered check name AND every extracted private helper is reachable both as validate.<name> (getattr) and via `from scripts.validate import <name>` (facade re-export).
-  - Mock interception is preserved -- patching scripts.checks._common.run / scripts.checks._common.ROOT, and a check-to-check pair, still intercepts when invoked through a moved check body (proven by test).
+  - Mock interception is preserved -- patching EACH scripts.checks._common primitive (run, ROOT, get_changed_files, invoke_step, PYTHON) and a check-to-check pair still intercepts through a moved body; AND zero residual patch("validate.run" | "validate.ROOT" | "validate.get_changed_files") sites remain (grep-count closure, complementing the sampled interception test).
   - "Owner metadata is correct: validate_broker_env_reads=trading; validate_product_roadmap and validate_environment_taxonomy = platform with product_coupled=trading; all others = platform."
   - scripts/validate.py drops below the 500-SLOC limit (target <300); no scripts/checks/**.py module exceeds 500 SLOC or CC 20; config/sloc_budgets.yaml loses its validate.py entry and gains NO new entry (diff-verified).
   - validate_cc_limits passes post-extraction (the CC waiver travelled with any moved function that needs it).
@@ -162,16 +166,16 @@ verification_plan:
     fix_if: A `from scripts.validate import X` fails -> facade omitted check/helper X; a `patch("validate.run/ROOT")` no-ops -> shared-primitive patch targets not migrated to scripts.checks._common.
   - step: 2
     phase: pre-deploy
-    action: Full ordered per-tier execution-trace equivalence against the frozen pre-refactor baseline.
+    action: Full ordered per-tier execution-trace equivalence (step LABELS / section headers only, NOT raw subprocess stdout) against the frozen pre-refactor baseline.
     command: bin/venv-python -m pytest tests/test_checks_registry.py -k "trace or equivalence" -q
     expected: The --pre and full ordered step-label sequences (checks + scaffolding) equal the committed baseline exactly; exit 0.
-    fix_if: A step changed position, tier, or dropped -> pre_sequence()/full_sequence() diverge from the original main() --pre block / run_python_checks ordering.
+    fix_if: A step changed position, tier, or dropped -> the sequences diverge from the original. The full-tier trace spans the WHOLE main() body (run_python_checks + terraform block + validate_iam_runner_policy + run_dependency_checks/validate_requirements + prompt block incl validate_prompt_compliance/validate_instruction_architecture_layers + ensure_fresh_dq_results + validate_verification_harness + all-files run_precommit_checks), not just run_python_checks.
   - step: 3
     phase: pre-deploy
-    action: Facade completeness + mock-interception preservation.
-    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "facade or interception or root_single_source" -q
-    expected: Every check/helper is getattr-able and importable; patching _common.run/_common.ROOT intercepts through a moved body; no checks module recomputes ROOT; exit 0.
-    fix_if: Interception fails -> a moved body references a bare primitive instead of _common.<name>; import fails -> missing re-export.
+    action: Facade completeness + mock-interception preservation + residual-patch-site closure.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "facade or interception or root_single_source" -q && test $(grep -cE 'patch\("validate\.(run|ROOT|get_changed_files)"' tests/test_validate.py) = 0
+    expected: Every check/helper is getattr-able and importable; patching each _common primitive intercepts through a moved body; no checks module recomputes ROOT; ZERO residual old-target patch sites for run/ROOT/get_changed_files; exit 0.
+    fix_if: Interception fails -> a moved body references a bare primitive instead of _common.<name>; residual count nonzero -> a patch site was not repointed (silent no-op mock); import fails -> missing re-export.
   - step: 4
     phase: pre-deploy
     action: Owner-metadata correctness.
@@ -252,10 +256,12 @@ context:
     test_pysr_factory, test_data_pipeline, test_async_engine, test_execution, test_broker_secrets, test_meta_learner.
   - >-
     Patch-binding reality - tests load validate via importlib as module "validate" + sys.modules["validate"]=_validate,
-    then patch "validate.X" (363 sites total, corrected from 318). Of these, ~142 target ROOT and ~60 target run
-    (shared primitives -> migrate to scripts.checks._common); the rest target check names (preserved via getattr) or
-    constants that stay. Three suites also do `from scripts.validate import X` directly -> rescued by facade re-exports
-    (public checks AND the private helper _check_claude_p_raw_invocations).
+    then patch "validate.X" (363 sites, corrected from 318). Shared primitives migrate to scripts.checks._common and
+    are bulk-repointed: ROOT (143), run (64), get_changed_files (33), plus invoke_step/PYTHON. Constants used only
+    inside a moved check travel WITH it and their patch sites repoint to the check's module (they do NOT "stay");
+    constants/helpers used only by the CLI (_FAST_TIER_BUDGET_SECONDS, _file_budget_*) stay in validate.py. Check-name
+    patches are preserved via getattr on the validate module. Three suites also do `from scripts.validate import X`
+    directly -> rescued by facade re-exports (public checks AND the private helper _check_claude_p_raw_invocations).
   - >-
     validate_complexity returns list[dict] (not None) and never appends to failed; its registry wrapper must preserve
     that signature, and its advisory logs/.complexity-warnings.json output is waived from the equivalence oracle
@@ -271,13 +277,13 @@ pre_implementation_checklist:
   - Full ordered per-tier step trace (checks + scaffolding) for --pre and full captured as the frozen baseline BEFORE moving any code
 execution_steps:
   - "Capture baseline FIRST - record the exact ordered sequence of ALL steps emitted by the current scripts/validate.py for the --pre tier and the full tier (every section header / step label, including lint, precommit, mypy, explicit pytest, unit-test invoke_step, dependency/coverage/terraform gates, budget assertion, and each validate_* check). Freeze both sequences in tests/test_checks_registry.py as the equivalence oracle. This must precede any code movement."
-  - "Audit intra-body references - enumerate every bare name each check body closes over that tests patch (run, ROOT, invoke_step, get_changed_files, and check-to-check calls). This list drives the _common migration and the patch-site repoint."
+  - "Audit intra-body references - enumerate every bare name each check body closes over that tests patch: shared primitives (run, ROOT, PYTHON, invoke_step, get_changed_files), module constants used inside a moved check (_KNOWN_CLI_TOOLS, _OPTIONAL_CLI_TOOLS, KNOWN_MODELS, _EXECUTOR_BOUNDARY_PATTERNS, the _SLOC_*/_CC_*/_WAIVER_PATTERN/_BRANCH_TYPES set, _TERRAFORM_ROOTS, _DQ_FRESHNESS_SECONDS), and check-to-check/helper calls. Convention: any check or helper called by another check either co-locates in the same module OR resolves through the validate namespace (getattr) / _common -- NO bare cross-module intra-check calls. This list drives the _common migration, per-module constant placement, and the patch-site repoint."
   - "Create scripts/checks/_common.py as the sole source of run, ROOT, PYTHON, invoke_step, get_changed_files. Create scripts/checks/registry.py (Check dataclass + register() + pre_sequence()/full_sequence() ordered manifests)."
   - "Extract checks into scripts/checks/<domain>/<module>.py, one concern per file, per the Scope table. Move each body verbatim; replace bare run/ROOT/etc with _common.<name> (call-time resolution); carry the CC-waiver comment where a function needs it; preserve validate_complexity's list[dict] signature."
   - "Tag owner metadata at registration - default platform; pin validate_broker_env_reads=trading; set validate_product_roadmap and validate_environment_taxonomy to platform + product_coupled=trading."
   - "Collapse scripts/validate.py to the thin CLI - keep argparse + guards + budget assertion; replace the two hand-maintained call-lists with iteration over registry pre_sequence()/full_sequence(); resolve checks via getattr(self_module, name)(failed); add facade re-exports (from scripts.checks... import <name>) for every extracted check AND extracted helper; re-import _common primitives for back-compat."
   - "Extend scripts/test_coverage_checker.py map_source_to_test to map scripts/checks/**/*.py to colocated tests; add tests/test_coverage_checker.py cases."
-  - "Bulk-migrate patch targets in tests/test_validate.py: patch(\"validate.run\") and patch(\"validate.ROOT\") -> scripts.checks._common equivalents (namespace-migration discipline). Confirm the 3 external importer suites still resolve via the facade; repoint only if strictly needed."
+  - "Bulk-migrate ALL moved-global patch targets in tests/test_validate.py to their canonical new homes (namespace-migration discipline): run/ROOT/get_changed_files/invoke_step/PYTHON -> scripts.checks._common; moved-check constants -> their check module. Then assert zero residual patch(\"validate.run\"|\"validate.ROOT\"|\"validate.get_changed_files\") sites (grep-count closure). Confirm the 3 external importer suites still resolve via the facade; repoint only if strictly needed."
   - "Add rec-2420's lowering test for _update_sloc_budgets and the mock-interception + no-local-ROOT tests in tests/test_checks_registry.py."
   - "Run `validate --update-sloc-budgets`, then `git diff config/sloc_budgets.yaml` and confirm the ONLY change is removal of the validate.py entry (no new key seeded)."
   - "Author Decision 104 in docs/DECISIONS.md - ratify the registry mechanism, owner convention + federation direction, the coverage-gate mapping extension, and the validate_complexity advisory-output waiver; partially supersede Decision 80 point 3 only."
