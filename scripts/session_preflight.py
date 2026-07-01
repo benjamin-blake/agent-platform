@@ -498,6 +498,63 @@ def print_ci_rca_undetermined_recs(recs: list[dict]) -> None:
     print()
 
 
+def _compute_ci_rca_abstention(cache_rows: list[dict] | None, window_days: int = 14) -> dict | None:
+    """Compute the CI-RCA probe abstention gauge from the warm cache (T1.13 c12(i)).
+
+    Returns None when the warm cache is unavailable (reader unreachable / offline) --
+    zero new reader egress (Decision 88), computed entirely from already-loaded rows.
+    """
+    if cache_rows is None:
+        return None
+    from scripts.ci_rca_probe_health import compute_abstention_rate  # noqa: PLC0415
+
+    undetermined_count, total_count, rate = compute_abstention_rate(cache_rows, window_days=window_days)
+    return {
+        "undetermined_count": undetermined_count,
+        "total_count": total_count,
+        "rate": rate,
+        "window_days": window_days,
+    }
+
+
+def _escalate_ci_rca_probe_health(
+    creds_status: str,
+    cache_rows: list[dict] | None,
+    gauge: dict | None,
+) -> dict | None:
+    """Idempotently file/update/close a source=ci_rca_probe_health rec on the warm-cache path.
+
+    Skips (returns None) when creds are unavailable or the warm cache did not load -- degraded
+    offline sessions never attempt a portal write. This is the deterministic preflight trigger
+    that substitutes for a cron until Lambda scheduled agents re-enable (AGENTS.md runbook).
+    """
+    if creds_status != "ok" or cache_rows is None or gauge is None:
+        return None
+    try:
+        from scripts.ci_rca_probe_health import escalate  # noqa: PLC0415
+
+        open_recs = [r for r in cache_rows if r.get("status") == "open"]
+        return escalate(
+            gauge["undetermined_count"],
+            gauge["total_count"],
+            gauge["rate"],
+            open_recs,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] preflight: ci_rca_probe_health.escalate() failed: {exc}", file=sys.stderr)
+        return None
+
+
+def print_ci_rca_abstention_gauge(gauge: dict | None) -> None:
+    """Print the CI-RCA probe abstention-rate gauge line."""
+    if gauge is None:
+        return
+    print(
+        f"CI-RCA probe abstention (last {gauge['window_days']}d): "
+        f"{gauge['undetermined_count']}/{gauge['total_count']} undetermined ({gauge['rate']:.0%})"
+    )
+
+
 def _derive_ci_rca_closed(rows: list[dict]) -> list[dict]:
     """Client-side derive: closed ci_rca recs projected to the sibling-cluster fields."""
     matched = [r for r in rows if r.get("source") == "ci_rca" and r.get("status") == "closed"]
@@ -1872,6 +1929,11 @@ def main(roadmap_detail: str = "slim") -> int:
     print_ci_rca_recs(ci_rca_recs, correlation=correlation)
     print_ci_rca_dispute_recs(ci_rca_dispute_recs)
     print_ci_rca_undetermined_recs(ci_rca_undetermined_recs)
+
+    ci_rca_abstention_gauge = _compute_ci_rca_abstention(recs_cache)
+    ci_rca_probe_health_escalation = _escalate_ci_rca_probe_health(creds_status, recs_cache, ci_rca_abstention_gauge)
+    print_ci_rca_abstention_gauge(ci_rca_abstention_gauge)
+
     print_priority_queue(priority_queue)
     _print_recent_main_commits(recent_main_commits)
 
@@ -1925,6 +1987,8 @@ def main(roadmap_detail: str = "slim") -> int:
         "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
         "ci_rca_dispute_recs": ci_rca_dispute_recs,
         "ci_rca_undetermined_recs": ci_rca_undetermined_recs,
+        "ci_rca_abstention_gauge": ci_rca_abstention_gauge,
+        "ci_rca_probe_health_escalation": ci_rca_probe_health_escalation,
         "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,

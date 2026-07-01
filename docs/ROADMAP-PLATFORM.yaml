@@ -3831,11 +3831,12 @@ tier_items:
         status: open
       - id: c4
         text: "rec-859 case study's preventive_action (validate_sloc_limits promoted to --pre tier) operational"
-        status: open
+        status: met
+        met_by: ci-rca-probe-health-failloud
       - id: c5
         text: >-
           evidence_bundle SHA-256 verification roundtrips: bundle uploaded to
-          s3://agent-platform-agent-logs/ci-rca-evidence/<sha>.json AND referenced by SHA in source=ci_rca rec
+          s3://agent-platform-data-lake/ci-rca-evidence/<sha>.json AND referenced by SHA in source=ci_rca rec
           context_v2_json field
         status: open
       - id: c6
@@ -3843,7 +3844,8 @@ tier_items:
           PLAN-ci-rca-workflow-correctness landed: ci-rca.yml rca job if: gates on head_branch==default_branch
           (main-only trigger); filing detection uses scripts/ci_rca_filing.py FILED: marker (not grep);
           ci-rca-filter guard wired into scripts/validate.py presubmit tier
-        status: open
+        status: met
+        met_by: ci-rca-probe-health-failloud
       - id: c7
         text: >-
           Probe-abstention fail-loud (H1). When the evidence bundle cannot deterministically compute
@@ -4111,6 +4113,28 @@ tier_items:
       coverage detection + N-failure-per-run enumeration + coverage_regression). c7/c9/c10/c12
       remain open for P2 (PLAN-ci-rca-abstention-and-gate-escape) and P3
       (PLAN-ci-rca-observability-dashboard extension).
+      2026-07-01: shipped PLAN-ci-rca-probe-health-failloud -- safety-slice of c12 plus two
+      bookkeeping closeouts. c12(i): new scripts/ci_rca_probe_health.py sensor (compute_abstention_rate,
+      escalation_action, idempotent escalate() mirroring convergence_health's file/update/close pattern,
+      reads only the warm preflight cache -- zero new reader egress per Decision 88, never constructs a
+      DuckLake reader); ci_rca_probe_health registered in source_registry.yaml; session_preflight.py
+      surfaces a "CI-RCA probe abstention (last Nd)" gauge line + report JSON fields and invokes
+      escalate() idempotently on the warm-cache path (skipped when creds/sync unavailable). c12(ii):
+      ops_data_portal._run_ci_rca_cross_check now fail-loud on bundle-absent (evidence_bundle_ref
+      empty) -- strict mode rejects unless rca_confidence=undetermined, warn mode accepts + logs
+      CI_RCA_BUNDLE_ABSENT; ci-rca.yml computes bundle_absent and injects the
+      set-rca_confidence=undetermined / human-route instruction into the agent prompt on that path.
+      Also lands the deferred c5 mechanism: S3-object-existence verification via head_object
+      (strict reject / warn on missing, degraded accept on upload_status=upload_failed, fail-open on
+      S3 read errors so a runner without S3 read is never wedged). c4 flipped met (validate_sloc_limits
+      confirmed reachable from the --pre tier). c6 flipped met (PLAN-ci-rca-workflow-correctness
+      surfaces reconfirmed: main-only trigger, FILED: marker parser, ci-rca-filter guard wired into
+      --pre). c5 stays OPEN -- the mechanism lands here but the criterion closes only when strict mode
+      is live (c2) and a real ci_rca rec roundtrips a verified S3 bundle end-to-end. c12 stays OPEN --
+      part (iii) back-validation loop (new ducklake_reader json_extract named-verb; greenfield query
+      work) deferred to the observability follow-on plan. Also corrected the stale
+      agent-platform-agent-logs bucket name in c5's text and in docs/INTENT-ci-rca-methodology.md to
+      agent-platform-data-lake (the bucket the code already uses).
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out

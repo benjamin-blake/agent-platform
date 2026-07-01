@@ -33,7 +33,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -285,20 +285,111 @@ def _load_and_verify_bundle(evidence_bundle_ref: dict) -> dict | None:
     return bundle
 
 
-def _run_ci_rca_cross_check(context_v2_json: dict) -> None:
+def _check_bundle_s3_existence(
+    evidence_bundle_ref: dict,
+    s3_client_factory: Optional[Callable[[], Any]] = None,
+) -> str:
+    """Verify the evidence bundle S3 object exists (c5 / INTENT Section 4 check 7).
+
+    Returns one of:
+      "ok"       -- upload_status='ok' and head_object confirms the object exists.
+      "missing"  -- upload_status='ok' but head_object reports the object is absent.
+      "degraded" -- upload_status != 'ok' (e.g. 'upload_failed'): no S3 call is made,
+                    the bundle is a known-local-only/stale artefact.
+      "fail_open" -- the S3 read itself could not be evaluated (bad s3_uri shape, missing
+                     credentials, permission denied, or any other client error). Never
+                     blocks filing -- the IAM grant for CI read access rides with c2.
+    """
+    upload_status = evidence_bundle_ref.get("upload_status")
+    if upload_status != "ok":
+        return "degraded"
+
+    s3_uri = evidence_bundle_ref.get("s3_uri", "")
+    match = re.match(r"^s3://([^/]+)/(.+)$", s3_uri)
+    if not match:
+        return "fail_open"
+    bucket, key = match.group(1), match.group(2)
+
+    try:
+        if s3_client_factory is not None:
+            client = s3_client_factory()
+        else:
+            import boto3  # noqa: PLC0415
+
+            profile = os.environ.get("AWS_PROFILE")
+            session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+            client = session.client("s3", region_name=_AWS_REGION)
+        client.head_object(Bucket=bucket, Key=key)
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        exc_str = str(exc) + type(exc).__name__
+        if any(marker in exc_str for marker in ("404", "NoSuchKey", "NotFound")):
+            return "missing"
+        return "fail_open"
+
+
+def _run_ci_rca_cross_check(
+    context_v2_json: dict,
+    s3_client_factory: Optional[Callable[[], Any]] = None,
+) -> None:
     """Run the cross-check spine for source=ci_rca recs.
 
-    Loads the local canonical evidence bundle (from evidence_bundle_ref.sha256),
-    verifies its SHA-256, then compares bundle-wins fields and enforces constraints.
+    Bundle-absent fail-loud (c12(ii)): when evidence_bundle_ref is absent/empty, the rec is
+    forced onto the mandatory human-review route (rca_confidence='undetermined') instead of
+    being accepted fully-unchecked. Strict mode rejects otherwise; warn mode logs and accepts.
+
+    c5 (Section 4 check 7): when evidence_bundle_ref is present, verifies the S3 object exists
+    via head_object (strict reject / warn on a missing object; degraded accept on
+    upload_status='upload_failed'; fail-open accept on any S3 read error so a runner without
+    S3 read access never has filing wedged).
+
+    Then loads the local canonical evidence bundle (from evidence_bundle_ref.sha256), verifies
+    its SHA-256, and compares bundle-wins fields.
 
     Raises ValueError in strict mode; logs warnings in warn mode.
     Never raises for SHA-256 mismatch (always loud-fail).
-    Does nothing if evidence_bundle_ref is absent or bundle file not found locally.
     """
     mode = get_ci_rca_strict_mode()
     evidence_bundle_ref = context_v2_json.get("evidence_bundle_ref") or {}
+
     if not evidence_bundle_ref:
+        rca_confidence = context_v2_json.get("rca_confidence")
+        bundle_absent_msg = (
+            "[CI_RCA_BUNDLE_ABSENT] rec filed with no evidence_bundle_ref (no evidence bundle was "
+            "generated or referenced for this run). A rec with no evidence bundle MUST set "
+            "rca_confidence='undetermined' so it routes to the mandatory human-review surface "
+            "(preflight 'CI-RCA Mandatory Human Review'); otherwise it would be accepted fully-unchecked."
+        )
+        if rca_confidence == "undetermined":
+            logger.warning("%s rca_confidence=undetermined -- routed to mandatory human review.", bundle_absent_msg)
+            return
+        if mode == "strict":
+            raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {bundle_absent_msg} rca_confidence={rca_confidence!r}.")
+        logger.warning("[CI_RCA_STRICT_MODE=warn] %s rca_confidence=%r (rec filed anyway).", bundle_absent_msg, rca_confidence)
         return
+
+    s3_check = _check_bundle_s3_existence(evidence_bundle_ref, s3_client_factory=s3_client_factory)
+    if s3_check == "missing":
+        s3_msg = (
+            f"[CI_RCA_EVIDENCE_S3_MISSING] evidence_bundle_ref.upload_status='ok' but no object exists at "
+            f"{evidence_bundle_ref.get('s3_uri', '')!r}. The bundle may have been deleted, or the upload "
+            "silently failed without updating upload_status."
+        )
+        if mode == "strict":
+            raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {s3_msg}")
+        logger.warning("[CI_RCA_STRICT_MODE=warn] %s (rec filed anyway)", s3_msg)
+    elif s3_check == "degraded":
+        logger.warning(
+            "[CI_RCA_EVIDENCE_S3_DEGRADED] evidence_bundle_ref.upload_status=%r (not 'ok') -- S3 existence "
+            "not verified; bundle content is stale/local-only.",
+            evidence_bundle_ref.get("upload_status"),
+        )
+    elif s3_check == "fail_open":
+        logger.warning(
+            "[CI_RCA_EVIDENCE_S3_FAIL_OPEN] S3 head_object check could not run (missing credentials, denied "
+            "permission, or a malformed s3_uri) -- accepting without S3 verification so filing is never "
+            "wedged by a runner lacking S3 read access."
+        )
 
     try:
         bundle = _load_and_verify_bundle(evidence_bundle_ref)
