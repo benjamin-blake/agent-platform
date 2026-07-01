@@ -1,0 +1,315 @@
+schema_version: 1
+slug: "gated-apply-rca-trigger"
+intent: >-
+  Close the gap where a gated terraform apply (tf-gated-apply) failure files no source=ci_rca
+  recommendation. ci-rca.yml is triggered SOLELY by the workflow_run:[terraform-apply-sandbox]
+  completed event, but the confirmed failure (run 28379330706, gated-apply job) arrived on a manual
+  RE-RUN (run_attempt 2, after tf-gated-apply Environment approval) and GitHub does not reliably
+  re-dispatch workflow_run-triggered workflows on re-run completions -- the exact backstop Decision 94
+  (VP10) assumed was "not silently masked". The failure wrote a RED convergence record with no
+  forward-fix RCA signal (Decision 92 point 6 / 55 / 72 obligation violated). Make RCA filing
+  independent of workflow_run via an in-job self-dispatch on both apply jobs, add a fail-loud preflight
+  detector for red-record-without-rec, guard the self-dispatch structurally in validate.py, and remediate
+  the currently-stuck run.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-gated-apply-rca-trigger.yaml
+phase: >-
+  Platform CI/CD reliability (CD.35 / T2.20-T2.22 lineage). The gated-apply job and the ci-rca
+  workflow_dispatch escape hatch (Decision 74) are both already resident; this hardens the failure-signal
+  wiring between them. No new tier_item; forward-fix on the ci-rca trigger surface.
+scope:
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Add actions: write to the apply-sandbox and gated-apply job permission blocks and a final
+      `if: ${{ failure() && github.run_attempt != '1' }}` step to BOTH jobs that self-dispatches ci-rca
+      (`gh workflow run ci-rca.yml -f run_id=${{ github.run_id }}`). Bridges the workflow_run re-run gap;
+      failure-path only, no re-plan (Decision 77 no-TOCTOU preserved). Update the gated-apply comment
+      block (lines 762-766 / 893-901) that asserts workflow_run always catches the failure.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      New structural guard _check_apply_rca_fallback(): assert both apply-sandbox and gated-apply carry
+      actions: write and a failure-path step invoking `gh workflow run ci-rca.yml` gated on run_attempt.
+      Add it to main().
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Wire _check_apply_rca_fallback into validate_ci_workflow_guards' guards list so the self-dispatch
+      step cannot be removed silently (Decision 60/73 -- validate.py is the gate SoT).
+  - file: tests/test_verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Positive case (real tree passes) + negative case (a mutated workflow copy missing the failure-path
+      dispatch step, or missing actions: write, fails the guard).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      New detector _check_convergence_rca_gap(): when the convergence record is red beyond a grace window
+      and no open source=ci_rca rec was filed since the red episode began, emit a convergence_rca_gap alert
+      into the report + one-line summary. Match on TIMESTAMP (rec creation vs the record's red-since), NOT
+      commit_sha -- ci_rca recs carry no structured commit_sha field (confirmed: the ci-rca agent doc and
+      every existing correlation verb match on timestamp/file/subject, never commit). Reuse the proven
+      _check_ci_rca_liveness / _fetch_ci_rca_recs_since pattern. commit_sha may ride the alert PAYLOAD (for
+      the operator) but must never be the match key. Generalises _check_ci_rca_liveness (which only inspects
+      ci.yml) to the convergence-record surface; aligned with the T2.35 correlate_ci_rca_with_main engine.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Detector cases: red record beyond grace + no matching open ci_rca rec -> alert; red + matching open
+      rec -> None; green record -> None; red within grace -> None.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    No terraform apply and no Lambda deploy. The only workflow change is additive on the failure path
+    (a new step + actions: write) -- it does not touch the plan/apply data path, so Decision 77 no-TOCTOU
+    and the deterministic apply guard are unaffected.
+  - >-
+    ci-rca.yml already exposes workflow_dispatch inputs run_id (required) + force_rca (optional) per
+    Decision 74; the self-dispatch reuses that interface unchanged (no ci-rca.yml edit required). The
+    dispatched run resolves head_sha from run_id via `gh api` (ci-rca.yml "Resolve run metadata" step).
+  - >-
+    GITHUB_TOKEN with actions: write can dispatch ci-rca.yml on the default branch; the added permission
+    is the minimum needed and is scoped to the two apply jobs only (least-privilege, Decision 35 posture).
+acceptance_criteria:
+  - >-
+    A gated-apply (or apply-sandbox) failure on a RE-RUN (run_attempt >= 2) dispatches ci-rca via
+    workflow_dispatch, so a source=ci_rca rec is filed independent of the workflow_run event -- the
+    confirmed run-28379330706 class of gap can no longer produce zero RCA signal.
+  - >-
+    The self-dispatch is gated on `failure() && github.run_attempt != '1'` so an attempt-1 failure (already
+    covered by workflow_run) does not double-fire; any residual overlap is collapsed by ci-rca's existing
+    per-category commit-status dedup (force_rca omitted).
+  - >-
+    validate.py (both tiers) fails if either apply job loses its failure-path ci-rca self-dispatch step or
+    its actions: write permission (structural guard registered via validate_ci_workflow_guards).
+  - >-
+    Preflight emits a convergence_rca_gap alert (report field + one-line summary) when the convergence
+    record is red beyond the grace window and no open source=ci_rca rec was filed since the red episode
+    began (matched on rec-creation timestamp vs the record's red-since -- ci_rca recs carry no commit_sha
+    field); it stays silent once such a rec exists, the record is green, or the red age is within grace.
+  - >-
+    The currently-stuck state is remediated: an RCA rec is filed for run 28379330706 and, after review, the
+    red convergence record is cleared via the workflow_dispatch acknowledge-and-retry path -- sandbox
+    auto-applies are unwedged.
+  - >-
+    validate.py --pre and the full unit suites for the three touched scripts pass; no regression in the
+    existing ci-workflow guards or ci-rca trigger gate.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: New structural guard passes on the real tree (both apply jobs carry the self-dispatch step + actions write).
+    command: bin/venv-python -m pytest tests/test_verify_ci_workflow.py -q
+    expected: All tests pass, including the new _check_apply_rca_fallback positive case.
+    fix_if: The guard fails on the unmodified tree -- the workflow edit is missing the step or the guard's match pattern is wrong.
+  - step: 2
+    phase: pre-deploy
+    action: Negative guard test -- a workflow copy with the failure-path dispatch step removed fails the guard.
+    command: >-
+      grep -q "def test_apply_rca_fallback_missing_step_fails" tests/test_verify_ci_workflow.py &&
+      bin/venv-python -m pytest tests/test_verify_ci_workflow.py::test_apply_rca_fallback_missing_step_fails
+      tests/test_verify_ci_workflow.py::test_apply_rca_fallback_missing_permission_fails -q
+    expected: The negative case asserts the guard raises when the step / actions:write is absent.
+    fix_if: rc=0 with the step removed -- the guard does not actually enforce presence (dead assertion).
+  - step: 3
+    phase: pre-deploy
+    action: The guard is registered in the presubmit tier (validate --pre runs it).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: --pre passes and prints the ci-workflow guards gate including the apply-rca-fallback guard PASS line.
+    fix_if: The guard is absent from the --pre output, or --pre fails -- guard not wired into validate_ci_workflow_guards.
+  - step: 4
+    phase: pre-deploy
+    action: The edited workflow is valid YAML and contains the dispatch primitive + actions:write in both jobs.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('.github/workflows/terraform-apply-sandbox.yml').read_text());
+      jobs=d['jobs']; assert all('actions' in jobs[j]['permissions'] and jobs[j]['permissions']['actions']=='write' for j in ('apply-sandbox','gated-apply')), 'actions:write missing';
+      import re; body=pathlib.Path('.github/workflows/terraform-apply-sandbox.yml').read_text(); assert body.count('gh workflow run ci-rca.yml')>=2, 'dispatch step count'; print('ok')"
+    expected: ok -- the file parses, both jobs have actions=write, and the ci-rca dispatch appears in both jobs.
+    fix_if: Assertion error -- malformed YAML, missing permission, or the dispatch step was added to only one job.
+  - step: 5
+    phase: pre-deploy
+    action: Preflight detector unit suite passes (red+no-rec -> alert; red+rec -> None; green -> None; within-grace -> None).
+    command: bin/venv-python -m pytest tests/test_session_preflight.py -q -k "convergence_rca_gap or rca_gap"
+    expected: All four detector cases pass.
+    fix_if: A case fails -- detector predicate (status / red-age / rec-since-timestamp) is wrong. Do NOT match on commit_sha (ci_rca recs carry none) -- a commit match fires a permanent false-positive.
+  - step: 6
+    phase: pre-deploy
+    action: Preflight runs end-to-end without crashing and the report carries the new alert key.
+    command: >-
+      bin/venv-python -m scripts.session_preflight >/dev/null 2>&1 &&
+      bin/venv-python -c "import json,pathlib; r=json.loads(pathlib.Path('logs/.preflight-report.json').read_text()); assert 'convergence_rca_gap_alert' in r; print('key present:', r['convergence_rca_gap_alert'])"
+    expected: The key is present (value is the alert dict for the current red record, or null once remediated).
+    fix_if: KeyError or preflight crash -- the report wiring or detector call raised instead of degrading to None.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Remediate the stuck run -- file the RCA for run 28379330706 by dispatching ci-rca (or file_rec if the
+      agent path is unavailable), confirm a source=ci_rca rec exists, then review it.
+    command: >-
+      bin/venv-python -m scripts.session_preflight --open-session --workflow implement >/dev/null 2>&1 || true;
+      echo "Dispatch: gh workflow run ci-rca.yml -f run_id=28379330706 (via GitHub MCP actions_run_trigger), then:";
+      bin/venv-python -m scripts.session_preflight | grep -i ci_rca
+    expected: >-
+      After the dispatch completes, preflight shows ci_rca >= 1 (an open source=ci_rca rec for the gated-apply
+      failure at commit 0b81f6a1); the convergence_rca_gap alert clears once the rec references the red commit.
+    fix_if: >-
+      No rec appears after dispatch -- inspect the dispatched ci-rca run's logs (evidence-bundle / FILED: marker);
+      the self-dispatch or the ci-rca agent filing path needs diagnosis (Decision 55, no inline workaround).
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Clear the red convergence record via the acknowledge-and-retry path once the RCA rec is reviewed, then
+      confirm the record is no longer red and sandbox auto-applies are unwedged.
+    command: >-
+      echo "Dispatch: gh workflow run terraform-apply-sandbox.yml -f acknowledge_red_commit=0b81f6a184d1a74b075082801ec9de2bfc4157d8 (or the rec id) via GitHub MCP actions_run_trigger";
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8])"
+    expected: >-
+      After the acknowledge-and-retry apply succeeds, the convergence record is green (or a fresh commit) and
+      the convergence_rca_gap alert is null on the next preflight.
+    fix_if: >-
+      The record stays red -- the underlying terraform apply is still failing (a real infra issue behind the
+      original gated-apply failure); RCA that separately, do NOT force the record green.
+  - step: 9
+    phase: post-deploy
+    action: Close the RCA rec once the fix + remediation land (Resolves trailer or ops_data_portal --update-rec).
+    command: >-
+      echo "Add a Resolves trailer (rec-NNNN) to the squash-merge body, or run bin/venv-python -m
+      scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution ..."
+    expected: The rec filed in step 7 is closed with a resolution referencing this plan.
+    fix_if: The rec stays open after merge -- rec-autoclose did not fire; close manually via the portal.
+constraints:
+  - >-
+    Decision 77 (no-TOCTOU / fail-closed guard): the new step runs ONLY on failure() AFTER the apply, never
+    in the plan/apply data path. It must not re-plan, re-read, or mutate plan.bin or the convergence record.
+  - >-
+    Decision 55 / 72: the self-dispatch only FILES an RCA rec (forward-fix signal); nothing auto-remediates
+    the failed apply. The remediation steps (7-8) are human-reviewed acknowledge-and-retry, not auto-revert.
+  - >-
+    Decision 94 (VP10 backstop clause) is the exact text this plan repairs: it assumed the
+    terraform-apply-sandbox workflow_run-failure trigger always fires. Cite it; the self-dispatch makes that
+    assumption hold on re-runs. Preserve the trust two-sub model and all existing guard behaviour byte-for-byte.
+  - >-
+    Decision 92 point 6 (apply failures wire into ci-rca) is the ratified obligation being restored; cite it.
+    The workflow_run trigger stays in place (it covers the fresh-push attempt-1 path); the self-dispatch is
+    additive belt-and-suspenders for the re-run path only.
+  - >-
+    Decision 74: reuse the ci-rca.yml workflow_dispatch run_id interface as-is; do NOT set force_rca (rely on
+    ci-rca's per-category commit-status dedup to collapse any overlap with a workflow_run-delivered run).
+  - >-
+    Decision 60/73: validate.py is the single source of truth for CI checks -- the structural guard lands in
+    verify_ci_workflow.py and is wired into validate.py; never add the assertion to ci.yml alone.
+  - >-
+    Public-repo boundary (Decision 101): no account IDs / ARNs / secrets in the workflow, guard, or detector.
+    The commit SHA 0b81f6a1 and run id 28379330706 are public Actions metadata (safe).
+  - "Decision 86: no new prose-architecture doc. All changes are code + workflow + tests. Only modify Scope files."
+context:
+  - >-
+    Confirmed failure: terraform-apply-sandbox run 28379330706 (run_number 126), gated-apply job, event=push,
+    head_branch=main, head_sha=0b81f6a184d1a74b075082801ec9de2bfc4157d8, run_attempt=2, conclusion=failure.
+    The gated-apply job failed at the "Terraform apply (gated -- plan.bin verbatim)" step on 2026-07-01
+    ~11:13Z, wrote a RED convergence record, and its own log printed "ci-rca will file a source=ci_rca rec."
+  - >-
+    No ci-rca run was dispatched for commit 0b81f6a1 (verified: zero references across the ci-rca run list;
+    every other workflow_run produced a ci-rca run, even if the if-gate skipped it). Preflight confirms
+    ci_rca=0 open, convergence_health=red (~20 min old at planning time), ci_rca_liveness_alert=null.
+  - >-
+    Root cause: ci-rca.yml triggers only on workflow_run:[CI, Main Canary, terraform-apply-sandbox] completed.
+    The failure arrived on a manual re-run (run_attempt 2, the normal way a gated apply executes after
+    Environment approval); GitHub does not reliably re-dispatch workflow_run workflows on re-run completions.
+    The design comments at terraform-apply-sandbox.yml:762-766 and :893-901, and Decision 94's VP10 backstop,
+    both assume workflow_run always catches gated-apply failures -- unsound for the re-run/late-approval path.
+  - >-
+    Why the existing detector missed it: scripts/session_preflight.py _check_ci_rca_liveness only queries
+    ci.yml (workflow "CI") push-to-main failures; it never inspects terraform-apply-sandbox or the convergence
+    record. The gated-apply failure is therefore invisible to it. The new _check_convergence_rca_gap detector
+    closes that blind spot.
+  - >-
+    Design decision (human-confirmed): self-dispatch gated on run_attempt != '1' precisely targets the
+    uncovered re-run path and avoids duplicate RCA runs on the fresh-push path (already covered by
+    workflow_run). The detector (step 2 layer) covers any residual attempt-1 miss. Scope = ALL apply paths
+    (both apply-sandbox and gated-apply jobs) + the detector + remediation of the stuck run.
+  - >-
+    Detector match key (plan-critique HIGH fix): ci_rca recs carry NO structured commit_sha field -- the
+    ci-rca agent doc requires only title/context/acceptance/context-v2-json, and every existing correlation
+    verb (_derive_ci_rca_since, correlate_ci_rca_with_main) matches on timestamp/file/subject. So the detector
+    MUST match on rec-creation-timestamp vs the record's red-since (the _check_ci_rca_liveness /
+    _fetch_ci_rca_recs_since pattern), NOT commit_sha -- a commit match would fire a permanent false-positive
+    even after a valid rec is filed (breaking acceptance criterion 4). commit_sha (which convergence_health.py
+    already reads from the record) may still ride the alert PAYLOAD for the operator; surface it there, but it
+    is not the match key.
+  - >-
+    Approval-window-expiry path (comment 762-766): an expired tf-gated-apply Environment window transitions the
+    waiting job to a failure() conclusion. That is also a re-run/non-attempt-1 conclusion, so the
+    run_attempt != '1' self-dispatch gate covers it; the attempt-1 fresh-push path stays workflow_run-covered.
+  - >-
+    ci-rca.yml workflow_dispatch already supports `-f run_id` (required) and `-f force_rca` (optional); the
+    dispatched job's if-gate is always-true for workflow_dispatch (no head_branch check), so a self-dispatched
+    run always reaches the agent. No ci-rca.yml change is required.
+  - >-
+    Decision-scout gate (Step 6a) returned NO_FLAGS. CITE list: 94 (clause repaired), 92 point 6 (governing
+    obligation), 77, 74, 72, 55, 60/73. Branch 0 commits behind origin/main at planning time; no Scope-file
+    overlap with main.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/tf-gated-apply-failure-aoyazi)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md Decision 94 / 92 / 77 / 74 read (backstop clause + obligation + no-TOCTOU + dispatch interface)
+  - >-
+    All Scope files located and readable; terraform-apply-sandbox.yml apply-sandbox (line 79) and gated-apply
+    (line 768) job permission blocks + record-write steps confirmed; verify_ci_workflow.py guard pattern
+    (_check_ci_rca_filter) and validate_ci_workflow_guards list confirmed; _check_ci_rca_liveness confirmed.
+  - Acceptance criteria understood and verifiable via V2 unit/integration tests + validate --pre
+execution_steps:
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml: add `actions: write` to the permissions block of BOTH the
+    apply-sandbox (line ~88) and gated-apply (line ~778) jobs. Add a final step to each job:
+    `- name: Self-dispatch ci-rca on re-run failure (workflow_run re-run gap)` with
+    `if: ${{ failure() && github.run_attempt != '1' }}`, env `GH_TOKEN: ${{ github.token }}`, and
+    `run: gh workflow run ci-rca.yml -f run_id=${{ github.run_id }}`. Update the gated-apply comment block
+    (762-766 / 893-901) to note the re-run gap and that the self-dispatch is the reliable path (workflow_run
+    remains the attempt-1 path). Do not touch the apply/plan/record-write logic.
+  - >-
+    scripts/verify_ci_workflow.py: add _check_apply_rca_fallback() -- load the workflow, assert for each of
+    ('apply-sandbox','gated-apply') that permissions.actions == 'write' and at least one step whose `if`
+    contains both 'failure()' and 'run_attempt' and whose `run` contains 'gh workflow run ci-rca.yml'. Raise
+    AssertionError with a precise message on any miss. Call it from main() alongside the existing checks.
+  - >-
+    scripts/validate.py: add ('apply-rca-fallback', _check_apply_rca_fallback) to the guards list in
+    validate_ci_workflow_guards (validate.py:2507; import it with the other _check_* names). No new top-level gate function needed.
+  - >-
+    tests/test_verify_ci_workflow.py: add test_apply_rca_fallback_passes (real tree) and
+    test_apply_rca_fallback_missing_step_fails / _missing_permission_fails (mutate a loaded copy of the
+    workflow dict -- drop the step or the actions:write -- write to a tmp path, assert the guard raises).
+  - >-
+    scripts/session_preflight.py: add _check_convergence_rca_gap(convergence_health, cache_rows) returning an
+    alert dict {commit_sha, red_age_hours, run_url?} when convergence_health.status == 'red',
+    red_age_minutes > GRACE (default 30, parity with _check_ci_rca_liveness), and NO open source=ci_rca rec
+    was filed since the red episode began. MATCH ON TIMESTAMP, not commit: reuse
+    _fetch_ci_rca_recs_since(red_since, cache_rows) exactly as _check_ci_rca_liveness does (ci_rca recs carry
+    no commit_sha field, so a commit match would fire a permanent false-positive). Derive red_since from the
+    convergence record (convergence_health.py already computes red_age_hours from the record's timestamp;
+    surface that start time). commit_sha may ride the alert PAYLOAD for the operator but is NOT the match key.
+    Add the result to the report as report['convergence_rca_gap_alert'] and a one-line summary token when
+    non-null. Degrade to None on any read/parse error (never crash preflight -- rec-2027 pattern).
+  - >-
+    tests/test_session_preflight.py: add cases -- red beyond grace + no matching rec -> alert; red + matching
+    open ci_rca rec -> None; green record -> None; red within grace -> None. Use the existing preflight test
+    fixtures/monkeypatch style (mock the convergence record + cache_rows).
+  - >-
+    Run the pre-deploy Verification Plan (steps 1-6); on green, commit (feat(gated-apply-rca-trigger): ...),
+    rebase onto origin/main, push, open the PR, subscribe, and merge per the implement skill commit flow.
+  - >-
+    Post-merge remediation (VP steps 7-9): dispatch ci-rca for run 28379330706 (GitHub MCP actions_run_trigger
+    on ci-rca.yml with run_id=28379330706), confirm the rec, review it, then dispatch the acknowledge-and-retry
+    (terraform-apply-sandbox.yml with acknowledge_red_commit=0b81f6a1...) to clear the red record; close the rec.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA
+    (Decision 55), never an inline workaround.
+  - "Report: what was implemented, verification results, whether the stuck run was remediated, and the convergence record's final state."
+rollback: >-
+  Fully reversible and forward-only. Reverting the terraform-apply-sandbox.yml step + actions:write restores
+  the prior workflow_run-only trigger (the pre-existing behaviour, gap included). The verify_ci_workflow guard
+  and validate.py wiring are pure additions -- removing them removes an assertion, no runtime impact. The
+  preflight detector degrades to None on any error and only ADDS a report field, so a bug in it cannot wedge
+  preflight (rec-2027 fail-safe). No data migration, no terraform apply, no Lambda deploy.
