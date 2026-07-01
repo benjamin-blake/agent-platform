@@ -1,0 +1,269 @@
+schema_version: 1
+slug: "gated-apply-red-record-remediation"
+intent: >-
+  Clear the currently-live RED convergence record (s3://agent-platform-data-lake/convergence/personal/sandbox.json,
+  status=red at commit 0b81f6a1, run 28379330706) that is wedging sandbox terraform auto-applies, and file the
+  RCA + durable-gap recommendations the anti-masking model requires. The original failure was a benign
+  "Error: Saved plan is stale" fail-close (Decision 77 no-TOCTOU), NOT a real infra defect. Clearing it is
+  non-trivial because the failed change is OUT-OF-BUDGET IAM (oidc.tf permissions_boundary propagation) and the
+  documented workflow_dispatch acknowledge-and-retry path cannot apply out-of-budget changes (gated-apply is
+  push-only; on dispatch an out-of-budget diff routes and both apply + record-write skip, leaving red). This is
+  a diagnose-then-branch operational remediation, run AFTER PLAN-gated-apply-rca-trigger is implemented.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-gated-apply-red-record-remediation.yaml
+phase: >-
+  Platform CI/CD operations (CD.35 / Decision 92). Operational follow-on to PLAN-gated-apply-rca-trigger
+  (which hardens the ci-rca trigger + adds the convergence_rca_gap detector). No new tier_item; one-time
+  remediation of a wedged sandbox convergence record plus two durable-tracking rec writes.
+scope:
+  - file: docs/SESSION_LOG.md
+    action: Modify
+    purpose: >-
+      Bookkeeping ONLY: append a dated remediation closeout entry recording the RCA rec id, the pending-diff
+      classification (empty / in-budget / out-of-budget), the clear-path taken, the restored GREEN convergence
+      record, and the durable-gap rec id. This is the ONLY repository file this plan modifies -- all substantive
+      work is operational (workflow dispatch + optional admin apply + ops_data_portal writes), mirroring the
+      single-repo-file shape of PLAN-t2-24-drift-live-demo.yaml. No account IDs / ARNs in the entry (Decision 101).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Sequencing dependency: run AFTER PLAN-gated-apply-rca-trigger is implemented + merged (self-dispatch steps
+    + the convergence_rca_gap preflight detector live). The RCA filing itself uses ci-rca.yml workflow_dispatch,
+    which already exists (Decision 74), so step 1 is technically independent -- but VP step 6 verifies the
+    convergence_rca_gap detector clears, which requires plan-1's detector to be present.
+  - >-
+    Live starting state verified at planning time (2026-07-01): convergence record status=RED, commit_sha
+    0b81f6a1, run_id 28379330706. Read via `aws s3 cp ... --profile agent_platform`. The sandbox is wedged:
+    a fresh terraform/personal push hits the convergence precondition and is refused-while-red.
+  - >-
+    Root cause of the failure (from run 28379330706 gated-apply logs): `Error: Saved plan is stale -- the given
+    plan file can no longer be applied because the state was changed by another operation after the plan was
+    created.` This is the Decision 77 no-TOCTOU guard working as designed (a stale saved plan.bin fails closed),
+    NOT a terraform/IAM defect. No code fix is warranted; the remediation is to converge to current HEAD.
+  - >-
+    CRITICAL recovery-path constraint (the reason this plan branches): the gated-apply job runs ONLY on
+    `github.event_name == 'push'`. On workflow_dispatch, an out-of-budget diff sets routed=true, the apply step
+    and the record-write step both skip (both gated on routed != true), and gated-apply does not run -- so a
+    workflow_dispatch acknowledge-and-retry CANNOT apply an out-of-budget change or clear its red record.
+    Branch selection is therefore governed by the guard verdict on a fresh plan.
+  - >-
+    agent_platform (PlatformDev, read) suffices for diagnosis + the in-budget/empty branch (A). agent_platform_admin
+    (PlatformAdmin) is REQUIRED in the implementation container ONLY IF branch B (out-of-budget) is taken -- the
+    local terraform/personal apply of the boundary change is beyond the PlatformDev runtime grant. Confirm admin
+    availability with the human before branch B; if unavailable, STOP and escalate.
+  - >-
+    Public-repo boundary (Decision 101): never write account IDs / ARNs / ExternalIds into the SESSION_LOG
+    closeout, the RCA rec, or the durable-gap rec. Use role NAMES / slugs. terraform/personal admin apply follows
+    the "Running terraform/personal on CC-web" procedure in terraform/CLAUDE.md (recover no-default tfvars from
+    remote state; never paste account_id / ExternalIds).
+acceptance_criteria:
+  - >-
+    An RCA rec (source=ci_rca) is filed for run 28379330706 documenting the stale-plan fail-close and reviewed as
+    benign (no code fix). Per Decision 72/55 this rec IS this plan's own RCA being actioned under /plan review --
+    not an inline hot-patch that skips the queue; it is closed at the end (criterion 6), not left open.
+  - >-
+    The pending terraform/personal diff is classified via a fresh plan (empty / in-budget / out-of-budget) by
+    dispatching acknowledge-and-retry and reading the apply-sandbox guard verdict (routed=true => out-of-budget),
+    and the classification is recorded in the SESSION_LOG closeout.
+  - >-
+    The convergence record is restored to GREEN at HEAD by the workflow itself (never hand-written): branch A
+    (empty/in-budget) -- the acknowledge-and-retry dispatch applies directly and writes green; branch B
+    (out-of-budget) -- the human-confirmed admin apply lands the boundary change, then a re-dispatched
+    acknowledge-and-retry sees an empty/in-budget fresh plan, applies, and writes green.
+  - >-
+    A SEPARATE recommendation is filed documenting the out-of-budget red-record recovery deadlock (workflow_dispatch
+    acknowledge-and-retry cannot apply out-of-budget; gated-apply is push-only) so it is durably tracked and fixed.
+  - >-
+    The convergence_rca_gap preflight detector (from PLAN-gated-apply-rca-trigger) reads null after remediation,
+    and a subsequent terraform/personal push is no longer refused-while-red (sandbox unwedged).
+  - >-
+    The RCA rec is closed with a resolution referencing this plan, and docs/SESSION_LOG.md carries the dated
+    closeout entry.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm PLAN-gated-apply-rca-trigger has been implemented on main (self-dispatch steps present).
+    command: >-
+      git fetch origin main --quiet &&
+      test "$(git show origin/main:.github/workflows/terraform-apply-sandbox.yml | grep -c 'gh workflow run ci-rca.yml')" -ge 2 &&
+      echo "self-dispatch present"
+    expected: "self-dispatch present -- both apply jobs carry the ci-rca self-dispatch step (plan-1 landed)."
+    fix_if: Count < 2 -- PLAN-gated-apply-rca-trigger is not yet implemented; run it first before this remediation.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the convergence record is still RED at 0b81f6a1 (remediation still needed).
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8], 'run', d.get('run_id'))"
+    expected: "status red commit 0b81f6a1 run 28379330706 -- the wedge is live."
+    fix_if: "status green -- already cleared by another operation; skip to VP step 7 (file the durable-gap rec) and close out."
+  - step: 3
+    phase: post-deploy
+    action: >-
+      File the RCA rec for run 28379330706 by dispatching ci-rca.yml, then confirm a source=ci_rca rec exists.
+      This rec is this plan's own bundled RCA, actioned under /plan review (Decision 72), not an inline hot-patch.
+    command: >-
+      echo "Dispatch via GitHub MCP: actions_run_trigger workflow=ci-rca.yml ref=main inputs.run_id=28379330706";
+      bin/venv-python -m scripts.session_preflight | grep -i ci_rca
+    expected: >-
+      After the dispatched ci-rca run completes, preflight shows ci_rca >= 1 (an open source=ci_rca rec for the
+      stale-plan failure at 0b81f6a1). Record the rec id for the closeout + the Resolves: trailer.
+    fix_if: >-
+      No rec appears -- inspect the dispatched ci-rca run logs (evidence bundle / FILED: marker). If ci-rca
+      abstains (bundle-absent), file the rec manually via get_rec_write_guidance + ops_data_portal file_rec
+      (source=ci_rca, rca_confidence=undetermined). Do NOT proceed without the audit rec (Decision 55/72).
+  - step: 4
+    phase: post-deploy
+    action: >-
+      Diagnose + attempt the in-budget/empty clear: dispatch terraform-apply-sandbox.yml with
+      acknowledge_red_commit=0b81f6a1 and inspect the apply-sandbox job's guard verdict via the GitHub MCP.
+    command: >-
+      echo "Dispatch via GitHub MCP: actions_run_trigger workflow=terraform-apply-sandbox.yml ref=main inputs.acknowledge_red_commit=0b81f6a184d1a74b075082801ec9de2bfc4157d8";
+      echo "Then read the apply-sandbox job: pull_request_read/get_job_logs -- look for 'routed=true' (out-of-budget) vs a completed apply (in-budget/empty)."
+    expected: >-
+      Guard PASS (in-budget/empty) -> apply-sandbox applies on the dispatch and writes GREEN (branch A, go to step 5);
+      OR routed=true (out-of-budget) -> the dispatch is a safe no-op, record stays red (branch B, go to step 6).
+    fix_if: >-
+      The apply-sandbox job fails for any reason OTHER than routing (e.g. precondition read error) -- diagnose that
+      failure; do not proceed to branch B until the dispatch cleanly classifies the diff.
+  - step: 5
+    phase: post-deploy
+    action: "Branch A (in-budget/empty diff): confirm the acknowledge-and-retry dispatch wrote GREEN."
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8])"
+    expected: "status green at HEAD -- branch A complete; skip step 6 and go to step 7."
+    fix_if: "Still red after a guard-PASS dispatch -- inspect the apply-sandbox apply + record-write step logs (write-verify failure?)."
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Branch B (out-of-budget diff): present the fresh `terraform plan` to the human for confirmation (Decision
+      98 / 77 -- admin IAM apply is human-gated, NOT autonomous). On confirmation, apply the boundary change via
+      agent_platform_admin (terraform/CLAUDE.md procedure), then re-dispatch acknowledge-and-retry so the now-empty
+      fresh plan applies and the workflow writes GREEN (the record is written by the workflow, never by hand).
+    command: >-
+      cd terraform/personal &&
+      terraform plan -input=false -var-file=terraform.personal.tfvars -out=/tmp/remediation.plan &&
+      echo "PRESENT /tmp/remediation.plan TO THE HUMAN; on confirmation: terraform apply /tmp/remediation.plan (agent_platform_admin), then re-dispatch acknowledge_red_commit=0b81f6a1..."
+    expected: >-
+      Human confirms the plan shows only the expected boundary propagation (permissions_boundary on
+      github_ci_branch + github_ci_pr, no destroys); admin apply succeeds; the re-dispatched acknowledge-and-retry
+      then writes GREEN (empty fresh plan -> guard PASS -> apply -> green).
+    fix_if: >-
+      The plan shows unexpected destroys/changes -- STOP, do not apply, escalate. If admin creds are unavailable,
+      STOP and escalate (the out-of-budget branch cannot proceed without PlatformAdmin).
+  - step: 7
+    phase: post-deploy
+    action: >-
+      File the SEPARATE durable-gap recommendation for the out-of-budget red-record recovery deadlock via the ops
+      portal (surface field semantics first per the Precision Context Injection rule).
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --get-rec-write-guidance 2>/dev/null || echo "call get_rec_write_guidance()";
+      echo "Then file_rec: title/context/acceptance describing that workflow_dispatch acknowledge-and-retry cannot apply out-of-budget changes (gated-apply is push-only) so an out-of-budget gated-apply failure can deadlock; propose making the dispatch-ack path able to apply out-of-budget after tf-gated-apply approval. No account IDs/ARNs (Decision 101)."
+    expected: A new rec is filed (writer-allocated id) documenting the deadlock; record its id for the closeout.
+    fix_if: file_rec fails -- confirm the agent_platform assume-role chain (aws sts get-caller-identity --profile agent_platform); re-file after restoring connectivity (Decision 84 -- no offline outbox).
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Verify unwedged + detector clear, close the RCA rec, and append the SESSION_LOG closeout.
+    command: >-
+      bin/venv-python -m scripts.session_preflight >/dev/null 2>&1 &&
+      bin/venv-python -c "import json,pathlib; r=json.loads(pathlib.Path('logs/.preflight-report.json').read_text()); print('convergence_health', (r.get('convergence_health') or {}).get('status')); print('convergence_rca_gap_alert', r.get('convergence_rca_gap_alert'))" &&
+      echo "Then: ops_data_portal --update-rec <rca-rec-id> --status closed --resolution 'stale-plan fail-close; converged via remediation plan'; and append the dated closeout to docs/SESSION_LOG.md."
+    expected: >-
+      convergence_health green (or non-red) and convergence_rca_gap_alert null; the RCA rec closed; SESSION_LOG
+      carries the dated entry (RCA rec id, classification, clear-path, durable-gap rec id).
+    fix_if: >-
+      Detector still fires or health still red -- the record did not actually clear; re-inspect steps 5/6. Rec
+      close fails -- use the Resolves: trailer fallback or retry the portal update.
+constraints:
+  - >-
+    Decision 77 (no-TOCTOU): the stale-plan RED is the guard working as designed. Do NOT bypass or weaken the
+    guard; converge by re-planning against current HEAD (fresh plan), never by force-applying a stale plan.
+  - >-
+    Decision 72 / 55 (RCA-first, no autonomous fix): the ci-rca rec (step 3) IS this plan's own RCA, actioned
+    under /plan review -- this is NOT an inline hot-patch that skips the review queue. Nothing auto-remediates;
+    branch B's admin apply is human-confirmed (step 6). Close the rec via update-rec / Resolves: trailer at the end.
+  - >-
+    Decision 92 / CD.35: the convergence record is written ONLY by the terraform-apply-sandbox workflow on a real
+    successful apply -- NEVER hand-write green. Branch B reaches green by making the fresh plan empty (admin apply)
+    then letting the workflow write it. Out-of-budget routing to tf-gated-apply is preserved.
+  - >-
+    Decision 98 / 77 (admin IAM apply is human-gated): branch B MUST present the terraform plan to the human and
+    obtain confirmation before the admin apply; agent_platform_admin only, terraform/CLAUDE.md procedure.
+  - >-
+    Decision 84 (single ops portal): both rec writes (RCA + durable-gap) and the close go through ops_data_portal
+    file_rec / update_rec; ids are writer-allocated; never edit logs/.recommendations-log.jsonl directly.
+  - >-
+    Decision 101 (public-repo boundary): no account IDs / ARNs / ExternalIds in SESSION_LOG, either rec, or any
+    committed artifact. Role names / slugs only.
+  - "Decision 86: no new prose-architecture doc. The only repo edit is the SESSION_LOG bookkeeping append. Only modify Scope files."
+context:
+  - >-
+    Live evidence: run 28379330706 (terraform-apply-sandbox, gated-apply job, run_attempt 2) failed at
+    `terraform apply` with `Error: Saved plan is stale`; the saved plan.bin (key bb20043d, PR #316 head) went
+    stale between speculative-plan and the late gated approval. The always-run record-write then latched RED at
+    commit 0b81f6a1. Verified still red at planning time.
+  - >-
+    Recovery-path analysis (the crux): gated-apply `if:` requires github.event_name == 'push'. On workflow_dispatch
+    an out-of-budget diff -> guard exit 2 -> routed=true -> apply step skips (if routed != true) -> record-write
+    skips (if routed == true) -> gated-apply does not run. Net: workflow_dispatch acknowledge-and-retry is a no-op
+    for out-of-budget changes. Branch A (in-budget/empty) applies directly on dispatch and writes green; branch B
+    (out-of-budget) needs the admin apply to make the fresh plan empty, after which the dispatch writes green.
+  - >-
+    The failed change is out-of-budget IAM (oidc.tf permissions_boundary propagation to github_ci_branch +
+    github_ci_pr, from T2.25 / commit 0b81f6a1). If that boundary was never applied (likely, since the apply
+    failed and no later apply cleared the record), the fresh plan is still out-of-budget -> branch B. If a later
+    op applied it, the fresh plan is empty -> branch A. Step 4's dispatch resolves which, deterministically.
+  - >-
+    Decision-scout gate (Step 6a) returned FLAGS_FOUND (two NOTE flags, both resolved in this plan): (1) Decision
+    72/55 -- the ci-rca rec is the plan's own RCA actioned under review, not a queue-skipping hot-patch (see
+    constraints + criterion 1); (2) Decision 77/98 -- branch B admin apply is human-confirmed (step 6). CITE list:
+    77, 92, 74, 72, 84, 98; Decision 94 cited in the durable-gap rec as the admin-apply-workaround precedent.
+  - >-
+    Precedent for the single-repo-file operational shape: PLAN-t2-24-drift-live-demo.yaml (IMPLEMENTATION, V3,
+    scope = one bookkeeping file, substance in the VP; live convergence-record observation as verification).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/tf-gated-apply-failure-aoyazi)
+  - docs/PROJECT_CONTEXT.md read; terraform/CLAUDE.md "Running terraform/personal on CC-web" procedure read (branch B)
+  - docs/DECISIONS.md 77 / 92 / 98 / 72 / 55 / 74 / 84 read (no-TOCTOU + CD.35 clearing model + admin-apply gate + RCA-first + portal)
+  - >-
+    PLAN-gated-apply-rca-trigger implemented on main (VP step 1); convergence record still red (VP step 2);
+    agent_platform read confirmed; agent_platform_admin availability confirmed with the human IF branch B is possible.
+  - Acceptance criteria understood; branch-A vs branch-B decision point (guard verdict, VP step 4) understood.
+execution_steps:
+  - >-
+    Preflight the remediation: run VP steps 1-2 (confirm plan-1 landed + record still red). If already green, skip
+    to the durable-gap rec (step 7) and closeout.
+  - >-
+    File the RCA rec for run 28379330706 (VP step 3): dispatch ci-rca.yml -f run_id=28379330706 via the GitHub MCP
+    actions_run_trigger; confirm the source=ci_rca rec; review it as a benign stale-plan fail-close (no code fix).
+    Record the rec id.
+  - >-
+    Diagnose + attempt clear (VP step 4): dispatch terraform-apply-sandbox.yml with
+    acknowledge_red_commit=0b81f6a184d1a74b075082801ec9de2bfc4157d8; inspect the apply-sandbox guard verdict.
+  - >-
+    Branch A (guard PASS / in-budget / empty): the dispatch applied and wrote green -- confirm via VP step 5.
+  - >-
+    Branch B (routed=true / out-of-budget): present the fresh terraform plan to the human (Decision 98/77); on
+    confirmation, apply the boundary via agent_platform_admin; re-dispatch acknowledge-and-retry so the now-empty
+    plan applies and the workflow writes green (VP step 6). If admin creds are unavailable, STOP and escalate.
+  - >-
+    File the SEPARATE durable-gap rec (VP step 7): call get_rec_write_guidance(), then ops_data_portal file_rec
+    documenting the out-of-budget recovery deadlock + the proposed durable fix (dispatch-ack able to apply
+    out-of-budget after tf-gated-apply approval). No account IDs/ARNs.
+  - >-
+    Verify + close (VP step 8): confirm convergence green + convergence_rca_gap_alert null + sandbox unwedged;
+    close the RCA rec (update-rec / Resolves: trailer); append the dated closeout to docs/SESSION_LOG.md.
+  - >-
+    Execute the Verification Plan -- run each step; on an unrecoverable failure STOP and escalate (Decision 55),
+    never a workaround or a hand-written convergence record.
+  - "Report: RCA rec id, diff classification + branch taken, final convergence status, durable-gap rec id."
+rollback: >-
+  Low-risk and non-destructive. The remediation only converges the sandbox to current HEAD (a real apply the
+  system already intends) and files audit recs; it deploys nothing new. If branch B's admin plan shows anything
+  unexpected, it is not applied (human-gated). The convergence record is only ever written GREEN by the workflow
+  after a genuine successful apply -- there is no hand-write to revert. The SESSION_LOG append and the two recs
+  are additive audit trail. If the record cannot be cleared (e.g. admin unavailable), the safe state is the
+  existing RED (wedged-but-honest) plus the filed RCA + durable-gap recs, escalated to the human.
