@@ -115,6 +115,38 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "test_pipeline.py"
 
+    def test_maps_scripts_checks_nested_module_to_test_validate(self) -> None:
+        """scripts/checks/<domain>/<module>.py maps to tests/test_validate.py (Decision 104).
+
+        Closes the coverage-gate hole: the pre-extension rule (len(parts) == 2) silently
+        skipped every nested scripts/checks/** module.
+        """
+        source = ROOT / "scripts" / "checks" / "sloc" / "sloc_limits.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_validate.py"
+
+    def test_maps_scripts_checks_domain_helper_to_test_validate(self) -> None:
+        """A domain-package helper module (e.g. contracts/_shared.py) also maps to test_validate.py."""
+        source = ROOT / "scripts" / "checks" / "contracts" / "_shared.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_validate.py"
+
+    def test_maps_scripts_checks_registry_to_test_checks_registry(self) -> None:
+        """scripts/checks/registry.py maps to tests/test_checks_registry.py, not test_validate.py."""
+        source = ROOT / "scripts" / "checks" / "registry.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_checks_registry.py"
+
+    def test_maps_scripts_checks_common_to_test_checks_registry(self) -> None:
+        """scripts/checks/_common.py maps to tests/test_checks_registry.py, not test_validate.py."""
+        source = ROOT / "scripts" / "checks" / "_common.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_checks_registry.py"
+
 
 class TestCheckTestFileExists:
     """Tests for check_test_file_exists()."""

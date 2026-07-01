@@ -42,11 +42,21 @@ def extract_definitions(file_path: Path) -> list[str]:
     return names
 
 
+# scripts/checks/registry.py and _common.py are the check-registry mechanism itself
+# (Decision 104); they're exercised directly by tests/test_checks_registry.py (frozen
+# baseline, facade completeness, mock-interception, owner metadata), not by any
+# individual check's tests in tests/test_validate.py.
+_CHECKS_REGISTRY_MECHANISM_FILES = {"_common.py", "registry.py"}
+
+
 def map_source_to_test(source_path: Path) -> Path | None:
     """Map a source file path to its expected test file path.
 
-    src/**/*.py  -> tests/test_{module}.py  (e.g. src/common/config.py -> tests/test_config.py)
-    scripts/*.py -> tests/test_{name}.py    (e.g. scripts/validate.py -> tests/test_validate.py)
+    src/**/*.py           -> tests/test_{module}.py  (e.g. src/common/config.py -> tests/test_config.py)
+    scripts/*.py          -> tests/test_{name}.py     (e.g. scripts/validate.py -> tests/test_validate.py)
+    scripts/checks/**/*.py -> tests/test_validate.py  (every extracted check's tests live there,
+                              colocated with the pre-decomposition monolith's test file -- Decision 104),
+                              except registry.py/_common.py which map to tests/test_checks_registry.py.
 
     Returns None for paths not under src/ or scripts/.
     """
@@ -62,6 +72,10 @@ def map_source_to_test(source_path: Path) -> Path | None:
     if parts[0] == "src" and len(parts) >= 2:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"
+    elif parts[0] == "scripts" and len(parts) >= 2 and parts[1] == "checks":
+        if len(parts) >= 3 and parts[2] in _CHECKS_REGISTRY_MECHANISM_FILES:
+            return ROOT / "tests" / "test_checks_registry.py"
+        return ROOT / "tests" / "test_validate.py"
     elif parts[0] == "scripts" and len(parts) == 2:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"
