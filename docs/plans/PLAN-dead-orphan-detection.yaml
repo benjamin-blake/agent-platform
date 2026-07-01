@@ -1,0 +1,229 @@
+schema_version: 1
+slug: "dead-orphan-detection"
+intent: >-
+  Implement T3.13: a deterministic source-code dead/orphan detector that combines reachability over
+  the T3.12 dependency graph with a grep cross-check, so agents and the human get a trustworthy
+  two-tier verdict on unused source code -- serving the "agent context is a first-class resource"
+  driver by making dead code visible without ever auto-deleting it.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dead-orphan-detection.yaml
+phase: >-
+  Platform roadmap tier_item T3.13 (Source-code dead/orphan detection). Consumes the complete T3.12
+  dependency graph. Part of the T3.11-T3.14 context-leanness group. Not a product-roadmap phase.
+scope:
+  - file: scripts/dead_code_detector.py
+    action: Create
+    purpose: >-
+      Deterministic detector -- reachability over the T3.12 graph (scripts.dependency_graph) plus a
+      grep cross-check across .py and non-Python surfaces; emits a two-tier confidence JSON verdict
+      (high-confidence dead vs low-confidence dynamically-referenced). No LLM, no auto-deletion. CLI
+      with --granularity module|symbol. Kept under 500 SLOC (Decision 43/102) with no new budget entry.
+  - file: tests/test_dead_code_detector.py
+    action: Create
+    purpose: >-
+      Unit tests over a synthetic tmp-repo fixture tree exercising real code paths: module-level
+      reachability, symbol-level candidates, the grep downgrade (non-Python surface hit ->
+      low-confidence), the src/scripts-only + tests-excluded boundary, output-schema shape, and
+      determinism. 100% coverage of the new source (tests/CLAUDE.md coverage policy).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Running `bin/venv-python -m scripts.dead_code_detector --granularity module` on the real repo
+    exits 0 and emits valid JSON with keys `high_confidence_dead`, `low_confidence_dynamically_referenced`,
+    `summary`, and `metadata`; candidates are computed as src/ + scripts/ non-test graph nodes
+    unreachable from the T3.12 declared root set (manifest handlers/includes + main()/CLI + pytest). [EC1]
+  - >-
+    Every candidate is grep-cross-checked across .py AND non-Python surfaces (src/lambdas/*/manifest.yaml,
+    **/*.tf, *.prompt.md, .github/workflows/*.yml, .github/agents/schedule.yaml, .claude/**/*.md); any
+    candidate with a reference on any surface (outside its own defining file) is reported in
+    `low_confidence_dynamically_referenced`, never in `high_confidence_dead`. [EC2]
+  - >-
+    High-confidence dead (graph-unreachable AND grep-absent) is reported in a list separate from the
+    low-confidence list; the tool writes/deletes no source files (mark-then-surface, Decision 55). [EC3]
+  - >-
+    The detector is deterministic and LLM-free: two consecutive runs on an unchanged tree produce
+    byte-identical JSON. It supersedes the grep-only orphan-code scheduled agent, whose disable
+    mechanism is verified at implement-time (EventBridge rule state=DISABLED in terraform/scheduled_agents.tf
+    AND dispatcher env SCHEDULED_AGENTS_ENABLED=false); the physical orphan-code prompt retirement is
+    deferred to the next data-pipeline Lambda deploy (Option A -- no dormant-Lambda redeploy this session). [EC4]
+  - >-
+    Candidate computation is restricted to src/ and scripts/ modules and excludes tests/, honouring the
+    T3.13<->T3.7 boundary (dead SOURCE vs dead/redundant TESTS are disjoint jobs). [EC5]
+  - >-
+    `scripts/dead_code_detector.py` is under 500 SLOC and adds NO entry to config/sloc_budgets.yaml
+    (Decision 102 -- growth budget respected, not waived); `bin/venv-python -m scripts.validate --pre`
+    passes (SLOC gate, ruff, plan-schema, and new-source coverage all green).
+  - >-
+    `--granularity symbol` runs and emits the same JSON shape with symbol-kind candidates (function/class
+    nodes), relying on the grep cross-check as recall insurance for the graph's known-unsound symbol layer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the unit suite -- exercises module reachability, symbol candidates, the grep downgrade
+      (non-Python surface hit -> low-confidence), the src/scripts-only + tests-excluded filter, output
+      schema, and determinism over a synthetic tmp-repo fixture (real code paths, not mocked).
+    command: bin/venv-python -m pytest tests/test_dead_code_detector.py -q
+    expected: All tests pass; exit code 0.
+    fix_if: >-
+      A failure here means the reachability, grep-downgrade, boundary, or determinism logic is wrong.
+      Inspect the failing assertion; fix the detector logic (not the test) unless the test encodes a
+      wrong expectation.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Real-repo module-granularity smoke -- confirm the CLI runs end-to-end against the live graph and
+      emits parseable JSON (proves the T3.12 consumption and grep surfaces resolve on the real tree).
+    command: bin/venv-python -m scripts.dead_code_detector --granularity module | bin/venv-python -m json.tool > /dev/null && echo VALID_JSON
+    expected: Prints VALID_JSON; exit code 0.
+    fix_if: >-
+      Non-zero exit or a json.tool parse error means the CLI crashed or emitted malformed JSON. Run the
+      detector without the pipe to read the traceback; common causes are an unhandled path/glob or a
+      non-serialisable value in the output dict.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Symbol-granularity smoke -- confirm the unsound symbol layer path also runs and emits the same
+      JSON shape (grep cross-check active as recall insurance).
+    command: bin/venv-python -m scripts.dead_code_detector --granularity symbol | bin/venv-python -m json.tool > /dev/null && echo VALID_JSON
+    expected: Prints VALID_JSON; exit code 0.
+    fix_if: >-
+      A crash here (but not in step 2) isolates the fault to the symbol-node candidate path or its grep
+      cross-check; inspect the symbol-branch code.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Determinism check -- run the detector twice and diff the outputs; identical bytes prove the
+      no-LLM deterministic contract (sorted lists, no timestamps).
+    command: bin/venv-python -m scripts.dead_code_detector --granularity module > /tmp/dc1.json && bin/venv-python -m scripts.dead_code_detector --granularity module > /tmp/dc2.json && diff /tmp/dc1.json /tmp/dc2.json && echo DETERMINISTIC
+    expected: diff reports no differences; prints DETERMINISTIC; exit code 0.
+    fix_if: >-
+      Any diff means non-deterministic output -- most likely an unsorted collection or an incidental
+      timestamp/set-ordering leak. Sort every emitted list and remove any wall-clock field.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Verify the disable mechanism claim for the superseded orphan-code agent (EC4) -- confirm the
+      EventBridge rule is DISABLED and the dispatcher env flag is false in terraform.
+    command: grep -n "SCHEDULED_AGENTS_ENABLED = \"false\"" terraform/scheduled_agents.tf && grep -n "state *= *\"DISABLED\"" terraform/scheduled_agents.tf
+    expected: >-
+      Both greps match (dispatcher env flag false; at least one DISABLED rule state present), confirming
+      the scheduled-agent path is off and no redeploy is warranted this session.
+    fix_if: >-
+      If either grep does not match, the disable-mechanism claim in EC4 is stale -- re-verify the actual
+      runtime state via the AGENTS.md re-enable runbook before asserting supersession, and surface the
+      discrepancy rather than assuming the agent is off.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Authoritative pre-merge gate -- runs the SLOC budget check (Decision 102, confirms the new file is
+      under 500 SLOC with no budget entry), ruff, plan-schema validation, and new-source coverage.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Validation passes with no failures.
+    fix_if: >-
+      A SLOC failure means the file exceeded 500 lines -- extract helpers or trim rather than registering
+      a sloc_budgets.yaml entry. A coverage failure means tests/test_dead_code_detector.py does not cover
+      all new lines -- add the missing cases. A ruff/schema failure is a formatting/plan-shape fix.
+constraints:
+  - >-
+    No LLM anywhere in the detector -- pure ast/networkx (via scripts.dependency_graph) + deterministic
+    grep. The whole point is to supersede the LLM grep-only agent with a deterministic tool.
+  - >-
+    No automatic deletion or mutation of source files. Mark-then-surface only; the human/PR decides
+    (Decision 55 no-rescue-loop / no-autonomous-workaround posture).
+  - >-
+    grep is used only in the conservative direction: a reference HIT downgrades a candidate to
+    low-confidence. Substring over-matching may therefore under-report dead code but MUST never promote
+    a referenced symbol into high_confidence_dead.
+  - >-
+    Do NOT edit .github/prompts/scheduled/orphan-code.prompt.md or .github/agents/schedule.yaml this
+    session -- both are bundled assets of the status:active data-pipeline Lambda, and editing them would
+    force a Decision 79 build/deploy/smoke-test cycle for an already-disabled agent (Option A).
+  - >-
+    Keep scripts/dead_code_detector.py under 500 SLOC and add NO new config/sloc_budgets.yaml entry
+    (Decision 43/102 -- respect the growth budget, do not waive it).
+  - >-
+    No new validate.py hard gate and no new standing prose doc. Detection/measurement only; validate
+    surfacing and the context-budget metric belong to T3.14 (Decision 73 budget discipline; Decision 86
+    no-new-prose-doc -- the JSON output is the machine-parseable artefact).
+  - >-
+    Do not persist detector output to the warehouse or any logs/ read-cache (Decision 84); the tool is
+    read-time compute that writes nothing.
+context:
+  - >-
+    Consumes T3.12 (scripts/dependency_graph.py, status complete). Stable API used: build_graph(repo_root,
+    granularity), roots(graph), reachable_from_roots(graph, module), and the module/symbol node `kind`
+    attribute. Reuse dependency_graph.KNOWN_UNSOUND in the output metadata to surface dynamic-dispatch
+    blind spots rather than re-listing them.
+  - >-
+    Reachability efficiency: compute the reachable set once as the union of each root plus its
+    networkx descendants, then candidates = module (and, for symbol granularity, symbol) nodes not in
+    that set. Do NOT call reachable_from_roots per-node in a loop over the whole graph (O(roots*nodes)).
+  - >-
+    Grep cross-check surfaces (enumerated once, searched as text, defining file excluded): all .py under
+    src/ scripts/ tests/, src/lambdas/*/manifest.yaml, **/*.tf, *.prompt.md, .github/workflows/*.yml,
+    .github/agents/schedule.yaml, .claude/**/*.md. For a module candidate search its short (last-dotted)
+    name and dotted path; for a symbol candidate search its short name. A hit outside the defining file
+    -> low_confidence_dynamically_referenced with the referencing surface recorded.
+  - >-
+    Decision scout (FLAGS_FOUND, no BLOCK) CITE list: Decision 79 (per-Lambda gating -- why this stays
+    V2 and the prompt asset is untouched), Decision 55 (mark-then-surface, no auto-repair), Decision 75
+    (frame-lock -- the T3.12 graph reframes the old grep-only agent), Decision 73 (two-tier CI -- no new
+    --pre gate here). NOTE flags accepted: Decision 43/102 SLOC cap (keep <500, no budget entry) and
+    Decision 79 V2/V3 fork (Option A -- detector-only, deferred prompt retirement).
+  - >-
+    Option A rationale (human-confirmed): the orphan-code prompt is a bundled asset of the status:active
+    data-pipeline Lambda; the scheduled agent is already disabled at the infra level, so redeploying the
+    Lambda solely to edit a dormant prompt is churn against Decision 80 lean posture. Exit-criterion EC4
+    is satisfied by the deterministic supersession + verified disable mechanism; the physical prompt
+    retire/retarget is deferred to the next data-pipeline deploy.
+  - >-
+    Related open recs surfaced but NOT bundled this session (additive plan, no closure obligation):
+    rec-163 (Improve orphan-code agent: hybrid AST script + LLM) -- directionally superseded by this
+    deterministic detector; rec-031 (workflow orphan cleanup) -- adjacent. Leave for a follow-up that
+    also lands the physical prompt retirement.
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main. T3.13
+    depends_on [T3.12] is satisfied (T3.12 complete 2026-06-30).
+  - >-
+    tests/CLAUDE.md gotchas: load the script under test via importlib.util (mirror test_dependency_graph.py's
+    header) since scripts/ is not an importable package prefix in the test context; use one consolidated
+    import block; new source needs 100% coverage.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dead-orphan-detection-453a9s)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision scout gate run (FLAGS_FOUND, no BLOCK) -- decisions 79/55/75/73 to cite, 43/102 + 79 NOTE flags accepted
+  - scripts/dependency_graph.py (T3.12) read and its stable API confirmed
+  - tests/test_dependency_graph.py read for the importlib.util loading + tmp-repo fixture pattern
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/dead_code_detector.py -- import scripts.dependency_graph; build the graph, compute the
+    reachable set once (union of each root + its descendants), derive candidates (src/ + scripts/ nodes,
+    tests excluded) at module granularity and, when --granularity symbol, symbol-kind nodes. For each
+    candidate grep the enumerated surfaces (defining file excluded); a hit -> low_confidence_dynamically_referenced
+    (record the surface), otherwise -> high_confidence_dead. Emit deterministic sorted JSON with summary +
+    metadata (reuse dependency_graph.KNOWN_UNSOUND). Provide main() with argparse (--granularity), exit 0
+    always (report-only). Keep under 500 SLOC.
+  - >-
+    Create tests/test_dead_code_detector.py -- build a synthetic tmp-repo fixture (mirror the
+    test_dependency_graph.py importlib.util header and _make_fixture style) with: a reachable module (via a
+    main()/root), a genuinely orphan module (graph-unreachable, referenced nowhere), an orphan module
+    referenced only from a non-Python surface (e.g. a fixture *.tf or manifest.yaml) that must be
+    downgraded to low-confidence, and a tests/ module that must be excluded from candidates. Assert
+    high/low classification, the src/scripts-only boundary, output-schema keys, symbol-granularity shape,
+    and byte-identical determinism across two runs. Cover 100% of the new source.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass. If validate --pre flags
+    SLOC, refactor to stay under 500 lines rather than adding a budget entry. Do not stop on the first
+    failure without a fix attempt; there is no V3 harness here so no RCA-stop applies (Decision 55).
+  - >-
+    Report: the detector file created, the two-tier verdict counts from the real-repo smoke run, and all
+    verification results.
+work_areas: []
+rollback: >-
+  Both scope files are new and additive (no existing behaviour changed, no packaged Lambda asset touched).
+  Rollback = delete scripts/dead_code_detector.py and tests/test_dead_code_detector.py; nothing else
+  references them.
