@@ -92,11 +92,16 @@ verification_plan:
     fix_if: Count < 2 -- PLAN-gated-apply-rca-trigger is not yet implemented; run it first before this remediation.
   - step: 2
     phase: pre-deploy
-    action: Confirm the convergence record is still RED at 0b81f6a1 (remediation still needed).
+    action: >-
+      Confirm the convergence record is still RED and CAPTURE the FULL commit_sha the dispatch must echo (the
+      precondition ack-gate at terraform-apply-sandbox.yml:180 is an EXACT string match against the stored
+      commit_sha -- pass the full 40-char value, never a truncation).
     command: >-
       aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform |
-      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'commit', d.get('commit_sha','')[:8], 'run', d.get('run_id'))"
-    expected: "status red commit 0b81f6a1 run 28379330706 -- the wedge is live."
+      bin/venv-python -c "import sys,json; d=json.load(sys.stdin); print('status', d['status'], 'run', d.get('run_id')); print('FULL_COMMIT_SHA', d.get('commit_sha',''))"
+    expected: >-
+      status red, run 28379330706, and FULL_COMMIT_SHA is the full 40-char SHA (expected
+      0b81f6a184d1a74b075082801ec9de2bfc4157d8). Use THAT exact value as acknowledge_red_commit in steps 4/6.
     fix_if: "status green -- already cleared by another operation; skip to VP step 7 (file the durable-gap rec) and close out."
   - step: 3
     phase: post-deploy
@@ -117,13 +122,14 @@ verification_plan:
     phase: post-deploy
     action: >-
       Diagnose + attempt the in-budget/empty clear: dispatch terraform-apply-sandbox.yml with
-      acknowledge_red_commit=0b81f6a1 and inspect the apply-sandbox job's guard verdict via the GitHub MCP.
+      acknowledge_red_commit set to the FULL commit_sha captured in step 2, and inspect the apply-sandbox job's
+      guard verdict via the GitHub MCP.
     command: >-
-      echo "Dispatch via GitHub MCP: actions_run_trigger workflow=terraform-apply-sandbox.yml ref=main inputs.acknowledge_red_commit=0b81f6a184d1a74b075082801ec9de2bfc4157d8";
-      echo "Then read the apply-sandbox job: pull_request_read/get_job_logs -- look for 'routed=true' (out-of-budget) vs a completed apply (in-budget/empty)."
+      echo "Dispatch via GitHub MCP: actions_run_trigger workflow=terraform-apply-sandbox.yml ref=main inputs.acknowledge_red_commit=<FULL_COMMIT_SHA from step 2, e.g. 0b81f6a184d1a74b075082801ec9de2bfc4157d8>";
+      echo "Then read the apply-sandbox job logs (get_job_logs): OUT-OF-BUDGET markers = the guard step output line 'routed=true' AND 'Guard BLOCKED (exit 2)'; IN-BUDGET/EMPTY = no routed line and a completed 'Terraform apply' step + a 'Wrote convergence record: {...green...}' line."
     expected: >-
       Guard PASS (in-budget/empty) -> apply-sandbox applies on the dispatch and writes GREEN (branch A, go to step 5);
-      OR routed=true (out-of-budget) -> the dispatch is a safe no-op, record stays red (branch B, go to step 6).
+      OR 'routed=true' / 'Guard BLOCKED (exit 2)' (out-of-budget) -> the dispatch is a safe no-op, record stays red (branch B, go to step 6).
     fix_if: >-
       The apply-sandbox job fails for any reason OTHER than routing (e.g. precondition read error) -- diagnose that
       failure; do not proceed to branch B until the dispatch cleanly classifies the diff.
