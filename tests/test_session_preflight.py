@@ -1456,6 +1456,52 @@ class TestCiRcaLivenessAlert:
         assert result is None
 
 
+class TestConvergenceRcaGapAlert:
+    """Tests for _check_convergence_rca_gap() (PLAN-gated-apply-rca-trigger)."""
+
+    def _red_health(self, red_age_hours: float = 1.0) -> dict:
+        from datetime import timedelta
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=red_age_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "status": "red",
+            "red_age_hours": red_age_hours,
+            "commit_sha": "0b81f6a184d1a74b075082801ec9de2bfc4157d8",  # pragma: allowlist secret
+            "run_url": "https://github.com/org/repo/actions/runs/28379330706",
+            "red_since": old_ts,
+        }
+
+    def test_convergence_rca_gap_alert_set_when_red_beyond_grace_no_matching_rec(self) -> None:
+        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[]):
+            result = _preflight._check_convergence_rca_gap(self._red_health())
+        assert result is not None
+        assert result["commit_sha"] == "0b81f6a184d1a74b075082801ec9de2bfc4157d8"  # pragma: allowlist secret
+        assert result["red_age_hours"] == 1.0
+
+    def test_convergence_rca_gap_alert_none_when_matching_open_rec_exists(self) -> None:
+        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[{"id": "rec-1"}]):
+            result = _preflight._check_convergence_rca_gap(self._red_health())
+        assert result is None
+
+    def test_convergence_rca_gap_alert_none_when_record_green(self) -> None:
+        result = _preflight._check_convergence_rca_gap({"status": "green", "red_age_hours": 0.0})
+        assert result is None
+
+    def test_convergence_rca_gap_alert_none_when_red_within_grace(self) -> None:
+        health = self._red_health(red_age_hours=0.1)  # 6 minutes, within the 30-minute grace
+        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[]):
+            result = _preflight._check_convergence_rca_gap(health)
+        assert result is None
+
+    def test_convergence_rca_gap_alert_none_when_health_is_none(self) -> None:
+        assert _preflight._check_convergence_rca_gap(None) is None
+
+    def test_convergence_rca_gap_alert_none_when_red_since_missing(self) -> None:
+        health = {"status": "red", "red_age_hours": 1.0}
+        result = _preflight._check_convergence_rca_gap(health)
+        assert result is None
+
+
 class TestAbstentionGauge:
     """T1.13 c12(i): _compute_ci_rca_abstention / _escalate_ci_rca_probe_health / preflight report JSON."""
 

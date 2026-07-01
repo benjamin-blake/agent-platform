@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from scripts.verify_ci_workflow import (
+    _check_apply_rca_fallback,
     _check_canary,
     _check_ci_rca_filter,
     _check_concurrency,
@@ -351,3 +352,88 @@ class TestCheckCanaryFailPath:
             mock_load.return_value = data
             with pytest.raises(AssertionError, match="--pre"):
                 _check_canary()
+
+
+# ---------------------------------------------------------------------------
+# _check_apply_rca_fallback (PLAN-gated-apply-rca-trigger)
+# ---------------------------------------------------------------------------
+
+_DISPATCH_STEP: dict[str, Any] = {
+    "name": "Self-dispatch ci-rca on re-run failure (workflow_run re-run gap)",
+    "if": "${{ failure() && github.run_attempt != '1' }}",
+    "run": "gh workflow run ci-rca.yml -f run_id=${{ github.run_id }}",
+}
+
+_VALID_APPLY_SANDBOX_DATA: dict[str, Any] = {
+    "jobs": {
+        "apply-sandbox": {
+            "permissions": {"id-token": "write", "contents": "read", "actions": "write"},
+            "steps": [
+                {"run": "terraform apply plan.bin"},
+                _DISPATCH_STEP,
+            ],
+        },
+        "gated-apply": {
+            "permissions": {"id-token": "write", "contents": "read", "actions": "write"},
+            "steps": [
+                {"run": "terraform apply plan.bin"},
+                _DISPATCH_STEP,
+            ],
+        },
+    }
+}
+
+
+class TestCheckApplyRcaFallbackPassPath:
+    def test_passes_with_real_workflow_file(self) -> None:
+        _check_apply_rca_fallback()
+
+
+class TestCheckApplyRcaFallbackFailPath:
+    def test_apply_rca_fallback_missing_step_fails(self) -> None:
+        data = {
+            "jobs": {
+                "apply-sandbox": {
+                    "permissions": {**_VALID_APPLY_SANDBOX_DATA["jobs"]["apply-sandbox"]["permissions"]},
+                    "steps": [{"run": "terraform apply plan.bin"}],
+                },
+                "gated-apply": _VALID_APPLY_SANDBOX_DATA["jobs"]["gated-apply"],
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="apply-sandbox is missing"):
+                _check_apply_rca_fallback()
+
+    def test_apply_rca_fallback_missing_permission_fails(self) -> None:
+        data = {
+            "jobs": {
+                "apply-sandbox": _VALID_APPLY_SANDBOX_DATA["jobs"]["apply-sandbox"],
+                "gated-apply": {
+                    "permissions": {"id-token": "write", "contents": "read"},
+                    "steps": [
+                        {"run": "terraform apply plan.bin"},
+                        _DISPATCH_STEP,
+                    ],
+                },
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="gated-apply is missing 'actions: write'"):
+                _check_apply_rca_fallback()
+
+    def test_apply_rca_fallback_missing_step_fails_for_gated_apply(self) -> None:
+        data = {
+            "jobs": {
+                "apply-sandbox": _VALID_APPLY_SANDBOX_DATA["jobs"]["apply-sandbox"],
+                "gated-apply": {
+                    "permissions": {**_VALID_APPLY_SANDBOX_DATA["jobs"]["gated-apply"]["permissions"]},
+                    "steps": [{"run": "terraform apply plan.bin"}],
+                },
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="gated-apply is missing"):
+                _check_apply_rca_fallback()

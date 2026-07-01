@@ -2488,8 +2488,9 @@ def validate_ci_rca_trigger(failed: list[str]) -> None:
 def validate_ci_workflow_guards(failed: list[str]) -> None:
     """Assert CI workflow structural invariants are met (Decision 60, CD.21).
 
-    Wires _check_jobs_and_flags, _check_fetch_depth, _check_concurrency, and
-    _check_canary from scripts/verify_ci_workflow.py into the presubmit tier.
+    Wires _check_jobs_and_flags, _check_fetch_depth, _check_concurrency,
+    _check_canary, and _check_apply_rca_fallback from scripts/verify_ci_workflow.py
+    into the presubmit tier.
     Each guard failure appends a distinct label; a non-AssertionError exception
     records a failure rather than crashing presubmit (rec-2027 pattern).
     """
@@ -2498,6 +2499,7 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
     injected = _ensure_root_on_path()
     try:
         from scripts.verify_ci_workflow import (
+            _check_apply_rca_fallback,
             _check_canary,
             _check_concurrency,
             _check_fetch_depth,
@@ -2509,6 +2511,7 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             ("fetch-depth", _check_fetch_depth),
             ("concurrency", _check_concurrency),
             ("canary", _check_canary),
+            ("apply-rca-fallback", _check_apply_rca_fallback),
         ]
         for label, fn in guards:
             try:
@@ -4070,6 +4073,10 @@ def main() -> None:
         validate_claude_p_retry_wrapper(failed)
         # Authority-budget drift gate in --pre: sub-second file reads, T2.25 / Decision 92 point 5.
         validate_authority_budget(failed)
+        # ci-workflow guards gate in --pre: pure YAML parse, sub-second (mirrors the rec-859 /
+        # rec-2106 / rec-2382 tier promotions above). PLAN-gated-apply-rca-trigger requires this
+        # gate at BOTH tiers so a PR cannot silently drop the apply-rca-fallback self-dispatch step.
+        validate_ci_workflow_guards(failed)
         # DuckLake version lockstep gate in --pre: sub-second static (OQ.12 SSOT enforcement). Registered
         # at BOTH sites -- here (--pre fast-tier) and in run_python_checks (full tier) -- per AGENTS.md.
         validate_ducklake_version_lockstep(failed)
