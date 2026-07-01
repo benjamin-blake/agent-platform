@@ -18,10 +18,17 @@ import pytest
 ROOT = Path(__file__).parent.parent
 
 _SCRIPT_PATH = ROOT / "scripts" / "validate.py"
-_spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
-_validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_validate)  # type: ignore[union-attr]
-sys.modules["validate"] = _validate
+# Reuse an already-loaded "validate" module (e.g. from tests/test_validate.py in the same
+# session) rather than overwriting sys.modules["validate"] with a second, independent exec
+# of the same file -- doing so would silently break any other test file's `patch("validate.X")`
+# calls, which resolve against whatever object currently sits at that sys.modules key.
+if "validate" in sys.modules:
+    _validate = sys.modules["validate"]
+else:
+    _spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
+    _validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+    _spec.loader.exec_module(_validate)  # type: ignore[union-attr]
+    sys.modules["validate"] = _validate
 
 from scripts.checks import _common, registry  # noqa: E402
 
