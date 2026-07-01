@@ -9,6 +9,24 @@ Entries are written by `session_close` at the end of each session.
 
 ---
 
+## [2026-07-01] - implement: gated-apply-red-record-remediation (operational remediation, no PR code changes beyond this closeout)
+
+**Mode:** Implement (operational remediation plan, PLAN-gated-apply-red-record-remediation.yaml)
+**Goal:** Clear the RED sandbox convergence record (commit 0b81f6a184d1a74b075082801ec9de2bfc4157d8, run 28379330706) wedging `terraform/personal/**` auto-applies, and durably track the recovery-path gap it exposed.
+**Outcome:** SUCCESS. Convergence record restored to GREEN at commit 5e931f59.
+
+**RCA:** run 28379330706 (gated-apply, run_attempt=2) failed at `terraform apply plan.bin` with "Saved plan is stale" -- the Decision 77 no-TOCTOU guard working as designed, not a code defect. ci-rca.yml's dedup guard skipped re-filing (it deduped against rec-2446, which documented a *different* attempt-1 failure on the same run_id, already closed). Filed **rec-2460** (source=ci_rca) manually per the plan's fix_if path to restore the audit trail before remediating.
+
+**Classification + clear-path:** dispatched `terraform-apply-sandbox.yml` acknowledge-and-retry (acknowledge_red_commit=0b81f6a184d1a74b075082801ec9de2bfc4157d8); guard verdict was **out-of-budget** (`routed=true`, IAM permissions_boundary diff on `aws_iam_role.github_ci_branch` / `aws_iam_role.github_ci_pr`) -- branch B. Presented the fresh `terraform/personal` plan to the human; after correcting a self-inflicted ExternalId-recovery bug (initial plan showed 2 unexpected `assume_role_policy` diffs on `platform_admin`/`platform_dev` caused by mis-extracting ExternalIds from the wrong IAM roles' trust policies -- corrected by reading directly from `aws_iam_role.platform_dev` / `aws_iam_role.platform_admin` state), the corrected plan showed exactly the expected 2-resource boundary propagation with 0 unexpected diffs. Human confirmed; applied via `agent_platform_admin` (0 added, 2 changed, 0 destroyed). Re-dispatched acknowledge-and-retry: guard now PASSed on the empty fresh plan, applied, and wrote the GREEN convergence record.
+
+**Durable-gap rec:** filed **rec-2461** (source=manual) documenting that `workflow_dispatch` acknowledge-and-retry cannot apply out-of-budget diffs (`gated-apply` only runs on `push`), so an out-of-budget red record currently requires a manual admin apply from the CC-web container rather than routing through the `tf-gated-apply` Environment approval automatically -- proposed extending the dispatch-ack path to close this deadlock durably.
+
+**Verification:** `session_preflight` confirms `convergence_health=green`, `convergence_rca_gap_alert=None` -- sandbox unwedged. rec-2460 closed with resolution referencing this plan.
+
+**Recs:** rec-2460 (RCA, closed), rec-2461 (durable-gap, open, Medium/M).
+
+---
+
 ## [2026-06-15] - ducklake-prod-merge: Decision 84 Phase-4 maintenance repoint (merge-only slice)
 
 **Goal:** Pay down the per-read Neon catalog-metadata egress driving network transfer to 3.78/5GB (free tier)
