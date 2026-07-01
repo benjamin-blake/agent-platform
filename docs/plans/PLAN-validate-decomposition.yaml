@@ -1,0 +1,240 @@
+schema_version: 1
+slug: "validate-decomposition"
+intent: >-
+  Decompose the scripts/validate.py monolith into a finer-grained, owner-tagged check registry so
+  platform validation can grow by adding files rather than by ratcheting one file's SLOC budget --
+  removing the recurring per-implement friction and structurally preventing monolith re-formation.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-decomposition.yaml
+phase: >-
+  Platform hardening. Executes Decision 80 point 3 (decompose validate.py tool-free into a local
+  importable check-registry; validate.py stays the thin CLI so the ci.yml-first single-source-of-truth
+  invariant holds). Ratified by new Decision 104, which partially supersedes Decision 80 point 3 by
+  specifying the registry mechanism Decision 80 deferred to this plan. Platform-internal tooling; no
+  product-roadmap phase.
+scope:
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<500 SLOC, target <300) CLI. Retains argparse (--pre, --terraform-only,
+      --update-sloc-budgets, --coverage, --ignore-budget[-reason]), the recursion + branch guards, the
+      budget assertion, the module-level constants tests patch (ROOT, PYTHON, KNOWN_MODELS, _KNOWN_CLI_TOOLS,
+      _OPTIONAL_CLI_TOOLS, _SLOC_LIMIT, _CC_LIMIT, _WAIVER_PATTERN, _SLOC_EXCLUDE_DIRS, _BRANCH_TYPES,
+      _TERRAFORM_ROOTS, _DQ_FRESHNESS_SECONDS, _FAST_TIER_BUDGET_SECONDS, _EXECUTOR_BOUNDARY_PATTERNS),
+      the orchestration helpers (invoke_step, run_lint_checks, run_precommit_checks, get_changed_files, run),
+      and FACADE RE-EXPORTS of every extracted check so `patch("validate.<name>")` keeps resolving. Tier
+      dispatch is driven by registry queries, not the two hand-maintained call lists.
+  - file: scripts/checks/__init__.py
+    action: Create
+    purpose: Package marker for the presubmit check registry (distinct from scripts/verifiers/, which is the V3 data-quality harness).
+  - file: scripts/checks/registry.py
+    action: Create
+    purpose: >-
+      Check dataclass/protocol carrying metadata (name, tier in {pre, full, both}, owner in {platform, trading},
+      optional product_coupled, order) + register() decorator + discovery + tier/owner query helpers. Stores
+      check NAMES; the thin CLI resolves each via getattr(validate_module, name)(failed) at call time so
+      unittest.mock patches on the validate module namespace still intercept.
+  - file: scripts/checks/_common.py
+    action: Create
+    purpose: Shared helpers used across domain check modules (ROOT/PYTHON access, invoke_step re-use) to avoid per-module duplication.
+  - file: scripts/checks/deps/
+    action: Create
+    purpose: "owner=platform. Checks: validate_requirements, validate_imports, validate_import_contracts, validate_lockfile_sync, validate_dependency_graph_freshness. One concern per module."
+  - file: scripts/checks/hygiene/
+    action: Create
+    purpose: "owner=platform. Checks: validate_subprocess_encoding, validate_sys_executable, validate_cli_tools_in_prompts. One concern per module."
+  - file: scripts/checks/sloc/
+    action: Create
+    purpose: "owner=platform. Checks: validate_sloc_limits, validate_cc_limits, validate_complexity + _load_sloc_budgets/_update_sloc_budgets helpers (Decision 43/102). One concern per module."
+  - file: scripts/checks/ops_governance/
+    action: Create
+    purpose: "owner=platform. Checks: validate_recommendations_schema, validate_outbox_staleness, validate_decisions_local_writes, validate_rec_write_paths, validate_warehouse_write_sources, check_source_registry, validate_pydantic_yaml_drift, validate_dq_manifest_gate, validate_rec_relevance_contract, validate_field_semantics_drift. One concern per module."
+  - file: scripts/checks/executor/
+    action: Create
+    purpose: "owner=platform. Checks: validate_executor_boundary. One concern per module."
+  - file: scripts/checks/roadmap/
+    action: Create
+    purpose: "Checks: validate_platform_roadmap (owner=platform), validate_plan_documents (owner=platform), _check_graduation_guard (owner=platform), validate_product_roadmap (owner=platform, product_coupled=trading). One concern per module."
+  - file: scripts/checks/lambda_pkg/
+    action: Create
+    purpose: "owner=platform. Checks: validate_lambda_manifests, validate_lambda_manifest_coverage, validate_lambda_bundle_completeness, validate_lambda_deploy_gating. One concern per module."
+  - file: scripts/checks/ci_guards/
+    action: Create
+    purpose: "owner=platform. Checks: validate_ci_rca_trigger, validate_ci_workflow_guards, validate_ci_rca_taxonomy, validate_claude_p_retry_wrapper, validate_workflow_agent_safety. One concern per module."
+  - file: scripts/checks/verification/
+    action: Create
+    purpose: "owner=platform. Checks: validate_verifier_same_pr_guard, validate_verification_registry, validate_differential_gate_baseline, validate_verifier_hermeticity, validate_verification_harness, validate_hermeticity_flags. One concern per module."
+  - file: scripts/checks/contracts/
+    action: Create
+    purpose: "owner=platform. Checks: validate_contract_drift, validate_intent_doc_freeze, validate_instruction_architecture_layers, validate_no_underscore_instructions, validate_claude_md_pointer_invariant, validate_prompt_compliance. One concern per module."
+  - file: scripts/checks/iam_tf/
+    action: Create
+    purpose: "Checks: validate_iam_runner_policy (owner=platform), validate_terraform_try (owner=platform), validate_authority_budget (owner=platform), validate_environment_taxonomy (owner=platform, product_coupled=trading). One concern per module."
+  - file: scripts/checks/prompts/
+    action: Create
+    purpose: "owner=platform. Checks: validate_prompt_files, validate_copilot_multipliers. One concern per module."
+  - file: scripts/checks/misc/
+    action: Create
+    purpose: "owner=platform. Checks: validate_test_coverage, validate_ducklake_version_lockstep, validate_scheduled_agent_logs, validate_invariants. One concern per module (split further if any exceeds the per-module budget)."
+  - file: scripts/checks/product/trading/
+    action: Create
+    purpose: "owner=trading. Checks: validate_broker_env_reads (Alpaca brokerage credential governance, T2.14). The lone unambiguous legacy trading-product check; pinned explicitly so it never inherits owner=platform by default."
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour. Existing patch("validate.<name>") bindings must keep working via the facade; any
+      that reference a symbol that genuinely moved and can no longer be reached through the validate namespace
+      are repointed. No test's assertion semantics change. Add nothing here that belongs in the new registry suite.
+  - file: tests/test_checks_registry.py
+    action: Create
+    purpose: >-
+      New suite: (1) tier-membership frozen-baseline equivalence (pre/full check sets + order identical to
+      pre-refactor manifest); (2) facade completeness (every registered check name is getattr-able on the
+      validate module); (3) owner-metadata correctness (broker_env_reads=trading; product_roadmap +
+      environment_taxonomy = platform/product_coupled=trading; spot-check others=platform); (4) rec-2420
+      lowering test for _update_sloc_budgets (file shrinks but stays >500 -> budget ratchets down).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102 forward-compat clause):
+      validate.py's budget auto-lowers (ideally drops out of the registry entirely at <=500 SLOC). No hand-raise.
+      No new module may enter the registry -- each must be <=500 SLOC.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 104: ratify the check-registry mechanism (Check protocol, name/tier/owner metadata,
+      getattr-resolution facade, per-tier equivalence guard) and record the owner-tagging convention +
+      platform/product federation direction. Partially supersedes ONLY Decision 80 point 3; points 1/2/4 of
+      Decision 80 remain live.
+bundled_recommendations:
+  - rec-2420
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_validate.py suite passes unchanged in assertion semantics (facade preserves patch paths).
+  - "The set AND order of checks executed in the --pre tier and in the full tier are byte-for-byte identical before and after the refactor, proven by a frozen-baseline test."
+  - Every registered check symbol is importable/getattr-able as validate.<name> (facade completeness), so unittest.mock patches on the validate namespace still intercept.
+  - "Owner metadata is correct: validate_broker_env_reads=trading; validate_product_roadmap and validate_environment_taxonomy = platform with product_coupled=trading; all other checks = platform."
+  - scripts/validate.py drops below the 500-SLOC limit (target <300) and no scripts/checks/**.py module exceeds 500 SLOC, so config/sloc_budgets.yaml no longer needs a validate.py entry and gains no new entry.
+  - The thin CLI still exposes and correctly dispatches every entrypoint (--pre, --terraform-only, --update-sloc-budgets, --coverage) with unchanged exit-code semantics; .github/workflows/ci.yml is unmodified.
+  - rec-2420's lowering test for _update_sloc_budgets exists and passes.
+  - import-linter contracts still pass with the new scripts/checks/ package (no new import cycles or layering violations).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full validate.py + registry unit suite passes.
+    command: bin/venv-python -m pytest tests/test_validate.py tests/test_checks_registry.py -m "not integration" -q
+    expected: All tests pass; no collection errors; exit 0.
+    fix_if: A patch("validate.X") binding fails to intercept -> the orchestrator captured a reference instead of resolving via getattr on the validate namespace, or the facade omitted symbol X.
+  - step: 2
+    phase: pre-deploy
+    action: Per-tier check-set + order equivalence against the frozen pre-refactor baseline.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "tier_membership or equivalence" -q
+    expected: The --pre and full tier check name-lists and order equal the committed baseline manifest; exit 0.
+    fix_if: A check silently changed tier or dropped/added -> registry tier metadata diverges from the original main() / run_python_checks call lists.
+  - step: 3
+    phase: pre-deploy
+    action: Facade completeness -- every registered check is reachable on the validate module namespace.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "facade" -q
+    expected: For every registered check name, getattr(validate_module, name) is callable; exit 0.
+    fix_if: A registered check has no re-export in validate.py -> its existing test patches would silently no-op.
+  - step: 4
+    phase: pre-deploy
+    action: Owner-metadata correctness (the explicit trading/product-coupled pinning).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "owner" -q
+    expected: broker_env_reads=trading; product_roadmap+environment_taxonomy=platform/product_coupled=trading; sampled others=platform; exit 0.
+    fix_if: A check inherited the platform default when it should be pinned trading (or vice versa) -> registry registration metadata is wrong.
+  - step: 5
+    phase: pre-deploy
+    action: SLOC re-point -- validate.py drops below limit and no new module exceeds it.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && bin/venv-python -c "import pathlib; over=[str(p) for p in pathlib.Path('scripts/checks').rglob('*.py') if len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; v=len([l for l in open('scripts/validate.py').read().splitlines() if l.strip() and not l.strip().startswith('#')]); print('validate.py SLOC',v,'over-budget modules',over); assert v<=500, 'validate.py still over 500'; assert not over, over"
+    expected: validate.py SLOC <=500 (target <300); zero scripts/checks modules over 500; config/sloc_budgets.yaml has no validate.py entry and no new entry.
+    fix_if: validate.py still >500 -> more logic must move out; a checks module >500 -> split that module finer.
+  - step: 6
+    phase: pre-deploy
+    action: Stale-reference sweep (closure obligation, X->Y migration) -- extracted check BODIES no longer live in validate.py.
+    command: "grep -cE '^def (validate_|check_source_registry)' scripts/validate.py | grep -qx 0"
+    expected: Zero extracted check-function DEFINITIONS remain in validate.py (only imports/re-exports); exit 0.
+    fix_if: A check def still lives in validate.py -> extraction incomplete; move its body to the domain module and leave only the re-export.
+  - step: 7
+    phase: pre-deploy
+    action: Thin-CLI entrypoints still run end-to-end with unchanged semantics.
+    command: bin/venv-python -m scripts.validate --coverage; echo "coverage-exit=$?"; bin/venv-python -m scripts.validate --terraform-only; echo "tf-exit=$?"
+    expected: --coverage exits 0 (advisory); --terraform-only runs the creds-free terraform gate and exits 0 (or clean SKIP where terraform absent). Neither raises an unhandled exception.
+    fix_if: An entrypoint tracebacks or changes exit code -> the thin CLI dropped an arg branch or a helper it depended on.
+  - step: 8
+    phase: pre-deploy
+    action: import-linter contracts pass for the new package.
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; exit 0.
+    fix_if: A new cycle/layering violation -> a checks module imports back into validate.py at module scope (use function-local import or restructure).
+  - step: 9
+    phase: pre-deploy
+    action: rec-2420 closes after merge (bundled-rec closure obligation).
+    command: bin/venv-python -m scripts.sync_ops pull && bin/venv-python -c 'import json,pathlib; rows=[json.loads(l) for l in pathlib.Path("logs/.recommendations-log.jsonl").read_text().splitlines() if l.strip()]; r=next((x for x in rows if x.get("id")=="rec-2420"), None); print("rec-2420", r and r.get("status")); raise SystemExit(0 if r and r.get("status")=="closed" else 1)'
+    expected: Post-merge, rec-2420 shows status closed (via the Resolves trailer / rec-autoclose). Pre-merge it may read OPEN.
+    fix_if: rec-2420 stays open post-merge -> add the Resolves rec-2420 trailer to the squash body or close via ops_data_portal --update-rec.
+constraints:
+  - Decision 80 point 3 - validate.py stays the THIN CLI; every registered check runs ONLY through `python -m scripts.validate`; ci.yml keeps calling only the CLI (never individual symbols). The ci.yml-first single-source-of-truth invariant is non-negotiable.
+  - Decision 102 - budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-raise. No new >500-SLOC module may be introduced (Decision 43 500-SLOC cap applies to every new module).
+  - Decision 86 - no new standing prose-architecture doc under docs/. The registry rationale + owner convention route to Decision 104 (rationale) only; no docs/INTENT-*.md or design-*.md companion.
+  - Behaviour preservation is absolute - the per-tier check set and order must be byte-for-byte identical; this is a packaging refactor, not a semantics change. No check may be dropped, added, reordered, or re-tiered.
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable verification failure, stop and RCA; do not paper over a broken equivalence with a skip.
+  - AGENTS.md code style - Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+context:
+  - >-
+    Root cause being fixed - validate.py is the mandatory convergence point for ALL platform checks
+    ("never add a check to ci.yml without adding it to validate.py first"), so a per-file SLOC cap on it only
+    ratchets upward (3238 -> 3261 -> 3316 -> 3355 -> 3375 across recent implements; currently ~3368 SLOC with
+    7 lines of headroom). Capping the aggregator is an axis error; the fix is one-concern-per-file modules
+    whose count grows freely while each stays flat.
+  - >-
+    Ownership classification (fresh-context subagent, 2026-07-01) - of ~57 checks exactly ONE is unambiguously
+    trading (validate_broker_env_reads); TWO are platform-machinery-over-trading-artifact and tagged
+    owner=platform + product_coupled=trading (validate_product_roadmap, validate_environment_taxonomy);
+    all others are platform. Default owner=platform; the trading exception is pinned explicitly to prevent
+    systemic mislabel as the monorepo adds products.
+  - >-
+    Legacy trading-product TEST files enumerated for future test-ownership work (NOT retagged here; scope is the
+    check registry): tests/test_feature_engine.py, tests/test_pysr_factory.py, tests/test_data_pipeline.py,
+    tests/test_async_engine.py, tests/test_execution.py, tests/test_broker_secrets.py, tests/test_meta_learner.py.
+    Product-adjacent-but-unconfirmed - test_north_star_tracker.py, test_model_registry.py, test_convergence_health.py.
+  - >-
+    Directory-structure decision (owner + architect) - the platform/product seam is modelled as registry
+    METADATA (owner tag), NOT as a directory level. No theseus/ or platform/ path segment: the platform-vs-product
+    axis is a repo-root taxonomy to be decided holistically when product #2 lands, and the checks tree stays movable
+    as a unit. When products arrive, product checks federate (colocate with their product) and CI composes by
+    owner+tier+affected-set. Decision 104 records this direction.
+  - >-
+    rec-2414 (breakdown of all SLOC-budget-registered files below 500) is ADVANCED but NOT closed by this plan -
+    it covers 18 files; this closes only validate.py. Leave rec-2414 open; do not bundle it.
+  - >-
+    Facade mechanism - tests load scripts/validate.py as module "validate" via importlib and
+    sys.modules["validate"]=_validate, then patch("validate.X"). The registry stores check NAMES and the CLI
+    resolves getattr(validate_module, name)(failed) at call time, so patches on re-exported names still intercept.
+    Most of the 318 bindings target helpers that never move (ROOT x142, run x60, get_changed_files x33).
+  - Branch was 0 commits behind origin/main at planning time; no scope-file divergence. Decision-scout gate returned NO_FLAGS (cite Decisions 80, 102, 43, 86).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/relaxed-gates-yo42gc)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (80, 102, 43, 86, and next-number 104)
+  - All files in scope located and readable (scripts/validate.py, tests/test_validate.py, config/sloc_budgets.yaml)
+  - Acceptance criteria understood and verifiable
+  - Pre-refactor per-tier check manifest (names + order) captured as the frozen baseline BEFORE moving any code
+execution_steps:
+  - "Capture baseline FIRST - record the exact ordered list of checks run in the --pre tier and the full tier from the current scripts/validate.py (main() --pre block + run_python_checks + terraform/deps/prompts blocks). Freeze it as the expected manifest in tests/test_checks_registry.py. This is the equivalence oracle; it must be captured before any code moves."
+  - "Create scripts/checks/registry.py - Check dataclass (name, tier, owner, product_coupled, order) + register() + discovery + query helpers (checks_for_tier(tier), all_checks()). Store names; never capture function references (getattr-at-call-time is required for patch compatibility)."
+  - "Extract checks into scripts/checks/<domain>/<module>.py, one concern per file, per the Scope table domain grouping. Move each validate_* body verbatim (behaviour-preserving); keep its section-header print and failed.append semantics identical. Split any module that would exceed 500 SLOC."
+  - "Tag owner metadata at registration - default platform; pin validate_broker_env_reads=trading; set validate_product_roadmap and validate_environment_taxonomy to platform + product_coupled=trading."
+  - "Collapse scripts/validate.py to the thin CLI - keep argparse, guards, budget assertion, constants, orchestration helpers (invoke_step/run_lint_checks/run_precommit_checks/get_changed_files/run); replace the two hand-maintained tier call-lists with registry-driven dispatch that calls getattr(self_module, name)(failed) in registry order; add `from scripts.checks... import <name>` re-exports (facade) for every extracted check."
+  - "Add rec-2420's lowering test for _update_sloc_budgets (file shrinks but stays >500 -> budget ratchets down) in tests/test_checks_registry.py."
+  - "Repoint tests/test_validate.py only where a symbol genuinely can no longer be reached through the validate namespace; do not change assertion semantics."
+  - "Run `validate --update-sloc-budgets` to auto-lower validate.py and confirm no scripts/checks module enters the registry."
+  - "Author Decision 104 in docs/DECISIONS.md - ratify the registry mechanism + owner convention + federation direction; partially supersede Decision 80 point 3 only."
+  - "Execute the Verification Plan - run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Include `Resolves: rec-2420` in the squash-merge body."
+  - "Report - what was extracted, the per-tier equivalence result, final validate.py SLOC, and the owner-tag summary."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence guard cannot be made green, abandon the branch (no
+  merge). Nothing is deployed. If merged and a regression surfaces, revert the squash commit - the thin CLI +
+  registry land atomically in one PR, so a single revert restores the monolith.
