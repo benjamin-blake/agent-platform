@@ -36,6 +36,10 @@ scope:
       88 -- zero new reader egress); writes ONLY via the portal (Decision 84 -- never cache-as-write-source).
       The close branch records a proof string (rate returned under threshold) per Decision 103/70. Sensor
       files priority=high (NOT critical/ci_rca) so it escalates visibly without hard-blocking the /plan queue.
+      CRITICAL divergence from the convergence_health template: find_open_probe_health_rec and escalate() take
+      open recs INJECTED as a caller-supplied list (from the preflight warm cache) -- do NOT copy
+      convergence_health._fetch_open_recs's live make_reader().named("open_recs") fall-through, which would
+      construct a reader and violate the Decision-88 zero-egress claim. The read path must never build a reader.
   - file: config/agent/data_quality/source_registry.yaml
     action: Modify
     purpose: >-
@@ -100,20 +104,24 @@ scope:
       (file/update/close/none for the four over_threshold x open_rec_exists cases); find_open_probe_health_rec
       selection; escalate() dispatch with a mocked portal asserting file/update/close is called exactly once
       and deduped (no duplicate filing when an open rec already exists). Mirrors tests/test_convergence_health.py.
+      MUST include an assertion that no ducklake reader is constructed in the escalate read path (e.g. patch
+      _make_reader / make_reader to raise and confirm escalate() still runs from the injected cache list) --
+      guards the Decision-88 zero-egress claim.
   - file: tests/test_ops_data_portal.py
     action: Modify
     purpose: >-
-      c12(ii) + c5. Add cases: (1) source=ci_rca + context_v2_json without evidence_bundle_ref -> strict
-      rejects unless rca_confidence=undetermined, warn accepts + logs CI_RCA_BUNDLE_ABSENT; (2) evidence_bundle_ref
-      upload_status=ok with S3 object present (mocked head_object) -> accepts; absent object -> strict rejects /
-      warn warns; (3) upload_status=upload_failed -> degraded accept without S3 call; (4) S3 head_object raising
-      a creds/permission error -> fail-open accept with warning.
+      c12(ii) + c5. Add two test classes. TestBundleAbsentFailLoud: source=ci_rca + context_v2_json without
+      evidence_bundle_ref -> strict rejects unless rca_confidence=undetermined, warn accepts + logs
+      CI_RCA_BUNDLE_ABSENT. TestEvidenceS3Existence: (1) evidence_bundle_ref upload_status=ok with S3 object
+      present (mocked head_object) -> accepts; (2) absent object -> strict rejects / warn warns; (3)
+      upload_status=upload_failed -> degraded accept without S3 call; (4) S3 head_object raising a
+      creds/permission error -> fail-open accept with warning.
   - file: tests/test_session_preflight.py
     action: Modify
     purpose: >-
-      c12(i). Add a case asserting the abstention-rate gauge is computed from cache rows (K/M/rate) and that
-      the abstention fields appear in the preflight report JSON; assert escalate() is invoked on the warm
-      cache path (mocked) and skipped when creds/sync unavailable.
+      c12(i). Add a test class TestAbstentionGauge asserting the abstention-rate gauge is computed from cache
+      rows (K/M/rate) and that the abstention fields appear in the preflight report JSON; assert escalate() is
+      invoked on the warm cache path (mocked) and skipped when creds/sync unavailable.
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -123,12 +131,22 @@ infrastructure_dependencies:
     applied by this plan: the check fails-open on permission errors and is warn-tolerant, so landing is
     unblocked. The grant rides with the c2 strict-mode flip (Decision Record + terraform/personal apply),
     which is where strict enforcement of check 7 becomes live.
+  - >-
+    Lambda assessment (no deploy required): docs/ROADMAP-PLATFORM.yaml is a bundled assets: entry of the
+    active data-pipeline Lambda artifact (src/lambdas/data-pipeline/manifest.yaml, status: active), so
+    compute_affected_artifacts() nominally flags it. The edit here is a non-functional roadmap bookkeeping
+    status-flip (read-only-context data, not runtime code); no Lambda build/deploy/smoke-test is required
+    (scheduled agents are disabled per the AGENTS.md runbook). Divergence from the letter of the per-Lambda
+    build-gate is stated explicitly per the "justify, do not silently skip" rule. None of the runtime Python
+    scope files (ci_rca_probe_health.py, ops_data_portal.py, session_preflight.py) match a Lambda packaging
+    pattern.
 acceptance_criteria:
   - >-
     c12(i) sensor: scripts/ci_rca_probe_health.py computes abstention rate from warm-cache rows and its
     escalation_action returns file/update/close/none matching the convergence_health truth table; escalate()
     files exactly one deduped source=ci_rca_probe_health rec per episode (no duplicate when one is already
-    open) -- verified by tests/test_ci_rca_probe_health.py passing.
+    open) AND constructs no ducklake reader in its read path (open recs injected from the warm cache) --
+    verified by tests/test_ci_rca_probe_health.py passing.
   - >-
     c12(i) gauge: session_preflight surfaces a "CI-RCA probe abstention (last Nd)" line and emits the
     abstention count/total/rate into the preflight report JSON, computed with zero new reader egress.
@@ -170,7 +188,7 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: Bundle-absent fail-loud + c5 S3-existence branches in file_rec exercised (mocked boto3).
-    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q -k "bundle_absent or s3_existence or evidence"
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestBundleAbsentFailLoud tests/test_ops_data_portal.py::TestEvidenceS3Existence -q
     expected: >-
       Strict mode rejects a ci_rca rec with no evidence_bundle_ref unless rca_confidence=undetermined; warn
       accepts + logs CI_RCA_BUNDLE_ABSENT. upload_status=ok with a present S3 object accepts; missing object
@@ -183,7 +201,7 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: Preflight abstention gauge computed from cache and emitted into the report JSON; escalate wired.
-    command: bin/venv-python -m pytest tests/test_session_preflight.py -q -k "abstention or probe_health"
+    command: bin/venv-python -m pytest tests/test_session_preflight.py::TestAbstentionGauge -q
     expected: >-
       The gauge fields (undetermined count, total, rate) appear in the preflight report and the printed CI-RCA
       section; escalate() is invoked on the warm-cache path and skipped when creds/sync are unavailable.
@@ -201,7 +219,7 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: c4 evidence -- validate_sloc_limits is reachable from the --pre tier.
-    command: bin/venv-python -m pytest tests/test_validate.py -q -k "sloc and pre" 2>/dev/null || bin/venv-python -c "import ast,pathlib; src=pathlib.Path('scripts/validate.py').read_text(); t=ast.parse(src); import sys; f=[n for n in ast.walk(t) if isinstance(n,ast.FunctionDef) and n.name=='main'][0]; pre=[b for b in ast.walk(f) if isinstance(b,ast.If) and any('pre' in ast.dump(b.test) for _ in [0])]; calls=[c.func.id for c in ast.walk(f) if isinstance(c,ast.Call) and isinstance(c.func,ast.Name)]; print('OK' if 'validate_sloc_limits' in calls else 'MISSING')"
+    command: bin/venv-python -c "import pathlib; src=pathlib.Path('scripts/validate.py').read_text(); i=src.index('if args.pre:'); j=src.index('run_python_checks(failed)', i); print('OK' if 'validate_sloc_limits(failed)' in src[i:j] else 'MISSING')"
     expected: "validate_sloc_limits is called within the --pre branch of main() (evidence for c4)."
     fix_if: >-
       If validate_sloc_limits is not reachable from --pre, c4 is not actually met -- do NOT flip c4; instead
