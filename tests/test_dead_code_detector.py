@@ -57,6 +57,12 @@ def _make_fixture(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
 
+    (tmp_path / "scripts" / "orphan_doc_ref.py").write_text("def unused_doc_referenced():\n    pass\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "PROJECT_CONTEXT.md").write_text(
+        "See scripts.orphan_doc_ref for the maintained helper.\n", encoding="utf-8"
+    )
+
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_stuff.py").write_text("def test_placeholder():\n    pass\n", encoding="utf-8")
     (tmp_path / "tests" / "dead_in_tests.py").write_text("def unused_test_helper():\n    pass\n", encoding="utf-8")
@@ -92,6 +98,17 @@ class TestDetectModuleGranularity:
         result = detect(repo_root=root, granularity="module")
         entry = next(e for e in result["low_confidence_dynamically_referenced"] if e["name"] == "scripts.orphan_ref")
         assert any("orphan_ref.tf" in ref for ref in entry["referenced_by"])
+
+    def test_docs_md_reference_downgrades_to_low_confidence(self, tmp_path: Path) -> None:
+        """A docs/**/*.md reference (e.g. PROJECT_CONTEXT.md) must downgrade a candidate too."""
+        root = _make_fixture(tmp_path)
+        result = detect(repo_root=root, granularity="module")
+        high_names = [e["name"] for e in result["high_confidence_dead"]]
+        low_names = [e["name"] for e in result["low_confidence_dynamically_referenced"]]
+        assert "scripts.orphan_doc_ref" not in high_names
+        assert "scripts.orphan_doc_ref" in low_names
+        entry = next(e for e in result["low_confidence_dynamically_referenced"] if e["name"] == "scripts.orphan_doc_ref")
+        assert any("PROJECT_CONTEXT.md" in ref for ref in entry["referenced_by"])
 
     def test_reachable_module_not_a_candidate(self, tmp_path: Path) -> None:
         root = _make_fixture(tmp_path)

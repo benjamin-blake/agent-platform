@@ -25,6 +25,7 @@ _GREP_GLOB_SURFACES: tuple[str, ...] = (
     ".github/workflows/*.yml",
     ".github/agents/schedule.yaml",
     ".claude/**/*.md",
+    "docs/**/*.md",
 )
 
 
