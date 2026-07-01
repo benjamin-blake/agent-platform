@@ -17,7 +17,7 @@ def validate_hermeticity_flags(failed: list[str], _cmd: list[str] | None = None)
     if _cmd is not None:
         cmd = _cmd
     else:
-        from scripts.validate import _build_unit_test_cmd  # noqa: PLC0415
+        from scripts.checks._scaffolding import _build_unit_test_cmd  # noqa: PLC0415
 
         cmd = _build_unit_test_cmd()
     for flag in _UNIT_TEST_HERMETICITY_FLAGS:

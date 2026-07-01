@@ -174,10 +174,11 @@ def full_sequence() -> list[Step]:
         _c("validate_dependency_graph_freshness"),
         _s("unit_tests"),
         _s("mypy_full"),
-        # run_terraform_checks()
-        _c("validate_terraform_try"),
-        _s("terraform_creds_free"),
-        _s("terraform_drift_check"),
+        # run_terraform_checks() -- a single bundled call site (validate_terraform_try +
+        # run_terraform_creds_free + the informational drift check); it is also called and
+        # tested directly as one unit (tests/test_validate.py::TestRunTerraformChecks), so it
+        # is modelled as one scaffold step rather than split into its 3 constituent actions.
+        _s("terraform_checks"),
         _c("validate_iam_runner_policy"),
         # run_dependency_checks() + validate_requirements
         _s("dependency_health"),

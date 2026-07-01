@@ -123,10 +123,7 @@ FROZEN_FULL_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_dependency_graph_freshness"),
     ("scaffold", "unit_tests"),
     ("scaffold", "mypy_full"),
-    # run_terraform_checks()
-    ("check", "validate_terraform_try"),
-    ("scaffold", "terraform_creds_free"),
-    ("scaffold", "terraform_drift_check"),
+    ("scaffold", "terraform_checks"),
     ("check", "validate_iam_runner_policy"),
     # run_dependency_checks() + validate_requirements
     ("scaffold", "dependency_health"),

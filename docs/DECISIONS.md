@@ -43,7 +43,9 @@ Ratifies the check-registry mechanism implemented by PLAN-validate-decomposition
   each "check" step via `globals()[name](failed)` so `patch("validate.<name>")` keeps
   intercepting), and facade re-exports of every extracted check and private helper (so both
   `patch("validate.<name>")` and `from scripts.validate import <name>` keep resolving). Dropped
-  from 3372 SLOC to 341. `ci.yml` is unmodified -- it still calls only `python -m scripts.validate`.
+  from 3372 SLOC to well under the 500-SLOC limit (target <300; `validate --update-sloc-budgets`
+  is the authoritative live figure, not this document). `ci.yml` is unmodified -- it still calls
+  only `python -m scripts.validate`.
 - **Owner-tagging convention (platform/product federation direction):** every check defaults
   `owner="platform"`. Of 58 checks, exactly one is unambiguously trading-product:
   `validate_broker_env_reads` (owner="trading"). Two are platform machinery operating over a

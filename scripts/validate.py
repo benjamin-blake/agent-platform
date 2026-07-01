@@ -198,18 +198,52 @@ def _dispatch_check(name: str, failed: list[str]) -> None:
 
 
 def run_python_checks(failed: list[str]) -> None:
+    """Dispatch the ENTIRE full (default) tier by iterating registry.full_sequence() -- every
+    check and non-check scaffold step, from lint through the all-files precommit run. This is
+    the sole source of full-tier order: main() calls this once and does not hand-dispatch any
+    of these steps itself, so registry.py stays the single place that adding/reordering a
+    full-tier check touches.
+    """
+
+    def _scaffold_lint() -> None:
+        run_lint_checks(failed)
+
+    def _scaffold_unit_tests() -> None:
+        _common.invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
+
+    def _scaffold_mypy_full() -> None:
+        print("\n=== mypy (informational) ===")
+        result = _common.run([_common.PYTHON, "-m", "mypy", "src/"], cwd=_common.ROOT)
+        if result.returncode != 0:
+            print("mypy: type errors found (informational - not blocking). Fix progressively.")
+
+    def _scaffold_terraform_checks() -> None:
+        run_terraform_checks(failed)
+
+    def _scaffold_dependency_health() -> None:
+        run_dependency_checks()
+
+    def _scaffold_ensure_fresh_dq() -> None:
+        ensure_fresh_dq_results(failed)
+
+    def _scaffold_precommit_all_files() -> None:
+        run_precommit_checks(failed, all_files=True)
+
+    scaffold_fns = {
+        "lint": _scaffold_lint,
+        "unit_tests": _scaffold_unit_tests,
+        "mypy_full": _scaffold_mypy_full,
+        "terraform_checks": _scaffold_terraform_checks,
+        "dependency_health": _scaffold_dependency_health,
+        "ensure_fresh_dq": _scaffold_ensure_fresh_dq,
+        "precommit_all_files": _scaffold_precommit_all_files,
+    }
+
     for step in registry.full_sequence():
-        if step.kind == "scaffold" and step.name == "unit_tests":
-            break  # end of the run_python_checks()-scoped portion of full_sequence()
         if step.kind == "check":
             _dispatch_check(step.name, failed)
-
-    _common.invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
-
-    print("\n=== mypy (informational) ===")
-    result = _common.run([_common.PYTHON, "-m", "mypy", "src/"], cwd=_common.ROOT)
-    if result.returncode != 0:
-        print("mypy: type errors found (informational - not blocking). Fix progressively.")
+        else:
+            scaffold_fns[step.name]()
 
 
 def main() -> None:
@@ -387,30 +421,11 @@ def main() -> None:
 
     scope = "all"
 
-    if scope in ("python", "all"):
-        run_python_checks(failed)
-
-    if scope in ("terraform", "all"):
-        run_terraform_checks(failed)
-        validate_iam_runner_policy(failed)
-
-    if scope in ("python", "all"):
-        run_dependency_checks()
-        validate_requirements(failed)
-
-    if scope in ("prompts", "all"):
-        validate_prompt_files(failed)
-        validate_cli_tools_in_prompts(failed)
-        validate_workflow_agent_safety(failed)
-        validate_prompt_compliance(failed)
-        validate_instruction_architecture_layers(failed)
-
-    ensure_fresh_dq_results(failed)
-    validate_verification_harness(failed)
-
-    # Full tier: run the entire pre-commit suite across all files (detect-secrets,
-    # shape denylist, file hygiene). main-validate's authoritative full-tree gate.
-    run_precommit_checks(failed, all_files=True)
+    # Full (default) tier: run_python_checks() dispatches the ENTIRE registry.full_sequence()
+    # (every check + scaffold step, lint through the all-files precommit run) -- see its
+    # docstring. There is no separate hand-dispatched block here; registry.py is the sole
+    # source of full-tier order.
+    run_python_checks(failed)
 
     print(f"\n=== Validation Summary (scope: {scope}) ===")
     if not failed:
