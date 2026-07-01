@@ -104,7 +104,9 @@ def _valid_class_a(
 
 
 def _install_fake_git(monkeypatch, fake: _FakeGit) -> None:
-    monkeypatch.setattr(_validate, "run", fake)
+    from scripts.checks import _common
+
+    monkeypatch.setattr(_common, "run", fake)
 
 
 # --------------------------------------------------------------------------------------

@@ -31,7 +31,7 @@ class TestValidateDecisionsLocalWrites:
             'with DECISIONS_JSONL.open("w", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_decisions_local_writes(failed)
         assert len(failed) > 0
@@ -45,7 +45,7 @@ class TestValidateDecisionsLocalWrites:
             'with DECISIONS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_decisions_local_writes(failed)
         assert len(failed) > 0
@@ -58,7 +58,7 @@ class TestValidateDecisionsLocalWrites:
             'with DECISIONS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_decisions_local_writes(failed)
         assert failed == []
@@ -71,7 +71,7 @@ class TestValidateDecisionsLocalWrites:
             'with DECISIONS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_decisions_local_writes(failed)
         assert failed == []
@@ -84,7 +84,7 @@ class TestValidateDecisionsLocalWrites:
             "from scripts.ops_data_portal import file_decision\nfile_decision({'title': 'test'})\n",
             encoding="utf-8",
         )
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_decisions_local_writes(failed)
         assert failed == []

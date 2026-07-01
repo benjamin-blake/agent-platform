@@ -21,8 +21,18 @@ import shutil  # noqa: F401  (back-compat: patch("validate.shutil.which") test t
 import subprocess  # noqa: F401  (back-compat: patch("validate.subprocess.run") test target; global module identity)
 import sys
 import time
+from pathlib import Path as _Path
 
-from scripts.checks import _common, registry
+# Some callers invoke this file as a direct script path (`python scripts/validate.py`,
+# e.g. scripts/execute_recommendation.py's [VALIDATE] finalize step) rather than as a
+# module (`python -m scripts.validate`); the former does not put the repo root on
+# sys.path, so `scripts` would not be importable as a top-level package. Ensure it is,
+# before importing scripts.checks.* below.
+_REPO_ROOT = _Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts.checks import _common, registry  # noqa: E402
 
 # Facade re-exports: shared primitives (back-compat for `from scripts.validate import ROOT` etc.
 # and for `patch("validate.ROOT"/"validate.run"/"validate.PYTHON"/"validate.invoke_step"/

@@ -324,9 +324,7 @@ class TestUpdateSlocBudgetsLoweringGap:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (scripts_dir / "shrunk_but_still_big.py").write_text("x = 1\n" * 550, encoding="utf-8")
-        (config_dir / "sloc_budgets.yaml").write_text(
-            "budgets:\n  scripts/shrunk_but_still_big.py: 700\n", encoding="utf-8"
-        )
+        (config_dir / "sloc_budgets.yaml").write_text("budgets:\n  scripts/shrunk_but_still_big.py: 700\n", encoding="utf-8")
 
         with patch("scripts.checks._common.ROOT", tmp_path):
             _validate._update_sloc_budgets()
