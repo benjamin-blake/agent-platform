@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from scripts.checks import _common, registry
 
@@ -18,16 +19,16 @@ def validate_broker_env_reads(failed: list[str]) -> None:
       - os.getenv("ALPACA_*")
       - os.environ.get("ALPACA_*")
 
-    Self-excluded: validate.py (contains the pattern strings) and broker_secrets.py (the
-    resolver itself; it may reference env-var naming in comments or error messages).
-    Skipped: tests/ (test fixtures may plant violations intentionally).
+    Self-excluded: this module's own docstring (demonstrates the flagged patterns) and
+    broker_secrets.py (the resolver itself; it may reference env-var naming in comments
+    or error messages). Skipped: tests/ (test fixtures may plant violations intentionally).
     """
     print("\n=== Broker env-read guard (RESOLVE-BY-KEY-ONLY) ===")
     scripts_dir = _common.ROOT / "scripts"
     src_dir = _common.ROOT / "src"
 
     _SELF_EXCLUDE = {
-        scripts_dir / "validate.py",
+        Path(__file__),
         scripts_dir / "broker_secrets.py",
     }
 

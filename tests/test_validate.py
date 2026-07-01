@@ -357,7 +357,7 @@ class TestValidatePromptCompliance:
         mock_compliance.check_retro_lite_compliance.return_value = []
 
         with (
-            patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=mock_compliance),
+            patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=mock_compliance),
             patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
@@ -382,7 +382,7 @@ class TestValidatePromptCompliance:
         mock_compliance.check_retro_lite_compliance.return_value = ["retro_lite_per_step: expected 5 entries, found 0"]
 
         with (
-            patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=mock_compliance),
+            patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=mock_compliance),
             patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
@@ -393,7 +393,7 @@ class TestValidatePromptCompliance:
 
     def test_skips_when_compliance_not_found(self) -> None:
         """No failures when prompt_compliance.py is absent."""
-        with patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=None):
+        with patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=None):
             failed: list[str] = []
             validate_prompt_compliance(failed)
 
@@ -411,7 +411,7 @@ class TestValidateInstructionArchitectureLayers:
         }
         mock_compliance.check_layer_compliance.return_value = []
 
-        with patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=mock_compliance):
+        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=mock_compliance):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -423,7 +423,7 @@ class TestValidateInstructionArchitectureLayers:
         mock_compliance._load_instruction_architecture.return_value = {"layers": []}
         mock_compliance.check_layer_compliance.return_value = ["layer 99 (Ghost): no files match 'ghost/*.md'"]
 
-        with patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=mock_compliance):
+        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=mock_compliance):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -432,7 +432,7 @@ class TestValidateInstructionArchitectureLayers:
 
     def test_skips_when_compliance_not_found(self) -> None:
         """No failures when prompt_compliance.py is absent."""
-        with patch("scripts.checks.contracts._shared._load_prompt_compliance", return_value=None):
+        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=None):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -2372,7 +2372,7 @@ class TestValidateDqManifestGate:
         (dec_dir / "ops_recommendations.yaml").write_text(manifest_yaml, encoding="utf-8")
 
     def _run(self, tmp_path: Path) -> list[str]:
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             _validate.validate_dq_manifest_gate(failed)
         return failed
@@ -2460,14 +2460,10 @@ class TestCheckSourceRegistry:
         (tmp_path / "scripts").mkdir(parents=True)
         (tmp_path / "scripts" / "ops_data_portal.py").write_text("", encoding="utf-8")
 
-        original_root = _validate.check_source_registry.__globals__["ROOT"]
-        _validate.check_source_registry.__globals__["ROOT"] = tmp_path
-        try:
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             check_source_registry(failed)
-            assert failed == [], f"Expected no failures but got: {failed}"
-        finally:
-            _validate.check_source_registry.__globals__["ROOT"] = original_root
+        assert failed == [], f"Expected no failures but got: {failed}"
 
     def test_source_registry_ci_guard_rejects_unregistered(self, tmp_path: Path) -> None:
         """check_source_registry() fails when a schedule.yaml agent name is not registered."""
@@ -2490,14 +2486,10 @@ class TestCheckSourceRegistry:
         (tmp_path / "scripts").mkdir(parents=True)
         (tmp_path / "scripts" / "ops_data_portal.py").write_text("", encoding="utf-8")
 
-        original_root = _validate.check_source_registry.__globals__["ROOT"]
-        _validate.check_source_registry.__globals__["ROOT"] = tmp_path
-        try:
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             check_source_registry(failed)
-            assert "Source registry CI guard" in failed
-        finally:
-            _validate.check_source_registry.__globals__["ROOT"] = original_root
+        assert "Source registry CI guard" in failed
 
 
 class TestValidateScheduledAgentLogs:
@@ -2972,7 +2964,7 @@ class TestBudgetAssertion:
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("scripts.checks._scaffolding._file_budget_breach_rec"),
+            patch("validate._file_budget_breach_rec"),
             patch("time.monotonic", side_effect=[0.0, 400.0]),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -2994,7 +2986,7 @@ class TestBudgetAssertion:
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("scripts.checks._scaffolding._file_budget_breach_rec"),
+            patch("validate._file_budget_breach_rec"),
             patch("time.monotonic", side_effect=[0.0, 400.0]),
             pytest.raises(SystemExit),
         ):
@@ -3042,7 +3034,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
-            patch("scripts.checks._scaffolding._file_budget_bypass_rec") as mock_bypass,
+            patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3063,7 +3055,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
-            patch("scripts.checks._scaffolding._file_budget_bypass_rec") as mock_bypass,
+            patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
         ):
             _validate.main()
@@ -3084,7 +3076,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
-            patch("scripts.checks._scaffolding._file_budget_bypass_rec") as mock_bypass,
+            patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
         ):
             _validate.main()
@@ -3106,8 +3098,8 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 400.0]),
-            patch("scripts.checks._scaffolding._file_budget_bypass_rec"),
-            patch("scripts.checks._scaffolding._file_budget_breach_rec") as mock_breach,
+            patch("validate._file_budget_bypass_rec"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3155,7 +3147,7 @@ class TestIgnoreBudgetCIGuard:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
-            patch("scripts.checks._scaffolding._file_budget_bypass_rec"),
+            patch("validate._file_budget_bypass_rec"),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -4697,20 +4689,18 @@ class TestValidateImportContracts:
         assert not failed
 
     def test_wired_in_both_tiers(self) -> None:
-        """validate_import_contracts is invoked in both --pre and run_python_checks bodies."""
-        import ast  # noqa: PLC0415
+        """validate_import_contracts is a registered check in both the --pre and full-tier sequences.
 
-        src = _SCRIPT_PATH.read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        call_sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_import_contracts"
-        ]
-        assert len(call_sites) >= 2, (
-            "validate_import_contracts must be called in both --pre and run_python_checks; "
-            f"found only {len(call_sites)} call site(s)"
-        )
+        Decision 104: dispatch is registry-driven (scripts/checks/registry.py), not a literal
+        `validate_import_contracts(failed)` call site in scripts/validate.py -- so tier membership
+        is verified via the registry's declared sequences, not AST call-site counting.
+        """
+        from scripts.checks import registry  # noqa: PLC0415
+
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_import_contracts" in pre_names, "validate_import_contracts missing from pre_sequence()"
+        assert "validate_import_contracts" in full_names, "validate_import_contracts missing from full_sequence()"
 
 
 # ---------------------------------------------------------------------------
@@ -4746,17 +4736,15 @@ class TestValidateLockfileSync:
         assert not failed
 
     def test_wired_in_both_tiers(self) -> None:
-        """validate_lockfile_sync is invoked in both --pre and run_python_checks bodies."""
-        import ast  # noqa: PLC0415
+        """validate_lockfile_sync is a registered check in both the --pre and full-tier sequences.
 
-        src = _SCRIPT_PATH.read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        call_sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_lockfile_sync"
-        ]
-        assert len(call_sites) >= 2, (
-            "validate_lockfile_sync must be called in both --pre and run_python_checks; "
-            f"found only {len(call_sites)} call site(s)"
-        )
+        Decision 104: dispatch is registry-driven (scripts/checks/registry.py), not a literal
+        `validate_lockfile_sync(failed)` call site in scripts/validate.py -- so tier membership
+        is verified via the registry's declared sequences, not AST call-site counting.
+        """
+        from scripts.checks import registry  # noqa: PLC0415
+
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_lockfile_sync" in pre_names, "validate_lockfile_sync missing from pre_sequence()"
+        assert "validate_lockfile_sync" in full_names, "validate_lockfile_sync missing from full_sequence()"
