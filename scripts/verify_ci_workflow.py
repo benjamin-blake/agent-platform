@@ -149,12 +149,48 @@ def _check_ci_rca_filter() -> None:
     )
 
 
+def _check_apply_rca_fallback() -> None:
+    """Assert both sandbox-apply jobs self-dispatch ci-rca on a re-run failure.
+
+    PLAN-gated-apply-rca-trigger: ci-rca.yml's workflow_run trigger is not reliably
+    re-dispatched on a manual re-run's completion (confirmed gap: run 28379330706,
+    gated-apply, run_attempt=2, zero RCA signal). Each of apply-sandbox and gated-apply
+    must carry actions: write and a failure-path step that dispatches ci-rca.yml, gated
+    on run_attempt so the workflow_run-covered attempt-1 path does not double-fire.
+    """
+    data = _load(".github/workflows/terraform-apply-sandbox.yml")
+    jobs = data.get("jobs", {})
+
+    for job_name in ("apply-sandbox", "gated-apply"):
+        job = jobs.get(job_name)
+        assert job is not None, f"Job {job_name!r} not found in terraform-apply-sandbox.yml"
+
+        permissions = job.get("permissions", {}) or {}
+        assert permissions.get("actions") == "write", (
+            f"{job_name} is missing 'actions: write' permission required for the ci-rca self-dispatch step"
+        )
+
+        dispatch_step = None
+        for step in job.get("steps", []):
+            step_if = str(step.get("if", ""))
+            step_run = str(step.get("run", ""))
+            if "failure()" in step_if and "run_attempt" in step_if and "gh workflow run ci-rca.yml" in step_run:
+                dispatch_step = step
+                break
+
+        assert dispatch_step is not None, (
+            f"{job_name} is missing a failure()-gated, run_attempt-gated step that dispatches ci-rca.yml "
+            "via 'gh workflow run ci-rca.yml'"
+        )
+
+
 _COMMANDS = {
     "jobs-and-flags": _check_jobs_and_flags,
     "concurrency": _check_concurrency,
     "fetch-depth": _check_fetch_depth,
     "canary": _check_canary,
     "ci-rca-filter": _check_ci_rca_filter,
+    "apply-rca-fallback": _check_apply_rca_fallback,
 }
 
 

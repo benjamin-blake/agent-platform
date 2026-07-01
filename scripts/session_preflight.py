@@ -254,6 +254,7 @@ def check_terraform_pending() -> tuple[bool | None, dict | None]:
 
         from scripts.convergence_health import (  # noqa: PLC0415
             assess_health,
+            derive_red_since,
             find_stuck_gated_approvals,
             read_convergence_record,
         )
@@ -273,6 +274,17 @@ def check_terraform_pending() -> tuple[bool | None, dict | None]:
             "stuck_approvals": len(verdict.stuck_approvals),
             "severity": verdict.severity,
         }
+
+        # PLAN-gated-apply-rca-trigger: carry the record's identity fields so
+        # _check_convergence_rca_gap can match on the red episode's start
+        # TIMESTAMP (ci_rca recs carry no commit_sha field) while still
+        # surfacing commit_sha to the operator in the alert payload. Reuses
+        # convergence_health.derive_red_since (the SAME fallback logic
+        # red_age_hours() itself is computed from) rather than re-deriving it.
+        if record and verdict.status == "red":
+            health["commit_sha"] = record.get("commit_sha", "")
+            health["run_url"] = record.get("run_url", "")
+            health["red_since"] = derive_red_since(record).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if verdict.status == "unknown":
             pending = None
@@ -1050,6 +1062,46 @@ def _check_ci_rca_liveness(creds_status: str, cache_rows: object = _READER_SENTI
         return None
 
     return {"run_url": run.get("url", ""), "elapsed_minutes": round(elapsed_minutes, 1)}
+
+
+_CONVERGENCE_RCA_GAP_GRACE_MINUTES = 30
+
+
+def _check_convergence_rca_gap(convergence_health: dict | None, cache_rows: object = _READER_SENTINEL) -> dict | None:
+    """Return alert dict when the convergence record is red beyond grace with no ci_rca rec since.
+
+    Generalises _check_ci_rca_liveness (which only inspects ci.yml push-to-main failures) to the
+    convergence-record surface: PLAN-gated-apply-rca-trigger's confirmed gap (run 28379330706,
+    gated-apply, run_attempt=2) wrote a red record with zero RCA signal and was invisible to
+    _check_ci_rca_liveness. Matches on the red episode's start TIMESTAMP (red_since) vs
+    ci_rca rec creation time -- NOT commit_sha, which ci_rca recs carry no structured field for
+    (a commit match would fire a permanent false-positive even after a valid rec is filed).
+    commit_sha rides the alert payload for the operator only. Degrades to None on any error or
+    missing data (rec-2027 pattern -- never crashes preflight).
+    """
+    try:
+        if not convergence_health or convergence_health.get("status") != "red":
+            return None
+
+        red_since = convergence_health.get("red_since")
+        if not red_since:
+            return None
+
+        red_age_hours = convergence_health.get("red_age_hours") or 0.0
+        if (red_age_hours * 60.0) <= _CONVERGENCE_RCA_GAP_GRACE_MINUTES:
+            return None
+
+        if _fetch_ci_rca_recs_since(red_since, cache_rows=cache_rows):
+            return None
+
+        return {
+            "commit_sha": convergence_health.get("commit_sha", ""),
+            "run_url": convergence_health.get("run_url", ""),
+            "red_age_hours": round(red_age_hours, 2),
+            "red_since": red_since,
+        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _check_forward_fix_recursion(cache_rows: object = _READER_SENTINEL) -> dict | None:
@@ -1902,6 +1954,7 @@ def main(roadmap_detail: str = "slim") -> int:
         fut_commits = phase_b.submit(_get_recent_main_commits)
         fut_decision_ts = phase_b.submit(_get_latest_decision_ts, dec_cache)
         fut_ci_liveness = phase_b.submit(_check_ci_rca_liveness, creds_status, recs_cache)
+        fut_convergence_rca_gap = phase_b.submit(_check_convergence_rca_gap, convergence_health_data, recs_cache)
         fut_forward_fix = phase_b.submit(_check_forward_fix_recursion, recs_cache)
         fut_budget = phase_b.submit(_check_budget_bypass_alert, recs_cache)
 
@@ -1913,6 +1966,7 @@ def main(roadmap_detail: str = "slim") -> int:
         recent_main_commits = fut_commits.result()
         latest_decision_ts = fut_decision_ts.result()
         ci_rca_liveness_alert = fut_ci_liveness.result()
+        convergence_rca_gap_alert = fut_convergence_rca_gap.result()
         forward_fix_alert = fut_forward_fix.result()
         budget_bypass_alert = fut_budget.result()
 
@@ -2004,6 +2058,14 @@ def main(roadmap_detail: str = "slim") -> int:
     report["provisional_contracts_due"] = provisional_contracts_due
     report["non_automatable_softcap_breached"] = _check_non_automatable_softcap(non_automatable_count)
     report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
+    report["convergence_rca_gap_alert"] = convergence_rca_gap_alert
+    if convergence_rca_gap_alert is not None:
+        print(
+            f"Convergence RCA gap alert: record red {convergence_rca_gap_alert['red_age_hours']}h "
+            f"(commit {convergence_rca_gap_alert.get('commit_sha', '')[:8]}) with no matching ci_rca rec filed "
+            "since the red episode began -- file one manually or dispatch ci-rca.yml.",
+            file=sys.stderr,
+        )
     report["forward_fix_recursion_alert"] = forward_fix_alert
     report["budget_bypass_alert"] = budget_bypass_alert
     if budget_bypass_alert is not None:
@@ -2071,13 +2133,17 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
         ci_rca_summary = f"ci_rca_unresolved={ci_rca_unresolved} ci_rca_likely_resolved={ci_rca_likely}"
     else:
         ci_rca_summary = "ci_rca=0"
+    convergence_rca_gap = report.get("convergence_rca_gap_alert")
+    convergence_rca_gap_suffix = (
+        f" convergence_rca_gap_alert=red_{convergence_rca_gap['red_age_hours']}h" if convergence_rca_gap else ""
+    )
     return (
         f"Preflight OK -> {report_path}\n"
         f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
         f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
         f"  open_recs={report.get('open_recommendations')} "
         f"non_automatable={report.get('non_automatable_recommendations')} "
-        f"{ci_rca_summary}{recs_status_suffix}\n"
+        f"{ci_rca_summary}{recs_status_suffix}{convergence_rca_gap_suffix}\n"
         f"  Read the report file for full constraint detail."
     )
 

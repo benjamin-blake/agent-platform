@@ -89,6 +89,7 @@ jobs:
       id-token: write       # REQUIRED for OIDC token minting
       contents: read
       pull-requests: write  # best-effort post-merge SHA->PR wake comment (CD.35 5.3)
+      actions: write        # self-dispatch ci-rca on a re-run failure (workflow_run re-run gap)
 
     env:
       AWS_DEFAULT_REGION: eu-west-2
@@ -455,6 +456,21 @@ jobs:
           fi
           gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
 
+      - name: Self-dispatch ci-rca on re-run failure (workflow_run re-run gap)
+        # PLAN-gated-apply-rca-trigger: ci-rca.yml triggers SOLELY on the workflow_run:
+        # [terraform-apply-sandbox] completed event, but GitHub does not reliably re-dispatch
+        # workflow_run-triggered workflows on a manual RE-RUN's completion (run_attempt >= 2) --
+        # the exact class of gap that left run 28379330706 (gated-apply, run_attempt=2) with zero
+        # RCA signal. Gated on run_attempt != '1' so the fresh-push attempt-1 path (already covered
+        # by workflow_run) never double-fires; force_rca is omitted so any residual overlap
+        # collapses via ci-rca's existing per-category commit-status dedup (Decision 74).
+        # failure()-only, runs after the record write -- never touches the plan/apply data path
+        # (Decision 77 no-TOCTOU preserved).
+        if: ${{ failure() && github.run_attempt != '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci-rca.yml -f run_id=${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
   # Speculative-plan job: pull_request ONLY, same-repo gated (CD.35 Wave 2 / T2.21).
   # Plans under github_ci_plan (tfstate-read, tfplan-write), captures the guard's PREDICTED
@@ -761,9 +777,14 @@ jobs:
   #     release the queue.
   #   - Approval-window expiry: when the Environment approval window expires (GitHub default
   #     30 days -- adequate for this workflow's cadence) the waiting job transitions to failure,
-  #     the workflow concludes failure, ci-rca.yml fires and files a rec, and the concurrency
-  #     group releases normally. The "waiting" state during the review window is NOT a failure;
-  #     ci-rca is triggered only on the eventual expiry/failure conclusion.
+  #     the workflow concludes failure, and the concurrency group releases normally. The
+  #     "waiting" state during the review window is NOT a failure.
+  #   - PLAN-gated-apply-rca-trigger: the workflow_run:[terraform-apply-sandbox] trigger that
+  #     ci-rca.yml relies on is NOT reliably re-dispatched on a manual RE-RUN's completion
+  #     (run_attempt >= 2) -- the normal way this job executes after Environment approval, and
+  #     also how an approval-window expiry concludes. The workflow_run trigger stays in place
+  #     for the fresh-push attempt-1 path; the job's own failure-path self-dispatch step
+  #     (below) is the reliable path for the re-run / expiry path (Decision 92 point 6).
   # ---------------------------------------------------------------------------
   gated-apply:
     needs: [apply-sandbox]
@@ -779,6 +800,7 @@ jobs:
       id-token: write       # OIDC for the apply role (same as apply-sandbox)
       contents: read
       pull-requests: write  # best-effort post-merge wake comment
+      actions: write        # self-dispatch ci-rca on a re-run failure (workflow_run re-run gap)
     env:
       AWS_DEFAULT_REGION: eu-west-2
       TF_VAR_aws_profile: ""
@@ -894,11 +916,15 @@ jobs:
         # OIDC apply-role creds configured in the "Configure AWS credentials" step. If the failure
         # occurs AT OR BEFORE that creds step (e.g. the OIDC trust regresses, as VP9 first found),
         # this step cannot reach S3 ("Unable to locate credentials") and the record stays at its
-        # prior value rather than going red. The backstop for that pre-creds window is ci-rca:
-        # ci-rca.yml triggers on the terraform-apply-sandbox workflow_run conclusion == failure
-        # (independent of the record), so a creds-stage gated-apply failure still files a rec and is
-        # NOT silently masked. Failures AT the apply stage (creds already configured) DO red the
-        # record here as intended.
+        # prior value rather than going red. Failures AT the apply stage (creds already configured)
+        # DO red the record here as intended.
+        #
+        # PLAN-gated-apply-rca-trigger (repairs the VP10 backstop clause above): the pre-creds
+        # backstop is NOT solely the workflow_run trigger -- confirmed run 28379330706 (run_attempt
+        # 2, a normal post-approval re-run) failed and produced zero ci-rca signal because GitHub
+        # does not reliably re-dispatch workflow_run-triggered workflows on a re-run's completion.
+        # The job's own failure-path self-dispatch step (below, gated on run_attempt != '1') is the
+        # reliable backstop for the re-run path; workflow_run remains the attempt-1 path.
         if: always()
         env:
           SHA: ${{ github.sha }}
@@ -954,3 +980,17 @@ jobs:
             MSG="gated-apply did NOT converge (RED) for ${SHA}; ci-rca will file a source=ci_rca rec. After review, unlatch via the workflow_dispatch acknowledge-and-retry path. (Best-effort wake.)"
           fi
           gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
+
+      - name: Self-dispatch ci-rca on re-run failure (workflow_run re-run gap)
+        # PLAN-gated-apply-rca-trigger: confirmed run 28379330706 (gated-apply, run_attempt=2)
+        # failed with zero RCA signal -- ci-rca.yml's workflow_run:[terraform-apply-sandbox]
+        # trigger is not reliably re-dispatched on a re-run's completion, and this job's normal
+        # execution mode (post-approval) IS a re-run (run_attempt >= 2), as is an approval-window
+        # expiry conclusion. Gated on run_attempt != '1' for parity with apply-sandbox's
+        # self-dispatch; force_rca is omitted so any residual overlap collapses via ci-rca's
+        # existing per-category commit-status dedup (Decision 74). failure()-only, after the
+        # record write -- never touches the plan/apply data path (Decision 77 no-TOCTOU preserved).
+        if: ${{ failure() && github.run_attempt != '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci-rca.yml -f run_id=${{ github.run_id }}
