@@ -203,8 +203,8 @@ class TestValidateCliToolsInPrompts:
         md.write_text("```bash\naws sts get-caller-identity\n```\n", encoding="utf-8")
 
         with (
-            patch("validate._KNOWN_CLI_TOOLS", {"aws"}),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.hygiene.validate_cli_tools_in_prompts._KNOWN_CLI_TOOLS", {"aws"}),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.shutil.which", return_value="/usr/bin/aws"),
         ):
             failed: list[str] = []
@@ -220,8 +220,8 @@ class TestValidateCliToolsInPrompts:
         md.write_text("```bash\nterraform validate\n```\n", encoding="utf-8")
 
         with (
-            patch("validate._KNOWN_CLI_TOOLS", {"terraform"}),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.hygiene.validate_cli_tools_in_prompts._KNOWN_CLI_TOOLS", {"terraform"}),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.shutil.which", return_value=None),
         ):
             failed: list[str] = []
@@ -238,9 +238,9 @@ class TestValidateCliToolsInPrompts:
         md.write_text("```bash\ngh pr view\n```\n", encoding="utf-8")
 
         with (
-            patch("validate._KNOWN_CLI_TOOLS", {"gh"}),
-            patch("validate._OPTIONAL_CLI_TOOLS", {"gh"}),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.hygiene.validate_cli_tools_in_prompts._KNOWN_CLI_TOOLS", {"gh"}),
+            patch("scripts.checks.hygiene.validate_cli_tools_in_prompts._OPTIONAL_CLI_TOOLS", {"gh"}),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.shutil.which", return_value=None),
         ):
             failed: list[str] = []
@@ -256,8 +256,8 @@ class TestValidateCliToolsInPrompts:
         md.write_text("```bash\n# aws sts get-caller-identity\n```\n", encoding="utf-8")
 
         with (
-            patch("validate._KNOWN_CLI_TOOLS", {"aws"}),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.hygiene.validate_cli_tools_in_prompts._KNOWN_CLI_TOOLS", {"aws"}),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.shutil.which", return_value=None),
         ):
             failed: list[str] = []
@@ -268,7 +268,7 @@ class TestValidateCliToolsInPrompts:
 
     def test_no_failures_when_no_md_files(self, tmp_path: Path) -> None:
         """No failures when no markdown files exist in the search dirs."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_cli_tools_in_prompts(failed)
 
@@ -288,7 +288,7 @@ class TestValidateTestCoverage:
         mock_checker = MagicMock()
         mock_checker.get_changed_source_files.return_value = []
 
-        with patch("validate._load_coverage_checker", return_value=mock_checker):
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
             failed: list[str] = []
             validate_test_coverage(failed)
 
@@ -305,7 +305,7 @@ class TestValidateTestCoverage:
         mock_checker.check_test_file_exists.return_value = (True, "test file found")
         mock_checker.check_per_file_coverage.return_value = []
 
-        with patch("validate._load_coverage_checker", return_value=mock_checker):
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
             failed: list[str] = []
             validate_test_coverage(failed)
 
@@ -321,7 +321,7 @@ class TestValidateTestCoverage:
         mock_checker.get_changed_source_files.return_value = [source]
         mock_checker.check_test_file_exists.return_value = (False, "missing test file: tests/test_new_module.py")
 
-        with patch("validate._load_coverage_checker", return_value=mock_checker):
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
             failed: list[str] = []
             validate_test_coverage(failed)
 
@@ -330,7 +330,7 @@ class TestValidateTestCoverage:
 
     def test_skips_when_checker_not_found(self) -> None:
         """No failures (and no exception) when test_coverage_checker.py is absent."""
-        with patch("validate._load_coverage_checker", return_value=None):
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=None):
             failed: list[str] = []
             validate_test_coverage(failed)
 
@@ -357,8 +357,8 @@ class TestValidatePromptCompliance:
         mock_compliance.check_retro_lite_compliance.return_value = []
 
         with (
-            patch("validate._load_prompt_compliance", return_value=mock_compliance),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=mock_compliance),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
             validate_prompt_compliance(failed)
@@ -382,8 +382,8 @@ class TestValidatePromptCompliance:
         mock_compliance.check_retro_lite_compliance.return_value = ["retro_lite_per_step: expected 5 entries, found 0"]
 
         with (
-            patch("validate._load_prompt_compliance", return_value=mock_compliance),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=mock_compliance),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
             validate_prompt_compliance(failed)
@@ -393,7 +393,7 @@ class TestValidatePromptCompliance:
 
     def test_skips_when_compliance_not_found(self) -> None:
         """No failures when prompt_compliance.py is absent."""
-        with patch("validate._load_prompt_compliance", return_value=None):
+        with patch("scripts.checks.contracts.validate_prompt_compliance._load_prompt_compliance", return_value=None):
             failed: list[str] = []
             validate_prompt_compliance(failed)
 
@@ -411,7 +411,10 @@ class TestValidateInstructionArchitectureLayers:
         }
         mock_compliance.check_layer_compliance.return_value = []
 
-        with patch("validate._load_prompt_compliance", return_value=mock_compliance):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=mock_compliance,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -423,7 +426,10 @@ class TestValidateInstructionArchitectureLayers:
         mock_compliance._load_instruction_architecture.return_value = {"layers": []}
         mock_compliance.check_layer_compliance.return_value = ["layer 99 (Ghost): no files match 'ghost/*.md'"]
 
-        with patch("validate._load_prompt_compliance", return_value=mock_compliance):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=mock_compliance,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -432,7 +438,10 @@ class TestValidateInstructionArchitectureLayers:
 
     def test_skips_when_compliance_not_found(self) -> None:
         """No failures when prompt_compliance.py is absent."""
-        with patch("validate._load_prompt_compliance", return_value=None):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=None,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -451,7 +460,7 @@ class TestLoadHelpers:
 
     def test_load_coverage_checker_returns_none_when_missing(self, tmp_path: Path) -> None:
         """Returns None when the script does not exist."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             result = _load_coverage_checker()
         assert result is None
 
@@ -464,7 +473,7 @@ class TestLoadHelpers:
 
     def test_load_prompt_compliance_returns_none_when_missing(self, tmp_path: Path) -> None:
         """Returns None when the script does not exist."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             result = _load_prompt_compliance()
         assert result is None
 
@@ -479,8 +488,8 @@ class TestValidateEnvironmentTaxonomy:
             p.write_text(content, encoding="utf-8")
         failed: list[str] = []
         with (
-            patch("validate.get_changed_files", return_value=changed),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=changed),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             validate_environment_taxonomy(failed)
         return failed
@@ -536,8 +545,8 @@ class TestValidateEnvironmentTaxonomy:
     def test_missing_file_ignored(self, tmp_path: Path) -> None:
         failed: list[str] = []
         with (
-            patch("validate.get_changed_files", return_value=["docs/gone.md"]),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=["docs/gone.md"]),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             validate_environment_taxonomy(failed)
         assert failed == []
@@ -557,9 +566,9 @@ class TestRunTerraformChecks:
             return result
 
         with (
-            patch("validate.validate_terraform_try"),
+            patch("scripts.checks._scaffolding.validate_terraform_try"),
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
         ):
             failed: list[str] = []
             _validate.run_terraform_checks(failed)
@@ -580,9 +589,9 @@ class TestRunTerraformChecks:
             return result
 
         with (
-            patch("validate.validate_terraform_try"),
+            patch("scripts.checks._scaffolding.validate_terraform_try"),
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
         ):
             failed: list[str] = []
             _validate.run_terraform_checks(failed)
@@ -594,9 +603,9 @@ class TestRunTerraformChecks:
     def test_skips_terraform_binary_steps_when_not_found(self, capsys: pytest.CaptureFixture) -> None:
         """No terraform binary -> creds-free helper prints a skip and `run` is never invoked."""
         with (
-            patch("validate.validate_terraform_try"),
+            patch("scripts.checks._scaffolding.validate_terraform_try"),
             patch("validate.shutil.which", return_value=None),
-            patch("validate.run", side_effect=AssertionError("run must not be called when terraform is absent")),
+            patch("scripts.checks._common.run", side_effect=AssertionError("run must not be called when terraform is absent")),
         ):
             failed: list[str] = []
             _validate.run_terraform_checks(failed)
@@ -619,7 +628,7 @@ class TestRunTerraformChecks:
 
         with (
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
         ):
             failed: list[str] = []
             _validate.run_terraform_creds_free(failed)
@@ -638,7 +647,7 @@ class TestRunTerraformChecks:
         """run_terraform_creds_free() emits a visible skip and calls nothing when terraform is absent."""
         with (
             patch("validate.shutil.which", return_value=None),
-            patch("validate.run", side_effect=AssertionError("run must not be called")),
+            patch("scripts.checks._common.run", side_effect=AssertionError("run must not be called")),
         ):
             failed: list[str] = []
             _validate.run_terraform_creds_free(failed)
@@ -670,7 +679,7 @@ class TestRunTerraformChecks:
 
         with (
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
             patch("validate.time.sleep"),
         ):
             failed: list[str] = []
@@ -699,7 +708,7 @@ class TestRunTerraformChecks:
 
         with (
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
             patch("validate.time.sleep"),
         ):
             failed: list[str] = []
@@ -729,7 +738,7 @@ class TestRunTerraformChecks:
 
         with (
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
-            patch("validate.run", side_effect=mock_run),
+            patch("scripts.checks._common.run", side_effect=mock_run),
             patch("validate.time.sleep"),
         ):
             failed: list[str] = []
@@ -755,7 +764,7 @@ class TestValidateSubprocessEncoding:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "good.py").write_text('subprocess.run(["cmd"], text=True, encoding="utf-8")\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_subprocess_encoding(failed)
         assert failed == []
@@ -765,7 +774,7 @@ class TestValidateSubprocessEncoding:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "bad.py").write_text('subprocess.run(["cmd"], capture_output=True, text=True)\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_subprocess_encoding(failed)
         assert "Subprocess encoding lint" in failed
@@ -775,7 +784,7 @@ class TestValidateSubprocessEncoding:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "ok.py").write_text('subprocess.run(["cmd"], capture_output=True)\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_subprocess_encoding(failed)
         assert failed == []
@@ -785,7 +794,7 @@ class TestValidateSubprocessEncoding:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "bad_popen.py").write_text('subprocess.Popen(["cmd"], text=True)\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_subprocess_encoding(failed)
         assert "Subprocess encoding lint" in failed
@@ -801,7 +810,7 @@ class TestValidateSysExecutable:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "good.py").write_text('subprocess.run([sys.executable, "-m", "pytest"])\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_sys_executable(failed)
         assert failed == []
@@ -811,7 +820,7 @@ class TestValidateSysExecutable:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "bad.py").write_text("subprocess.run(['python', '-m', 'pytest'])\n", encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_sys_executable(failed)
         assert "sys.executable lint" in failed
@@ -821,7 +830,7 @@ class TestValidateSysExecutable:
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         (scripts_dir / "bad_pip.py").write_text('subprocess.run(["pip", "install", "boto3"])\n', encoding="utf-8")
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_sys_executable(failed)
         assert "sys.executable lint" in failed
@@ -840,7 +849,7 @@ class TestValidateTerraformTry:
             'source_code_hash = try(\n  filemd5("build/lambda.zip"),\n  md5("fallback")\n)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert failed == []
@@ -853,7 +862,7 @@ class TestValidateTerraformTry:
             'source_code_hash = filemd5("build/lambda.zip")\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert "Terraform try() lint" in failed
@@ -862,7 +871,7 @@ class TestValidateTerraformTry:
         """No failure when terraform directory has no .tf files."""
         tf_dir = tmp_path / "terraform"
         tf_dir.mkdir()
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert failed == []
@@ -875,7 +884,7 @@ class TestValidateTerraformTry:
             'policy = file("policy.json")\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert "Terraform try() lint" in failed
@@ -888,7 +897,7 @@ class TestValidateTerraformTry:
             'hash = try(\n  filemd5("build/lambda.zip"),\n  md5(file("ok.tf"))\n)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert failed == []
@@ -901,7 +910,7 @@ class TestValidateTerraformTry:
             'hash = retry(filemd5("build/lambda.zip"))\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             self.validate_terraform_try(failed)
         assert "Terraform try() lint" in failed
@@ -948,7 +957,7 @@ class TestValidateInvariants:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_invariants(failed)
 
@@ -980,7 +989,7 @@ class TestValidateInvariants:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_invariants(failed)
 
@@ -1009,7 +1018,7 @@ class TestValidateInvariants:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_invariants(failed)
 
@@ -1026,7 +1035,7 @@ class TestValidateNoUnderscoreInstructions:
         # Only the hyphen variant exists -- underscore must be absent
         (github_dir / "copilot-instructions.md").write_text("# instructions\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_no_underscore_instructions(failed)
 
@@ -1038,7 +1047,7 @@ class TestValidateNoUnderscoreInstructions:
         github_dir.mkdir(parents=True)
         (github_dir / "copilot_instructions.md").write_text("# ghost\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_no_underscore_instructions(failed)
 
@@ -1075,7 +1084,7 @@ class TestValidateRecommendationsSchema:
     def test_passes_on_valid_rec(self, tmp_path: Path) -> None:
         """A well-formed rec with a safe acceptance command passes."""
         self._write_jsonl(tmp_path, [self._VALID_REC])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_recommendations_schema(failed)
         assert failed == []
@@ -1087,14 +1096,14 @@ class TestValidateRecommendationsSchema:
         bad_rec = copy.deepcopy(self._VALID_REC)
         bad_rec["acceptance"] = '`python -c "import foo; assert foo.bar"`'
         self._write_jsonl(tmp_path, [bad_rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_recommendations_schema(failed)
         assert "Recommendations schema validation" in failed
 
     def test_skips_when_file_missing(self, tmp_path: Path) -> None:
         """No error when the JSONL file does not exist."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_recommendations_schema(failed)
         assert failed == []
@@ -1110,7 +1119,7 @@ class TestValidateSlocLimits:
         big_file = scripts_dir / "big_module.py"
         big_file.write_text("x = 1\n" * 501, encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1127,7 +1136,7 @@ class TestValidateSlocLimits:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1141,7 +1150,7 @@ class TestValidateSlocLimits:
         small_file = scripts_dir / "small.py"
         small_file.write_text("x = 1\n" * 100, encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1154,7 +1163,7 @@ class TestValidateSlocLimits:
         init_file = scripts_dir / "__init__.py"
         init_file.write_text("x = 1\n" * 501, encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1176,7 +1185,7 @@ class TestValidateSlocLimits:
         (scripts_dir / "heavy.py").write_text("x = 1\n" * 601, encoding="utf-8")
         self._write_budget(tmp_path, {"scripts/heavy.py": 600})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1190,7 +1199,7 @@ class TestValidateSlocLimits:
         (scripts_dir / "heavy.py").write_text("x = 1\n" * 600, encoding="utf-8")
         self._write_budget(tmp_path, {"scripts/heavy.py": 600})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1203,7 +1212,7 @@ class TestValidateSlocLimits:
         (scripts_dir / "heavy.py").write_text("x = 1\n" * 550, encoding="utf-8")
         self._write_budget(tmp_path, {"scripts/heavy.py": 600})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1219,7 +1228,7 @@ class TestValidateSlocLimits:
         )
         self._write_budget(tmp_path, {})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1235,7 +1244,7 @@ class TestValidateSlocLimits:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_sloc_limits(failed)
 
@@ -1251,7 +1260,7 @@ class TestValidateSlocLimits:
         # Seed a budget BELOW current SLOC -- regen must not raise it
         self._write_budget(tmp_path, {"scripts/growing.py": 580})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             _update_sloc_budgets()
             result = _load_sloc_budgets()
 
@@ -1266,7 +1275,7 @@ class TestValidateSlocLimits:
         (scripts_dir / "new_big.py").write_text("x = 1\n" * 620, encoding="utf-8")
         self._write_budget(tmp_path, {})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             _update_sloc_budgets()
             result = _load_sloc_budgets()
 
@@ -1282,7 +1291,7 @@ class TestValidateSlocLimits:
         (scripts_dir / "shrunken.py").write_text("x = 1\n" * 100, encoding="utf-8")
         self._write_budget(tmp_path, {"scripts/shrunken.py": 600})
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             _update_sloc_budgets()
             result = _load_sloc_budgets()
 
@@ -1300,7 +1309,7 @@ class TestValidateCcLimits:
         branches = "\n".join(f"    if x == {i}: pass" for i in range(21))
         over_limit.write_text(f"def heavy_dispatch(x):\n{branches}\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_cc_limits(failed)
 
@@ -1320,7 +1329,7 @@ class TestValidateCcLimits:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_cc_limits(failed)
 
@@ -1334,7 +1343,7 @@ class TestValidateCcLimits:
         branches = "\n".join(f"    if x == {i}: pass" for i in range(5))
         small.write_text(f"def light_func(x):\n{branches}\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_cc_limits(failed)
 
@@ -1348,7 +1357,7 @@ class TestValidateCcLimits:
         branches = "\n".join(f"    if x == {i}: pass" for i in range(21))
         init_file.write_text(f"def heavy_dispatch(x):\n{branches}\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_cc_limits(failed)
 
@@ -1377,7 +1386,7 @@ class TestValidateComplexity:
             md_file = prompts_dir / f"test{i}.md"
             md_file.write_text("Some text here.\nRegular lines only.\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             warnings = validate_complexity(failed)
 
@@ -1420,7 +1429,7 @@ class TestValidateComplexity:
             md_file = prompts_dir / f"test{i}.md"
             md_file.write_text("Regular text here.\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             warnings = validate_complexity(failed)
 
@@ -1455,7 +1464,7 @@ class TestValidateComplexity:
             encoding="utf-8",
         )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             warnings = validate_complexity(failed)
 
@@ -1479,7 +1488,7 @@ class TestValidateComplexity:
                 encoding="utf-8",
             )
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             warnings = validate_complexity(failed)
 
@@ -1502,7 +1511,7 @@ class TestValidateComplexity:
             py_file = src_dir / f"simple{i}.py"
             py_file.write_text("def func(): pass\n", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_complexity(failed)
 
@@ -1527,7 +1536,7 @@ class TestValidateRecWritePaths:
             'with RECS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_rec_write_paths(failed)
         assert len(failed) > 0
@@ -1542,7 +1551,7 @@ class TestValidateRecWritePaths:
             'with RECS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_rec_write_paths(failed)
         assert failed == []
@@ -1556,7 +1565,7 @@ class TestValidateRecWritePaths:
             'with open(_LOCAL_RECS_FILE, "w", encoding="utf-8") as fh: fh.write("x")\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_rec_write_paths(failed)
         assert failed == []
@@ -1570,7 +1579,7 @@ class TestValidateRecWritePaths:
             "from scripts.ops_data_portal import file_rec\nfile_rec({'title': 'test'})\n",
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_rec_write_paths(failed)
         assert failed == []
@@ -1588,7 +1597,7 @@ class TestValidateWarehouseWriteSources:
             'OpsWriter().write("ops_recommendations", entry)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert len(failed) > 0
@@ -1603,7 +1612,7 @@ class TestValidateWarehouseWriteSources:
             'writer = OpsWriter()\nwriter.write("ops_decisions", entry)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert len(failed) > 0
@@ -1618,7 +1627,7 @@ class TestValidateWarehouseWriteSources:
             'OpsWriter().write("ops_session_log", merged)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert failed == []
@@ -1638,7 +1647,7 @@ class TestValidateWarehouseWriteSources:
                 f'OpsWriter().write("{table}", merged)\n',
                 encoding="utf-8",
             )
-            with patch("validate.ROOT", tmp_path):
+            with patch("scripts.checks._common.ROOT", tmp_path):
                 failed: list[str] = []
                 validate_warehouse_write_sources(failed)
             assert len(failed) > 0, f"migrated-table block must fire for {table}"
@@ -1653,7 +1662,7 @@ class TestValidateWarehouseWriteSources:
             'ops.write("ops_priority_queue", enriched)\n',
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert not any("DuckLake-migrated table" in e for e in failed)
@@ -1667,7 +1676,7 @@ class TestValidateWarehouseWriteSources:
             "from scripts.ops_data_portal import file_rec\nfile_rec({'title': 'test'})\n",
             encoding="utf-8",
         )
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert failed == []
@@ -1707,7 +1716,7 @@ class TestValidateExecutorBoundary:
         rec = copy.deepcopy(self._VALID_REC)
         # file matches "scripts/executor/" pattern, automatable:True, status:open
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert "Executor boundary validation" in failed
@@ -1719,7 +1728,7 @@ class TestValidateExecutorBoundary:
         rec = copy.deepcopy(self._VALID_REC)
         rec["automatable"] = False
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert failed == []
@@ -1732,7 +1741,7 @@ class TestValidateExecutorBoundary:
         rec["file"] = "scripts/session_postflight.py"
         rec["acceptance"] = "`python -m pytest tests/test_session_postflight.py -x -q`"
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert failed == []
@@ -1744,14 +1753,14 @@ class TestValidateExecutorBoundary:
         rec = copy.deepcopy(self._VALID_REC)
         rec["status"] = "closed"
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert failed == []
 
     def test_missing_jsonl_skips_gracefully(self, tmp_path: Path) -> None:
         """Missing JSONL file does not raise and does not append to failed."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert failed == []
@@ -1768,7 +1777,7 @@ class TestValidateExecutorBoundary:
         rec["file"] = "config/agent/executor/prompts/planning.prompt.md"
         rec["acceptance"] = "`grep -q planning config/agent/executor/prompts/planning.prompt.md`"
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert "Executor boundary validation" in failed
@@ -1788,7 +1797,7 @@ class TestValidateExecutorBoundary:
         rec["file"] = "docs/ROADMAP-PLATFORM.yaml"
         rec["acceptance"] = "`grep -c 'does NOT touch DECISIONS.md' docs/ROADMAP-PLATFORM.yaml`"
         self._write_jsonl(tmp_path, [rec])
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_executor_boundary(failed)
         assert failed == []
@@ -1804,7 +1813,7 @@ class TestValidateOutboxStaleness:
 
     def test_no_outbox_directory_passes(self, tmp_path: Path, capsys) -> None:
         """No outbox directory: passes with 'No outbox directory' message."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_outbox_staleness(failed)
         captured = capsys.readouterr()
@@ -1817,7 +1826,7 @@ class TestValidateOutboxStaleness:
         outbox.mkdir(parents=True)
         (outbox / "entry.jsonl").write_text("{}", encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_outbox_staleness(failed)
         captured = capsys.readouterr()
@@ -1837,7 +1846,7 @@ class TestValidateOutboxStaleness:
         old_mtime = time.time() - 48 * 3600
         os.utime(str(stale_file), (old_mtime, old_mtime))
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_outbox_staleness(failed)
         captured = capsys.readouterr()
@@ -1871,9 +1880,9 @@ class TestEnsureFreshDqResults:
     def test_ensure_fresh_dq_runs_when_cache_missing(self, tmp_path: Path, capsys) -> None:
         """No dq-latest.json on disk: credential check runs, then data_quality_runner is invoked."""
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
-            patch("validate.run") as mock_run,
+            patch("scripts.checks._common.run") as mock_run,
         ):
             mock_session.return_value.client.return_value.get_caller_identity.return_value = {"Account": "123"}
             mock_run.return_value = _mock_completed(0)
@@ -1903,9 +1912,9 @@ class TestEnsureFreshDqResults:
         os.utime(str(dq_file), (old_mtime, old_mtime))
 
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
-            patch("validate.run") as mock_run,
+            patch("scripts.checks._common.run") as mock_run,
         ):
             mock_session.return_value.client.return_value.get_caller_identity.return_value = {"Account": "123"}
             mock_run.return_value = _mock_completed(0)
@@ -1926,7 +1935,7 @@ class TestEnsureFreshDqResults:
         dq_file.write_text("{}", encoding="utf-8")
         # Default mtime is 'now', well inside the 1h freshness window.
 
-        with patch("validate.ROOT", tmp_path), patch("validate.run") as mock_run:
+        with patch("scripts.checks._common.ROOT", tmp_path), patch("scripts.checks._common.run") as mock_run:
             failed: list[str] = []
             ensure_fresh_dq_results(failed)
 
@@ -1939,9 +1948,9 @@ class TestEnsureFreshDqResults:
     def test_ensure_fresh_dq_skips_when_sso_unavailable(self, tmp_path: Path, capsys) -> None:
         """Decision 57: failed boto3 credential check prints actionable guidance and skips."""
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
-            patch("validate.run") as mock_run,
+            patch("scripts.checks._common.run") as mock_run,
         ):
             mock_session.return_value.client.return_value.get_caller_identity.side_effect = Exception("Token has expired")
             failed: list[str] = []
@@ -1956,9 +1965,9 @@ class TestEnsureFreshDqResults:
     def test_ensure_fresh_dq_skips_when_credentials_unavailable(self, tmp_path: Path, capsys) -> None:
         """Decision 57: any boto3 credential error must skip with guidance, not crash."""
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
-            patch("validate.run") as mock_run,
+            patch("scripts.checks._common.run") as mock_run,
         ):
             mock_session.side_effect = Exception("ProfileNotFound")
             failed: list[str] = []
@@ -1975,7 +1984,7 @@ class TestRunCoverageCheck:
 
     def test_run_coverage_check_no_changed_files_prints_message(self, capsys) -> None:
         """When there are no changed files, the function reports nothing to check."""
-        with patch("validate.get_changed_files", return_value=[]):
+        with patch("scripts.checks._common.get_changed_files", return_value=[]):
             run_coverage_check()
         captured = capsys.readouterr()
         assert "coverage" in captured.out.lower()
@@ -1984,7 +1993,7 @@ class TestRunCoverageCheck:
     def test_run_coverage_check_all_covered(self, capsys) -> None:
         """When every changed file is covered, the report says 'All scope files covered'."""
         with (
-            patch("validate.get_changed_files", return_value=["scripts/ops_data_portal.py"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["scripts/ops_data_portal.py"]),
             patch("scripts.verifiers.check_coverage", return_value=[]),
         ):
             run_coverage_check()
@@ -1995,7 +2004,7 @@ class TestRunCoverageCheck:
         """Uncovered files are printed line-by-line under the report header."""
         with (
             patch(
-                "validate.get_changed_files",
+                "scripts.checks._common.get_changed_files",
                 return_value=["docs/foo.md", "scripts/ops_data_portal.py"],
             ),
             patch(
@@ -2132,8 +2141,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, self._NEW_YAML_ENFORCED_TRUE)
 
         with (
-            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML_ENFORCED_FALSE)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(old_yaml=self._OLD_YAML_ENFORCED_FALSE)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2151,8 +2160,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, self._NEW_YAML_ENFORCED_TRUE)
 
         with (
-            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML_ENFORCED_FALSE)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(old_yaml=self._OLD_YAML_ENFORCED_FALSE)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2164,8 +2173,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, self._NEW_YAML_ENFORCED_TRUE)
 
         with (
-            patch("validate.run", side_effect=self._make_run()),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run()),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2183,8 +2192,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, self._NEW_YAML_ENFORCED_TRUE)
 
         with (
-            patch("validate.run", side_effect=self._make_run()),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run()),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2207,8 +2216,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, new_yaml)
 
         with (
-            patch("validate.run", side_effect=self._make_run(old_yaml=old_yaml)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(old_yaml=old_yaml)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2225,8 +2234,8 @@ class TestGraduationGuard:
         self._write_new_yaml(tmp_path, self._NEW_YAML_ENFORCED_TRUE)
 
         with (
-            patch("validate.run", side_effect=self._make_run(git_show_rc=1)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(git_show_rc=1)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2237,8 +2246,8 @@ class TestGraduationGuard:
     def test_no_dq_yaml_changes_returns_early(self, tmp_path: Path) -> None:
         """Returns without loading dq-latest.json when no YAML files changed."""
         with (
-            patch("validate.run", side_effect=self._make_run(no_changes=True)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(no_changes=True)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2253,7 +2262,7 @@ class TestGraduationGuard:
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("validate.run", return_value=MagicMock(stdout="agent/test\n", returncode=0)),
+            patch("scripts.checks._common.run", return_value=MagicMock(stdout="agent/test\n", returncode=0)),
             patch.dict("os.environ", {"_VALIDATE_DEPTH": "0"}),
             patch("sys.argv", ["validate.py", "--pre"]),
         ):
@@ -2314,8 +2323,8 @@ class TestGraduationGuardUnavailableCarveout:
         self._write_new_yaml(tmp_path, self._NEW_YAML)
 
         with (
-            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2337,8 +2346,8 @@ class TestGraduationGuardUnavailableCarveout:
         self._write_new_yaml(tmp_path, self._NEW_YAML)
 
         with (
-            patch("validate.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(old_yaml=self._OLD_YAML)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list = []
             _check_graduation_guard(failed)
@@ -2372,7 +2381,7 @@ class TestValidateDqManifestGate:
         (dec_dir / "ops_recommendations.yaml").write_text(manifest_yaml, encoding="utf-8")
 
     def _run(self, tmp_path: Path) -> list[str]:
-        with patch.object(_validate, "ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             _validate.validate_dq_manifest_gate(failed)
         return failed
@@ -2460,14 +2469,10 @@ class TestCheckSourceRegistry:
         (tmp_path / "scripts").mkdir(parents=True)
         (tmp_path / "scripts" / "ops_data_portal.py").write_text("", encoding="utf-8")
 
-        original_root = _validate.check_source_registry.__globals__["ROOT"]
-        _validate.check_source_registry.__globals__["ROOT"] = tmp_path
-        try:
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             check_source_registry(failed)
-            assert failed == [], f"Expected no failures but got: {failed}"
-        finally:
-            _validate.check_source_registry.__globals__["ROOT"] = original_root
+        assert failed == [], f"Expected no failures but got: {failed}"
 
     def test_source_registry_ci_guard_rejects_unregistered(self, tmp_path: Path) -> None:
         """check_source_registry() fails when a schedule.yaml agent name is not registered."""
@@ -2490,14 +2495,10 @@ class TestCheckSourceRegistry:
         (tmp_path / "scripts").mkdir(parents=True)
         (tmp_path / "scripts" / "ops_data_portal.py").write_text("", encoding="utf-8")
 
-        original_root = _validate.check_source_registry.__globals__["ROOT"]
-        _validate.check_source_registry.__globals__["ROOT"] = tmp_path
-        try:
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             check_source_registry(failed)
-            assert "Source registry CI guard" in failed
-        finally:
-            _validate.check_source_registry.__globals__["ROOT"] = original_root
+        assert "Source registry CI guard" in failed
 
 
 class TestValidateScheduledAgentLogs:
@@ -2525,8 +2526,8 @@ class TestValidateScheduledAgentLogs:
         )
         changed = ["logs/agents/rec-curator/20260509T182000Z.jsonl"]
         with (
-            patch("validate.run", side_effect=self._make_run(changed)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
@@ -2538,7 +2539,7 @@ class TestValidateScheduledAgentLogs:
             "logs/agents/rec-curator/20260509T182000Z.jsonl",
             "logs/.recommendations-log.jsonl",
         ]
-        with patch("validate.run", side_effect=self._make_run(changed)):
+        with patch("scripts.checks._common.run", side_effect=self._make_run(changed)):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
         assert "Scheduled agent log validation" in failed
@@ -2551,8 +2552,8 @@ class TestValidateScheduledAgentLogs:
         log_file.write_text("this is not json\n", encoding="utf-8")
         changed = ["logs/agents/rec-curator/20260509T182000Z.jsonl"]
         with (
-            patch("validate.run", side_effect=self._make_run(changed)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
@@ -2569,8 +2570,8 @@ class TestValidateScheduledAgentLogs:
         )
         changed = ["logs/agents/rec-curator/output.jsonl"]
         with (
-            patch("validate.run", side_effect=self._make_run(changed)),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
@@ -2582,14 +2583,14 @@ class TestValidateScheduledAgentLogs:
             "scripts/validate.py",
             "logs/agents/rec-curator/20260509T182000Z.jsonl",
         ]
-        with patch("validate.run", side_effect=self._make_run(changed)):
+        with patch("scripts.checks._common.run", side_effect=self._make_run(changed)):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
         assert failed == []
 
     def test_skips_when_no_files_changed(self) -> None:
         """Skips validation when there are no changed files relative to main."""
-        with patch("validate.run", side_effect=self._make_run([])):
+        with patch("scripts.checks._common.run", side_effect=self._make_run([])):
             failed: list[str] = []
             validate_scheduled_agent_logs(failed)
         assert failed == []
@@ -2608,7 +2609,7 @@ class TestValidateIamRunnerPolicy:
         terraform.parent.mkdir()
         terraform.write_text('Action = ["s3:GetObject"]\n', encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_iam_runner_policy(failed)
 
@@ -2624,7 +2625,7 @@ class TestValidateIamRunnerPolicy:
         terraform.parent.mkdir()
         terraform.write_text('Action = ["s3:GetObject"]\n', encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_iam_runner_policy(failed)
 
@@ -2643,7 +2644,7 @@ class TestValidateIamRunnerPolicy:
         # s3:Get matches part of s3:GetObject, but we want exact quoted match
         terraform.write_text('Action = ["s3:GetObject"]\n', encoding="utf-8")
 
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_iam_runner_policy(failed)
 
@@ -2652,7 +2653,7 @@ class TestValidateIamRunnerPolicy:
 
     def test_skips_when_manifest_missing(self, tmp_path: Path, capsys) -> None:
         """Gracefully skips if config/agent/validate/iam_runner_manifest.yaml does not exist."""
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_iam_runner_policy(failed)
 
@@ -2674,7 +2675,7 @@ class TestGetChangedFilesOriginMain:
             result.stdout = "scripts/validate.py\ntests/test_validate.py\n"
             return result
 
-        with patch("validate.run", side_effect=mock_run):
+        with patch("scripts.checks._common.run", side_effect=mock_run):
             files = get_changed_files()
 
         assert "scripts/validate.py" in files
@@ -2695,7 +2696,7 @@ class TestGetChangedFilesOriginMain:
                 result.stdout = "scripts/validate.py\n"
             return result
 
-        with patch("validate.run", side_effect=mock_run):
+        with patch("scripts.checks._common.run", side_effect=mock_run):
             files = get_changed_files()
 
         assert "scripts/validate.py" in files
@@ -2709,7 +2710,7 @@ class TestGetChangedFilesOriginMain:
             result.stdout = ""
             return result
 
-        with patch("validate.run", side_effect=mock_run):
+        with patch("scripts.checks._common.run", side_effect=mock_run):
             files = get_changed_files()
 
         assert files == []
@@ -2740,8 +2741,8 @@ class TestPreModeDiffAware:
         changed = ["scripts/validate.py", "tests/test_validate.py"]
 
         with (
-            patch("validate.get_changed_files", return_value=changed),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=changed),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2768,8 +2769,8 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2795,8 +2796,8 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("validate.get_changed_files", return_value=["scripts/validate.py"]),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2822,8 +2823,8 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("validate.get_changed_files", return_value=["scripts/validate.py", "tests/test_validate.py"]),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "tests/test_validate.py"]),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2852,8 +2853,8 @@ class TestPreModeDiffAware:
             return result
 
         with (
-            patch("validate.get_changed_files", return_value=["tests/test_validate.py"]),
-            patch("validate.run", side_effect=exit5_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["tests/test_validate.py"]),
+            patch("scripts.checks._common.run", side_effect=exit5_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2887,8 +2888,8 @@ class TestPreModePytestSelection:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2916,8 +2917,8 @@ class TestPreModePytestSelection:
             return result
 
         with (
-            patch("validate.get_changed_files", return_value=["tests/test_x.py"]),
-            patch("validate.run", side_effect=exit5_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
+            patch("scripts.checks._common.run", side_effect=exit5_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2941,8 +2942,8 @@ class TestPreModePytestSelection:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("validate.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
-            patch("validate.run", side_effect=tracking_run),
+            patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
+            patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2966,8 +2967,8 @@ class TestBudgetAssertion:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -2988,8 +2989,8 @@ class TestBudgetAssertion:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3009,8 +3010,8 @@ class TestBudgetAssertion:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3035,8 +3036,8 @@ class TestIgnoreBudgetFlag:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3056,8 +3057,8 @@ class TestIgnoreBudgetFlag:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3077,8 +3078,8 @@ class TestIgnoreBudgetFlag:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3099,8 +3100,8 @@ class TestIgnoreBudgetFlag:
         monkeypatch.delenv("CI", raising=False)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3148,8 +3149,8 @@ class TestIgnoreBudgetCIGuard:
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3171,7 +3172,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             _file_budget_breach_rec(400.0, ["scripts/validate.py"], None)
@@ -3185,7 +3186,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             _file_budget_breach_rec(400.0, ["scripts/validate.py", "tests/test_validate.py"], None)
@@ -3200,7 +3201,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             # Must not raise
@@ -3211,7 +3212,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
@@ -3226,7 +3227,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             _file_budget_bypass_rec(60.0, [], None)
@@ -3240,7 +3241,7 @@ class TestBudgetBreachRecFiling:
         git_result = MagicMock(returncode=0, stdout="agent/test\n")
 
         with (
-            patch("validate.run", return_value=git_result),
+            patch("scripts.checks._common.run", return_value=git_result),
             patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
         ):
             # Must not raise
@@ -3506,7 +3507,7 @@ class TestValidateLambdaDeployGating:
         mock_lm = MagicMock()
         with (
             patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("validate.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
         ):
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
@@ -3518,7 +3519,7 @@ class TestValidateLambdaDeployGating:
         mock_lm.compute_affected_artifacts.return_value = {"data-pipeline": ["src/data/handlers/fetch_handler.py"]}
         with (
             patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("validate.get_changed_files", return_value=["src/data/handlers/fetch_handler.py"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["src/data/handlers/fetch_handler.py"]),
         ):
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
@@ -3530,7 +3531,7 @@ class TestValidateLambdaDeployGating:
         mock_lm.compute_affected_artifacts.return_value = {}
         with (
             patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("validate.get_changed_files", return_value=["docs/README.md"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["docs/README.md"]),
         ):
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
@@ -3539,7 +3540,7 @@ class TestValidateLambdaDeployGating:
     def test_fails_on_import_error(self) -> None:
         with (
             patch.dict(sys.modules, {"scripts.lambda_manifest": None}),
-            patch("validate.get_changed_files", return_value=["src/some/file.py"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["src/some/file.py"]),
         ):
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
@@ -3550,7 +3551,7 @@ class TestValidateLambdaDeployGating:
         mock_lm.compute_affected_artifacts.side_effect = RuntimeError("load failed")
         with (
             patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("validate.get_changed_files", return_value=["src/some/file.py"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["src/some/file.py"]),
         ):
             failed: list[str] = []
             validate_lambda_deploy_gating(failed)
@@ -3572,8 +3573,8 @@ class TestSlocLimitsInPreMode:
             sloc_called.append(True)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3602,8 +3603,8 @@ class TestSlocLimitsInPreMode:
             call_order.append("sloc")
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -3638,8 +3639,8 @@ class TestGetChangedFilesDeletedPaths:
             return result
 
         with (
-            patch("validate.run", side_effect=mock_run),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             files = get_changed_files()
 
@@ -3656,8 +3657,8 @@ class TestGetChangedFilesDeletedPaths:
             return result
 
         with (
-            patch("validate.run", side_effect=mock_run),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             files = get_changed_files()
 
@@ -3676,8 +3677,8 @@ class TestGetChangedFilesDeletedPaths:
             return result
 
         with (
-            patch("validate.run", side_effect=mock_run),
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("scripts.checks._common.ROOT", tmp_path),
         ):
             files = get_changed_files()
 
@@ -3709,7 +3710,7 @@ class TestIntentDocFreeze:
         (docs_dir / "INTENT-bazel-feasibility.md").write_text("# content\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert failed == []
@@ -3722,7 +3723,7 @@ class TestIntentDocFreeze:
         (docs_dir / "INTENT-zzz-new.md").write_text("# rogue\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert any("INTENT-zzz-new.md" in f for f in failed)
@@ -3740,7 +3741,7 @@ class TestIntentDocFreeze:
         (docs_dir / "INTENT-bazel-feasibility.md").write_text("# content\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert any("bazel-feasibility" in f for f in failed)
@@ -3755,7 +3756,7 @@ class TestIntentDocFreeze:
         (contracts_dir / "INTENT-zzz.md").write_text("# contract\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert not any("zzz" in f for f in failed)
@@ -3768,7 +3769,7 @@ class TestIntentDocFreeze:
         (docs_dir / "intent-migration" / "INTENT-internal.md").write_text("# internal\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert not any("INTENT-internal" in f for f in failed)
@@ -3780,7 +3781,7 @@ class TestIntentDocFreeze:
         (docs_dir / "INTENT-zzz.md").write_text("# rogue\n", encoding="utf-8")
 
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_intent_doc_freeze(failed)
 
         assert failed == []
@@ -3864,7 +3865,7 @@ class TestVerifierHermeticity:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert any("time.time" in f for f in failed), f"Expected time.time violation, got: {failed}"
 
@@ -3877,7 +3878,7 @@ class TestVerifierHermeticity:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert any("boto3" in f for f in failed), f"Expected boto3 violation, got: {failed}"
 
@@ -3894,7 +3895,7 @@ class TestVerifierHermeticity:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert failed == [], f"Expected no failures for NON_HERMETIC verifier, got: {failed}"
 
@@ -3910,7 +3911,7 @@ class TestVerifierHermeticity:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert any("datetime.datetime.now" in f for f in failed), f"Expected datetime.datetime.now violation, got: {failed}"
 
@@ -3923,7 +3924,7 @@ class TestVerifierHermeticity:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verifier_hermeticity(failed)
         assert failed == [], f"SyntaxError file must be skipped, got: {failed}"
 
@@ -3946,7 +3947,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
             f"Expected broker env-read violation, got: {failed}"
@@ -3961,7 +3962,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
             f"Expected broker env-read violation, got: {failed}"
@@ -3976,7 +3977,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert any("ALPACA" in f or "broker" in f.lower() for f in failed), (
             f"Expected broker env-read violation, got: {failed}"
@@ -3991,7 +3992,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert failed == [], f"broker_secrets.py must be self-excluded, got: {failed}"
 
@@ -4004,7 +4005,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert failed == [], f"validate.py must be self-excluded, got: {failed}"
 
@@ -4017,7 +4018,7 @@ class TestBrokerEnvReadGuard:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_broker_env_reads(failed)
         assert failed == [], f"tests/ must not be scanned, got: {failed}"
 
@@ -4060,7 +4061,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
             "        met_by: nonexistent-plan\n",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" in failed
 
@@ -4080,7 +4081,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         )
         (tmp_path / "docs" / "plans" / "PLAN-real-plan.yaml").write_text("slug: real-plan\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" not in failed
         assert "Platform roadmap schema validation" not in failed
@@ -4101,7 +4102,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
             f"        met_by: '{sha}'\n",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" not in failed
 
@@ -4110,7 +4111,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         self._setup_dirs(tmp_path)  # roadmap has no tier_items
         (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T999.1:c1\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" in failed
 
@@ -4129,7 +4130,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         )
         (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c999\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" in failed
 
@@ -4148,7 +4149,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         )
         (tmp_path / "docs" / "plans" / "PLAN-test-plan.yaml").write_text("closes_criteria:\n  - T0.1:c1\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path), self._no_diff_ctx():
+        with patch("scripts.checks._common.ROOT", tmp_path), self._no_diff_ctx():
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" not in failed
         assert "Platform roadmap schema validation" not in failed
@@ -4173,7 +4174,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         mock_diff = "+  - id: T0.1\n+    status: in_progress\n"
         failed: list[str] = []
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
         ):
             validate_platform_roadmap(failed)
@@ -4195,7 +4196,7 @@ class TestPlatformRoadmapCriteriaIntegrity:
         mock_diff = "+  - id: T0.1\n"
         failed: list[str] = []
         with (
-            patch("validate.ROOT", tmp_path),
+            patch("scripts.checks._common.ROOT", tmp_path),
             patch("validate.subprocess.run", return_value=_mock_completed(returncode=0, stdout=mock_diff)),
         ):
             validate_platform_roadmap(failed)
@@ -4236,7 +4237,7 @@ class TestDucklakeVersionLockstepGate:
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("validate.ROOT", tmp_path):
+            with patch("scripts.checks._common.ROOT", tmp_path):
                 validate_ducklake_version_lockstep(failed)
         assert failed == [], failed
 
@@ -4257,7 +4258,7 @@ class TestDucklakeVersionLockstepGate:
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("validate.ROOT", tmp_path):
+            with patch("scripts.checks._common.ROOT", tmp_path):
                 validate_ducklake_version_lockstep(failed)
         assert any("duckdb floor" in f or "requirements" in f for f in failed), failed
 
@@ -4281,7 +4282,7 @@ class TestDucklakeVersionLockstepGate:
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("validate.ROOT", tmp_path):
+            with patch("scripts.checks._common.ROOT", tmp_path):
                 validate_ducklake_version_lockstep(failed)
         assert any("hardcoded" in f or "literal" in f or "ducklake_runtime" in f for f in failed), failed
 
@@ -4301,8 +4302,8 @@ class TestPreModeChecks:
             encoding_called.append(True)
 
         with (
-            patch("validate.get_changed_files", return_value=[]),
-            patch("validate.run", side_effect=_pre_mock_run),
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
@@ -4327,7 +4328,7 @@ class TestSamePrGuard:
 
     def test_no_violations_when_no_verifier_in_diff(self) -> None:
         failed: list[str] = []
-        with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+        with patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]):
             validate_verifier_same_pr_guard(failed)
         assert not failed
 
@@ -4343,10 +4344,10 @@ class TestSamePrGuard:
         rel = "scripts/verifiers/new_verifier.py"
         failed: list[str] = []
         with (
-            patch("validate.ROOT", tmp_path),
-            patch("validate.get_changed_files", return_value=[rel, "scripts/validate.py"]),
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/validate.py"]),
             patch(
-                "validate.run",
+                "scripts.checks._common.run",
                 return_value=MagicMock(returncode=0, stdout=rel + "\n"),
             ),
         ):
@@ -4365,10 +4366,10 @@ class TestSamePrGuard:
         rel = "scripts/verifiers/my_verifier.py"
         failed: list[str] = []
         with (
-            patch("validate.ROOT", tmp_path),
-            patch("validate.get_changed_files", return_value=[rel, "scripts/other.py"]),
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/other.py"]),
             patch(
-                "validate.run",
+                "scripts.checks._common.run",
                 return_value=MagicMock(returncode=0, stdout=""),
             ),
         ):
@@ -4390,10 +4391,10 @@ class TestSamePrGuard:
         (tmp_path / "scripts" / "target.py").write_text("# target\n", encoding="utf-8")
         failed: list[str] = []
         with (
-            patch("validate.ROOT", tmp_path),
-            patch("validate.get_changed_files", return_value=[rel, target]),
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, target]),
             patch(
-                "validate.run",
+                "scripts.checks._common.run",
                 return_value=MagicMock(returncode=0, stdout=""),
             ),
         ):
@@ -4414,13 +4415,13 @@ class TestVerificationRegistry:
         reg.mkdir(parents=True)
         (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert not failed
 
     def test_fail_missing_file(self, tmp_path: Path) -> None:
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert any("not found" in f for f in failed)
 
@@ -4429,7 +4430,7 @@ class TestVerificationRegistry:
         reg.mkdir(parents=True)
         (reg / "registry.yaml").write_text("entries: [\n  - invalid: yaml: :", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert any("YAML" in f for f in failed)
 
@@ -4441,7 +4442,7 @@ class TestVerificationRegistry:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert "Verification registry" in failed
 
@@ -4460,7 +4461,7 @@ class TestVerificationRegistry:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert "Verification registry" in failed
 
@@ -4476,7 +4477,7 @@ class TestVerificationRegistry:
         )
         (reg / "registry.yaml").write_text(f"entries:\n{entry}{entry}", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert "Verification registry" in failed
 
@@ -4495,7 +4496,7 @@ class TestVerificationRegistry:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert not failed
 
@@ -4520,7 +4521,7 @@ class TestDifferentialGateStep:
         kernel_dir.mkdir()
         (kernel_dir / "verification_checks.py").write_text("# no sentinel here\n", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_differential_gate_baseline(failed)
         assert any("Differential gate baseline" in f for f in failed)
 
@@ -4569,7 +4570,7 @@ def test_verification_registry_accepts_empty_file(tmp_path: Path) -> None:
     reg.mkdir(parents=True)
     (reg / "registry.yaml").write_text("entries: []\n", encoding="utf-8")
     failed: list = []
-    with patch("validate.ROOT", tmp_path):
+    with patch("scripts.checks._common.ROOT", tmp_path):
         validate_verification_registry(failed)
     assert not failed
 
@@ -4577,7 +4578,7 @@ def test_verification_registry_accepts_empty_file(tmp_path: Path) -> None:
 def test_same_pr_guard_passes_on_no_verifier_in_diff() -> None:
     """VP step 6: same-PR guard passes when no verifier file is in the diff."""
     failed: list = []
-    with patch("validate.get_changed_files", return_value=["scripts/validate.py"]):
+    with patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]):
         validate_verifier_same_pr_guard(failed)
     assert not failed
 
@@ -4613,7 +4614,7 @@ class TestValidateRecRelevanceContract:
     def test_fails_when_contract_missing(self, tmp_path: Path) -> None:
         """Missing contract file -> failure appended."""
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             (tmp_path / "docs" / "contracts").mkdir(parents=True)
             validate_rec_relevance_contract(failed)
         assert any("not found" in f for f in failed)
@@ -4623,7 +4624,7 @@ class TestValidateRecRelevanceContract:
         (tmp_path / "docs" / "contracts").mkdir(parents=True)
         (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(": invalid: [yaml", encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_rec_relevance_contract(failed)
         assert any("parse error" in f for f in failed)
 
@@ -4635,7 +4636,7 @@ class TestValidateRecRelevanceContract:
         contract = {"verdicts": ["relevant", "unknown"], "columns": {"foo": "bar"}}
         (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_rec_relevance_contract(failed)
         assert any("Decision 84" in f or "columns" in f for f in failed)
 
@@ -4647,7 +4648,7 @@ class TestValidateRecRelevanceContract:
         contract = {"verdicts": ["relevant", "satisfied", "unknown"]}  # missing 5 verdicts
         (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_rec_relevance_contract(failed)
         assert any("drift" in f for f in failed)
 
@@ -4659,7 +4660,7 @@ class TestValidateRecRelevanceContract:
         contract = {"verdicts": []}
         (tmp_path / "docs" / "contracts" / "recommendation-relevance.yaml").write_text(yaml.dump(contract), encoding="utf-8")
         failed: list[str] = []
-        with patch("validate.ROOT", tmp_path):
+        with patch("scripts.checks._common.ROOT", tmp_path):
             validate_rec_relevance_contract(failed)
         assert failed
 
@@ -4697,20 +4698,18 @@ class TestValidateImportContracts:
         assert not failed
 
     def test_wired_in_both_tiers(self) -> None:
-        """validate_import_contracts is invoked in both --pre and run_python_checks bodies."""
-        import ast  # noqa: PLC0415
+        """validate_import_contracts is a registered check in both the --pre and full-tier sequences.
 
-        src = _SCRIPT_PATH.read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        call_sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_import_contracts"
-        ]
-        assert len(call_sites) >= 2, (
-            "validate_import_contracts must be called in both --pre and run_python_checks; "
-            f"found only {len(call_sites)} call site(s)"
-        )
+        Decision 104: dispatch is registry-driven (scripts/checks/registry.py), not a literal
+        `validate_import_contracts(failed)` call site in scripts/validate.py -- so tier membership
+        is verified via the registry's declared sequences, not AST call-site counting.
+        """
+        from scripts.checks import registry  # noqa: PLC0415
+
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_import_contracts" in pre_names, "validate_import_contracts missing from pre_sequence()"
+        assert "validate_import_contracts" in full_names, "validate_import_contracts missing from full_sequence()"
 
 
 # ---------------------------------------------------------------------------
@@ -4746,17 +4745,15 @@ class TestValidateLockfileSync:
         assert not failed
 
     def test_wired_in_both_tiers(self) -> None:
-        """validate_lockfile_sync is invoked in both --pre and run_python_checks bodies."""
-        import ast  # noqa: PLC0415
+        """validate_lockfile_sync is a registered check in both the --pre and full-tier sequences.
 
-        src = _SCRIPT_PATH.read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        call_sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "validate_lockfile_sync"
-        ]
-        assert len(call_sites) >= 2, (
-            "validate_lockfile_sync must be called in both --pre and run_python_checks; "
-            f"found only {len(call_sites)} call site(s)"
-        )
+        Decision 104: dispatch is registry-driven (scripts/checks/registry.py), not a literal
+        `validate_lockfile_sync(failed)` call site in scripts/validate.py -- so tier membership
+        is verified via the registry's declared sequences, not AST call-site counting.
+        """
+        from scripts.checks import registry  # noqa: PLC0415
+
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_lockfile_sync" in pre_names, "validate_lockfile_sync missing from pre_sequence()"
+        assert "validate_lockfile_sync" in full_names, "validate_lockfile_sync missing from full_sequence()"

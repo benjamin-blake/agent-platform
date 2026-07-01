@@ -1,0 +1,51 @@
+"""Cyclomatic-complexity limit check (Decision 43)."""
+
+from __future__ import annotations
+
+import ast
+
+from scripts.checks import _common, registry
+from scripts.checks.sloc._shared import _BRANCH_TYPES, _CC_LIMIT, _SLOC_EXCLUDE_DIRS, _WAIVER_PATTERN
+
+
+@registry.register("validate_cc_limits", owner="platform")
+def validate_cc_limits(failed: list[str]) -> None:
+    """Enforce Decision 43: max 20 cyclomatic-complexity branches per function unless waivered."""
+    print("\n=== Cyclomatic complexity limits (Decision 43) ===")
+    errors: list[str] = []
+
+    for search_dir in (_common.ROOT / "scripts", _common.ROOT / "src"):
+        if not search_dir.exists():
+            continue
+        for py_file in sorted(search_dir.glob("**/*.py")):
+            if py_file.name == "__init__.py":
+                continue
+            if any(part in _SLOC_EXCLUDE_DIRS for part in py_file.parts):
+                continue
+            content = py_file.read_text(encoding="utf-8", errors="replace")
+            lines = content.splitlines()
+            header = "\n".join(lines[:10])
+            if _WAIVER_PATTERN.search(header):
+                continue
+            try:
+                tree = ast.parse(content)
+            except SyntaxError:
+                continue
+            rel = str(py_file.relative_to(_common.ROOT)).replace(chr(92), "/")
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                branch_count = sum(1 for sub in ast.walk(node) if isinstance(sub, _BRANCH_TYPES))
+                if branch_count > _CC_LIMIT:
+                    errors.append(
+                        f"{rel}::{node.name}: {branch_count} branches "
+                        f"(limit {_CC_LIMIT}). Add '# complexity-waiver: decision-43' or reduce."
+                    )
+
+    if errors:
+        print("Cyclomatic complexity violations:")
+        for e in errors:
+            print(f"  - {e}")
+        failed.append("Cyclomatic complexity limits (Decision 43)")
+    else:
+        print("All functions within CC limits or waivered.")

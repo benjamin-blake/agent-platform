@@ -2,6 +2,97 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 104: scripts/validate.py decomposed into an owner-tagged check registry (partially supersedes Decision 80 point 3) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-01
+**Warehouse ID:** dec-104 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`scripts/validate.py` is the mandatory convergence point for every platform check ("never add a
+check to ci.yml without adding it to validate.py first"), so a per-file SLOC cap on it only
+ratchets upward under Decision 43/102 (3238 -> 3261 -> 3316 -> 3355 -> 3375; ~3368 SLOC, 7 lines
+of headroom before this plan). Capping the aggregator was an axis error: the fix is one-concern-
+per-file modules whose count grows freely while each stays flat, not a growing exemption on the
+one file every check must route through.
+
+**Decision:**
+Ratifies the check-registry mechanism implemented by PLAN-validate-decomposition:
+- `scripts/checks/registry.py` defines a `Check` dataclass (`name`, `owner`, `product_coupled`),
+  a `register()` decorator, and two ordered per-tier sequences -- `pre_sequence()` /
+  `full_sequence()` -- each a list of `Step(kind, name)` descriptors that interleave registered
+  check names with fixed non-check scaffolding steps (lint, precommit, mypy, explicit pytest,
+  unit-test invoke_step, dependency/terraform gates, budget assertion). Tier membership and order
+  live ONLY in this package; adding a check never touches `scripts/validate.py`.
+- `scripts/checks/_common.py` is the SOLE source of the shared primitives (`ROOT`, `PYTHON`,
+  `run`, `invoke_step`, `get_changed_files`). Every consumer -- extracted checks, the CLI's own
+  remaining scaffolding, and `scripts/checks/_scaffolding.py` -- references these via the
+  qualified `_common.<name>` form (never a bare imported name), so `scripts.checks._common` is
+  the single interception point regardless of which module does the calling.
+- Every `validate_*`/`check_*` function moved out of the monolith into
+  `scripts/checks/<domain>/<module>.py`, one concern per file (a shared `_shared.py` inside a
+  domain package is permitted when 2+ checks in that SAME domain need an identical helper --
+  e.g. `ci_guards/_shared.py::_ensure_root_on_path`, `contracts/_shared.py::_load_prompt_compliance`,
+  `sloc/_shared.py`'s constants -- never across domains).
+  `scripts/checks/_scaffolding.py` holds the non-check CLI orchestration logic (precommit, lint,
+  terraform gates, dependency health, DQ-freshness auto-invoke, budget-breach/bypass rec filing,
+  the unit-test command builder) that stays outside the registry (no check identity) but outside
+  `scripts/validate.py` too, so the CLI entrypoint stays thin.
+- `scripts/validate.py` retains ONLY: the argparse surface, the `_VALIDATE_DEPTH` recursion guard,
+  the branch guard, the fast-tier budget assertion, the registry-driven dispatch loops (resolving
+  each "check" step via `globals()[name](failed)` so `patch("validate.<name>")` keeps
+  intercepting), and facade re-exports of every extracted check and private helper (so both
+  `patch("validate.<name>")` and `from scripts.validate import <name>` keep resolving). Dropped
+  from 3372 SLOC to well under the 500-SLOC limit (target <300; `validate --update-sloc-budgets`
+  is the authoritative live figure, not this document). `ci.yml` is unmodified -- it still calls
+  only `python -m scripts.validate`.
+- **Owner-tagging convention (platform/product federation direction):** every check defaults
+  `owner="platform"`. Of 58 checks, exactly one is unambiguously trading-product:
+  `validate_broker_env_reads` (owner="trading"). Two are platform machinery operating over a
+  trading-shaped artifact and are tagged `owner="platform", product_coupled=True`:
+  `validate_product_roadmap`, `validate_environment_taxonomy`. The owner axis is registry
+  metadata, not a directory split (no `theseus/`/`platform/` path segment) -- the checks tree
+  stays movable as a unit; a second product's checks will federate (colocate with their product)
+  with CI composed by owner+tier+affected-set when that day comes. This is architectural
+  direction, not a roadmap tier_item (a parked federation item would itself be the stale artifact
+  Decision 86 prevents).
+- **Coverage-gate mapping extension:** `scripts/test_coverage_checker.py::map_source_to_test` now
+  maps `scripts/checks/**/*.py` to `tests/test_validate.py` (where every extracted check's tests
+  already live, colocated with the pre-decomposition monolith's test file), except
+  `registry.py`/`_common.py` which map to the new `tests/test_checks_registry.py` (the registry
+  mechanism's own dedicated suite). Previously `len(parts) == 2` silently skipped every nested
+  `scripts/checks/**` module from the coverage gate entirely.
+- **Equivalence oracle:** `tests/test_checks_registry.py` freezes the exact pre-refactor ordered
+  step sequence (kind + name tuples, not raw stdout) for both tiers and asserts
+  `registry.pre_sequence()`/`full_sequence()` match it byte-for-byte. `validate_complexity`'s
+  advisory `logs/.complexity-warnings.json` output is the sole documented exception to full
+  behaviour preservation (it is inherently location-dependent by construction and non-gating).
+- Partially supersedes ONLY Decision 80 point 3 (validate.py's internal structure); Decision 80
+  points 1/2/4 remain live and unaffected.
+
+**Rationale:**
+- A registry with declared per-tier sequences is the only design that lets "add a check" touch
+  one new file instead of the SLOC-capped aggregator, while still letting the CLI single-source-
+  of-truth invariant (Decision 80 point 3) hold: `ci.yml` still calls only `python -m scripts.validate`.
+- Routing every shared primitive through `_common.<name>` (qualified, never a bare re-imported
+  name) is what makes "patch scripts.checks._common.X" a single, uniform interception point for
+  both extracted checks and the CLI's own remaining orchestration code -- the alternative (each
+  module keeping its own bare-name import) would silently fork interception semantics per call
+  site, exactly the class of bug this decomposition would otherwise reintroduce.
+- Getattr-resolution dispatch (`globals()[name](failed)` inside `scripts/validate.py`, walking
+  `registry.pre_sequence()`/`full_sequence()`) preserves the existing test suite's mock-patching
+  idiom (`patch("validate.<check_name>")`) without any test rewrite for check-name patches --
+  only patches targeting a MOVED shared primitive or a check-local helper/constant needed
+  repointing.
+
+**Related:** Decision 80 (ci.yml-first single-source-of-truth invariant, partially superseded --
+point 3 only), Decision 102 (SLOC ratchet, applied to every new `scripts/checks/**` module),
+Decision 43 (CC<=20 waiver-carry rule), Decision 86 (no new standing prose-architecture docs --
+this section is the sole record of the registry rationale and owner convention), rec-2420
+(the `_update_sloc_budgets` lowering-test gap this plan closed in `tests/test_checks_registry.py`).
+
+---
+
 ## Decision 103: Recommendation relevance is a governed lifecycle state (CD.36 ratification) (Decided)
 
 **Status:** Decided

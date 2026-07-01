@@ -78,14 +78,50 @@ def _collect_all_validate_calls(func_def: ast.FunctionDef) -> list[str]:
     return calls
 
 
+def _build_tier_membership_from_registry() -> dict[str, list[str]]:
+    """Build tier_membership from scripts.checks.registry (Decision 104).
+
+    The live scripts/validate.py is a thin CLI whose dispatch is registry-driven, not the
+    literal validate_X() call lists / if args.pre: blocks the AST walker below was designed
+    to parse -- so tier membership for the LIVE file is sourced from the registry directly.
+    """
+    from scripts.checks import registry  # noqa: PLC0415
+
+    membership: dict[str, set[str]] = {}
+    for step in registry.pre_sequence():
+        if step.kind == "check":
+            membership.setdefault(step.name, set()).add("pre")
+    for step in registry.full_sequence():
+        if step.kind == "check":
+            membership.setdefault(step.name, set()).add("presubmit")
+    return {fn: sorted(tiers) for fn, tiers in membership.items()}
+
+
+def _is_live_validate_path(vpath: Path, real_validate_path: Path) -> bool:
+    """True if vpath resolves to the live repo's scripts/validate.py (not a synthetic/historical copy)."""
+    try:
+        return Path(vpath).resolve() == real_validate_path.resolve()
+    except OSError:
+        return False
+
+
 def build_tier_membership(validate_path: Path | None = None) -> dict[str, list[str]] | None:
-    """Build tier_membership via AST walk of validate.py.
+    """Build tier_membership via AST walk of validate.py, or via the registry for the live file.
 
     Returns dict mapping func_name -> sorted list of tiers, or None on parse failure.
     Handles: (a) direct --pre calls, (b) aggregator indirection, (c) sys.exit short-circuits,
     (d) duplicate registration -> ["pre", "presubmit"].
+
+    Decision 104: when `validate_path` resolves to the live repo's scripts/validate.py (the
+    default, and what ci_rca_evidence.py's --validate-path defaults to), tier membership is
+    sourced from scripts.checks.registry instead -- the live file no longer contains the literal
+    call-list structure this AST walker parses. Synthetic/historical validate.py snapshots
+    (as used by this module's own test suite) still go through the AST walker unchanged.
     """
-    vpath = validate_path or (ROOT / "scripts" / "validate.py")
+    real_validate_path = ROOT / "scripts" / "validate.py"
+    vpath = validate_path or real_validate_path
+    if _is_live_validate_path(vpath, real_validate_path):
+        return _build_tier_membership_from_registry()
     try:
         source = Path(vpath).read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(vpath))
