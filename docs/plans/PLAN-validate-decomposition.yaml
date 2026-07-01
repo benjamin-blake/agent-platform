@@ -1,0 +1,296 @@
+schema_version: 1
+slug: "validate-decomposition"
+intent: >-
+  Decompose the scripts/validate.py monolith into a finer-grained, owner-tagged check registry so
+  platform validation can grow by adding files rather than by ratcheting one file's SLOC budget --
+  removing the recurring per-implement friction and structurally preventing monolith re-formation.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-decomposition.yaml
+phase: >-
+  Platform hardening. Executes Decision 80 point 3 (decompose validate.py tool-free into a local
+  importable check-registry; validate.py stays the thin CLI so the ci.yml-first single-source-of-truth
+  invariant holds). Ratified by new Decision 104, which partially supersedes Decision 80 point 3 by
+  specifying the registry mechanism Decision 80 deferred to this plan. Platform-internal tooling; no
+  product-roadmap phase.
+scope:
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<500 SLOC, target <300) CLI. Retains argparse (--pre, --terraform-only,
+      --update-sloc-budgets, --coverage, --ignore-budget[-reason]), the _VALIDATE_DEPTH recursion guard,
+      the branch guard, the fast-tier budget assertion, and FACADE RE-EXPORTS of every extracted check
+      AND extracted private helper (so both `patch("validate.<name>")` and
+      `from scripts.validate import <name>` keep resolving). Tier dispatch iterates the registry's ordered
+      per-tier sequences (see registry.py); each check is resolved via getattr(validate_module, name)(failed)
+      at call time so mock patches on the validate namespace still intercept. Shared primitives (ROOT, PYTHON,
+      run, invoke_step, get_changed_files) move to scripts/checks/_common.py and are re-imported here for
+      back-compat; validate.py keeps the `# complexity-waiver: decision-43` header only if a residual
+      function still needs it.
+  - file: scripts/checks/__init__.py
+    action: Create
+    purpose: Package marker for the presubmit check registry (distinct from scripts/verifiers/, the V3 data-quality harness).
+  - file: scripts/checks/registry.py
+    action: Create
+    purpose: >-
+      Check dataclass/protocol carrying metadata (name, owner in {platform, trading}, optional
+      product_coupled) + register() decorator + discovery. Tier membership + ORDER is modelled as two
+      explicit ordered sequences -- pre_sequence() and full_sequence() -- each a list of step descriptors
+      that interleave registry check names with the fixed non-check scaffolding steps (lint, precommit,
+      mypy, explicit pytest, unit-test invoke_step, dependency/coverage/terraform gates, budget assertion).
+      A check that runs in both tiers appears in both sequences at its own position (no single order int).
+      These sequences live in the checks package, so adding a check touches only this package, never validate.py.
+  - file: scripts/checks/_common.py
+    action: Create
+    purpose: >-
+      SOLE source of shared primitives (ROOT, PYTHON, run, invoke_step, get_changed_files) and shared
+      constants. Extracted check modules reference these via the _common module object (e.g. _common.run,
+      _common.ROOT) so a single patch target (scripts.checks._common.run / .ROOT) intercepts all of them.
+      No scripts/checks module may recompute ROOT locally. Has no dependency on scripts.validate (avoids a cycle).
+  - file: scripts/checks/deps/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_requirements, validate_imports, validate_import_contracts, validate_lockfile_sync, validate_dependency_graph_freshness."
+  - file: scripts/checks/hygiene/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_subprocess_encoding, validate_sys_executable, validate_cli_tools_in_prompts."
+  - file: scripts/checks/sloc/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_sloc_limits, validate_cc_limits, validate_complexity (+ _load_sloc_budgets/_update_sloc_budgets helpers) (Decision 43/102). Carry the CC waiver comment into any module whose moved function needs it."
+  - file: scripts/checks/ops_governance/
+    action: Create
+    purpose: "owner=platform. One concern per module (no grab-bag): validate_recommendations_schema, validate_outbox_staleness, validate_decisions_local_writes, validate_rec_write_paths, validate_warehouse_write_sources, check_source_registry, validate_pydantic_yaml_drift, validate_dq_manifest_gate, validate_rec_relevance_contract, validate_field_semantics_drift."
+  - file: scripts/checks/executor/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_executor_boundary."
+  - file: scripts/checks/roadmap/
+    action: Create
+    purpose: "One concern per module: validate_platform_roadmap (owner=platform), validate_plan_documents (owner=platform), _check_graduation_guard (owner=platform), validate_product_roadmap (owner=platform, product_coupled=trading)."
+  - file: scripts/checks/lambda_pkg/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_lambda_manifests, validate_lambda_manifest_coverage, validate_lambda_bundle_completeness, validate_lambda_deploy_gating."
+  - file: scripts/checks/ci_guards/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_ci_rca_trigger, validate_ci_workflow_guards, validate_ci_rca_taxonomy, validate_claude_p_retry_wrapper (+ _check_claude_p_raw_invocations helper), validate_workflow_agent_safety."
+  - file: scripts/checks/verification/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_verifier_same_pr_guard, validate_verification_registry, validate_differential_gate_baseline, validate_verifier_hermeticity, validate_verification_harness, validate_hermeticity_flags."
+  - file: scripts/checks/contracts/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_contract_drift, validate_intent_doc_freeze, validate_instruction_architecture_layers, validate_no_underscore_instructions, validate_claude_md_pointer_invariant (+ check_claude_md_pointer_invariant helper, kept co-resolved with its caller), validate_prompt_compliance."
+  - file: scripts/checks/iam_tf/
+    action: Create
+    purpose: "One concern per module: validate_iam_runner_policy (owner=platform; runs in --pre AND full terraform block -> appears in both sequences), validate_terraform_try (owner=platform), validate_authority_budget (owner=platform), validate_environment_taxonomy (owner=platform, product_coupled=trading)."
+  - file: scripts/checks/prompts/
+    action: Create
+    purpose: "owner=platform. One concern per module: validate_prompt_files, validate_copilot_multipliers."
+  - file: scripts/checks/misc/
+    action: Create
+    purpose: "owner=platform. One concern PER FILE (not a grab-bag): validate_test_coverage, validate_ducklake_version_lockstep, validate_scheduled_agent_logs, validate_invariants -- each its own module."
+  - file: scripts/checks/product/trading/
+    action: Create
+    purpose: "owner=trading. validate_broker_env_reads (Alpaca brokerage credential governance, T2.14). The lone unambiguous legacy trading-product check; pinned explicitly so it never inherits owner=platform by default."
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Extend map_source_to_test so scripts/checks/**/*.py (depth >2) maps to a colocated test path, closing
+      the silent coverage-gate hole (currently `parts[0]=="scripts" and len(parts)==2` skips nested modules).
+      The new package becomes subject to the per-file coverage floor.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: Add tests for the extended scripts/checks/** mapping (nested path maps to the right test file; still returns None for non-scripts/src paths).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour. Bulk-migrate EVERY shared-primitive patch target that references a moved global to the
+      canonical scripts.checks._common target (per tests/CLAUDE.md namespace-migration discipline): ROOT (143),
+      run (64), get_changed_files (33), invoke_step, PYTHON. ALSO repoint patch sites for module constants that
+      travel with a moved check (e.g. _KNOWN_CLI_TOOLS / _OPTIONAL_CLI_TOOLS -> checks/hygiene; KNOWN_MODELS,
+      _EXECUTOR_BOUNDARY_PATTERNS, the _SLOC_LIMIT/_CC_LIMIT/_WAIVER_PATTERN/_SLOC_EXCLUDE_DIRS/_BRANCH_TYPES set,
+      _TERRAFORM_ROOTS, _DQ_FRESHNESS_SECONDS -> their check's module). Check-name patches
+      (`patch("validate.<check>")`) and CLI-resident constants/helpers (_FAST_TIER_BUDGET_SECONDS,
+      _file_budget_bypass_rec / _file_budget_breach_rec) stay as-is. No assertion semantics change.
+  - file: tests/test_checks_registry.py
+    action: Create
+    purpose: >-
+      New suite: (1) full ordered per-tier execution-trace equivalence vs the pre-refactor frozen baseline
+      (the ordered list of emitted step labels/section headers for --pre AND full, including non-check
+      scaffolding steps); (2) facade completeness (every registered check name AND extracted helper is
+      getattr-able on the validate module and importable via `from scripts.validate import`); (3) mock-interception
+      preservation (patch scripts.checks._common.run/.ROOT and a check-to-check pair; assert interception still
+      fires through a moved body); (4) owner-metadata correctness; (5) no scripts/checks module recomputes ROOT;
+      (6) rec-2420 lowering test for _update_sloc_budgets.
+  - file: tests/test_validate_authority_budget.py
+    action: Modify
+    purpose: Confirm `from scripts.validate import validate_authority_budget` still resolves via the facade re-export; repoint only if a moved shared primitive it patches requires it.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: Confirm `from scripts.validate import validate_plan_documents` still resolves via the facade re-export; repoint if needed.
+  - file: tests/test_ci_claude_p_retry.py
+    action: Modify
+    purpose: Confirm `from scripts.validate import _check_claude_p_raw_invocations` still resolves -- the facade MUST re-export this private helper, not just public checks; repoint if needed.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102 forward-compat clause):
+      validate.py's budget auto-drops out of the registry at <=500 SLOC. Then DIFF the file and assert no new
+      entry was seeded (a >500 module would be silently added by the ratchet) -- no hand-raise.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 104: ratify the check-registry mechanism (Check protocol, name/owner metadata, per-tier
+      ordered sequences, getattr-resolution facade, _common shared-primitive namespace, full-trace equivalence
+      guard). Record: the owner-tagging convention + platform/product federation direction; the coverage-gate
+      mapping extension; and the explicit WAIVER of validate_complexity's advisory output (logs/.complexity-warnings.json)
+      from the equivalence oracle (inherently location-dependent, non-gating). Partially supersedes ONLY Decision 80
+      point 3; points 1/2/4 of Decision 80 remain live.
+bundled_recommendations:
+  - rec-2420
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_validate.py suite plus the three external importer suites (test_validate_authority_budget, test_plan_document, test_ci_claude_p_retry) pass unchanged in assertion semantics.
+  - "The FULL ordered per-tier execution trace -- every emitted step label/section header for --pre AND for full, including non-check scaffolding steps (lint, precommit, mypy, pytest, unit-test invoke_step, dependency/coverage/terraform gates, budget assertion) -- is byte-for-byte identical before and after, proven by a frozen-baseline test. validate_complexity's advisory output is the sole documented exception (Decision 104)."
+  - Every registered check name AND every extracted private helper is reachable both as validate.<name> (getattr) and via `from scripts.validate import <name>` (facade re-export).
+  - Mock interception is preserved -- patching EACH scripts.checks._common primitive (run, ROOT, get_changed_files, invoke_step, PYTHON) and a check-to-check pair still intercepts through a moved body; AND zero residual patch("validate.run" | "validate.ROOT" | "validate.get_changed_files") sites remain (grep-count closure, complementing the sampled interception test).
+  - "Owner metadata is correct: validate_broker_env_reads=trading; validate_product_roadmap and validate_environment_taxonomy = platform with product_coupled=trading; all others = platform."
+  - scripts/validate.py drops below the 500-SLOC limit (target <300); no scripts/checks/**.py module exceeds 500 SLOC or CC 20; config/sloc_budgets.yaml loses its validate.py entry and gains NO new entry (diff-verified).
+  - validate_cc_limits passes post-extraction (the CC waiver travelled with any moved function that needs it).
+  - scripts/checks/**/*.py modules are now mapped by map_source_to_test and meet the per-file coverage floor (coverage-gate hole closed).
+  - The thin CLI still dispatches every entrypoint (--pre, --terraform-only, --update-sloc-budgets, --coverage) with unchanged exit-code semantics; .github/workflows/ci.yml is unmodified.
+  - rec-2420's lowering test for _update_sloc_budgets exists and passes; import-linter contracts still pass (no new cycle from the scripts/checks package).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full validate.py suite + registry suite + the three external importer suites pass.
+    command: bin/venv-python -m pytest tests/test_validate.py tests/test_checks_registry.py tests/test_validate_authority_budget.py tests/test_plan_document.py tests/test_ci_claude_p_retry.py tests/test_coverage_checker.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.validate import X` fails -> facade omitted check/helper X; a `patch("validate.run/ROOT")` no-ops -> shared-primitive patch targets not migrated to scripts.checks._common.
+  - step: 2
+    phase: pre-deploy
+    action: Full ordered per-tier execution-trace equivalence (step LABELS / section headers only, NOT raw subprocess stdout) against the frozen pre-refactor baseline.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "trace or equivalence" -q
+    expected: The --pre and full ordered step-label sequences (checks + scaffolding) equal the committed baseline exactly; exit 0.
+    fix_if: A step changed position, tier, or dropped -> the sequences diverge from the original. The full-tier trace spans the WHOLE main() body (run_python_checks + terraform block + validate_iam_runner_policy + run_dependency_checks/validate_requirements + prompt block incl validate_prompt_compliance/validate_instruction_architecture_layers + ensure_fresh_dq_results + validate_verification_harness + all-files run_precommit_checks), not just run_python_checks.
+  - step: 3
+    phase: pre-deploy
+    action: Facade completeness + mock-interception preservation + residual-patch-site closure.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "facade or interception or root_single_source" -q && test $(grep -cE 'patch\("validate\.(run|ROOT|get_changed_files)"' tests/test_validate.py) = 0
+    expected: Every check/helper is getattr-able and importable; patching each _common primitive intercepts through a moved body; no checks module recomputes ROOT; ZERO residual old-target patch sites for run/ROOT/get_changed_files; exit 0.
+    fix_if: Interception fails -> a moved body references a bare primitive instead of _common.<name>; residual count nonzero -> a patch site was not repointed (silent no-op mock); import fails -> missing re-export.
+  - step: 4
+    phase: pre-deploy
+    action: Owner-metadata correctness.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "owner" -q
+    expected: broker_env_reads=trading; product_roadmap+environment_taxonomy=platform/product_coupled=trading; sampled others=platform; exit 0.
+    fix_if: A check inherited the platform default when it should be pinned trading (or vice versa).
+  - step: 5
+    phase: pre-deploy
+    action: SLOC/CC re-point -- validate.py drops below limits, no new module over budget, no new registry entry.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && git diff --exit-code config/sloc_budgets.yaml | cat; bin/venv-python -c "import pathlib; over=[str(p) for p in pathlib.Path('scripts/checks').rglob('*.py') if len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; v=len([l for l in open('scripts/validate.py').read().splitlines() if l.strip() and not l.strip().startswith('#')]); print('validate.py SLOC',v,'over',over); assert v<=500 and not over"
+    expected: validate.py SLOC <=500; zero over-budget modules; the only sloc_budgets.yaml change is REMOVAL of the validate.py line (no new key added).
+    fix_if: A new key appears -> a domain module exceeds 500 and was auto-seeded; split it finer and re-run.
+  - step: 6
+    phase: pre-deploy
+    action: CC gate passes post-extraction (waiver carried).
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print(f); raise SystemExit(1 if f else 0)"
+    expected: validate_cc_limits reports no violation over the new tree; exit 0.
+    fix_if: A moved function over 20 branches reddens the CC gate -> add the decision-43 complexity-waiver header comment to its module.
+  - step: 7
+    phase: pre-deploy
+    action: Stale-reference sweep (closure obligation) -- no extracted check/helper DEFINITION remains in validate.py.
+    command: "grep -cE '^def (validate_|check_source_registry|_check_graduation_guard|check_claude_md_pointer_invariant|_check_claude_p_raw_invocations)' scripts/validate.py | grep -qx 0"
+    expected: Zero extracted definitions remain in validate.py (only imports/re-exports); exit 0.
+    fix_if: A def still lives in validate.py -> move its body to the domain module and leave only the re-export.
+  - step: 8
+    phase: pre-deploy
+    action: Thin-CLI entrypoints still run end-to-end with unchanged semantics.
+    command: bin/venv-python -m scripts.validate --coverage; echo "coverage-exit=$?"; bin/venv-python -m scripts.validate --terraform-only; echo "tf-exit=$?"
+    expected: --coverage exits 0 (advisory); --terraform-only runs the creds-free terraform gate and exits 0 (or clean SKIP where terraform absent). Neither tracebacks.
+    fix_if: An entrypoint tracebacks or changes exit code -> the thin CLI dropped an arg branch or a helper it depended on.
+  - step: 9
+    phase: pre-deploy
+    action: import-linter contracts pass for the new package.
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; exit 0.
+    fix_if: A new cycle (checks importing validate at module scope) -> use function-local import or route through _common.
+  - step: 10
+    phase: pre-deploy
+    action: rec-2420 closes after merge (bundled-rec closure obligation).
+    command: bin/venv-python -m scripts.sync_ops pull && bin/venv-python -c 'import json,pathlib; rows=[json.loads(l) for l in pathlib.Path("logs/.recommendations-log.jsonl").read_text().splitlines() if l.strip()]; r=next((x for x in rows if x.get("id")=="rec-2420"), None); print("rec-2420", r and r.get("status")); raise SystemExit(0 if r and r.get("status")=="closed" else 1)'
+    expected: Post-merge, rec-2420 shows status closed (via the Resolves trailer / rec-autoclose). Pre-merge it may read open.
+    fix_if: rec-2420 stays open post-merge -> add the Resolves rec-2420 trailer to the squash body or close via ops_data_portal --update-rec.
+constraints:
+  - Decision 80 point 3 - validate.py stays the THIN CLI; every registered check runs ONLY through `python -m scripts.validate`; ci.yml keeps calling only the CLI (never individual symbols). The ci.yml-first single-source-of-truth invariant is non-negotiable.
+  - Decision 102 - budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-raise; diff the yaml to catch a silently-seeded >500 module. No new >500-SLOC module (Decision 43 cap applies to every new module).
+  - Decision 43 - CC<=20 per function; the decision-43 complexity-waiver header comment must travel with any moved function that genuinely exceeds CC 20 (the waiver still waives CC per Decision 102).
+  - Decision 86 - no new standing prose-architecture doc under docs/. Registry rationale + owner convention + coverage-gate/complexity carve-outs route to Decision 104 only; no docs/INTENT-*.md or design doc.
+  - Behaviour preservation is absolute - the FULL ordered per-tier execution trace (checks + scaffolding) must be byte-for-byte identical; validate_complexity's advisory output is the sole documented exception. No check dropped, added, reordered, or re-tiered.
+  - Namespace-migration discipline (tests/CLAUDE.md) - moving a global that tests patch (run, ROOT) requires bulk-repointing every patch site to the new canonical target in the SAME PR; verify with an interception test, never leave a silent no-op mock.
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable verification failure, stop and RCA; never paper over a broken equivalence with a skip.
+  - AGENTS.md code style - Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+context:
+  - >-
+    Root cause - validate.py is the mandatory convergence point for ALL platform checks ("never add a check to
+    ci.yml without adding it to validate.py first"), so a per-file SLOC cap on it only ratchets upward
+    (3238 -> 3261 -> 3316 -> 3355 -> 3375; ~3368 SLOC now, 7 lines headroom). Capping the aggregator is an axis
+    error; one-concern-per-file modules whose count grows freely while each stays flat is the structural fix.
+  - >-
+    Four zero-context critiques ran (elevated report-style treatment). Plan-critique gate: PROCEED. Architect,
+    adversarial-risk, invariant: REVISE on mechanism gaps (not architecture). This revision addresses all
+    consensus findings: full-trace (not names-only) equivalence oracle; namespace-binding via _common with bulk
+    patch-migration; coverage-gate mapping extension; CC-waiver carry; the 3 external importer suites; the
+    --update-sloc-budgets silent-seed diff; step-7 grep widened to _check_graduation_guard and the extracted helpers.
+  - >-
+    Ownership classification (fresh-context subagent) - of 57 checks exactly ONE is unambiguously trading
+    (validate_broker_env_reads); TWO are platform-machinery-over-trading-artifact (validate_product_roadmap,
+    validate_environment_taxonomy), tagged owner=platform + product_coupled=trading; all others platform.
+    Default owner=platform; the trading exception is pinned explicitly to prevent systemic mislabel as the
+    monorepo adds products.
+  - >-
+    Platform/product seam is modelled as registry METADATA (owner tag), NOT a directory level - no theseus/ or
+    platform/ path segment. The platform-vs-product axis is a repo-root taxonomy to decide holistically when
+    product #2 lands; the checks tree stays movable as a unit and product checks will federate (colocate with
+    their product) with CI composed by owner+tier+affected-set. Decision 104 records this direction; NOT a roadmap
+    tier_item (a parked federation item would be the stale artifact Decision 86 prevents -- invariant critique concurs).
+  - >-
+    Legacy trading-product TEST files enumerated for future test-ownership work (NOT retagged here): test_feature_engine,
+    test_pysr_factory, test_data_pipeline, test_async_engine, test_execution, test_broker_secrets, test_meta_learner.
+  - >-
+    Patch-binding reality - tests load validate via importlib as module "validate" + sys.modules["validate"]=_validate,
+    then patch "validate.X" (363 sites, corrected from 318). Shared primitives migrate to scripts.checks._common and
+    are bulk-repointed: ROOT (143), run (64), get_changed_files (33), plus invoke_step/PYTHON. Constants used only
+    inside a moved check travel WITH it and their patch sites repoint to the check's module (they do NOT "stay");
+    constants/helpers used only by the CLI (_FAST_TIER_BUDGET_SECONDS, _file_budget_*) stay in validate.py. Check-name
+    patches are preserved via getattr on the validate module. Three suites also do `from scripts.validate import X`
+    directly -> rescued by facade re-exports (public checks AND the private helper _check_claude_p_raw_invocations).
+  - >-
+    validate_complexity returns list[dict] (not None) and never appends to failed; its registry wrapper must preserve
+    that signature, and its advisory logs/.complexity-warnings.json output is waived from the equivalence oracle
+    (location-dependent by construction). Coverage-gate hole - map_source_to_test currently skips scripts/checks/**
+    (len(parts)!=2); this plan extends the mapping so the new package is gated.
+  - Branch 0 commits behind origin/main at planning time; no scope-file divergence. Decision-scout gate NO_FLAGS (cite Decisions 80, 102, 43, 86).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/relaxed-gates-yo42gc)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (80, 102, 43, 86; next-number 104)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Full ordered per-tier step trace (checks + scaffolding) for --pre and full captured as the frozen baseline BEFORE moving any code
+execution_steps:
+  - "Capture baseline FIRST - record the exact ordered sequence of ALL steps emitted by the current scripts/validate.py for the --pre tier and the full tier (every section header / step label, including lint, precommit, mypy, explicit pytest, unit-test invoke_step, dependency/coverage/terraform gates, budget assertion, and each validate_* check). Freeze both sequences in tests/test_checks_registry.py as the equivalence oracle. This must precede any code movement."
+  - "Audit intra-body references - enumerate every bare name each check body closes over that tests patch: shared primitives (run, ROOT, PYTHON, invoke_step, get_changed_files), module constants used inside a moved check (_KNOWN_CLI_TOOLS, _OPTIONAL_CLI_TOOLS, KNOWN_MODELS, _EXECUTOR_BOUNDARY_PATTERNS, the _SLOC_*/_CC_*/_WAIVER_PATTERN/_BRANCH_TYPES set, _TERRAFORM_ROOTS, _DQ_FRESHNESS_SECONDS), and check-to-check/helper calls. Convention: any check or helper called by another check either co-locates in the same module OR resolves through the validate namespace (getattr) / _common -- NO bare cross-module intra-check calls. This list drives the _common migration, per-module constant placement, and the patch-site repoint."
+  - "Create scripts/checks/_common.py as the sole source of run, ROOT, PYTHON, invoke_step, get_changed_files. Create scripts/checks/registry.py (Check dataclass + register() + pre_sequence()/full_sequence() ordered manifests)."
+  - "Extract checks into scripts/checks/<domain>/<module>.py, one concern per file, per the Scope table. Move each body verbatim; replace bare run/ROOT/etc with _common.<name> (call-time resolution); carry the CC-waiver comment where a function needs it; preserve validate_complexity's list[dict] signature."
+  - "Tag owner metadata at registration - default platform; pin validate_broker_env_reads=trading; set validate_product_roadmap and validate_environment_taxonomy to platform + product_coupled=trading."
+  - "Collapse scripts/validate.py to the thin CLI - keep argparse + guards + budget assertion; replace the two hand-maintained call-lists with iteration over registry pre_sequence()/full_sequence(); resolve checks via getattr(self_module, name)(failed); add facade re-exports (from scripts.checks... import <name>) for every extracted check AND extracted helper; re-import _common primitives for back-compat."
+  - "Extend scripts/test_coverage_checker.py map_source_to_test to map scripts/checks/**/*.py to colocated tests; add tests/test_coverage_checker.py cases."
+  - "Bulk-migrate ALL moved-global patch targets in tests/test_validate.py to their canonical new homes (namespace-migration discipline): run/ROOT/get_changed_files/invoke_step/PYTHON -> scripts.checks._common; moved-check constants -> their check module. Then assert zero residual patch(\"validate.run\"|\"validate.ROOT\"|\"validate.get_changed_files\") sites (grep-count closure). Confirm the 3 external importer suites still resolve via the facade; repoint only if strictly needed."
+  - "Add rec-2420's lowering test for _update_sloc_budgets and the mock-interception + no-local-ROOT tests in tests/test_checks_registry.py."
+  - "Run `validate --update-sloc-budgets`, then `git diff config/sloc_budgets.yaml` and confirm the ONLY change is removal of the validate.py entry (no new key seeded)."
+  - "Author Decision 104 in docs/DECISIONS.md - ratify the registry mechanism, owner convention + federation direction, the coverage-gate mapping extension, and the validate_complexity advisory-output waiver; partially supersede Decision 80 point 3 only."
+  - "Execute the Verification Plan - run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Include `Resolves: rec-2420` in the squash-merge body."
+  - "Report - what was extracted, the full-trace equivalence result, final validate.py SLOC, CC/coverage status, and the owner-tag summary."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence guard cannot be made green, abandon the branch (no
+  merge). Nothing is deployed. If merged and a regression surfaces, revert the squash commit - the thin CLI +
+  registry + coverage-mapping change land atomically in one PR, so a single revert restores the monolith.
