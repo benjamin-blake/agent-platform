@@ -1456,6 +1456,138 @@ class TestCiRcaLivenessAlert:
         assert result is None
 
 
+class TestAbstentionGauge:
+    """T1.13 c12(i): _compute_ci_rca_abstention / _escalate_ci_rca_probe_health / preflight report JSON."""
+
+    def test_compute_returns_none_when_cache_unavailable(self) -> None:
+        assert _preflight._compute_ci_rca_abstention(None) is None
+
+    def test_compute_delegates_to_ci_rca_probe_health(self) -> None:
+        with patch("scripts.ci_rca_probe_health.compute_abstention_rate", return_value=(2, 5, 0.4)) as mock_compute:
+            gauge = _preflight._compute_ci_rca_abstention([{"id": "rec-1"}], window_days=14)
+        mock_compute.assert_called_once_with([{"id": "rec-1"}], window_days=14)
+        assert gauge == {
+            "undetermined_count": 2,
+            "total_count": 5,
+            "rate": 0.4,
+            "window_days": 14,
+        }
+
+    def test_escalate_skipped_when_creds_not_ok(self) -> None:
+        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+            result = _preflight._escalate_ci_rca_probe_health(
+                "unavailable", [{"id": "rec-1"}], {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+            )
+        assert result is None
+        mock_escalate.assert_not_called()
+
+    def test_escalate_skipped_when_cache_unavailable(self) -> None:
+        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+            result = _preflight._escalate_ci_rca_probe_health(
+                "ok", None, {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+            )
+        assert result is None
+        mock_escalate.assert_not_called()
+
+    def test_escalate_skipped_when_gauge_is_none(self) -> None:
+        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+            result = _preflight._escalate_ci_rca_probe_health("ok", [{"id": "rec-1"}], None)
+        assert result is None
+        mock_escalate.assert_not_called()
+
+    def test_escalate_invoked_on_warm_cache_path(self) -> None:
+        cache_rows = [
+            {"id": "rec-1", "status": "open"},
+            {"id": "rec-2", "status": "closed"},
+        ]
+        gauge = {"undetermined_count": 3, "total_count": 6, "rate": 0.5, "window_days": 14}
+        with patch(
+            "scripts.ci_rca_probe_health.escalate", return_value={"action": "file", "rec_id": "rec-9"}
+        ) as mock_escalate:
+            result = _preflight._escalate_ci_rca_probe_health("ok", cache_rows, gauge)
+        assert result == {"action": "file", "rec_id": "rec-9"}
+        mock_escalate.assert_called_once()
+        args, kwargs = mock_escalate.call_args
+        assert args[0] == 3
+        assert args[1] == 6
+        assert args[2] == 0.5
+        # open_recs filtered to status='open' only, from the injected cache -- no reader call.
+        assert args[3] == [{"id": "rec-1", "status": "open"}]
+
+    def test_escalate_failure_is_non_fatal(self) -> None:
+        gauge = {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+        with patch("scripts.ci_rca_probe_health.escalate", side_effect=RuntimeError("portal down")):
+            result = _preflight._escalate_ci_rca_probe_health("ok", [], gauge)
+        assert result is None
+
+    def test_print_gauge_line_format(self, capsys: pytest.CaptureFixture) -> None:
+        gauge = {"undetermined_count": 2, "total_count": 8, "rate": 0.25, "window_days": 14}
+        _preflight.print_ci_rca_abstention_gauge(gauge)
+        out = capsys.readouterr().out
+        assert "CI-RCA probe abstention (last 14d): 2/8 undetermined (25%)" in out
+
+    def test_print_gauge_noop_when_none(self, capsys: pytest.CaptureFixture) -> None:
+        _preflight.print_ci_rca_abstention_gauge(None)
+        out = capsys.readouterr().out
+        assert out == ""
+
+    def test_main_report_contains_abstention_gauge_fields(self, tmp_path: Path) -> None:
+        """The gauge fields appear in the preflight report JSON, computed from the warm cache."""
+        preflight_report = tmp_path / ".preflight-report.json"
+        cache_rows = [
+            {
+                "id": "rec-1",
+                "source": "ci_rca",
+                "status": "open",
+                "created_timestamp": datetime.now(timezone.utc).isoformat(),
+                "context_v2_json": "",
+            }
+        ]
+        warm_sync_stub = {
+            "drained": {},
+            "pulled": {},
+            "rows": {"ops_recommendations": cache_rows, "ops_decisions": [], "ops_priority_queue": []},
+            "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
+        }
+        with (
+            patch("session_preflight.check_venv", return_value=True),
+            patch("session_preflight.get_git_status", return_value=("main", False, [])),
+            patch("session_preflight.check_terraform_pending", return_value=False),
+            patch("session_preflight.check_credentials", return_value="ok"),
+            patch("session_preflight.parse_last_session", return_value=""),
+            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch("session_preflight._sync_ops_pull", return_value={}),
+            patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub),
+            patch(
+                "session_preflight.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 2",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch(
+                "session_preflight.check_telemetry_health",
+                return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+            ),
+            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.ci_rca_probe_health.escalate", return_value={"action": "none", "rec_id": None}) as mock_escalate,
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        data = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert "ci_rca_abstention_gauge" in data
+        gauge = data["ci_rca_abstention_gauge"]
+        assert gauge["total_count"] == 1
+        assert gauge["undetermined_count"] == 0
+        assert data["ci_rca_probe_health_escalation"] == {"action": "none", "rec_id": None}
+        mock_escalate.assert_called_once()
+
+
 class TestForwardFixRecursion:
     """Tests for _check_forward_fix_recursion() -- forward_fix_recursion named verb."""
 

@@ -2264,3 +2264,161 @@ class TestProposeOrCloseRec:
         result = p.propose_or_close_rec("rec-009", "superseded", 'evidence with "quotes" inside')
         assert result is not None
         assert '\\"quotes\\"' in result
+
+
+class TestBundleAbsentFailLoud:
+    """c12(ii): _run_ci_rca_cross_check bundle-absent fail-loud (ops_data_portal.py)."""
+
+    def _ctx_v2(self, **overrides):
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": "test gap explanation with enough chars for the field",
+        }
+        ctx = {
+            "schema_version": 2,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, "c " * 25 + "systemic scripts/validate.py:1"],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_strict_rejects_bundle_absent_without_undetermined(self, tmp_path) -> None:
+        """No evidence_bundle_ref and rca_confidence != undetermined -> strict rejects."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()  # no evidence_bundle_ref, no rca_confidence
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_BUNDLE_ABSENT"):
+                p._run_ci_rca_cross_check(ctx)
+
+    def test_strict_accepts_bundle_absent_with_undetermined(self, tmp_path, caplog) -> None:
+        """No evidence_bundle_ref but rca_confidence=undetermined -> strict accepts (human-route)."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["rca_confidence"] = "undetermined"
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            p._run_ci_rca_cross_check(ctx)  # must not raise
+        assert any("routed to mandatory human review" in r.message for r in caplog.records)
+
+    def test_warn_accepts_bundle_absent_and_logs_gauge(self, caplog) -> None:
+        """Warn mode (default) accepts a bundle-absent rec but logs the CI_RCA_BUNDLE_ABSENT gauge."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        with caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"):
+            p._run_ci_rca_cross_check(ctx)  # must not raise
+        assert any("CI_RCA_BUNDLE_ABSENT" in r.message for r in caplog.records)
+
+
+class TestEvidenceS3Existence:
+    """c5 / INTENT Section 4 check 7: S3-object-existence verification (ops_data_portal.py)."""
+
+    _S3_URI = "s3://agent-platform-data-lake/ci-rca-evidence/" + "a" * 64 + ".json"
+
+    def _ctx_v2(self, **overrides):
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": "test gap explanation with enough chars for the field",
+        }
+        ctx = {
+            "schema_version": 2,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, "c " * 25 + "systemic scripts/validate.py:1"],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_object_present_accepts(self, tmp_path) -> None:
+        """upload_status=ok and head_object succeeds -> accepted, S3 verified."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "ok"}
+        mock_client = MagicMock()
+        mock_client.head_object.return_value = {}
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
+        mock_client.head_object.assert_called_once()
+
+    def test_object_missing_strict_rejects(self, tmp_path) -> None:
+        """upload_status=ok but head_object 404s -> strict mode rejects."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "ok"}
+        mock_client = MagicMock()
+        mock_client.head_object.side_effect = Exception("404 NoSuchKey")
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="CI_RCA_EVIDENCE_S3_MISSING"):
+                p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)
+
+    def test_object_missing_warn_warns(self, tmp_path, caplog) -> None:
+        """upload_status=ok but head_object 404s -> warn mode accepts + logs."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "ok"}
+        mock_client = MagicMock()
+        mock_client.head_object.side_effect = Exception("404 NoSuchKey")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
+        assert any("CI_RCA_EVIDENCE_S3_MISSING" in r.message for r in caplog.records)
+
+    def test_upload_failed_takes_degraded_path_no_s3_call(self, tmp_path, caplog) -> None:
+        """upload_status=upload_failed -> degraded accept, no head_object call made."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "upload_failed"}
+        mock_client = MagicMock()
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
+        mock_client.head_object.assert_not_called()
+        assert any("CI_RCA_EVIDENCE_S3_DEGRADED" in r.message for r in caplog.records)
+
+    def test_s3_permission_error_fails_open(self, tmp_path, caplog) -> None:
+        """A non-404 S3 client error (e.g. AccessDenied) fails open with a warning, even in strict mode."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "ok"}
+        mock_client = MagicMock()
+        mock_client.head_object.side_effect = Exception("AccessDenied: permission denied")
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
+        assert any("CI_RCA_EVIDENCE_S3_FAIL_OPEN" in r.message for r in caplog.records)

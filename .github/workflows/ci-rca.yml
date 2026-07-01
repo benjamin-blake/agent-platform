@@ -206,6 +206,17 @@ jobs:
           echo "bundle_local=${BUNDLE_LOCAL}" >> "$GITHUB_OUTPUT"
           echo "categories=${CATEGORIES}" >> "$GITHUB_OUTPUT"
 
+          # c12(ii): bundle_absent when the generator produced neither a BUNDLE_SHA nor any
+          # emit-dir bundle file -- the continue-on-error above swallowed a hard failure, so the
+          # agent has zero deterministic evidence. Surface it loudly instead of letting the agent
+          # proceed as if it had a bundle.
+          BUNDLE_ABSENT="false"
+          if [ -z "$BUNDLE_SHA" ] && ! ls /tmp/ci-rca-bundles/*.json > /dev/null 2>&1; then
+            BUNDLE_ABSENT="true"
+            echo "[CI_RCA_BUNDLE_ABSENT] evidence bundle generation produced no BUNDLE_SHA and no emit-dir bundle file for run ${RUN_ID}."
+          fi
+          echo "bundle_absent=${BUNDLE_ABSENT}" >> "$GITHUB_OUTPUT"
+
       - name: Dedup guard
         id: dedup
         env:
@@ -252,12 +263,20 @@ jobs:
           BUNDLE_S3_URI="${{ steps.evidence.outputs.bundle_s3_uri }}"
           BUNDLE_PATH="${{ steps.evidence.outputs.bundle_path }}"
           BUNDLE_LOCAL="${{ steps.evidence.outputs.bundle_local }}"
+          BUNDLE_ABSENT="${{ steps.evidence.outputs.bundle_absent }}"
           EVIDENCE_CONTEXT=""
           if ls /tmp/ci-rca-bundles/*.json 2>/dev/null >/dev/null 2>&1; then
             # Reference the emit-dir so multi-failure runs expose all N bundles to the agent.
             # For a single-failure run BUNDLE_SHA is the only SHA; for N>1 the agent enumerates
             # /tmp/ci-rca-bundles/*.json to find each bundle's sha256 and failure_category.
             EVIDENCE_CONTEXT=" Evidence bundle(s) are at /tmp/ci-rca-bundles/ -- enumerate *.json for multi-failure runs (one JSON per failed check). Primary bundle SHA: ${BUNDLE_SHA}. Primary S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local path: ${BUNDLE_LOCAL}."
+          fi
+          # c12(ii): when no evidence bundle was generated at all, force the agent onto the
+          # mandatory human-review route instead of letting it file a confidently-wrong rec with
+          # zero deterministic evidence. ops_data_portal.file_rec's bundle-absent fail-loud check
+          # only accepts a bundle-absent rec when rca_confidence='undetermined'.
+          if [ "$BUNDLE_ABSENT" = "true" ]; then
+            EVIDENCE_CONTEXT=" No evidence bundle was generated for this run (bundle_absent=true) -- you have zero deterministic evidence. You MUST set detection_gap.earliest_viable_gate='undetermined', rca_confidence='undetermined', and file the rec anyway so it routes to mandatory human review (preflight 'CI-RCA Mandatory Human Review'). Do NOT guess earliest_viable_gate/escape_mode without a bundle."
           fi
           # Pass the prompt via stdin: --allowedTools is variadic and would otherwise swallow a
           # trailing positional prompt, leaving claude with no input ("Input must be provided
