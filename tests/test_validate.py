@@ -411,7 +411,10 @@ class TestValidateInstructionArchitectureLayers:
         }
         mock_compliance.check_layer_compliance.return_value = []
 
-        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=mock_compliance):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=mock_compliance,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -423,7 +426,10 @@ class TestValidateInstructionArchitectureLayers:
         mock_compliance._load_instruction_architecture.return_value = {"layers": []}
         mock_compliance.check_layer_compliance.return_value = ["layer 99 (Ghost): no files match 'ghost/*.md'"]
 
-        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=mock_compliance):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=mock_compliance,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
@@ -432,7 +438,10 @@ class TestValidateInstructionArchitectureLayers:
 
     def test_skips_when_compliance_not_found(self) -> None:
         """No failures when prompt_compliance.py is absent."""
-        with patch("scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance", return_value=None):
+        with patch(
+            "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+            return_value=None,
+        ):
             failed: list[str] = []
             _validate.validate_instruction_architecture_layers(failed)
 
