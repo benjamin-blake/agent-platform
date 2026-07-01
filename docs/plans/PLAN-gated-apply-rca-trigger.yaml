@@ -36,7 +36,7 @@ scope:
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      Wire _check_apply_rca_fallback into validate_ci_workflow_guards' guards tuple so the self-dispatch
+      Wire _check_apply_rca_fallback into validate_ci_workflow_guards' guards list so the self-dispatch
       step cannot be removed silently (Decision 60/73 -- validate.py is the gate SoT).
   - file: tests/test_verify_ci_workflow.py
     action: Modify
@@ -47,10 +47,13 @@ scope:
     action: Modify
     purpose: >-
       New detector _check_convergence_rca_gap(): when the convergence record is red beyond a grace window
-      and no open source=ci_rca rec references its commit_sha, emit a convergence_rca_gap alert into the
-      report + one-line summary. Surface commit_sha through convergence_health (or read the record) so the
-      match is possible. Generalises _check_ci_rca_liveness (which only inspects ci.yml) to the
-      convergence-record surface; aligned with the Decision 103 preflight correlation-engine shape.
+      and no open source=ci_rca rec was filed since the red episode began, emit a convergence_rca_gap alert
+      into the report + one-line summary. Match on TIMESTAMP (rec creation vs the record's red-since), NOT
+      commit_sha -- ci_rca recs carry no structured commit_sha field (confirmed: the ci-rca agent doc and
+      every existing correlation verb match on timestamp/file/subject, never commit). Reuse the proven
+      _check_ci_rca_liveness / _fetch_ci_rca_recs_since pattern. commit_sha may ride the alert PAYLOAD (for
+      the operator) but must never be the match key. Generalises _check_ci_rca_liveness (which only inspects
+      ci.yml) to the convergence-record surface; aligned with the T2.35 correlate_ci_rca_with_main engine.
   - file: tests/test_session_preflight.py
     action: Modify
     purpose: >-
@@ -83,8 +86,9 @@ acceptance_criteria:
     its actions: write permission (structural guard registered via validate_ci_workflow_guards).
   - >-
     Preflight emits a convergence_rca_gap alert (report field + one-line summary) when the convergence
-    record is red beyond the grace window and no open source=ci_rca rec references its commit_sha; it stays
-    silent when a matching rec exists, the record is green, or the red age is within grace.
+    record is red beyond the grace window and no open source=ci_rca rec was filed since the red episode
+    began (matched on rec-creation timestamp vs the record's red-since -- ci_rca recs carry no commit_sha
+    field); it stays silent once such a rec exists, the record is green, or the red age is within grace.
   - >-
     The currently-stuck state is remediated: an RCA rec is filed for run 28379330706 and, after review, the
     red convergence record is cleared via the workflow_dispatch acknowledge-and-retry path -- sandbox
@@ -125,7 +129,7 @@ verification_plan:
     action: Preflight detector unit suite passes (red+no-rec -> alert; red+rec -> None; green -> None; within-grace -> None).
     command: bin/venv-python -m pytest tests/test_session_preflight.py -q -k "convergence_rca_gap or rca_gap"
     expected: All four detector cases pass.
-    fix_if: A case fails -- detector predicate (status/age/commit-match) is wrong or commit_sha is not surfaced to the detector.
+    fix_if: A case fails -- detector predicate (status / red-age / rec-since-timestamp) is wrong. Do NOT match on commit_sha (ci_rca recs carry none) -- a commit match fires a permanent false-positive.
   - step: 6
     phase: pre-deploy
     action: Preflight runs end-to-end without crashing and the report carries the new alert key.
@@ -224,9 +228,18 @@ context:
     workflow_run). The detector (step 2 layer) covers any residual attempt-1 miss. Scope = ALL apply paths
     (both apply-sandbox and gated-apply jobs) + the detector + remediation of the stuck run.
   - >-
-    convergence_health (scripts/convergence_health.py) reads the record's commit_sha but the derived dict does
-    not currently expose it to the report; the detector needs it. Surface commit_sha through convergence_health
-    or have the detector read the record (parity with _check_ci_rca_liveness's own gh/warm-cache pattern).
+    Detector match key (plan-critique HIGH fix): ci_rca recs carry NO structured commit_sha field -- the
+    ci-rca agent doc requires only title/context/acceptance/context-v2-json, and every existing correlation
+    verb (_derive_ci_rca_since, correlate_ci_rca_with_main) matches on timestamp/file/subject. So the detector
+    MUST match on rec-creation-timestamp vs the record's red-since (the _check_ci_rca_liveness /
+    _fetch_ci_rca_recs_since pattern), NOT commit_sha -- a commit match would fire a permanent false-positive
+    even after a valid rec is filed (breaking acceptance criterion 4). commit_sha (which convergence_health.py
+    already reads from the record) may still ride the alert PAYLOAD for the operator; surface it there, but it
+    is not the match key.
+  - >-
+    Approval-window-expiry path (comment 762-766): an expired tf-gated-apply Environment window transitions the
+    waiting job to a failure() conclusion. That is also a re-run/non-attempt-1 conclusion, so the
+    run_attempt != '1' self-dispatch gate covers it; the attempt-1 fresh-push path stays workflow_run-covered.
   - >-
     ci-rca.yml workflow_dispatch already supports `-f run_id` (required) and `-f force_rca` (optional); the
     dispatched job's if-gate is always-true for workflow_dispatch (no head_branch check), so a self-dispatched
@@ -242,7 +255,7 @@ pre_implementation_checklist:
   - >-
     All Scope files located and readable; terraform-apply-sandbox.yml apply-sandbox (line 79) and gated-apply
     (line 768) job permission blocks + record-write steps confirmed; verify_ci_workflow.py guard pattern
-    (_check_ci_rca_filter) and validate_ci_workflow_guards tuple confirmed; _check_ci_rca_liveness confirmed.
+    (_check_ci_rca_filter) and validate_ci_workflow_guards list confirmed; _check_ci_rca_liveness confirmed.
   - Acceptance criteria understood and verifiable via V2 unit/integration tests + validate --pre
 execution_steps:
   - >-
@@ -259,8 +272,8 @@ execution_steps:
     contains both 'failure()' and 'run_attempt' and whose `run` contains 'gh workflow run ci-rca.yml'. Raise
     AssertionError with a precise message on any miss. Call it from main() alongside the existing checks.
   - >-
-    scripts/validate.py: add ('apply-rca-fallback', _check_apply_rca_fallback) to the guards tuple in
-    validate_ci_workflow_guards (import it with the other _check_* names). No new top-level gate function needed.
+    scripts/validate.py: add ('apply-rca-fallback', _check_apply_rca_fallback) to the guards list in
+    validate_ci_workflow_guards (validate.py:2507; import it with the other _check_* names). No new top-level gate function needed.
   - >-
     tests/test_verify_ci_workflow.py: add test_apply_rca_fallback_passes (real tree) and
     test_apply_rca_fallback_missing_step_fails / _missing_permission_fails (mutate a loaded copy of the
@@ -268,11 +281,14 @@ execution_steps:
   - >-
     scripts/session_preflight.py: add _check_convergence_rca_gap(convergence_health, cache_rows) returning an
     alert dict {commit_sha, red_age_hours, run_url?} when convergence_health.status == 'red',
-    red_age_minutes > GRACE (default 30, parity with _check_ci_rca_liveness), and no open source=ci_rca rec
-    references the red commit_sha (match on the rec's commit field; if absent, treat as unmatched). Surface
-    commit_sha via convergence_health (extend the derived dict) so the match is possible. Add the result to
-    the report as report['convergence_rca_gap_alert'] and add a one-line summary token when non-null. Degrade
-    to None on any read/parse error (never crash preflight -- rec-2027 pattern).
+    red_age_minutes > GRACE (default 30, parity with _check_ci_rca_liveness), and NO open source=ci_rca rec
+    was filed since the red episode began. MATCH ON TIMESTAMP, not commit: reuse
+    _fetch_ci_rca_recs_since(red_since, cache_rows) exactly as _check_ci_rca_liveness does (ci_rca recs carry
+    no commit_sha field, so a commit match would fire a permanent false-positive). Derive red_since from the
+    convergence record (convergence_health.py already computes red_age_hours from the record's timestamp;
+    surface that start time). commit_sha may ride the alert PAYLOAD for the operator but is NOT the match key.
+    Add the result to the report as report['convergence_rca_gap_alert'] and a one-line summary token when
+    non-null. Degrade to None on any read/parse error (never crash preflight -- rec-2027 pattern).
   - >-
     tests/test_session_preflight.py: add cases -- red beyond grace + no matching rec -> alert; red + matching
     open ci_rca rec -> None; green record -> None; red within grace -> None. Use the existing preflight test
