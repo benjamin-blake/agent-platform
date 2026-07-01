@@ -1,0 +1,365 @@
+schema_version: 1
+slug: "ci-rca-probe-health-failloud"
+intent: >-
+  Close the two safety-critical fail-loud gaps in the T1.13 CI-RCA methodology contract so the
+  self-improving loop cannot silently disable its own depth enforcement: (i) an abstention-rate
+  gauge + deduped ci_rca_probe_health auto-file when the deterministic evidence probe is
+  systematically abstaining (earliest_viable_gate="undetermined"), and (ii) bundle-absent
+  fail-loud so a source=ci_rca rec filed with NO evidence bundle is forced onto the mandatory
+  human-review route instead of accepted fully-unchecked. Lands the deferred c5 portal-side
+  S3-object-existence verification (Section 4 check 7) on the same evidence surface, and folds in
+  the c4/c6 roadmap-bookkeeping closeouts.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-probe-health-failloud.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract) -- post-incident hardening wave, safety
+  slice of exit criterion c12. Closes the two bookkeeping criteria c4 (validate_sloc_limits already
+  promoted to --pre) and c6 (PLAN-ci-rca-workflow-correctness landed). Lands c12 parts (i)
+  abstention gauge + probe-health auto-file and (ii) bundle-absent fail-loud, plus the c5 S3-existence
+  verification mechanism -- but leaves c5 and c12 OPEN (c12(iii) back-validation loop deferred; c5
+  closes only when strict mode is live and the roundtrip is demonstrated end-to-end, riding with c2).
+closes_criteria:
+  - "T1.13:c4"
+  - "T1.13:c6"
+scope:
+  - file: scripts/ci_rca_probe_health.py
+    action: Create
+    purpose: >-
+      c12(i). New client-side sensor mirroring scripts/convergence_health.py's idempotent-escalation
+      pattern. Pure functions: compute_abstention_rate(cache_rows, window_days) -> (undetermined_count,
+      total_count, rate) counting source=ci_rca recs whose context_v2_json.rca_confidence=="undetermined"
+      over a trailing window; find_open_probe_health_rec(rows) -> rec|None; escalation_action(over_threshold,
+      open_rec_exists) -> "file"|"update"|"close"|"none" (identical truth table to convergence_health);
+      escalate(...) files/updates/closes EXACTLY ONE deduped source=ci_rca_probe_health rec per abstention
+      episode via ops_data_portal file_rec/update_rec. Reads ONLY the warm recommendation cache (Decision
+      88 -- zero new reader egress); writes ONLY via the portal (Decision 84 -- never cache-as-write-source).
+      The close branch records a proof string (rate returned under threshold) per Decision 103/70. Sensor
+      files priority=high (NOT critical/ci_rca) so it escalates visibly without hard-blocking the /plan queue.
+      CRITICAL divergence from the convergence_health template: find_open_probe_health_rec and escalate() take
+      open recs INJECTED as a caller-supplied list (from the preflight warm cache) -- do NOT copy
+      convergence_health._fetch_open_recs's live make_reader().named("open_recs") fall-through, which would
+      construct a reader and violate the Decision-88 zero-egress claim. The read path must never build a reader.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      c12(i). Register canonical_id ci_rca_probe_health with description + signal_interpretation
+      (persistence-escalation semantics: one rec per sustained-abstention episode, deduped via update_rec,
+      auto-closes when abstention subsides; does NOT hard-block the /plan queue). Required for
+      validate_source / check_source_registry to accept the new source.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      c12(i). Add an abstention-rate gauge line to the existing CI-RCA preflight surfacing (computed from
+      the warm recs cache already loaded -- _derive_ci_rca_since window; zero new reader call, Decision 88):
+      "CI-RCA probe abstention (last Nd): K/M undetermined (R%)". Invoke ci_rca_probe_health.escalate()
+      idempotently on the same warm cache when creds/sync are available (offline sessions skip -- degraded
+      mode) so sustained abstention auto-files without a cron. Add abstention gauge fields to the preflight
+      report JSON.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c12(ii) + c5. (a) Bundle-absent fail-loud: when source=ci_rca AND context_v2_json is present AND
+      evidence_bundle_ref is absent/empty, stop silently returning from _run_ci_rca_cross_check
+      (currently ops_data_portal.py:299-301). Emit a CI_RCA_BUNDLE_ABSENT structured-log gauge and enforce
+      the human-route marker: strict mode REJECTS unless context_v2_json.rca_confidence=="undetermined";
+      warn mode logs the deficiency and accepts. This forces the rec into preflight "CI-RCA Mandatory Human
+      Review" (Tier-B deterministic marker consistent with the existing file_rec validators, Decision 66).
+      (b) c5 Section 4 check 7: when evidence_bundle_ref.upload_status=="ok", verify the SHA object EXISTS at
+      evidence_bundle_ref.s3_uri via a boto3 head_object (reuse the ci_rca_evidence session/region pattern);
+      missing object -> reject in strict / warn in warn mode. upload_status=="upload_failed" -> degraded
+      path (accept, do not verify S3, log staleness). S3 read errors (creds/permission) fail-open with a
+      warning so the check never wedges filing when the runner lacks S3 read (IAM grant rides with c2).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      c12(ii). In the evidence step compute bundle_absent=true when BUNDLE_SHA is empty AND no *.json exist
+      in the emit-dir (the continue-on-error path produced no bundle). Surface it as a step output + a log
+      gauge line. In the Run ci-rca agent step, when bundle_absent, inject an explicit instruction into the
+      prompt: "No evidence bundle was generated for this run; you MUST set rca_confidence=undetermined and
+      route this rec for mandatory human review." Keep the agent running (the rec must still be filed) but
+      forced onto the human-route path so the portal check (a) accepts it and preflight surfaces it.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Amend Section 7.2 (Preflight surfacing) to document the two new gauges -- probe abstention rate and
+      bundle-absent count -- and Section 3.4 / Section 4 check 7 to record that the bundle-absent case is now
+      fail-loud (human-route) and that the S3-object-existence verification is implemented (no longer
+      "DEFERRED to Phase 2"). While amending, correct the stale s3_uri pattern at Section 1 (~line 301):
+      agent-platform-agent-logs -> agent-platform-data-lake, the live bucket the code already uses (c8).
+      Amend-only of a grandfathered doc (disposition_state: pending in
+      docs/intent-migration/MANIFEST.yaml) -- Decision 86 compliant; do NOT create a new prose doc.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping (applied by /implement on verified VP pass, per Status-Trusted-Never-Inferred): flip c4 ->
+      status: met, met_by referencing the validate.py --pre sloc promotion; flip c6 -> status: met, met_by:
+      ci-rca-workflow-correctness. Add a c5 progress note (S3-existence mechanism landed via this plan; c5
+      stays OPEN pending live end-to-end roundtrip demonstration + strict-mode, rides with c2). Add a c12
+      progress note (parts i+ii landed here; c12 stays OPEN pending part iii back-validation loop). Append a
+      T1.13 progress_note entry summarising this slice.
+  - file: tests/test_ci_rca_probe_health.py
+    action: Create
+    purpose: >-
+      c12(i). Unit tests for the sensor: compute_abstention_rate over synthetic cache rows (window
+      filtering, undetermined counting, rate math, zero-total guard); escalation_action truth table
+      (file/update/close/none for the four over_threshold x open_rec_exists cases); find_open_probe_health_rec
+      selection; escalate() dispatch with a mocked portal asserting file/update/close is called exactly once
+      and deduped (no duplicate filing when an open rec already exists). Mirrors tests/test_convergence_health.py.
+      MUST include an assertion that no ducklake reader is constructed in the escalate read path (e.g. patch
+      _make_reader / make_reader to raise and confirm escalate() still runs from the injected cache list) --
+      guards the Decision-88 zero-egress claim.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c12(ii) + c5. Add two test classes. TestBundleAbsentFailLoud: source=ci_rca + context_v2_json without
+      evidence_bundle_ref -> strict rejects unless rca_confidence=undetermined, warn accepts + logs
+      CI_RCA_BUNDLE_ABSENT. TestEvidenceS3Existence: (1) evidence_bundle_ref upload_status=ok with S3 object
+      present (mocked head_object) -> accepts; (2) absent object -> strict rejects / warn warns; (3)
+      upload_status=upload_failed -> degraded accept without S3 call; (4) S3 head_object raising a
+      creds/permission error -> fail-open accept with warning.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      c12(i). Add a test class TestAbstentionGauge asserting the abstention-rate gauge is computed from cache
+      rows (K/M/rate) and that the abstention fields appear in the preflight report JSON; assert escalate() is
+      invoked on the warm cache path (mocked) and skipped when creds/sync unavailable.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    No terraform in scope. The c5 S3-object-existence check (head_object) requires the CI OIDC role
+    (agent-platform-github-ci-*) to hold s3:GetObject/ListBucket on the
+    s3://agent-platform-data-lake/ci-rca-evidence/ prefix for STRICT-mode operation. This grant is NOT
+    applied by this plan: the check fails-open on permission errors and is warn-tolerant, so landing is
+    unblocked. The grant rides with the c2 strict-mode flip (Decision Record + terraform/personal apply),
+    which is where strict enforcement of check 7 becomes live.
+  - >-
+    Lambda assessment (no deploy required): docs/ROADMAP-PLATFORM.yaml is a bundled assets: entry of the
+    active data-pipeline Lambda artifact (src/lambdas/data-pipeline/manifest.yaml, status: active), so
+    compute_affected_artifacts() nominally flags it. The edit here is a non-functional roadmap bookkeeping
+    status-flip (read-only-context data, not runtime code); no Lambda build/deploy/smoke-test is required
+    (scheduled agents are disabled per the AGENTS.md runbook). Divergence from the letter of the per-Lambda
+    build-gate is stated explicitly per the "justify, do not silently skip" rule. None of the runtime Python
+    scope files (ci_rca_probe_health.py, ops_data_portal.py, session_preflight.py) match a Lambda packaging
+    pattern.
+acceptance_criteria:
+  - >-
+    c12(i) sensor: scripts/ci_rca_probe_health.py computes abstention rate from warm-cache rows and its
+    escalation_action returns file/update/close/none matching the convergence_health truth table; escalate()
+    files exactly one deduped source=ci_rca_probe_health rec per episode (no duplicate when one is already
+    open) AND constructs no ducklake reader in its read path (open recs injected from the warm cache) --
+    verified by tests/test_ci_rca_probe_health.py passing.
+  - >-
+    c12(i) gauge: session_preflight surfaces a "CI-RCA probe abstention (last Nd)" line and emits the
+    abstention count/total/rate into the preflight report JSON, computed with zero new reader egress.
+  - >-
+    c12(ii) bundle-absent fail-loud: a source=ci_rca rec with context_v2_json but no evidence_bundle_ref is
+    REJECTED in strict mode unless rca_confidence=undetermined, and in warn mode is accepted while emitting a
+    CI_RCA_BUNDLE_ABSENT gauge -- verified by tests/test_ops_data_portal.py.
+  - >-
+    c12(ii) workflow: .github/workflows/ci-rca.yml computes bundle_absent and injects the
+    set-rca_confidence=undetermined / human-route instruction into the agent prompt on the bundle-absent path.
+  - >-
+    c5 mechanism: file_rec verifies S3-object existence at evidence_bundle_ref.s3_uri when upload_status=ok
+    (strict reject / warn on missing), takes the degraded path on upload_failed, and fails-open on S3 read
+    errors -- verified by tests/test_ops_data_portal.py.
+  - >-
+    c4 evidence: validate_sloc_limits is reachable from the --pre tier of scripts/validate.py (already
+    landed) -- confirmed by a VP step, and c4 staged to status: met in the roadmap.
+  - >-
+    c6 evidence: ci-rca.yml gates the rca job on head_branch==default_branch, filing detection uses
+    scripts/ci_rca_filing.py, and validate_ci_rca_trigger is wired into validate.py presubmit (already
+    landed) -- confirmed by a VP step, and c6 staged to status: met in the roadmap.
+  - >-
+    docs/INTENT-ci-rca-methodology.md Section 7.2 / Section 4 documents the two gauges and the S3-existence
+    check, and the intent-doc-freeze guard still passes (amend of a grandfathered doc).
+  - "bin/venv-python -m scripts.validate --pre passes (source registry, ci_rca_trigger, workflow guards, intent-doc-freeze, sloc)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Sensor logic + escalation dedup exercised against synthetic cache rows.
+    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py -q
+    expected: >-
+      All tests pass; escalation_action returns file only when over_threshold AND no open rec, update when
+      over_threshold AND open rec, close when under_threshold AND open rec, none otherwise; escalate() calls
+      the portal exactly once per episode.
+    fix_if: >-
+      A failing dedup assertion means escalate() would file duplicate probe-health recs every session; a
+      failing rate assertion means the window filter or undetermined counting is wrong. Fix the pure function
+      before wiring into preflight.
+  - step: 2
+    phase: pre-deploy
+    action: Bundle-absent fail-loud + c5 S3-existence branches in file_rec exercised (mocked boto3).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestBundleAbsentFailLoud tests/test_ops_data_portal.py::TestEvidenceS3Existence -q
+    expected: >-
+      Strict mode rejects a ci_rca rec with no evidence_bundle_ref unless rca_confidence=undetermined; warn
+      accepts + logs CI_RCA_BUNDLE_ABSENT. upload_status=ok with a present S3 object accepts; missing object
+      rejects (strict) / warns (warn); upload_failed takes the degraded path with no S3 call; S3 permission
+      error fails-open with a warning.
+    fix_if: >-
+      If a bundle-absent rec is silently accepted in strict mode, the human-route enforcement regressed
+      (still at ops_data_portal.py:299-301). If the S3 permission error raises instead of fail-open, the check
+      would wedge filing on runners without S3 read -- make head_object errors non-fatal.
+  - step: 3
+    phase: pre-deploy
+    action: Preflight abstention gauge computed from cache and emitted into the report JSON; escalate wired.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py::TestAbstentionGauge -q
+    expected: >-
+      The gauge fields (undetermined count, total, rate) appear in the preflight report and the printed CI-RCA
+      section; escalate() is invoked on the warm-cache path and skipped when creds/sync are unavailable.
+    fix_if: >-
+      Missing JSON fields mean downstream consumers cannot see the abstention signal; escalate firing on an
+      offline path means preflight attempts a portal write without creds -- guard it behind the sync/creds gate.
+  - step: 4
+    phase: pre-deploy
+    action: New source registered and accepted by the registry validator.
+    command: bin/venv-python -c "import sys; sys.argv=['v']; from scripts.validate import check_source_registry as c; f=[]; c(f); print('FAIL' if any('ci_rca_probe_health' in x for x in f) else 'OK')"
+    expected: "Prints OK -- ci_rca_probe_health is a recognised canonical_id (no registry failure)."
+    fix_if: >-
+      A registry failure means the sensor's file_rec would be rejected by validate_source at write time. Add
+      the canonical_id entry with description + signal_interpretation.
+  - step: 5
+    phase: pre-deploy
+    action: c4 evidence -- validate_sloc_limits is reachable from the --pre tier.
+    command: bin/venv-python -c "import pathlib; src=pathlib.Path('scripts/validate.py').read_text(); i=src.index('if args.pre:'); j=src.index('run_python_checks(failed)', i); print('OK' if 'validate_sloc_limits(failed)' in src[i:j] else 'MISSING')"
+    expected: "validate_sloc_limits is called within the --pre branch of main() (evidence for c4)."
+    fix_if: >-
+      If validate_sloc_limits is not reachable from --pre, c4 is not actually met -- do NOT flip c4; instead
+      scope the promotion. (Current tree already calls it at scripts/validate.py:4055 inside if args.pre.)
+  - step: 6
+    phase: pre-deploy
+    action: c6 evidence -- workflow-correctness surfaces present (main-only trigger, FILED marker, wired guard).
+    command: bin/venv-python -m scripts.validate --pre 2>&1 | grep -iE "ci_rca|trigger|workflow" ; test -f scripts/ci_rca_filing.py && grep -qE "head_branch.*default_branch|default_branch.*head_branch" .github/workflows/ci-rca.yml && echo "c6-EVIDENCE-OK"
+    expected: >-
+      validate_ci_rca_trigger runs in --pre without failure, scripts/ci_rca_filing.py exists, and ci-rca.yml
+      gates on head_branch==default_branch -- prints c6-EVIDENCE-OK (evidence for c6).
+    fix_if: >-
+      If any surface is missing, c6 is not met -- do NOT flip c6. (PLAN-ci-rca-workflow-correctness landed
+      2026-06-01; this is a bookkeeping confirmation.)
+  - step: 7
+    phase: pre-deploy
+    action: INTENT amend does not trip the intent-doc-freeze guard; full fast tier is green.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Fast tier passes end-to-end: check_source_registry, validate_ci_rca_trigger, validate_ci_workflow_guards,
+      validate_intent_doc_freeze (grandfathered ci-rca-methodology doc still allowed), and validate_sloc_limits
+      all green.
+    fix_if: >-
+      An intent-doc-freeze failure means the INTENT edit was mistaken for a new doc (it must be an amend of the
+      grandfathered path). A source/registry/guard failure points at the specific new surface to fix.
+  - step: 8
+    phase: pre-deploy
+    action: Plan document itself validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-probe-health-failloud.yaml
+    expected: "Plan validates (schema_version, slug/plan_path consistency, non-empty VP with commands, execution_steps)."
+    fix_if: "Schema errors name the offending field -- correct and re-validate."
+constraints:
+  - >-
+    Decision 55 (loud-failure / no-autonomous-fix): the probe-health sensor DIAGNOSES and FILES a rec; it
+    never self-remediates. The bundle-absent path forces human review rather than accept-then-patch. No rescue
+    agents or workaround loops.
+  - >-
+    Decision 72 (RCA-as-Plan-Source): both gauges extend the existing source=ci_rca / preflight consumer flow;
+    the ci_rca_probe_health rec is consumed via the standard /plan review path.
+  - >-
+    Decision 88 (Neon egress budget): abstention rate and the escalation decision read ONLY the warm
+    recommendation cache already loaded by preflight -- no new ducklake_reader call, no _make_reader() in the
+    read path.
+  - >-
+    Decision 84 (DuckLake sole backend / read-cache-is-never-a-write-source): the sensor writes ONLY via the
+    portal file_rec/update_rec; the warm cache is a read source only.
+  - >-
+    Decision 86 (intent-doc-freeze): docs/INTENT-ci-rca-methodology.md is AMENDED (grandfathered,
+    disposition_state: pending), never re-created; no new standing prose doc.
+  - >-
+    Decision 66 (Precision Context Injection): the bundle-absent human-route marker is a Tier-B deterministic
+    write-time check in file_rec consistent with the existing ci_rca validators; it does not bypass the
+    Tier-A get_rec_write_guidance surface.
+  - >-
+    Decision 73 (public repo): gauge/structured-log strings and the s3_uri carry no AWS account IDs, ARNs,
+    ExternalIds, or internal hostnames (agent-platform-data-lake bucket name is already public).
+  - >-
+    Decision 103/70 (closure needs a recorded proof): the sensor's close branch records the sub-threshold
+    rate as the closure proof, mirroring convergence_health's idempotent close.
+  - >-
+    Status-Trusted-Never-Inferred: this plan STAGES the c4/c6 status flips as a roadmap Scope edit; the actual
+    flip happens in /implement's bookkeeping walk on a verified VP pass. c5 and c12 remain OPEN.
+context:
+  - >-
+    Follow-on to T1.13 hardening wave. Scope chosen with the operator: "safety fail-loud first" -- land
+    c12(i) abstention gauge/probe-health and c12(ii) bundle-absent fail-loud; DEFER full Section-7
+    ops_ci_rca_telemetry table emission and c12(iii) back-validation loop (which needs a NEW ducklake_reader
+    json_extract named-verb -- greenfield query work) to a successor plan.
+  - >-
+    c5 folded in as the deferred portal-side S3-object-existence verification (INTENT Section 4 check 7). Per
+    operator: c5 stays OPEN -- the mechanism lands now but the criterion closes only when strict mode is live
+    (c2) and a real ci_rca rec roundtrips a verified S3 bundle end-to-end.
+  - >-
+    Bundle-absent anchor: scripts/ops_data_portal.py:299-301 (_run_ci_rca_cross_check returns early when
+    evidence_bundle_ref is empty -> today the rec is accepted fully unchecked; c12(ii) closes that path).
+  - >-
+    Sensor template: scripts/convergence_health.py (escalation_action + escalate idempotent file/update/close,
+    one rec per episode, tf_convergence_stale) is the exact pattern to mirror for ci_rca_probe_health.
+  - >-
+    Evidence-upload reuse: scripts/ci_rca_evidence.py upload_and_persist / _upload_to_s3 (boto3 Session,
+    region eu-west-2, agent-platform-data-lake, ci-rca-evidence/<sha>.json) is the session/key pattern the c5
+    head_object check reuses.
+  - >-
+    c4 is already implemented (validate_sloc_limits at scripts/validate.py:4055 inside the if args.pre branch);
+    c6 landed via PLAN-ci-rca-workflow-correctness (2026-06-01). Both are bookkeeping closeouts confirmed by VP
+    steps 5-6 before the /implement bookkeeping walk flips them.
+  - >-
+    Decision-scout gate (Step 6a) returned FLAGS_FOUND: two NOTE flags, both resolved -- Decision 86 (amend
+    permitted: doc is grandfathered, freeze guard passes) and Decision 66 (implement as Tier-B marker, no
+    pivot). CITE list: 72, 55, 88, 86, 60; related 57, 103/70, 84, 73, 92pt6/94.
+  - >-
+    No open ci-rca unresolved recs at planning time (ci_rca_unresolved_recs empty); the two likely-resolved
+    recs (rec-2447/rec-2449, strict-mode cache) are unrelated to this slice and not bundled.
+  - >-
+    Durable successor for the auto-file wiring: when Lambda scheduled agents re-enable (see AGENTS.md runbook),
+    ci_rca_probe_health.escalate() moves to a periodic entrypoint; until then preflight is the deterministic
+    trigger (idempotent dedup prevents per-session spam).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-g8wg0c)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant decisions surfaced via decision-scout (72, 55, 88, 86, 60, 66, 73, 103/70)
+  - All files in scope located and readable (ci_rca_probe_health.py + test are new)
+  - Acceptance criteria understood and verifiable
+  - CI_RCA_STRICT_MODE default is warn; strict-mode enforcement paths validated via test toggling the flag
+execution_steps:
+  - >-
+    Create scripts/ci_rca_probe_health.py mirroring convergence_health.py -- pure functions
+    compute_abstention_rate / find_open_probe_health_rec / escalation_action and the idempotent escalate()
+    writing via the ops portal; no reader egress, portal-only writes.
+  - >-
+    Register ci_rca_probe_health in config/agent/data_quality/source_registry.yaml (description +
+    signal_interpretation; persistence-escalation, non-blocking).
+  - >-
+    Modify scripts/ops_data_portal.py: (a) bundle-absent fail-loud in the source=ci_rca path (strict reject
+    unless rca_confidence=undetermined, warn log + CI_RCA_BUNDLE_ABSENT gauge); (b) c5 Section-4 check-7
+    S3-object head_object verification (strict reject / warn on missing, degraded on upload_failed, fail-open
+    on S3 read errors).
+  - >-
+    Modify scripts/session_preflight.py: abstention-rate gauge line + report-JSON fields from the warm cache;
+    invoke ci_rca_probe_health.escalate() idempotently on the creds/sync-available path.
+  - >-
+    Modify .github/workflows/ci-rca.yml: compute bundle_absent, surface a gauge line, and inject the
+    set-rca_confidence=undetermined / human-route instruction into the agent prompt on that path.
+  - >-
+    Amend docs/INTENT-ci-rca-methodology.md Section 7.2 (two gauges) and Section 3.4 / Section 4 check 7
+    (bundle-absent now fail-loud; S3-existence implemented) -- amend-only, grandfathered doc.
+  - >-
+    Stage docs/ROADMAP-PLATFORM.yaml bookkeeping: c4 -> met (met_by --pre sloc promotion), c6 -> met (met_by
+    ci-rca-workflow-correctness), c5 progress note (mechanism landed, stays open), c12 progress note (i+ii
+    landed, stays open), T1.13 progress_note append.
+  - >-
+    Add tests/test_ci_rca_probe_health.py; extend tests/test_ops_data_portal.py and
+    tests/test_session_preflight.py per the scope purposes.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA
+    (Decision 55). The /implement bookkeeping walk flips c4/c6 only after VP steps 5-6 pass.
+  - "Report: what was implemented, verification results, and confirmation that c5/c12 remain open."
+rollback: >-
+  All changes are additive and flag-gated (CI_RCA_STRICT_MODE default warn). Revert the branch commit to
+  remove the sensor, the file_rec branches, the preflight gauge, and the ci-rca.yml bundle_absent path; the
+  roadmap bookkeeping flips revert with it. No infra or data migration to unwind.
