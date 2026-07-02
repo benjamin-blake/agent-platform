@@ -1,0 +1,329 @@
+schema_version: 1
+slug: "implement-code-review-audit-fixes"
+intent: >-
+  Repair correctness and consistency defects in the /implement command, the implement skill, and
+  the code-review skill surfaced by the interactive-workflow audit, so the agent workflows execute
+  the gates they name (working CLI flags, a real subagent dispatch, a deterministic review verdict)
+  and carry less duplicated or stale instruction -- keeping the self-improving platform control
+  surfaces trustworthy and low-friction.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-implement-code-review-audit-fixes.yaml
+phase: >-
+  Platform interactive-workflow instruction maintenance (Decision 90 four-tier workflow surfaces);
+  actioning the implement + code-review findings of audits/workflow-review-d107b4a.yaml. No tier_item
+  targeted; closes_criteria empty (no roadmap bookkeeping).
+scope:
+  - file: .claude/commands/implement.md
+    action: Modify
+    purpose: >-
+      WF-01 (validate flags --ci->--pre, --quick->full), CE-13 (thin Step 5 to a skill pointer, which
+      also removes the broken subagent_type from the command), WF-09 (Step 8 friction -> ops portal +
+      Phase-4 telemetry caveat + executor-rca via Skill tool).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      WF-02 (Code Review Protocol dispatch -> general-purpose + Skill tool), WF-03 (verdict-handling
+      branch references the deterministic rule), WF-12+CE-11 (collapse restated git-ops wake prose to
+      an AGENTS.md pointer; reconcile Resolves trailer), WF-13+CE-12 (delete spent T-1.10 / T-1.12
+      self-application scaffolding).
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: >-
+      WF-03 (add the deterministic Verdict line to the output contract), WF-15+CE-15 (retitle Scoped
+      Branch Code Review; drop full-repo framing and read-all-docs; scope doc reads; fix exemptions
+      pointer to DECISIONS_ARCHIVE.md with absent-section fallback; #prompts:plan -> /plan; renumber
+      duplicate heading numbers).
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    WF-01: grep -nE for "--ci" or "--quick" in .claude/commands/implement.md returns nothing, and
+    scripts.validate --help lists --pre (both replacement gates parse; exit != 2).
+  - >-
+    WF-02: no "subagent_type: code-review" remains in implement.md or the implement skill; the implement
+    skill Code Review Protocol dispatches subagent_type "general-purpose" and instructs invoking the
+    code-review skill via the Skill tool and returning its output verbatim.
+  - >-
+    WF-03: both .claude/skills/code-review/SKILL.md and .claude/skills/implement/SKILL.md carry the exact
+    rule string "REVISE iff any Critical or High finding, else PROCEED", and the code-review output
+    template ends with a "Verdict: PROCEED | REVISE" line.
+  - >-
+    WF-15/CE-15: code-review skill is titled "Scoped Branch Code Review"; no "read every source file"
+    (full-repo) instruction remains; the exemptions pointer resolves on disk (## Code Review Exemptions
+    exists in docs/DECISIONS_ARCHIVE.md) and carries the "exemptions source unavailable" fallback; rg
+    "#prompts" over the file returns nothing; each "### N." heading number is unique.
+  - >-
+    WF-09: implement.md Step 8 names bin/venv-python -m scripts.ops_data_portal (source=manual) as the
+    friction sink, annotates the telemetry emit as suspended until Decision 84 Phase 4 (T2.36), invokes
+    the executor-rca skill via the Skill tool, and contains no run_skill reference within Step 8.
+  - >-
+    WF-12/CE-11: the implement skill Commit Flows no longer restates the git-ops wake mechanism (it
+    points to AGENTS.md ## Git-ops procedure steps 3-5) while keeping the on-wake verdict-handling table
+    and the terraform "Hold subscription through apply" section; the Resolves trailer is one sentence
+    deferring to AGENTS.md ("PR body, which the squash-merge commit body inherits").
+  - >-
+    WF-13/CE-12: grep "Self-application" over the implement skill returns nothing and the T-1.10 recovery
+    clause is gone, while the Decomposition-hint exemption inheritance and Parallel-with-code-review
+    state-machine sections remain intact.
+  - >-
+    CE-13: implement.md Step 5 keeps the MANDATORY trigger, the "dispatch per the implement skill Code
+    Review Protocol" pointer, and the Critical/High-fix + Medium/Low-file lines, and no longer contains
+    the Agent-prompt-requirements block.
+  - >-
+    The full gate bin/venv-python -m scripts.validate exits 0, OR its only failure is the pre-existing
+    "Import contracts (Decision 80)" check documented in the audit meta (no failure is attributable to
+    the three edited markdown files).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: WF-01 -- stale validate flags removed from implement.md and the fast replacement flag parses.
+    command: >-
+      ! grep -nE -- '--ci|--quick' .claude/commands/implement.md && bin/venv-python -m scripts.validate --help | grep -q -- '--pre' && echo PASS
+    expected: 'Prints PASS (no --ci/--quick matches; --help lists --pre).'
+    fix_if: 'grep finds --ci or --quick, or --pre is not a recognised flag.'
+  - step: 2
+    phase: pre-deploy
+    action: WF-02 -- no broken code-review subagent type; general-purpose dispatch present in the skill.
+    command: >-
+      ! grep -rn 'subagent_type: code-review' .claude/commands/implement.md .claude/skills/implement/SKILL.md && grep -q 'subagent_type: "general-purpose"' .claude/skills/implement/SKILL.md && echo PASS
+    expected: 'Prints PASS (no code-review subagent_type anywhere; general-purpose present in implement skill).'
+    fix_if: 'subagent_type: code-review still present, or the skill does not name general-purpose.'
+  - step: 3
+    phase: pre-deploy
+    action: WF-03 -- identical deterministic verdict rule in both skills; code-review output ends with the Verdict line.
+    command: >-
+      grep -q 'REVISE iff any Critical or High finding, else PROCEED' .claude/skills/code-review/SKILL.md && grep -q 'REVISE iff any Critical or High finding, else PROCEED' .claude/skills/implement/SKILL.md && grep -q 'Verdict: PROCEED | REVISE' .claude/skills/code-review/SKILL.md && echo PASS
+    expected: 'Prints PASS (rule string in both files; Verdict line in code-review output).'
+    fix_if: 'Either file lacks the exact rule string, or the code-review output has no Verdict line.'
+  - step: 4
+    phase: pre-deploy
+    action: WF-15/CE-15 -- retitle, no full-repo read, exemptions path resolves, no #prompts, unique 6-heading.
+    command: >-
+      grep -q '^# Scoped Branch Code Review' .claude/skills/code-review/SKILL.md && ! grep -q 'read every source file' .claude/skills/code-review/SKILL.md && ! grep -q '#prompts' .claude/skills/code-review/SKILL.md && grep -q '^## Code Review Exemptions' docs/DECISIONS_ARCHIVE.md && [ "$(grep -c '^### 6\.' .claude/skills/code-review/SKILL.md)" = "1" ] && echo PASS
+    expected: 'Prints PASS (title changed; full-repo read gone; #prompts gone; exemptions section on disk; exactly one "### 6." heading).'
+    fix_if: 'Any clause fails -- title unchanged, full-repo read remains, #prompts remains, exemptions section missing, or duplicate "### 6." heading.'
+  - step: 5
+    phase: pre-deploy
+    action: WF-09 -- Step 8 routes friction to the portal with the Phase-4 caveat and executor-rca, no run_skill.
+    command: >-
+      S8=$(sed -n '/^## Step 8:/,/^## Step 9:/p' .claude/commands/implement.md); echo "$S8" | grep -q 'ops_data_portal' && echo "$S8" | grep -q 'source=manual' && echo "$S8" | grep -q 'T2.36' && echo "$S8" | grep -q 'executor-rca' && ! echo "$S8" | grep -q 'run_skill' && echo PASS
+    expected: 'Prints PASS (Step 8 block names ops_data_portal + source=manual + T2.36 + executor-rca and has no run_skill).'
+    fix_if: 'Step 8 still emits to telemetry as primary, omits the Phase-4 caveat, or retains run_skill.'
+  - step: 6
+    phase: pre-deploy
+    action: WF-12/CE-11 -- wake prose collapsed to a pointer; terraform hold section kept; Resolves reconciled.
+    command: >-
+      grep -q '### Hold subscription through apply' .claude/skills/implement/SKILL.md && ! grep -q 'Robustness note' .claude/skills/implement/SKILL.md && grep -q 'which the squash-merge commit body inherits' .claude/skills/implement/SKILL.md && ! grep -q 'Implemented by /implement. Verification plan passed.' .claude/skills/implement/SKILL.md && echo PASS
+    expected: 'Prints PASS (terraform hold section retained; restated Robustness-note wake prose gone; Resolves trailer is the single AGENTS.md-deferring sentence).'
+    fix_if: 'The terraform hold section was dropped, restated wake prose remains, or the Resolves trailer was not reconciled.'
+  - step: 7
+    phase: pre-deploy
+    action: WF-13/CE-12 -- spent self-application scaffolding deleted; mechanism sections intact.
+    command: >-
+      ! grep -q 'Self-application' .claude/skills/implement/SKILL.md && ! grep -q 'Recovery clause' .claude/skills/implement/SKILL.md && grep -q '### Decomposition-hint exemption inheritance' .claude/skills/implement/SKILL.md && grep -q '### Parallel-with-code-review state machine' .claude/skills/implement/SKILL.md && echo PASS
+    expected: 'Prints PASS (no Self-application / Recovery clause; both mechanism sections still present).'
+    fix_if: 'A Self-application subsection or the recovery clause remains, or a mechanism section was removed.'
+  - step: 8
+    phase: pre-deploy
+    action: CE-13 -- implement.md Step 5 thinned to the skill pointer with the fix/file lines, no prompt block.
+    command: >-
+      S5=$(sed -n '/^## Step 5:/,/^## Step 6:/p' .claude/commands/implement.md); echo "$S5" | grep -q 'Code Review Protocol' && ! echo "$S5" | grep -q 'Agent prompt requirements' && ! echo "$S5" | grep -q 'subagent_type: code-review' && echo "$S5" | grep -q 'Critical' && echo PASS
+    expected: 'Prints PASS (Step 5 keeps the Code Review Protocol pointer and Critical/High wording; the Agent-prompt block and broken subagent_type are gone).'
+    fix_if: 'The Agent-prompt-requirements block remains, the skill pointer is missing, or the fix/file lines were dropped.'
+  - step: 9
+    phase: pre-deploy
+    action: Full local gate for regression across the edited instruction files.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. If non-zero, the ONLY failing check is the pre-existing "Import contracts (Decision 80)"
+      documented in the audit meta (verify it also fails on origin/main); no prompt-compliance,
+      instruction-architecture, or other check tied to the three edited markdown files fails.
+    fix_if: >-
+      Any check that parses the edited .claude/ files fails (e.g. prompt compliance, instruction
+      architecture) -- fix the offending edit and re-run.
+constraints:
+  - 'Markdown instruction files only -- no Python, terraform, or Lambda surfaces are in scope (V1).'
+  - >-
+    Only the three scope files may be modified. Deliberately EXCLUDED (owned by a follow-up plan on the
+    plan-workflow files): implement.md:50 full DECISIONS.md read, CE-14 (preflight explanation shared
+    with plan.md), CE-10 (agent-first block shared with the planning skill), the WF-08 gate-error clause,
+    and WF-20 frontmatter. Do not touch them.
+  - >-
+    Do not file any recommendation and do not add or flip any roadmap item. All work lands as file edits.
+    No closes_criteria (no tier_item bookkeeping).
+  - 'No rescue agents or workaround loops (Decision 55). Forward-fix only.'
+  - >-
+    Preserve exact string fidelity for the deterministic verdict: the phrase "REVISE iff any Critical or
+    High finding, else PROCEED" must appear identically in both the code-review and implement skills
+    (VP step 3 greps it).
+  - >-
+    WF-13/CE-12 deletes ONLY the two Self-application invariant subsections and the T-1.10 recovery
+    clause. The Decomposition-hint exemption inheritance and Parallel-with-code-review state-machine
+    mechanism sections stay untouched.
+  - >-
+    WF-12/CE-11 KEEPS the on-wake verdict-handling table and the terraform "Hold subscription through
+    apply" section (canonical here; AGENTS.md delegates to it). Only the restated wake-mechanism prose
+    (subscribe / end-turn / CI-green-comment wake / send_later backstop / auto-merge "Robustness note")
+    collapses to the AGENTS.md pointer.
+context:
+  - >-
+    Specification: audits/workflow-review-d107b4a.yaml (audited commit d107b4a). Each finding carries
+    evidence, proposed_change, and an acceptance field used as the acceptance criterion here. The audit
+    line numbers predate two later commits (the CD-ratification section shifted the implement skill down
+    by ~40 lines); anchor every edit by section/content, not by audit line numbers.
+  - >-
+    Decisions this plan references (decision-scout CITE list): Decision 84 (Single Portal Invariant /
+    telemetry stubbed until Phase 4 -- WF-09), Decision 60 (two-tier validation surface; renamed
+    --quick->--pre and deleted --ci -- WF-01 flag semantics), Decision 73 (two-tier diff-aware CI),
+    Decision 59 (deterministic signals -- WF-03), Decision 55 (RCA-first, no workaround loops -- WF-09),
+    Decision 86 (collocation / no companion doc / no stale pointers -- the dry_consolidate + WF-15
+    cluster), Decision 67 (STRATEGIC suspended -- plan type IMPLEMENTATION), Decision 90 (four-tier
+    workflow -- #prompts:plan -> /plan), Decision 48 (V1 tier for no-runtime-effect instruction files),
+    and AGENTS.md ## Git-ops procedure (canonical git-ops authority -- WF-12).
+  - >-
+    Decision-scout verdict: FLAGS_FOUND. WARN on Decision 60 (WF-01): the audit maps --ci->--pre (fast)
+    and --quick->full, which inverts Decision 60 flag lineage (--quick was fast, --ci was full) but is
+    correct by ROLE -- Step 6 is the pre-PR gate (implement skill "Run the full gate locally first" ->
+    full) and Step 1 is a session-start sanity gate inside the working loop (-> fast --pre). Accepted
+    with this finding recorded; cite Decision 60 for flag semantics. NOTE on Decision 86 (exemptions
+    pointer): RESOLVED -- docs/DECISIONS_ARCHIVE.md ## Code Review Exemptions verified present on disk
+    (line 1380). RELATED Decision 66 (Precision Context Injection): deferred -- sibling portal call-sites
+    in these files do not inline get_rec_write_guidance and AGENTS.md carries the rule ambiently, so the
+    Step 8 instruction stays consistent with them.
+  - >-
+    Pre-existing gate note (from the audit meta, verified on a clean origin/main tree): validate --pre
+    fails on "Import contracts (Decision 80)" unrelated to markdown edits. VP step 9 accounts for it --
+    if the full gate reports only that check, treat as out-of-scope pre-existing and proceed (surface
+    go/no-go to the human per the implement skill Preflight Constraints).
+  - >-
+    Branch was even with origin/main at planning time (0 commits behind, no scope overlap); no rebase
+    needed at assessment time.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... branch).
+  - Audit spec audits/workflow-review-d107b4a.yaml read (findings WF-01, WF-02, WF-03, WF-09, WF-12, WF-13, WF-15 and CE-11, CE-12, CE-13, CE-15).
+  - docs/PROJECT_CONTEXT.md read.
+  - Cited decision sections located (84, 60, 73, 59, 55, 86, 67, 90, 48) plus AGENTS.md ## Git-ops procedure.
+  - All three scope files located and readable; current anchors confirmed.
+  - Acceptance criteria understood and verifiable via the VP greps.
+execution_steps:
+  - >-
+    .claude/commands/implement.md WF-01 (Step 1): change the Step 1 pre-implementation gate command from
+    "bin/venv-python -m scripts.validate --ci" to "bin/venv-python -m scripts.validate --pre", and adjust
+    the lead-in line to "run the pre-implementation gate (fast `--pre` tier):". Leave the "Failed checks:"
+    failure-handling sentence as-is -- --pre emits that same output, so it stays valid.
+  - >-
+    .claude/commands/implement.md WF-01 (Step 6): change the Step 6 Final Validation command from
+    "bin/venv-python -m scripts.validate --quick" to "bin/venv-python -m scripts.validate" (full tier,
+    matching the implement skill "Run the full gate locally first" guidance).
+  - >-
+    .claude/commands/implement.md CE-13 + WF-02 (Step 5): replace the Step 5 body with the thinned form --
+    keep the "## Step 5: Code Review (IMPLEMENTATION only -- MANDATORY)" heading and the MANDATORY trigger
+    sentence, then "Dispatch per the **Code Review Protocol** in your `implement` skill (fresh-context
+    anti-bias gate; subagent_type \"general-purpose\" invoking the `code-review` skill via the Skill
+    tool).", then keep the two lines "Read the findings output. You MUST implement fixes for all
+    **Critical** and **High** priority findings before proceeding." and "Medium and Low findings should
+    be filed as recommendations using `bin/venv-python -m scripts.ops_data_portal --file-rec ...`." Delete
+    the "Agent prompt requirements (...)" bullet block and the broken subagent_type: code-review line.
+  - >-
+    .claude/commands/implement.md WF-09 (Step 8): rewrite Step 8 so the PRIMARY friction path is "filing a
+    recommendation via `bin/venv-python -m scripts.ops_data_portal --file-rec ...` with source=manual (the
+    Single Portal Invariant, Decision 84)"; add a parenthetical that the legacy process-event emit to
+    telemetry_process_events via the executor telemetry API is "suspended until Decision 84 Phase 4
+    (T2.36) re-lands telemetry on DuckLake"; and change the RCA sub-path to "invoke the `executor-rca`
+    skill via the `Skill` tool" (remove the scripts.agent_development.run_skill invocation). Keep the
+    "If no friction, this step is a no-op" and the housekeeping-flush note.
+  - >-
+    .claude/skills/implement/SKILL.md WF-02 (Code Review Protocol -- Trigger): change the dispatch
+    sentence to "Dispatch via the `Agent` tool with subagent_type \"general-purpose\", instructing the
+    subagent to invoke the `code-review` skill via the Skill tool and return its structured output
+    verbatim (the same idiom the plan.md decision-scout / plan-critique gates use) -- NOT via
+    bin/venv-python -m scripts.agent_development.run_skill --skill code-review." Keep the surrounding
+    rationale about fresh context and cross-file surface. In the Agent prompt template, change the
+    Instruction bullet to "Invoke the `code-review` skill via the Skill tool against this branch. Survey
+    the diff, read the plan to understand intent, then return its structured findings report (including
+    the final Verdict line) verbatim. Do not edit files."
+  - >-
+    .claude/skills/implement/SKILL.md WF-03 (Parallel-with-code-review state machine, item 4): prepend the
+    rule to the "Code-review verdict handling:" line so it reads "**Code-review verdict handling:** the
+    `code-review` skill ends its report with a deterministic `Verdict: PROCEED | REVISE` line -- REVISE
+    iff any Critical or High finding, else PROCEED. Branch on it:" and keep the existing PROCEED and
+    REVISE bullets unchanged. The phrase "REVISE iff any Critical or High finding, else PROCEED" must
+    match the code-review skill exactly.
+  - >-
+    .claude/skills/implement/SKILL.md WF-13/CE-12 (delete spent scaffolding): delete the standalone
+    paragraph beginning "**Self-application invariant (T-1.12 subset g):**" (the six-line block between
+    the Decomposition-hint exemption inheritance section and the Replacement closure check heading), and
+    delete the entire "### Self-application invariant (T-1.10)" subsection including its paragraph and the
+    following "**Recovery clause:**" paragraph (between the Parallel-with-code-review state machine and
+    the "## CD Ratification Bookkeeping" heading). Leave the Decomposition-hint exemption inheritance and
+    Parallel-with-code-review state-machine mechanism content otherwise intact. Collapse any resulting
+    double blank lines.
+  - >-
+    .claude/skills/implement/SKILL.md WF-12/CE-11 (Commit Flows -- Wait-for-CI): replace the restated
+    wake-mechanism prose in "### Wait-for-CI: event-driven, never polled" with a pointer while KEEPING the
+    on-wake verdict-handling table. New shape: a lead paragraph "Wait for the PR-tier CI (the fast --pre
+    tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- subscribe_pr_activity,
+    ending the turn, the ci.yml \"CI green\" comment wake signal, the one-shot send_later backstop bounds,
+    and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps
+    3-5; do not restate it here." Then "**On wake**, always confirm check runs via
+    `mcp__github__pull_request_read` (get_status / get_check_runs) BEFORE merging, then branch on status:"
+    followed by the three existing bullets verbatim (All green with the terraform carve-out; Any red;
+    Still running). Remove the old numbered items 1-3, the "slow full tier runs post-merge" paragraph, and
+    the "Robustness note:" paragraph. Do NOT touch "### Run the full gate locally first" or "### Hold
+    subscription through apply".
+  - >-
+    .claude/skills/implement/SKILL.md WF-12 (Resolves trailer): replace the IMPLEMENTATION Commit Flow
+    step-1 block (the "Build the PR body. If ... append a Resolves: trailer ... fenced example ... omit
+    the trailer." lines) with one sentence: "Build the PR body. If the plan bundled_recommendations list
+    is non-empty, add the `Resolves: rec-NNNN[, rec-MMMM]` trailer in the PR body, which the squash-merge
+    commit body inherits -- per AGENTS.md `### Resolves: trailer` (triggers `rec-autoclose` to close each
+    named rec after the squash-merge lands on main). If empty, omit it."
+  - >-
+    .claude/skills/code-review/SKILL.md WF-15 (Step 0b exemptions pointer): change "Read the \"Code Review
+    Exemptions\" section at the end of `docs/DECISIONS.md`." to "Read the \"Code Review Exemptions\"
+    section in `docs/DECISIONS_ARCHIVE.md`." and append to that sentence "If that section is absent,
+    report \"exemptions source unavailable\" in your report instead of silently matching zero exemptions."
+  - >-
+    .claude/skills/code-review/SKILL.md WF-15/CE-15 (retitle + drop full-repo framing): change the heading
+    "# Full Repository Code Review" to "# Scoped Branch Code Review", and replace the paragraph "Perform a
+    comprehensive code review of this repository. Work systematically through the entire codebase -- read
+    every source file, ... before producing your report." with "Perform a focused code review of the
+    current branch changes. Build the review scope from the branch diff, the plan, and one level of direct
+    imports (see the Review Process below) -- do not read the entire repository."
+  - >-
+    .claude/skills/code-review/SKILL.md WF-15/CE-15 (scoped doc reads): replace Review Process item 1
+    "**Read all documentation first** -- docs/ARCHITECTURE.md, ... and any module-level READMEs." with
+    "**Read the anchoring docs** -- the plan file (via bin/venv-python -m scripts.find_plan),
+    docs/PROJECT_CONTEXT.md, and only the docs directly referenced by the changed files. Do not bulk-read
+    the roadmaps or other large docs unless a changed file references them." Leave items 2-5 (the scoped
+    git-diff build) unchanged.
+  - >-
+    .claude/skills/code-review/SKILL.md WF-15 (renumber duplicate headings): in the LLM Maintainability
+    Assessment block renumber the subsection headings so numbers are unique across the file -- "### 6.
+    File and Module Discoverability" -> "### 7.", "### 7. In-Code Navigation Signals" -> "### 8.", "### 8.
+    Searchability" -> "### 9.", "### 9. Change Safety for Agents" -> "### 10.", "### 10. Documentation for
+    Agent Orientation" -> "### 11.". Leave "### 6. Documentation Accuracy" in the Review Dimensions block
+    as the sole "### 6.".
+  - >-
+    .claude/skills/code-review/SKILL.md WF-03 (Verdict line in the output template): inside the Output
+    Format fenced block, after the "### Test Completeness" entry and before the closing fence, add a final
+    section: "### Verdict" then "Verdict: PROCEED | REVISE" then "(Deterministic rule: REVISE iff any
+    Critical or High finding, else PROCEED.)". The rule phrase must match the implement skill exactly.
+  - >-
+    .claude/skills/code-review/SKILL.md WF-15 (closing nudge): in the Closing Nudge block change "Start a
+    new chat with `#prompts:plan` to plan fixes." to "Start a new chat with `/plan` to plan fixes.", and
+    for coherence change the twin stale pointer "add them to Code Review Exemptions in `docs/DECISIONS.md`."
+    to "add them to Code Review Exemptions in `docs/DECISIONS_ARCHIVE.md`."
+  - >-
+    Validate the plan document and execute the Verification Plan -- run each VP step; every step must
+    print PASS (step 9 is the full gate, adjudicated against the documented pre-existing Import-contracts
+    caveat). Loop until all pass.
+  - >-
+    Report -- files changed, per-VP-step actual outputs, and confirmation that no excluded item (WF-08,
+    WF-20, CE-10, CE-14, implement.md:50) was touched.
+work_areas: []
+rollback: >-
+  Single commit touching three markdown files; revert with git revert of the feat commit (or git
+  checkout of the three files against origin/main) -- no state, migrations, or deploys involved.
