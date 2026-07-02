@@ -1,0 +1,255 @@
+schema_version: 1
+slug: cost-reconciliation-job
+plan_path: docs/plans/PLAN-cost-reconciliation-job.yaml
+plan_type: IMPLEMENTATION
+verification_tier: V2
+phase: "Phase 1: Core Infrastructure (platform cost observability / alarm-not-gate monitor)"
+
+intent: >
+  Close audit finding ULF-08 (audits/unclosed-loops-44ef5c6.yaml): build the CD.28
+  cost-reconciliation job so the five cost_projection.reevaluation_triggers in
+  docs/ROADMAP-PLATFORM.yaml (DeepSeek direct pricing >5x, Anthropic Max x5 programmatic-pool
+  >70% over 30d, S3 >50% of bill, self-hosted-runner cost >2x scheduled alternative, Step
+  Functions >5% of bill) plus KG.7's Tier-2 programmatic-pool-exhaustion concern stop being
+  prose tripwires and become machine-evaluated. A monthly scheduled GitHub Actions workflow
+  ingests a per-provider cost snapshot (invoice totals + AWS service line-items + pool
+  utilisation) plus telemetry est_cost_usd, emits a reconciliation report, evaluates the
+  triggers, and files a recommendation through the ops portal on any trigger tripping OR a
+  >5% invoice-vs-telemetry discrepancy. The rec-filing IS the designed alarm; it gates
+  nothing and auto-remediates nothing (Decision 55 / Decision 62 monitor-canary shape). A
+  --dry-run fixture proves the rec-filing path without a live warehouse write. The telemetry
+  leg degrades gracefully until T2.36 lands est_cost_usd on the reader boundary; invoice
+  ingestion + trigger evaluation are buildable now.
+
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+
+scope:
+  - file: scripts/cost_reconciliation.py
+    action: Create
+    purpose: >
+      Core module (target <500 SLOC per Decision 102 -- NO config/sloc_budgets.yaml entry; if it
+      would exceed 500, split rather than raise a budget). Public surface: load_snapshot(path) ->
+      CostSnapshot (pydantic, extra=forbid); load_config(path) -> baselines + thresholds;
+      load_telemetry_cost(month) -> TelemetryCost|None (returns None today -- graceful degradation
+      until T2.36); evaluate_triggers(snapshot, config) -> list[TriggerResult] for the five triggers
+      + KG.7 pool-exhaustion (same threshold as trigger 2); compute_discrepancy(snapshot, telem)
+      -> Discrepancy|None; build_report(...) -> (full_markdown, public_summary) where full carries
+      absolute figures + measured ratios (private sink) and public carries ONLY trigger names +
+      pass/fail verdicts + the public (roadmap-sourced) THRESHOLD values, NEVER measured
+      values/ratios, absolute dollars, or per-service line-items (Decision 101 -- measured ratios
+      reveal cost structure, so they stay private too);
+      build_rec_fields(tripped, discrepancy, month) -> dict whose file=docs/ROADMAP-PLATFORM.yaml,
+      source=cost_reconciliation, context>=80 chars, acceptance a runnable check that passes
+      lint_acceptance_command (Decision 66 write-time validators -- template pinned in context);
+      find_open_cost_rec_for(trigger_key, profile) -> id|None (dedupe lookup that reads the local
+      recs cache, mirrors find_open_postmortem_for); reconcile(snapshot_path, month, dry_run,
+      profile) orchestrates: on dry_run build+validate the rec payload (validate_source,
+      _validate_context_length, lint_acceptance_command, Recommendation.model_validate) but DO NOT
+      write and DO NOT sync; else FIRST call sync() to populate logs/.recommendations-log.jsonl
+      (the dedupe lookup reads that gitignored cache, ABSENT in a fresh Actions checkout -- WITHOUT
+      sync() find_open_cost_rec_for always returns None, so dedupe never fires and auto-close never
+      happens; this mirrors rec-autoclose.yml:73), THEN per-trigger dedupe-and-auto-close
+      (Decision 103): tripped+no-open-rec -> file_rec; tripped+open-rec -> update_rec (refresh
+      context); cleared+open-rec -> update_rec status=closed; main(argv) CLI: --invoice PATH --month
+      YYYY-MM [--dry-run] [--config PATH] [--report-out PATH]. Import-safe (no exceptions at import;
+      no eval/exec; async not required -- CLI is sync I/O).
+  - file: tests/test_cost_reconciliation.py
+    action: Create
+    purpose: >
+      Unit tests at 100% per-file line coverage (scripts/*.py -> tests/test_{name}.py per
+      test_coverage_checker). Cover: snapshot load + schema reject; each of the 5 triggers fired AND
+      not-fired from fixtures; KG.7 pool concern maps to trigger 2; telemetry graceful-degradation
+      (load_telemetry_cost None -> discrepancy skipped + report notes pending T2.36); dry-run builds
+      a schema-VALID rec payload AND asserts file_rec/update_rec are NOT called (monkeypatch/mock);
+      dedupe path (open rec -> update_rec) and auto-close path (cleared trigger -> update_rec
+      status=closed) with the portal calls mocked; public_summary contains NO absolute dollar AND
+      no measured-ratio substring while the full report does (Decision 101 assertion); main() CLI
+      dry-run exit 0. Organise tests into classes TestTriggerEvaluation, TestGracefulDegradation,
+      TestReconcileDedupe, TestPublicBoundary -- the verification_plan targets these by ::ClassName
+      (fails loudly if a class is missing, unlike -k which silently matches zero tests).
+  - file: config/agent/cost_reconciliation.yaml
+    action: Create
+    purpose: >
+      Baseline prices + thresholds (human-owned; edited when pricing/policy shifts). baseline:
+      deepseek_input_per_mtok 0.252, deepseek_output_per_mtok 0.378, anthropic_pool_size_usd 100.0.
+      thresholds: deepseek_price_change_factor 5.0, anthropic_pool_utilisation_pct 70.0,
+      s3_share_of_bill_pct 50.0, runner_cost_vs_scheduled_factor 2.0, step_functions_share_of_bill_pct
+      5.0, invoice_vs_telemetry_discrepancy_pct 5.0. report.private_s3_prefix
+      s3://agent-platform-data-lake/cost-reconciliation-reports/. NOT a pydantic-projection YAML
+      (validate_pydantic_yaml_drift targets only config/agent/data_quality/ops.yaml, so this file is
+      safe); loaded into a plain pydantic model at runtime. No real invoice figures committed.
+  - file: .github/workflows/cost-reconciliation.yml
+    action: Create
+    purpose: >
+      Monthly scheduled workflow. on.schedule cron '0 6 4 * *' (06:00 UTC on the 4th, reconciling the
+      PRIOR calendar month after provider invoices + AWS Cost Explorer settle) + workflow_dispatch
+      (inputs: month, invoice_s3_key optional). permissions id-token:write, contents:read. Steps
+      mirror rec-autoclose.yml: checkout; setup-python 3.12; venv + pip install; OIDC assume
+      role-to-assume arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+      region eu-west-2; `aws s3 cp s3://agent-platform-data-lake/cost-invoices/<month>.json` (if the
+      object is ABSENT, log a step-summary reminder to export invoices and EXIT 0 -- graceful, non-
+      fatal); run the module LIVE (env DUCKLAKE_WRITER_URL=${{ secrets.DUCKLAKE_WRITER_URL }}; the
+      module calls sync() internally before the dedupe lookup -- sync() resolves the reader URL via
+      the branch role's lambda:GetFunctionUrlConfig fallback, exactly as rec-autoclose.yml does, so
+      no DUCKLAKE_READER_URL env is required, though set it if the secret exists) writing the full
+      report to the private S3 prefix; write ONLY the sanitized public_summary to
+      $GITHUB_STEP_SUMMARY (trigger names + PASS/FAIL + public thresholds; no measured ratios /
+      absolute dollars / ARNs / secrets). No signal-green.needs entry (this is a scheduled alarm,
+      not a PR gate); not an agent/`claude -p` workflow.
+  - file: tests/fixtures/cost_reconciliation/snapshot_tripped.json
+    action: Create
+    purpose: >
+      Synthetic (clearly-fixture, non-real) monthly snapshot that trips >=1 trigger (e.g. S3 share
+      >50% and Anthropic pool >70%) and yields a >5% invoice-vs-telemetry discrepancy when a
+      telemetry value is supplied. Drives the --dry-run rec-filing proof + the fired-trigger tests.
+      Schema: {month, currency, providers:{deepseek:{invoice_total_usd, unit_price_input_per_mtok,
+      unit_price_output_per_mtok}, anthropic:{invoice_total_usd, programmatic_pool_size_usd,
+      pool_spend_usd}}, aws:{total_bill_usd, line_items_usd:{s3, step_functions, self_hosted_runner,
+      ...}}, runner_scheduled_alternative_usd}.
+  - file: tests/fixtures/cost_reconciliation/snapshot_clean.json
+    action: Create
+    purpose: >
+      Synthetic clean snapshot where NO trigger trips and the discrepancy is under 5% -- drives the
+      not-fired tests and the reconcile()-files-no-rec path (asserts file_rec not called).
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >
+      Add canonical_id cost_reconciliation (description: monthly invoice-vs-telemetry cost
+      reconciliation monitor per CD.28 that files a rec when a reevaluation trigger trips or the
+      invoice/telemetry discrepancy exceeds 5%; signal_interpretation: alarm-not-gate cost signal,
+      deduped one-rec-per-trigger-episode and auto-closed on clear -- volume tracks how often the
+      cost envelope's watched lines breach). HARD PREREQUISITE: validate_source(cost_reconciliation)
+      must pass before the first live write AND for the dry-run payload validation.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >
+      (a) Annotate CD.28's PLAN-cost-reconciliation-job follow-on inventory entry (currently priority
+      low, prose-only) with a [Built <date>] marker pointing at scripts/cost_reconciliation.py +
+      .github/workflows/cost-reconciliation.yml + config/agent/cost_reconciliation.yaml, and record
+      that the telemetry est_cost_usd leg degrades gracefully until T2.36 wires it through a
+      registered named reader verb (Decision 88 / Decision 84 I-3), not a read-cache re-fetch.
+      (b) Annotate KG.7 availability concern #1 (programmatic-pool exhaustion) to point at the new
+      monitor as its machine evaluator; note concern #2 (simultaneous Tier-1+Tier-2 outage / no warm
+      Tier-3) is an availability gap NOT cost-reconcilable from invoices and stays owned by the
+      Tier-3/OpenRouter deferral, not this job. Prose-only edits inside notes blocks -- no schema
+      change to RoadmapDocument.
+
+acceptance_criteria:
+  - "A monthly scheduled workflow (.github/workflows/cost-reconciliation.yml, cron '0 6 4 * *' + workflow_dispatch) exists and, given a per-provider cost snapshot, emits a reconciliation report and evaluates all five cost_projection.reevaluation_triggers plus KG.7's pool-exhaustion concern via scripts/cost_reconciliation.py."
+  - "On any trigger tripping OR a >5% invoice-vs-telemetry discrepancy the job files a recommendation through the ops portal (file_rec, source=cost_reconciliation); the rec is the alarm and gates nothing / auto-remediates nothing (Decision 55 / Decision 62)."
+  - "`bin/venv-python -m scripts.cost_reconciliation --invoice tests/fixtures/cost_reconciliation/snapshot_tripped.json --month 2026-06 --dry-run` builds and fully validates the rec payload (validate_source + context>=80 + lint_acceptance_command + Recommendation.model_validate) and completes WITHOUT any warehouse write -- proving the rec-filing path without a live write."
+  - "The telemetry leg degrades gracefully: with no telemetry source available (pre-T2.36) the invoice-vs-telemetry discrepancy trigger is skipped-with-note and the five invoice-derived triggers still evaluate; the report records the leg as pending T2.36."
+  - "Persistent-condition discipline (Decision 103): reconcile() calls sync() BEFORE the dedupe lookup (the lookup reads the gitignored recs cache, absent in a fresh CI checkout), so a tripped trigger with an existing open cost_reconciliation rec updates it (one rec per trigger episode) and a cleared trigger auto-closes its open rec -- working against a populated cache, not only mocked. Unit tests prove file_rec-vs-update_rec routing with the portal mocked; the step-9 live two-run sequence proves it end-to-end against the real synced cache."
+  - "Public-boundary safety (Decision 101): the full-figure report (absolute dollars + measured ratios) goes to a private sink (private S3 prefix + summarized in the private warehouse rec body); the public GitHub step-summary carries only trigger names + pass/fail verdicts + public (roadmap-sourced) threshold values, never measured ratios, absolute dollars, per-service line-items, ARNs, or secrets."
+  - "config/agent/data_quality/source_registry.yaml registers cost_reconciliation; docs/ROADMAP-PLATFORM.yaml CD.28 inventory entry points at the built implementation and KG.7 concern #1 points at the monitor."
+  - "`bin/venv-python -m scripts.validate` is green (100% line coverage on the new module; SLOC within Decision-102 limits with NO new sloc_budgets entry; roadmap + registry checks pass)."
+
+verification_plan:
+  - step: 1
+    phase: Trigger evaluation
+    action: All five triggers fire on the tripping fixture and stay quiet on the clean fixture; KG.7 pool concern maps to trigger 2.
+    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py::TestTriggerEvaluation -q"
+    expected: "All trigger fired/not-fired tests pass, including the S3-share, pool-utilisation, DeepSeek-pricing, runner, and Step-Functions cases."
+    fix_if: "If a trigger mis-classifies, check the ratio math (share = line_item/total_bill*100; pricing = max of the four direction ratios >= factor). If KG.7 diverges from trigger 2, unify them onto anthropic_pool_utilisation_pct."
+  - step: 2
+    phase: Graceful degradation
+    action: With load_telemetry_cost returning None, the discrepancy trigger is skipped and the report notes the telemetry leg pending T2.36.
+    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py::TestGracefulDegradation -q"
+    expected: "Tests pass: discrepancy is None when telemetry is unavailable; the five invoice triggers still evaluate; report string contains a 'pending T2.36' note."
+    fix_if: "If reconcile() raises when telemetry is None, guard the discrepancy branch on a truthy telemetry value and emit the pending-note instead."
+  - step: 3
+    phase: Dry-run rec-filing proof (no live write)
+    action: The dry-run builds a fully schema-valid rec payload from a tripping snapshot and does NOT call file_rec/update_rec.
+    command: "bin/venv-python -m scripts.cost_reconciliation --invoice tests/fixtures/cost_reconciliation/snapshot_tripped.json --month 2026-06 --dry-run"
+    expected: "Exit 0; prints the would-file rec payload (title/context/acceptance/source) and a line stating no warehouse write occurred. No portal/network call."
+    fix_if: "If it attempts a write, ensure the dry_run branch returns before file_rec/update_rec. If payload validation fails, ensure source=cost_reconciliation is registered and context>=80 chars and acceptance carries a runnable command (Decision 66)."
+  - step: 4
+    phase: Dry-run assertion + dedupe/auto-close routing (mock-only) + sync precondition
+    action: Tests assert the dry-run performs zero portal writes AND no sync; in live mode reconcile() calls sync() BEFORE the dedupe lookup; dedupe (open rec -> update_rec) and auto-close (cleared -> status=closed) route correctly with the portal + sync mocked. (Mock-only routing; the synced-cache behaviour is proven live in step 9.)
+    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py::TestReconcileDedupe -q"
+    expected: "Tests pass: file_rec/update_rec/sync assert_not_called in dry-run; sync called before find_open_cost_rec_for in live mode; update_rec on an existing open rec; status=closed on a cleared trigger."
+    fix_if: "If writes/sync leak in dry-run, thread dry_run through reconcile(). If sync is not called first in live mode, add it before find_open_cost_rec_for. If dedupe mis-routes, verify find_open_cost_rec_for matches source=cost_reconciliation + status=open + the per-trigger title tag."
+  - step: 5
+    phase: Public-boundary sanitization
+    action: The public step-summary carries verdicts + public thresholds only -- no measured ratios and no absolute dollars -- while the full report carries both.
+    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py::TestPublicBoundary -q"
+    expected: "Test passes: build_report's public_summary contains trigger names + PASS/FAIL + threshold values but NO '$'/dollar-amount and NO measured-ratio substrings; the full report contains the absolute figures and measured ratios."
+    fix_if: "If a dollar figure or measured ratio leaks into public_summary, route absolute values and measured ratios only into the full report; keep public to trigger names + verdicts + public thresholds."
+  - step: 6
+    phase: Coverage
+    action: 100% per-file line coverage on the new module.
+    command: "bin/venv-python scripts/test_coverage_checker.py --check-tests --check-coverage --files scripts/cost_reconciliation.py"
+    expected: "Reports a corresponding test file exists and per-file line coverage is 100%."
+    fix_if: "Add tests for any uncovered branch (main() argument paths, missing-snapshot handling, each trigger branch, the auto-close branch)."
+  - step: 7
+    phase: Source registry + roadmap schema
+    action: cost_reconciliation is a registered source and the roadmap annotations keep RoadmapDocument valid.
+    command: "bin/venv-python -c \"from scripts.executor.rec_write_guidance import validate_source; validate_source('cost_reconciliation'); print('source ok')\" && bin/venv-python -m scripts.validate --only validate_platform_roadmap 2>/dev/null || bin/venv-python -m pytest tests/test_platform_roadmap.py -q"
+    expected: "'source ok' prints; the roadmap validator/tests pass (prose-only notes edits do not break the schema)."
+    fix_if: "If validate_source raises, add the cost_reconciliation entry to source_registry.yaml. If the roadmap fails to parse, confirm edits stayed inside notes: | blocks with valid YAML indentation."
+  - step: 8
+    phase: Full regression
+    action: The whole validation suite is green with the new module, workflow, config, and roadmap edits in place.
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0; no failure from test-coverage, sloc/complexity, source-registry, roadmap, or workflow-guard checks; module SLOC <500 with no sloc_budgets entry."
+    fix_if: "If sloc/complexity fails, split the module (do NOT add a >500 budget entry -- Decision 102 smell). If a workflow guard fails, confirm the workflow has no headless claude -p step and is not mistaken for a PR gate."
+  - step: 9
+    phase: Post-merge behavioural verification (manual, Decision 48 conscious-acceptance)
+    action: A live TWO-RUN sequence against a tripping snapshot behaviourally exercises the S3-read + sync + live file_rec/update_rec/close legs the dry-run + mocks do not -- proving dedupe/auto-close against the REAL synced cache (Strategic Risk the mock-only step-4 cannot substantiate).
+    command: "bin/venv-python -m scripts.cost_reconciliation --invoice <tripping-snapshot> --month <M>   # run 1 files rec-NNNN; re-run same args -> UPDATES rec-NNNN (dedupe, no new id); then run with a cleared-trigger snapshot -> update_rec status=closed on rec-NNNN"
+    expected: "Run 1 files a NEW rec; the identical second run UPDATES the same rec id (no duplicate) proving sync()+find_open_cost_rec_for hit a populated cache; a subsequent cleared-trigger run CLOSES that rec. A full report lands in the private S3 prefix each run. Equivalently dispatch .github/workflows/cost-reconciliation.yml via workflow_dispatch. Run AFTER merge, not in PR CI."
+    fix_if: "If run 2 files a duplicate instead of updating, sync() is not running before the lookup (or the title-tag key differs run-to-run) -- fix the sync precondition / stabilise the trigger key. If the live write 403s, confirm DUCKLAKE_WRITER_URL + the branch role writer/reader InvokeFunction grants; if the S3 read 403s, confirm the object key + bucket-wide s3:GetObject."
+
+constraints:
+  - "Alarm-not-gate (Decision 55 / Decision 62): the job's ONLY action on breach is to file/update a rec. It NEVER blocks a merge, changes infra, or auto-remediates. This is the explicitly-in-scope runtime rec-filing the task sanctions -- it is NOT a tracking rec for the build work (none of those are filed)."
+  - "Loud-fail, no offline outbox (Decision 84 I-4): a file_rec/update_rec that cannot complete raises at the call site; do NOT swallow portal errors into a green no-op. The workflow step surfaces the failure (non-zero) so a dropped write is visible."
+  - "Single Portal Invariant (Decision 84): the rec write transits file_rec/update_rec -> ducklake_writer; the rec id is writer-allocated in-transaction (I-2), never client-assigned. Read-cache-never-a-write-source (hard rule): the cost snapshot is read from the private cost-invoices/ S3 prefix, NEVER from any logs/ read cache; nothing in this job calls OpsWriter.write()."
+  - "Public-repo boundary (Decision 101): NEVER publish absolute cost figures, per-service line-items, MEASURED ratios, ARNs, account ids, or the writer URL to any world-readable GitHub surface (Actions log / step-summary / artifact). Full figures + measured ratios go to the private S3 prefix + the private warehouse rec body only; the public step-summary carries ONLY trigger names + pass/fail verdicts + the public (roadmap-sourced) THRESHOLD values, never the measured value. Reference DUCKLAKE_WRITER_URL and AWS_ACCOUNT_ID only via secrets.*/vars.* -- never echo them."
+  - "Verification tier V2, conscious-accepted against Decision 48: the deliverable is verified by units + the --dry-run fixture (no live warehouse write, honouring the ULF-08 acceptance 'prove the path without a live write'). The live file_rec WRITE leg is pre-proven by rec-autoclose.yml (same OIDC role + writer boundary). BUT the sync()+find-open-by-title-tag dedupe/auto-close routing is NOVEL logic (rec-autoclose only closes by explicit id; it never dedupes against a synced cache), is NOT pre-proven, and is NOT substantiated by the mock-only unit tests -- its behavioural proof runs through the step-9 live TWO-RUN sequence (file -> update -> close against the real synced cache). The snapshot PRODUCER (uploading invoices to S3) is out of scope."
+  - "Write-time validators (Decision 66): the templated rec payload MUST satisfy validate_source (cost_reconciliation registered FIRST), context >= 80 chars, and lint_acceptance_command (acceptance carries a runnable command, no banned patterns). Call get_rec_write_guidance(source='cost_reconciliation') before composing the payload. risk/automatable are DERIVED by the portal from file+effort -- supply file=docs/ROADMAP-PLATFORM.yaml and a valid effort; do not hand-set risk."
+  - "GitHub Actions, NOT a Lambda (Decision 79 / CD.16 / CD.24): scripts/cost_reconciliation.py is a new standalone module and config/agent/ is not Lambda-packaged, so no build/deploy/smoke-test step applies. Confirm at implement time with `bin/venv-python -m scripts.lambda_manifest --list-patterns` and compute_affected_artifacts([...scope...]). EXCEPTION: docs/ROADMAP-PLATFORM.yaml is a bundled ASSET of the active data-pipeline Lambda -- this is an asset-only doc edit (no Lambda CODE change), validate_lambda_deploy_gating is advisory-only, and deploy/smoke-test is DEFERRED with justification (the data-pipeline scheduled agents are disabled per the AGENTS.md runbook)."
+  - "SLOC (Decision 102 / Decision 43): keep scripts/cost_reconciliation.py <500 SLOC and add NO config/sloc_budgets.yaml entry (Decision 102 registers only >500-SLOC files; a fresh >500 file is a directed-growth smell). If the module cannot fit under 500, SPLIT it (e.g. a thin triggers submodule) rather than raise a budget."
+  - "Dedupe-and-auto-close (per the tf_convergence_stale / ci_rca_probe_health source-registry precedent for one-rec-per-episode dedupe; Decision 103 governs the deterministic rec auto-close lifecycle): treat each trigger as an independent condition keyed by a stable per-trigger title tag; one open rec per trigger episode (update_rec on persistence), auto-closed (update_rec status=closed) when the trigger clears. find_open_cost_rec_for mirrors find_open_postmortem_for (source + status==open + title-tag match)."
+  - "T2.36 forward-constraint (Decision 88 / Decision 84 I-3): load_telemetry_cost is a graceful stub today (telemetry store not migrated; TelemetryModelCalls carries no est_cost_usd yet). When T2.36 lands, the est_cost_usd read MUST go through a registered named reader verb over the ducklake_reader closed boundary -- NOT a raw SQL read and NOT a read-cache re-fetch. Encode this as a forward-pointer comment at the stub, not live code."
+  - "No new validate.py check is in scope: the job itself is the deterministic monitor ULF-08 asks for; adding a checks/ registry entry to police the job would be scope creep beyond the ULF-08 acceptance (Decision 104 -- registry is SoT, but nothing here needs a new gate). ci.yml is untouched, so the validate.py<->ci.yml parity invariant is not engaged."
+  - "STRATEGIC plans are suspended (Decision 67 / CD.17): this is and stays an IMPLEMENTATION plan."
+
+context:
+  - "The five triggers verbatim (docs/ROADMAP-PLATFORM.yaml:281-285 at plan time): (1) DeepSeek direct API pricing changes >5x in either direction; (2) Anthropic Max x5 programmatic pool sustained >70% utilisation over 30 days -> file rec for org-billed API key; (3) S3 storage cost >50% of total monthly bill; (4) self-hosted runner cost >2x scheduled-runner alternative; (5) Step Functions state-transition cost >5% of total monthly bill. Trigger 2 == KG.7 availability concern #1 (same 70% pool threshold)."
+  - "CD.28 inventory target (docs/ROADMAP-PLATFORM.yaml:1142-1150): 'PLAN-cost-reconciliation-job (priority low)' names impl (a) ingest DeepSeek CSV + Anthropic Console invoice, (b) compute monthly totals from telemetry, (c) emit report, (d) file rec on discrepancy >5%; and line 1050 records the job as 'declared but not yet built'. CD.28 retired AWS CUR as the LLM-spend source, making per-provider invoice export the authoritative cost source -- which is why this reconciliation job exists."
+  - "KG.7 (docs/ROADMAP-PLATFORM.yaml:7631-7652): two Tier-2 availability concerns 'to monitor'. #1 programmatic-pool exhaustion (>70% of Max x5 pool over 30d -> file rec for org-billed key) is machine-evaluated by this job. #2 simultaneous Tier-1+Tier-2 outage with no warm Tier-3 (OpenRouter deferred) is an availability gap, NOT invoice-reconcilable -- annotate but do not evaluate here."
+  - "Portal write path (verified): file_rec (scripts/ops_data_portal.py:810) requires title,file,status,source,effort,priority,context,acceptance; _derive_computed_fields (:722) DERIVES risk+automatable from file+effort (caller risk is overridden). _validate_file_path (:693) checks path FORMAT only (relative + forward-slashes); file EXISTENCE is deferred to execution time (Decision 66), so it does NOT require the path to exist -- file=docs/ROADMAP-PLATFORM.yaml is chosen because it is the natural file implicated by the alarm (the triggers' home) and keeps derived risk/automatable meaningful. update_rec (:1065) is the dedupe/close path. find_open_postmortem_for (:1432) is the pattern for find_open_cost_rec_for and reads the gitignored logs/.recommendations-log.jsonl cache -- hence the sync() precondition (see constraints)."
+  - "Runtime alarm rec fields (pin at implement time): title tags the tripped trigger(s) + month with a STABLE per-trigger key so find_open_cost_rec_for matches run-to-run (e.g. '[cost:s3_share] S3 exceeded 50% of the monthly bill (2026-06)'); context (>=80 chars) names the measured breach + the CD.28 remedy (e.g. pool>70% -> provision an org-billed Anthropic API key) AND states the rec auto-closes on the next monthly run once the trigger clears. The acceptance value MUST be a BARE runnable shell command with literal args -- NO prose, NO parentheses, NO angle-bracket placeholders (all fail lint_acceptance_command's bash-syntax check; VERIFIED against the linter). Verified-passing template (lint=True): `bin/venv-python -m scripts.cost_reconciliation --invoice tests/fixtures/cost_reconciliation/snapshot_tripped.json --month 2026-06`; the runtime rec keeps this bare-command shape, substituting the actual --month and the resolved invoice path. NEVER put the auto-close explanation inside the acceptance string (keep it in context)."
+  - "Trigger #4 (self-hosted runner cost >2x scheduled) is VESTIGIAL post-CD.21 (runner retired 2026-05-28; self_hosted_runner line-item is $0): the job evaluates it faithfully because the roadmap reevaluation_triggers list is the SoT/contract, but it cannot fire while no runner exists. Not removed -- guard the ratio against a zero/absent scheduled-alternative to avoid a divide-by-zero and treat it as not-tripped."
+  - "IAM (verified, terraform/personal/oidc.tf): agent-platform-github-ci-branch has bucket-wide s3:GetObject+PutObject+DeleteObject on the data lake (Sid S3ReadWrite, Resource ${data_lake.arn}/*) minus an explicit Deny on convergence/personal/* -- so reading s3://agent-platform-data-lake/cost-invoices/<month>.json and writing the private report under cost-reconciliation-reports/ need NO IAM change. The writer boundary is reached via the DUCKLAKE_WRITER_URL secret exactly as rec-autoclose.yml does. NO terraform/IAM change is in scope."
+  - "Telemetry state (verified): preflight telemetry-store = 'not migrated (Phase 4)'; scripts/telemetry_schemas.py TelemetryModelCalls has tokens_input/output but NO est_cost_usd field; T2.36 (not_started, depends_on T2.26+T2.18) re-lands telemetry on the DuckLake four-table model where est_cost_usd will live on the reader boundary. Hence the telemetry leg is a graceful stub now (design note in the task)."
+  - "pydantic-yaml-drift (verified): validate_pydantic_yaml_drift targets ONLY config/agent/data_quality/ops.yaml, so the new config/agent/cost_reconciliation.yaml does not trip it. Workflow guards (verified): validate_workflow_agent_safety only flags headless `claude -p` steps (none here); validate_ci_workflow_guards targets ci.yml structure (untouched)."
+  - "GH-Actions-vs-Lambda decision: chose GH Actions monthly workflow over a Lambda because it needs no CD.16 build/deploy/smoke-test gating, reuses the rec-autoclose.yml OIDC + writer-boundary pattern, and keeps the logic a plain unit-testable module. The CD.28 prose's 'self-hosted runner' option is moot (runner retired 2026-05-28, CD.21); GitHub-hosted ubuntu-latest is the substrate. Lambda was the rejected alternative (heavier packaging/IAM for a monthly cron)."
+  - "Cron cadence: '0 6 4 * *' runs on the 4th for the PRIOR month so DeepSeek dashboard + Anthropic Console + AWS Cost Explorer have settled; --month defaults to the previous calendar month; workflow_dispatch overrides month. If the monthly snapshot object is absent the run posts a reminder and exits 0 (graceful) -- the human uploads invoices out-of-band to the private prefix (matching Decision 101's 'confidential data lives only in S3 private prefixes')."
+  - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decisions 55, 62, 61, 84, 66, 79 (CD.16/CD.24), 101, 48, 88, 103; plus CD.28, KG.7, ULF-08. Two WARN flags resolved in constraints: (101) full report -> private sink, public summary sanitized; (48) V2 conscious-acceptance + step-9 post-merge workflow_dispatch live verification. RELATED handled: (102) module <500 SLOC no budget entry; (100/75) managed-service-native does NOT fire (reconciles across AWS + two non-AWS invoices no primitive spans; CUR retired by CD.28)."
+
+pre_implementation_checklist:
+  - "Confirm on the harness claude/... branch, not main (git branch --show-current)."
+  - "Run `bin/venv-python -m scripts.lambda_manifest --list-patterns` and compute_affected_artifacts([...scope...]) to confirm scripts/cost_reconciliation.py is not Lambda-packaged and docs/ROADMAP-PLATFORM.yaml is an asset-only edit of the disabled data-pipeline Lambda."
+  - "Call get_rec_write_guidance(source='cost_reconciliation') (AFTER registering the source) to surface the rec field semantics before composing the rec payload template (Decision 66 / AGENTS.md)."
+  - "Register cost_reconciliation in source_registry.yaml FIRST -- validate_source gates both the dry-run payload validation and the first live write."
+
+execution_steps:
+  - "Add the cost_reconciliation source to config/agent/data_quality/source_registry.yaml."
+  - "Author config/agent/cost_reconciliation.yaml (baselines + thresholds + private report prefix)."
+  - "Author the two fixtures under tests/fixtures/cost_reconciliation/ (tripped + clean)."
+  - "Build scripts/cost_reconciliation.py (snapshot/config/telemetry loaders, trigger evaluation, discrepancy, report build with private/public split, rec payload build, reconcile() that calls sync() BEFORE find_open_cost_rec_for in live mode then dedupe-and-auto-close, CLI main). Keep <500 SLOC."
+  - "Write tests/test_cost_reconciliation.py to 100% line coverage, including the dry-run no-write/no-sync assertion, the sync-called-before-lookup-in-live assertion, and the Decision-101 public-sanitization assertion."
+  - "Add .github/workflows/cost-reconciliation.yml (monthly cron + workflow_dispatch; OIDC branch role; S3 snapshot read with graceful-absent; live module run; private report + sanitized public summary)."
+  - "Annotate CD.28 inventory + KG.7 concern #1 in docs/ROADMAP-PLATFORM.yaml."
+  - "Run the full verification_plan; iterate to green; commit with feat(cost-reconciliation-job): ..."
+  - "After merge, run the step-9 live TWO-RUN verification (workflow_dispatch or local live run: file -> update -> close) to exercise the S3-read + sync + file_rec/update_rec/close legs against the real synced cache."
+
+rollback: >
+  Purely additive: five new files + two prose annotations + one source-registry line. No data
+  migration, no infra/terraform apply, no IAM change, no Lambda deploy. Rollback = revert the PR;
+  the monthly workflow simply stops running and no rec is filed. Any rec already filed by a live
+  run persists in the warehouse and is closed via the normal portal path (it is an alarm, not
+  state the job owns).
