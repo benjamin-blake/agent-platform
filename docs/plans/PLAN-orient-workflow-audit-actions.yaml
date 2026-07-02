@@ -36,7 +36,7 @@ bundled_recommendations:
   - rec-2412
 infrastructure_dependencies: []
 acceptance_criteria:
-  - "WF-11: the parked-gated rule (condition + treatment) appears exactly once across the two files; the in_progress field semantics (open_criteria_count, all_plans_actioned, needs_followon_plan, completion_blocked_on_cd) live in the skill Inputs section; orient.md shrinks from 69 to <=58 lines."
+  - "WF-11: the parked-gated rule (condition + treatment) appears exactly once across the two files; the in_progress field semantics (open_criteria_count, all_plans_actioned, needs_followon_plan, completion_blocked_on_cd) live in the skill Inputs section; orient.md shrinks from 69 to <=56 lines (target ~50 per the audit; the mandatory WF-19 extraction block accounts for the residual above 50)."
   - "WF-07 + rec-2392: the skill's open-criteria and needs_followon_plan guidance reads the preflight-cache keys as the PRIMARY path; 'Phase A (this version)' framing is deleted and 'Phase A' survives only as a degradation-branch label that includes an explicit fallback for a missing completion_blocked_on_cd key."
   - "WF-19: neither orient instruction file carries an unconditional full-file Read of docs/ROADMAP-PLATFORM.yaml; the roadmap projection is obtained via a literal, runnable bin/venv-python extraction (typed loader, pure-local, no warehouse I/O) with a full-file Read only as an error fallback."
   - "WF-20: .claude/skills/orient/SKILL.md declares required-context frontmatter [logs/.preflight-report.json, docs/ROADMAP-PLATFORM.yaml]; the instruction-architecture-layers and prompt-compliance validators report no violation."
@@ -45,18 +45,18 @@ acceptance_criteria:
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: "WF-11 -- confirm the canonical parked-gated rule (condition + treatment) appears exactly once across both files."
+    action: "WF-11 -- confirm the canonical parked-gated rule (condition + treatment) appears exactly once across both files. The treatment-clause sentinel is matched case- and order-insensitively (both 'closeout or follow-on' and 'follow-on or closeout') so it cannot false-fail on phrasing."
     command: |-
-      bin/venv-python -c "t=open('.claude/commands/orient.md').read()+open('.claude/skills/orient/SKILL.md').read(); n=t.count('emit NO closeout or follow-on'); assert n==1, ('parked-gated rule count', n); print('parked-gated rule appears once:', n)"
+      bin/venv-python -c "import re; t=open('.claude/commands/orient.md').read()+open('.claude/skills/orient/SKILL.md').read(); n=len(re.findall(r'emit no (?:closeout or follow-on|follow-on or closeout)', t, re.I)); assert n==1, ('parked-gated rule count', n); print('parked-gated rule appears once:', n)"
     expected: "Prints 'parked-gated rule appears once: 1' and exits 0."
-    fix_if: "n>1 means a section still restates the rule (reduce it to a bare 'see Inputs' reference); n==0 means the canonical sentinel phrase was lost (restore it in the skill Inputs field-semantics)."
+    fix_if: "n>1 means a section still restates the rule (reduce it to a bare 'see Inputs' reference); n==0 means the canonical treatment clause ('emit NO closeout or follow-on ... prompt') was lost (restore it in the skill Inputs field-semantics)."
   - step: 2
     phase: pre-deploy
     action: "WF-11 -- confirm orient.md is reduced and the in_progress field semantics now live in the skill."
     command: |-
-      test $(wc -l < .claude/commands/orient.md) -le 58 && grep -q 'all_plans_actioned' .claude/skills/orient/SKILL.md && grep -q 'needs_followon_plan' .claude/skills/orient/SKILL.md && echo "orient.md reduced; field semantics in skill"
-    expected: "orient.md has <=58 lines and the skill carries all_plans_actioned + needs_followon_plan; prints the confirmation and exits 0."
-    fix_if: "orient.md still >58 lines -- the Step 2 key list or Step 3 section list was not collapsed to bare names; if the greps fail the field semantics did not move into the skill."
+      test $(wc -l < .claude/commands/orient.md) -le 56 && grep -q 'all_plans_actioned' .claude/skills/orient/SKILL.md && grep -q 'needs_followon_plan' .claude/skills/orient/SKILL.md && echo "orient.md reduced; field semantics in skill"
+    expected: "orient.md has <=56 lines and the skill carries all_plans_actioned + needs_followon_plan; prints the confirmation and exits 0."
+    fix_if: "orient.md still >56 lines -- compress the Step 2 cache-key list to a grouped/inline form and collapse the Step 3 section list to bare names; if the greps fail the field semantics did not move into the skill."
   - step: 3
     phase: pre-deploy
     action: "WF-07 + rec-2392 -- confirm Phase A survives only as degradation wording and the completion_blocked_on_cd fallback is documented."
@@ -120,11 +120,11 @@ pre_implementation_checklist:
 execution_steps:
   - ".claude/skills/orient/SKILL.md -- add `required-context:` frontmatter listing `logs/.preflight-report.json` and `docs/ROADMAP-PLATFORM.yaml` (WF-20), mirroring the block-list style used by the decision-scout/plan-critique/code-review skills."
   - ".claude/skills/orient/SKILL.md -- extend the Inputs table with a row declaring the five Best-Practices Health Check signals (convergence_health, telemetry_health, data_quality, non_automatable_softcap_breached, terraform_pending) for rec-2412; change the Roadmap-detail row's load method from 'Read file' to the typed-loader projection (WF-19)."
-  - ".claude/skills/orient/SKILL.md -- add an 'In_progress entry fields' semantics block immediately after the Inputs table carrying open_criteria_count / all_plans_actioned / needs_followon_plan / completion_blocked_on_cd, ending with the SINGLE canonical parked-gated rule (contains the sentinel phrase 'emit NO closeout or follow-on'); preserve Decision 93 semantics verbatim."
+  - ".claude/skills/orient/SKILL.md -- add an 'In_progress entry fields' semantics block immediately after the Inputs table carrying open_criteria_count / all_plans_actioned / needs_followon_plan / completion_blocked_on_cd, ending with the SINGLE canonical parked-gated rule whose treatment clause reads 'emit NO closeout or follow-on `/plan` prompt' (VP1 matches this case- and order-insensitively, so any restatement elsewhere trips the gate); preserve Decision 93 semantics verbatim."
   - ".claude/skills/orient/SKILL.md -- invert Phase A/B: the open-criteria para (Status Digest) and the needs_followon_plan mention (Ranked What-to-Work-On) read the cache keys as PRIMARY; demote prose inference to an explicit 'Phase A' degradation branch that also documents the missing-completion_blocked_on_cd fallback (rec-2392); delete 'Phase A (this version)'."
   - ".claude/skills/orient/SKILL.md -- reduce the parked-gated restatements in the Status Digest, Ranked What-to-Work-On, and /plan-Prompts sections to bare 'see Inputs' references (keeping section-1's ratifiable-CD pointer and closeout-candidate nuance, which are not the rule itself); replace the roadmap full-read uses in the Momentum mapping and keystone computation with references to the Step-2 projection; soften line-40 'Read roadmap status' to 'Trust roadmap status' so no full-file read is implied."
   - ".claude/commands/orient.md -- Step 1: collapse the cache-only constraint + full-projection paragraphs to one skill-pointer line (CE-01)."
-  - ".claude/commands/orient.md -- Step 2: reduce to a bare list of the cache-key names (drop the per-field semantics, now in the skill) and replace 'Read docs/ROADMAP-PLATFORM.yaml directly for ...' with the literal, runnable typed-loader extraction (Option A) plus the frame-lock note and the full-file-Read error fallback (CE-03 + WF-19)."
+  - ".claude/commands/orient.md -- Step 2: reduce to a compact grouped/inline list of the cache-key names (drop the per-field semantics, now in the skill; do NOT keep one bullet per key -- group them so the file lands near the audit's ~50-line target) and replace 'Read docs/ROADMAP-PLATFORM.yaml directly for ...' with the literal, runnable typed-loader extraction (Option A) plus the frame-lock note and the full-file-Read error fallback (CE-03 + WF-19)."
   - ".claude/commands/orient.md -- Step 3: reduce the six section descriptions to a bare numbered list of the six section names + the existing skill pointer (CE-02)."
   - "Execute the Verification Plan -- run each step in order; loop until all pass. This is V1 (instruction files), so no deploy phase."
   - "At commit-flow time, include 'Resolves: rec-2392, rec-2412' in the squash-merge commit body (AGENTS.md Resolves: trailer) so rec-autoclose.yml closes both recs."
