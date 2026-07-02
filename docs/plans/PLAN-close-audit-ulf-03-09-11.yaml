@@ -1,0 +1,311 @@
+schema_version: 1
+slug: "close-audit-ulf-03-09-11"
+intent: >-
+  Close three ABSORB audit findings (ULF-03, ULF-09, ULF-11) from
+  audits/unclosed-loops-44ef5c6.yaml by promoting prose-only invariants into deterministic
+  guards on live mechanisms. Advances NS.4 (agent-first, machine-checkable governance) and the
+  self-improving loop's principle that findings terminate in enforced mechanisms, not annotations.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-close-audit-ulf-03-09-11.yaml
+phase: >-
+  Platform governance / CI-hardening. Closes audit findings ULF-03, ULF-09, ULF-11 (the three
+  ABSORB dispositions) from audits/unclosed-loops-44ef5c6.yaml. Related tier_item T2.11b
+  (ULF-11, deferred_post_mvp) -- the portal-drift check is separable per the audit frame_lock
+  analysis and does NOT close any T2.11b exit criterion (no closes_criteria; no roadmap edit).
+  Product Phase 1 (Core Infrastructure) complete.
+scope:
+  - file: .github/workflows/rec-autoclose.yml
+    action: Modify
+    purpose: >-
+      ULF-03. Bump the checkout to fetch-depth: 2 and add a DECISIONS.md-path-gated step that runs
+      the DECISIONS.md -> ops_decisions ETL (backfill_decisions_from_md, an existing idempotent
+      caller-keyed upsert) on pushes to main that touch docs/DECISIONS.md, reusing the workflow's
+      existing DUCKLAKE_WRITER_URL + OIDC branch role. The step is its own parity gate: it exits
+      non-zero when the backfill result reports failed > 0 (fails loudly, NO warehouse read).
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      ULF-09. Add two guard functions -- _check_validate_single_source (every check-like
+      `python -m scripts.<mod>` invocation in .github/workflows/ci.yml must be scripts.validate, the
+      Decision 104 registry runner: this is Decision 80's ci.yml-single-source-of-truth invariant)
+      and _check_signal_green_needs (every PR-gating ci.yml job must appear in the signal-green job's
+      needs list). Register both in the module's _COMMANDS dict for CLI parity with the existing guards.
+  - file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
+    action: Modify
+    purpose: >-
+      ULF-09. Wire the two new guards into the existing `guards` list (and its in-function import
+      tuple from scripts.verify_ci_workflow) so they run inside the already-registered
+      validate_ci_workflow_guards check in both presubmit tiers. No new registry entry (the check
+      already exists in pre_sequence + full_sequence).
+  - file: tests/test_verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      ULF-09. Add fixtures proving both failure paths (a ci.yml invoking a non-scripts.validate check
+      step fails _check_validate_single_source; a ci.yml with a PR-gating job absent from
+      signal-green.needs fails _check_signal_green_needs) via the existing patch("..._load") pattern,
+      plus live-pass tests that call both guards against the real ci.yml. 100% coverage of the two new
+      functions (Decision 104 mapping: scripts/verify_ci_workflow.py -> tests/test_verify_ci_workflow.py).
+  - file: scripts/checks/contracts/validate_portal_drift.py
+    action: Create
+    purpose: >-
+      ULF-11. New @register("validate_portal_drift", owner="platform") full-tier check promoting the
+      one-shot probes from docs/plans/PLAN-t2-11b-portal-artefacts.yaml verification_plan: (1) every
+      EVALUATION-PROMPTS.yaml answer-locus path resolves; (2) each portal file (README.md, SECURITY.md,
+      EVALUATION-PROMPTS.yaml) carries its projection header; (3) ops-table tokens are absent from
+      EVALUATION-PROMPTS.yaml (the curated CD.20 index). Appends to `failed`, never raises (rec-2027 pattern).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      ULF-11. Insert _c("validate_portal_drift") into full_sequence() only (full tier per Decision
+      60/73; portal files change rarely and this is a drift alarm), positioned immediately after
+      validate_contract_drift among the contracts-domain checks. Do NOT add it to pre_sequence().
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      ULF-11. Add the facade re-export
+      `from scripts.checks.contracts.validate_portal_drift import validate_portal_drift` so the check
+      resolves via getattr(validate, "validate_portal_drift") and `from scripts.validate import
+      validate_portal_drift` (Decision 104 facade completeness).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      ULF-11. Add TestValidatePortalDrift with 100% coverage of validate_portal_drift: a live-repo
+      pass case (empty failed list) and one failing case per drift mode (unresolved answer-locus,
+      missing projection header, ops-table token in EVALUATION-PROMPTS.yaml), using tmp_path +
+      patch("scripts.checks._common.ROOT"). Decision 104 mapping routes scripts/checks/**/*.py tests here.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      ULF-11. Add ("check", "validate_portal_drift") to FROZEN_FULL_SEQUENCE at the exact position the
+      registry insert uses (after validate_contract_drift) so the frozen-baseline equivalence test
+      passes. The new check is auto-included in ALL_CHECK_NAMES; the default-owner test expects
+      owner=platform, product_coupled=False (satisfied by the @register defaults).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    ULF-03: rec-autoclose.yml has a step, conditioned on a docs/DECISIONS.md path filter (grep-confirmable),
+    that runs the DECISIONS.md -> ops_decisions backfill reusing DUCKLAKE_WRITER_URL, with the checkout at
+    fetch-depth: 2; the step exits non-zero when the backfill result reports failed > 0 (parity gate, no
+    warehouse read).
+  - >-
+    ULF-03: running the backfill twice locally (`backfill_decisions_from_md()`) both times returns
+    failed == 0 and does not duplicate rows (idempotent caller-keyed upsert), proving the exact logic the
+    workflow step executes.
+  - >-
+    ULF-09: a fixture ci.yml invoking a check step other than `python -m scripts.validate` fails
+    _check_validate_single_source, and a fixture ci.yml whose PR-gating job is absent from signal-green.needs
+    fails _check_signal_green_needs; both guards pass against the live .github/workflows/ci.yml.
+  - >-
+    ULF-11: validate_portal_drift is registered in registry.full_sequence(), reachable via
+    validate.validate_portal_drift, and fails when (a) an EVALUATION-PROMPTS.yaml answer-locus does not
+    resolve, (b) a portal file lacks its projection header, or (c) an ops-table token appears in
+    EVALUATION-PROMPTS.yaml; the live repo passes the check (empty failed list).
+  - >-
+    Both presubmit tiers are green: `bin/venv-python -m scripts.validate --pre` and
+    `bin/venv-python -m scripts.validate` each exit 0, including 100% test coverage for every new/modified
+    Python source file per the Decision 104 source-to-test mapping.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: ULF-09 -- both new guards pass against the live ci.yml (single-source-of-truth + signal-green.needs)
+    command: "bin/venv-python -c 'from scripts.verify_ci_workflow import _check_validate_single_source, _check_signal_green_needs; _check_validate_single_source(); _check_signal_green_needs(); print(\"LIVE-CI-PARITY-OK\")'"
+    expected: "Prints LIVE-CI-PARITY-OK -- neither guard raises against the real .github/workflows/ci.yml"
+    fix_if: "If a guard raises, either the guard logic over-matches the live workflow (relax the check-like/PR-gating heuristic) or ci.yml genuinely violates the invariant (fix ci.yml); do not weaken the guard to pass a real violation"
+  - step: 2
+    phase: pre-deploy
+    action: ULF-09 -- the guard test suite proves BOTH failure paths raise AssertionError and the live workflow passes
+    command: "bin/venv-python -m pytest tests/test_verify_ci_workflow.py -q"
+    expected: "All tests pass, including the two new fixtures asserting pytest.raises(AssertionError) for the unregistered-check-step and the missing-signal-green-need cases"
+    fix_if: "If a failure-path test does not raise, the guard is not actually catching the violation -- tighten the guard; if the live-pass test fails, reconcile the guard with ci.yml"
+  - step: 3
+    phase: pre-deploy
+    action: ULF-11 -- the new check passes against the live repo (no portal drift today)
+    command: "bin/venv-python -c 'import scripts.validate as v; f=[]; v.validate_portal_drift(f); assert not f, f; print(\"PORTAL-DRIFT-CLEAN\")'"
+    expected: "Prints PORTAL-DRIFT-CLEAN -- failed list empty: all answer-loci resolve, all three portal files carry a projection header, EVALUATION-PROMPTS.yaml has no ops-table token"
+    fix_if: "If failed is non-empty on the live repo, the check over-matches (e.g. it bans a token README legitimately uses, or requires the .md projection line on line 1 instead of within the first several lines); scope the token ban to EVALUATION-PROMPTS.yaml and allow the markdown projection line anywhere in the header block"
+  - step: 4
+    phase: pre-deploy
+    action: ULF-11 -- unit tests prove each of the three drift modes fails the check and the live case passes
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestValidatePortalDrift -q"
+    expected: "All TestValidatePortalDrift cases pass: live-clean plus one failing case per drift mode (unresolved locus, missing projection header, ops-table token in EVALUATION-PROMPTS.yaml)"
+    fix_if: "If a drift-mode case does not populate failed, the check is not catching that mode -- correct the assertion for that mode"
+  - step: 5
+    phase: pre-deploy
+    action: ULF-11 -- registry wiring; frozen-baseline equivalence and facade completeness hold with the new check inserted
+    command: "bin/venv-python -m pytest tests/test_checks_registry.py -q"
+    expected: "All pass -- FROZEN_FULL_SEQUENCE matches registry.full_sequence() (new check present, in position, and only in the full tier) and validate.validate_portal_drift resolves both via getattr and from-import"
+    fix_if: "If the frozen-sequence test fails, align FROZEN_FULL_SEQUENCE with the registry insert position; if facade completeness fails, add the missing scripts/validate.py re-export"
+  - step: 6
+    phase: pre-deploy
+    action: ULF-03 -- run the exact backfill+parity logic the workflow step executes; idempotent, returns failed == 0 (real, idempotent warehouse upsert -- requires the agent_platform chain)
+    command: "bin/venv-python -c 'from scripts.ops_data_portal import backfill_decisions_from_md as b; r1=b(); r2=b(); print(r1, r2); import sys; sys.exit(0 if r1[\"failed\"]==0 and r2[\"failed\"]==0 else 1)'"
+    expected: "Prints two summary dicts each with failed:0 and exits 0 -- proves the ETL parses DECISIONS.md(+ARCHIVE) and upserts every decision row, and that a re-run does not error or duplicate (idempotent). This is the parity gate the workflow step embeds"
+    fix_if: "If failed > 0, inspect the per-row warning the backfill logs and fix the offending DECISIONS.md entry or the ETL mapping; if the reader/writer chain is unreachable, verify `aws sts get-caller-identity --profile agent_platform` and retry (do not silence the failure)"
+  - step: 7
+    phase: pre-deploy
+    action: ULF-03 -- static assertions on the workflow edit (path filter present, backfill invoked, writer env set, fetch-depth 2, YAML parses)
+    command: "bin/venv-python -c 'import yaml; d=yaml.safe_load(open(\".github/workflows/rec-autoclose.yml\")); s=d[\"jobs\"][\"autoclose\"][\"steps\"]; text=\"\\n\".join(str(x) for x in s); assert \"docs/DECISIONS.md\" in text, \"path filter missing\"; assert \"backfill_decisions_from_md\" in text or \"--backfill-decisions-md\" in text, \"backfill not invoked\"; assert \"DUCKLAKE_WRITER_URL\" in text, \"writer env missing\"; co=[x for x in s if str(x.get(\"uses\",\"\")).startswith(\"actions/checkout\")][0]; assert (co.get(\"with\") or {}).get(\"fetch-depth\")==2, \"fetch-depth != 2\"; print(\"WORKFLOW-OK\")'"
+    expected: "Prints WORKFLOW-OK -- the DECISIONS.md path filter, the backfill invocation, the DUCKLAKE_WRITER_URL env, and fetch-depth: 2 are all present and the YAML parses"
+    fix_if: "Add whichever assertion fails: the path gate, the backfill call, the writer env on the new step, or fetch-depth: 2 on the checkout"
+  - step: 8
+    phase: pre-deploy
+    action: Both presubmit tiers green (fast then full) -- includes validate_ci_workflow_guards (with the two new guards) and validate_portal_drift running against the live tree
+    command: "bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate"
+    expected: "Both invocations exit 0 with no failures (ruff/format/mypy/prompt checks, the extended ci-workflow guards, the new portal-drift check, and per-file 100% coverage all pass)"
+    fix_if: "Address each reported failure (lint/format, coverage gap on a new/modified file, or a check failure) and re-run until both tiers are clean"
+  - step: 9
+    phase: post-deploy
+    action: ULF-03 -- after merge, the first push to main touching docs/DECISIONS.md runs rec-autoclose's backfill step green (natural runtime proof; observe the Actions run for that commit)
+    command: "bin/venv-python -c 'from scripts.ops_data_portal import backfill_decisions_from_md as b; r=b(); print(r); import sys; sys.exit(1 if r[\"failed\"] else 0)'"
+    expected: "The re-run reports failed:0 (idempotent), and on the next main push that edits docs/DECISIONS.md the rec-autoclose workflow's backfill step exits 0 in the GitHub Actions run for that SHA (confirm via mcp__github__ actions/get_job_logs on the rec-autoclose run)"
+    fix_if: "If the workflow step errors post-merge, read the rec-autoclose Actions log; a writer-URL/OIDC gap is an env/secret problem, a failed>0 is a data problem in the newly added decision entry -- forward-fix, never silence"
+constraints:
+  - >-
+    Decision 80 (ci.yml single-source-of-truth): _check_validate_single_source asserts ci.yml's only
+    validation entrypoint is `python -m scripts.validate` (the Decision 104 registry runner). Scope this
+    guard to .github/workflows/ci.yml ONLY -- it must NOT scan rec-autoclose.yml (whose new
+    `scripts.ops_data_portal` invocation is a portal write, not a validation check) or any other workflow.
+  - >-
+    Decision 62 + Decision 84 I-3 + Decision 88: the ULF-03 parity gate reads NO warehouse -- it fails on the
+    backfill result's `failed` count only. Do NOT add a warehouse-reading parity check to validate.py
+    (scripts/checks/ has zero warehouse reads today; a reader-dependent check belongs off the merge gate, and
+    it would race the concurrent rec-autoclose backfill on the same push). No ad-hoc SQL; the backfill uses
+    the sanctioned writer path (Decision 84 named ETL from DECISIONS.md).
+  - >-
+    Decision 101 / CD.20 / CD.23 (public-content boundary + projection discipline): the ops-table-token ban in
+    validate_portal_drift applies to EVALUATION-PROMPTS.yaml ONLY (the curated evaluator index), matching the
+    promoted PLAN-t2-11b probe. Do NOT ban the tokens across README.md / SECURITY.md -- README legitimately
+    uses the word "telemetry" in architecture prose, so a repo-wide ban would fail the live tree. Token set:
+    ops_recommendations, ops_decisions, ops_session_log, ops_execution_plans, ops_priority_queue, telemetry.
+  - >-
+    Decision 104 (checks registry): the new check is registered, inserted into full_sequence() (full tier
+    only), facade-re-exported in scripts/validate.py, and mirrored in FROZEN_FULL_SEQUENCE. Its unit tests live
+    in tests/test_validate.py per map_source_to_test (scripts/checks/**/*.py -> tests/test_validate.py); the
+    verify_ci_workflow.py tests live in tests/test_verify_ci_workflow.py. Do NOT create a standalone
+    tests/test_validate_portal_drift.py -- it would break the coverage-gate mapping.
+  - >-
+    Decision 102 / 43 (SLOC + complexity ratchet): keep validate_portal_drift.py small and low-complexity
+    (well under the 500-SLOC default cap) and keep verify_ci_workflow.py under cap after the two additions; no
+    config/sloc_budgets.yaml entry is expected (both stay under the default). Import optional deps (yaml)
+    inside the function, never raise at import time (rec-2027: append to `failed`, do not crash presubmit).
+  - >-
+    Decision 86 (intent-doc-freeze): this plan creates a check module + tests and edits machine-readable
+    YAML/workflow files -- no new standing prose-architecture doc under docs/. EVALUATION-PROMPTS.yaml is
+    pre-existing root YAML; it is not moved or re-authored.
+  - >-
+    The audit report audits/unclosed-loops-44ef5c6.yaml is an immutable historical artefact -- do NOT edit it.
+    No recommendations are filed (direct-execution closure). No roadmap edit (no closes_criteria; ULF-11 does
+    not close a T2.11b criterion).
+  - >-
+    Test-isolation rules (tests/CLAUDE.md): mock BOTH subprocess.Popen and subprocess.run for any
+    subprocess-spawning path; patch pathlib.Path.exists() where a test assumes a file is absent; use one
+    consolidated import block per module; after removing a test class run `ruff check --fix` (F401).
+  - No emojis; ASCII hyphens only (no em dashes). Bash syntax; invoke Python via bin/venv-python.
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure, stop and RCA.
+context:
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness: ok, 0 behind / 0 ahead);
+    no Scope-file overlap with main divergence.
+  - >-
+    Decision-scout verdict FLAGS_FOUND, both non-blocking and resolved in-design: (a) Decision 104 coverage-map
+    WARN -- the new check's tests go in tests/test_validate.py, not a separate file; (b) Decision 84 I-3 NOTE --
+    the parity gate uses the in-hand `failed` count, issuing no warehouse read. Decisions to cite: 84, 104, 80,
+    62, 88, 101 (CD.20/CD.23 provenance), 60/73, 86, 55, 102/43.
+  - >-
+    The three findings are independent ABSORB dispositions that each extend a live mechanism: ULF-03 ->
+    rec-autoclose.yml (existing push-to-main lane with portal write creds + sync()); ULF-09 ->
+    validate_ci_workflow_guards / verify_ci_workflow.py (existing structural CI guard); ULF-11 -> the Decision
+    104 checks registry (promoting probes that today live only inside a completed plan's verification_plan).
+  - >-
+    Live-state confirmed at planning: all 12 EVALUATION-PROMPTS.yaml answer-loci resolve; README.md projection
+    line is on line 3, SECURITY.md on line 3, EVALUATION-PROMPTS.yaml `projection:` on line 1; ci.yml invokes
+    only scripts.validate and signal-green.needs = [pr-validate, terraform-validate] (both PR-gating jobs
+    present); max decision in DECISIONS.md(+ARCHIVE) is dec-107; parse_decisions_md() reads DECISIONS.md AND
+    DECISIONS_ARCHIVE.md; there are zero warehouse reads in scripts/checks/ today.
+  - >-
+    ULF-03 path-filter mechanics: rec-autoclose.yml runs on push to main and must keep running its existing
+    Resolves-trailer autoclose on EVERY push, so the DECISIONS.md gate is STEP-level, not a workflow-level
+    on.push.paths filter. Squash-merge to main yields single-parent commits, so `git diff --name-only HEAD^ HEAD`
+    with fetch-depth: 2 is sufficient; when detection is ambiguous (shallow/first commit), fall back to running
+    the backfill (safe -- the upsert is idempotent).
+  - >-
+    ULF-09 guard shapes: _check_validate_single_source extracts `python -m scripts.<mod>` / `scripts/<mod>.py`
+    tokens from every ci.yml run-step and asserts any check-like module (name matches ^(validate|verify|check))
+    equals `validate`. _check_signal_green_needs treats a job as PR-gating when its `if` admits pull_request
+    (no `github.event_name == 'push'`-only guard) and asserts each such job (excluding signal-green itself) is in
+    the signal-green job's needs list. Live ci.yml passes both.
+  - >-
+    ULF-03 post-merge proof: neither the plan-file merge nor the implementation merge touches docs/DECISIONS.md,
+    so the workflow step fires naturally on the next decision merge. Step 6 runs the identical backfill logic
+    locally (idempotent) as the substantive pre-merge proof; VP step 9 records the natural post-merge observation.
+  - >-
+    No .tf files and no Lambda-packaged files are in scope (config/agent/ is not touched; rec-autoclose.yml is a
+    CI workflow, not infrastructure), so no Infrastructure or Lambda deployment assessment applies.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/close-audit-ulf-03-09-11-17bdou)
+  - docs/PROJECT_CONTEXT.md read
+  - "Relevant decisions read: 84, 104, 80, 62, 88, 101, 60/73, 86, 55, 102/43"
+  - "All scope files located and readable (rec-autoclose.yml, verify_ci_workflow.py, validate_ci_workflow_guards.py, registry.py, validate.py, EVALUATION-PROMPTS.yaml, README.md, SECURITY.md, test files)"
+  - "audits/unclosed-loops-44ef5c6.yaml ULF-03/09/11 proposed_rec_draft acceptance blocks read"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    ULF-03 (.github/workflows/rec-autoclose.yml): set the actions/checkout step to `with: fetch-depth: 2`. Add a
+    step "Detect DECISIONS.md change" that computes `git diff --name-only HEAD^ HEAD` and sets an output
+    (decisions_changed=true when docs/DECISIONS.md is in the diff, or when the diff cannot be computed --
+    idempotent fall-back). Add a step "Backfill decisions to warehouse" gated on that output, with env
+    DUCKLAKE_WRITER_URL, running a python heredoc that calls backfill_decisions_from_md(), prints the result, and
+    `sys.exit(1 if result["failed"] else 0)` (the loud parity gate, no warehouse read). Keep the existing
+    Resolves-trailer autoclose step unchanged and unconditional.
+  - >-
+    ULF-09 (scripts/verify_ci_workflow.py): add _check_validate_single_source() -- load ci.yml, iterate every
+    job's steps, extract `python -m scripts.<mod>` and `scripts/<mod>.py` tokens from each run block, and assert
+    every check-like module (name matches ^(validate|verify|check)) equals "validate"; raise AssertionError
+    listing any bespoke validation module invoked outside scripts.validate. Add _check_signal_green_needs() --
+    assert the signal-green job's needs list contains every PR-gating job (a job whose `if` admits pull_request,
+    excluding signal-green itself). Add both to the _COMMANDS dict.
+  - >-
+    ULF-09 (scripts/checks/ci_guards/validate_ci_workflow_guards.py): import the two new functions in the
+    in-function `from scripts.verify_ci_workflow import (...)` tuple and append
+    ("validate-single-source", _check_validate_single_source) and ("signal-green-needs", _check_signal_green_needs)
+    to the `guards` list.
+  - >-
+    ULF-09 (tests/test_verify_ci_workflow.py): add a live-pass test calling both guards against the real ci.yml,
+    and two failure fixtures via patch("scripts.verify_ci_workflow._load", return_value=<broken ci.yml dict>) --
+    one whose run step invokes `python -m scripts.validate_bogus` (expects AssertionError from
+    _check_validate_single_source) and one adding a `pull_request`-gated job missing from signal-green.needs
+    (expects AssertionError from _check_signal_green_needs). 100% coverage of the two new functions and their branches.
+  - >-
+    ULF-11 (scripts/checks/contracts/validate_portal_drift.py): create the @register("validate_portal_drift",
+    owner="platform") check. Load EVALUATION-PROMPTS.yaml; for every question's answer_loci, append a failure if
+    Path(locus.split("#")[0]) does not exist under _common.ROOT. For each portal file
+    {README.md, SECURITY.md, EVALUATION-PROMPTS.yaml}, append a failure if its projection header is absent
+    (EVALUATION-PROMPTS.yaml: top-level `projection:` key / first non-empty line starts with `projection:`;
+    README.md + SECURITY.md: a case-insensitive "projection of" line within the first 6 lines). Append a failure
+    if any token in {ops_recommendations, ops_decisions, ops_session_log, ops_execution_plans, ops_priority_queue,
+    telemetry} appears (case-insensitive) in EVALUATION-PROMPTS.yaml. Import yaml inside the function; never raise
+    (append to `failed`).
+  - >-
+    ULF-11 (scripts/checks/registry.py + scripts/validate.py): insert _c("validate_portal_drift") into
+    full_sequence() immediately after validate_contract_drift (full tier only; not pre_sequence). Add
+    `from scripts.checks.contracts.validate_portal_drift import validate_portal_drift  # noqa: F401,E402` to the
+    facade re-export block in scripts/validate.py.
+  - >-
+    ULF-11 (tests/test_validate.py + tests/test_checks_registry.py): add TestValidatePortalDrift to
+    tests/test_validate.py with a live-clean case and one failing case per drift mode (unresolved locus, missing
+    projection header, ops-table token in EVALUATION-PROMPTS.yaml) using tmp_path +
+    patch("scripts.checks._common.ROOT"). Add ("check", "validate_portal_drift") to FROZEN_FULL_SEQUENCE in
+    tests/test_checks_registry.py at the same position as the registry insert.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. On an unrecoverable failure (e.g. the
+    warehouse chain is genuinely unreachable for step 6), stop and RCA (Decision 55); do not silence or work around.
+  - "Report: files changed, each finding's closure, all VP results (steps 1-8 pre-deploy; step 9 post-deploy note), and confirmation both validate tiers are green."
+work_areas: []
+rollback: >-
+  Every change is reversible by reverting the commit. rec-autoclose.yml returns to its prior checkout depth and
+  loses the backfill step (the ETL reverts to manual invocation); verify_ci_workflow.py / validate_ci_workflow_guards.py
+  lose the two guards; validate_portal_drift.py is deleted and its registry insert + facade re-export + FROZEN_FULL_SEQUENCE
+  entry removed. No data-plane, schema, or infrastructure effects -- the backfill only performs the idempotent
+  DECISIONS.md -> ops_decisions upsert that Decision 84 already sanctions.
