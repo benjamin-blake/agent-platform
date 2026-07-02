@@ -1,0 +1,738 @@
+audit:
+  meta:
+    audited_commit: 44ef5c6
+    base_branch: main
+    model: "Claude Code (exact model identifier withheld from repo artifacts per harness policy; stated in the session chat)"
+    methodology_version: 1
+    cache_availability_note: >-
+      Fresh-clone container: the gitignored local caches (logs/.recommendations-log.jsonl,
+      logs/.decisions-index.jsonl, logs/.preflight-report.json, logs/.ops-outbox/) do not exist,
+      and DuckLake reader calls were forbidden by the audit guardrails. All magnitude counts
+      therefore come from committed sources (ROADMAP-PLATFORM.yaml fields, DECISIONS.md, manifests,
+      git ls-files); every accumulation claim that would need the recs cache is tagged HYPOTHESIS,
+      and dedup searches cover DECISIONS.md + ROADMAP-PLATFORM.yaml only (recorded per finding).
+    state_types_swept:
+      - candidate_decisions (state pending/ratified/superseded)
+      - tier_items by status + exit-criteria ledger (CD.39)
+      - open_questions (OQ.1-OQ.15)
+      - known_gaps (KG.1-KG.14)
+      - cross_tier_gates (G.1/G.8/G.9/G.10)
+      - decisions (DECISIONS.md numbering authority + ops_decisions warehouse projection)
+      - recommendations (cache absent; magnitude untestable locally)
+      - priority_queue (reads DuckLake; not locally auditable)
+      - ops outbox (absent in clone; legacy paths per Decision 84 I-4)
+      - contracts (ratified vs provisional_v0 + re-ratification triggers)
+      - plan documents (docs/plans, PlanDocument schema)
+      - handoff documents (docs/handoffs)
+      - audit reports (docs/audit-reports, proposal-only lifecycle)
+      - INTENT-doc migration manifest (waves 0-5)
+      - lambda manifests (active/deprecated/future-state)
+      - scheduled agents (schedule.yaml + terraform EventBridge gating)
+      - GitHub workflows (live/disabled/prototype)
+      - retired-but-retained terraform (ec2_runner.tf)
+      - executor local run artifacts (logs/runs, logs/failure-summaries)
+      - telemetry write path (dead until T2.36)
+      - credential rotation reminders (calendar-based prose)
+      - convergence record (S3; monitored by T2.35 sensor - a CLOSED loop, used as baseline)
+      - public-portal projections (README/EVALUATION-PROMPTS/SECURITY.md)
+      - roadmap document lifecycle (status draft / filed_via pending)
+  summary:
+    total_findings: 13
+    by_classification: {recognized_adequate: 1, recognized_underscoped: 7, unrecognized: 5}
+    by_disposition: {close: 7, absorb: 4, eliminate: 1, keep: 1}
+    worst_debt_areas:
+      - "Governance-state transitions (CD ratification, DECISIONS.md-to-warehouse ETL, OQ/KG resolution) are manual prose acts with no owning lane or trigger"
+      - "Retired/disabled substrate residue stays half-alive (scheduled-agent manifest, copilot multiplier refresher, executor local artifacts)"
+      - "Prose thresholds and triggers with no deterministic monitor (KG.11 file-size trigger, cost reevaluation triggers, provisional-contract re-ratification, GHAS live-probe)"
+    systemic_fix: >-
+      (Judgment call.) Generalize the blocked_on_cd pattern (T-1.20) into a single deterministic
+      'dormant transitions' preflight surface: pending CDs whose gated work is realized,
+      DECISIONS.md entries newer than the warehouse projection, provisional contracts whose
+      trigger clock is running, breached prose thresholds (KG.11), and outstanding one-time
+      verifications (Decision 83 probe) all become machine-computed rows that /orient ranks,
+      with a standing ratification/bookkeeping lane so each surfaced transition terminates in
+      an owned act instead of a prose annotation. Most findings below are instances of that
+      one missing surface.
+    sequencing_note: >-
+      Nothing below is blocked behind a pending CD except the terminal step of ULF-07
+      (contract ratification lands after CD.25, which ULF-02's lane delivers). ULF-02 is the
+      keystone: closing it un-wedges T-1.20 completion, terminates the three
+      bootstrap_completion_exempt scopes, and unblocks CD.25/T1.12. ULF-01 is a one-time
+      verification act queueable immediately. All ABSORB findings extend already-live
+      mechanisms (rec-autoclose.yml, validate_ci_workflow_guards, RoadmapDocument schema,
+      checks registry) and are safe to queue now. ULF-06's deletion half is safe now; its
+      write-path half lands with the T4.x executor rebuild.
+    rejected_candidates:
+      - {loop_name: "STRATEGIC-plan freeze accumulation (strategic:true items pile up unplannable)", why_dismissed: "Freeze test: intentionally suspended per Decision 67, and the freeze carries a structural reversal trigger (CD.17 grammar expression keyed to T4.2/T3.2/T3.3), so the expiry-check exists. RECOGNIZED-ADEQUATE."}
+      - {loop_name: "Six scheduled agents disabled since 2026-05", why_dismissed: "The disabled state itself is deliberate migration parking; T4.3 exit criteria own re-enable/deletion and the Decision 67 freeze has the CD.17 trigger. Only the un-gated live residue (refresher workflow, stale enabled flags) survived as ULF-05."}
+      - {loop_name: "rec-curator priority-queue producer writes to a store nothing reads", why_dismissed: "Freeze-gated and explicitly documented: AGENTS.md runbook caveat forbids re-enabling before the T2.26 producer repoint; T2.26 (in_progress) owns the repoint."}
+      - {loop_name: "Credential rotation is calendar-reminder prose (OAuth 90d, DeepSeek/Anthropic quarterly)", why_dismissed: "Consciously deferred via T2.9 (deferred_post_mvp, Decision 93 defer-by-exception); failure mode is non-silent (CI auth errors trigger ci-rca recs per AGENTS.md rotation runbook). Safety carve-out adjacent; KEEP as-is."}
+      - {loop_name: "195 deprecated PLAN-*.md files + PlanDocument has no status field / no archival", why_dismissed: "CD.22 explicitly accepts historical .md persistence ('remain ... as archive; not retroactively converted'); the roadmap-side lifecycle is the CD.39 exit-criteria ledger (met_by), and Decision 87/T4.5 queue warehouse-authoritative plan entities as the real fix."}
+      - {loop_name: "GitHub-native auto-merge follow-on from Decision 76 has no owner", why_dismissed: "Tracked: AGENTS.md names rec-940 as the durable successor to the comment-wake mechanism. Dedup hit in committed instructions; not unowned."}
+      - {loop_name: "INTENT extraction stalls (15/18 docs pending, waves human-gated)", why_dismissed: "T5.5 (in_progress) owns it with per-wave gates and open ledger criteria; the validate.py intent-doc-freeze guard already prevents regression. Pacing is a choice, not an unclosed loop."}
+      - {loop_name: "ci-rca.yml TODO(bedrock) 90-day migration window comment", why_dismissed: "Single inline marker with the mitigation named in place; no accumulating state. Dismissed as cosmetic under the precision preference."}
+      - {loop_name: "G.9/G.10 grace-period gates evaluate to deferred at runtime", why_dismissed: "By design: T-1.20 shipped the Kleene evaluator; grace_period_elapsed is statically resolvable and item_field_eq deferral is documented as owned by T-1.20 until a verifier-output source exists."}
+      - {loop_name: "KG.13 Test Impact Analysis / result caching deferred", why_dismissed: "Explicit trigger exists twice over: T4.4 concurrency >1 precondition plus the Decision 80 measured _FAST_TIER_BUDGET_SECONDS breach trigger wired in scripts/import_governance.py (T3.11)."}
+      - {loop_name: "deploy.yml disabled stub + tf-gated-apply-prototype.yml inert workflow", why_dismissed: "Both are documented deliberate placeholders (deploy until SIT/PROD exist per Decision 77; the prototype retained as a re-runnable reviewer-gate proof for T2.22). No state accumulates."}
+      - {loop_name: "Roadmap document.status permanently draft", why_dismissed: "Not a separate loop: the terminal transition (draft -> ratified, filed_via -> ops_decisions:dec-NNN) is owned by T-1.1's exit criteria and is subsumed by ULF-02's ratification-lane finding."}
+  findings:
+    - id: ULF-01
+      loop_name: "Decision 83 security-control live-probe: verification promised, no owner, no probe"
+      lens: A
+      produce:
+        what: >-
+          Decision 83 (2026-06-08) records the T2.12 security gate as applied but leaves GHAS
+          secret-scanning, push protection, and Actions permissions verified only by
+          configuration evidence, with live-probe verification explicitly outstanding
+          ("one-time UI confirmation recommended"); AGENTS.md carries the same caveat ambiently.
+        evidence: "docs/DECISIONS.md:1063"
+      transition_gap:
+        description: >-
+          No rec or tier item owns the confirmation act, and no deterministic probe exists:
+          the scripts/checks registry (54 checks enumerated at audit time) contains no GHAS/
+          push-protection probe, the CI PAT lacks security_events scope (the reason the probe
+          403'd), and T2.12 is already status:complete so no open item surfaces it. LENS A(b):
+          terminal transition is manual-only with no trigger; 24 days elapsed.
+        evidence: "docs/DECISIONS.md:1063 (403 on alert endpoints); scripts/checks/ registry (no security/GHAS check present - negative enumeration)"
+      terminal_state: "A recorded live verification (Decision 83 annotation or closed rec) that secret-scanning + push protection are ACTIVE on the public repo, ideally plus a scheduled probe with a properly-scoped token"
+      symptom:
+        description: "Confidential-boundary control unverified since Decision 83 landed; if the applied config silently did not take effect, nothing alarms"
+        magnitude_count: "24 days since 2026-06-08; 3 of 4 GHAS controls unverified (CodeQL alone has verified successful runs)"
+        source: "docs/DECISIONS.md Decision 83 Date field vs audit date 2026-07-02"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: [T2.12]
+        dedup_search_terms: ["live-probe", "security_events"]
+        dedup_hit_count: 8
+        note: >-
+          Hits (DECISIONS.md 3+1, ROADMAP 3+1) are all the SAME caveat restated on Decision 83,
+          T2.12 notes, and AGENTS.md; none is an owning item or rec. T2.12 is complete, so the
+          annotation is not schedulable work (the 2026-06-09 audit's F-014 flagged the pattern
+          of complete items with acknowledged-unmet criteria; this instance remains open).
+          Recs cache absent; an open rec cannot be ruled out locally.
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Solo-dev residue: verification hinges on a one-time human UI glance that never got
+        scheduled, where an agent-era design gives the probe a properly-scoped credential and
+        runs it deterministically. Rejected alternative: ABSORB into validate.py - rejected
+        because the probe needs a security_events-scoped token CI does not hold; a one-shot
+        confirmation rec plus an optional scheduled probe is the honest closure. Safety note:
+        this ADDS verification of a confidential-boundary gate; nothing is removed or thinned.
+      severity: critical
+      severity_rationale: >-
+        Critical clause invoked: confidential-boundary risk. The repo is PUBLIC and the
+        Decision 101 boundary depends on push protection/secret-scanning as the GitHub-side
+        layer behind the local never-commit hook; that layer's live status is unverified and
+        its silent-failure mode has no alarm. No downstream item is gated (so the high clause
+        does not apply); the risk class, not backlog, drives severity.
+      confidence: CONFIRMED
+      proposed_closer: "One-time verification rec: confirm secret-scanning + push protection + Actions permissions via UI or a security_events-scoped PAT; record evidence on Decision 83; optionally register a scheduled probe"
+      proposed_rec_draft:
+        title: "Verify GHAS secret-scanning/push-protection live state and record it on Decision 83"
+        context: "Decision 83 (docs/DECISIONS.md:1063) applied the T2.12 security gate but live-probe verification of secret-scanning, push protection, and Actions permissions is outstanding (web PAT lacks security_events); the public-repo confidential-data boundary (Decision 101) treats these as the GitHub-side enforcement layer, and no check in scripts/checks/ probes them."
+        acceptance: "DECISIONS.md Decision 83 carries a dated live-probe verification annotation naming the evidence (API responses or UI capture) for all three outstanding controls; if a scheduled probe is added, scripts/checks/ contains it and validate.py full tier runs it green"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Requires a human-held credential (UI session or scoped PAT); everything else is queueable immediately"
+    - id: ULF-02
+      loop_name: "Candidate-decision ratification: no lane transitions pending CDs whose gated work is already realized"
+      lens: both
+      produce:
+        what: "candidate_decisions are filed state:pending in the roadmap; the portal primitive that ratifies (file_decision -> ops_decisions:dec-NNN) exists and is proven (CD.16/24/31/33/35/36 ratified through it)"
+        evidence: "docs/ROADMAP-PLATFORM.yaml:363 (candidate_decisions); scripts/ops_data_portal.py:1148 (file_decision)"
+      transition_gap:
+        description: >-
+          Nothing owns pending -> ratified: no code assigns CandidateDecision.ratified_as
+          (passive schema field), /orient is read-only, decision-scout may not edit
+          DECISIONS.md, /implement + T-1.10 bookkeeping flip tier-item status only. T-1.1
+          nominally owns ratification but is UNDERSCOPED three ways: scoped to CD.1-CD.19
+          only, depends_on T0.7b (not_started) although the agent_instructions ratification-
+          vehicle note says the portal ratifies TODAY, and it predates the realized-but-
+          pending backlog. Gates read state=="pending" and so keep blocking.
+        evidence: "scripts/platform_roadmap.py:382 (ratified_as passive), :754 and :784 (state==pending gates), :318-323 (filed_via validator); docs/ROADMAP-PLATFORM.yaml T-1.1 (depends_on [T0.7b, T-1.5], not_started)"
+      terminal_state: "state: ratified + filed_via: ops_decisions:dec-NNN on each CD whose gated work is done; document.status draft -> ratified at CD.1 (T-1.1 exit criteria); bootstrap_completion_exempt scopes terminate"
+      symptom:
+        description: >-
+          31 of 39 CDs pending; at least 5 carry '[Realized ...]' annotations (CD.2, CD.6,
+          CD.20 partial, CD.21, CD.26) meaning the gated work landed but the decision never
+          ratified; T-1.20 has all 5 exit criteria met yet completion is wedged solely on
+          CD.1 pending; all three bootstrap_completion_exempt scopes state they 'end at
+          CD.1/CD.25 ratification', which never occurs.
+        magnitude_count: "31/39 pending; 5 realized-but-pending; 1 item (T-1.20) fully-met-but-wedged"
+        source: "docs/ROADMAP-PLATFORM.yaml candidate_decisions[].state (recomputed), '[Realized' annotations at lines 379/401/668/690/888, T-1.20 progress_note"
+      downstream_gated: [T-1.20, T1.12]
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: [T-1.1]
+        dedup_search_terms: ["ratification vehicle", "Realized", "ratified_as"]
+        dedup_hit_count: 12
+        note: >-
+          The roadmap recognizes the vehicle (agent_instructions ratification-vehicle note,
+          audit F-001) and T-1.1 names the act, but T-1.1's exit criteria do not close
+          today's loop (wrong dependency, wrong CD range, no cadence). Recs cache absent for
+          the second dedup leg.
+      novelty_confidence: CONFIRMED
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Human-team residue: ratification is modeled as a ceremony a standing team would
+        batch at a milestone (T0.7b Lambda), while the portal already ratifies today and
+        agents do the realization work continuously. Rejected alternative: ABSORB into
+        /implement bookkeeping - rejected because ratification is a distinct governance act
+        the human must sign (safety carve-out: the lane PREPARES ratification drafts and
+        surfaces realized-but-pending CDs; the human ratifies).
+      severity: high
+      severity_rationale: "High clause: downstream gated (T-1.20 completion, T1.12 via CD.25, exemption-scope termination) AND silent (only the advisory stale_cache_note notices; no count of realized-but-pending CDs is surfaced anywhere)"
+      confidence: CONFIRMED
+      proposed_closer: "Rescope T-1.1 to the portal vehicle (drop the T0.7b dependency, cover CD.1-CD.39) and add a ratification lane: /orient surfaces realized-but-pending CDs; a human-confirmed /plan session files the dec-NNN batch"
+      proposed_rec_draft:
+        title: "Rescope T-1.1 into a portal-vehicle ratification lane for realized-but-pending CDs"
+        context: "31/39 candidate decisions are pending and >=5 carry [Realized] annotations; T-1.20 is fully met but wedged on CD.1; T-1.1 still depends_on T0.7b although the agent_instructions ratification-vehicle note (audit F-001) made the ops portal the operative vehicle; no code or lane transitions CD state (scripts/platform_roadmap.py:382 passive)."
+        acceptance: "T-1.1 depends_on no longer includes T0.7b and its exit criteria cover surfacing realized-but-pending CDs; after the first lane session, CD.1 is ratified (document.status=ratified) and T-1.20 flips complete; bin/venv-python -m scripts.validate passes"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Keystone finding: unblocks T-1.20, exemption-scope termination, and CD.25 (which ULF-07's terminal needs). Human ratifies; agent prepares."
+    - id: ULF-03
+      loop_name: "DECISIONS.md -> ops_decisions warehouse ETL has no automated trigger"
+      lens: both
+      produce:
+        what: "Every merged decision adds a DECISIONS.md entry whose Warehouse ID line promises 'synced to ops_decisions via ops_data_portal --backfill-decisions-md post-merge, per Decision 84' (26 such lines; 64 decisions total)"
+        evidence: "docs/DECISIONS.md:9 (convention line); scripts/ops_data_portal.py:1252 (backfill_decisions_from_md)"
+      transition_gap:
+        description: >-
+          'Post-merge' has no executor: no workflow, hook, skill, or registered check invokes
+          the backfill (negative grep across .github/workflows/, .claude/, scripts/checks/
+          recorded zero hits), so warehouse sync depends on someone remembering the CLI call.
+          Readers (orient/decision-scout/preflight decision_by_id verb) silently serve the
+          stale projection; the only staleness signal is the advisory roadmap-mtime
+          stale_cache_note, which watches the roadmap YAML, not DECISIONS.md.
+        evidence: "grep 'backfill' across .github/workflows/, .claude/skills/, .claude/commands/, scripts/checks/ = 0 hits (recorded 2026-07-02); scripts/platform_roadmap.py:841-853 (advisory note only)"
+      terminal_state: "Each merged DECISIONS.md entry has a corresponding ops_decisions row without manual action, or a deterministic parity check fails loudly when it does not"
+      symptom:
+        description: "Every decision merge is a chance to skip the sync; parity is unverifiable from a fresh container (reader calls forbidden in this audit), which is itself the symptom - nothing local or CI-side can prove the projection is current"
+        magnitude_count: "64 decisions in DECISIONS.md, 26 carrying the manual-sync promise line"
+        source: "docs/DECISIONS.md (grep -c '^## Decision' = 64; grep -c 'Warehouse ID' = 26)"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: UNRECOGNIZED
+        item_ids: []
+        dedup_search_terms: ["backfill-decisions", "post-merge sync"]
+        dedup_hit_count: 22
+        note: >-
+          All 19 DECISIONS.md hits + 3 roadmap hits document the MECHANISM (transport via the
+          writer, T0.7b exit criterion keeps the route), none the TRIGGER/automation. Recs
+          cache absent, so an open rec cannot be excluded: novelty HYPOTHESIS.
+      novelty_confidence: HYPOTHESIS
+      disposition: ABSORB
+      absorb_into: ".github/workflows/rec-autoclose.yml (existing push-to-main lane with portal write credentials)"
+      frame_lock_analysis: >-
+        Solo-dev residue: (1) assumption - the one human who authors a decision also remembers
+        the follow-up CLI call; (2) removing mechanism - rec-autoclose.yml already runs on
+        every main push with DUCKLAKE_WRITER_URL and portal access; (3) cheaper design - one
+        conditional job step (DECISIONS.md in the push diff -> run --backfill-decisions-md,
+        idempotent upsert by design). Rejected alternative: CLOSE via a new workflow -
+        rejected because an existing credentialed lane absorbs it for one step's cost.
+      severity: medium
+      severity_rationale: "Medium clause: quantified magnitude (64 decisions / 26 manual-sync promises) with no downstream tier item gated; failure degrades reader freshness rather than integrity (DECISIONS.md stays authoritative; backfill is idempotent)"
+      confidence: CONFIRMED
+      proposed_closer: "Add a DECISIONS.md-diff-gated backfill step to rec-autoclose.yml; optionally add a full-tier parity check (max dec-NNN in md vs warehouse) that fails loudly"
+      proposed_rec_draft:
+        title: "Trigger ops_data_portal --backfill-decisions-md from rec-autoclose.yml on DECISIONS.md changes"
+        context: "Decision 84 makes ops_decisions rebuildable from DECISIONS.md, and every Warehouse ID line promises post-merge sync via --backfill-decisions-md, but nothing invokes it (zero hits in workflows/hooks/checks); readers serve the projection silently stale until a human remembers the CLI call."
+        acceptance: "A push to main touching docs/DECISIONS.md runs the backfill step green in rec-autoclose.yml (idempotent on re-run); grep confirms the step is conditioned on the DECISIONS.md path filter"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Independent of all pending CDs; reuses existing secrets/IAM surface"
+    - id: ULF-04
+      loop_name: "KG.11 roadmap file-size trigger: breached 3x, self-declared unowned, no deterministic guard"
+      lens: both
+      produce:
+        what: "Every roadmap edit grows docs/ROADMAP-PLATFORM.yaml; KG.11 pinned a split trigger at 2500 lines / 50K tokens and prescribes filing a rec or tier item on breach"
+        evidence: "docs/ROADMAP-PLATFORM.yaml:7634-7644 (KG.11)"
+      transition_gap:
+        description: >-
+          The trigger fired long ago and the transition never ran: KG.11's own text records
+          'the prescribed rec was never filed ... No tier item owns this yet' as of the
+          2026-06-09 audit (F-019), the file has since grown from ~4900 to 7685 lines, and no
+          validate.py check watches the threshold (sloc/complexity checks cover .py only), so
+          the breach re-surfaces only when a human re-reads KG.11. LENS A(d)+(e): prose
+          threshold without guard, surfaced once without closure.
+        evidence: "docs/ROADMAP-PLATFORM.yaml:7642-7644 ('No tier item owns this yet'); scripts/checks/sloc/ + scripts/checks/roadmap/validate_platform_roadmap.py (no size check)"
+      terminal_state: "Either the per-tier split ships or a ratified decision raises the threshold, and a deterministic size check makes the next breach fail loudly instead of accruing silently"
+      symptom:
+        description: "The planning skill loads this file per /plan invocation, so the ambient token cost is paid every session (KG.11's own words); the prior audit surfaced it and the loop still did not close, demonstrating the missing guard"
+        magnitude_count: "7685 lines vs 2500-line trigger (3.07x), up from ~4900 at the 2026-06-09 audit"
+        source: "wc -l docs/ROADMAP-PLATFORM.yaml (recomputed at audited_commit) vs KG.11 threshold text"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: []
+        dedup_search_terms: ["per-tier YAML", "2500", "split"]
+        dedup_hit_count: 1
+        note: "The only hit is KG.11 itself, which names the gap and its own unownedness; no tier item, CD, or decision owns closure. Recs cache absent for the rec-side check (F-019 asserted 'never filed' as of 06-09)."
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Solo-dev residue: a threshold only a human re-reading known_gaps would notice, sized
+        for an era when the file was 1500 lines. The agent-era design makes the trigger
+        deterministic (a size assertion in validate_platform_roadmap) so breach = red CI, and
+        lets the human decide split-vs-raise once, explicitly. Rejected alternative: ELIMINATE
+        the threshold (declare big-file acceptable) - rejected because KG.11 names a real
+        per-session ambient cost and the decision belongs to the human, not to silence.
+      severity: medium
+      severity_rationale: "Medium clause: quantified backlog magnitude (7685 vs 2500 lines, growth across two audits) with no downstream item gated"
+      confidence: CONFIRMED
+      proposed_closer: "File the KG.11-prescribed rec: human decides split-per-tier vs ratified raised threshold; either way add a line/token assertion to validate_platform_roadmap so the next breach fails CI"
+      proposed_rec_draft:
+        title: "Resolve KG.11: decide roadmap split vs raised threshold and add a deterministic size guard"
+        context: "KG.11 set a 2500-line/50K-token split trigger; the file is 7685 lines (3.07x), the 2026-06-09 audit (F-019) already surfaced the breach, and KG.11 still records that no rec or tier item owns it; no validate.py check watches the threshold so the breach accrues silently while the planning skill pays the load cost per /plan session."
+        acceptance: "Either ROADMAP-PLATFORM splits per tier with a loader manifest or a ratified decision records the new threshold; scripts/checks/roadmap/ contains a size assertion matching the decided threshold and validate.py full tier is green; KG.11 notes updated to the resolution"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Human decision (split vs raise) is the only gate; mechanics are freeze-independent"
+    - id: ULF-05
+      loop_name: "Retired scheduled-agent/copilot substrate: live monthly producer, stale enabled-flags, retirement work parked in prose"
+      lens: both
+      produce:
+        what: >-
+          refresh-copilot-multipliers.yml still runs monthly with contents:write, refreshing
+          config/agent/copilot/model_multipliers.yaml for the Copilot SDK provider;
+          schedule.yaml declares six agents enabled:true and cites a dispatch workflow
+          (.github/workflows/scheduled-agents.yml) that does not exist.
+        evidence: ".github/workflows/refresh-copilot-multipliers.yml:4-5 (cron 0 0 1 * *); .github/agents/schedule.yaml:3-4 (nonexistent workflow ref) + 6x 'enabled: true'"
+      transition_gap:
+        description: >-
+          The consumer side is retired or disabled - Decision 49 retired Copilot SDK as
+          provider, the EventBridge rules are DISABLED and SCHEDULED_AGENTS_ENABLED=false,
+          and Decision 61's findings-processor retirement is 'recorded here; the action is
+          deferred' with no id - while the producer side keeps running and CI keeps validating
+          its output (validate_copilot_multipliers). The retirement work exists only as CD.28
+          prose inventory (PLAN-retire-copilot-sdk, PLAN-resolve-scheduled-agent-provider,
+          neither queued; the refresher workflow is named in neither) and in T4.3 exit
+          criteria that are not_started. LENS A(c) producer-without-consumer on the refresher,
+          A(b) on the deferred retirements.
+        evidence: "terraform/scheduled_agents.tf:271 + :220 + :389 (DISABLED gates); docs/ROADMAP-PLATFORM.yaml:1059-1066 + :1103-1113 (prose-only plan inventory); docs/DECISIONS.md Decision 61 (deferred retirement, no id)"
+      terminal_state: "Copilot-SDK surface deleted (refresher workflow, multipliers config+check, sdk client/wrapper), schedule.yaml either deleted per T4.3 or its enabled flags made truthful, findings-processor retirement owned by an id"
+      symptom:
+        description: "A live cron produces monthly bot commits for a provider with zero enabled consumers; machine-readable state (enabled:true, status:active) contradicts operating reality, which is exactly the agent-first drift CD.13/CD.25 exist to prevent"
+        magnitude_count: "6 schedule.yaml agents enabled:true with no live scheduler; 1 monthly producer workflow; 4+ retired-substrate source files (copilot_sdk_client.py, copilot_wrapper.py, refresher, multipliers check)"
+        source: "grep -c 'enabled: true' .github/agents/schedule.yaml; ls scripts/copilot_*; refresher cron"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: [T4.3, T1.15]
+        dedup_search_terms: ["multiplier", "copilot-sdk", "retire-copilot"]
+        dedup_hit_count: 9
+        note: >-
+          CD.28's follow-on inventory names the sweeps and audit F-021 moved only the two
+          high-priority ones into T1.15 (complete: Bedrock refs swept, including inside the
+          refresher SCRIPT); the refresher WORKFLOW, the multipliers check, and schedule.yaml
+          truthfulness are named nowhere; T4.3 covers schedule.yaml deletion but is
+          freeze-cascade parked. Recs cache absent.
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Human-team residue: monthly multiplier refresh is a substrate-maintenance ritual that
+        outlived its substrate, kept alive because deletion was parked with the (frozen)
+        scheduled-agent migration rather than with the (ratified) provider retirement.
+        Rejected alternative: ELIMINATE by deleting the refresher unilaterally now - rejected
+        because the deletion sweep is exactly what CD.28's named plans scope, and schedule.yaml
+        interlocks with T4.3's exit criteria; promoting the prose plans to owned work is the
+        provable path.
+      severity: medium
+      severity_rationale: "Medium clause: quantified residue magnitude (6 stale flags, 1 live producer, 4+ dead files) with no downstream item gated; failure mode is drift/noise, not integrity"
+      confidence: CONFIRMED
+      proposed_closer: "Promote PLAN-retire-copilot-sdk + PLAN-resolve-scheduled-agent-provider from CD.28 prose to a filed rec (or tier item) whose scope explicitly adds refresh-copilot-multipliers.yml, the validate_copilot_multipliers check, and schedule.yaml flag truthfulness"
+      proposed_rec_draft:
+        title: "Retire the Copilot-SDK residue: refresher workflow, multipliers check, SDK client, schedule.yaml truth"
+        context: "Decision 49 + CD.28 retired Copilot SDK as a provider and the scheduled-agent dispatch is DISABLED (terraform/scheduled_agents.tf:220/271), but refresh-copilot-multipliers.yml still runs monthly with contents:write for that provider, CI validates its output, and schedule.yaml declares 6 agents enabled:true via a workflow that does not exist; the retirement plans exist only as CD.28 prose inventory (roadmap lines 1059-1113)."
+        acceptance: "refresh-copilot-multipliers.yml and validate_copilot_multipliers are deleted (or re-pointed at a live consumer with rationale); rg -l 'copilot_sdk|copilot-sdk' scripts/ .github/ returns only historical decision/roadmap text; schedule.yaml is deleted per T4.3 scope or its enabled flags match the DISABLED dispatch reality; validate.py green"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Pure retirement sweep; does not touch T4.3's substrate decision, which stays parked behind the freeze"
+    - id: ULF-06
+      loop_name: "Executor per-run artifacts: 565 committed JSON files nothing reads"
+      lens: both
+      produce:
+        what: "execute_recommendation.py writes a per-run summary to logs/runs/{rec}-{ts}.json and failure summaries to logs/failure-summaries/, and the files are git-tracked"
+        evidence: "scripts/execute_recommendation.py:226-265 (logs/runs) and :378-381 (failure-summaries)"
+      transition_gap:
+        description: >-
+          No consumer, aggregator, rotation, or cleanup exists (grep across scripts/, .claude/,
+          src/ finds only the three write sites), and no retention policy or roadmap item
+          names the directories. The producer is currently dormant (executor frozen per
+          Decision 67), so this is not freeze-gated accumulation of pending WORK - it is
+          576KB+ of committed artifact payload with no owner, plus a write path the T4.x
+          rebuild would otherwise carry forward. LENS A(c).
+        evidence: "negative grep 'logs/runs|failure-summaries' over scripts/ .claude/ src/ (write sites only); docs/DECISIONS.md + ROADMAP dedup = 0 hits"
+      terminal_state: "Run outcomes live in the governed telemetry plane (Decision 59/95 model) and the local artifact write path plus the committed files are deleted"
+      symptom:
+        description: "565 committed JSON artifacts (Apr 2026 executor era) ship with every clone; the executor rebuild would resurrect the pattern unless the path is retired explicitly"
+        magnitude_count: "551 files in logs/runs + 14 in logs/failure-summaries = 565"
+        source: "git ls-files logs/runs | wc -l; git ls-files logs/failure-summaries | wc -l"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: UNRECOGNIZED
+        item_ids: []
+        dedup_search_terms: ["logs/runs", "failure-summar"]
+        dedup_hit_count: 0
+        note: "Zero hits in DECISIONS.md and ROADMAP-PLATFORM.yaml (recorded); recs cache absent, so an open cleanup rec cannot be excluded - novelty HYPOTHESIS"
+      novelty_confidence: HYPOTHESIS
+      disposition: ELIMINATE
+      served_better_by: "T2.36 (telemetry re-lands on DuckLake) + T4.1/T4.2 executor rebuild under the Decision 59/95 telemetry model"
+      frame_lock_analysis: >-
+        Solo-dev residue, three-part test: (1) baked-in assumption - a lone human debugging
+        post-hoc by opening local JSON files on one machine; (2) the agent-era mechanism that
+        removes it - Decision 59 moved retrospective/step-validation to telemetry, Decision 95
+        pinned the 4-table model, T2.36 re-lands the transport, and the executor is rebuilt
+        anyway at T4.1/T4.2; (3) cheaper replacement - emit telemetry rows through the portal
+        boundary, delete the local write path and the 565 committed files. Rejected
+        alternative: CLOSE by adding rotation/consumers for the local files - rejected as
+        building a lifecycle for an artifact class the queued design abolishes.
+      severity: medium
+      severity_rationale: "Medium clause: quantified backlog magnitude (565 committed files) with no downstream item gated; dormant producer, so no active growth claim is made"
+      confidence: CONFIRMED
+      proposed_closer: "Rec: delete logs/runs/ + logs/failure-summaries/ from the tree, gitignore the paths, and mark the write sites for removal in the T4.x executor rebuild scope (telemetry emission replaces them per Decision 59/95)"
+      proposed_rec_draft:
+        title: "Delete committed executor run artifacts and retire the local write path in the T4.x rebuild"
+        context: "scripts/execute_recommendation.py writes per-run JSON to logs/runs/ (551 committed files) and logs/failure-summaries/ (14) with zero consumers, rotation, or roadmap owner; Decision 59/95 place run outcomes in telemetry, and the executor rebuild (T4.1/T4.2) is the natural point to drop the pattern rather than carry it forward."
+        acceptance: "git ls-files logs/runs logs/failure-summaries returns 0; .gitignore covers both paths; the T4.1/T4.2 scope notes name telemetry emission as the replacement for the deleted write sites"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "File deletion + gitignore is safe now (producer frozen); the write-path removal rides the T4.x rebuild"
+    - id: ULF-07
+      loop_name: "Provisional Class B contracts: re-ratification trigger authored but structurally unable to fire"
+      lens: A
+      produce:
+        what: "Three Class B Lambda-verb contracts (ducklake_writer/reader/maintenance) authored at status: provisional_v0 with re_ratification_trigger conditions, per the CD.25 ritual; the writer has served live traffic since 2026-06-08, so 'the clock is real'"
+        evidence: "docs/contracts/ducklake_writer.yaml:21 (+ reader:19, maintenance:21); 3 files by grep 'status: provisional_v0'"
+      transition_gap:
+        description: >-
+          The surfacing path is dormant by construction: the contracts' own surfacing_note
+          records that session_preflight._scan_provisional_contracts passes no metrics, so
+          evaluate_provisional_trigger receives metrics=None and never fires - 'the thresholds
+          below are the authored intent, not yet a live alarm' - and the trigger format is not
+          schema-validated. The metrics-provider wiring ('subset-f') is named in the note but
+          owned by no open item; T1.12 (in_progress) holds contract COMPLETION on CD.25 but
+          does not carry the wiring. LENS A(b)+(d).
+        evidence: "docs/contracts/ducklake_writer.yaml:66-72 (surfacing_note DORMANT); scripts/contracts_enforcement.py evaluate_provisional_trigger (metrics=None path)"
+      terminal_state: "Provisional contracts surface in preflight when their trigger conditions are met and graduate to ratified at a contract_version bump; no contract sits provisional indefinitely with a dead alarm"
+      symptom:
+        description: "All three contracts have been provisional since 2026-06-22 with live traffic accruing against unverified thresholds; the designed re-ratification alarm can never ring"
+        magnitude_count: "3 of 3 Class B contracts provisional_v0 with dormant triggers"
+        source: "grep -rl 'status: provisional_v0' docs/contracts/ (recomputed)"
+      downstream_gated: [T1.12]
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: [T1.12]
+        dedup_search_terms: ["provisional_v0", "re-ratification", "subset-f"]
+        dedup_hit_count: 6
+        note: "CD.25 and T1.12 recognize the provisional lifecycle; the dormant-metrics gap is documented INSIDE the contracts but owned by no item's open criteria. Recs cache absent."
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Not frame-lock so much as an unfinished loop the design already prescribes: the CD.25
+        ritual is correct (KEEP the ritual), only its alarm is unwired. Rejected alternative:
+        ABSORB into T1.12 as-is - rejected because T1.12's open state is about CD.25
+        ratification, and quietly widening it re-creates the invisible-deferral pattern audit
+        F-018 fixed; a named wiring rec (or an explicit new T1.12 criterion) keeps the work
+        visible.
+      severity: medium
+      severity_rationale: "Medium clause: quantified magnitude (3/3 provisional contracts, dead alarm) with T1.12 held primarily by CD.25 rather than this gap alone; failure mode is stale contracts, not integrity"
+      confidence: CONFIRMED
+      proposed_closer: "Wire the preflight metrics provider (subset-f) so evaluate_provisional_trigger receives real metrics, or downgrade the trigger to deterministic time/traffic conditions preflight can compute; schema-validate re_ratification_trigger"
+      proposed_rec_draft:
+        title: "Wire provisional-contract trigger metrics so re-ratification can actually surface"
+        context: "The three Class B DuckLake contracts are provisional_v0 with re_ratification_trigger conditions, but session_preflight._scan_provisional_contracts passes no metrics so evaluate_provisional_trigger never fires (documented in each contract's surfacing_note); the writer has served live ops traffic since 2026-06-08, so the graduation clock runs with a dead alarm."
+        acceptance: "session_preflight passes a metrics object and a synthetic threshold-met fixture surfaces the contract in provisional_contracts_due; re_ratification_trigger parses under a schema check; unit test covers the fired and not-fired paths"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: [CD.25]
+        note: "Wiring is queueable now; the terminal ratification act lands after CD.25 (delivered by ULF-02's lane)"
+    - id: ULF-08
+      loop_name: "Cost-model reevaluation triggers and Tier-2 pool ceiling: five prose tripwires, zero monitors"
+      lens: both
+      produce:
+        what: >-
+          cost_projection.reevaluation_triggers pins five conditions (DeepSeek pricing 5x,
+          Max-pool >70% over 30d, S3 >50% of bill, runner cost 2x, Step Functions >5%);
+          CD.28 adds the >70%-pool rec-filing discipline and names a monthly
+          invoice-vs-telemetry reconciliation job as the authoritative cost source -
+          'declared but not yet built'.
+        evidence: "docs/ROADMAP-PLATFORM.yaml:264-269 (reevaluation_triggers); :1115-1123 (PLAN-cost-reconciliation-job, priority low, prose-only)"
+      transition_gap:
+        description: >-
+          Nothing computes any trigger: Bedrock's exit removed AWS CUR coverage of LLM spend
+          (CD.28 records the reconciliation job as the replacement), the job is unbuilt, no
+          scripts/checks entry or workflow touches cost/pool utilisation (checks registry
+          enumerated - none exist), and KG.7's two Tier-2 availability concerns are 'to
+          monitor' with no monitor. The five conditions can only trip inside a human's head.
+          LENS A(d) + A(c).
+        evidence: "scripts/checks/ registry (no cost/pool check); docs/ROADMAP-PLATFORM.yaml:7598-7605 (KG.7 concerns 'to monitor')"
+      terminal_state: "A scheduled reconciliation artifact (monthly invoice + telemetry est_cost_usd) computes the trigger conditions and files a rec when one trips (alarm-not-gate, Decision 55)"
+      symptom:
+        description: "Non-accumulating; the exposure is silent cost drift on the exact lines the roadmap says to watch, with the executor's spend about to leave AWS-visible billing entirely as T4.x volume arrives"
+        magnitude_count: "5 declared triggers, 0 monitored; reconciliation job priority 'low' and unqueued"
+        source: "docs/ROADMAP-PLATFORM.yaml reevaluation_triggers list (recounted)"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: []
+        dedup_search_terms: ["invoice", "reconciliation", "70%"]
+        dedup_hit_count: 4
+        note: "All 4 hits are CD.28's own prose inventory/discipline points; audit F-021 promoted only the Bedrock/contract sweeps to T1.15, leaving the cost job prose-only. No tier item or CD owns it. Recs cache absent."
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Solo-dev residue: 'the developer will notice the bill' works for one human with one
+        credit card, not for an autonomous fleet whose spend is split across two non-AWS
+        providers precisely when volume scales. Rejected alternative: ELIMINATE the triggers
+        as premature at ~$50/mo - rejected because CD.28 itself made the reconciliation job
+        the authoritative cost source after removing CUR coverage; the declaration without
+        the artifact is the classic prose-invariant-without-guard.
+      severity: medium
+      severity_rationale: "Medium clause: quantified magnitude (5 triggers / 0 monitors) and no downstream item gated; becomes load-bearing only as executor volume grows, which is why CLOSE-now-cheaply beats waiting"
+      confidence: CONFIRMED
+      proposed_closer: "File the PLAN-cost-reconciliation-job rec (monthly GH-Actions schedule, ingest provider invoices + telemetry est_cost_usd, evaluate the five triggers, file rec on breach >5% discrepancy or any trigger tripping)"
+      proposed_rec_draft:
+        title: "Build the CD.28 cost-reconciliation job and make the five reevaluation triggers machine-evaluated"
+        context: "cost_projection.reevaluation_triggers lists five conditions and CD.28 names a monthly invoice-vs-telemetry reconciliation job as the authoritative cost source after Bedrock's exit removed CUR coverage, but the job is unbuilt and nothing in scripts/checks/ or workflows computes any trigger; KG.7's pool-exhaustion concern likewise has no monitor."
+        acceptance: "A scheduled workflow (or Lambda) emits a monthly reconciliation report comparing provider invoices to telemetry est_cost_usd and evaluates the five triggers, filing a rec via the portal on breach; a dry-run fixture proves the rec-filing path; alarm-not-gate per Decision 55"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Telemetry est_cost_usd inputs improve after T2.36, but invoice ingestion + trigger evaluation are buildable now"
+    - id: ULF-09
+      loop_name: "validate.py <-> ci.yml parity invariant stated twice, guarded nowhere"
+      lens: A
+      produce:
+        what: "AGENTS.md pins 'never add a check to .github/workflows/ci.yml without adding it to validate.py first' (stated in Git-ops and again in Merge protocol); ci.yml adds its own prose INVARIANT that new PR-gating checks join signal-green.needs"
+        evidence: "AGENTS.md:148; .github/workflows/ci.yml:154-156"
+      transition_gap:
+        description: "No deterministic check asserts either: validate_ci_workflow_guards verifies CI structure (jobs/flags/fetch-depth/concurrency) but not check-parity with the validate.py registry, so a CI-only check or a non-needs-listed gating job merges green and silently forks the single-source-of-truth model. LENS A(d)."
+        evidence: "scripts/checks/ci_guards/validate_ci_workflow_guards.py:11 (structural scope only; no registry-parity assertion)"
+      terminal_state: "A registered check fails when ci.yml invokes a validation step absent from the checks registry, or when a PR-gating job is missing from signal-green.needs"
+      symptom:
+        description: "Non-accumulating invariant gap; the Decision 104 registry decomposition makes the parity assertion newly cheap (job steps vs registry names)"
+        magnitude_count: "N/A"
+        source: "N/A"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: UNRECOGNIZED
+        item_ids: []
+        dedup_search_terms: ["never add a check", "signal-green.needs", "parity"]
+        dedup_hit_count: 3
+        note: "Hits are the invariant statements themselves (AGENTS.md x2, ci.yml x1); no item/CD/decision owns enforcement. Recs cache absent - novelty HYPOTHESIS."
+      novelty_confidence: HYPOTHESIS
+      disposition: ABSORB
+      absorb_into: "scripts/checks/ci_guards/validate_ci_workflow_guards (existing structural CI check)"
+      frame_lock_analysis: >-
+        Human-team residue, three-part test: (1) assumption - reviewers remember a prose rule
+        at PR time; (2) removing mechanism - Decision 104's owner-tagged checks registry plus
+        the existing ci-workflow structural check already parse both surfaces; (3) cheaper
+        design - a parity assertion inside the existing check instead of a standing rule
+        humans must recall. Rejected alternative: CLOSE with a new standalone check -
+        rejected because the guard file already owns ci.yml structure.
+      severity: low
+      severity_rationale: "Low clause: no accumulation and no gated item; the invariant-without-guard failure mode is real but currently hypothetical"
+      confidence: CONFIRMED
+      proposed_closer: "Extend validate_ci_workflow_guards: assert every validate-invoking ci.yml step resolves to a registry check and every PR-gating job is in signal-green.needs"
+      proposed_rec_draft:
+        title: "Enforce the ci.yml/validate.py parity invariant inside validate_ci_workflow_guards"
+        context: "AGENTS.md:148 pins validate.py as the single source of truth for CI checks and ci.yml:154-156 pins the signal-green.needs invariant, but validate_ci_workflow_guards checks structure only, so either invariant can regress silently; the Decision 104 registry makes parity mechanically checkable."
+        acceptance: "A fixture ci.yml with an unregistered check step or a gating job absent from signal-green.needs fails validate_ci_workflow_guards; the live workflow passes; both tiers green"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Pure check extension; no infra"
+    - id: ULF-10
+      loop_name: "open_questions/known_gaps carry no machine lifecycle; resolution is prose applied by ad-hoc audits"
+      lens: both
+      produce:
+        what: "OQ.1-OQ.15 and KG.1-KG.14 accumulate as roadmap sections; resolutions happen in CDs/decisions/items"
+        evidence: "docs/ROADMAP-PLATFORM.yaml:7326 (open_questions), :7547 (known_gaps)"
+      transition_gap:
+        description: >-
+          The OpenQuestion/KnownGap models are passive (id/question/resolution_tier/notes;
+          no status enum, extra=ignore, zero validation), so 'resolved' exists only as prose
+          markers ('RESOLVED (status reconciled 2026-06-09, audit F-020)', 'CLOSED', 'Resolved
+          (a): Decision 91') that a periodic human audit pastes in. The 2026-06-09 audit
+          closed the INSTANCES (F-020) but not the CLASS: OQ.15, opened after it, already
+          needed the same prose treatment. LENS A(d) + agent-first violation (narrative state
+          in a machine-parseable file).
+        evidence: "scripts/platform_roadmap.py:403-415 (passive models, no status field); docs/ROADMAP-PLATFORM.yaml:7332/7341/7394/7453/7536 (prose markers)"
+      terminal_state: "OQ/KG entries carry a schema-validated status (open|resolved|closed|promoted) + resolution_ref that validate_platform_roadmap enforces, so resolution is a field flip, not an audit-day paste"
+      symptom:
+        description: "10 of 15 OQs are resolved-in-prose while structurally indistinguishable from open ones; agents reading open_questions must parse free text to know what is actually open"
+        magnitude_count: "10/15 OQs with prose resolution markers; 3/14 KGs prose-closed or promoted"
+        source: "grep of RESOLVED/Resolved/CLOSED markers within the open_questions/known_gaps sections (recomputed)"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: UNRECOGNIZED
+        item_ids: []
+        dedup_search_terms: ["RESOLVED (status reconciled", "open_questions status"]
+        dedup_hit_count: 3
+        note: "All hits are the prose markers themselves (F-020 reconciliation); no item/CD owns adding a lifecycle field. Recs cache absent - novelty HYPOTHESIS."
+      novelty_confidence: HYPOTHESIS
+      disposition: ABSORB
+      absorb_into: "scripts/platform_roadmap.py RoadmapDocument schema + validate_platform_roadmap check (the T-1.5 mechanism)"
+      frame_lock_analysis: >-
+        Solo-dev residue, three-part test: (1) assumption - one human tracks OQ state in
+        their head and reconciles prose annually; (2) removing mechanism - the T-1.5
+        RoadmapDocument schema and its CI check already validate this exact file, and the
+        CD.39 exit-criteria ledger proves the promote-prose-to-enum pattern works here;
+        (3) cheaper design - a status enum + resolution_ref field beats recurring audit-day
+        prose reconciliation. Rejected alternative: KEEP (prose is human-readable) - rejected
+        by NS.4/CD.13: this file is the agent-first exemplar.
+      severity: low
+      severity_rationale: "Low clause: cosmetic/machine-parseability debt; quantified (10/15) but gates nothing and misleads only agents that skip the notes prose"
+      confidence: CONFIRMED
+      proposed_closer: "Schema extension: OpenQuestion/KnownGap gain status + resolution_ref; validator requires resolution_ref when status != open; one-time migration of the 13 prose-resolved entries"
+      proposed_rec_draft:
+        title: "Give open_questions/known_gaps a schema-validated lifecycle (status + resolution_ref)"
+        context: "OpenQuestion/KnownGap models (scripts/platform_roadmap.py:403-415) have no status field, so 10/15 OQs and 3/14 KGs are resolved only in prose markers pasted by the 2026-06-09 audit and successors; the CD.39 ledger already established the promote-prose-to-enum pattern for exit_criteria on this same file."
+        acceptance: "RoadmapDocument validates status in {open,resolved,closed,promoted} with resolution_ref required when not open; the 13 prose-resolved entries migrate; validate_platform_roadmap fails on a non-open entry lacking resolution_ref; full tier green"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Schema + one-file migration; independent of all CDs"
+    - id: ULF-11
+      loop_name: "Public-portal projection drift: named a follow-on concern by CD.23, then its parent item was parked"
+      lens: A
+      produce:
+        what: "The curated human portal (README, EVALUATION-PROMPTS.yaml with 12 answer-loci paths, SECURITY.md) projects canonical sources; CD.23 states 'drift-detection between portal and sources is a follow-on concern'"
+        evidence: "docs/ROADMAP-PLATFORM.yaml:738-741 (CD.23); EVALUATION-PROMPTS.yaml projection block"
+      transition_gap:
+        description: >-
+          The only checks that ever verified the portal (loci resolve, zero operational-data
+          references, projection header present) live inside the completed authoring plan's
+          verification_plan, not the checks registry - they ran once at close-out. T2.11b,
+          the item nearest the concern, is now deferred_post_mvp, and the deferral text does
+          not carry the drift check. Answer-loci are file paths into a repo that refactors
+          weekly; nothing re-resolves them. LENS A(d), machine/human pair requiring manual sync.
+        evidence: "docs/plans/PLAN-t2-11b-portal-artefacts.yaml verification_plan (one-shot checks); scripts/checks/ registry (no portal/loci check)"
+      terminal_state: "The portal invariants (loci resolve; no confidential/operational references; projection headers present) run as a registered validate.py check on every full tier"
+      symptom:
+        description: "Non-accumulating but publicly visible: a rotted answer-locus or a drifted README claim degrades exactly the evaluator surface CD.20 curates, silently"
+        magnitude_count: "12 answer-loci verified once (2026-06-18), 0 standing checks"
+        source: "EVALUATION-PROMPTS.yaml question count; checks registry enumeration"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_UNDERSCOPED
+        item_ids: [T2.11b]
+        dedup_search_terms: ["answer_loci", "drift-detection", "projection"]
+        dedup_hit_count: 2
+        note: "CD.23 names the concern ('follow-on'); T2.11b is deferred_post_mvp without carrying it; answer_loci appears nowhere in DECISIONS.md. Recs cache absent."
+      novelty_confidence: HYPOTHESIS
+      disposition: ABSORB
+      absorb_into: "scripts/checks/ registry (Decision 104), promoting the already-written probes from PLAN-t2-11b-portal-artefacts.yaml verification_plan"
+      frame_lock_analysis: >-
+        Human-team residue, three-part test: (1) assumption - a human notices portal rot while
+        browsing; (2) removing mechanism - the exact probe commands already exist in the
+        authoring plan's verification_plan and the checks registry gives them a standing home;
+        (3) cheaper design - promote one-shot probes to a registered check instead of
+        re-auditing per release. Rejected alternative: CLOSE via reactivating T2.11b -
+        rejected because the remaining T2.11b scope (architecture diagram, devcontainer) is
+        consciously post-MVP; the drift check is separable and cheap.
+      severity: low
+      severity_rationale: "Low clause: no accumulation, nothing gated; public-surface polish with a silent-drift mode"
+      confidence: CONFIRMED
+      proposed_closer: "Register a portal-drift check running the PLAN-t2-11b probes (loci resolve, zero ops-data references, projection headers) in the full tier"
+      proposed_rec_draft:
+        title: "Promote the public-portal drift probes into a registered validate.py check"
+        context: "CD.23 declares portal drift-detection a follow-on concern; the probes exist only inside the completed PLAN-t2-11b-portal-artefacts.yaml verification_plan (ran once 2026-06-18) and T2.11b is now deferred_post_mvp, so EVALUATION-PROMPTS answer-loci and projection headers can rot silently on the public evaluator surface."
+        acceptance: "A scripts/checks/ entry fails when any EVALUATION-PROMPTS answer-locus path does not resolve, when a portal file lacks its projection header, or when ops-table names appear in portal files; live repo passes; full tier green"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Independent of the parked T2.11b remainder"
+    - id: ULF-12
+      loop_name: "Transient handoff document outlived its own delete-before-merge instruction"
+      lens: A
+      produce:
+        what: "docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md was authored as a container-to-container apply handoff with an explicit self-destruct: 'git rm this file before opening the PR -- transient handoff, must not land on main'"
+        evidence: "docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md:33 (pre_merge_cleanup) and :126"
+      transition_gap:
+        description: "The removal step was manual and got skipped; the file is on main while the work it describes (T2.17 runtime apply) completed weeks ago. No guard class exists for transient artifacts (the intent-doc-freeze guard covers INTENT-*.md only), so the failure mode recurs for the next handoff. LENS A(b)."
+        evidence: "file present at audited_commit; scripts/checks/contracts/validate_intent_doc_freeze.py:8 (scope excludes docs/handoffs)"
+      terminal_state: "Handoff deleted; transient-artifact classes either carry a lifecycle guard (fail full tier when a handoff's referenced work is complete) or the pattern is retired in favor of PR-description handoffs"
+      symptom:
+        description: "One stale operational document containing a step-by-step privileged-apply sequence persists as apparent live guidance"
+        magnitude_count: "1 file (the only occupant of docs/handoffs/)"
+        source: "ls docs/handoffs/"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: UNRECOGNIZED
+        item_ids: []
+        dedup_search_terms: ["handoff", "pre_merge_cleanup"]
+        dedup_hit_count: 4
+        note: "DECISIONS.md hits are the unrelated CD.18 sibling-branch hand-off; nothing owns handoff-doc lifecycle. Recs cache absent - novelty HYPOTHESIS."
+      novelty_confidence: HYPOTHESIS
+      disposition: CLOSE
+      frame_lock_analysis: >-
+        Human-team residue: a handoff DOCUMENT mimics how two human engineers transfer work;
+        between two agent containers the durable halves already live in the plan YAML + exit
+        criteria, and the ephemeral half belongs in the PR body. Rejected alternative:
+        ABSORB into the intent-doc-freeze guard - rejected as scope creep on a guard with
+        precise semantics; a one-line deletion rec plus a decision on the pattern is cheaper.
+      severity: low
+      severity_rationale: "Low clause: single-file hygiene; the work completed, so the stale instructions are noise rather than risk"
+      confidence: CONFIRMED
+      proposed_closer: "Rec: git rm the handoff; record whether future handoffs ride PR descriptions or gain a freeze-style guard"
+      proposed_rec_draft:
+        title: "Delete the stale ducklake runtime-apply handoff and pick a lifecycle for transient handoffs"
+        context: "The handoff at docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md instructs its own pre-merge deletion (:33, :126) but landed on main; the T2.17 apply it choreographed completed, and no guard covers the docs/handoffs class, so the skipped-manual-step failure recurs by construction."
+        acceptance: "docs/handoffs/ is empty (or contains only a README stating the chosen pattern); if the guard option is chosen, a checks entry fails on any handoff older than its referenced work's completion"
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: "Trivial; bundle with any hygiene PR"
+    - id: ULF-13
+      loop_name: "Deferred ops-table migrations, telemetry dead path, and legacy outbox all terminate at T2.26/T2.36 (confirmation)"
+      lens: A
+      produce:
+        what: "ops_session_log/ops_execution_plans remain on Athena/Iceberg with ops-compaction 'active but DEPRECATED, retires at T2.26'; telemetry writes ride the dead-until-rebuilt path; the legacy staging outbox survives only for those paths (Decision 84 I-4)"
+        evidence: "src/lambdas/ops-compaction/manifest.yaml (deprecated note); AGENTS.md source-of-truth table"
+      transition_gap:
+        description: >-
+          Audited as a candidate unclosed loop and found CLOSED-BY-QUEUE: T2.26 (in_progress)
+          owns the migrations + compaction retirement behind an explicit START GATE
+          (rec-2113 pg_restore drill), T2.36 owns the telemetry re-landing (Decision 95
+          4-table model), the preflight telemetry health check is explicitly stubbed until
+          then, and the freeze test passes because each deferral names its trigger. Reported
+          as confirmation per methodology, not as a defect.
+        evidence: "docs/ROADMAP-PLATFORM.yaml T2.26 exit criteria (START GATE rec-2113) + T2.36; docs/DECISIONS.md Decision 84 I-4"
+      terminal_state: "All ops tables transit the closed boundary or retire per T-1.9; ops-compaction + outbox deleted; telemetry lands on DuckLake"
+      symptom:
+        description: "Deferral is tracked, gated, and non-silent (validate_outbox_staleness warns; the manifest carries the deprecation)"
+        magnitude_count: "N/A"
+        source: "N/A"
+      downstream_gated: []
+      roadmap_crossref:
+        classification: RECOGNIZED_ADEQUATE
+        item_ids: [T2.26, T2.36]
+        dedup_search_terms: ["ops_compaction", "T2.26", "Phase 4"]
+        dedup_hit_count: 14
+        note: "Extensively tracked (Decision 84, T2.26 in_progress with named start gate, T2.36 queued); included to record the freeze-test pass and calibrate the dismissal ledger"
+      novelty_confidence: CONFIRMED
+      disposition: KEEP
+      frame_lock_analysis: >-
+        Correct as-is: the deferral chain names its own triggers (rec-2113 drill -> T2.26
+        migrations -> outbox retirement; T2.36 for telemetry), which is exactly the
+        expiry-check the freeze test demands. Rejected alternative: CLOSE by accelerating
+        the migrations - rejected; the restore-drill start gate is a data-safety control
+        (safety carve-out) and sequencing is deliberate.
+      severity: low
+      severity_rationale: "Low clause: confirmation entry; no defect claimed"
+      confidence: CONFIRMED
+      sequencing:
+        safe_to_queue_now: false
+        blocked_behind: [rec-2113]
+        note: "Proceeds on its own gate; no action proposed"
