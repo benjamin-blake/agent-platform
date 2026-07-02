@@ -1,0 +1,244 @@
+schema_version: 1
+slug: candidate-decision-ratification
+plan_path: docs/plans/PLAN-candidate-decision-ratification.yaml
+plan_type: IMPLEMENTATION
+verification_tier: V2
+phase: "Phase 1: Core Infrastructure (platform governance / workflow)"
+
+intent: >
+  Close a workflow gap: the four-tier workflow (/orient -> /plan -> /implement) can AUTHOR
+  decisions (ops_data_portal file_decision) and CITE them (decision-scout) but has no lane that
+  RATIFIES a candidate decision (CD.NN) whose conditions are met. 31 of 39 CDs are state=pending
+  and several silently gate live tier items via completion_blocked_on_cd. Build a first-class
+  ratification lane shared across /orient (surface), /plan (draft the ratification step), and
+  /implement (execute the file+flip bookkeeping) -- no new top-level command -- and use it on its
+  first instances by ratifying the two already-REALIZED CDs (CD.6 rebuild-not-migrate; CD.34
+  RDS->Neon). Ratification is the user's call: this plan DRAFTS the Decision text (esp. CD.34's
+  swap-back-to-RDS reversal conditions) for approval; the portal write + roadmap flip execute only
+  in /implement behind an execution-time confirmation gate.
+
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >
+      Add realization_evidence (str|None) to the CandidateDecision Pydantic model (extra=forbid,
+      so it is an explicit field). Add a lean CD-centric ratifiable_cds() computation and expose it
+      in to_preflight_dict so /orient can deterministically surface pending+realized CDs distinct
+      from merely-blocking CDs. Keep in-file additions minimal -- file is at its 710 SLOC budget.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >
+      scripts/platform_roadmap.py is at 710/710. If the realization_evidence field + ratifiable_cds
+      cannot be absorbed by an in-file offset, raise the platform_roadmap.py budget by the minimum
+      needed with a one-line justification comment (Decision 102 sanctions a manual justified raise;
+      budgets otherwise ratchet down only). Prefer offset over raise where clean.
+  - file: scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    action: Create
+    purpose: >
+      New hermetic referential guard. Asserts (R1) every state==ratified CD resolves to a dec-NNN
+      (via ratified_as, else the dec-NNN inside filed_via) that matches an existing "## Decision NNN:"
+      header in docs/DECISIONS.md; when both ratified_as and filed_via are present they must agree.
+      (R2) no state==pending CD carries ratified_as, and its filed_via is absent or the pending
+      literal pending_log_decision_lambda (never a dec-pointer). (R3) state==superseded CDs are
+      exempt from R1. Referential target is DECISIONS.md (git-tracked SoT) because the ops_decisions
+      cache is gitignored/absent in CI.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >
+      Register validate_candidate_decision_ratification (owner=platform) and insert it into the
+      full_sequence() adjacent to validate_platform_roadmap AND into pre_sequence() so ratification
+      PRs are gated pre-merge (governance writes deserve the --pre gate).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >
+      Facade re-export of validate_candidate_decision_ratification so registry getattr-resolution on
+      the validate module (and test mock-patching) works, matching the Decision 104 registry pattern.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >
+      (a) Reconcile the 5 stale ratified CDs onto real Decisions: CD.31->dec-078, CD.16->dec-079,
+      CD.24->dec-079, CD.33->dec-081, CD.22->dec-085; unify all 7 ratified CDs onto the canonical
+      shape (state: ratified + ratified_as: dec-NNN + filed_via: ops_decisions:dec-NNN), incl.
+      CD.35 (add ratified_as: dec-092) and CD.36 (filed_via -> ops_decisions:dec-103, keep
+      ratified_as: dec-103). (b) Add realization_evidence to CD.6 and CD.34. (c) Phase 2: flip CD.6
+      and CD.34 to state: ratified with ratified_as/filed_via = dec-106 / dec-107. (d) Update the
+      agent_instructions "Ratification vehicle" note to describe the shared /orient->/plan->/implement
+      lane and the canonical shape; correct the stale dec-1086/1085/1089 parentheticals to the 3-digit
+      DECISIONS.md numbers.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >
+      Draft Decision 105 (ratification-lane mechanism + canonical ratified-CD shape + stale-CD
+      reconciliation rationale), Decision 106 (ratify CD.6 rebuild-not-migrate; realized-state +
+      reversal conditions), Decision 107 (ratify CD.34 RDS->Neon; MUST ratify the Decision-88-amended
+      framing -- weekly DR, egress-budget invariants, inlining=0 -- and MUST specify explicit
+      swap-back-to-RDS reversal conditions). Bodies drafted in this plan's context.
+  - file: docs/contracts/candidate-decision-ratification.yaml
+    action: Create
+    purpose: >
+      Machine-parseable contract (Decision 86: semantics -> contracts, NOT a prose INTENT doc)
+      defining the canonical ratified-CD shape, the R1/R2/R3 guard rules, the surfacing signal
+      (realization_evidence), and the shared-surface lane steps.
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >
+      Add a "Ratifiable CDs" surfacing subsection keyed on platform_roadmap.ratifiable_cds
+      (pending CDs carrying realization_evidence), distinct from item-centric parked-gated handling;
+      point parked-gated items at the ratification lane instead of a dead-end note.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >
+      Add a "Candidate Decision Ratification" methodology section: a plan that realizes/ratifies a CD
+      must include a ratification block (drafted Decision text incl. any reversal conditions + the
+      exact portal + roadmap-flip commands). The /plan Step 6b confirmation + plan-critique are the
+      human sign-off on the Decision text.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >
+      Add a "CD ratification bookkeeping" step: execute an approved plan's ratification block --
+      edit DECISIONS.md -> portal ETL (ops_data_portal --backfill-decisions-md; --file-decision noted
+      as the single-row alternative) -> flip the CD in ROADMAP-PLATFORM.yaml to the canonical ratified
+      shape -> re-run session_preflight to confirm the gate cleared. Requires an explicit
+      execution-time human confirmation BEFORE the irreversible portal write.
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >
+      Cover the realization_evidence field (accepted, defaults None) and ratifiable_cds() (surfaces
+      pending+realized CDs; excludes ratified and pending-without-evidence; present in to_preflight_dict).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >
+      Cover the new guard: PASS on a canonical ratified CD whose dec-NNN matches a DECISIONS.md header;
+      FAIL on (i) ratified CD with a dec-NNN that has no header, (ii) pending CD carrying ratified_as
+      or a dec-pointer filed_via, (iii) ratified_as/filed_via dec-NNN disagreement. Include a fixture
+      proving ops_decisions:dec-078 resolves via the "## Decision 78:" header while stale 4-digit
+      Warehouse-ID lines in the decision body are ignored.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >
+      Assert validate_candidate_decision_ratification is registered (owner=platform) and present in
+      the pre and full sequences; keep the registry<->validate facade parity test green.
+
+acceptance_criteria:
+  - "The ratification lane exists end-to-end across /orient (surface), /plan (draft), /implement (execute), encoded in .claude skills + the new contract; no new top-level command is added."
+  - "The referential guard validate_candidate_decision_ratification is registered in scripts/checks/registry.py (owner=platform), facade-re-exported in scripts/validate.py, present in BOTH pre and full sequences, and `bin/venv-python -m scripts.validate` passes with it active."
+  - "All 7 pre-existing ratified CDs (CD.16/22/24/31/33/35/36) carry the canonical shape (state: ratified + ratified_as: dec-NNN + filed_via: ops_decisions:dec-NNN) resolving to a real `## Decision NNN:` header, so the guard passes on the reconciled roadmap."
+  - "CD.6 and CD.34 are flipped to state: ratified with ratified_as/filed_via = dec-106 / dec-107 ONLY after human sign-off; each has a filed DECISIONS.md entry and (post-portal) an ops_decisions row."
+  - "Decision 107 (CD.34) ratifies the Decision-88-amended framing (weekly DR cadence, egress-budget invariants, inlining=0) and records explicit swap-back-to-RDS reversal conditions."
+  - "A fresh `bin/venv-python -m scripts.session_preflight` after the flip shows the CD.6/CD.34 gates cleared (those CD ids no longer appear in blocked_on_cd / completion_blocked_on_cd), demonstrating the lane on >=1 CD."
+  - "CD.29 is NOT ratified (forward-intent, not realized); no pending CD is ratified without corroborated realization evidence."
+  - "Docs/skills updated so the next agent can run the lane without rediscovering the mechanism (contract + orient/planning/implement skills + agent_instructions vehicle note)."
+
+verification_plan:
+  - step: 1
+    phase: Schema + surfacing
+    action: realization_evidence field accepted and defaults None; ratifiable_cds surfaces pending+realized CDs only.
+    command: "bin/venv-python -m pytest tests/test_platform_roadmap.py -q"
+    expected: "All tests pass; new tests for realization_evidence and ratifiable_cds green."
+    fix_if: "If the field is rejected, confirm it was added to CandidateDecision (extra=forbid). If ratifiable_cds mis-classifies, ensure it filters state==pending AND realization_evidence truthy."
+  - step: 2
+    phase: Surfacing wiring
+    action: ratifiable_cds is present in the preflight dict so /orient can read it.
+    command: "bin/venv-python -c \"from pathlib import Path; from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml'); k=d.to_preflight_dict(); print('ratifiable_cds' in k, [c['id'] for c in k.get('ratifiable_cds',[])])\""
+    expected: "Prints True and a list including CD.6 and CD.34 after realization_evidence is added to them."
+    fix_if: "If key missing, add ratifiable_cds() output to to_preflight_dict(). If CD.6/CD.34 absent, confirm realization_evidence was set on them in the roadmap."
+  - step: 3
+    phase: Guard - negative cases
+    action: The guard FAILS on a ratified CD with an unknown dec-NNN, a pending CD carrying ratified fields, and a ratified_as/filed_via mismatch.
+    command: "bin/venv-python -m pytest tests/test_validate.py -q -k candidate_decision"
+    expected: "All new guard tests pass, including the three failure fixtures and the dec-078-resolves-via-header fixture."
+    fix_if: "If a failure case is not caught, tighten the R1/R2 checks. If dec-078 does not resolve, ensure the header regex matches `## Decision <int>:` and derives the int from ratified_as/filed_via."
+  - step: 4
+    phase: Guard - registry + facade parity
+    action: The guard is registered (owner=platform), in both sequences, and facade-re-exported.
+    command: "bin/venv-python -m pytest tests/test_checks_registry.py -q"
+    expected: "Registry parity tests pass with validate_candidate_decision_ratification present in pre + full sequences and re-exported on scripts.validate."
+    fix_if: "Add @register(...) + insert into pre_sequence()/full_sequence(); add the re-export line in scripts/validate.py."
+  - step: 5
+    phase: Guard - full suite green on reconciled roadmap
+    action: The whole validation suite passes with the guard active AFTER the 5 stale CDs are reconciled and all 7 ratified CDs carry the canonical shape.
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0; no failure from validate_candidate_decision_ratification; platform_roadmap SLOC within budget."
+    fix_if: "If the guard flags a legacy CD, complete the reconciliation (CD.31->dec-078, CD.16/CD.24->dec-079, CD.33->dec-081, CD.22->dec-085, CD.35 add ratified_as, CD.36 filed_via->ops_decisions:dec-103). If SLOC fails, apply the offset or the justified budget raise."
+  - step: 6
+    phase: Ratification execution (post sign-off)
+    action: After human sign-off, Decisions 106/107 are in DECISIONS.md and ETL'd to ops_decisions; CD.6/CD.34 flipped.
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && bin/venv-python -c \"import json; ids={json.loads(l)['id'] for l in open('logs/.decisions-index.jsonl') if l.strip()}; print('dec-106' in ids, 'dec-107' in ids)\""
+    expected: "Backfill reports 0 failed; prints True True (dec-106 and dec-107 present in ops_decisions)."
+    fix_if: "If a row is absent, confirm the DECISIONS.md entry has a parseable `## Decision NNN:` header + decision_id; re-run backfill. Do NOT edit the JSONL cache directly (Single Portal Invariant)."
+  - step: 7
+    phase: Gate-clear demonstration
+    action: A fresh preflight shows the CD.6/CD.34 gates cleared once the CDs are ratified.
+    command: "bin/venv-python -m scripts.session_preflight >/dev/null 2>&1; bin/venv-python -c \"import json; r=json.load(open('logs/.preflight-report.json')); ids=set(); [ids.update(x['blocking_cds']) for x in r.get('platform_roadmap',{}).get('blocked_on_cd',[])] if isinstance(r.get('platform_roadmap',{}).get('blocked_on_cd',[]),list) else None; print('CD.6' in ids or 'CD.34' in ids)\""
+    expected: "Prints False (neither CD.6 nor CD.34 remains in blocked_on_cd after the flip). Note: the slim preflight payload may omit blocked_on_cd; if so use `bin/venv-python -m scripts.platform_roadmap` for the full dict."
+    fix_if: "If a CD still blocks, confirm its state flipped to ratified in ROADMAP-PLATFORM.yaml (gate derivation keys purely on state==pending)."
+  - step: 8
+    phase: Regression
+    action: Full validation suite remains green end-to-end after the ratifications.
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0; guard passes with CD.6/CD.34 now ratified and pointing at dec-106/dec-107 headers present in DECISIONS.md."
+    fix_if: "If the guard fails on CD.6/CD.34, ensure Decision 106/107 headers exist in DECISIONS.md in the same commit as the roadmap flip (the guard's referential target is DECISIONS.md, hermetic)."
+
+constraints:
+  - "STRATEGIC plans are suspended (Decision 67 / CD.17). This is and stays an IMPLEMENTATION plan even though it is large."
+  - "Single Portal Invariant (Decision 84): decision writes go ONLY through ops_data_portal (--backfill-decisions-md preferred, --file-decision the single-row alternative). NEVER edit logs/.decisions-index.jsonl or logs/.recommendations-log.jsonl directly. Decision numbering authority is DECISIONS.md; callers supply the integer decision_id."
+  - "Ratification is the USER's call. The portal write + roadmap state flip for CD.6/CD.34 (Phase 2) execute ONLY after human sign-off, behind an explicit execution-time confirmation gate in /implement. Do NOT file a Decision unilaterally. Plan approval (Step 6b + plan-critique) is the sign-off on the drafted Decision text."
+  - "Decision 76: .claude/ is the canonical mechanism surface. Decision 86: no new standing prose-architecture docs -- semantics land in docs/contracts/candidate-decision-ratification.yaml, rationale in Decisions, NOT an INTENT-*.md (the intent-doc-freeze guard enforces this)."
+  - "Decision 104: the new check registers in scripts/checks/registry.py FIRST (validate.py is SoT before ci.yml). ci.yml calls `python -m scripts.validate` and enumerates no individual checks, so registry insertion is sufficient for CI pickup."
+  - "Decision 102 (SLOC ratchet): budgets ratchet DOWN only; a raise needs a manual justified edit to config/sloc_budgets.yaml. platform_roadmap.py is at 710/710 -- keep additions minimal; prefer an in-file offset, else raise by the minimum with justification."
+  - "Guard referential target is DECISIONS.md `## Decision NNN:` headers (git-tracked, hermetic) -- NOT the gitignored ops_decisions cache and NOT a live warehouse read (CI PR roles lack reader access). Leave the stale 4-digit `Warehouse ID: dec-1085/1086/1089/1091` lines in the Decision bodies untouched; the guard derives the number from the CD's ratified_as/filed_via and matches the header integer only."
+  - "NECESSARY-BUT-NOT-SUFFICIENT: ratifying CD.6/CD.34 clears the COMPLETION gate on T2.18 (9 open) / T2.26 (7 open) but their open CODE criteria remain; this does NOT make T2.36 (telemetry capture) eligible. Do not imply otherwise."
+  - "Closing any items that fully unpark on ratification (every gating CD ratified AND open_criteria_count == 0) is /implement's status-flip bookkeeping, NOT /plan's (Decision 90). T3.1 does NOT unpark here because CD.29 stays pending."
+
+context:
+  - "Verified facts: gate derivation (platform_roadmap.py:754/784) keys purely on cd.state == 'pending'; a flip to ratified clears the gate with no AWS/runtime probe. CandidateDecision.filed_via has NO validator (the filed_via validator at L320 is on DocumentMeta), so the referential constraint is not enforced today -- the new guard adds it."
+  - "Precedent (CD.36 -> Decision 103): DECISIONS.md entry authored with number 103, warehouse row created via ops_data_portal --backfill-decisions-md post-merge, roadmap CD.36 flipped to state: ratified. CD.35 -> Decision 92 the same way. These are the two working prior ratifications (dec-092, dec-103 both present in ops_decisions today)."
+  - "Ground truth (39 CDs): 31 pending, 7 ratified (CD.16/22/24/31/33/35/36), 1 superseded (CD.14). Stale filed_via pointers on 5 ratified CDs reference 4-digit warehouse ids (dec-1085/1086/1089/1091) that no longer exist in the 3-digit ops_decisions store; only dec-092 and dec-103 resolve. Correct mappings confirmed against DECISIONS.md: Decision 78=CD.31, 79=CD.16+CD.24, 81=CD.33, 85=CD.22, 92=CD.35, 103=CD.36."
+  - "Realization evidence corroborated: CD.6 detail '[Realized 2026-05-28: Phase B personal-account Terraform re-deploy applied + verified per Decision 77 (PR #1)]'; CD.34 is live (Decision 82 names 'CD.34 (Neon)' as catalog authority; Decision 88 amends CD.34's DR cadence because the live Neon catalog breached the free-tier egress cap). CD.29 EXCLUDED -- forward-intent validation-suite architecture, T3.1/T3.7/T0.12.5 open, roadmap says 'state remains pending' even with T3.6 satisfied."
+  - "Canonical ratified-CD shape (Decision 105 defines; contract encodes): state: ratified + ratified_as: dec-NNN (3-digit DECISIONS.md number; authoritative referential key) + filed_via: ops_decisions:dec-NNN (same number; the vehicle-note format). Guard rules: R1 ratified => dec-NNN resolves to `## Decision NNN:` header and ratified_as/filed_via agree if both present; R2 pending => no ratified_as and filed_via absent-or-pending_log_decision_lambda; R3 superseded exempt from R1."
+  - "DRAFT Decision 105 (ratification-lane mechanism): Adopts a first-class CD ratification lane shared across /orient (surface pending+realized CDs via realization_evidence), /plan (draft the ratifying Decision text incl. reversal conditions as a plan step; the Step 6b + plan-critique gates are the human sign-off), and /implement (execute: author DECISIONS.md entry -> ops portal ETL -> flip the CD to the canonical ratified shape -> re-run preflight to confirm the gate cleared, behind an execution-time confirmation gate). Defines the canonical ratified-CD shape and the R1/R2/R3 referential guard (validate_candidate_decision_ratification), whose target is DECISIONS.md (hermetic; the ops_decisions cache is gitignored and CI PR roles lack reader access). Reconciles 5 pre-existing ratified CDs whose filed_via pointed at retired 4-digit warehouse ids onto their real 3-digit Decisions. Rationale routed here per Decision 86; mechanism encoded in .claude/ + docs/contracts/candidate-decision-ratification.yaml. Related: Decision 90 (four-tier workflow), Decision 84 (Single Portal / numbering authority), Decision 92 + Decision 103 (ratification precedents), Decision 104 (check registry), Decision 76/86 (canonical surfaces / contract routing)."
+  - "DRAFT Decision 106 (ratify CD.6 -- Personal AWS account = destination; rebuild not migrate): Ratifies CD.6. Realized 2026-05-28 -- Phase B personal-account Terraform re-deploy applied + verified per Decision 77 (PR #1); pre-live data was throwaway, only ops_recommendations + ops_decisions were preserved (JSON export/import), infrastructure re-created by a fresh terraform apply against the personal account. CD.6 gates all of T2; ratifying clears the completion gate on T2 items but their open CODE criteria remain (necessary-not-sufficient). Reversal conditions: re-open as a candidate only if (a) a second destination account/re-platform is chosen (re-invokes the migrate-vs-rebuild question), or (b) pre-live-data-is-throwaway ceases to hold (i.e., live trading data with retention/compliance value exists AND a future account move is contemplated) -- at which point a migrate path, not a rebuild, must be re-evaluated. Related: Decision 77 (fail-closed apply pipeline that realized it), CD.34 (the catalog backend re-platformed within this account). Warehouse: dec-106 via --backfill-decisions-md."
+  - "DRAFT Decision 107 (ratify CD.34 -- DuckLake catalog backend RDS PostgreSQL -> Neon serverless Postgres), AMENDED framing per Decision 88: Ratifies CD.34 as realized/live. The DuckLake catalog runs on Neon serverless Postgres provisioned via the Terraform Neon provider behind the Decision-77 Neon-aware fail-closed guard (blocks any neon_* update/replace/delete; allows a neon_* create on compensating controls -- TLS sslmode=require + scoped non-owner neon_role + Secrets Manager DSN; no IP allow-list). Inlining is disabled for ALL tables including telemetry (ducklake_default_data_inlining_row_limit=0). Catalog egress is a first-class budget governed by Decision 88's four standing access-pattern invariants (warm-connection reuse; no read-cache re-fetch; keep the catalog compacted; DR cadence sized to durability tier + measured egress). DR = a WEEKLY pg_dump-to-S3 (cron(0 3 ? * SUN *), 30-day retention, ~8-day freshness alarm), NOT the original daily cadence (Decision 88 amendment); paid-tier Neon PITR provides finer recovery between weekly dumps. The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED. Swap-back-to-RDS reversal conditions (any one triggers a human-gated re-evaluation, Decision 35): (1) sustained cost regression -- monthly Neon cost (compute + metered egress, WITH the Decision-88 invariants upheld) exceeds the ~$12-15/mo micro-RDS baseline for 2 consecutive billing cycles; (2) durability/availability floor breached -- Neon PITR/pooler cannot meet recovery objectives (e.g. recurring ducklake_reader 502s traced to scale-to-zero cold-resume that warm-connection reuse cannot mitigate, or a PITR window short of a required RPO); (3) hard technical incompatibility -- the built-in pooler / direct endpoint cannot satisfy DuckLake postgres-catalog transaction-safety within the CD.33 OCC budget and no app-side pool remedies it; (4) vendor viability -- discontinuation of the eligible tier, a ToS change incompatible with the use, or sustained SLA misses. Reversal mechanics: the RDS path stays fully Terraformed as an architectural-evolution artifact; swap-back re-points the Terraform config to the RDS module and restores the catalog from the latest weekly pg_dump-to-S3 (+ Neon PITR delta) -- a METADATA restore, not a data migration (row data is S3 Parquet). Precondition: the rec-2113 pg_restore restore drill must pass before the weekly dump is relied on as the swap-back artifact. Related: Decision 88 (amends here -- egress budget + weekly DR), Decision 82 (direct-vs-pooled endpoint basis), Decision 81/CD.33 (runtime architecture retained), Decision 77 (fail-closed guard), Decision 100/75 (managed-service-native preference the Neon choice aligns with). Warehouse: dec-107 via --backfill-decisions-md."
+  - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decisions 76, 84, 86, 88, 90, 92, 102, 103, 104, 67. NOTE flags handled in constraints: (102) SLOC at-budget for platform_roadmap.py; (84/92) guard resolves against `## Decision NNN:` headers, stale 4-digit Warehouse-ID lines left untouched, test fixture proves dec-078 resolves via header."
+  - "SLOC/tier facts: config/sloc_budgets.yaml pins scripts/platform_roadmap.py at 710 (file currently ~710). ci.yml pr-validate runs `--pre`, main-validate runs full; adding the guard to pre_sequence gates ratification PRs pre-merge. Sibling checks validate_platform_roadmap + validate_decisions_local_writes live in full_sequence; this guard is added to both."
+
+pre_implementation_checklist:
+  - "Confirm on the harness branch (claude/candidate-decision-ratification-2olfja), not main."
+  - "Confirm AWS profile agent_platform is assumable (session-start hook) -- needed for the Phase 2 portal ETL (--backfill-decisions-md) and the preflight ops sync."
+  - "Re-read the CandidateDecision model (scripts/platform_roadmap.py ~L375) and the 7 ratified CDs in docs/ROADMAP-PLATFORM.yaml before editing; re-confirm the dec-078/079/081/085 headers exist in DECISIONS.md."
+  - "Read the Decision 104 registry pattern (scripts/checks/registry.py + an existing scripts/checks/roadmap/*.py) before authoring the new guard so the register()/facade/sequence wiring matches."
+  - "Verify no scope file is Lambda-packaged (confirmed at plan time: none match lambda_manifest patterns) -- no build/deploy/smoke-test steps required."
+
+execution_steps:
+  - "PHASE 1 - Build the lane (no live writes; fully mergeable on its own if Phase 2 is deferred)."
+  - "1. scripts/platform_roadmap.py: add `realization_evidence: str | None = None` to CandidateDecision. Add a lean ratifiable_cds() (returns [{id, title, realization_evidence, gates}] for CDs with state=='pending' and truthy realization_evidence) and include it as `ratifiable_cds` in to_preflight_dict. Keep net in-file growth minimal."
+  - "2. config/sloc_budgets.yaml: run the suite; if platform_roadmap.py now exceeds 710, either apply an in-file offset to get back to <=710 OR raise the budget by the minimum needed with a one-line justification comment (Decision 102 sanctions a manual justified raise)."
+  - "3. tests/test_platform_roadmap.py: add tests for the field default + ratifiable_cds classification + presence in to_preflight_dict (VP steps 1-2)."
+  - "4. scripts/checks/roadmap/validate_candidate_decision_ratification.py: implement R1/R2/R3 against docs/ROADMAP-PLATFORM.yaml + docs/DECISIONS.md headers. Parse dec-NNN from ratified_as (else the dec-NNN inside filed_via); match the integer against `^## Decision <int>:` headers. Decorate with @register('validate_candidate_decision_ratification', owner='platform')."
+  - "5. scripts/checks/registry.py: insert the check name into pre_sequence() and full_sequence() (adjacent to validate_platform_roadmap). scripts/validate.py: add the facade re-export."
+  - "6. tests/test_validate.py + tests/test_checks_registry.py: add the guard pass/fail fixtures (incl. dec-078-via-header) and the registry/facade parity assertions (VP steps 3-4)."
+  - "7. docs/ROADMAP-PLATFORM.yaml reconciliation: repoint CD.31->dec-078, CD.16->dec-079, CD.24->dec-079, CD.33->dec-081, CD.22->dec-085; add ratified_as: dec-092 to CD.35; set CD.36 filed_via -> ops_decisions:dec-103 (keep ratified_as: dec-103). Add realization_evidence to CD.6 and CD.34 (text from the DRAFT Decision 106/107 context). Update the agent_instructions 'Ratification vehicle' note (describe the shared lane + canonical shape; correct the stale 4-digit parentheticals to 3-digit DECISIONS.md numbers)."
+  - "8. docs/contracts/candidate-decision-ratification.yaml: author the contract (canonical shape, R1/R2/R3, realization_evidence surfacing signal, lane steps across the three surfaces)."
+  - "9. .claude/skills/{orient,planning,implement}/SKILL.md: add the surfacing subsection, the ratification-step methodology, and the ratification bookkeeping step respectively (pointing at the contract as SoT)."
+  - "10. Run `bin/venv-python -m scripts.validate` -- expect green with the guard active on the reconciled roadmap (VP step 5). This is the natural Phase-1 commit/merge boundary."
+  - "PHASE 2 - Ratify CD.6 and CD.34 (governance-gated; requires explicit human sign-off before any portal write)."
+  - "11. Draft Decisions 105, 106, 107 into docs/DECISIONS.md using the DRAFT bodies in this plan's context (105 = lane mechanism; 106 = CD.6; 107 = CD.34 with the Decision-88-amended framing + swap-back reversal conditions). Assign numbers 105/106/107 (current max is 104). Each entry carries a `## Decision NNN:` header + Status/Date/Warehouse ID + decision_id fields backfill can parse."
+  - "12. STOP and obtain explicit human confirmation of the Decision text (esp. CD.34's reversal conditions) and authorization to write. Do NOT proceed to the portal write without it."
+  - "13. After sign-off: `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` to ETL 105/106/107 into ops_decisions (Single Portal path; --file-decision is the single-row alternative). Confirm dec-106/dec-107 present (VP step 6)."
+  - "14. Flip CD.6 and CD.34 in docs/ROADMAP-PLATFORM.yaml to state: ratified + ratified_as/filed_via = dec-106 / dec-107 (canonical shape). (Decision 105 already gets ratified_as if it is itself modeled as a CD -- it is not; 105 is a plain Decision, so no CD flip for it.)"
+  - "15. Re-run `bin/venv-python -m scripts.session_preflight` (or `-m scripts.platform_roadmap` for the full dict) and confirm CD.6/CD.34 no longer appear in blocked_on_cd / completion_blocked_on_cd (VP step 7). Run `bin/venv-python -m scripts.validate` for the final regression (VP step 8)."
+  - "16. Do NOT flip any tier_item status in this plan. Any item that fully unparks (every gating CD ratified AND zero open criteria) is a separate /implement bookkeeping closeout (Decision 90). Note in the PR body which items became unpark-eligible, if any."
+  - "17. Commit per the conventions table (feat(candidate-decision-ratification): ...), push, open PR, follow the AGENTS.md PR/CI/squash-merge flow. If Phase 2 is split from Phase 1, land Phase 1 first (guard + reconciliation) then Phase 2 (ratifications)."
+
+rollback: >
+  Phase 1 is pure additive tooling + roadmap-bookkeeping reconciliation; revert the commit to remove
+  the guard/field/skill edits and restore the prior (stale) filed_via values -- no external state
+  changes. Phase 2 writes to the warehouse: to reverse a ratification, flip the CD back to state:
+  pending in ROADMAP-PLATFORM.yaml (the gate re-appears immediately, keying on state) and mark the
+  corresponding decision superseded via `ops_data_portal --update-decision dec-NNN --status
+  superseded` (NEVER edit the JSONL cache directly). Because ratification is a governance act, prefer
+  filing a superseding Decision over deleting rows.
