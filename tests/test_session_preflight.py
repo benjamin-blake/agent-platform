@@ -353,6 +353,15 @@ class TestSlimRoadmapState:
         slim = _preflight._slim_roadmap_state({})
         assert slim == {"next_eligible": [], "strategic_pending": []}
 
+    def test_full_mode_includes_ratifiable_cds(self) -> None:
+        full = {"ratifiable_cds": [{"id": "CD.6", "realization_evidence": "Realized."}]}
+        slim = _preflight._slim_roadmap_state(full, full=True)
+        assert slim["ratifiable_cds"] == [{"id": "CD.6", "realization_evidence": "Realized."}]
+
+    def test_full_mode_defaults_ratifiable_cds_to_empty(self) -> None:
+        slim = _preflight._slim_roadmap_state({}, full=True)
+        assert slim["ratifiable_cds"] == []
+
 
 class TestFormatPreflightSummary:
     def test_summary_is_a_single_block_referencing_the_report_path(self) -> None:

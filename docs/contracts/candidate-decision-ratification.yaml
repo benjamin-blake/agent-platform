@@ -1,0 +1,108 @@
+version: 1
+last_updated: "2026-07-02"
+decisions_cited:
+  - Decision-76
+  - Decision-84
+  - Decision-86
+  - Decision-90
+  - Decision-92
+  - Decision-102
+  - Decision-103
+  - Decision-104
+  - Decision-105
+summary: >-
+  A candidate_decision (CD.NN) whose gated work is realized needs a lane that RATIFIES it --
+  distinct from AUTHORING a fresh Decision (ops_data_portal file_decision) or CITING one
+  (decision-scout). This contract defines the canonical ratified-CD shape, the surfacing
+  signal that flags a CD as ready, the R1/R2/R3 referential guard that enforces the shape,
+  and the shared lane steps across /orient, /plan, and /implement (no new top-level command).
+  This file is intentionally non-ritual (no contract:/class: block) per the CD.25 gate
+  (validate.py::validate_contract_drift skips files without a top-level contract: key).
+
+canonical_ratified_shape:
+  description: >-
+    The required field combination on a candidate_decisions[] entry once it ratifies.
+    Enforced by scripts/checks/roadmap/validate_candidate_decision_ratification.py.
+  state:
+    value: "ratified"
+  ratified_as:
+    type: "str"
+    semantics: "'dec-NNN' -- the 3-digit DECISIONS.md decision number. Authoritative referential key (R1)."
+  filed_via:
+    type: "str"
+    semantics: >-
+      'ops_decisions:dec-NNN' -- same NNN as ratified_as. This is the vehicle-note format
+      already enforced by DocumentMeta.filed_via's field_validator; CandidateDecision.filed_via
+      has no such validator today, which is why this guard exists.
+  precedents: >-
+    CD.16/CD.24 -> Decision 79 (dec-079); CD.31 -> Decision 78 (dec-078); CD.33 -> Decision 81
+    (dec-081); CD.22 -> Decision 85 (dec-085); CD.35 -> Decision 92 (dec-092); CD.36 -> Decision
+    103 (dec-103). Five of these seven pre-existing ratified CDs pointed at retired 4-digit
+    warehouse ids (dec-1085/1086/1089/1091) before Decision 105 reconciled them onto the real
+    3-digit DECISIONS.md numbers.
+
+surfacing_signal:
+  field: realization_evidence
+  type: "str | None"
+  location: "CandidateDecision.realization_evidence (scripts/platform_roadmap.py)"
+  semantics: >-
+    Free-text evidence that a pending CD's gated work is realized/live, set by whoever notices
+    (audit, /orient session, planning). Truthy realization_evidence on a state==pending CD makes
+    it eligible for the ratification lane. A pending CD with no realization_evidence is NOT
+    surfaced -- forward-intent CDs (e.g. CD.29) stay invisible to the lane until evidence exists.
+  computed_by: "PlatformRoadmapState.ratifiable_cds() -> included in to_preflight_dict['ratifiable_cds']"
+
+referential_guard:
+  name: validate_candidate_decision_ratification
+  owner: platform
+  registered_in: "scripts/checks/registry.py pre_sequence() AND full_sequence() (governance writes gate pre-merge)"
+  target: >-
+    The `## Decision NNN:` headers in BOTH docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md
+    (union; archive read only if present) -- git-tracked and hermetic. NOT the gitignored
+    ops_decisions cache (CI PR roles lack reader access) and NOT a live warehouse read.
+    Reading both files matters because resolved Decisions sweep from DECISIONS.md to
+    DECISIONS_ARCHIVE.md over time; a DECISIONS.md-only guard would redden main on the first
+    archival sweep of a ratified CD's Decision.
+  rules:
+    R1:
+      applies_to: "state == ratified"
+      rule: >-
+        dec-NNN (from ratified_as, else the dec-NNN inside filed_via) MUST resolve to a
+        '## Decision NNN:' header. If both ratified_as and filed_via are present, their
+        NNN MUST agree.
+    R2:
+      applies_to: "state == pending"
+      rule: >-
+        MUST NOT carry ratified_as. filed_via MUST be absent or the literal
+        'pending_log_decision_lambda' -- never a dec-NNN pointer.
+    R3:
+      applies_to: "state == superseded"
+      rule: "Exempt from R1 (a superseded CD's historical dec pointer, if any, is not re-verified)."
+
+lane_steps:
+  orient:
+    surface: >-
+      /orient reads platform_roadmap.ratifiable_cds() (pending CDs with realization_evidence)
+      as a distinct surfacing lane from item-centric parked-gated handling, and points any
+      parked-gated item at the ratification lane instead of a dead-end note.
+  plan:
+    draft: >-
+      A /plan session that realizes/ratifies a CD includes a ratification block: the drafted
+      Decision text (including any reversal conditions) plus the exact portal + roadmap-flip
+      commands to run at /implement time. The plan confirmation step + plan-critique are the
+      human sign-off on the drafted Decision text -- ratification is the user's call, never
+      unilateral.
+  implement:
+    execute: >-
+      After explicit execution-time human confirmation (never before), /implement: (1) authors
+      the DECISIONS.md entry, (2) ETLs it via `scripts.ops_data_portal --backfill-decisions-md`
+      (`--file-decision` is the single-row alternative; Single Portal Invariant, Decision 84),
+      (3) flips the CD to the canonical ratified shape in docs/ROADMAP-PLATFORM.yaml, (4)
+      re-runs session_preflight to confirm the completion/blocking gate cleared.
+
+necessary_not_sufficient: >-
+  Ratifying a CD clears the COMPLETION gate on items it gates (gate derivation keys purely on
+  cd.state == 'pending'; scripts/platform_roadmap.py blocked_on_cd / to_preflight_dict). It does
+  NOT close those items' open CODE exit criteria, and does NOT cascade to unrelated items whose
+  own gating CDs remain pending. Tier_item status flips (Decision 90 bookkeeping) are a separate
+  /implement step from the ratification itself.

@@ -325,6 +325,55 @@ T-1.10's own exit_criteria are satisfied by the existence of this section. The f
 **Recovery clause:** if T-1.10 remains `status: not_started` after this branch merges, the next planning session must address it explicitly -- either as a manual YAML flip in a small follow-up plan, or as a follow-on tier_item that re-implements the bookkeeping rule under different assumptions. Do not let T-1.10 sit `not_started` indefinitely while its implementation is live.
 
 
+## CD Ratification Bookkeeping (Workflow Step 6 -- CONDITIONAL, fires when the plan has a ratification block)
+
+Fires only when the approved plan carries a ratification block (see the planning skill's
+"Candidate Decision Ratification" section). This step's authoritative shape is
+`docs/contracts/candidate-decision-ratification.yaml`. Ratification is the user's call --
+this step NEVER runs without the explicit execution-time confirmation in step 2 below.
+
+### Protocol
+1. **Locate the ratification block** in the approved plan (drafted Decision text, reversal
+   conditions if applicable, and the exact portal + roadmap-flip commands).
+2. **STOP and obtain explicit execution-time human confirmation** of the Decision text before
+   any write. Plan approval (the planning skill's Step 6b + Critique Gate) is sign-off on the
+   *drafted text*; it is NOT authorization to execute the write. Re-present the drafted Decision
+   text verbatim and wait for an explicit go-ahead in THIS session. Do not proceed on an assumed
+   or inferred yes.
+3. **Author the DECISIONS.md entry** using the confirmed text. Before assigning the number,
+   re-check the current max `## Decision NNN:` header (numbering-race note: a concurrent PR may
+   have claimed the drafted number since `/plan` ran -- shift to the next free number if so, and
+   update the ratified_as/filed_via targets in the same edit).
+4. **ETL via the Single Portal Invariant** (Decision 84): `bin/venv-python -m
+   scripts.ops_data_portal --backfill-decisions-md` (the `--file-decision` single-row form is
+   the alternative for a single entry). Confirm the new dec-NNN row(s) are present in
+   `logs/.decisions-index.jsonl` after the sync. NEVER edit the JSONL cache directly.
+5. **Flip the CD** in `docs/ROADMAP-PLATFORM.yaml` to the canonical shape: `state: ratified` +
+   `ratified_as: dec-NNN` + `filed_via: ops_decisions:dec-NNN` (same NNN in both fields). If the
+   plan's ratification block calls for truth-maintenance edits to the CD's body (e.g. a stale
+   mechanism description contradicted by the ratified reality), apply them in the SAME edit --
+   do not leave the body describing a superseded mechanism after the flip (mirrors the
+   exit-criteria "realized-differently" rule above).
+6. **Re-run `bin/venv-python -m scripts.session_preflight`** (or `-m scripts.platform_roadmap`
+   for the full dict if the slim preflight payload omits the field you need) and confirm the
+   ratified CD no longer appears in `blocked_on_cd` / `completion_blocked_on_cd` for any item it
+   was gating.
+7. **Run `bin/venv-python -m scripts.validate`** for the final regression -- the
+   `validate_candidate_decision_ratification` guard must pass against the newly ratified CD's
+   dec-NNN header.
+8. **Do NOT flip any tier_item status as part of this step.** An item that fully unparks
+   (every gating CD ratified AND zero open criteria) is a separate Tier_item bookkeeping
+   decision (the section above) -- note in the PR body which items became unpark-eligible, if
+   any, but let the normal bookkeeping walk decide status flips (Decision 90).
+
+### Rejection handling
+If the human declines to confirm the Decision text in step 2 (asks for edits, defers, or says
+no), do NOT proceed to steps 3-8. Either incorporate the requested edits and re-present, or stop
+the ratification portion of the plan entirely and report which steps were skipped. A plan whose
+non-ratification scope is otherwise complete may still commit/merge without the ratification
+having executed -- ratification is additive, not a blocking prerequisite for the rest of the plan.
+
+
 ## Strategic Scoping Rules (Workflow Step 3 -- STRATEGIC Plans only)
 
 ### JIT Context Injection
