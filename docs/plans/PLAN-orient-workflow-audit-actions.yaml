@@ -1,0 +1,135 @@
+schema_version: 1
+slug: "orient-workflow-audit-actions"
+intent: >-
+  Action the orient-slice findings of the interactive-workflow audit (commit d107b4a) so the
+  read-only orientation surface that precedes every /plan session is DRY across its layer-3/4
+  boundary, reads deterministic preflight-cache fields as its primary path, and stops overspending
+  ~150k tokens on a full roadmap read -- sharpening the agent-first workflow that steers all
+  platform work.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-orient-workflow-audit-actions.yaml
+phase: >-
+  Platform instruction-architecture maintenance (Decision 90 four-tier workflow; layer-3/4 boundary
+  per docs/contracts/instruction-architecture.yaml). No tier_item targeted (closes_criteria: none);
+  actions the orient slice of audits/workflow-review-d107b4a.yaml. Roadmap phase: Phase 1 Core
+  Infrastructure (complete).
+scope:
+  - file: .claude/commands/orient.md
+    action: Modify
+    purpose: >-
+      Layer-3 command reduces to thin orchestration -- collapse the duplicated cache-only constraint
+      to a skill pointer (CE-01), Step 2 lists only the cache-key names + the literal runnable roadmap
+      projection extraction replacing the full-file Read (CE-03 + WF-19), Step 3 lists only the six
+      section names + skill pointer (CE-02).
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Layer-4 skill becomes the sole home of orient input semantics -- Inputs table gains the
+      in_progress field semantics and the single canonical parked-gated rule (WF-11/CE-03) plus the
+      five Best-Practices signal rows (rec-2412); Phase A/B framing inverted so the structured cache
+      keys are primary and prose inference is an explicit "Phase A" degradation branch with a missing
+      completion_blocked_on_cd fallback (WF-07 + rec-2392); roadmap uses replaced by the typed-loader
+      projection (WF-19); required-context frontmatter added (WF-20).
+bundled_recommendations:
+  - rec-2392
+  - rec-2412
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "WF-11: the parked-gated rule (condition + treatment) appears exactly once across the two files; the in_progress field semantics (open_criteria_count, all_plans_actioned, needs_followon_plan, completion_blocked_on_cd) live in the skill Inputs section; orient.md shrinks from 69 to <=56 lines (target ~50 per the audit; the mandatory WF-19 extraction block accounts for the residual above 50)."
+  - "WF-07 + rec-2392: the skill's open-criteria and needs_followon_plan guidance reads the preflight-cache keys as the PRIMARY path; 'Phase A (this version)' framing is deleted and 'Phase A' survives only as a degradation-branch label that includes an explicit fallback for a missing completion_blocked_on_cd key."
+  - "WF-19: neither orient instruction file carries an unconditional full-file Read of docs/ROADMAP-PLATFORM.yaml; the roadmap projection is obtained via a literal, runnable bin/venv-python extraction (typed loader, pure-local, no warehouse I/O) with a full-file Read only as an error fallback."
+  - "WF-20: .claude/skills/orient/SKILL.md declares required-context frontmatter [logs/.preflight-report.json, docs/ROADMAP-PLATFORM.yaml]; the instruction-architecture-layers and prompt-compliance validators report no violation."
+  - "rec-2412: the skill Inputs table declares the five Best-Practices Health Check signals (convergence_health, telemetry_health, data_quality, non_automatable_softcap_breached, terraform_pending)."
+  - "Decision 93 parked-exclusion semantics are preserved verbatim by the consolidation (no silent narrowing); both files remain well-formed and the skill frontmatter parses as valid YAML."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "WF-11 -- confirm the canonical parked-gated rule (condition + treatment) appears exactly once across both files. The treatment-clause sentinel is matched case- and order-insensitively (both 'closeout or follow-on' and 'follow-on or closeout') so it cannot false-fail on phrasing."
+    command: |-
+      bin/venv-python -c "import re; t=open('.claude/commands/orient.md').read()+open('.claude/skills/orient/SKILL.md').read(); n=len(re.findall(r'emit no (?:closeout or follow-on|follow-on or closeout)', t, re.I)); assert n==1, ('parked-gated rule count', n); print('parked-gated rule appears once:', n)"
+    expected: "Prints 'parked-gated rule appears once: 1' and exits 0."
+    fix_if: "n>1 means a section still restates the rule (reduce it to a bare 'see Inputs' reference); n==0 means the canonical treatment clause ('emit NO closeout or follow-on ... prompt') was lost (restore it in the skill Inputs field-semantics)."
+  - step: 2
+    phase: pre-deploy
+    action: "WF-11 -- confirm orient.md is reduced and the in_progress field semantics now live in the skill."
+    command: |-
+      test $(wc -l < .claude/commands/orient.md) -le 56 && grep -q 'all_plans_actioned' .claude/skills/orient/SKILL.md && grep -q 'needs_followon_plan' .claude/skills/orient/SKILL.md && echo "orient.md reduced; field semantics in skill"
+    expected: "orient.md has <=56 lines and the skill carries all_plans_actioned + needs_followon_plan; prints the confirmation and exits 0."
+    fix_if: "orient.md still >56 lines -- compress the Step 2 cache-key list to a grouped/inline form and collapse the Step 3 section list to bare names; if the greps fail the field semantics did not move into the skill."
+  - step: 3
+    phase: pre-deploy
+    action: "WF-07 + rec-2392 -- confirm Phase A survives only as degradation wording and the completion_blocked_on_cd fallback is documented."
+    command: |-
+      grep -q 'completion_blocked_on_cd' .claude/skills/orient/SKILL.md && grep -qi 'phase a' .claude/skills/orient/SKILL.md && ! grep -q 'Phase A (this version)' .claude/skills/orient/SKILL.md && echo "Phase A inverted to degradation branch; fallback documented"
+    expected: "Exits 0: completion_blocked_on_cd present, 'Phase A' present as degradation wording, and 'Phase A (this version)' absent."
+    fix_if: "'Phase A (this version)' still present -- the primary/degradation framing was not inverted; or the completion_blocked_on_cd fallback branch is missing (rec-2392 unresolved)."
+  - step: 4
+    phase: pre-deploy
+    action: "WF-19 -- confirm no unconditional full-file Read remains in the command and the typed-loader extraction is literal and runnable."
+    command: |-
+      ! grep -qiE 'Read .?docs/ROADMAP-PLATFORM\.yaml.? directly' .claude/commands/orient.md && bin/venv-python -c "import json; from scripts.platform_roadmap import load; ids={i['id'] for k in ('next_eligible','in_progress','blocked_on_cd') for i in json.load(open('logs/.preflight-report.json')).get('platform_roadmap',{}).get(k,[])}; proj=[t.model_dump(include={'id','files_in_scope','depends_on','related_candidate_decisions'}) for t in load('docs/ROADMAP-PLATFORM.yaml').tier_items if t.id in ids]; assert proj, 'empty projection'; print('extraction runnable, items projected:', len(proj))"
+    expected: "The old 'Read ... ROADMAP-PLATFORM.yaml ... directly' line is gone and the extraction prints a non-zero item count; exits 0."
+    fix_if: "The grep still matches -- the full-file Read was not replaced; if the extraction errors, the projection one-liner in orient.md Step 2 does not match the runnable form (fix the embedded command)."
+  - step: 5
+    phase: pre-deploy
+    action: "WF-20 -- confirm required-context frontmatter is present and both layer/prompt-compliance validators stay clean."
+    command: |-
+      grep -A3 '^required-context:' .claude/skills/orient/SKILL.md | grep -q 'logs/.preflight-report.json' && bin/venv-python -c "from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_compliance as f; from scripts.checks.contracts.validate_instruction_architecture_layers import validate_instruction_architecture_layers as g; fa=[]; f(fa); g(fa); assert not fa, fa; print('layer + prompt-compliance validators clean')"
+    expected: "required-context lists logs/.preflight-report.json and both validators append no failures; prints 'validators clean' and exits 0."
+    fix_if: "The frontmatter key is missing/misindented, or a validator now fails (inspect the appended failure list and correct the frontmatter)."
+  - step: 6
+    phase: pre-deploy
+    action: "Confirm the skill frontmatter parses as valid YAML with the expected required-context list (well-formedness guard)."
+    command: |-
+      bin/venv-python -c "import yaml; parts=open('.claude/skills/orient/SKILL.md').read().split('---'); d=yaml.safe_load(parts[1]); assert d.get('name')=='orient', d; rc=d.get('required-context'); assert isinstance(rc,list) and len(rc)==2, rc; print('frontmatter ok:', rc)"
+    expected: "Prints 'frontmatter ok: [logs/.preflight-report.json, docs/ROADMAP-PLATFORM.yaml]' and exits 0."
+    fix_if: "YAML parse error -- the frontmatter block was malformed by the edit; fix indentation/delimiters."
+  - step: 7
+    phase: pre-deploy
+    action: "Closure obligation -- confirm rec-2392 and rec-2412 acceptance criteria are met by the edits (the Resolves: trailer autocloses them post-merge)."
+    command: |-
+      grep -q 'completion_blocked_on_cd' .claude/skills/orient/SKILL.md && grep -qi 'phase a' .claude/skills/orient/SKILL.md && grep -q 'convergence_health' .claude/skills/orient/SKILL.md && grep -q 'telemetry_health' .claude/skills/orient/SKILL.md && echo "rec-2392 and rec-2412 acceptance met"
+    expected: "Both recs' acceptance greps pass; prints the confirmation and exits 0."
+    fix_if: "A grep fails -- the corresponding rec is not yet resolved; do not add its id to the Resolves: trailer until its acceptance passes."
+constraints:
+  - "Agent-first repository (AGENTS.md): prefer machine-parseable structure; collocate semantics with the methodology that uses them (Decision 86); no new standing prose-architecture docs."
+  - "Layer boundary (docs/contracts/instruction-architecture.yaml, Decision 76): layer-3 command = thin orchestration (excludes deep methodology); layer-4 skill = self-contained methodology and input semantics."
+  - "Decision 59: deterministic preflight-cache signals are the primary path; LLM prose inference is a fallback only."
+  - "Decision 93: preserve the parked-exclusion semantics verbatim during the DRY consolidation -- a de-duplication edit MUST NOT silently narrow or alter the rule."
+  - "WF-19 governing basis is Decisions 59/86/90 (a local-file projection); Decision 88 is cited as ethos only, never as the governing authority for a local file read."
+  - "orient egress invariant: do NOT introduce a DuckLake reader verb or the banned `-m scripts.platform_roadmap` module entrypoint; the extraction imports the pure-local load() function only (no warehouse I/O)."
+  - "No emojis; ASCII hyphens only; no rescue agents or workaround loops (Decision 55)."
+  - "Instruction-file work only: no Python/terraform/Lambda source is modified; V1 verification."
+context:
+  - "Specification: audits/workflow-review-d107b4a.yaml (audited commit d107b4a). Each finding's proposed_change is the change spec and its acceptance is the acceptance criterion."
+  - "Findings actioned (orient slice only): WF-11 + CE-01/CE-02/CE-03 (dry_consolidate), WF-07 (clarify), WF-19 (rescope), WF-20 orient slice (add). The plan/implement-skill slices of the same audit are handled by a separate plan."
+  - "Decisions to cite (decision-scout CITE): Decision 90 (four-tier workflow -- keep the six section names faithful to the orient contract), Decision 76 + the instruction-architecture contract (layer-3/4 boundary -- governs WF-11 and WF-20), Decision 86 (collocate semantics; no new docs), Decision 59 (deterministic signals over inference -- governs WF-07), Decision 67 (STRATEGIC suspended -> IMPLEMENTATION)."
+  - "Decision-scout verdict: FLAGS_FOUND. WARN: Decision 75 (Frame-Lock) on WF-19's extraction mechanism. RESOLVED by choosing Option A (reuse the typed loader scripts.platform_roadmap.load) over a hand-rolled yaml.safe_load -- this reuses the canonical roadmap primitive (single source of truth, prevents drift/orphaned parallel-parsing) and is confirmed pure-local (no warehouse I/O), so it respects the orient egress invariant. RELATED guardrails: Decision 84 (local-file read only, no reader verb), Decision 88 (ethos only for WF-19), Decision 93 (preserve parked semantics verbatim), Decision 58 (superseded by 76 -- cite 76/contract)."
+  - "Frame-lock mitigation: the extraction imports scripts.platform_roadmap.load, which sits next to the orient ban on `-m scripts.platform_roadmap`; the instruction carries a one-line note distinguishing the pure-local load() import (no warehouse I/O, no state recompute) from the banned module entrypoint."
+  - "Bundled recs: rec-2392 (document Phase A fallback for a missing completion_blocked_on_cd key -- complement of WF-07) and rec-2412 (declare the five Best-Practices signals as Inputs-table rows -- folds into the CE-03 table edit); both returned relevance verdict 'unknown' at planning time (safe to bundle). The squash-merge commit body must carry 'Resolves: rec-2392, rec-2412' so rec-autoclose.yml closes them."
+  - "Tier Item Freshness Gate: SKIPPED -- intent names no tier_item (soft-warn category: ad_hoc_rec / user_explicit_out_of_scope); the actioned findings are NOVEL/RELATED with no item_ids and close no criterion."
+  - "Main divergence: preflight main_freshness = 0 behind / 0 ahead; no scope-file overlap with main. No rebase needed at planning time."
+  - "Baseline established this session: validate_instruction_architecture_layers and validate_prompt_compliance both pass on the pre-edit tree, and neither currently enforces required-context -- so WF-20 is additive and low-risk."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/orient-workflow-audit-gz3oow)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Cited decisions located via the decision-scout CITE list (90, 76, 86, 59, 67; plus 75/84/93 guardrails) -- no full DECISIONS.md read required."
+  - "Both scope files located and readable; audits/workflow-review-d107b4a.yaml read as the specification."
+  - "Acceptance criteria understood and each maps to a verification_plan step with a runnable command."
+execution_steps:
+  - ".claude/skills/orient/SKILL.md -- add `required-context:` frontmatter listing `logs/.preflight-report.json` and `docs/ROADMAP-PLATFORM.yaml` (WF-20), mirroring the block-list style used by the decision-scout/plan-critique/code-review skills."
+  - ".claude/skills/orient/SKILL.md -- extend the Inputs table with a row declaring the five Best-Practices Health Check signals (convergence_health, telemetry_health, data_quality, non_automatable_softcap_breached, terraform_pending) for rec-2412; change the Roadmap-detail row's load method from 'Read file' to the typed-loader projection (WF-19)."
+  - ".claude/skills/orient/SKILL.md -- add an 'In_progress entry fields' semantics block immediately after the Inputs table carrying open_criteria_count / all_plans_actioned / needs_followon_plan / completion_blocked_on_cd, ending with the SINGLE canonical parked-gated rule whose treatment clause reads 'emit NO closeout or follow-on `/plan` prompt' (VP1 matches this case- and order-insensitively, so any restatement elsewhere trips the gate); preserve Decision 93 semantics verbatim."
+  - ".claude/skills/orient/SKILL.md -- invert Phase A/B: the open-criteria para (Status Digest) and the needs_followon_plan mention (Ranked What-to-Work-On) read the cache keys as PRIMARY; demote prose inference to an explicit 'Phase A' degradation branch that also documents the missing-completion_blocked_on_cd fallback (rec-2392); delete 'Phase A (this version)'."
+  - ".claude/skills/orient/SKILL.md -- reduce the parked-gated restatements in the Status Digest, Ranked What-to-Work-On, and /plan-Prompts sections to bare 'see Inputs' references (keeping section-1's ratifiable-CD pointer and closeout-candidate nuance, which are not the rule itself); replace the roadmap full-read uses in the Momentum mapping and keystone computation with references to the Step-2 projection; soften line-40 'Read roadmap status' to 'Trust roadmap status' so no full-file read is implied."
+  - ".claude/commands/orient.md -- Step 1: collapse the cache-only constraint + full-projection paragraphs to one skill-pointer line (CE-01)."
+  - ".claude/commands/orient.md -- Step 2: reduce to a compact grouped/inline list of the cache-key names (drop the per-field semantics, now in the skill; do NOT keep one bullet per key -- group them so the file lands near the audit's ~50-line target) and replace 'Read docs/ROADMAP-PLATFORM.yaml directly for ...' with the literal, runnable typed-loader extraction (Option A) plus the frame-lock note and the full-file-Read error fallback (CE-03 + WF-19)."
+  - ".claude/commands/orient.md -- Step 3: reduce the six section descriptions to a bare numbered list of the six section names + the existing skill pointer (CE-02)."
+  - "Execute the Verification Plan -- run each step in order; loop until all pass. This is V1 (instruction files), so no deploy phase."
+  - "At commit-flow time, include 'Resolves: rec-2392, rec-2412' in the squash-merge commit body (AGENTS.md Resolves: trailer) so rec-autoclose.yml closes both recs."
+  - "Report: what was changed in each file, the parked-gated rule's single canonical location, and the verification results."
+work_areas: []
+rollback: >-
+  Instruction-file-only change with no runtime state; revert the single feat commit
+  (git revert <sha>) to restore the prior orient command/skill verbatim.
