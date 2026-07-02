@@ -28,11 +28,13 @@ fields), `blocked_on_cd`, `gate_evaluations`, `ratifiable_cds`; `ci_rca_unresolv
 `data_quality`, `non_automatable_softcap_breached`, `terraform_pending`.
 
 For `files_in_scope` (overlap matrix) and `depends_on` (keystone computation), use the typed-loader
-projection -- pure-local, no warehouse I/O, distinct from the banned `-m scripts.platform_roadmap`
-module entrypoint (frame-lock note: this imports `scripts.platform_roadmap.load()` only, never the
-module entrypoint itself). Fall back to a full-file Read of `docs/ROADMAP-PLATFORM.yaml` on error:
+projection -- pure-local `scripts.platform_roadmap.load()` import, no warehouse I/O, distinct from
+the banned `-m scripts.platform_roadmap` module entrypoint. Keystone fan-out is a reverse query, so
+the extraction also emits a roadmap-wide `{id: depends_on}` index (cheap) alongside the
+candidate-scoped projection -- forward-only visibility over the ~9 candidates cannot answer it.
+Fall back to a full-file Read of `docs/ROADMAP-PLATFORM.yaml` on error:
 ```bash
-bin/venv-python -c "import json; from scripts.platform_roadmap import load; ids={i['id'] for k in ('next_eligible','in_progress','blocked_on_cd') for i in json.load(open('logs/.preflight-report.json')).get('platform_roadmap',{}).get(k,[])}; proj=[t.model_dump(include={'id','files_in_scope','depends_on','related_candidate_decisions'}) for t in load('docs/ROADMAP-PLATFORM.yaml').tier_items if t.id in ids]; print(json.dumps(proj))"
+bin/venv-python -c "import json; from scripts.platform_roadmap import load; data=load('docs/ROADMAP-PLATFORM.yaml'); ids={i['id'] for k in ('next_eligible','in_progress','blocked_on_cd') for i in json.load(open('logs/.preflight-report.json')).get('platform_roadmap',{}).get(k,[])}; proj=[t.model_dump(include={'id','files_in_scope','depends_on','related_candidate_decisions'}) for t in data.tier_items if t.id in ids]; depends_index={t.id: t.depends_on for t in data.tier_items}; print(json.dumps({'candidates': proj, 'depends_index': depends_index}))"
 ```
 
 ## Step 3: Invoke the Orient Skill and Emit the Deliverable
