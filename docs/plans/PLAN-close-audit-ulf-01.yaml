@@ -54,7 +54,16 @@ scope:
       runner, which exits non-zero on a proven-disabled control AND on any inability to verify
       (missing/expired/mis-scoped token, 401/403, transport error) -- Decision 55 loud alarm, no
       green-but-blind. Least-privilege top-level permissions (contents: read only); third-party
-      actions pinned to a commit SHA.
+      actions pinned to a commit SHA. The workflow `name:` is pinned to `ghas-probe` so it matches its
+      config/ci_rca_taxonomy.yaml registration exactly.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      MANDATORY coupling (blocking). validate_ci_rca_taxonomy runs in BOTH the fast --pre tier (behind the
+      REQUIRED pr-validate status check) and the full tier, and hard-fails if any .github/workflows/*.yml
+      `name:` is absent from workflow_to_tier. Add `ghas-probe: not_a_gate` (matching sibling scheduled
+      monitors terraform-drift / convergence-health -- a security alarm, not a PR merge gate). Without this
+      the PR cannot merge and validate.py exits non-zero. The map key MUST equal the workflow's pinned `name:`.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -115,6 +124,10 @@ acceptance_criteria:
     contents: read only; every third-party `uses:` is pinned to a 40-hex commit SHA; it references
     secrets.GHAS_PROBE_TOKEN and probes all three control surfaces; and it invokes the loud-fail runner.
   - >-
+    config/ci_rca_taxonomy.yaml workflow_to_tier contains a key equal to the new workflow's pinned `name:`
+    (ghas-probe) mapped to not_a_gate, so enumerate_workflow_names() is a subset of workflow_to_tier and
+    validate_ci_rca_taxonomy passes in BOTH tiers -- the required pr-validate check stays green and the PR can merge.
+  - >-
     docs/ROADMAP-PLATFORM.yaml no longer asserts the secret-scanning / push-protection / Actions-permissions
     live-probe is outstanding (T2.12 progress_note + note and the T2.13 cross-reference updated to cite the
     standing monitor + Decision 83), without misclaiming CodeQL is covered by this probe; T2.12 stays
@@ -155,26 +168,32 @@ verification_plan:
     action: Full tier is green end-to-end in the no-token default (this is where validate_test_coverage catches an under-covered module).
     command: bin/venv-python -m scripts.validate
     expected: Exit 0; the GHAS probe section prints SKIPPED; validate_test_coverage passes (new module 100% covered with the __main__ line pragma'd).
-    fix_if: 'Any check fails; if validate_test_coverage reds on the new module, the __main__ block is uncovered -- move logic into _run_cli and mark the `if __name__ == "__main__":` guard with `# pragma: no cover`.'
+    fix_if: 'Any check fails. If validate_test_coverage reds on the new module, the __main__ block is uncovered -- move logic into _run_cli and mark the `if __name__ == "__main__":` guard with `# pragma: no cover`. If validate_ci_rca_taxonomy reds, the new workflow name is unregistered in config/ci_rca_taxonomy.yaml workflow_to_tier (see step 6).'
   - step: 5
     phase: pre-deploy
     action: Directly inspect ghas-probe.yml for least-privilege + fork-safety + SHA-pinning. The existing validate_ci_workflow_guards / validate_workflow_agent_safety hard-code the current workflow set and do NOT inspect this new file, so they pass vacuously and cannot verify these properties -- this step asserts them against the file itself. (YAML validity is covered by the pre-commit Check-Yaml hook.)
-    command: '! grep -q "pull_request" .github/workflows/ghas-probe.yml && grep -q "workflow_dispatch" .github/workflows/ghas-probe.yml && grep -q "cron" .github/workflows/ghas-probe.yml && grep -Eq "uses:[^@]+@[0-9a-f]{40}" .github/workflows/ghas-probe.yml && ! grep -Eq "uses:[^@]+@(v?[0-9.]+|main|master|latest)" .github/workflows/ghas-probe.yml && grep -Eq "contents:[[:space:]]*read" .github/workflows/ghas-probe.yml'
-    expected: No pull_request trigger; workflow_dispatch + cron present; every third-party uses is pinned to a 40-hex SHA with no floating (tag/branch) ref; permissions grants contents read.
-    fix_if: Any property is missing -- add workflow_dispatch/schedule, remove any pull_request trigger, pin actions to a commit SHA, and set top-level permissions to contents read only.
+    command: '! grep -q "pull_request" .github/workflows/ghas-probe.yml && grep -q "workflow_dispatch" .github/workflows/ghas-probe.yml && grep -q "cron" .github/workflows/ghas-probe.yml && grep -Eq "uses:[^@]+@[0-9a-f]{40}" .github/workflows/ghas-probe.yml && ! grep -Eq "uses:[^@]+@(v?[0-9.]+|main|master|latest)" .github/workflows/ghas-probe.yml && grep -Eq "contents:[[:space:]]*read" .github/workflows/ghas-probe.yml && ! grep -Eq "[a-z_-]+:[[:space:]]+write(-all)?([[:space:]]|$)" .github/workflows/ghas-probe.yml'
+    expected: No pull_request trigger; workflow_dispatch + cron present; every third-party uses is pinned to a 40-hex SHA with no floating (tag/branch) ref; permissions grants contents read and NO write scope anywhere.
+    fix_if: Any property is missing -- add workflow_dispatch/schedule, remove any pull_request trigger, pin actions to a commit SHA, and set top-level permissions to contents read only with no write scopes.
   - step: 6
+    phase: pre-deploy
+    action: The new workflow name is registered in the CI-RCA taxonomy. validate_ci_rca_taxonomy hard-fails in BOTH tiers on any unregistered .github/workflows/*.yml name, and the fast tier backs the REQUIRED pr-validate check -- an unregistered workflow wedges the merge.
+    command: bin/venv-python -c "from scripts.ci_rca_taxonomy import enumerate_workflow_names, load_taxonomy; n=enumerate_workflow_names(); m=load_taxonomy()['workflow_to_tier']; missing=[x for x in n if x not in m]; assert not missing, missing; print('all workflow names registered')"
+    expected: Prints "all workflow names registered"; the pinned ghas-probe name is present in workflow_to_tier (mapped to not_a_gate).
+    fix_if: The new workflow name is missing from config/ci_rca_taxonomy.yaml workflow_to_tier -- add an entry whose key equals the workflow's pinned name exactly, mapped to not_a_gate.
+  - step: 7
     phase: pre-deploy
     action: Control-state-only + no-token-leak discipline in the probe source (Decision 101).
     command: '! grep -qE "print\(.*(\.read\(\)|GHAS_PROBE_TOKEN|resp\.)" scripts/checks/misc/validate_ghas_probe.py'
     expected: Exit 0 -- no print of a raw response body or the token; the module emits only status enums / HTTP codes / counts.
     fix_if: The grep matches a print of a raw body or the token -- rewrite to emit control-state fields only.
-  - step: 7
+  - step: 8
     phase: pre-deploy
     action: The workflow actually probes all three controls and reads the secret (structural grep, since the live call cannot run in the branch's proxied CC-web CI).
     command: grep -q "secrets.GHAS_PROBE_TOKEN" .github/workflows/ghas-probe.yml && grep -Eq "actions/permissions" .github/workflows/ghas-probe.yml && grep -Eq "secret-scanning|security_and_analysis" .github/workflows/ghas-probe.yml
     expected: All three greps match (token wired; Actions-permissions + secret-scanning/push-protection surfaces probed).
     fix_if: A control surface is not probed or the secret is not referenced.
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: >-
       After merge, provision GHAS_PROBE_TOKEN and run the workflow live (workflow_dispatch); confirm the
@@ -185,12 +204,12 @@ verification_plan:
     command: '[ "$(grep -c "Live-probe verification (20" docs/DECISIONS.md)" -ge 2 ] && grep -Eq "actions/runs/[0-9]+" docs/DECISIONS.md && grep -Eiq "secret.scanning" docs/DECISIONS.md && grep -Eiq "push.protection" docs/DECISIONS.md && grep -Eiq "allowed_actions|actions permission" docs/DECISIONS.md'
     expected: At least 2 dated live-probe blocks (the 2026-06-08 original + the new run's), an actions/runs URL is cited, and all three probed controls are named -- so a NEW block (not the pre-existing one) carries the evidence.
     fix_if: Only the pre-existing 2026-06-08 block exists (count < 2), no actions/runs URL is present, or a control is unnamed -- the new evidence was not transcribed. Evidence MUST come from a real successful ghas-probe run -- never fabricated.
-  - step: 9
+  - step: 10
     phase: post-deploy
-    action: The stale "outstanding" caveats are retired in both remaining surfaces -- AGENTS.md and ROADMAP-PLATFORM.yaml (Decision 83 is covered by step 8).
-    command: '! grep -Eiq "live-probe verification outstanding|one-time UI confirmation recommended" AGENTS.md && grep -Eiq "ghas-probe|standing (probe|monitor)" AGENTS.md && ! grep -qiF "CodeQL live-probe outstanding" docs/ROADMAP-PLATFORM.yaml'
-    expected: Neither AGENTS.md nor the ROADMAP T2.12 progress_note asserts the probe is outstanding; AGENTS.md points at the standing monitor. CodeQL's separate (accurate) characterization is preserved.
-    fix_if: A surface still reads "outstanding" for the three probed controls (secret-scanning / push-protection / Actions permissions).
+    action: The stale "outstanding" caveats are retired across all remaining prose surfaces -- AGENTS.md and the ROADMAP-PLATFORM.yaml T2.12 note + progress_note + T2.13 cross-reference (Decision 83 itself is covered by step 9).
+    command: '! grep -Eiq "live-probe verification outstanding|one-time UI confirmation recommended" AGENTS.md && grep -Eiq "ghas-probe|standing (probe|monitor)" AGENTS.md && ! grep -qiF "CodeQL live-probe outstanding" docs/ROADMAP-PLATFORM.yaml && ! grep -qiF "remain live-probe-unverified" docs/ROADMAP-PLATFORM.yaml && ! grep -qiF "GHAS live-probe still open there" docs/ROADMAP-PLATFORM.yaml'
+    expected: AGENTS.md points at the standing monitor and no longer says outstanding; none of the three ROADMAP stale phrases (note 4693, progress_note 4695, T2.13 4712) remain. CodeQL's separate (accurate) characterization is preserved.
+    fix_if: A surface still asserts the probe is outstanding for the three probed controls (secret-scanning / push-protection / Actions permissions).
 constraints:
   - >-
     Decision 101 (public-content boundary): the repo is PUBLIC. Record CONTROL-STATE evidence only --
@@ -232,6 +251,11 @@ constraints:
   - >-
     The workflow declares minimal permissions (contents: read), pins third-party actions, and never
     exposes GHAS_PROBE_TOKEN to fork-PR-triggered runs (schedule/dispatch/non-fork only).
+  - >-
+    Workflow-registration coupling (hard rule): adding any .github/workflows/*.yml REQUIRES registering its
+    `name:` in config/ci_rca_taxonomy.yaml workflow_to_tier -- validate_ci_rca_taxonomy runs in both the
+    --pre and full tiers, and the --pre tier backs the REQUIRED pr-validate check, so an unregistered
+    workflow reds CI and blocks the merge. Map ghas-probe to not_a_gate (a security alarm, not a CI gate).
   - No rescue agents or workaround loops (Decision 55). Only files listed in scope may be modified.
 context:
   - >-
@@ -275,7 +299,11 @@ context:
     check skips-when-unscoped; (B) validate_ci_workflow_guards does not inspect the new file -> VP step 5
     asserts the workflow's properties directly; (C) VP step 8 was pre-satisfied by the 2026-06-08 block ->
     now anchored to a NEW dated block (count >= 2 + run URL); (E) ROADMAP-PLATFORM.yaml was a third stale
-    surface -> added to scope with the CodeQL-vs-probed-controls distinction preserved.
+    surface -> added to scope with the CodeQL-vs-probed-controls distinction preserved. Round-2 critique then
+    caught a BLOCKING coupling: a new .github/workflows/*.yml must be registered in config/ci_rca_taxonomy.yaml
+    workflow_to_tier or validate_ci_rca_taxonomy reds the required pr-validate check and the PR cannot merge --
+    now fixed (config/ci_rca_taxonomy.yaml added to scope; the workflow `name:` pinned to ghas-probe; VP step 6
+    asserts every workflow name is registered).
   - >-
     Tier item T2.12 is status:complete; this closes an acknowledged-unmet verification criterion (the
     audit's F-014 pattern) rather than re-planning T2.12. No roadmap status flip is proposed.
@@ -305,7 +333,9 @@ execution_steps:
     -> failed.append(...). (2) a module-level _run_cli() -> int -- the LOUD-FAIL runner: token absent / 401 /
     403 / transport error -> print a control-state error line and return non-zero; a disabled control ->
     non-zero; all-enabled -> print control-state and return 0. End with `if __name__ == "__main__":  # pragma:
-    no cover` doing `raise SystemExit(_run_cli())`. Never recompute ROOT (import from scripts.checks._common if needed).
+    no cover` doing `raise SystemExit(_run_cli())`. Resolve owner/repo from the GITHUB_REPOSITORY env var
+    (GitHub Actions sets it; default benjamin-blake/agent-platform if unset). Never recompute ROOT (import
+    from scripts.checks._common if needed).
   - Register in scripts/checks/registry.py full_sequence() (after validate_scheduled_agent_logs); do NOT add to pre_sequence().
   - Add the facade re-export line to scripts/validate.py.
   - Update FROZEN_FULL_SEQUENCE in tests/test_checks_registry.py to include ("check","validate_ghas_probe") at the matching index.
@@ -314,14 +344,22 @@ execution_steps:
     blocks real sockets). CHECK cases: all-enabled -> failed==[]; a control disabled -> failed non-empty;
     no GHAS_PROBE_TOKEN -> SKIP, failed==[], no network; 401/403/URLError -> SKIP. RUNNER cases: _run_cli
     returns 0 on all-enabled and non-zero on token-absent, 401/403, URLError, AND a disabled control.
-    Assert the token is never passed to print. 100% coverage of the module (the __main__ line is pragma'd).
+    Assert the token is never passed to print. Patch urlopen at the module's own import site
+    (scripts.checks.misc.validate_ghas_probe.urlopen) -- there is no existing urllib-mock precedent in
+    tests/test_validate.py. 100% coverage of the module (the __main__ line is pragma'd).
   - >-
-    Create .github/workflows/ghas-probe.yml: triggers `schedule` (weekly cron) + `workflow_dispatch` only
-    (NO pull_request); top-level `permissions: {contents: read}`; a single ubuntu-latest job; checkout +
-    setup-python pinned to commit SHAs; run the loud-fail runner (python -m scripts.checks.misc.validate_ghas_probe
-    OR bin/venv-python -m ...) with env GHAS_PROBE_TOKEN from secrets. The run fails (non-zero) on a disabled
+    Create .github/workflows/ghas-probe.yml with `name: ghas-probe` (this exact string must equal the
+    config/ci_rca_taxonomy.yaml key registered in the next step): triggers `schedule` (weekly cron) +
+    `workflow_dispatch` only (NO pull_request); top-level `permissions: {contents: read}` (no write scope);
+    a single ubuntu-latest job; checkout + setup-python pinned to commit SHAs; run the loud-fail runner
+    (python -m scripts.checks.misc.validate_ghas_probe) with env GHAS_PROBE_TOKEN from secrets and
+    GITHUB_REPOSITORY (GitHub sets it) for owner/repo resolution. The run fails (non-zero) on a disabled
     control AND on any inability to verify (missing/expired/mis-scoped token, 401/403, transport error) --
     Decision 55 loud alarm, no green-but-blind. Keep it minimal -- the runner, not the full validate suite.
+  - >-
+    Register the workflow in config/ci_rca_taxonomy.yaml: add `ghas-probe: not_a_gate` under workflow_to_tier
+    (the key MUST equal the workflow `name:` exactly). Without this, validate_ci_rca_taxonomy hard-fails in
+    both the --pre and full tiers and the required pr-validate status check reds, wedging the merge.
   - Update AGENTS.md T2.12 caveat -- replace the "live-probe verification outstanding ... one-time UI confirmation recommended" wording for these three controls with a pointer to the standing ghas-probe monitor + Decision 83's dated block.
   - >-
     Update docs/ROADMAP-PLATFORM.yaml (prose progress-note edits only; no status/exit_criteria flips): in T2.12
@@ -331,10 +369,10 @@ execution_steps:
     ghas-probe monitor + Decision 83. Do NOT claim CodeQL is covered by this probe -- keep CodeQL's separate,
     accurate characterization (evidenced by green codeql.yml runs).
   - >-
-    Execute the pre-deploy Verification Plan (steps 1-7); loop until green. Commit + open the PR
-    (feat(close-audit-ulf-01): ...). These pre-deploy deliverables (check, workflow, tests, AGENTS.md +
-    ROADMAP-PLATFORM prose edits) are self-contained and verifiable without the token; the DECISIONS.md
-    annotation is the only deliverable that requires the live run (post-deploy).
+    Execute the pre-deploy Verification Plan (steps 1-8); loop until green. Commit + open the PR
+    (feat(close-audit-ulf-01): ...). These pre-deploy deliverables (check, workflow, taxonomy registration,
+    tests, AGENTS.md + ROADMAP-PLATFORM prose edits) are self-contained and verifiable without the token;
+    the DECISIONS.md annotation is the only deliverable that requires the live run (post-deploy).
   - >-
     HUMAN-GATED post-deploy: provision the GHAS_PROBE_TOKEN Actions secret (fine-grained PAT:
     Administration:read + Secret scanning alerts:read; or L3 App token). Trigger ghas-probe.yml
