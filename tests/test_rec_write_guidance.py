@@ -11,12 +11,12 @@ import yaml
 class TestLoadSourceRegistry:
     """Tests for load_source_registry()."""
 
-    def test_returns_34_entries(self) -> None:
-        """load_source_registry() returns 34 canonical entries (includes ci_rca_probe_health)."""
+    def test_returns_35_entries(self) -> None:
+        """load_source_registry() returns 35 canonical entries (includes cost_reconciliation)."""
         from scripts.executor.rec_write_guidance import load_source_registry
 
         entries = load_source_registry()
-        assert len(entries) == 34
+        assert len(entries) == 35
 
     def test_entries_have_required_keys(self) -> None:
         """Every entry has canonical_id, description, signal_interpretation, added_date."""
@@ -108,12 +108,12 @@ class TestGetRecWriteGuidance:
         assert isinstance(registered, list)
         assert "planning" in registered
 
-    def test_registered_values_has_34_entries(self) -> None:
-        """'registered_values' list has 34 registry entries (includes ci_rca_probe_health)."""
+    def test_registered_values_has_35_entries(self) -> None:
+        """'registered_values' list has 35 registry entries (includes cost_reconciliation)."""
         from scripts.executor.rec_write_guidance import get_rec_write_guidance
 
         guidance = get_rec_write_guidance()
-        assert len(guidance["source"]["registered_values"]) == 34
+        assert len(guidance["source"]["registered_values"]) == 35
 
     def test_other_columns_have_description_and_semantics(self) -> None:
         """Non-source columns also carry description and semantics."""

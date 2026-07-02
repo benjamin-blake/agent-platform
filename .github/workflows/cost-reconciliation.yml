@@ -1,0 +1,99 @@
+name: cost-reconciliation
+# Monthly cost reconciliation monitor (CD.28 / ULF-08). Alarm-not-gate (Decision 55 /
+# Decision 62): the ONLY action on breach is to file/update a rec via scripts.cost_reconciliation.
+# It never blocks a merge, changes infra, or auto-remediates. Not a PR gate -- no
+# signal-green.needs entry -- and not an agent/`claude -p` workflow.
+
+on:
+  schedule:
+    # 06:00 UTC on the 4th, reconciling the PRIOR calendar month once DeepSeek dashboard +
+    # Anthropic Console + AWS Cost Explorer have settled.
+    - cron: "0 6 4 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to reconcile (YYYY-MM); defaults to the previous calendar month"
+        required: false
+        type: string
+      invoice_s3_key:
+        description: "Override S3 key under cost-invoices/ (defaults to <month>.json)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Configure AWS credentials (OIDC -- branch role)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Resolve month + invoice key
+        id: resolve
+        run: |
+          MONTH="${{ inputs.month }}"
+          if [ -z "$MONTH" ]; then
+            MONTH=$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)
+          fi
+          KEY="${{ inputs.invoice_s3_key }}"
+          if [ -z "$KEY" ]; then
+            KEY="${MONTH}.json"
+          fi
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+          echo "invoice_key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Download monthly invoice snapshot
+        id: download
+        run: |
+          mkdir -p /tmp/cost-reconciliation
+          if aws s3 cp "s3://agent-platform-data-lake/cost-invoices/${{ steps.resolve.outputs.invoice_key }}" \
+              /tmp/cost-reconciliation/snapshot.json; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "### cost-reconciliation: no invoice snapshot found" >> "$GITHUB_STEP_SUMMARY"
+            echo "Export invoices to s3://agent-platform-data-lake/cost-invoices/${{ steps.resolve.outputs.invoice_key }} and re-run via workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run cost reconciliation
+        # main() prints ONLY the sanitized public_summary + trigger/action names (Decision 101) --
+        # never the full report (absolute dollars + measured ratios), so stdout is safe for the
+        # public step summary. The full report goes to --report-out (private S3 upload next).
+        if: steps.download.outputs.present == 'true'
+        env:
+          DUCKLAKE_WRITER_URL: ${{ secrets.DUCKLAKE_WRITER_URL }}
+        shell: bash
+        run: |
+          set -o pipefail
+          .venv/bin/python -m scripts.cost_reconciliation \
+            --invoice /tmp/cost-reconciliation/snapshot.json \
+            --month "${{ steps.resolve.outputs.month }}" \
+            --report-out /tmp/cost-reconciliation/report.md \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload private report to S3
+        if: steps.download.outputs.present == 'true'
+        run: |
+          aws s3 cp /tmp/cost-reconciliation/report.md \
+            "s3://agent-platform-data-lake/cost-reconciliation-reports/${{ steps.resolve.outputs.month }}.md"

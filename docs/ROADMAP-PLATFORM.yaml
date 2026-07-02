@@ -1140,6 +1140,18 @@ candidate_decisions:
           must reconcile or the architecture is internally contradictory.
 
         - PLAN-cost-reconciliation-job (priority low)
+          [Built 2026-07-02]: implemented by scripts/cost_reconciliation.py +
+          .github/workflows/cost-reconciliation.yml + config/agent/cost_reconciliation.yaml. Evaluates
+          the five cost_projection.reevaluation_triggers plus KG.7 concern #1 against a per-provider
+          cost snapshot on a monthly cron ('0 6 4 * *') + workflow_dispatch, and files/updates/closes a
+          rec per trigger via the ops portal (alarm-not-gate, Decision 55 / Decision 62). The
+          telemetry-est_cost_usd leg (invoice-vs-telemetry discrepancy trigger) degrades gracefully --
+          load_telemetry_cost() is a stub returning None until T2.36 lands est_cost_usd on the
+          ducklake_reader closed boundary via a registered named reader verb (Decision 88 / Decision 84
+          I-3); the five invoice-derived triggers evaluate now regardless. Verified V2 (units +
+          --dry-run fixture proof, Decision 48 conscious-acceptance); the sync()+dedupe/auto-close
+          routing against the real synced cache is proven by the post-merge step-9 live two-run
+          sequence.
           Scope: build the monthly per-provider invoice-export-vs-telemetry-est_cost_usd reconciliation
           job referenced in INTENT Cost Attribution. Implementation: (a) ingest DeepSeek dashboard CSV
           export + Anthropic Console invoice; (b) compute monthly totals from telemetry_model_calls;
@@ -7654,11 +7666,15 @@ known_gaps:
         1. Programmatic-pool exhaustion. If executor volume sustains > 70% of Max x5 programmatic pool
            over a 30-day window, spillover bills at API rates and may exceed the cost envelope. Mitigation
            per CD.28 discipline point: file rec to provision an org-billed Anthropic API key as an
-           overflow credential.
+           overflow credential. [Built 2026-07-02]: machine-evaluated by PLAN-cost-reconciliation-job's
+           monthly monitor (scripts/cost_reconciliation.py trigger key anthropic_pool_utilisation, same
+           70% threshold) -- see CD.28 follow-on plan inventory.
         2. Anthropic-direct outage or rate-limit during a DeepSeek outage simultaneously. Currently
            Tier 3 (OpenRouter) is deferred -- there is no warm third tier. If both Tier 1 and Tier 2
            are simultaneously unavailable, T4.2's autonomous loop blocks until either provider recovers
-           or a hotfix activates OpenRouter as a hot escape hatch.
+           or a hotfix activates OpenRouter as a hot escape hatch. NOT invoice-reconcilable (an
+           availability gap, not a cost-envelope breach) -- stays owned by the deferred
+           Tier-3/OpenRouter work, not the cost-reconciliation monitor.
 
       T0.4 is rewritten (per the same pivot) for Anthropic-direct + DeepSeek API key provisioning. The
       original Bedrock-model-access-request critical path is moot.
