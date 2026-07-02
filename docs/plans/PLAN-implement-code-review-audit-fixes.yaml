@@ -19,7 +19,8 @@ scope:
     purpose: >-
       WF-01 (validate flags --ci->--pre, --quick->full), CE-13 (thin Step 5 to a skill pointer, which
       also removes the broken subagent_type from the command), WF-09 (Step 8 friction -> ops portal +
-      Phase-4 telemetry caveat + executor-rca via Skill tool).
+      Phase-4 telemetry caveat + executor-rca via Skill tool; also retire the now-orphaned run_skill
+      reference in the Step 1 UUID note).
   - file: .claude/skills/implement/SKILL.md
     action: Modify
     purpose: >-
@@ -43,7 +44,7 @@ acceptance_criteria:
     scripts.validate --help lists --pre (both replacement gates parse; exit != 2).
   - >-
     WF-02: no "subagent_type: code-review" remains in implement.md or the implement skill; the implement
-    skill Code Review Protocol dispatches subagent_type "general-purpose" and instructs invoking the
+    skill Code Review Protocol dispatches subagent_type: "general-purpose" and instructs invoking the
     code-review skill via the Skill tool and returning its output verbatim.
   - >-
     WF-03: both .claude/skills/code-review/SKILL.md and .claude/skills/implement/SKILL.md carry the exact
@@ -57,7 +58,8 @@ acceptance_criteria:
   - >-
     WF-09: implement.md Step 8 names bin/venv-python -m scripts.ops_data_portal (source=manual) as the
     friction sink, annotates the telemetry emit as suspended until Decision 84 Phase 4 (T2.36), invokes
-    the executor-rca skill via the Skill tool, and contains no run_skill reference within Step 8.
+    the executor-rca skill via the Skill tool, and no run_skill reference remains anywhere in
+    implement.md (the Step 1 UUID note is reworded to point at session_postflight --close-session).
   - >-
     WF-12/CE-11: the implement skill Commit Flows no longer restates the git-ops wake mechanism (it
     points to AGENTS.md ## Git-ops procedure steps 3-5) while keeping the on-wake verdict-handling table
@@ -108,15 +110,15 @@ verification_plan:
     phase: pre-deploy
     action: WF-09 -- Step 8 routes friction to the portal with the Phase-4 caveat and executor-rca, no run_skill.
     command: >-
-      S8=$(sed -n '/^## Step 8:/,/^## Step 9:/p' .claude/commands/implement.md); echo "$S8" | grep -q 'ops_data_portal' && echo "$S8" | grep -q 'source=manual' && echo "$S8" | grep -q 'T2.36' && echo "$S8" | grep -q 'executor-rca' && ! echo "$S8" | grep -q 'run_skill' && echo PASS
-    expected: 'Prints PASS (Step 8 block names ops_data_portal + source=manual + T2.36 + executor-rca and has no run_skill).'
-    fix_if: 'Step 8 still emits to telemetry as primary, omits the Phase-4 caveat, or retains run_skill.'
+      S8=$(sed -n '/^## Step 8:/,/^## Step 9:/p' .claude/commands/implement.md); echo "$S8" | grep -q 'ops_data_portal' && echo "$S8" | grep -q 'source=manual' && echo "$S8" | grep -q 'T2.36' && echo "$S8" | grep -q 'executor-rca' && ! grep -q 'run_skill' .claude/commands/implement.md && echo PASS
+    expected: 'Prints PASS (Step 8 block names ops_data_portal + source=manual + T2.36 + executor-rca; and no run_skill anywhere in implement.md).'
+    fix_if: 'Step 8 still emits to telemetry as primary, omits the Phase-4 caveat, or a run_skill reference remains in implement.md (including the Step 1 UUID note).'
   - step: 6
     phase: pre-deploy
     action: WF-12/CE-11 -- wake prose collapsed to a pointer; terraform hold section kept; Resolves reconciled.
     command: >-
-      grep -q '### Hold subscription through apply' .claude/skills/implement/SKILL.md && ! grep -q 'Robustness note' .claude/skills/implement/SKILL.md && grep -q 'which the squash-merge commit body inherits' .claude/skills/implement/SKILL.md && ! grep -q 'Implemented by /implement. Verification plan passed.' .claude/skills/implement/SKILL.md && echo PASS
-    expected: 'Prints PASS (terraform hold section retained; restated Robustness-note wake prose gone; Resolves trailer is the single AGENTS.md-deferring sentence).'
+      grep -q '### Hold subscription through apply' .claude/skills/implement/SKILL.md && ! grep -q 'Robustness note' .claude/skills/implement/SKILL.md && grep -q 'which the squash-merge commit body inherits' .claude/skills/implement/SKILL.md && ! grep -q 'Implemented by /implement. Verification plan passed.' .claude/skills/implement/SKILL.md && grep -q 'Still running' .claude/skills/implement/SKILL.md && echo PASS
+    expected: 'Prints PASS (terraform hold section retained; the on-wake "Still running" verdict bullet retained; restated Robustness-note wake prose gone; Resolves trailer is the single AGENTS.md-deferring sentence).'
     fix_if: 'The terraform hold section was dropped, restated wake prose remains, or the Resolves trailer was not reconciled.'
   - step: 7
     phase: pre-deploy
@@ -221,7 +223,7 @@ execution_steps:
     .claude/commands/implement.md CE-13 + WF-02 (Step 5): replace the Step 5 body with the thinned form --
     keep the "## Step 5: Code Review (IMPLEMENTATION only -- MANDATORY)" heading and the MANDATORY trigger
     sentence, then "Dispatch per the **Code Review Protocol** in your `implement` skill (fresh-context
-    anti-bias gate; subagent_type \"general-purpose\" invoking the `code-review` skill via the Skill
+    anti-bias gate; subagent_type: "general-purpose" invoking the `code-review` skill via the Skill
     tool).", then keep the two lines "Read the findings output. You MUST implement fixes for all
     **Critical** and **High** priority findings before proceeding." and "Medium and Low findings should
     be filed as recommendations using `bin/venv-python -m scripts.ops_data_portal --file-rec ...`." Delete
@@ -233,10 +235,14 @@ execution_steps:
     telemetry_process_events via the executor telemetry API is "suspended until Decision 84 Phase 4
     (T2.36) re-lands telemetry on DuckLake"; and change the RCA sub-path to "invoke the `executor-rca`
     skill via the `Skill` tool" (remove the scripts.agent_development.run_skill invocation). Keep the
-    "If no friction, this step is a no-op" and the housekeeping-flush note.
+    "If no friction, this step is a no-op" and the housekeeping-flush note. Because this removes the
+    last run_skill call in the workflow, also reword the now-dangling Step 1 UUID line "Save the printed
+    UUID for use with --session-id in any run_skill invocations during this session." to "Save the printed
+    UUID for the session_postflight --close-session call in Step 9." (mirrors plan.md Step 1) -- no
+    run_skill reference then remains in implement.md.
   - >-
     .claude/skills/implement/SKILL.md WF-02 (Code Review Protocol -- Trigger): change the dispatch
-    sentence to "Dispatch via the `Agent` tool with subagent_type \"general-purpose\", instructing the
+    sentence to "Dispatch via the `Agent` tool with subagent_type: "general-purpose", instructing the
     subagent to invoke the `code-review` skill via the Skill tool and return its structured output
     verbatim (the same idiom the plan.md decision-scout / plan-critique gates use) -- NOT via
     bin/venv-python -m scripts.agent_development.run_skill --skill code-review." Keep the surrounding
@@ -309,8 +315,9 @@ execution_steps:
   - >-
     .claude/skills/code-review/SKILL.md WF-03 (Verdict line in the output template): inside the Output
     Format fenced block, after the "### Test Completeness" entry and before the closing fence, add a final
-    section: "### Verdict" then "Verdict: PROCEED | REVISE" then "(Deterministic rule: REVISE iff any
-    Critical or High finding, else PROCEED.)". The rule phrase must match the implement skill exactly.
+    section: "### Verdict", then the rule line "Deterministic rule: REVISE iff any Critical or High
+    finding, else PROCEED.", then the final line "Verdict: PROCEED | REVISE" (so the template ends with
+    the Verdict line). The rule phrase must match the implement skill exactly.
   - >-
     .claude/skills/code-review/SKILL.md WF-15 (closing nudge): in the Closing Nudge block change "Start a
     new chat with `#prompts:plan` to plan fixes." to "Start a new chat with `/plan` to plan fixes.", and
