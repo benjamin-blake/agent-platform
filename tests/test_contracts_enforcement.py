@@ -8,6 +8,7 @@ returns met/unmet verdicts for injected metrics.  100% per-file coverage of the 
 from __future__ import annotations
 
 import textwrap
+from datetime import datetime, timezone
 
 import pytest
 
@@ -16,8 +17,10 @@ from scripts.contracts_enforcement import (
     _load_contract_from_text,
     _parse_condition,
     check_amendment_for_diff,
+    check_re_ratification_trigger,
     check_required_inline_fields,
     check_status_transition,
+    default_provisional_metrics,
     evaluate_provisional_trigger,
 )
 from scripts.contracts_schema import (
@@ -571,3 +574,188 @@ class TestEvaluateProvisionalTrigger:
         doc = self._make_provisional_doc(["production_invocations >= 10"])
         met, cond = evaluate_provisional_trigger(doc, {"production_invocations": "not_a_number"})
         assert met is False
+
+
+def _make_provisional_doc_with_date(
+    *,
+    first_of: list[str],
+    first_production_invocation_date: str | None,
+    status: ContractStatus = ContractStatus.provisional_v0,
+) -> ContractDocument:
+    provisional_v0: dict = {"re_ratification_trigger": {"first_of": first_of}}
+    if first_production_invocation_date is not None:
+        provisional_v0["first_production_invocation_date"] = first_production_invocation_date
+    return ContractDocument(
+        contract=ContractMeta(
+            id="prov-metrics-test",
+            **{"class": ContractClass.A},
+            contract_version=1,
+            status=status,
+            provisional_v0=provisional_v0,
+        ),
+        fields={
+            "f1": FieldSpec(
+                type="string",
+                nullable=False,
+                description="A field",
+                semantics="The meaning",
+                populated_by="writer",
+                dq_intent={"not_null": {"enforced": True}},
+            )
+        },
+    )
+
+
+class TestDefaultProvisionalMetrics:
+    def test_fired_via_past_date_and_injected_now(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 60"],
+            first_production_invocation_date="2026-01-01",
+        )
+        now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        metrics = default_provisional_metrics(doc, now=now)
+        assert metrics == {"days_since_first_production_invocation": 151}
+        met, cond = evaluate_provisional_trigger(doc, metrics)
+        assert met is True
+        assert cond == "days_since_first_production_invocation >= 60"
+
+    def test_not_fired_via_recent_date(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 60"],
+            first_production_invocation_date="2026-06-08",
+        )
+        now = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        metrics = default_provisional_metrics(doc, now=now)
+        assert metrics == {"days_since_first_production_invocation": 12}
+        met, cond = evaluate_provisional_trigger(doc, metrics)
+        assert met is False
+
+    def test_no_production_invocations_key_supplied(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 1"],
+            first_production_invocation_date="2020-01-01",
+        )
+        metrics = default_provisional_metrics(doc, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        assert "production_invocations" not in metrics
+
+    def test_absent_date_returns_empty_dict(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 1"],
+            first_production_invocation_date=None,
+        )
+        assert default_provisional_metrics(doc) == {}
+
+    def test_malformed_date_returns_empty_dict(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 1"],
+            first_production_invocation_date="not-a-date",
+        )
+        assert default_provisional_metrics(doc) == {}
+
+    def test_non_provisional_status_returns_empty_dict(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 1"],
+            first_production_invocation_date="2020-01-01",
+            status=ContractStatus.draft,
+        )
+        assert default_provisional_metrics(doc) == {}
+
+    def test_missing_provisional_v0_block_returns_empty_dict(self) -> None:
+        doc = ContractDocument(
+            contract=ContractMeta(
+                id="no-prov-block",
+                **{"class": ContractClass.A},
+                contract_version=1,
+                status=ContractStatus.provisional_v0,
+                provisional_v0=None,
+            ),
+            fields={"f1": FieldSpec(type="string", nullable=False)},
+        )
+        assert default_provisional_metrics(doc) == {}
+
+
+class TestCheckReRatificationTrigger:
+    def test_valid_trigger_passes(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["production_invocations >= 500", "days_since_first_production_invocation >= 60"],
+            first_production_invocation_date="2026-06-08",
+        )
+        assert check_re_ratification_trigger(doc) == []
+
+    def test_unparseable_condition_errors(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["not a valid condition"],
+            first_production_invocation_date="2026-06-08",
+        )
+        errors = check_re_ratification_trigger(doc)
+        assert any("unparseable" in e for e in errors)
+
+    def test_days_since_without_date_errors(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 60"],
+            first_production_invocation_date=None,
+        )
+        errors = check_re_ratification_trigger(doc)
+        assert any("first_production_invocation_date" in e for e in errors)
+
+    def test_malformed_date_errors(self) -> None:
+        doc = _make_provisional_doc_with_date(
+            first_of=["days_since_first_production_invocation >= 60"],
+            first_production_invocation_date="not-a-date",
+        )
+        errors = check_re_ratification_trigger(doc)
+        assert any("not a valid ISO date" in e for e in errors)
+
+    def test_non_list_first_of_errors(self) -> None:
+        doc = ContractDocument(
+            contract=ContractMeta(
+                id="bad-firstof",
+                **{"class": ContractClass.A},
+                contract_version=1,
+                status=ContractStatus.provisional_v0,
+                provisional_v0={"re_ratification_trigger": {"first_of": "not-a-list"}},
+            ),
+            fields={"f1": FieldSpec(type="string", nullable=False)},
+        )
+        errors = check_re_ratification_trigger(doc)
+        assert any("non-empty list" in e for e in errors)
+
+    def test_non_provisional_returns_empty(self) -> None:
+        doc = _make_class_a_doc(status=ContractStatus.draft)
+        assert check_re_ratification_trigger(doc) == []
+
+    def test_missing_provisional_v0_block_returns_empty(self) -> None:
+        doc = ContractDocument(
+            contract=ContractMeta(
+                id="no-prov-block-2",
+                **{"class": ContractClass.A},
+                contract_version=1,
+                status=ContractStatus.provisional_v0,
+                provisional_v0=None,
+            ),
+            fields={"f1": FieldSpec(type="string", nullable=False)},
+        )
+        assert check_re_ratification_trigger(doc) == []
+
+    def test_missing_trigger_block_returns_empty(self) -> None:
+        doc = ContractDocument(
+            contract=ContractMeta(
+                id="no-trigger-block",
+                **{"class": ContractClass.A},
+                contract_version=1,
+                status=ContractStatus.provisional_v0,
+                provisional_v0={"declared_at": "2026-01-01"},
+            ),
+            fields={"f1": FieldSpec(type="string", nullable=False)},
+        )
+        assert check_re_ratification_trigger(doc) == []
+
+    def test_live_contracts_pass(self) -> None:
+        from pathlib import Path  # noqa: PLC0415
+
+        from scripts.contracts import load_contract  # noqa: PLC0415
+
+        contracts_dir = Path(__file__).resolve().parents[1] / "docs" / "contracts"
+        for name in ("ducklake_writer.yaml", "ducklake_reader.yaml", "ducklake_maintenance.yaml"):
+            doc = load_contract(contracts_dir / name)
+            assert check_re_ratification_trigger(doc) == [], f"{name} should have a well-formed trigger"

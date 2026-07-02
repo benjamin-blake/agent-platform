@@ -63,13 +63,14 @@ contract:
       Class B contracts start provisional_v0 (INTENT Part 6A/6B). Maintenance is scheduled/low-volume,
       so an invocation-count trigger is not meaningful; the stagger is a 90-day clock only (INTENT
       Part 6B: lambda-maintenance trigger is "90 days only").
+    first_production_invocation_date: "2026-06-22"
     surfacing_note: >-
-      Trigger surfacing is DORMANT until the session-preflight metrics provider is wired (subset-f):
-      session_preflight._scan_provisional_contracts currently passes no metrics, so
-      evaluate_provisional_trigger receives metrics=None and never fires. The threshold below is the
-      authored intent, not yet a live alarm. NB: the re_ratification_trigger.first_of format is NOT
-      schema-validated (provisional_v0 is dict[str, Any]); any amendment must hand-verify each
-      condition parses via scripts/contracts_enforcement._parse_condition (closed LHS vocabulary, ">=", int).
+      The time-based alarm is LIVE: session_preflight._scan_provisional_contracts computes
+      days_since_first_production_invocation deterministically from first_production_invocation_date
+      (via scripts.contracts_enforcement.default_provisional_metrics) and surfaces this contract in
+      provisional_contracts_due once the threshold below is met -- no credentials, no warehouse reads.
+      Maintenance has no traffic condition; it is fully live on the 90-day clock.
+      check_re_ratification_trigger schema-validates this trigger block in CI.
     re_ratification_trigger:
       first_of:
         - "days_since_first_production_invocation >= 90"

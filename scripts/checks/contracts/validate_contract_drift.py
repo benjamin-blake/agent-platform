@@ -42,6 +42,7 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
         from scripts.contracts_enforcement import (
             _load_contract_from_text,
             check_amendment_for_diff,
+            check_re_ratification_trigger,
             check_required_inline_fields,
             check_status_transition,
         )
@@ -86,6 +87,10 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
 
             # check_required_inline_fields: cat-2 (inline Class-A field missing required descriptive keys)
             for err in check_required_inline_fields(doc):
+                failed.append(f"Contract drift: {p.name}: {err}")
+
+            # check_re_ratification_trigger: provisional_v0 re_ratification_trigger well-formedness
+            for err in check_re_ratification_trigger(doc):
                 failed.append(f"Contract drift: {p.name}: {err}")
 
             ritual_contracts.append((p, doc))
