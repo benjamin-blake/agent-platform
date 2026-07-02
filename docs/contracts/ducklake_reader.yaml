@@ -46,15 +46,14 @@ contract:
       payload shapes are validated against real agent traffic before ratification. The reader is the
       hottest ops path (every preflight sync + every rec/decision read), so a high invocation
       threshold reaches signal quickly.
+    first_production_invocation_date: "2026-06-08"
     surfacing_note: >-
-      Trigger surfacing is DORMANT until the session-preflight metrics provider is wired (subset-f):
-      session_preflight._scan_provisional_contracts currently passes no metrics, so
-      evaluate_provisional_trigger receives metrics=None and never fires. The thresholds below are the
-      authored intent, not yet a live alarm; the production_invocations clock may already be past
-      threshold (reader has been live since 2026-06-08/09) but will not surface until the provider lands.
-      NB: the re_ratification_trigger.first_of format is NOT schema-validated (provisional_v0 is
-      dict[str, Any]); any amendment must hand-verify each condition parses via
-      scripts/contracts_enforcement._parse_condition (closed LHS vocabulary, ">=", int).
+      The time-based alarm is LIVE: session_preflight._scan_provisional_contracts computes
+      days_since_first_production_invocation deterministically from first_production_invocation_date
+      (via scripts.contracts_enforcement.default_provisional_metrics) and surfaces this contract in
+      provisional_contracts_due once the threshold below is met -- no credentials, no warehouse reads.
+      The production_invocations condition stays dormant pending invocation telemetry (T2.36 /
+      Decision 84 Phase 4); check_re_ratification_trigger schema-validates this trigger block in CI.
     re_ratification_trigger:
       first_of:
         - "production_invocations >= 2000"

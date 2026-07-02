@@ -15,6 +15,7 @@ contracts.resolve_refs; this module does not re-implement them.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Any
 
 import yaml
@@ -224,3 +225,75 @@ def evaluate_provisional_trigger(
             continue
 
     return False, None
+
+
+def default_provisional_metrics(doc: ContractDocument, now: datetime | None = None) -> dict[str, Any]:
+    """Compute the deterministic, credential-free days-since metric for a provisional_v0 contract.
+
+    Reads provisional_v0.first_production_invocation_date (ISO date string) and returns
+    {"days_since_first_production_invocation": <int>} using (now or utcnow()).date() minus that
+    date, floored at 0. Returns {} when the contract is not provisional_v0, the field is absent,
+    or the field is unparseable (fail-safe: absent metric means the condition cannot fire).
+    Supplies no "production_invocations" key -- that metric stays dormant pending telemetry (T2.36).
+    """
+    if doc.contract.status != ContractStatus.provisional_v0:
+        return {}
+    prov = doc.contract.provisional_v0
+    if not isinstance(prov, dict):
+        return {}
+    first_date_str = prov.get("first_production_invocation_date")
+    if not isinstance(first_date_str, str):
+        return {}
+    try:
+        first_date = date.fromisoformat(first_date_str)
+    except ValueError:
+        return {}
+    today = (now or datetime.now(timezone.utc)).date()
+    days_since = max(0, (today - first_date).days)
+    return {"days_since_first_production_invocation": days_since}
+
+
+def check_re_ratification_trigger(doc: ContractDocument) -> list[str]:
+    """Return error strings for a malformed provisional_v0 re_ratification_trigger.
+
+    For provisional_v0 contracts, re_ratification_trigger.first_of must be a non-empty list of
+    strings each parseable via _parse_condition; any condition referencing
+    days_since_first_production_invocation requires provisional_v0.first_production_invocation_date
+    to be present and a valid ISO date. Non-provisional contracts, or ones missing the
+    provisional_v0/trigger block, return [] -- this check only gates the trigger's own well-formedness.
+    """
+    if doc.contract.status != ContractStatus.provisional_v0:
+        return []
+    prov = doc.contract.provisional_v0
+    if not isinstance(prov, dict):
+        return []
+    trigger = prov.get("re_ratification_trigger")
+    if not isinstance(trigger, dict):
+        return []
+    first_of = trigger.get("first_of")
+    if not isinstance(first_of, list) or not first_of:
+        return [f"re_ratification_trigger.first_of must be a non-empty list, got {first_of!r}"]
+
+    errors: list[str] = []
+    needs_date = False
+    for condition in first_of:
+        parsed = _parse_condition(condition) if isinstance(condition, str) else None
+        if parsed is None:
+            errors.append(f"re_ratification_trigger condition unparseable: {condition!r}")
+            continue
+        if parsed[0] == "days_since_first_production_invocation":
+            needs_date = True
+
+    if needs_date:
+        first_date_str = prov.get("first_production_invocation_date")
+        if not isinstance(first_date_str, str):
+            errors.append(
+                "re_ratification_trigger references days_since_first_production_invocation but "
+                "provisional_v0.first_production_invocation_date is missing"
+            )
+        else:
+            try:
+                date.fromisoformat(first_date_str)
+            except ValueError:
+                errors.append(f"provisional_v0.first_production_invocation_date is not a valid ISO date: {first_date_str!r}")
+    return errors

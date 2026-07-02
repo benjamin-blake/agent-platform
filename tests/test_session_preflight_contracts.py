@@ -1,10 +1,11 @@
-"""Tests for the session_preflight provisional-contract scan (T-1.12 subset f).
+"""Tests for the session_preflight provisional-contract scan (T-1.12 subset f, live in c6).
 
 Follows the tests/test_session_preflight_platform_roadmap.py direct-import pattern.
-_scan_provisional_contracts reads local docs/contracts/ ritual contracts and surfaces
-the ids whose re_ratification_trigger first_of conditions evaluate as met given an
-injected metrics provider.  With the default (no provider) nothing fires, mirroring the
-production reality that no invocation telemetry exists yet (PLAN context: subset f deferral).
+_scan_provisional_contracts reads local docs/contracts/ ritual contracts and surfaces the ids
+whose re_ratification_trigger first_of conditions evaluate as met.  metrics_provider is now
+called PER CONTRACT with the loaded doc; when absent (the production default), the live
+default_provisional_metrics days-since provider computes the metric from each contract's
+provisional_v0.first_production_invocation_date.
 """
 
 from __future__ import annotations
@@ -19,7 +20,12 @@ def _write(directory: Path, name: str, text: str) -> None:
     (directory / name).write_text(textwrap.dedent(text).strip() + "\n", encoding="utf-8")
 
 
-def _provisional_contract(contract_id: str, condition: str) -> str:
+def _provisional_contract(contract_id: str, condition: str, first_production_invocation_date: str | None = None) -> str:
+    date_line = (
+        f'\n            first_production_invocation_date: "{first_production_invocation_date}"'
+        if first_production_invocation_date is not None
+        else ""
+    )
     return f"""
         contract:
           id: {contract_id}
@@ -28,7 +34,7 @@ def _provisional_contract(contract_id: str, condition: str) -> str:
           status: provisional_v0
           description: Provisional contract {contract_id}
           provisional_v0:
-            declared_at: "2026-01-01"
+            declared_at: "2026-01-01"{date_line}
             re_ratification_trigger:
               first_of:
                 - "{condition}"
@@ -70,7 +76,7 @@ class TestScanProvisionalContracts:
         _write(tmp_path, "prov-due.yaml", _provisional_contract("prov-due", "days_since_first_production_invocation >= 30"))
         due = _scan_provisional_contracts(
             contracts_dir=tmp_path,
-            metrics_provider=lambda: {"days_since_first_production_invocation": 45},
+            metrics_provider=lambda doc: {"days_since_first_production_invocation": 45},
         )
         assert due == ["prov-due"]
 
@@ -82,7 +88,7 @@ class TestScanProvisionalContracts:
         )
         due = _scan_provisional_contracts(
             contracts_dir=tmp_path,
-            metrics_provider=lambda: {"days_since_first_production_invocation": 10},
+            metrics_provider=lambda doc: {"days_since_first_production_invocation": 10},
         )
         assert due == []
 
@@ -94,12 +100,12 @@ class TestScanProvisionalContracts:
             # 'due' meets the threshold; 'pending' has a distinct id so we cannot vary metrics
             # per-contract -- instead assert the single shared metric gates both the same way,
             # then a second call with a sub-threshold metric excludes both.
-            metrics_provider=lambda: {"production_invocations": 150},
+            metrics_provider=lambda doc: {"production_invocations": 150},
         )
         assert sorted(due) == ["due", "pending"]
         none_due = _scan_provisional_contracts(
             contracts_dir=tmp_path,
-            metrics_provider=lambda: {"production_invocations": 5},
+            metrics_provider=lambda doc: {"production_invocations": 5},
         )
         assert none_due == []
 
@@ -107,7 +113,7 @@ class TestScanProvisionalContracts:
         _write(tmp_path, "just-draft.yaml", _DRAFT_CONTRACT)
         due = _scan_provisional_contracts(
             contracts_dir=tmp_path,
-            metrics_provider=lambda: {"days_since_first_production_invocation": 999},
+            metrics_provider=lambda doc: {"days_since_first_production_invocation": 999},
         )
         assert due == []
 
@@ -115,9 +121,34 @@ class TestScanProvisionalContracts:
         due = _scan_provisional_contracts(contracts_dir=tmp_path)
         assert due == []
 
-    def test_default_metrics_provider_fires_nothing(self, tmp_path) -> None:
-        # Production default: no metrics provider -> no invocation telemetry -> no trigger fires,
-        # even for a provisional contract carrying a trigger.
-        _write(tmp_path, "prov-due.yaml", _provisional_contract("prov-due", "days_since_first_production_invocation >= 1"))
+    def test_default_provider_surfaces_past_dated_contract(self, tmp_path) -> None:
+        # Production default: no metrics_provider -> default_provisional_metrics computes
+        # days_since deterministically from first_production_invocation_date. A far-past date
+        # surfaces via the DEFAULT provider (proving the wiring, not just the evaluation logic).
+        _write(
+            tmp_path,
+            "prov-due.yaml",
+            _provisional_contract(
+                "prov-due",
+                "days_since_first_production_invocation >= 1",
+                first_production_invocation_date="2000-01-01",
+            ),
+        )
+        due = _scan_provisional_contracts(contracts_dir=tmp_path)
+        assert due == ["prov-due"]
+
+    def test_default_provider_excludes_recent_dated_contract(self, tmp_path) -> None:
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        _write(
+            tmp_path,
+            "prov-pending.yaml",
+            _provisional_contract(
+                "prov-pending",
+                "days_since_first_production_invocation >= 1",
+                first_production_invocation_date=today,
+            ),
+        )
         due = _scan_provisional_contracts(contracts_dir=tmp_path)
         assert due == []

@@ -1992,8 +1992,8 @@ def main(roadmap_detail: str = "slim") -> int:
     _print_recent_main_commits(recent_main_commits)
 
     # Scan provisional contracts inline (reads only local docs/contracts/ -- no creds, no ThreadPoolExecutor).
-    # No production telemetry exists today, so the metrics provider returns None and nothing fires;
-    # the evaluation logic is fully built and tested via injected metrics (PLAN context: subset f deferral).
+    # The default per-contract provider computes a deterministic days-since-first-production-invocation
+    # metric from each contract's provisional_v0 date; production_invocations stays dormant (T2.36).
     provisional_contracts_due = _scan_provisional_contracts()
 
     print("\n--- Provisional contracts due ---")
@@ -2151,22 +2151,22 @@ def _format_preflight_summary(report: dict, report_path: Path) -> str:
 
 def _scan_provisional_contracts(
     contracts_dir: Path | None = None,
-    metrics_provider: Callable[[], dict[str, Any] | None] | None = None,
+    metrics_provider: Callable[[Any], dict[str, Any] | None] | None = None,
 ) -> list[str]:
     """Return contract ids whose provisional_v0 re_ratification_trigger is met.
 
     Reads local docs/contracts/ files only -- no warehouse reader, no credentials.
-    ``metrics_provider`` is called with no arguments to obtain a dict[str, Any] | None;
-    when absent (default None), no condition can fire (fail-safe: no false positives).
+    ``metrics_provider`` is called PER CONTRACT with the doc to obtain a metrics dict;
+    when absent (default), default_provisional_metrics supplies the live days-since metric.
     """
     from scripts.contracts import load_all_contracts  # noqa: PLC0415
-    from scripts.contracts_enforcement import evaluate_provisional_trigger  # noqa: PLC0415
+    from scripts.contracts_enforcement import default_provisional_metrics, evaluate_provisional_trigger  # noqa: PLC0415
 
     target_dir = contracts_dir if contracts_dir is not None else ROOT / "docs" / "contracts"
-    metrics = metrics_provider() if metrics_provider is not None else None
     due: list[str] = []
     try:
         for contract_id, doc in load_all_contracts(target_dir).items():
+            metrics = metrics_provider(doc) if metrics_provider else default_provisional_metrics(doc)
             met, _ = evaluate_provisional_trigger(doc, metrics)
             if met:
                 due.append(contract_id)

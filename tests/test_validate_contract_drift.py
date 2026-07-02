@@ -402,6 +402,119 @@ class TestCategory8BadChangeClass:
 
 
 # --------------------------------------------------------------------------------------
+# re_ratification_trigger well-formedness (Pass 1, provisional-contract-alarm plan)
+# --------------------------------------------------------------------------------------
+class TestReRatificationTriggerWellFormedness:
+    def test_malformed_trigger_condition_rejected(self, tmp_path, monkeypatch) -> None:
+        _install_fake_git(monkeypatch, _FakeGit(merge_base_rc=1))
+        text = textwrap.dedent(
+            """
+            contract:
+              id: provbad
+              class: A
+              contract_version: 1
+              status: provisional_v0
+              description: Provisional bad trigger
+              provisional_v0:
+                declared_at: "2026-01-01"
+                first_production_invocation_date: "2026-06-08"
+                re_ratification_trigger:
+                  first_of:
+                    - "not a valid condition"
+            fields:
+              f1:
+                type: string
+                nullable: false
+                description: A field
+                semantics: The meaning
+                populated_by: writer
+                dq_intent:
+                  not_null:
+                    enforced: true
+            """
+        ).strip()
+        _write(tmp_path, "provbad.yaml", text + "\n")
+        failed: list[str] = []
+        validate_contract_drift(failed, contracts_dir=tmp_path)
+        assert any("provbad.yaml" in f and "unparseable" in f for f in failed)
+
+    def test_missing_date_for_days_since_condition_rejected(self, tmp_path, monkeypatch) -> None:
+        _install_fake_git(monkeypatch, _FakeGit(merge_base_rc=1))
+        text = textwrap.dedent(
+            """
+            contract:
+              id: provnodate
+              class: A
+              contract_version: 1
+              status: provisional_v0
+              description: Provisional missing date
+              provisional_v0:
+                declared_at: "2026-01-01"
+                re_ratification_trigger:
+                  first_of:
+                    - "days_since_first_production_invocation >= 60"
+            fields:
+              f1:
+                type: string
+                nullable: false
+                description: A field
+                semantics: The meaning
+                populated_by: writer
+                dq_intent:
+                  not_null:
+                    enforced: true
+            """
+        ).strip()
+        _write(tmp_path, "provnodate.yaml", text + "\n")
+        failed: list[str] = []
+        validate_contract_drift(failed, contracts_dir=tmp_path)
+        assert any("provnodate.yaml" in f and "first_production_invocation_date" in f for f in failed)
+
+    def test_valid_provisional_contract_passes(self, tmp_path, monkeypatch) -> None:
+        _install_fake_git(monkeypatch, _FakeGit(merge_base_rc=1))
+        text = textwrap.dedent(
+            """
+            contract:
+              id: provgood
+              class: A
+              contract_version: 1
+              status: provisional_v0
+              description: Provisional good trigger
+              provisional_v0:
+                declared_at: "2026-01-01"
+                first_production_invocation_date: "2026-06-08"
+                re_ratification_trigger:
+                  first_of:
+                    - "production_invocations >= 500"
+                    - "days_since_first_production_invocation >= 60"
+            fields:
+              f1:
+                type: string
+                nullable: false
+                description: A field
+                semantics: The meaning
+                populated_by: writer
+                dq_intent:
+                  not_null:
+                    enforced: true
+            """
+        ).strip()
+        _write(tmp_path, "provgood.yaml", text + "\n")
+        failed: list[str] = []
+        validate_contract_drift(failed, contracts_dir=tmp_path)
+        assert failed == []
+
+    def test_real_live_contracts_pass(self, monkeypatch) -> None:
+        # The three real Class B provisional_v0 contracts (ducklake_writer/reader/maintenance)
+        # must pass the well-formedness check now enforced in Pass 1.
+        _install_fake_git(monkeypatch, _FakeGit(merge_base_rc=1))
+        real_dir = Path(__file__).resolve().parent.parent / "docs" / "contracts"
+        failed: list[str] = []
+        validate_contract_drift(failed, contracts_dir=real_dir)
+        assert failed == []
+
+
+# --------------------------------------------------------------------------------------
 # Clean / no-op cases
 # --------------------------------------------------------------------------------------
 class TestCleanAndNoRitual:
