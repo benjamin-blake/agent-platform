@@ -36,18 +36,25 @@ scope:
       until T2.36); evaluate_triggers(snapshot, config) -> list[TriggerResult] for the five triggers
       + KG.7 pool-exhaustion (same threshold as trigger 2); compute_discrepancy(snapshot, telem)
       -> Discrepancy|None; build_report(...) -> (full_markdown, public_summary) where full carries
-      absolute figures (private sink) and public carries ONLY trigger names + pass/fail +
-      percent-vs-threshold ratios, NEVER absolute dollars or per-service line-items (Decision 101);
+      absolute figures + measured ratios (private sink) and public carries ONLY trigger names +
+      pass/fail verdicts + the public (roadmap-sourced) THRESHOLD values, NEVER measured
+      values/ratios, absolute dollars, or per-service line-items (Decision 101 -- measured ratios
+      reveal cost structure, so they stay private too);
       build_rec_fields(tripped, discrepancy, month) -> dict whose file=docs/ROADMAP-PLATFORM.yaml,
-      source=cost_reconciliation, context>=80 chars, acceptance carries a runnable command
-      (Decision 66 write-time validators); find_open_cost_rec_for(trigger_key, profile) -> id|None
-      (dedupe lookup, mirrors find_open_postmortem_for); reconcile(snapshot_path, month, dry_run,
+      source=cost_reconciliation, context>=80 chars, acceptance a runnable check that passes
+      lint_acceptance_command (Decision 66 write-time validators -- template pinned in context);
+      find_open_cost_rec_for(trigger_key, profile) -> id|None (dedupe lookup that reads the local
+      recs cache, mirrors find_open_postmortem_for); reconcile(snapshot_path, month, dry_run,
       profile) orchestrates: on dry_run build+validate the rec payload (validate_source,
       _validate_context_length, lint_acceptance_command, Recommendation.model_validate) but DO NOT
-      write; else per-trigger dedupe-and-auto-close (Decision 103): tripped+no-open-rec -> file_rec;
-      tripped+open-rec -> update_rec (refresh context); cleared+open-rec -> update_rec status=closed;
-      main(argv) CLI: --invoice PATH --month YYYY-MM [--dry-run] [--config PATH] [--report-out PATH].
-      Import-safe (no exceptions at import; no eval/exec; async not required -- CLI is sync I/O).
+      write and DO NOT sync; else FIRST call sync() to populate logs/.recommendations-log.jsonl
+      (the dedupe lookup reads that gitignored cache, ABSENT in a fresh Actions checkout -- WITHOUT
+      sync() find_open_cost_rec_for always returns None, so dedupe never fires and auto-close never
+      happens; this mirrors rec-autoclose.yml:73), THEN per-trigger dedupe-and-auto-close
+      (Decision 103): tripped+no-open-rec -> file_rec; tripped+open-rec -> update_rec (refresh
+      context); cleared+open-rec -> update_rec status=closed; main(argv) CLI: --invoice PATH --month
+      YYYY-MM [--dry-run] [--config PATH] [--report-out PATH]. Import-safe (no exceptions at import;
+      no eval/exec; async not required -- CLI is sync I/O).
   - file: tests/test_cost_reconciliation.py
     action: Create
     purpose: >
@@ -80,10 +87,14 @@ scope:
       role-to-assume arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
       region eu-west-2; `aws s3 cp s3://agent-platform-data-lake/cost-invoices/<month>.json` (if the
       object is ABSENT, log a step-summary reminder to export invoices and EXIT 0 -- graceful, non-
-      fatal); run the module LIVE (env DUCKLAKE_WRITER_URL=${{ secrets.DUCKLAKE_WRITER_URL }})
-      writing the full report to the private S3 prefix; write ONLY the sanitized public_summary to
-      $GITHUB_STEP_SUMMARY (no absolute dollars / ARNs / secrets). No signal-green.needs entry (this
-      is a scheduled alarm, not a PR gate); not an agent/`claude -p` workflow.
+      fatal); run the module LIVE (env DUCKLAKE_WRITER_URL=${{ secrets.DUCKLAKE_WRITER_URL }}; the
+      module calls sync() internally before the dedupe lookup -- sync() resolves the reader URL via
+      the branch role's lambda:GetFunctionUrlConfig fallback, exactly as rec-autoclose.yml does, so
+      no DUCKLAKE_READER_URL env is required, though set it if the secret exists) writing the full
+      report to the private S3 prefix; write ONLY the sanitized public_summary to
+      $GITHUB_STEP_SUMMARY (trigger names + PASS/FAIL + public thresholds; no measured ratios /
+      absolute dollars / ARNs / secrets). No signal-green.needs entry (this is a scheduled alarm,
+      not a PR gate); not an agent/`claude -p` workflow.
   - file: tests/fixtures/cost_reconciliation/snapshot_tripped.json
     action: Create
     purpose: >
@@ -127,8 +138,8 @@ acceptance_criteria:
   - "On any trigger tripping OR a >5% invoice-vs-telemetry discrepancy the job files a recommendation through the ops portal (file_rec, source=cost_reconciliation); the rec is the alarm and gates nothing / auto-remediates nothing (Decision 55 / Decision 62)."
   - "`bin/venv-python -m scripts.cost_reconciliation --invoice tests/fixtures/cost_reconciliation/snapshot_tripped.json --month 2026-06 --dry-run` builds and fully validates the rec payload (validate_source + context>=80 + lint_acceptance_command + Recommendation.model_validate) and completes WITHOUT any warehouse write -- proving the rec-filing path without a live write."
   - "The telemetry leg degrades gracefully: with no telemetry source available (pre-T2.36) the invoice-vs-telemetry discrepancy trigger is skipped-with-note and the five invoice-derived triggers still evaluate; the report records the leg as pending T2.36."
-  - "Persistent-condition discipline (Decision 103): a tripped trigger with an existing open cost_reconciliation rec updates it (one rec per trigger episode); a trigger that clears auto-closes its open rec. The dry-run/tests prove file_rec vs update_rec routing with the portal mocked."
-  - "Public-boundary safety (Decision 101): the full-figure report goes to a private sink (private S3 prefix + summarized in the private warehouse rec body); the public GitHub step-summary carries only trigger names + pass/fail + percent-vs-threshold ratios, never absolute dollars, per-service line-items, ARNs, or secrets."
+  - "Persistent-condition discipline (Decision 103): reconcile() calls sync() BEFORE the dedupe lookup (the lookup reads the gitignored recs cache, absent in a fresh CI checkout), so a tripped trigger with an existing open cost_reconciliation rec updates it (one rec per trigger episode) and a cleared trigger auto-closes its open rec -- working against a populated cache, not only mocked. Unit tests prove file_rec-vs-update_rec routing with the portal mocked; the step-9 live two-run sequence proves it end-to-end against the real synced cache."
+  - "Public-boundary safety (Decision 101): the full-figure report (absolute dollars + measured ratios) goes to a private sink (private S3 prefix + summarized in the private warehouse rec body); the public GitHub step-summary carries only trigger names + pass/fail verdicts + public (roadmap-sourced) threshold values, never measured ratios, absolute dollars, per-service line-items, ARNs, or secrets."
   - "config/agent/data_quality/source_registry.yaml registers cost_reconciliation; docs/ROADMAP-PLATFORM.yaml CD.28 inventory entry points at the built implementation and KG.7 concern #1 points at the monitor."
   - "`bin/venv-python -m scripts.validate` is green (100% line coverage on the new module; SLOC within Decision-102 limits with NO new sloc_budgets entry; roadmap + registry checks pass)."
 
@@ -152,17 +163,17 @@ verification_plan:
     expected: "Exit 0; prints the would-file rec payload (title/context/acceptance/source) and a line stating no warehouse write occurred. No portal/network call."
     fix_if: "If it attempts a write, ensure the dry_run branch returns before file_rec/update_rec. If payload validation fails, ensure source=cost_reconciliation is registered and context>=80 chars and acceptance carries a runnable command (Decision 66)."
   - step: 4
-    phase: Dry-run assertion + dedupe/auto-close routing
-    action: A test asserts the dry-run performs zero portal writes; dedupe (open rec -> update_rec) and auto-close (cleared -> status=closed) route correctly with the portal mocked.
-    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py -q -k 'dry_run or dedupe or autoclose or nowrite'"
-    expected: "Tests pass: file_rec/update_rec assert_not_called in dry-run; update_rec called on an existing open rec; status=closed on a cleared trigger."
-    fix_if: "If writes leak in dry-run, thread dry_run through reconcile(). If dedupe mis-routes, verify find_open_cost_rec_for matches source=cost_reconciliation + status=open + the per-trigger title tag."
+    phase: Dry-run assertion + dedupe/auto-close routing (mock-only) + sync precondition
+    action: Tests assert the dry-run performs zero portal writes AND no sync; in live mode reconcile() calls sync() BEFORE the dedupe lookup; dedupe (open rec -> update_rec) and auto-close (cleared -> status=closed) route correctly with the portal + sync mocked. (Mock-only routing; the synced-cache behaviour is proven live in step 9.)
+    command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py -q -k 'dry_run or dedupe or autoclose or nowrite or sync'"
+    expected: "Tests pass: file_rec/update_rec/sync assert_not_called in dry-run; sync called before find_open_cost_rec_for in live mode; update_rec on an existing open rec; status=closed on a cleared trigger."
+    fix_if: "If writes/sync leak in dry-run, thread dry_run through reconcile(). If sync is not called first in live mode, add it before find_open_cost_rec_for. If dedupe mis-routes, verify find_open_cost_rec_for matches source=cost_reconciliation + status=open + the per-trigger title tag."
   - step: 5
     phase: Public-boundary sanitization
-    action: The public step-summary string carries no absolute dollar figures while the full report does.
+    action: The public step-summary carries verdicts + public thresholds only -- no measured ratios and no absolute dollars -- while the full report carries both.
     command: "bin/venv-python -m pytest tests/test_cost_reconciliation.py -q -k 'public or sanitiz or boundary'"
-    expected: "Test passes: build_report's public_summary contains percent ratios + PASS/FAIL but no '$'/dollar-amount substrings; full report contains the absolute figures."
-    fix_if: "If a dollar figure leaks into public_summary, route absolute values only into the full report and keep public to trigger names + ratios + verdicts."
+    expected: "Test passes: build_report's public_summary contains trigger names + PASS/FAIL + threshold values but NO '$'/dollar-amount and NO measured-ratio substrings; the full report contains the absolute figures and measured ratios."
+    fix_if: "If a dollar figure or measured ratio leaks into public_summary, route absolute values and measured ratios only into the full report; keep public to trigger names + verdicts + public thresholds."
   - step: 6
     phase: Coverage
     action: 100% per-file line coverage on the new module.
@@ -183,17 +194,17 @@ verification_plan:
     fix_if: "If sloc/complexity fails, split the module (do NOT add a >500 budget entry -- Decision 102 smell). If a workflow guard fails, confirm the workflow has no headless claude -p step and is not mistaken for a PR gate."
   - step: 9
     phase: Post-merge behavioural verification (manual, Decision 48 conscious-acceptance)
-    action: One-shot live run against a real/staging snapshot behaviourally exercises the S3-read + live file_rec legs the dry-run does not.
-    command: "bin/venv-python -m scripts.cost_reconciliation --invoice <path-to-real-or-staging-snapshot.json> --month <YYYY-MM>"
-    expected: "A rec is filed (or updated) via the portal and a full report lands in the private S3 prefix; equivalently, dispatch .github/workflows/cost-reconciliation.yml via workflow_dispatch and confirm the run files the rec. Run AFTER merge, not in PR CI."
-    fix_if: "If the live write fails with an auth error, confirm DUCKLAKE_WRITER_URL is set and the agent_platform/branch role reaches the writer boundary (same path rec-autoclose.yml uses). If the S3 read 403s, confirm the object key and the role's bucket-wide s3:GetObject."
+    action: A live TWO-RUN sequence against a tripping snapshot behaviourally exercises the S3-read + sync + live file_rec/update_rec/close legs the dry-run + mocks do not -- proving dedupe/auto-close against the REAL synced cache (Strategic Risk the mock-only step-4 cannot substantiate).
+    command: "bin/venv-python -m scripts.cost_reconciliation --invoice <tripping-snapshot> --month <M>   # run 1 files rec-NNNN; re-run same args -> UPDATES rec-NNNN (dedupe, no new id); then run with a cleared-trigger snapshot -> update_rec status=closed on rec-NNNN"
+    expected: "Run 1 files a NEW rec; the identical second run UPDATES the same rec id (no duplicate) proving sync()+find_open_cost_rec_for hit a populated cache; a subsequent cleared-trigger run CLOSES that rec. A full report lands in the private S3 prefix each run. Equivalently dispatch .github/workflows/cost-reconciliation.yml via workflow_dispatch. Run AFTER merge, not in PR CI."
+    fix_if: "If run 2 files a duplicate instead of updating, sync() is not running before the lookup (or the title-tag key differs run-to-run) -- fix the sync precondition / stabilise the trigger key. If the live write 403s, confirm DUCKLAKE_WRITER_URL + the branch role writer/reader InvokeFunction grants; if the S3 read 403s, confirm the object key + bucket-wide s3:GetObject."
 
 constraints:
   - "Alarm-not-gate (Decision 55 / Decision 62): the job's ONLY action on breach is to file/update a rec. It NEVER blocks a merge, changes infra, or auto-remediates. This is the explicitly-in-scope runtime rec-filing the task sanctions -- it is NOT a tracking rec for the build work (none of those are filed)."
   - "Loud-fail, no offline outbox (Decision 84 I-4): a file_rec/update_rec that cannot complete raises at the call site; do NOT swallow portal errors into a green no-op. The workflow step surfaces the failure (non-zero) so a dropped write is visible."
   - "Single Portal Invariant (Decision 84): the rec write transits file_rec/update_rec -> ducklake_writer; the rec id is writer-allocated in-transaction (I-2), never client-assigned. Read-cache-never-a-write-source (hard rule): the cost snapshot is read from the private cost-invoices/ S3 prefix, NEVER from any logs/ read cache; nothing in this job calls OpsWriter.write()."
   - "Public-repo boundary (Decision 101): NEVER publish absolute cost figures, per-service line-items, ARNs, account ids, or the writer URL to any world-readable GitHub surface (Actions log / step-summary / artifact). Full figures go to the private S3 prefix + the private warehouse rec body only; the public step-summary is trigger names + pass/fail + percent-vs-threshold ratios. Reference DUCKLAKE_WRITER_URL and AWS_ACCOUNT_ID only via secrets.*/vars.* -- never echo them."
-  - "Verification tier V2, conscious-accepted against Decision 48: the deliverable is verified by units + the --dry-run fixture (no live warehouse write, honouring the ULF-08 acceptance 'prove the path without a live write'). The live file_rec leg is pre-proven by rec-autoclose.yml (same OIDC role + writer boundary); the snapshot PRODUCER (uploading invoices to S3) is out of scope. The V3-class cross-service legs (live S3 read + live portal write) are behaviourally verified post-merge via the step-9 one-shot workflow_dispatch run, not in PR CI."
+  - "Verification tier V2, conscious-accepted against Decision 48: the deliverable is verified by units + the --dry-run fixture (no live warehouse write, honouring the ULF-08 acceptance 'prove the path without a live write'). The live file_rec WRITE leg is pre-proven by rec-autoclose.yml (same OIDC role + writer boundary). BUT the sync()+find-open-by-title-tag dedupe/auto-close routing is NOVEL logic (rec-autoclose only closes by explicit id; it never dedupes against a synced cache), is NOT pre-proven, and is NOT substantiated by the mock-only unit tests -- its behavioural proof runs through the step-9 live TWO-RUN sequence (file -> update -> close against the real synced cache). The snapshot PRODUCER (uploading invoices to S3) is out of scope."
   - "Write-time validators (Decision 66): the templated rec payload MUST satisfy validate_source (cost_reconciliation registered FIRST), context >= 80 chars, and lint_acceptance_command (acceptance carries a runnable command, no banned patterns). Call get_rec_write_guidance(source='cost_reconciliation') before composing the payload. risk/automatable are DERIVED by the portal from file+effort -- supply file=docs/ROADMAP-PLATFORM.yaml and a valid effort; do not hand-set risk."
   - "GitHub Actions, NOT a Lambda (Decision 79 / CD.16 / CD.24): scripts/cost_reconciliation.py is a new standalone module and config/agent/ is not Lambda-packaged, so no build/deploy/smoke-test step applies. Confirm at implement time with `bin/venv-python -m scripts.lambda_manifest --list-patterns` and compute_affected_artifacts([...scope...]). EXCEPTION: docs/ROADMAP-PLATFORM.yaml is a bundled ASSET of the active data-pipeline Lambda -- this is an asset-only doc edit (no Lambda CODE change), validate_lambda_deploy_gating is advisory-only, and deploy/smoke-test is DEFERRED with justification (the data-pipeline scheduled agents are disabled per the AGENTS.md runbook)."
   - "SLOC (Decision 102 / Decision 43): keep scripts/cost_reconciliation.py <500 SLOC and add NO config/sloc_budgets.yaml entry (Decision 102 registers only >500-SLOC files; a fresh >500 file is a directed-growth smell). If the module cannot fit under 500, SPLIT it (e.g. a thin triggers submodule) rather than raise a budget."
@@ -206,7 +217,9 @@ context:
   - "The five triggers verbatim (docs/ROADMAP-PLATFORM.yaml:281-285 at plan time): (1) DeepSeek direct API pricing changes >5x in either direction; (2) Anthropic Max x5 programmatic pool sustained >70% utilisation over 30 days -> file rec for org-billed API key; (3) S3 storage cost >50% of total monthly bill; (4) self-hosted runner cost >2x scheduled-runner alternative; (5) Step Functions state-transition cost >5% of total monthly bill. Trigger 2 == KG.7 availability concern #1 (same 70% pool threshold)."
   - "CD.28 inventory target (docs/ROADMAP-PLATFORM.yaml:1142-1150): 'PLAN-cost-reconciliation-job (priority low)' names impl (a) ingest DeepSeek CSV + Anthropic Console invoice, (b) compute monthly totals from telemetry, (c) emit report, (d) file rec on discrepancy >5%; and line 1050 records the job as 'declared but not yet built'. CD.28 retired AWS CUR as the LLM-spend source, making per-provider invoice export the authoritative cost source -- which is why this reconciliation job exists."
   - "KG.7 (docs/ROADMAP-PLATFORM.yaml:7631-7652): two Tier-2 availability concerns 'to monitor'. #1 programmatic-pool exhaustion (>70% of Max x5 pool over 30d -> file rec for org-billed key) is machine-evaluated by this job. #2 simultaneous Tier-1+Tier-2 outage with no warm Tier-3 (OpenRouter deferred) is an availability gap, NOT invoice-reconcilable -- annotate but do not evaluate here."
-  - "Portal write path (verified): file_rec (scripts/ops_data_portal.py:810) requires title,file,status,source,effort,priority,context,acceptance; _derive_computed_fields (:722) DERIVES risk+automatable from file+effort (caller risk is overridden); _validate_file_path requires file to exist, so the rec's file=docs/ROADMAP-PLATFORM.yaml (the triggers' home). update_rec (:1065) is the dedupe/close path. find_open_postmortem_for (:1432) is the pattern for find_open_cost_rec_for."
+  - "Portal write path (verified): file_rec (scripts/ops_data_portal.py:810) requires title,file,status,source,effort,priority,context,acceptance; _derive_computed_fields (:722) DERIVES risk+automatable from file+effort (caller risk is overridden). _validate_file_path (:693) checks path FORMAT only (relative + forward-slashes); file EXISTENCE is deferred to execution time (Decision 66), so it does NOT require the path to exist -- file=docs/ROADMAP-PLATFORM.yaml is chosen because it is the natural file implicated by the alarm (the triggers' home) and keeps derived risk/automatable meaningful. update_rec (:1065) is the dedupe/close path. find_open_postmortem_for (:1432) is the pattern for find_open_cost_rec_for and reads the gitignored logs/.recommendations-log.jsonl cache -- hence the sync() precondition (see constraints)."
+  - "Runtime alarm rec fields (pin at implement time): title tags the tripped trigger(s) + month with a STABLE per-trigger key so find_open_cost_rec_for matches run-to-run (e.g. '[cost:s3_share] S3 exceeded 50% of the monthly bill (2026-06)'); context (>=80 chars) names the measured breach + the CD.28 remedy (e.g. pool>70% -> provision an org-billed Anthropic API key); acceptance MUST pass lint_acceptance_command (no `python -c`, no banned patterns) and be a genuine runnable check, e.g. 'Address the tripped trigger, then re-run `bin/venv-python -m scripts.cost_reconciliation --invoice <snapshot> --month <YYYY-MM>` and confirm it no longer trips (the rec auto-closes on the next monthly run).'"
+  - "Trigger #4 (self-hosted runner cost >2x scheduled) is VESTIGIAL post-CD.21 (runner retired 2026-05-28; self_hosted_runner line-item is $0): the job evaluates it faithfully because the roadmap reevaluation_triggers list is the SoT/contract, but it cannot fire while no runner exists. Not removed -- guard the ratio against a zero/absent scheduled-alternative to avoid a divide-by-zero and treat it as not-tripped."
   - "IAM (verified, terraform/personal/oidc.tf): agent-platform-github-ci-branch has bucket-wide s3:GetObject+PutObject+DeleteObject on the data lake (Sid S3ReadWrite, Resource ${data_lake.arn}/*) minus an explicit Deny on convergence/personal/* -- so reading s3://agent-platform-data-lake/cost-invoices/<month>.json and writing the private report under cost-reconciliation-reports/ need NO IAM change. The writer boundary is reached via the DUCKLAKE_WRITER_URL secret exactly as rec-autoclose.yml does. NO terraform/IAM change is in scope."
   - "Telemetry state (verified): preflight telemetry-store = 'not migrated (Phase 4)'; scripts/telemetry_schemas.py TelemetryModelCalls has tokens_input/output but NO est_cost_usd field; T2.36 (not_started, depends_on T2.26+T2.18) re-lands telemetry on the DuckLake four-table model where est_cost_usd will live on the reader boundary. Hence the telemetry leg is a graceful stub now (design note in the task)."
   - "pydantic-yaml-drift (verified): validate_pydantic_yaml_drift targets ONLY config/agent/data_quality/ops.yaml, so the new config/agent/cost_reconciliation.yaml does not trip it. Workflow guards (verified): validate_workflow_agent_safety only flags headless `claude -p` steps (none here); validate_ci_workflow_guards targets ci.yml structure (untouched)."
@@ -224,12 +237,12 @@ execution_steps:
   - "Add the cost_reconciliation source to config/agent/data_quality/source_registry.yaml."
   - "Author config/agent/cost_reconciliation.yaml (baselines + thresholds + private report prefix)."
   - "Author the two fixtures under tests/fixtures/cost_reconciliation/ (tripped + clean)."
-  - "Build scripts/cost_reconciliation.py (snapshot/config/telemetry loaders, trigger evaluation, discrepancy, report build with private/public split, rec payload build, dedupe-and-auto-close reconcile(), CLI main). Keep <500 SLOC."
-  - "Write tests/test_cost_reconciliation.py to 100% line coverage, including the dry-run no-write assertion and the Decision-101 public-sanitization assertion."
+  - "Build scripts/cost_reconciliation.py (snapshot/config/telemetry loaders, trigger evaluation, discrepancy, report build with private/public split, rec payload build, reconcile() that calls sync() BEFORE find_open_cost_rec_for in live mode then dedupe-and-auto-close, CLI main). Keep <500 SLOC."
+  - "Write tests/test_cost_reconciliation.py to 100% line coverage, including the dry-run no-write/no-sync assertion, the sync-called-before-lookup-in-live assertion, and the Decision-101 public-sanitization assertion."
   - "Add .github/workflows/cost-reconciliation.yml (monthly cron + workflow_dispatch; OIDC branch role; S3 snapshot read with graceful-absent; live module run; private report + sanitized public summary)."
   - "Annotate CD.28 inventory + KG.7 concern #1 in docs/ROADMAP-PLATFORM.yaml."
   - "Run the full verification_plan; iterate to green; commit with feat(cost-reconciliation-job): ..."
-  - "After merge, run the step-9 one-shot live verification (workflow_dispatch or local live run) to exercise the S3-read + file_rec legs."
+  - "After merge, run the step-9 live TWO-RUN verification (workflow_dispatch or local live run: file -> update -> close) to exercise the S3-read + sync + file_rec/update_rec/close legs against the real synced cache."
 
 rollback: >
   Purely additive: five new files + two prose annotations + one source-registry line. No data
