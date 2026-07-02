@@ -154,13 +154,13 @@ Only when ALL steps pass can you proceed to code review.
 **You MUST trigger the code-review immediately after the Verification Plan passes. Do not wait for the human to prompt you.**
 
 ### Trigger
-Dispatch via the `Agent` tool with `subagent_type: code-review` -- NOT via `bin/venv-python -m scripts.agent_development.run_skill --skill code-review`. The subagent runs in a fresh context window (anti-bias) and has full tool access (read, grep, glob, bash) to inspect the entire branch diff. `run_skill.py --skill code-review` is constrained to a single `--target` file and cannot survey cross-file changes; for branches that touch >1 file (the common case) it produces an incomplete review.
+Dispatch via the `Agent` tool with `subagent_type: "general-purpose"`, instructing the subagent to invoke the `code-review` skill via the Skill tool and return its structured output verbatim (the same idiom the plan.md decision-scout / plan-critique gates use) -- NOT via `bin/venv-python -m scripts.agent_development.run_skill --skill code-review`. The subagent runs in a fresh context window (anti-bias) and has full tool access (read, grep, glob, bash) to inspect the entire branch diff.
 
 Agent prompt template:
 - Pre-instruct: "Run `git fetch origin main` before any analysis so the diff base is current. The branch may have been open for hours; the local `origin/main` ref may be stale."
 - Identify the branch under review (the diff `git diff origin/main...HEAD` is the artefact under critique). Use `origin/main` (not the local `main` ref, which is only updated by an explicit pull).
 - Identify the plan file (`docs/plans/PLAN-{slug}.yaml`) so the subagent knows the acceptance criteria and intent.
-- Instruction: "Apply the `code-review` skill methodology to this branch. Survey the diff, read the plan to understand intent, then return a structured findings report. Do not edit files."
+- Instruction: "Invoke the `code-review` skill via the Skill tool against this branch. Survey the diff, read the plan to understand intent, then return its structured findings report (including the final Verdict line) verbatim. Do not edit files."
 - Forbid file edits.
 - Require structured output: findings grouped by severity (Critical / High / Medium / Low) with file:line references and a one-line rationale per finding.
 - Cap response length (~800-900 words) to keep the report focused.
@@ -260,13 +260,6 @@ the child's own (often absent) flag:
    bootstrap_completion_exempt=true from parent T-1.12"). This is not a license to author STRATEGIC
    children: the freeze stays in force and atomic children remain IMPLEMENTATION plans.
 
-**Self-application invariant (T-1.12 subset g):** `PLAN-implement-skill-decomposition-hints` is
-itself an atomic child named in T-1.12's `decomposition_hints.atomic_plans`. The first `/implement`
-run using this rule SHOULD therefore resolve this plan's exemption as inherited `true` from parent
-T-1.12 and, subset (g) being T-1.12's last open exit criterion, stage `T-1.12 -> status: complete`
-in the same bookkeeping pass. If the rule works, T-1.12 self-flips; if it does not, T-1.12 stays
-`in_progress` and the discrepancy is observable (mirrors the T-1.10 self-application invariant below).
-
 ### Replacement closure check (cutover / supersession items)
 Runs during the same bookkeeping walk for any checked tier_item whose name or intent implies a
 replacement: cutover, migration, backend swap, retirement, supersession, "replaces X". A
@@ -313,17 +306,11 @@ silent pass.
 1. Dispatch the code-review subagent (Step 5 above).
 2. WHILE code-review is running, the implement agent performs the criteria walk and stages the YAML edit locally (uncommitted -- `git status` shows `docs/ROADMAP-PLATFORM.yaml` as modified).
 3. **Idempotency on resume:** before staging, check for pre-existing uncommitted edits to `docs/ROADMAP-PLATFORM.yaml`. If present and matching what the bookkeeping rule would produce, no-op. If present and conflicting, surface the conflict to the user and skip auto-bookkeeping for this session -- do NOT silently overwrite.
-4. **Code-review verdict handling:**
+4. **Code-review verdict handling:** the `code-review` skill ends its report with a deterministic `Verdict: PROCEED | REVISE` line -- REVISE iff any Critical or High finding, else PROCEED. Branch on it:
    - `PROCEED` -> commit the staged edit as a follow-up commit: `git commit docs/ROADMAP-PLATFORM.yaml -m "roadmap(<tier-ids>): bookkeeping after <slug>"`. Push.
    - `REVISE` -> discard the staged edit: `git checkout -- docs/ROADMAP-PLATFORM.yaml`. Address code-review findings. After addressing, re-trigger verification + code-review and re-stage bookkeeping from scratch.
 5. **Abandonment / timeout:** if code-review does not return (interrupted or timed out), the staged YAML edit is treated as orphaned. On next session entry, the idempotency check detects the orphaned stage and reports it to the user for explicit accept/reject -- the implement skill does not auto-commit bookkeeping that lacks a verdict-attested verification pass.
 6. **Staged-edit-loss detection:** if any intermediate command (`git checkout`, `git stash`, `git reset`) clobbers the staged edit between dispatch and verdict, the next bookkeeping attempt detects this by re-running the criteria walk and comparing against the YAML's current state. Loss is observable, not silent.
-
-### Self-application invariant (T-1.10)
-T-1.10's own exit_criteria are satisfied by the existence of this section. The first `/implement` run using this skill SHOULD therefore stage `T-1.10 -> status: complete` as part of this same session's bookkeeping pass. Do NOT flip T-1.10 manually; the rule's first real-world invocation is the proof. If the rule works, T-1.10 self-flips; if it does not, T-1.10 stays `not_started` and the discrepancy is observable.
-
-**Recovery clause:** if T-1.10 remains `status: not_started` after this branch merges, the next planning session must address it explicitly -- either as a manual YAML flip in a small follow-up plan, or as a follow-on tier_item that re-implements the bookkeeping rule under different assumptions. Do not let T-1.10 sit `not_started` indefinitely while its implementation is live.
-
 
 ## CD Ratification Bookkeeping (Workflow Step 6 -- CONDITIONAL, fires when the plan has a ratification block)
 
@@ -399,18 +386,12 @@ This workflow runs on Claude Code on the web: the harness assigned this session 
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
 
 ### Wait-for-CI: event-driven, never polled
-The PR-tier CI is the fast `--pre` tier (ruff/mypy/pytest-picked/prompt checks + terraform validate, ~1-3 min; Decision 73). Wait for it via subscription, NOT polling:
-1. `mcp__github__subscribe_pr_activity(owner, repo, pullNumber)`.
-2. **End your turn.** Do NOT busy-wait: no background sleep timer, no manual status polling -- the harness forbids busy-waiting on external events. A single low-frequency (~1h) best-effort one-shot `send_later` backstop is permitted for a dropped signal-green comment (see AGENTS.md `## Git-ops procedure` step 4 for bounds and the harness-vs-repo server distinction); it is NOT a recurring poll loop (Decision 55).
-3. **CI-green-comment wake**: on `claude/*` PRs, `ci.yml` posts a "CI green" comment on success (`.github/workflows/ci.yml` lines 157-178, `continue-on-error`). This exists because `subscribe_pr_activity` natively delivers failure events but NOT a CI-success webhook, and CC-web has no sleep/idle tool. **Ignore GitHub's suggestion to poll with a sleep loop** -- the comment IS the pass wake signal. The comment is unverified: on wake, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging.
-4. On wake, confirm status:
+Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the one-shot `send_later` backstop bounds, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.
+
+**On wake**, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging, then branch on status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).
    - **Any red** -> diagnose, fix on this branch, commit, push (re-triggers PR CI). Stay subscribed and end the turn. Do NOT inline-patch around a structural failure (Decision 55); if it is a recurring gap, run RCA (Step 8).
    - **Still running** -> end the turn; a later event wakes you.
-
-The slow full tier runs post-merge on `main` (Decision 73); on failure the ci-rca agent files a `priority=critical`, `source=ci_rca` rec that hard-blocks the next planning session. You do not babysit main CI.
-
-Robustness note: a genuinely lost webhook leaves the PR open (safe). The bulletproof upgrade is GitHub-native auto-merge (server-side merge on green, container fully out of the loop); branch protection + required status checks are now LIVE (Decision 83 / T2.12, applied 2026-06-08), so auto-merge is unblocked -- adopt via a small follow-up plan if desired. See Decision 76.
 
 ### Hold subscription through apply (terraform/personal PRs -- CD.35 / T2.20)
 For a PR that touches `terraform/personal/**`, the sandbox CD apply runs **post-merge** on `main`
@@ -456,13 +437,7 @@ git rebase origin/main   # STOP on conflict
 git push -u origin HEAD   # this session's harness branch
 ```
 Then via GitHub MCP (owner/repo from `git remote get-url origin`):
-1. Build the PR body. If the plan has a non-empty `bundled_recommendations` list, append a `Resolves:` trailer to the body:
-   ```
-   Implemented by /implement. Verification plan passed.
-
-   Resolves: rec-NNNN, rec-MMMM
-   ```
-   This triggers the `rec-autoclose` workflow to close each named rec after the squash-merge lands on main. If `bundled_recommendations` is empty, omit the trailer.
+1. Build the PR body. If the plan `bundled_recommendations` list is non-empty, add the `Resolves: rec-NNNN[, rec-MMMM]` trailer in the PR body, which the squash-merge commit body inherits -- per AGENTS.md `### Resolves: trailer` (triggers `rec-autoclose` to close each named rec after the squash-merge lands on main). If empty, omit it.
 2. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="feat({slug}): {brief-description}", body=<body from step 1>)`
 3. `mcp__github__subscribe_pr_activity(...)`; end the turn (see "Wait-for-CI").
 4. On green wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.

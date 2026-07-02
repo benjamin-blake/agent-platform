@@ -21,11 +21,11 @@ After preflight completes successfully, open a telemetry session:
 ```bash
 bin/venv-python -m scripts.session_preflight --open-session --workflow implement
 ```
-Save the printed UUID for use with `--session-id` in any `run_skill` invocations during this session.
+Save the printed UUID for the `session_postflight --close-session` call in Step 9.
 
-After the session is open, run the pre-implementation CI gate:
+After the session is open, run the pre-implementation gate (fast `--pre` tier):
 ```bash
-bin/venv-python -m scripts.validate --ci
+bin/venv-python -m scripts.validate --pre
 ```
 On non-zero exit: parse each failed check from the "Failed checks:" output, file each as a recommendation via `bin/venv-python -m scripts.ops_data_portal --file-rec ...` with `automatable: false`, surface a go/no-go to the human, and STOP if no-go. SSO-related failures: skip with actionable guidance per Decision 57; do not crash. Pattern reference: `ensure_fresh_dq_results()` in `scripts/validate.py`.
 
@@ -73,14 +73,7 @@ Execute the Verification Plan from the PLAN-{slug}.yaml file. Apply the strict *
 Produce the VP Compliance Table. If ANY row is FAIL, fix and re-verify. If BLOCKED, wait for human.
 
 ## Step 5: Code Review (IMPLEMENTATION only -- MANDATORY)
-**You MUST trigger the code-review immediately after verification passes. Do not wait for the human to ask.** Dispatch via the `Agent` tool with `subagent_type: code-review` so the review runs in a fresh context window (anti-bias gate). The subagent has full tool access (read, grep, glob, bash) and can survey the entire branch diff -- unlike `run_skill.py --skill code-review` which is constrained to a single `--target` file and cannot review cross-file changes.
-
-Agent prompt requirements (do NOT brief the subagent on what to look for -- that biases the review):
-- Pre-instruct: "Run `git fetch origin main --quiet` before diffing -- the branch may have been open for hours and the local `origin/main` ref may be stale."
-- Identify the branch under review (`git diff origin/main...HEAD` is the diff under critique). Use `origin/main`, not the local `main` ref.
-- Identify the plan file (`docs/plans/PLAN-{slug}.yaml`) so the subagent knows the acceptance criteria
-- Instruct: "Apply the `code-review` skill methodology to this branch. Return a structured findings report grouped by severity (Critical / High / Medium / Low) with file:line references. Do not edit files."
-- Forbid file edits
+**You MUST trigger the code-review immediately after verification passes. Do not wait for the human to ask.** Dispatch per the **Code Review Protocol** in your `implement` skill (fresh-context anti-bias gate; `subagent_type: "general-purpose"` invoking the `code-review` skill via the `Skill` tool).
 
 Read the findings output. You MUST implement fixes for all **Critical** and **High** priority findings before proceeding.
 Medium and Low findings should be filed as recommendations using `bin/venv-python -m scripts.ops_data_portal --file-rec ...`.
@@ -88,7 +81,7 @@ Medium and Low findings should be filed as recommendations using `bin/venv-pytho
 ## Step 6: Final Validation
 **You MUST run validation. Do not skip this step.**
 ```bash
-bin/venv-python -m scripts.validate --quick
+bin/venv-python -m scripts.validate
 ```
 Must exit 0 before continuing. If it fails, fix the issues and re-run.
 
@@ -99,10 +92,10 @@ Apply the appropriate **Commit Flow** (STRATEGIC or IMPLEMENTATION) defined in y
 When creating the PR body, emit a `Resolves: rec-NNNN[, rec-MMMM]` trailer if the plan's `bundled_recommendations` list is non-empty. After the merge, execute the **post-merge closeout fallback** from the implement skill (verify `rec-autoclose` closed each rec; close directly if not).
 
 ## Step 8: Capture Friction
-Record friction (parsing errors, ambiguous areas, bugs found) as a process event emitted to `telemetry_process_events` via the executor telemetry API. If no friction, this step is a no-op.
+Record friction (parsing errors, ambiguous areas, bugs found) by filing a recommendation via `bin/venv-python -m scripts.ops_data_portal --file-rec ...` with `source=manual` (the Single Portal Invariant, Decision 84). (The legacy process-event emit to `telemetry_process_events` via the executor telemetry API is suspended until Decision 84 Phase 4 (T2.36) re-lands telemetry on DuckLake.) If no friction, this step is a no-op.
 
 **RCA-First Protocol (Decision 55):**
-If the friction was a recurring gap or unrecoverable failure, you MUST invoke the RCA skill via `bin/venv-python -m scripts.agent_development.run_skill --skill executor-rca` to diagnose the root cause and file a permanent fix. Do NOT silently workaround structural issues.
+If the friction was a recurring gap or unrecoverable failure, you MUST invoke the `executor-rca` skill via the `Skill` tool to diagnose the root cause and file a permanent fix. Do NOT silently workaround structural issues.
 
 Friction logs will be committed to the current branch and pushed automatically via the `session_postflight.py` flow during Step 7, or you can flush them manually:
 ```bash
