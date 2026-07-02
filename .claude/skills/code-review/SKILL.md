@@ -25,7 +25,7 @@ Use the **Intent** and **Acceptance Criteria** sections to anchor the review: ve
 
 ## Step 0b: Load Exemptions
 
-Read the "Code Review Exemptions" section at the end of `docs/DECISIONS.md`. These are findings reviewed by a human and marked as intentional, not-applicable, or accepted-risk.
+Read the "Code Review Exemptions" section in `docs/DECISIONS_ARCHIVE.md`. If that section is absent, report "exemptions source unavailable" in your report instead of silently matching zero exemptions. These are findings reviewed by a human and marked as intentional, not-applicable, or accepted-risk.
 
 When generating your report, skip any issue that matches an exemption (file path + issue type match, not expired).
 
@@ -33,13 +33,13 @@ Note in your report: "X issues matched exemptions and were not flagged."
 
 ---
 
-# Full Repository Code Review
+# Scoped Branch Code Review
 
-Perform a comprehensive code review of this repository. Work systematically through the entire codebase — read every source file, configuration file, test file, infrastructure definition, and documentation file before producing your report.
+Perform a focused code review of the current branch changes. Build the review scope from the branch diff, the plan, and one level of direct imports (see the Review Process below) -- do not read the entire repository.
 
 ## Review Process
 
-1. **Read all documentation first** — `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE-WORKFLOW.md`, README.md, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, `docs/GETTING_STARTED.md`, `docs/CHANGELOG.md`, and any module-level READMEs.
+1. **Read the anchoring docs** — the plan file (via `bin/venv-python -m scripts.find_plan`), `docs/PROJECT_CONTEXT.md`, and only the docs directly referenced by the changed files. Do not bulk-read the roadmaps or other large docs unless a changed file references them.
 2. **Build the review file list** using a scoped approach — do not read the entire repository blindly:
    a. Run `git diff --name-only origin/main` to get the list of changed files.
    b. Read the plan file (via `bin/venv-python -m scripts.find_plan`) and parse its Scope table for planned files.
@@ -114,32 +114,32 @@ Evaluate the repository across each of the following dimensions. For every issue
 
 ## LLM Maintainability Assessment
 
-### 6. File and Module Discoverability
+### 7. File and Module Discoverability
 
 - **File naming** — Can an agent locate relevant code by name alone?
 - **Module structure** — Does the directory layout reflect logical domains?
 - **`__init__.py` files** — Do they export key symbols with `__all__`?
 
-### 7. In-Code Navigation Signals
+### 8. In-Code Navigation Signals
 
 - **Docstrings as context** — Do docstrings explain purpose, inputs, outputs, and relationships?
 - **Cross-references** — Do comments reference related files or architectural decisions?
 - **Type hints as documentation** — Are parameter types, return types, and class attributes fully typed?
 
-### 8. Searchability
+### 9. Searchability
 
 - **Consistent terminology** — Does the codebase use consistent terms for the same concept?
 - **Grep-friendly patterns** — Are names specific enough to locate via text search?
 - **Config key naming** — Do config keys match the variable/parameter names that consume them?
 
-### 9. Change Safety for Agents
+### 10. Change Safety for Agents
 
 - **Test coverage as guardrails** — Will existing tests catch regressions from agent modifications?
 - **Small, focused files** — Are files short enough (under ~300 lines) for full-context reading?
 - **Explicit dependencies** — Are imports specific (no wildcard imports)?
 - **Minimal side effects** — Do module imports trigger side effects?
 
-### 10. Documentation for Agent Orientation
+### 11. Documentation for Agent Orientation
 
 - **Architecture decision records** — Are key design decisions documented with rationale?
 - **Copilot/agent instructions** — Is `docs/PROJECT_CONTEXT.md` accurate and maintained?
@@ -185,6 +185,10 @@ Structure your report exactly as follows:
 
 ### Test Completeness
 [Modules lacking coverage, test quality observations]
+
+### Verdict
+Deterministic rule: REVISE iff any Critical or High finding, else PROCEED.
+Verdict: PROCEED | REVISE
 ```
 
 ---
@@ -211,6 +215,6 @@ Do not write to any file. Do not edit any file. Return the findings block to the
 
 > **Code review complete.** [X] findings returned. The invoking agent will file them via `ops_data_portal.py`.
 >
-> Critical/High items should be addressed before merging. Start a new chat with `#prompts:plan` to plan fixes.
+> Critical/High items should be addressed before merging. Start a new chat with `/plan` to plan fixes.
 >
-> If any findings are false positives, tell me and I will add them to Code Review Exemptions in `docs/DECISIONS.md`.
+> If any findings are false positives, tell me and I will add them to Code Review Exemptions in `docs/DECISIONS_ARCHIVE.md`.
