@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,74 @@ def _check_apply_rca_fallback() -> None:
         )
 
 
+_MODULE_INVOCATION_RE = re.compile(
+    r"(?:python[0-9.]*\s+-m\s+scripts\.([A-Za-z_][A-Za-z0-9_]*)|scripts/([A-Za-z_][A-Za-z0-9_]*)\.py)"
+)
+_CHECK_LIKE_RE = re.compile(r"^(validate|verify|check)")
+
+
+def _check_validate_single_source() -> None:
+    """Decision 80: ci.yml's only validation entrypoint is `scripts.validate`.
+
+    Every check-like `python -m scripts.<mod>` / `scripts/<mod>.py` invocation in
+    ci.yml (module name matching ^(validate|verify|check)) must resolve to the
+    scripts.validate registry runner -- not a bespoke module bypassing it.
+    """
+    data = _load(".github/workflows/ci.yml")
+    jobs = data.get("jobs", {})
+
+    violations = []
+    for job_name, job in jobs.items():
+        steps_text = _get_steps_text(job)
+        for match in _MODULE_INVOCATION_RE.finditer(steps_text):
+            module = match.group(1) or match.group(2)
+            if _CHECK_LIKE_RE.match(module) and module != "validate":
+                violations.append(f"{job_name}: scripts.{module}")
+
+    assert not violations, f"ci.yml invokes check-like module(s) other than scripts.validate: {violations}"
+
+
+def _admits_pull_request(if_expr: Any) -> bool:
+    """A job is PR-gating unless its `if` is a push-only guard.
+
+    A job with NO `if` key runs on every triggering event, including pull_request --
+    that makes it PR-gating too (e.g. terraform-validate). A job whose `if` mentions
+    `push` but not `pull_request` is treated as a push-only guard and excluded. An
+    `if` mentioning neither (e.g. a schedule/workflow_dispatch-only guard) defaults
+    to PR-gating -- the conservative direction, since excluding a job that actually
+    can run on pull_request would silently create an ungated merge path.
+    """
+    if if_expr is None:
+        return True
+    if_str = str(if_expr)
+    if "pull_request" in if_str:
+        return True
+    if "push" in if_str:
+        return False
+    return True
+
+
+def _check_signal_green_needs() -> None:
+    """Every PR-gating job in ci.yml must be listed in signal-green.needs."""
+    data = _load(".github/workflows/ci.yml")
+    jobs = data.get("jobs", {})
+
+    signal_green = jobs.get("signal-green")
+    assert signal_green is not None, "signal-green job missing from ci.yml"
+
+    needs = signal_green.get("needs") or []
+    if isinstance(needs, str):
+        needs = [needs]
+
+    missing = [
+        job_name
+        for job_name, job in jobs.items()
+        if job_name != "signal-green" and _admits_pull_request(job.get("if")) and job_name not in needs
+    ]
+
+    assert not missing, f"PR-gating job(s) missing from signal-green.needs: {missing}"
+
+
 _COMMANDS = {
     "jobs-and-flags": _check_jobs_and_flags,
     "concurrency": _check_concurrency,
@@ -191,6 +260,8 @@ _COMMANDS = {
     "canary": _check_canary,
     "ci-rca-filter": _check_ci_rca_filter,
     "apply-rca-fallback": _check_apply_rca_fallback,
+    "validate-single-source": _check_validate_single_source,
+    "signal-green-needs": _check_signal_green_needs,
 }
 
 

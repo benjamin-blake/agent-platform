@@ -28,6 +28,8 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             _check_concurrency,
             _check_fetch_depth,
             _check_jobs_and_flags,
+            _check_signal_green_needs,
+            _check_validate_single_source,
         )
 
         guards = [
@@ -36,6 +38,8 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             ("concurrency", _check_concurrency),
             ("canary", _check_canary),
             ("apply-rca-fallback", _check_apply_rca_fallback),
+            ("validate-single-source", _check_validate_single_source),
+            ("signal-green-needs", _check_signal_green_needs),
         ]
         for label, fn in guards:
             try:

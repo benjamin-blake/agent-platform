@@ -115,6 +115,7 @@ FROZEN_FULL_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_differential_gate_baseline"),
     ("check", "validate_intent_doc_freeze"),
     ("check", "validate_contract_drift"),
+    ("check", "validate_portal_drift"),
     ("check", "validate_rec_relevance_contract"),
     ("check", "validate_field_semantics_drift"),
     ("check", "validate_ci_rca_taxonomy"),
