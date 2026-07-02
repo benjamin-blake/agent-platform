@@ -1,0 +1,826 @@
+audit:
+  meta:
+    audited_commit: d107b4a
+    base_branch: main
+    model: claude-fable-5
+    methodology_version: 1
+    scope_files:
+      - .claude/commands/orient.md
+      - .claude/commands/plan.md
+      - .claude/commands/implement.md
+      - .claude/skills/orient/SKILL.md
+      - .claude/skills/planning/SKILL.md
+      - .claude/skills/implement/SKILL.md
+      - .claude/skills/decision-scout/SKILL.md
+      - .claude/skills/plan-critique/SKILL.md
+      - .claude/skills/code-review/SKILL.md
+    degraded_dedup: false
+    contract_notes: >-
+      docs/contracts/instruction-architecture.yaml (ratified 2026-06-29) reads current against the
+      repo layout; no staleness found in its layer/consumer claims. One conformance note (filed as a
+      finding against the SKILLS, not the contract): the layer-4 clause 'must declare required-context
+      frontmatter' is unmet by orient/planning/implement SKILL.md (WF-20). Measured artifact sizes used
+      throughout this audit: DECISIONS.md 229,638 B; ROADMAP-PLATFORM.yaml 603,139 B;
+      ROADMAP-PRODUCT.yaml 209,297 B; PROJECT_CONTEXT.md 49,347 B. Caches regenerated this session via
+      session_preflight --roadmap-detail full (creds OK; open_recs=605). validate --pre (advisory
+      outside CI) fails on 'Import contracts (Decision 80)' -- verified PRE-EXISTING on a clean
+      origin/main tree with this report stashed, unrelated to this additive audits/ YAML; clean YAML
+      parse verified as the real gate.
+
+  per_workflow_assessment:
+    - workflow: orient
+      maturity: strong
+      strengths: >-
+        Cleanest of the three: hard read-only contract, deterministic-signal health check (Decision 59
+        applied by name), status-trusted-never-inferred stated and honored, explicit degradation rules
+        (ambiguous slug mapping -> raw commit list; absent signal -> UNKNOWN, no resolving reads),
+        egress budget respected by design (cache-only reads), and the freshness gate correctly
+        referenced from the planning skill instead of re-authored.
+      top_gaps: [WF-07, WF-11, WF-19]
+    - workflow: plan
+      maturity: solid
+      strengths: >-
+        Strong intent-capture discipline (structured decomposition, 2-5 ranked questions, explicit
+        human confirmation gate with auto-approval explicitly excluded), two genuinely well-designed
+        isolation gates (decision-scout, plan-critique) with fresh-context anti-bias rationale, a
+        Pydantic-validated handoff artifact, assessment-time vs commit-flow rebase distinction, and
+        the Tier Item Freshness Gate closing the roadmap-lag class of dead work.
+      top_gaps: [WF-05, WF-04, WF-06, WF-08, WF-10]
+    - workflow: implement
+      maturity: solid
+      strengths: >-
+        The Live Verification Protocol is genuinely industry-grade (VP-failure-is-not-negotiable, no
+        env-blocked euphemisms, compliance table, V3 merge gate with human deploy confirmation), the
+        bookkeeping walk has real idempotency/orphan/loss-detection design, closes_criteria flips are
+        strictly declaration-scoped, and the commit flow is event-driven rather than polled.
+      top_gaps: [WF-01, WF-02, WF-03, WF-09, WF-13]
+
+  gate_fitness:
+    - gate: decision-scout
+      verdict: fit
+      enforced: blocking
+      evidence: ".claude/commands/plan.md:66-87 (MANDATORY, pre-presentation; BLOCK -> STOP + pivot + re-dispatch); planning SKILL.md:292-315 (verdict handling, 3-loop convergence cap)"
+      what_it_misses: >-
+        Silent truncation: exhaustiveness rests on self-attestation over a ~230KB file (64 decisions);
+        no deterministic completeness echo the caller can verify (WF-18). Its output is also not
+        required to land in the plan artifact, so the isolation win is re-bought by /implement's full
+        DECISIONS.md read (WF-04). Caller defines no behavior for a subagent error (WF-08). Runtime
+        token cost ~55-60k per dispatch, re-paid on every material revision; the '25k' cost claim is
+        stale by >2x (WF-14).
+      what_it_overdoes: "Little -- the anti-patterns section explicitly suppresses over-citation and keyword-adjacency noise; 1,200-word cap is enforced by self-check."
+      tuning: "Add the decisions-triaged count echo (WF-18); require the CITE list + verdict recorded in plan context (WF-04); define gate-error = gate-incomplete -> re-dispatch (WF-08); refresh the cost figure (WF-14)."
+    - gate: plan-critique
+      verdict: degraded
+      enforced: blocking
+      evidence: ".claude/commands/plan.md:114-128 ('DO NOT output the completion message until this step completes'; loop on REVISE) -- but the loop is uncapped (WF-17) and no verdict artifact survives the session (WF-08)"
+      what_it_misses: >-
+        The Decision 85 schema-era failure modes: no closes_criteria presence/open-status check for
+        follow-on plans, no verification-tier fitness adjudication (12c checks phase tags only), no
+        AC-to-criterion 1:1 mapping check (WF-06). Its mandatory Phase 1 context (~1.09MB across four
+        files plus all scope files) cannot fit the gate's window, so under-reading is structural and
+        silent (WF-05). Residual legacy aim: plan.prompt.md reference (SKILL.md:51, file deleted at
+        T-1.13), .md-plan fallbacks, and a Quality Gate 'Files Read' list absent from the output
+        template.
+      what_it_overdoes: >-
+        Full DECISIONS.md conflict re-scan duplicating the decision-scout pass that ran minutes earlier
+        in the same workflow on the same approach -- the costliest read in the gate for the least
+        marginal signal.
+      tuning: "Targeted retrieval instead of full-file reads (WF-05); add 12l/12m schema checks (WF-06); 3-round convergence cap (WF-17); record Recommendation verdict in plan context (WF-08)."
+    - gate: code-review
+      verdict: misaligned
+      enforced: blocking
+      evidence: ".claude/commands/implement.md:75-87 (MANDATORY, auto-trigger, Critical/High must be fixed before proceeding); implement SKILL.md:153-176"
+      what_it_misses: >-
+        Structurally (post-hoc, non-editing): design-time flaws already ratified at plan time; defects
+        in files outside changed+planned+1-level-imports (explicitly out of scope); whether the VP
+        table's self-reported results are truthful (it never re-runs verification); and whether the
+        implementer's fixes to its Critical/High findings are sound -- the re-review loop exists only
+        in the bookkeeping state machine and is keyed to a PROCEED/REVISE verdict the gate never emits
+        (WF-03). The documented dispatch (subagent_type: code-review) errors against the current agent
+        registry (WF-02). Exemption matching silently no-ops because the referenced DECISIONS.md
+        section moved to DECISIONS_ARCHIVE.md (WF-15).
+      what_it_overdoes: >-
+        Full-repository framing and a read-all-docs step (including the 603KB roadmap) that its own
+        scoping rule contradicts; a 7-dimension score table (Infrastructure, Documentation Accuracy,
+        LLM Maintainability...) rendered for every branch diff regardless of relevance -- noise that
+        dilutes the Critical/High signal the caller actually consumes (WF-15).
+      tuning: "Fix the dispatch idiom (WF-02); add the deterministic verdict line (WF-03); scope the doc pre-read and drop the full-repo framing, fix the exemptions pointer (WF-15)."
+
+  context_economy:
+    total_line_reduction_estimate: -133
+    removable:
+      - id: CE-01
+        file: .claude/commands/orient.md
+        range: "22-26"
+        justification_class: "duplicate_of:.claude/skills/orient/SKILL.md:33-35"
+        replacement: "One line: 'Cache-only constraint and full-projection requirement: see the orient skill (Decision 88/84).'"
+        line_delta: -4
+        confidence: CONFIRMED
+      - id: CE-02
+        file: .claude/commands/orient.md
+        range: "57-64"
+        justification_class: "duplicate_of:.claude/skills/orient/SKILL.md:55-183 (Deliverable Shape owns every restated per-section rule, incl. parked-gated and Phase A/B semantics)"
+        replacement: "Bare list of the six section names; all semantics remain in the skill."
+        line_delta: -6
+        confidence: CONFIRMED
+      - id: CE-03
+        file: .claude/commands/orient.md
+        range: "30-49"
+        justification_class: "duplicate_of:.claude/skills/orient/SKILL.md:24-31 (Inputs table is the layer-4 home; field semantics move there, +6 counted in this delta)"
+        replacement: "Command lists only the cache keys to load; skill Inputs table gains the field-semantics column (open_criteria_count, all_plans_actioned, needs_followon_plan, completion_blocked_on_cd)."
+        line_delta: -6
+        confidence: CONFIRMED
+      - id: CE-04
+        file: .claude/commands/plan.md
+        range: "69-87"
+        justification_class: "duplicate_of:.claude/skills/planning/SKILL.md:296-304"
+        replacement: "Command Step 6a keeps MANDATORY trigger + 'dispatch and handle verdicts per the planning skill Decision Scout Gate'; the example prompt body moves into the skill (+9 counted in this delta)."
+        line_delta: -10
+        confidence: CONFIRMED
+      - id: CE-05
+        file: .claude/commands/plan.md
+        range: "116-130"
+        justification_class: "duplicate_of:.claude/skills/planning/SKILL.md:404-427"
+        replacement: "Command Step 9 keeps MANDATORY trigger + 'invoke per the planning skill Critique Gate; loop on REVISE, proceed on PROCEED'."
+        line_delta: -12
+        confidence: CONFIRMED
+      - id: CE-06
+        file: .claude/commands/plan.md
+        range: "134-139"
+        justification_class: "duplicate_of:.claude/skills/planning/SKILL.md:429-476"
+        replacement: "Keep the REPORT-ONLY trigger + skill pointer; drop the restated methodology summary and convergence rule."
+        line_delta: -5
+        confidence: CONFIRMED
+      - id: CE-07
+        file: .claude/commands/plan.md
+        range: "158-166"
+        justification_class: "duplicate_of:.claude/skills/planning/SKILL.md:478-491"
+        replacement: "'Emit the Plan-Type-specific confirmation message from the planning skill Confirmation Messages section.'"
+        line_delta: -7
+        confidence: CONFIRMED
+      - id: CE-08
+        file: .claude/skills/planning/SKILL.md
+        range: "306-312"
+        justification_class: "duplicate_of:.claude/skills/decision-scout/SKILL.md:14-20"
+        replacement: "One pointer line: 'Isolation rationale and the Lambda migration contract live in the decision-scout skill.'"
+        line_delta: -6
+        confidence: CONFIRMED
+      - id: CE-09
+        file: .claude/skills/planning/SKILL.md
+        range: "321-328"
+        justification_class: "restates_ambient:AGENTS.md ## Git-ops procedure (branch rule) + ## Branching (never_on_main + hook)"
+        replacement: "Keep line 330 (slug derivation + .md deprecation, unique); the branch-topology restatement collapses to the AGENTS.md pointer already present at line 322."
+        line_delta: -5
+        confidence: CONFIRMED
+      - id: CE-10
+        file: .claude/skills/planning/SKILL.md
+        range: "planning:218-238 + implement:36-53 (near-identical blocks; diff shows only the heading line differs)"
+        justification_class: "restates_ambient:AGENTS.md ## Agent-First Repository (agent-first preference, Decision 86 routing rule, no-companion-doc anti-pattern)"
+        replacement: >-
+          Remove the ambient-restating lines from BOTH skills; keep ONE copy of the unique ops.yaml
+          extended-contract pattern. Out-of-scope dependency (noted, not executed): its durable home is
+          a ~4-line addition to AGENTS.md Agent-First Repository.
+        line_delta: -24
+        confidence: CONFIRMED
+      - id: CE-11
+        file: .claude/skills/implement/SKILL.md
+        range: "352-364"
+        justification_class: "restates_ambient:AGENTS.md ## Git-ops procedure steps 3-5 (CI-green-comment wake, send_later backstop bounds, auto-merge successor)"
+        replacement: "Keep the on-wake verdict-handling table (357-361) and the terraform hold-subscription section (366-388 -- canonical HERE; AGENTS.md delegates to it). Replace the wake-mechanism prose with the AGENTS.md pointer."
+        line_delta: -10
+        confidence: CONFIRMED
+      - id: CE-12
+        file: .claude/skills/implement/SKILL.md
+        range: "263-268 + 322-325 (+ T-1.10 recovery clause)"
+        justification_class: "stale_ref:T-1.10 and T-1.12 self-application invariants -- both items read status: complete in docs/ROADMAP-PLATFORM.yaml; the one-shot self-flip proof already fired"
+        replacement: "Delete both Self-application invariant subsections and the recovery clause; the mechanism sections they once proved stay untouched."
+        line_delta: -14
+        confidence: CONFIRMED
+      - id: CE-13
+        file: .claude/commands/implement.md
+        range: "76-87"
+        justification_class: "duplicate_of:.claude/skills/implement/SKILL.md:153-176"
+        replacement: "Command Step 5 keeps MANDATORY trigger + 'dispatch per the implement skill Code Review Protocol' + the Critical/High-fix and Medium/Low-file lines."
+        line_delta: -9
+        confidence: CONFIRMED
+      - id: CE-14
+        file: .claude/commands/implement.md
+        range: "16-18"
+        justification_class: "duplicate_of:.claude/commands/plan.md:20-24 (identical session_preflight slim-report explanation)"
+        replacement: "One line in each command: 'stdout is a one-line summary; Read logs/.preflight-report.json for the full constraint surface.' (delta counts both commands)"
+        line_delta: -6
+        confidence: CONFIRMED
+      - id: CE-15
+        file: .claude/skills/code-review/SKILL.md
+        range: "36-42"
+        justification_class: "redundant_within_file:43-56 (the scoped-review rule contradicts and supersedes the full-repository framing and the read-all-docs step)"
+        replacement: "Retitle 'Scoped Branch Code Review'; step 1 doc reads become: plan file, docs/PROJECT_CONTEXT.md, plus docs referenced by changed files only."
+        line_delta: -5
+        confidence: CONFIRMED
+      - id: CE-16
+        file: .claude/commands/plan.md
+        range: "41-43"
+        justification_class: "duplicate_of:.claude/skills/planning/SKILL.md:104-108 + 42-43 (orientation responsibility + ci-rca block conditions)"
+        replacement: "One-line pointers to the planning skill sections; drop the restated conditions."
+        line_delta: -4
+        confidence: CONFIRMED
+    # Sum of line_delta = -133 (cross-file move-additions of +6 orient-skill Inputs and +9 scout
+    # example prompt are already folded into CE-03/CE-04). Finding-driven ADDITIONS not in CE entries:
+    # resume clause ~+4 (WF-16), scout count-echo ~+3 (WF-18), critique 12l/12m ~+8 (WF-06),
+    # gate-verdict recording + error clauses ~+6 (WF-08), verdict line in code-review ~+2 (WF-03).
+    # Net reduction after those additions: approximately -110 lines across the nine files.
+
+  findings:
+    - id: WF-01
+      workflow: implement
+      dimension: D6
+      title: "/implement Steps 1 and 6 invoke validate.py flags that do not exist (--ci, --quick)"
+      evidence: ".claude/commands/implement.md:28,91 vs scripts/validate.py:259-293 (argparse defines only --pre/--coverage/--terraform-only/--ignore-budget[-reason]/--update-sloc-budgets; live run of both flags returns 'error: unrecognized arguments'; git log -S finds no commit on origin/main ever adding either string)"
+      evidence_kind: static
+      current_behavior: >-
+        Step 1's pre-implementation CI gate is 'bin/venv-python -m scripts.validate --ci' and Step 6's
+        final gate is 'scripts.validate --quick'; both exit 2 with an argparse error carrying no
+        'Failed checks:' output, so Step 1's parse-and-file-recs instruction cannot execute and Step
+        6's 'must exit 0 before continuing' is unsatisfiable as written. Agents must silently
+        substitute a different command, making the merge gate's verification improvised.
+      ideal_behavior: "Every gate command in the workflow is literally executable; the gate the agent runs is the gate the instruction names."
+      gap: "Two mandatory validation gates reference a CLI surface absent from this repo's history."
+      change_type: clarify
+      proposed_change: >-
+        implement.md:28 'scripts.validate --ci' -> 'scripts.validate --pre' (fast tier, matching the
+        two-tier model); implement.md:91 'scripts.validate --quick' -> 'scripts.validate' (full tier,
+        matching implement SKILL.md:349-350 'Run the full gate locally first' and AGENTS.md). Reword
+        Step 1's failure handling to reference --pre's actual failure output.
+      acceptance: "grep -n '\\-\\-ci\\|\\-\\-quick' .claude/commands/implement.md returns nothing; both replacement commands parse (exit != 2)."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high clause 'loop-slowing friction / material rework': fires on every /implement session and leaves the merge gate's verification improvised. Not critical: the implement skill separately names the correct full-gate command, which sampled sessions demonstrably run."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: '--ci', '--quick' (12 lines contain 'quick', none about the flag; rec-610 is a distinct historical failure); roadmap tier_items scan for implement.md", dedup_hit_count: 0, note: "no open rec or tier_item covers the stale flags"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "independent two-line fix"}
+
+    - id: WF-02
+      workflow: implement
+      dimension: D4
+      title: "Code-review gate dispatch names a subagent type that does not exist in the agent registry"
+      evidence: ".claude/commands/implement.md:76 + .claude/skills/implement/SKILL.md:157 ('subagent_type: code-review') vs .claude/agents/ containing only scheduled/{ci-rca,rec-curator}.md (subdirectory; does not register) -- the live registry exposes no code-review type; the legacy .github/agents/code-review.agent.md was deleted at T-1.13"
+      evidence_kind: static
+      current_behavior: >-
+        The MANDATORY Step 5 gate instructs Agent-tool dispatch with subagent_type: code-review, which
+        errors against the current registry; the fallback path is undefined, so each session improvises
+        (typically general-purpose + Skill) -- unlike the decision-scout and plan-critique gates, which
+        correctly document subagent_type: general-purpose + Skill-tool invocation.
+      ideal_behavior: "All three gates use the same working dispatch idiom; a mandatory gate's documented invocation never errors."
+      gap: "One of three gates documents a broken dispatch; execution depends on improvisation."
+      change_type: retune_gate
+      proposed_change: >-
+        implement.md:76 and SKILL.md:157: replace with subagent_type: "general-purpose" plus an
+        explicit prompt instruction to invoke the code-review skill via the Skill tool and return its
+        structured output verbatim (mirroring plan.md Step 6a/9). Alternative (out-of-scope file,
+        noted as dependency only): author .claude/agents/code-review.md.
+      acceptance: "grep subagent_type over both files shows only registered types; a live dispatch of the documented invocation does not error."
+      gate_ref: code-review
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high: a mandatory gate's documented invocation is broken and its error path undefined. Not critical: the instruction text still blocks, and 484 code-review-sourced recs in the cache show reviews do run via improvised dispatch."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'code-review' (rec-568 = run_skill --target breakage, different dispatcher; rec-436 targets deleted .github/agents files); roadmap scan", dedup_hit_count: 2, note: "adjacent recs exist; none covers the nonexistent subagent_type"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-03
+      workflow: implement
+      dimension: D4
+      title: "Implement skill branches on a code-review PROCEED/REVISE verdict the code-review skill never emits"
+      evidence: ".claude/skills/implement/SKILL.md:316-318 (bookkeeping commit on 'PROCEED', discard + re-review on 'REVISE') vs .claude/skills/code-review/SKILL.md:150-204 (output contract: severity-grouped findings, scores, findings JSONL -- no verdict line)"
+      evidence_kind: static
+      current_behavior: >-
+        The parallel-with-code-review state machine commits staged roadmap criterion flips when the
+        review 'returns PROCEED' and discards/re-reviews on 'REVISE', but the gate's output contract
+        contains no such token; each session must invent the findings-to-verdict mapping, so the
+        commit/discard/re-review trigger for staged status flips is non-deterministic (Decision 59).
+      ideal_behavior: "Producer output contract and consumer branch conditions share one explicit deterministic token."
+      gap: "Caller-consumer contract mismatch on the signal gating a roadmap-bookkeeping commit."
+      change_type: retune_gate
+      proposed_change: >-
+        code-review SKILL.md output format: add a final mandatory line 'Verdict: PROCEED | REVISE' with
+        the deterministic rule 'REVISE iff any Critical or High finding, else PROCEED'; implement
+        SKILL.md:316 references that rule explicitly.
+      acceptance: "Both files carry the identical verdict rule; the output template ends with the Verdict line."
+      gate_ref: code-review
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high: the commit trigger for staged status flips is undefined -- approaches the critical status-flip clause, but the flips remain gated on the verified VP pass and (for complete) explicit human confirmation."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: EXTENDS, item_ids: ["T-1.10"], dedup_search_terms: "recs cache + roadmap: 'PROCEED', 'code-review verdict'", dedup_hit_count: 0, note: "T-1.10 (complete) shipped the consumer state machine; nothing tracks the producer-side verdict"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "pairs naturally with WF-02"}
+
+    - id: WF-04
+      workflow: plan
+      dimension: D3
+      title: "Handoff loses the decision-scout output: /implement re-buys the full DECISIONS.md read the scout gate exists to avoid"
+      evidence: ".claude/commands/implement.md:50 ('Also read docs/PROJECT_CONTEXT.md and docs/DECISIONS.md before proceeding') vs docs/DECISIONS.md = 229,638 B (~55-60k tokens); planning SKILL.md:294 justifies the scout subagent precisely to keep this cost out of agent context. Observed: 97 of 110 docs/plans/PLAN-*.yaml already record the scout verdict + CITE list in context (e.g. PLAN-candidate-decision-ratification.yaml: 'Decision-scout verdict: FLAGS_FOUND ... CITE: Decisions 76, 84, 86, 88, 90, ...') -- an uninstructed practice."
+      evidence_kind: observed
+      current_behavior: >-
+        /plan pays a subagent dispatch to isolate the DECISIONS.md cost and produce a CITE list; the
+        planning skill never instructs writing that list into the plan; /implement then instructs a
+        full DECISIONS.md read into the executing agent's window, re-deriving what the scout found.
+        Plan authors already copy the scout output into context, so the instructed re-read is pure
+        redundant cost and the instructed handoff is lossier than actual practice.
+      ideal_behavior: "PLAN-{slug}.yaml is the complete brief: the scout CITE list + verdict is a required context entry, and /implement reads only the cited decision sections (targeted grep by id), never the whole file."
+      gap: "Uninstructed-but-universal practice on the producer side; ~55-60k tokens of forced re-derivation on the consumer side."
+      change_type: rescope
+      proposed_change: >-
+        (1) planning SKILL.md plan template context field: add required entry 'Decision-scout verdict +
+        CITE list (verbatim decision ids)'. (2) implement.md:50: replace 'and docs/DECISIONS.md' with
+        'read ONLY the decisions cited in the plan context (locate each via rg "^## Decision N:"
+        docs/DECISIONS.md); do not load the full file'.
+      acceptance: "implement.md contains no unconditional full-DECISIONS.md read; the planning template names the scout-output context entry; the next authored plan carries it."
+      gate_ref: decision-scout
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high clause 'handoff context loss': forced re-derivation plus the single largest recurring runtime-context cost in /implement."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'DECISIONS.md' + 'implement'; roadmap items T-1.2/T-1.3 reviewed (complete, different direction)", dedup_hit_count: 0, note: "no rec covers the implement-side full read"}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "codifies existing practice; no behavior break"}
+
+    - id: WF-05
+      workflow: plan
+      dimension: D11
+      title: "plan-critique's mandatory required-context is ~1.09MB (~270k tokens) -- the gate cannot actually comply with its own Phase 1"
+      evidence: ".claude/skills/plan-critique/SKILL.md:4-8,21-31 (MANDATORY full reads) vs measured sizes: ROADMAP-PLATFORM.yaml 603,139 B + DECISIONS.md 229,638 B + ROADMAP-PRODUCT.yaml 209,297 B + PROJECT_CONTEXT.md 49,347 B, before the plan file and every scope file (sampled IMPLEMENTATION plans carry 10-27 scope files)"
+      evidence_kind: static
+      current_behavior: >-
+        Phase 1 is labelled 'MANDATORY - Do Not Skip' and requires four full-file reads whose combined
+        size exceeds a 200k window and consumes most of a 1M window before the plan and scope files. A
+        compliant subagent cannot do this; real critiques necessarily under-read while implicitly
+        reporting compliance, and the Phase 2 decision-conflict check duplicates work the
+        decision-scout gate performed minutes earlier on the same approach.
+      ideal_behavior: >-
+        The gate's required reading fits its window with room for the artifact: read only the roadmap
+        items and decision sections the plan names, use the plan's recorded scout CITE list for
+        conflict coverage, keep the full-file read where the isolation was designed for it (the scout).
+      gap: "Instructed-vs-feasible divergence at the gate most relied on for plan quality; silent under-reading is structural and undetectable."
+      change_type: retune_gate
+      proposed_change: >-
+        plan-critique SKILL.md Phase 1: replace unconditional full reads of ROADMAP-PLATFORM.yaml,
+        ROADMAP-PRODUCT.yaml and DECISIONS.md with (a) extract the tier_item/phase ids and decision ids
+        the plan names; (b) read only those roadmap items (python extraction) and decision sections;
+        (c) conflict-sweep via rg of 2-3 approach keywords over '^## Decision' headers plus the plan's
+        recorded CITE list. Update required-context frontmatter to match. PROJECT_CONTEXT.md (49KB)
+        stays a full read.
+      acceptance: "Phase 1 names no unconditional full read of the three >200KB files; a critique subagent can complete Phase 1 within a 200k window on the largest sampled plan (27 scope files)."
+      gate_ref: plan-critique
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high: the mandatory gate is demonstrably unfit for its artifact at current file sizes -- it silently degrades at the costliest error-prevention point (pre-implementation)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: EXTENDS, item_ids: ["T-1.0"], dedup_search_terms: "recs cache: 'plan-critique' (rec-2177 = schema enum gap, different); roadmap scan (T-1.0 rerouted critique context once, for the ROADMAP rename)", dedup_hit_count: 1, note: "no open item tracks required-context feasibility"}
+      effort: S
+      depends_on: ["WF-04"]
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "lands best after WF-04 records CITE lists in plans"}
+
+    - id: WF-06
+      workflow: plan
+      dimension: D4
+      title: "plan-critique misses PlanDocument-era failure modes: closes_criteria in follow-on mode, tier fitness, AC-to-criteria mapping"
+      evidence: ".claude/skills/plan-critique/SKILL.md:33-84 (Phase 2 has no closes_criteria or tier-assignment check; 12c checks phase tags only) vs planning SKILL.md:81-84 (follow-on plans MUST declare closes_criteria with 1:1 AC mapping), scripts/plan_document.py:68 (field exists; validate.py checks referential integrity only), sampled live use (PLAN-import-governance-baseline closes T3.11:c1-c5)"
+      evidence_kind: static
+      current_behavior: >-
+        The gate validates Lambda completeness, VP commands, closure obligations and frame-lock, but a
+        follow-on plan that omits closes_criteria (so /implement's bookkeeping walk flips nothing and
+        the item silently stalls), targets an already-met criterion, maps ACs loosely, or declares V1
+        while touching Python/terraform surfaces passes uncontested.
+      ideal_behavior: "The gate catches the schema-specific failure modes of the artifact it certifies -- especially fields that drive downstream status flips."
+      gap: "Gate lags the Decision 85 schema and the T-1.23 follow-on mechanism it certifies plans for."
+      change_type: retune_gate
+      proposed_change: >-
+        Add Phase 2 checks: '12l closes_criteria (follow-on): if the plan phase/context names an
+        in_progress tier_item, closes_criteria MUST be non-empty, each ref must name a criterion with
+        status: open in the roadmap, and acceptance_criteria must map 1:1 onto the chosen criteria --
+        else REVISE. 12m tier fitness: verification_tier must satisfy the planning skill
+        classification (any .tf or active-Lambda scope file => V3; any Python source => >= V2); a lower
+        declared tier => REVISE.' Mirror both in the Phase 3 output template.
+      acceptance: "A fixture follow-on plan with empty closes_criteria and a V1 plan with a .py scope row both draw REVISE citing 12l/12m."
+      gate_ref: plan-critique
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high: a missed closes_criteria declaration defeats the only sanctioned status-flip path -- the item stalls until a later audit (material rework)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: EXTENDS, item_ids: ["T-1.23"], dedup_search_terms: "recs cache + roadmap: 'closes_criteria'", dedup_hit_count: 0, note: "roadmap hits are the mechanism itself (T-1.23, complete), not the gate gap"}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-07
+      workflow: orient
+      dimension: D5
+      title: "Orient still instructs Phase A prose-inference for fields the preflight cache already carries structurally"
+      evidence: ".claude/skills/orient/SKILL.md:66,142 ('Phase A (this version) -- infer open-criteria count from exit_criteria[] and progress_note prose') vs live logs/.preflight-report.json in_progress entries carrying open_criteria_count, all_plans_actioned, needs_followon_plan, completion_blocked_on_cd (observed this session across 9 entries); .claude/commands/orient.md:33-37 already documents the cache fields"
+      evidence_kind: observed
+      current_behavior: >-
+        The skill presents judgment-based inference as the current mechanism and the structured read as
+        a future 'Phase B', while the cache (T-1.23/T-1.20 work) already emits every Phase B field --
+        so agents spend judgment (with error risk the conservative bias only mitigates) on data that
+        exists deterministically, against Decision 59.
+      ideal_behavior: "Deterministic cache fields are the primary path; prose inference survives only as an explicit degradation branch when a key is absent."
+      gap: "Instruction lags shipped capability; judgment where determinism is available."
+      change_type: clarify
+      proposed_change: >-
+        SKILL.md:66 and :142: invert the phrasing -- 'Read open_criteria_count / needs_followon_plan /
+        completion_blocked_on_cd directly from the preflight cache. Degradation: if a key is absent
+        (older cache), fall back to prose inference with the conservative bias.' Delete the 'Phase A
+        (this version)' framing.
+      acceptance: "grep 'Phase A' on the skill shows only degradation-branch wording; the primary path names the cache keys."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: medium
+      severity_rationale: "medium: inconsistency with a clear fix; every orient run risks counts diverging from the ledger, but no rework observed yet."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: EXTENDS, item_ids: [], dedup_search_terms: "recs cache: 'Phase A', 'completion_blocked_on_cd', 'orient'", dedup_hit_count: 1, note: "rec-2392 (open) asks to DOCUMENT the fallback for one missing key; this finding is its complement -- flip the default; coordinate wording"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "coordinate with rec-2392"}
+
+    - id: WF-08
+      workflow: plan
+      dimension: D4
+      title: "Gate verdicts leave no artifact and the runtime compliance check is vacuous -- a skipped or errored gate is undetectable"
+      evidence: "scripts/prompt_compliance.py:226-241 (check_plan_compliance passes if SESSION_LOG.md contains ANY markdown table row anywhere; decision_scout_gate / report_critique_gate / harness_branch keys are not in the checked plan_invariants set at all) + planning SKILL.md:12-20 / implement SKILL.md:14-22 (Behavioural Invariants blocks implying machine verification); no step in plan.md or implement.md records a gate verdict in a durable artifact; no caller defines behavior when a gate subagent errors or returns malformed output"
+      evidence_kind: observed
+      current_behavior: >-
+        All three gates block by instruction only. The nominal enforcement layer cited by both skills
+        verifies gate execution by checking that the session log contains a table row -- effectively
+        always true -- and never checks the decision_scout_gate invariant it appears to cover. A gate
+        subagent that errors, times out, or returns malformed output leaves the workflow undefined,
+        with zero detection.
+      ideal_behavior: "Each gate verdict is recorded in the plan artifact; gate-error is defined as gate-incomplete (re-dispatch, never proceed); the compliance checker can verify per plan."
+      gap: "Prevention-grade gates with detection-grade enforcement that detects nothing."
+      change_type: add
+      proposed_change: >-
+        (in-scope) plan.md Steps 6a/9 + planning SKILL.md gate sections: add 'Record in the plan
+        context list: "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)"'
+        and 'If the gate subagent errors or returns output missing the required Verdict/Recommendation
+        line, the gate has NOT completed -- re-dispatch; never proceed past an incomplete gate.'
+        implement SKILL.md Code Review Protocol: same error clause. (out-of-scope dependency, noted
+        only: prompt_compliance.py could then deterministically assert the gates: entry per plan file.)
+      acceptance: "Next authored plan carries the gates: context entry; all three gate sections contain the gate-error-is-incomplete clause."
+      gate_ref: plan-critique
+      context_economy_ref: []
+      severity: high
+      severity_rationale: "high, not critical: instruction text does block ('DO NOT ... until this gate completes'), so no gate is textually skippable -- but skip-via-error or drift is undetectable, which fails the enforcement half of D4."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache + roadmap: 'prompt_compliance', 'invariant', 'gate enforcement'", dedup_hit_count: 0, note: ""}
+      effort: S
+      depends_on: ["WF-03"]
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "verdict recording presupposes WF-03's explicit code-review verdict"}
+
+    - id: WF-09
+      workflow: implement
+      dimension: D6
+      title: "Step 8 friction capture targets the dead telemetry backend and a dispatcher elsewhere described as removed"
+      evidence: ".claude/commands/implement.md:102 (emit to telemetry_process_events 'via the executor telemetry API') vs AGENTS.md warehouse table ('Telemetry stays on its (dead, to-be-rebuilt) path until ... Phase 4 / T2.36'); implement.md:105 routes RCA through scripts.agent_development.run_skill while plan.md:116 / planning SKILL.md:407 call that dispatcher 'removed' (the file exists; rec-568 documents its --target breakage). Observed: recent sessions file friction as portal recs instead (SESSION_LOG 2026-07-01: rec-2460/rec-2461)."
+      evidence_kind: observed
+      current_behavior: "The instructed friction path writes to a store nothing reads (dead work); the RCA sub-path names a dispatcher two sibling surfaces say is gone; actual sessions bypass both by filing recs through the portal."
+      ideal_behavior: "The workflow instructs the path sessions actually use, carrying the Decision 84 Phase-4 caveat the way the AGENTS.md rec-curator runbook does."
+      gap: "Instruction-vs-practice divergence on both halves of Step 8."
+      change_type: clarify
+      proposed_change: >-
+        implement.md Step 8: primary instruction becomes 'file friction as a recommendation via
+        bin/venv-python -m scripts.ops_data_portal (source=manual)'; annotate the telemetry emit as
+        'suspended until Decision 84 Phase 4 (T2.36) re-lands telemetry'; for RCA, invoke the
+        executor-rca skill via the Skill tool instead of run_skill.
+      acceptance: "Step 8 names the portal as the friction sink, carries the Phase-4 caveat, and contains no run_skill reference."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: medium
+      severity_rationale: "medium: dead-path instruction with a clear fix; sessions already route around it, so no rework -- but the divergence is systematic."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: EXTENDS, item_ids: ["T2.36"], dedup_search_terms: "recs cache: 'telemetry_process_events', 'run_skill'", dedup_hit_count: 1, note: "rec-568 covers run_skill breakage from another angle; the dead-backend caveat is unfiled"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-10
+      workflow: plan
+      dimension: D9
+      title: "/plan command restates planning-skill methodology (gate dispatch shapes, example prompts, verdict handling, confirmation messages)"
+      evidence: ".claude/commands/plan.md:69-87 vs planning SKILL.md:296-304; plan.md:116-130 vs SKILL.md:404-427; plan.md:134-139 vs SKILL.md:429-476; plan.md:158-166 vs SKILL.md:478-491; contract layer 3 = 'thin orchestration step-sequences referencing skills' (docs/contracts/instruction-architecture.yaml:51)"
+      evidence_kind: static
+      current_behavior: "Both layers carry near-verbatim copies of the scout and critique invocation shapes, example prompt bodies, verdict-handling rules and the confirmation block; the copies have already drifted in small ways (the two Step 9 example prompts phrase the stale-docs caveat differently)."
+      ideal_behavior: "The command sequences and gates; the skill owns every dispatch shape, prompt template and message verbatim (single canonical home, Decision 86 collocation)."
+      gap: "Layer-boundary violation producing two surfaces to sync -- drift by design."
+      change_type: dry_consolidate
+      proposed_change: "Apply CE-04, CE-05, CE-06, CE-07, CE-16: command keeps triggers + MANDATORY markers + skill pointers; the skill absorbs the scout example prompt body."
+      acceptance: "No dispatch-shape or example-prompt text appears in both plan.md and planning SKILL.md; plan.md shrinks by ~38 lines."
+      gate_ref: ""
+      context_economy_ref: [CE-04, CE-05, CE-06, CE-07, CE-16]
+      severity: medium
+      severity_rationale: "medium: redundancy/drift with a clear fix; drift already observable between the two Step 9 example prompts."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: RELATED, item_ids: [], dedup_search_terms: "recs cache: 'plan.md' (rec-843 load-order, rec-844 roadmap-touched directive -- neither is the duplication)", dedup_hit_count: 2, note: ""}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "verify inbound step-number anchors (Step 6a/9 labels retained) before cutting"}
+
+    - id: WF-11
+      workflow: orient
+      dimension: D9
+      title: "/orient command duplicates the orient skill's input semantics and deliverable-section rules (semantics live in the wrong layer)"
+      evidence: ".claude/commands/orient.md:22-26 vs orient SKILL.md:33-35 (cache-only constraint, twice); orient.md:30-49 (field-level semantics incl. needs_followon_plan and parked-gated definitions) vs SKILL.md:24-31 (less-detailed Inputs table); orient.md:57-64 vs SKILL.md:55-183 (per-section rules restated); the parked-gated rule appears four times across the two files (orient.md:58,62,63; SKILL.md:68,140,173)"
+      evidence_kind: static
+      current_behavior: "The layer-3 command carries the field semantics that belong to the layer-4 methodology; the skill's Inputs table (the natural home) is the less complete copy."
+      ideal_behavior: "Command: check cache, load the keys the skill names, apply the skill, stop. Skill: sole home of input semantics and section rules."
+      gap: "Inverted layer boundary plus fourfold restatement of the parked-gated rule."
+      change_type: dry_consolidate
+      proposed_change: "Apply CE-01, CE-02, CE-03: field semantics move into the skill Inputs table (+6 lines there); command Steps 2-3 reduce to key names + section names."
+      acceptance: "The parked-gated rule appears exactly once across the two files; orient.md <= ~50 lines."
+      gate_ref: ""
+      context_economy_ref: [CE-01, CE-02, CE-03]
+      severity: medium
+      severity_rationale: "medium: redundancy with a clear fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: RELATED, item_ids: [], dedup_search_terms: "recs cache: 'orient' (rec-2270/2271/2272/2412/2413 = other orient inconsistencies, none the layer duplication)", dedup_hit_count: 5, note: "fold rec-2412's missing Inputs rows into the same skill-table edit"}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-12
+      workflow: implement
+      dimension: D8
+      title: "Implement skill restates AGENTS.md git-ops and has already drifted on Resolves-trailer placement"
+      evidence: ".claude/skills/implement/SKILL.md:352-364 restates AGENTS.md '## Git-ops procedure' steps 3-5 (comment wake, send_later backstop, auto-merge successor) despite AGENTS.md: 'All other surfaces (skills, commands) point here and do not restate'; drift instance: AGENTS.md '### Resolves: trailer' places the trailer in the squash-merge COMMIT body, SKILL.md:410-416 places it in the PR body"
+      evidence_kind: static
+      current_behavior: "Two canonical-claiming descriptions of the same flow; the trailer-placement difference is live drift (equivalent only while squash-merge defaults the commit body to the PR body)."
+      ideal_behavior: "AGENTS.md is the sole git-ops narrative; the skill keeps only its deltas (on-wake verdict table, terraform hold-subscription -- which AGENTS.md explicitly delegates here -- and the rec-autoclose fallback)."
+      gap: "D8 violation with one observable drift instance."
+      change_type: dry_consolidate
+      proposed_change: "Apply CE-11; reconcile the trailer rule to one sentence deferring to AGENTS.md ('trailer in the PR body, which the squash-merge commit body inherits -- per AGENTS.md Resolves: trailer')."
+      acceptance: "SKILL.md Commit Flows contains no restated wake-mechanism prose; the trailer rule has a single canonical formulation across both files."
+      gate_ref: ""
+      context_economy_ref: [CE-11]
+      severity: medium
+      severity_rationale: "medium: canonical-authority drift with a clear fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'Resolves', 'git-ops', 'commit flow'", dedup_hit_count: 0, note: ""}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-13
+      workflow: implement
+      dimension: D2
+      title: "Spent one-shot self-application invariants (T-1.10, T-1.12) still load into every implement session"
+      evidence: ".claude/skills/implement/SKILL.md:263-268 + 322-325 vs docs/ROADMAP-PLATFORM.yaml: T-1.10 status complete, T-1.12 status complete (verified this session)"
+      evidence_kind: static
+      current_behavior: "Both sections exist to prove their rule's FIRST invocation self-flips its item; both items flipped and closed. The scaffolding (including T-1.10's recovery clause for a scenario that did not occur) is dead weight in the highest-traffic skill."
+      ideal_behavior: "One-shot proof scaffolding retires when the proof lands."
+      gap: "~14 lines of spent instructions per implement session."
+      change_type: remove
+      proposed_change: "Apply CE-12: delete both Self-application invariant subsections and the recovery clause; the mechanism sections (bookkeeping walk, decomposition-hint inheritance) stay untouched."
+      acceptance: "grep 'Self-application' on the skill returns nothing; bookkeeping and inheritance sections intact."
+      gate_ref: ""
+      context_economy_ref: [CE-12]
+      severity: medium
+      severity_rationale: "medium: bloat with a clear, safe fix (both targets verifiably complete)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: ["T-1.10", "T-1.12"], dedup_search_terms: "recs cache + roadmap: 'self-application'", dedup_hit_count: 0, note: "both parents complete; no open item owns the cleanup"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-14
+      workflow: plan
+      dimension: D2
+      title: "The '25k-token DECISIONS.md' figure is stale by >2x across six occurrences in three files"
+      evidence: ".claude/commands/plan.md:47,67; planning SKILL.md:294,307; decision-scout SKILL.md:3,10,16 vs docs/DECISIONS.md = 229,638 B (~55-60k tokens)"
+      evidence_kind: static
+      current_behavior: "Six occurrences quote 25k tokens; the file has grown to roughly 2.3x that -- under-stating the very cost the isolation design defends against and inviting 'it is only 25k, inline it' regressions."
+      ideal_behavior: "Cost claims are current or size-independent."
+      gap: "Stale figure in every surface that motivates the scout gate."
+      change_type: clarify
+      proposed_change: "Replace each '25k-token' with a size-independent formulation ('the full DECISIONS.md, currently >200KB') at all six sites."
+      acceptance: "rg '25k' over the three files returns nothing."
+      gate_ref: decision-scout
+      context_economy_ref: []
+      severity: low
+      severity_rationale: "low: wording accuracy only."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: '25k'", dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-15
+      workflow: implement
+      dimension: D4
+      title: "code-review skill: full-repo framing contradicts its own scoping rule; exemptions pointer, closing nudge and section numbering are stale"
+      evidence: ".claude/skills/code-review/SKILL.md:38 ('read every source file ... before producing your report') + :42 (read-all-docs incl. the 603KB roadmap) vs :43,50 ('do not read the entire repository blindly'; scope = changed + planned + 1-level imports); :28 exemptions 'at the end of docs/DECISIONS.md' -- the section lives at docs/DECISIONS_ARCHIVE.md:1380 and is absent from DECISIONS.md (grep verified); :215 '#prompts:plan' names the legacy Copilot prompt surface deleted at T-1.13; duplicate '### 6.' headings at :107 and :119"
+      evidence_kind: static
+      current_behavior: >-
+        A reviewer following the file top-down is told to read everything, then told not to; Step 0b
+        sends it to a section that no longer exists at the stated location, so exemption matching
+        silently no-ops and human-waived findings resurface as noise; the closing nudge points at a
+        retired invocation surface.
+      ideal_behavior: "One consistent scoped-review contract; every pointer resolves; doc pre-reads proportional to a branch diff."
+      gap: "Internal contradiction plus three stale references in the gate that certifies merges."
+      change_type: retune_gate
+      proposed_change: >-
+        Apply CE-15 (retitle + scoped doc reads). Step 0b: point at docs/DECISIONS_ARCHIVE.md 'Code
+        Review Exemptions' (or its successor) and add 'if the section is absent, report "exemptions
+        source unavailable" instead of silently matching zero'. Closing nudge: '#prompts:plan' ->
+        '/plan'. Renumber the second '### 6.' onward.
+      acceptance: "No full-repo read instruction remains; the exemptions path resolves on disk; rg '#prompts' returns nothing; heading numbers unique."
+      gate_ref: code-review
+      context_economy_ref: [CE-15]
+      severity: medium
+      severity_rationale: "medium: gate noise/contradiction with clear fixes; the exemption no-op quietly re-litigates human-waived findings (signal dilution, no data loss)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache + roadmap: 'exemption', 'code-review'", dedup_hit_count: 0, note: ""}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-16
+      workflow: plan
+      dimension: D12
+      title: "/plan has no resume protocol -- interruption after the Step 8 commit forces full re-derivation or manual navigation"
+      evidence: ".claude/commands/plan.md:12-174 contains no resume/idempotency clause; the only re-entry surface is planning SKILL.md:28 ('uncommitted_changes -> Resume, stash, or discard?'), which cannot fire for COMMITTED-but-uncritiqued or approved-but-unmerged plans; contrast implement SKILL.md:315 (bookkeeping idempotency-on-resume) solving the analogous problem"
+      evidence_kind: static
+      current_behavior: "CC-web sessions hibernate between turns; a /plan session interrupted between the Step 8 commit and Step 9/11 leaves a committed plan in limbo. Re-running /plan restarts at Step 1 and re-derives Steps 3-6 (clarification, scoping, scout) for work already on the branch."
+      ideal_behavior: "Re-run detects the existing artifact and offers resume-at-step: 'plan exists at <path>; resume at Step 9 (uncritiqued) / Step 11 (approved, unmerged) / start over'."
+      gap: "No defined loop-back after interruption at the workflow's most expensive point."
+      change_type: add
+      proposed_change: >-
+        plan.md Step 2: add 'Resume check: if a docs/plans/PLAN-*.yaml matching the stated intent
+        exists on this branch (committed or not), present it and ask which step to resume at (Step 9
+        critique if uncritiqued; Step 11 merge if approved; discard and restart otherwise). Do not
+        re-derive Steps 3-6 for an already-confirmed plan without human direction.' (~4 lines, counted
+        in the CE net.)
+      acceptance: "Re-invoking /plan on a branch carrying a committed plan offers resume options instead of restarting clarification."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: medium
+      severity_rationale: "medium: rework on interruption; frequency unmeasured in sampled sessions, so not high."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'resume'; roadmap scan", dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-17
+      workflow: plan
+      dimension: D13
+      title: "Step 9 plan-critique loop has no convergence cap, unlike its two sibling gates"
+      evidence: ".claude/commands/plan.md:128 / planning SKILL.md:425 ('Loop if REVISE. Proceed if PROCEED.' -- unbounded) vs the decision-scout convergence rule (planning SKILL.md:314-315, 3 loops) and the report-critique rule (SKILL.md:461-465, 3 rounds then escalate)"
+      evidence_kind: static
+      current_behavior: "A critique that keeps returning REVISE (e.g. a structural disagreement plan edits cannot resolve) loops indefinitely with no defined escalation to the human."
+      ideal_behavior: "Same 3-round cap + human-escalation wording as the adjacent gates."
+      gap: "Missing self-correction bound on one of three gates."
+      change_type: add
+      proposed_change: "planning SKILL.md Critique Gate: append 'Convergence rule: after 3 REVISE rounds, escalate to the human with the unresolved findings and options (accept-with-deferral / re-scope / abandon) -- mirroring the Step 6a convergence rule.'"
+      acceptance: "Both Step 9 surfaces reference the 3-round cap."
+      gate_ref: plan-critique
+      context_economy_ref: []
+      severity: low
+      severity_rationale: "low: defensive completeness; no runaway loop observed in sampled sessions."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'critique' + 'loop'", dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-18
+      workflow: plan
+      dimension: D4
+      title: "decision-scout has no completeness mechanism against silent truncation (its costliest error is a false negative)"
+      evidence: ".claude/skills/decision-scout/SKILL.md:28 (read the entire file) with self-check :101 ('you read the full DECISIONS.md') as the only guard; docs/DECISIONS.md carries 64 '## Decision' headers across ~230KB; duplicate step numbering at :52 and :60 (two steps numbered 5)"
+      evidence_kind: static
+      current_behavior: >-
+        Exhaustiveness rests entirely on subagent self-attestation; a context-pressured read that drops
+        the file's tail produces a confident NO_FLAGS with no external signal. The caller cannot
+        distinguish 'triaged all 64' from 'triaged 40'.
+      ideal_behavior: "The report carries a deterministic completeness echo the caller verifies against the file (Decision 59)."
+      gap: "No truncation tripwire on the gate whose false negatives are costliest."
+      change_type: retune_gate
+      proposed_change: >-
+        Phase 1: 'Before triage, run rg -c "^## Decision " docs/DECISIONS.md and record the count M.'
+        Phase 3 output: mandatory line 'Decisions triaged: N of M'; caller (plan.md Step 6a verdict
+        handling) treats N != M or a missing line as gate-incomplete -> re-dispatch. Also renumber the
+        duplicate step 5 at :60 (cascade Phase 3 numbering).
+      acceptance: "The scout output template contains the triage-count line; the caller's verdict handling names the mismatch condition."
+      gate_ref: decision-scout
+      context_economy_ref: []
+      severity: medium
+      severity_rationale: "medium: prevention hardening for a plausible failure mode -- the missing mechanism is CONFIRMED; no sampled false negative, so impact remains prospective."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache + roadmap: 'decision-scout'", dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-19
+      workflow: orient
+      dimension: D11
+      title: "Orient loads the full 603KB ROADMAP-PLATFORM.yaml for two fields"
+      evidence: ".claude/commands/orient.md:51-53 ('Read docs/ROADMAP-PLATFORM.yaml directly for files_in_scope ... depends_on') + orient SKILL.md:30,111,143 vs measured size 603,139 B (~150k tokens)"
+      evidence_kind: static
+      current_behavior: "The overlap matrix and keystone computation need only id -> files_in_scope / depends_on / related_candidate_decisions for the candidate items, but the instruction is an unqualified full-file Read into the orient agent's window."
+      ideal_behavior: "Deterministic extraction: a bin/venv-python -c projection of {id, files_in_scope, depends_on, related_candidate_decisions} for the candidate ids -- a few hundred tokens instead of ~150k, and Decision 59-aligned."
+      gap: "Two-orders-of-magnitude context overspend in the workflow that precedes every planning session."
+      change_type: rescope
+      proposed_change: >-
+        orient.md Step 2 (and the SKILL.md Inputs row + :111/:143 uses): replace 'Read
+        docs/ROADMAP-PLATFORM.yaml directly' with a literal bin/venv-python -c extraction
+        (yaml.safe_load; print the projection for the candidate ids from the preflight cache as JSON).
+        Full-file Read only as fallback if the extraction errors.
+      acceptance: "Orient instructions contain no unconditional full-file Read of ROADMAP-PLATFORM.yaml; the extraction one-liner is literal and runnable."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: medium
+      severity_rationale: "medium: pure runtime-cost overspend, no correctness impact (opus[1m] absorbs it today, at price)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache: 'ROADMAP-PLATFORM' + 'orient' (rec-2271 adjacent: git-log-vs-cache input, different)", dedup_hit_count: 1, note: ""}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+    - id: WF-20
+      workflow: plan
+      dimension: D9
+      title: "orient/planning/implement skills omit the required-context frontmatter the layer-4 contract mandates"
+      evidence: "docs/contracts/instruction-architecture.yaml:61 (layer 4 'must declare required-context frontmatter') + anti_patterns:99-101 vs .claude/skills/orient/SKILL.md:1-4, planning/SKILL.md:1-5, implement/SKILL.md:1-5 (frontmatter carries name/description/model only); the three gate skills DO declare it"
+      evidence_kind: static
+      current_behavior: "Half the in-scope skills exhibit the contract's own declared anti-pattern; the loader and compliance tooling cannot know what context the three workflow skills expect."
+      ideal_behavior: "Every SKILL.md declares required-context so layer conformance is checkable (fix lands in the skills; the contract is a read-only reference for this audit)."
+      gap: "Contract clause unmet by the three workflow skills."
+      change_type: add
+      proposed_change: >-
+        Add required-context frontmatter: orient -> [logs/.preflight-report.json,
+        docs/ROADMAP-PLATFORM.yaml]; planning -> [logs/.preflight-report.json, docs/PROJECT_CONTEXT.md,
+        docs/ROADMAP-PLATFORM.yaml]; implement -> [logs/.preflight-report.json,
+        docs/PROJECT_CONTEXT.md] (implement's list should reflect WF-04's targeted-decisions outcome).
+      acceptance: "All six in-scope SKILL.md files carry a required-context key; prompt_compliance --all reports no layer violation."
+      gate_ref: ""
+      context_economy_ref: []
+      severity: low
+      severity_rationale: "low: conformance/clarity; no behavioral defect observed."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: NOVEL, item_ids: [], dedup_search_terms: "recs cache + roadmap: 'required-context'", dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: ["WF-04"]
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+
+  rejected_candidates:
+    - candidate: "orient.md Intent line enumerates 4 deliverable sections while the deliverable has 6"
+      why_dismissed: "already filed as open rec-2413; re-filing would duplicate"
+      decision_id: ""
+    - candidate: "orient.md 2-hour preflight freshness threshold undocumented/unanchored"
+      why_dismissed: "already filed as open rec-2272"
+      decision_id: ""
+    - candidate: "plan.md -> planning-skill load-order dependency undocumented"
+      why_dismissed: "already filed as open rec-843"
+      decision_id: ""
+    - candidate: "orient skill frontmatter 'up to N prompts' vs body '5'"
+      why_dismissed: "already filed as open rec-2270"
+      decision_id: ""
+    - candidate: "Complexity heuristic (>5 files / >8 steps) routinely exceeded by sampled plans (14-27 scope files) without STRATEGIC classification"
+      why_dismissed: "deliberate: the freeze override suspends the heuristic while the executor freeze holds (AGENTS.md Temporary Operational Constraints; planning SKILL.md:253-258 states it explicitly)"
+      decision_id: "Decision 67"
+    - candidate: "code-review files every Medium/Low finding as a rec while 519 non-automatable recs sit over the soft cap -- backlog amplifier"
+      why_dismissed: "deliberate posture: per-rec review suspended until CD.17/T4.2 reverses; the soft-cap breach is already a surfaced preflight signal consumed by orient's health check"
+      decision_id: "Decision 73"
+    - candidate: "implement.md Step 3 'Include a fun titbit to confirm understanding'"
+      why_dismissed: "quirky but functional comprehension check; no defect, and removing it is a style call the task excludes"
+      decision_id: ""
+    - candidate: "planning skill may edit ROADMAP yaml during a planning session (tension with 'planning implements nothing')"
+      why_dismissed: "deliberate carve-out: Tier Item Freshness Gate roadmap-bookkeeping edits fire only after explicit human confirmation (T-1.21; planning SKILL.md:9) -- they reconcile roadmap data with reality"
+      decision_id: ""
+    - candidate: "orient defers product-roadmap orientation (v1 platform only)"
+      why_dismissed: "explicit declared scope (orient SKILL.md:186), not an omission"
+      decision_id: ""
+    - candidate: "plan.md:116 / planning SKILL.md:407 say the run_skill gemini dispatcher 'is removed' but scripts/agent_development/run_skill.py exists"
+      why_dismissed: "the directive (do not shell out to it) is behaviorally correct; the parenthetical inaccuracy folds into WF-09's run_skill reconciliation; rec-568 already tracks run_skill brokenness"
+      decision_id: ""
+    - candidate: "plan-critique 12d rationale text ('telemetry tables not yet confirmed operational') reflects Decision 67's original premise, not the surviving CD.17 framing"
+      why_dismissed: "behaviorally correct gate (STRATEGIC -> REVISE while 67 active); wording-grade, rides along with any WF-06 edit"
+      decision_id: ""
+    - candidate: "plan-critique Quality Gate references a 'Files Read' list absent from the Phase 3 output template"
+      why_dismissed: "real but wording-grade internal inconsistency; folded into the WF-06 template edit rather than filed separately"
+      decision_id: ""
+
+  summary:
+    total_findings: 20
+    top_improvements: [WF-05, WF-04, WF-01, WF-08, WF-06]
+    highest_leverage_change: WF-05
+    total_context_reduction_estimate: -133   # sum of context_economy[].line_delta (net -110 after finding-driven additions)
+    dry_violations: 5
+    layer_violations: 3
