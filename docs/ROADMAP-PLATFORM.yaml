@@ -118,15 +118,31 @@ document:
             the flag + a scope-(c) note in the same edit (implement skill
             bookkeeping enforces this; T-1.22).
     - Ratification vehicle (single source of truth; supersedes earlier "T0.7b
-      is the first ratification vehicle" phrasing -- 2026-06-09 audit F-001):
-      until T0.7b (log-decision Lambda) is deployed, candidate decisions are
-      ratified via the ops portal (scripts.ops_data_portal file_decision ->
-      ops_decisions:dec-NNN), exactly as CD.16/CD.24 (Decision 79, dec-1086),
-      CD.31 (Decision 78, dec-1085) and CD.33 (Decision 81, dec-1089) were.
-      T0.7b assumes the vehicle role once deployed; the portal path retires
-      with T1.5's import-site sweep. During the pending window,
-      candidate_decisions with state == "pending" MUST still be treated as
-      binding by any agent reading the roadmap.
+      is the first ratification vehicle" phrasing -- 2026-06-09 audit F-001;
+      re-described as the shared /orient->/plan->/implement lane by Decision
+      105): until T0.7b (log-decision Lambda) is deployed, candidate decisions
+      are ratified via a first-class lane shared across /orient (surfaces
+      pending CDs carrying realization_evidence via
+      PlatformRoadmapState.ratifiable_cds()), /plan (drafts the ratifying
+      Decision text, incl. any reversal conditions, as a plan step -- the plan
+      confirmation + plan-critique gates are the human sign-off), and
+      /implement (executes: author the DECISIONS.md entry -> ETL via
+      scripts.ops_data_portal --backfill-decisions-md (file_decision is the
+      single-row alternative) -> flip the CD to the canonical ratified shape
+      -> re-run preflight to confirm the gate cleared, behind an
+      execution-time human confirmation gate). Canonical ratified-CD shape
+      (contract: docs/contracts/candidate-decision-ratification.yaml):
+      state: ratified + ratified_as: dec-NNN + filed_via: ops_decisions:dec-NNN
+      (same 3-digit DECISIONS.md number), enforced by the
+      validate_candidate_decision_ratification referential guard against the
+      `## Decision NNN:` headers in DECISIONS.md/DECISIONS_ARCHIVE.md. Working
+      precedents: CD.16/CD.24 (Decision 79, dec-079), CD.31 (Decision 78,
+      dec-078), CD.33 (Decision 81, dec-081), CD.22 (Decision 85, dec-085),
+      CD.35 (Decision 92, dec-092), CD.36 (Decision 103, dec-103). T0.7b
+      assumes the vehicle role once deployed; the portal path retires with
+      T1.5's import-site sweep. During the pending window, candidate_decisions
+      with state == "pending" MUST still be treated as binding by any agent
+      reading the roadmap.
     - deferred_post_mvp status (Decision 93 -- Platform-MVP boundary): The
       defer-by-exception convention governs platform scope: new platform work
       is MVP-critical by default; items leave MVP scope only by conscious
@@ -400,7 +416,15 @@ candidate_decisions:
       Pre-live data is throwaway. Only ops_recommendations + ops_decisions need preservation (small enough to export/import as JSON). Infrastructure is fully Terraformed, so migration = fresh terraform apply against new account ID.
       [Realized 2026-05-28: Phase B personal-account Terraform re-deploy applied + verified per Decision 77 (PR #1). Full T2 completion outstanding; T2.4/T2.5/T2.6/T2.7+ not yet started.]
     gates: [T2]
-    state: pending
+    state: ratified
+    ratified_as: dec-106
+    filed_via: ops_decisions:dec-106
+    realization_evidence: >-
+      Realized 2026-05-28: Phase B personal-account Terraform re-deploy applied + verified per
+      Decision 77 (PR #1); pre-live data was throwaway, only ops_recommendations + ops_decisions
+      preserved (JSON export/import), infrastructure re-created by a fresh terraform apply against
+      the personal account. Ratifying clears CD.6's completion gate on T2 (necessary, not
+      sufficient -- open CODE criteria remain).
   - id: CD.7
     title: LLM inference stays on Bedrock; home GPU is wrong tier
     detail: |
@@ -513,7 +537,8 @@ candidate_decisions:
       to good Lambda hygiene.
     gates: [T0.6, T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3, T1.4, T4.3]    # T1.4 is reserved (superseded by T2.18/T2.26) -- inert here; CD.16 is ratified regardless
     state: ratified
-    filed_via: ops_decisions:dec-1086
+    ratified_as: dec-079
+    filed_via: ops_decisions:dec-079
     enforcement_mechanism: |
       Wiring lives in T-1.6 (CD.16 enforcement tier item). validate.py detects Lambda-modifying changes
       via a Lambda-package file-set registry; planning skill checks per-Lambda deploy steps; build_lambda.py
@@ -716,7 +741,8 @@ candidate_decisions:
       and stay as markdown.
     gates: [T1.11]
     state: ratified
-    filed_via: ops_decisions:dec-1091
+    ratified_as: dec-085
+    filed_via: ops_decisions:dec-085
     discipline_points:
       - "Ratified by Decision 85 (2026-06-11; recorded as 84 by PR #127, renumbered at merge -- see DECISIONS.md note) in the T1.11 implementing PR (Decision 79 precedent). Decision 76 clause 3 amended: the /implement handoff artefact reads docs/plans/PLAN-{slug}.yaml; find_plan.py's deprecated .md fallback is the transition bridge until the .claude/commands reconciliation rec lands."
       - "In-flight conversion list at implementation time (1 of 1): PLAN-t1-11-plan-yaml-migration.md -> .yaml. Historical PLAN-*.md files remain in tree and history, not retroactively converted."
@@ -785,7 +811,8 @@ candidate_decisions:
           mechanism that consumes that structure. Both are needed.
     gates: [T-1.6, T-1.7, T-1.8]
     state: ratified
-    filed_via: ops_decisions:dec-1086
+    ratified_as: dec-079
+    filed_via: ops_decisions:dec-079
     discipline_points:
       - Manifests are committed YAML at a stable path (src/lambdas/<name>/manifest.yaml). Schema-validated by a LambdaManifest Pydantic model (parallel to RoadmapDocument per T-1.5).
       - Each manifest lists exactly: (a) handler entry-point module, (b) extra modules from src/ outside its own subtree, (c) extra paths from config/lambda/<name>/. No transitive resolution -- if module A imports B, the manifest lists both. Explicitness over cleverness.
@@ -1327,7 +1354,8 @@ candidate_decisions:
           Gated on a billions-of-rows scale-proof; deferred after ops catalog validates the approach.
     gates: [T2.16, T2.17, T2.18, T2.19]
     state: ratified
-    filed_via: ops_decisions:dec-1085
+    ratified_as: dec-078
+    filed_via: ops_decisions:dec-078
     supersedes_decisions: [50, 56, 51, 69]
     discipline_points:
       - "NS.1 generalisation (\"S3 + Iceberg\" -> \"S3 + open table format\") was deferred to OQ.13 and is now ENACTED at CD.31 ratification (Decision 78, 2026-06-02): NS.1 detail now reads \"S3 + open table format\", not the original \"S3 + Iceberg\". (Pre-ratification this discipline point recorded the deferral; it is retained as enacted-state history.)"
@@ -1457,7 +1485,8 @@ candidate_decisions:
       OQ.12 (version/upgrade policy) is left to T2.17 implementation (clone-rehearsal default); not pre-empted.
     gates: [T2.17, T2.18, T2.19]
     state: ratified
-    filed_via: ops_decisions:dec-1089
+    ratified_as: dec-081
+    filed_via: ops_decisions:dec-081
     supersedes_decisions: []
     discipline_points:
       - "Supersedes CD.10's six-Lambda enumeration; CD.10 is state:pending so no DECISIONS.md transition. CD.10's six slugs are status:stub MOCK examples (verified on disk), which confirms they were illustrative, never canonical. The agent verb/tool surface is explicitly NOT frozen by CD.33 -- only the writer/reader/maintenance path split and the closed boundary are. CD.10's PlatformDev/PlatformAdmin two-principal allow-list is retained, not superseded."
@@ -1482,19 +1511,25 @@ candidate_decisions:
       and the closed read/write boundary. Motivated by cost -- the micro RDS is the largest live AWS line
       after the CD.21 EC2-runner retirement; Neon free tier is $0 (realized saving ~$12-15/mo). Sequenced
       BEFORE T2.17 so the Lambda runtime is built against Neon (no VPC attach for catalog reachability; Neon's
-      built-in pooler) rather than RDS-in-a-VPC. Nothing consumes the catalog yet (live ops are Iceberg/Athena
-      until T2.19), so present blast radius is zero. Ratified later via the log-decision path (a FUTURE
-      numbered Decision -- the number is not pre-reserved; the prior 'provisionally Decision 82' reservation
-      collided with the actual Decision 82, the EC8 churn-gate frame correction -- audit F-033); this CD
-      does NOT edit DECISIONS.md while pending.
+      built-in pooler) rather than RDS-in-a-VPC. [Amendment 2026-07-02, Decision 107 ratification: the
+      "nothing consumes the catalog yet / blast radius is zero" framing below is now CONTRADICTED by the
+      live Neon catalog -- ops are cut over per T2.19 and the catalog is the lakehouse SPOF, not a
+      provably-unused stub. Retained verbatim for historical traceability only.] Nothing consumes the
+      catalog yet (live ops are Iceberg/Athena until T2.19), so present blast radius is zero. Ratified by
+      Decision 107 (2026-07-02) via the ops portal path (log-decision Lambda / T0.7b never deployed; see
+      the agent_instructions "Ratification vehicle" note).
       Consequential mechanics (folded into the gated tier items + CD.33):
       (1) Inlining DISABLED for ALL tables including telemetry (ducklake_default_data_inlining_row_limit=0),
           overriding the telemetry-inlining carve-out in CD.33 clause (5) and OQ.11 -- on Neon's ~6h free-tier
           PITR no table may be catalog-only-durable. High-write-rate tables get a higher-frequency
           merge_adjacent_files; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate.
-      (2) Catalog DR = a daily pg_dump (single consistent snapshot, engine-version-tagged) to a dedicated
-          versioned S3 bucket (cron 03:00 UTC, 30-day retention, >25h freshness alarm) + a tested restore as a
-          T2.16b precondition BEFORE any production write. Catastrophic-case RPO ~24h; intra-6h via Neon PITR.
+      (2) Catalog DR = a WEEKLY pg_dump (single consistent snapshot, engine-version-tagged) to a dedicated
+          versioned S3 bucket (cron(0 3 ? * SUN *), 30-day retention, ~8-day freshness alarm) + a tested
+          restore as a T2.16b precondition BEFORE any production write. [Amendment -- Decision 88, folded
+          in at Decision 107 ratification: cadence changed from the original daily pg_dump because the
+          live Neon catalog breached the free-tier egress cap; paid-tier Neon PITR covers finer recovery
+          between weekly dumps.] Catastrophic-case RPO ~7d; intra-6h via Neon PITR (free tier) / longer via
+          paid-tier PITR.
       (3) Pooling = Neon built-in pooler if proven transaction-safe, else the direct endpoint for catalog
           writes (no separate RDS Proxy); a measured T2.16b connection-churn gate (the OQ.8 churn mitigation)
           requires churn + commit-latency within CD.33's OCC budget OR an app-side pool.
@@ -1503,18 +1538,26 @@ candidate_decisions:
       Authored by docs/REPORT-ducklake-catalog-neon-migration.md (architect + ops-risk zero-context review,
       converged PROCEED over three rounds).
     gates: [T2.16b, T2.17, T2.18, T2.19, T2.26]    # T2.26 added 2026-06-09 (audit F-018): the deferred-table migrations inherit CD.34's inlining/DR/pooling mechanics
-    state: pending
-    filed_via: pending_log_decision_lambda
+    state: ratified
+    ratified_as: dec-107
+    filed_via: ops_decisions:dec-107
+    realization_evidence: >-
+      Live: Decision 82 names 'CD.34 (Neon)' as catalog authority; the DuckLake catalog runs on Neon
+      serverless Postgres via the Terraform Neon provider behind the Decision-77 Neon-aware fail-closed
+      guard. Decision 88 amends CD.34's DR cadence (daily -> weekly pg_dump) because the live Neon
+      catalog breached the free-tier egress cap -- amendment presupposes the catalog is live, not
+      hypothetical. Ratifying requires the Decision-88-amended framing (weekly DR, egress-budget
+      invariants, inlining=0) and explicit swap-back-to-RDS reversal conditions.
     supersedes_decisions: []
     discipline_points:
       - "Narrowly amends the CD.31 catalog-backend paragraph / Decision 78 item (RDS PostgreSQL -> Neon serverless Postgres); preserves DuckLake adoption, the S3-Parquet data plane, the DuckDB engine, the metadata-store framing, and the closed boundary. CD.31/Decision 78 are paragraph-structured, not clause-numbered. Stays inside the NS.3 'small managed cloud state-store' framing that justified the catalog originally."
-      - "Does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path (a future numbered Decision -- NOT 'Decision 82', which now names the EC8 churn-gate frame correction; audit F-033), mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81. Because CD.33 is now RATIFIED, CD.34's CD.33-level changes are staged as an additive [Amendment -- CD.34] annotation on CD.33 (the CD.31 pattern), NOT a rewrite of CD.33's ratified body; they enact when CD.34 ratifies."
+      - "Ratified by Decision 107 (2026-07-02) via the ops portal path (mirroring CD.31 -> Decision 78 and CD.33 -> Decision 81; NOT 'Decision 82', which names the EC8 churn-gate frame correction; audit F-033). CD.34's CD.33-level changes (staged as an additive [Amendment -- CD.34] annotation on CD.33, the CD.31 pattern, rather than a rewrite of CD.33's ratified body) now enact."
       - "Inlining DISABLED for ALL tables including telemetry (inlined_rows=0), overriding the telemetry carve-out in CD.33 clause (5) + OQ.11 -- a durability decision on Neon's ~6h free-tier PITR, NOT an architecture change. High-write-rate tables get a higher-frequency merge; T2.18 co-tunes the guarded-GC circuit breaker for the raised dead-file rate."
       - "Supersedes OQ.8's RDS-Proxy/IAM-auth-preferred resolution: RDS Proxy (never provisioned; deferrable per OQ.8) -> Neon built-in pooler (direct endpoint for catalog writes; app-side pool if churn exceeds the OCC budget); credential = Secrets Manager DSN (IAM DB auth is N/A against a non-AWS endpoint). Realized saving ~$12-15/mo; the +$10-12 RDS-Proxy figure was conditional, not bankable."
-      - "Catalog is the lakehouse SPOF; on Neon free tier (~6h PITR) DR = a daily pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, >25h freshness alarm) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR -- rec-2063 WONTFIX while the catalog is provably unused), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
+      - "Catalog is the lakehouse SPOF -- LIVE, not provably-unused (Decision 107 ratification note: the historical 'provably unused' framing on the rec-2063 WONTFIX predates cutover and no longer holds; rec-2063 needs re-review against the live catalog). On Neon free tier (~6h PITR) DR = a WEEKLY pg_dump-to-S3 (single consistent snapshot, engine-version-tagged, 30-day retention, ~8-day freshness alarm; Decision 88 amendment from the original daily cadence) + a tested restore BEFORE any production write (T2.16b). Reversible: the RDS retires with a final snapshot (sole recovery artifact; delete_automated_backups wipes PITR), human-gated (Decision 35) onto the Decision-77 fail-closed destroy path."
       - "Provisioned via the Terraform Neon provider in terraform/personal/, auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (policy-as-code parity for the new provider; NOT carved out). The guard blocks any neon_* update/replace/delete (the mutation surface -- allow-list widening, credential rotation, project deletion) and allows a neon_* create on the strength of compensating controls -- enforced TLS (sslmode=require) + a scoped non-owner neon_role + the DSN in Secrets Manager -- NOT an IP allow-list (Neon IP-Allow is Scale-plan-only, unavailable on the free tier, and egress here is dynamic; REPORT R3). Keeps declarative state/audit for the lakehouse's single most critical stateful dependency rather than console-only. The out-of-band ducklake_ops schema DDL is captured as a versioned in-repo migration for reproducibility."
       - "The CD.33 runtime architecture (writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is UNCHANGED; only the catalog backend + its consequential recovery/pooling mechanics change."
-    enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; daily pg_dump-to-S3 (30-day retention) + >25h freshness alarm + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via a future numbered Decision (log-decision path; number not pre-reserved -- audit F-033)."
+    enforcement_mechanism: "Terraform Neon provider auto-applied via the Decision-77 sandbox pipeline behind a Neon-aware fail-closed guard + subagent review (the guard blocks any neon_* update/replace/delete and allows a neon_* create on compensating controls -- TLS sslmode=require + scoped neon_role + Secrets Manager DSN, no IP allow-list) + Secrets Manager DSN; inlining=0 on all tables enforced at the writer + T2.17/T2.18 exit criteria; WEEKLY pg_dump-to-S3 (30-day retention) + ~8-day freshness alarm (Decision 88 amendment from the original daily cadence) + tested-restore-before-cutover gate (T2.16b/T2.19); T2.16b connection-churn gate (within CD.33 OCC budget OR app-side pool); RDS retired with final snapshot (the destroy stays human-gated, Decision 35); ratified via Decision 107 (2026-07-02, ops portal path)."
 
   - id: CD.35
     title: Agent-native Terraform CI/CD -- speculative plan, server-side convergence, gated-CD-apply via GitHub Environments, privilege-tiered bootstrap
@@ -1584,6 +1627,7 @@ candidate_decisions:
           deterministic policy plus the human signature on budget amendments.
     gates: [T2.20, T2.21, T2.22, T2.23, T2.24, T2.25]
     state: ratified
+    ratified_as: dec-092
     filed_via: ops_decisions:dec-092
     supersedes_decisions: []
     discipline_points:
@@ -1626,7 +1670,7 @@ candidate_decisions:
     gates: [T3.8, T3.9]
     state: ratified
     ratified_as: dec-103
-    filed_via: ops_data_portal_file_decision
+    filed_via: ops_decisions:dec-103
     discipline_points:
       - Relevance verdict and lifecycle status are orthogonal axes; do not collapse them (Decision 70 governs status, this CD governs relevance).
       - Deterministic closure may auto-close with recorded proof; semantic closure produces close_proposed only (no direct close on LLM judgement).
