@@ -380,6 +380,7 @@ class CandidateDecision(BaseModel):
     gates: list[str] = Field(default_factory=list)
     state: str = "pending"
     ratified_as: str | None = None
+    realization_evidence: str | None = None
     decision_required_before: list[str] | str | None = None
     bootstrap_allowance: bool = False
     filed_via: str | None = None
@@ -776,6 +777,14 @@ class PlatformRoadmapState:
 
         return result
 
+    def ratifiable_cds(self) -> list[dict[str, Any]]:
+        """Pending CDs carrying realization_evidence -- surfaced to /orient as ready to ratify."""
+        return [
+            {"id": cd.id, "title": cd.title, "realization_evidence": cd.realization_evidence, "gates": cd.gates}
+            for cd in self._doc.candidate_decisions
+            if cd.state == "pending" and cd.realization_evidence
+        ]
+
     def to_preflight_dict(self, plans_dir: Path | None = None) -> dict[str, Any]:
         if plans_dir is None:
             plans_dir = Path(__file__).parent.parent / "docs" / "plans"
@@ -808,6 +817,7 @@ class PlatformRoadmapState:
             "deferred_post_mvp": [_item_dict(i) for i in self.deferred_post_mvp_items()],
             "active_tier": self.active_tier(),
             "blocked_on_cd": self.blocked_on_cd(),
+            "ratifiable_cds": self.ratifiable_cds(),
             "gate_evaluations": self.evaluate_gates(),
         }
 
@@ -831,6 +841,7 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "deferred_post_mvp": [],
             "active_tier": None,
             "blocked_on_cd": [],
+            "ratifiable_cds": [],
             "gate_evaluations": [],
         }
 

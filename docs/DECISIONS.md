@@ -2,6 +2,118 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 107: Ratify CD.34 -- DuckLake catalog backend RDS PostgreSQL -> Neon serverless Postgres (Decision-88-amended framing) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-02
+**Warehouse ID:** dec-107 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.34 as realized/live. The DuckLake catalog runs on Neon serverless Postgres via the
+Terraform Neon provider behind the Decision-77 Neon-aware fail-closed guard (blocks any `neon_*`
+update/replace/delete; allows a `neon_*` create on compensating controls -- TLS `sslmode=require`,
+a scoped non-owner `neon_role`, Secrets Manager DSN; no IP allow-list). Inlining is disabled for
+ALL tables including telemetry (`ducklake_default_data_inlining_row_limit=0`). Catalog egress is a
+first-class budget governed by Decision 88's four standing access-pattern invariants (warm-
+connection reuse; no read-cache re-fetch; keep the catalog compacted; DR cadence sized to
+durability tier + measured egress). DR = a WEEKLY `pg_dump`-to-S3 (`cron(0 3 ? * SUN *)`, 30-day
+retention, ~8-day freshness alarm), NOT the original daily cadence (Decision 88 amendment); paid-
+tier Neon PITR provides finer recovery between weekly dumps. The CD.33 runtime architecture
+(writer/reader/maintenance split, OCC retry, current projection, SCD2 keys, GC/merge cadences) is
+UNCHANGED -- only the catalog backend + its consequential recovery/pooling mechanics change.
+
+**Swap-back-to-RDS reversal conditions** (any one triggers a human-gated re-evaluation, Decision 35):
+1. Sustained cost regression -- monthly Neon cost (compute + metered egress, WITH the Decision-88
+   invariants upheld) exceeds the ~$12-15/mo micro-RDS baseline for 2 consecutive billing cycles.
+2. Durability/availability floor breached -- Neon PITR/pooler cannot meet recovery objectives
+   (e.g. recurring `ducklake_reader` 502s traced to scale-to-zero cold-resume that warm-connection
+   reuse cannot mitigate, or a PITR window short of a required RPO).
+3. Hard technical incompatibility -- the built-in pooler / direct endpoint cannot satisfy DuckLake
+   postgres-catalog transaction-safety within the CD.33 OCC budget and no app-side pool remedies it.
+4. Vendor viability -- discontinuation of the eligible tier, a ToS change incompatible with the
+   use, or sustained SLA misses.
+
+**Reversal mechanics:** the RDS path stays fully Terraformed as an architectural-evolution
+artifact; swap-back re-points the Terraform config to the RDS module and restores the catalog from
+the latest weekly `pg_dump`-to-S3 (+ Neon PITR delta) -- a METADATA restore, not a data migration
+(row data is S3 Parquet). Precondition: the rec-2113 `pg_restore` restore drill must pass before
+the weekly dump is relied on as the swap-back artifact.
+
+**Related:** Decision 88 (amends here -- egress budget + weekly DR), Decision 82 (direct-vs-pooled
+endpoint basis), Decision 81/CD.33 (runtime architecture retained), Decision 77 (fail-closed
+guard), Decision 100/75 (managed-service-native preference the Neon choice aligns with).
+
+---
+
+## Decision 106: Ratify CD.6 -- Personal AWS account is the destination; rebuild not migrate (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-02
+**Warehouse ID:** dec-106 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.6. Realized 2026-05-28 -- Phase B personal-account Terraform re-deploy applied and
+verified per Decision 77 (PR #1); pre-live data was throwaway, only `ops_recommendations` +
+`ops_decisions` were preserved (JSON export/import), infrastructure re-created by a fresh
+`terraform apply` against the personal account. CD.6 gates all of T2; ratifying clears the
+*completion* gate on T2 items but their open CODE criteria remain (necessary, not sufficient).
+
+**Reversal conditions:** re-open as a candidate only if (a) a second destination account/re-
+platform is chosen (re-invokes the migrate-vs-rebuild question), or (b) the "pre-live-data-is-
+throwaway" premise ceases to hold (i.e., live trading data with retention/compliance value exists
+AND a future account move is contemplated) -- at which point a migrate path, not a rebuild, must
+be re-evaluated.
+
+**Related:** Decision 77 (fail-closed apply pipeline that realized it), CD.34 (the catalog backend
+re-platformed within this account).
+
+---
+
+## Decision 105: Candidate-decision ratification lane -- shared /orient->/plan->/implement mechanism; canonical ratified-CD shape; stale-CD reconciliation (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-02
+**Warehouse ID:** dec-105 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The four-tier workflow (`/orient` -> `/plan` -> `/implement`) can AUTHOR decisions
+(`ops_data_portal file_decision`) and CITE them (decision-scout), but has no lane that RATIFIES a
+candidate decision (CD.NN) whose gated work is realized. 31 of 39 CDs were `state: pending` and
+several silently gate live tier items via `completion_blocked_on_cd`. 5 of the 7 pre-existing
+ratified CDs pointed at retired 4-digit warehouse ids (dec-1085/1086/1089/1091) instead of their
+real 3-digit DECISIONS.md numbers.
+
+**Decision:**
+Adopts a first-class CD ratification lane shared across `/orient` (surfaces pending CDs carrying
+`realization_evidence` via `PlatformRoadmapState.ratifiable_cds()`), `/plan` (drafts the ratifying
+Decision text, including any reversal conditions, as a plan step -- the plan confirmation + plan-
+critique gates are the human sign-off), and `/implement` (executes: author the DECISIONS.md entry
+-> ops portal ETL via `ops_data_portal --backfill-decisions-md` (`--file-decision` the single-row
+alternative) -> flip the CD to the canonical ratified shape -> re-run preflight to confirm the
+gate cleared, behind an execution-time human confirmation gate). No new top-level command is
+added. Defines the canonical ratified-CD shape (`state: ratified` + `ratified_as: dec-NNN` +
+`filed_via: ops_decisions:dec-NNN`, same 3-digit number in both fields) and the R1/R2/R3
+referential guard (`validate_candidate_decision_ratification`), whose referential target is the
+`## Decision NNN:` headers in BOTH `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` (hermetic;
+the ops_decisions cache is gitignored and CI PR roles lack reader access). Reconciles the 5 pre-
+existing ratified CDs whose `filed_via` pointed at retired 4-digit warehouse ids onto their real
+3-digit Decisions (CD.31->dec-078, CD.16/CD.24->dec-079, CD.33->dec-081, CD.22->dec-085), and
+normalizes CD.35 (adds `ratified_as: dec-092`) and CD.36 (`filed_via` -> `ops_decisions:dec-103`).
+
+**Rationale:**
+Routed here per Decision 86 (rationale in this Decision, not a new prose doc; mechanism encoded in
+`.claude/` skills + `docs/contracts/candidate-decision-ratification.yaml`). Ratifying a CD clears
+the COMPLETION gate on items it gates (gate derivation keys purely on `cd.state == 'pending'`) --
+this is necessary but not sufficient, since open CODE exit criteria on those items remain and
+tier_item status flips are a separate `/implement` bookkeeping step (Decision 90).
+
+**Related:** Decision 90 (four-tier workflow), Decision 84 (Single Portal Invariant / numbering
+authority), Decision 92 + Decision 103 (the two working ratification precedents this pattern
+generalizes), Decision 104 (check registry pattern this guard follows), Decision 76/86 (canonical
+mechanism surface / contract routing).
+
+---
+
 ## Decision 104: scripts/validate.py decomposed into an owner-tagged check registry (partially supersedes Decision 80 point 3) (Decided)
 
 **Status:** Decided

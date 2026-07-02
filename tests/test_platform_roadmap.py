@@ -652,8 +652,11 @@ class TestDeferredPostMvp:
 # ---------------------------------------------------------------------------
 
 
-def _cd(cd_id: str, state: str = "pending", gates: list | None = None) -> dict:
-    return {"id": cd_id, "title": f"Decision {cd_id}", "state": state, "gates": gates or []}
+def _cd(cd_id: str, state: str = "pending", gates: list | None = None, realization_evidence: str | None = None) -> dict:
+    d = {"id": cd_id, "title": f"Decision {cd_id}", "state": state, "gates": gates or []}
+    if realization_evidence is not None:
+        d["realization_evidence"] = realization_evidence
+    return d
 
 
 def _state_from_doc(doc_dict: dict) -> PlatformRoadmapState:
@@ -916,6 +919,41 @@ class TestBlockedOnCd:
         result = _state_from_doc(doc).blocked_on_cd()
         assert len(result) == 1
         assert result[0]["blocking_cds"] == sorted(result[0]["blocking_cds"])
+
+
+# ---------------------------------------------------------------------------
+# TestRatifiableCds -- candidate-decision-ratification lane surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestRatifiableCds:
+    def test_defaults_to_none_and_excluded(self) -> None:
+        doc = _doc(candidate_decisions=[_cd("CD.1")])
+        result = _state_from_doc(doc).ratifiable_cds()
+        assert result == []
+
+    def test_pending_with_evidence_included(self) -> None:
+        doc = _doc(candidate_decisions=[_cd("CD.6", realization_evidence="Realized 2026-05-28: ...")])
+        result = _state_from_doc(doc).ratifiable_cds()
+        assert len(result) == 1
+        assert result[0]["id"] == "CD.6"
+        assert result[0]["realization_evidence"] == "Realized 2026-05-28: ..."
+
+    def test_ratified_with_evidence_excluded(self) -> None:
+        doc = _doc(candidate_decisions=[_cd("CD.36", state="ratified", realization_evidence="already ratified")])
+        result = _state_from_doc(doc).ratifiable_cds()
+        assert result == []
+
+    def test_pending_without_evidence_excluded(self) -> None:
+        doc = _doc(candidate_decisions=[_cd("CD.29")])
+        result = _state_from_doc(doc).ratifiable_cds()
+        assert result == []
+
+    def test_present_in_to_preflight_dict(self) -> None:
+        doc = _doc(candidate_decisions=[_cd("CD.6", realization_evidence="Realized")])
+        full = _state_from_doc(doc).to_preflight_dict()
+        assert "ratifiable_cds" in full
+        assert [c["id"] for c in full["ratifiable_cds"]] == ["CD.6"]
 
 
 # ---------------------------------------------------------------------------

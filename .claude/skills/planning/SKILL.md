@@ -289,6 +289,43 @@ When writing Verification Plan steps, ask: "If this feature had a subtle bug (wr
 - Terraform-only: "Confirm `terraform apply` succeeded" -- infrastructure existing is not enough
 - Prose-only VP step: VP step describes what to check but has no executable command -- the implement agent will substitute a weaker check
 
+## Candidate Decision Ratification (Workflow Step 5b, when the plan realizes/ratifies a CD)
+
+Fires when the plan's scope realizes the work a pending `candidate_decision` (CD.NN) gates, OR the
+CD was surfaced by `/orient`'s "Ratifiable CDs" subsection (`platform_roadmap.ratifiable_cds` --
+pending CDs carrying `realization_evidence`). Ratification is a first-class lane shared across
+`/orient` (surface), `/plan` (draft, this section), and `/implement` (execute) -- see
+`docs/contracts/candidate-decision-ratification.yaml` for the canonical shape and referential guard
+this drafting step must satisfy.
+
+**Protocol:**
+1. Confirm the CD's `realization_evidence` (or equivalent corroborating evidence gathered this
+   session) actually establishes the gated work is realized/live -- do not draft a ratification for
+   a forward-intent CD (Decision 55: no unilateral judgement calls; a CD with no realization
+   evidence is not a ratification candidate, full stop).
+2. Add a **ratification block** to the plan (own section, distinct from `scope`/`execution_steps`)
+   containing:
+   - The full drafted Decision text (title, body, any amendments to other Decisions/CDs it
+     narrows or supersedes) -- including explicit **reversal conditions** if the ratified state
+     could later be undone (e.g. a swap-back to a prior architecture). A ratification with no
+     reversal conditions when the realized state is reversible is incomplete.
+   - The exact `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (or
+     `--file-decision` single-row alternative) command sequence /implement will run.
+   - The exact roadmap-flip diff: `state: ratified` + `ratified_as: dec-NNN` + `filed_via:
+     ops_decisions:dec-NNN` (canonical shape; same NNN in both fields) on the target CD entry.
+3. This is a DRAFT only. Do not run the portal write or the roadmap flip during `/plan` --
+   Decision 105 / the plan's own constraints reserve execution for `/implement` behind an
+   execution-time human confirmation gate. Planning-time writes here would make the Step 6b
+   confirmation gate meaningless (the write would already be done before the human signs off).
+4. The Step 6b Confirmation Gate (below) and the Critique Gate (Workflow Step 9) ARE the human
+   sign-off on the drafted Decision text -- do not add a separate approval step. If Decision-Scout
+   (Step 6a) flags a contradiction with the drafted text, resolve it before presenting.
+
+**Numbering-race note:** decision numbers are not reserved at draft time. Re-check the current max
+`## Decision NNN:` header in `docs/DECISIONS.md` at `/implement` execution time -- a concurrent PR
+may have claimed the drafted number. The referential guard (`validate_candidate_decision_ratification`)
+catches any resulting header mismatch, so shifting to the next free number at execution time is safe.
+
 ## Decision Scout Gate (Workflow Step 6a, pre-presentation)
 
 This gate fires BEFORE Step 6b's presentation to the human. Its job is to surface any active decisions the proposed approach must cite, contradict, or pivot around -- without paying the 25k-token cost of loading `docs/DECISIONS.md` into the planning agent.

@@ -2099,8 +2099,8 @@ def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
     Keeps the planning agent's payload lean; blocked_on_cd and gate_evaluations are absent.
 
     full (full=True -- used by /orient): entire computed state including in_progress, blocked,
-    active_tier, blocked_on_cd, and gate_evaluations. Uses .get() defaults so product_roadmap
-    (no candidate_decisions / cross_tier_gates) is unaffected (Decision 93).
+    active_tier, blocked_on_cd, ratifiable_cds, and gate_evaluations. Uses .get() defaults so
+    product_roadmap (no candidate_decisions / cross_tier_gates) is unaffected (Decision 93).
     """
     if full:
         return {
@@ -2110,6 +2110,7 @@ def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
             "blocked": state.get("blocked", []),
             "active_tier": state.get("active_tier"),
             "blocked_on_cd": state.get("blocked_on_cd", []),
+            "ratifiable_cds": state.get("ratifiable_cds", []),
             "gate_evaluations": state.get("gate_evaluations", []),
         }
     return {
