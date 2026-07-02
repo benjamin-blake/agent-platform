@@ -92,9 +92,7 @@ def validate_candidate_decision_ratification(failed: list[str]) -> None:
                 issues.append(f"  FAIL: {cd.id} is state=ratified but neither ratified_as nor filed_via names a dec-NNN")
                 continue
             if ratified_num is not None and filed_num is not None and ratified_num != filed_num:
-                issues.append(
-                    f"  FAIL: {cd.id} ratified_as (dec-{ratified_num}) disagrees with filed_via (dec-{filed_num})"
-                )
+                issues.append(f"  FAIL: {cd.id} ratified_as (dec-{ratified_num}) disagrees with filed_via (dec-{filed_num})")
                 continue
             if dec_num not in header_numbers:
                 issues.append(
@@ -107,4 +105,5 @@ def validate_candidate_decision_ratification(failed: list[str]) -> None:
             print(issue)
         failed.append("Candidate decision ratification guard")
     else:
-        print(f"  PASS: all non-superseded candidate_decisions carry the canonical shape ({len(header_numbers)} decision headers indexed).")
+        n = len(header_numbers)
+        print(f"  PASS: all non-superseded candidate_decisions carry the canonical shape ({n} headers indexed).")
