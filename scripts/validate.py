@@ -79,6 +79,7 @@ from scripts.checks.contracts.validate_intent_doc_freeze import validate_intent_
 from scripts.checks.contracts.validate_no_underscore_instructions import (  # noqa: F401,E402
     validate_no_underscore_instructions,
 )
+from scripts.checks.contracts.validate_portal_drift import validate_portal_drift  # noqa: F401,E402
 from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_compliance  # noqa: F401,E402
 from scripts.checks.deps.validate_dependency_graph_freshness import (  # noqa: F401,E402
     validate_dependency_graph_freshness,

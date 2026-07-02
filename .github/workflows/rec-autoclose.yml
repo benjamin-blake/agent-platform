@@ -19,6 +19,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Detect DECISIONS.md change
+        id: detect-decisions
+        run: |
+          if ! git rev-parse HEAD^ >/dev/null 2>&1; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^ HEAD | grep -qx 'docs/DECISIONS.md'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -107,4 +120,25 @@ jobs:
                   exit_code = 1
 
           sys.exit(exit_code)
+          PYEOF
+
+      - name: Backfill decisions to warehouse
+        if: steps.detect-decisions.outputs.changed == 'true'
+        env:
+          DUCKLAKE_WRITER_URL: ${{ secrets.DUCKLAKE_WRITER_URL }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          .venv/bin/python << 'PYEOF'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, os.environ.get("GITHUB_WORKSPACE", str(Path.cwd())))
+
+          from scripts.ops_data_portal import backfill_decisions_from_md
+
+          result = backfill_decisions_from_md()
+          print(f"rec-autoclose: DECISIONS.md backfill result: {result}")
+          sys.exit(1 if result["failed"] else 0)
           PYEOF

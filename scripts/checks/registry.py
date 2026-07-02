@@ -166,6 +166,7 @@ def full_sequence() -> list[Step]:
         _c("validate_differential_gate_baseline"),
         _c("validate_intent_doc_freeze"),
         _c("validate_contract_drift"),
+        _c("validate_portal_drift"),
         _c("validate_rec_relevance_contract"),
         _c("validate_field_semantics_drift"),
         _c("validate_ci_rca_taxonomy"),
