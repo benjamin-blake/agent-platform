@@ -1,0 +1,280 @@
+schema_version: 1
+slug: "provisional-contract-alarm"
+intent: >-
+  Close audit finding ULF-07 by making the three provisional_v0 Class B DuckLake contracts'
+  re-ratification alarm actually fire, so a governance-state transition (a contract due for
+  ratification review) surfaces deterministically in preflight instead of accruing silently
+  against a dead alarm.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-provisional-contract-alarm.yaml
+phase: >-
+  Platform tier_item T1.12 (Ratify Class B Lambda verb contracts); closes new exit criterion
+  T1.12:c6 (live-alarm wiring). Audit finding ULF-07 (audits/unclosed-loops-44ef5c6.yaml).
+scope:
+  - file: scripts/contracts_enforcement.py
+    action: Modify
+    purpose: >-
+      Add default_provisional_metrics(doc, now=None) (credential-free per-contract days-since
+      computation from provisional_v0.first_production_invocation_date) and
+      check_re_ratification_trigger(doc) (semantic schema validator for the trigger format).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Wire _scan_provisional_contracts to compute metrics PER CONTRACT via the default provider.
+      NET-ZERO SLOC (Decision 102: file is pinned at 1857/1857) -- the computation lives in
+      contracts_enforcement.py; this file gains only a per-contract call and a signature change.
+  - file: scripts/checks/contracts/validate_contract_drift.py
+    action: Modify
+    purpose: Call check_re_ratification_trigger in Pass 1 (runs in both --pre and full tiers).
+  - file: docs/contracts/ducklake_writer.yaml
+    action: Modify
+    purpose: >-
+      Add provisional_v0.first_production_invocation_date "2026-06-08"; rewrite surfacing_note to
+      state the time-based alarm is live and the production_invocations condition is dormant-pending-telemetry.
+  - file: docs/contracts/ducklake_reader.yaml
+    action: Modify
+    purpose: Add first_production_invocation_date "2026-06-08"; rewrite surfacing_note (same as writer).
+  - file: docs/contracts/ducklake_maintenance.yaml
+    action: Modify
+    purpose: >-
+      Add first_production_invocation_date "2026-06-22" (T2.18 go-live); rewrite surfacing_note
+      (maintenance has no traffic condition -- fully live on the 90-day clock).
+  - file: tests/test_contracts_enforcement.py
+    action: Modify
+    purpose: >-
+      Cover default_provisional_metrics (fired/not-fired via injected now; absent/malformed date -> {})
+      and check_re_ratification_trigger (valid/malformed/missing-date/non-provisional; live contracts pass).
+  - file: tests/test_session_preflight_contracts.py
+    action: Modify
+    purpose: >-
+      Update to the per-contract provider signature; add a synthetic past-dated contract that surfaces via
+      the DEFAULT provider and a recent-dated one that does not; keep empty-dir and non-provisional cases.
+  - file: tests/test_validate_contract_drift.py
+    action: Modify
+    purpose: >-
+      Add a malformed-re_ratification_trigger fixture that fails the gate; assert a valid provisional
+      contract and the three real contracts pass.
+bundled_recommendations: []
+closes_criteria:
+  - "T1.12:c6"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A synthetic provisional_v0 contract whose first_production_invocation_date is far enough in the past
+    that a days_since_first_production_invocation condition is met is returned by _scan_provisional_contracts
+    (and thus report["provisional_contracts_due"]) under the DEFAULT provider; a recent-dated one is excluded.
+  - >-
+    default_provisional_metrics computes days_since_first_production_invocation from the contract date + an
+    injected now (unit-tested fired and not-fired), returns {} when the date field is absent or unparseable,
+    and supplies NO production_invocations key (traffic condition stays dormant).
+  - >-
+    check_re_ratification_trigger rejects a re_ratification_trigger whose first_of holds an unparseable
+    condition (bad LHS / missing '>=' / non-int) or a days_since condition lacking
+    first_production_invocation_date, and accepts the three live contracts.
+  - >-
+    Each of ducklake_writer/reader/maintenance carries first_production_invocation_date and an updated
+    surfacing_note describing the live time-based alarm; validate_contract_drift passes on them in both tiers.
+  - >-
+    scripts/session_preflight.py non-blank SLOC is unchanged at 1857 (validate_sloc_limits green; no budget
+    raise); scripts/validate.py is not modified.
+  - >-
+    T1.12 exit criterion c6 is closed (status met, met_by provisional-contract-alarm) on the verified VP pass;
+    T1.12 stays in_progress (c1-c5 remain open, gated on CD.25).
+  - "bin/venv-python -m scripts.validate --pre and bin/venv-python -m scripts.validate both exit 0."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the contracts_enforcement unit tests -- default_provisional_metrics fired (past date + injected
+      now -> days_since >= threshold) and not-fired (recent date), plus check_re_ratification_trigger
+      accept/reject cases.
+    command: bin/venv-python -m pytest tests/test_contracts_enforcement.py -q
+    expected: >-
+      All pass; a past-dated contract yields days_since >= threshold (met) and a recent-dated one does not;
+      malformed triggers and days_since-without-date are rejected; the three live contracts return no error.
+    fix_if: >-
+      A fired case returns no metric or the wrong sign (date arithmetic bug), or the schema check passes a
+      malformed trigger (no-op validation) -- fix default_provisional_metrics / check_re_ratification_trigger.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the session_preflight provisional-contract scan tests -- a synthetic past-dated contract surfaces
+      via the DEFAULT provider (proving the wiring); a recent-dated one does not; empty dir returns [].
+    command: bin/venv-python -m pytest tests/test_session_preflight_contracts.py -q
+    expected: The past-dated fixture appears in _scan_provisional_contracts output; the recent one does not.
+    fix_if: >-
+      The default (no-provider) path returns nothing for a past-dated contract (provider not wired) or errors
+      on the per-contract signature change -- fix _scan_provisional_contracts.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the drift-gate tests -- a malformed re_ratification_trigger fixture produces a Contract-drift
+      failure; a valid provisional contract and the three real contracts produce none.
+    command: bin/venv-python -m pytest tests/test_validate_contract_drift.py -q
+    expected: The malformed fixture fails; the valid provisional contract and the three live contracts pass.
+    fix_if: >-
+      The check fails to reject a malformed trigger, or wrongly rejects the live contracts (over-strict) --
+      e.g. flags the authored production_invocations condition. Fix the check or its wiring in Pass 1.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run session_preflight end-to-end and confirm the scan ran without error and the field is present
+      (integration: the default per-contract provider is actually invoked, no regression).
+    command: >-
+      bin/venv-python -m scripts.session_preflight && bin/venv-python -c "import json;
+      r=json.load(open('logs/.preflight-report.json'));
+      assert isinstance(r['provisional_contracts_due'], list);
+      print('provisional_contracts_due =', r['provisional_contracts_due'])"
+    expected: >-
+      Exit 0; prints the list. Likely [] today (real thresholds not yet met: writer/reader ~24 of 60 days,
+      maintenance ~10 of 90) -- the alarm is armed, not necessarily firing. No exception from the provider.
+    fix_if: The scan raises (signature or date-parse bug) or provisional_contracts_due is missing.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the fast validate tier -- includes validate_contract_drift (new schema check), validate_sloc_limits
+      (session_preflight.py still 1857), and validate_platform_roadmap (c6 + closes_criteria resolve).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS.
+    fix_if: >-
+      SLOC breach (session_preflight.py grew -- relocate more logic to contracts_enforcement.py), drift-gate
+      failure on the live contracts, or a closes_criteria referential failure on T1.12:c6.
+  - step: 6
+    phase: pre-deploy
+    action: Run the full validate tier -- mypy, 100% coverage of modified files, all registered checks.
+    command: bin/venv-python -m scripts.validate
+    expected: PASS.
+    fix_if: >-
+      Coverage gap on the new functions (add tests in the dedicated test files) or a mypy regression on the
+      metrics_provider signature change.
+constraints:
+  - >-
+    Decision 55 (alarm-not-gate): provisional_contracts_due SURFACES contracts for human ratification review
+    only -- it must not auto-graduate, auto-remediate, or file recs, and the fired path stays advisory
+    (non-blocking). Only the YAML well-formedness check (check_re_ratification_trigger) may gate CI.
+  - >-
+    Decision 102 (SLOC ratchet): scripts/session_preflight.py is pinned at 1857 SLOC with no room. The change
+    MUST be net-zero there -- the date/metric computation lives in scripts/contracts_enforcement.py. No budget raise.
+  - >-
+    Decision 104: keep new logic in scripts/contracts_enforcement.py + scripts/checks/contracts/; do NOT modify
+    scripts/validate.py (registry dispatch untouched). New lines reach 100% coverage from
+    tests/test_contracts_enforcement.py and tests/test_validate_contract_drift.py.
+  - >-
+    Decision 84 / Decision 88 / Decision 95: _scan_provisional_contracts stays no-credentials, local-files-only
+    -- zero warehouse reads, zero Neon/CloudWatch egress. production_invocations stays dormant pending the
+    invocation telemetry that re-lands at T2.36 (Decision 84 Phase 4; Decision 95 telemetry model).
+  - >-
+    Decision 81 (CD.33) / Decision 91: contract edits touch ONLY provisional_v0 metadata
+    (first_production_invocation_date, surfacing_note). The verb surface, governance, and runtime architecture
+    are untouched; status stays provisional_v0 (no transition).
+  - >-
+    CD.25 amendment semantics (check_amendment_for_diff -- NOT Decision 95): the provisional_v0 field-add +
+    surfacing_note edit are additive/non-breaking. check_amendment_for_diff inspects only contract.description and
+    per-field description/semantics (none change; the edits live inside the provisional_v0 dict) and status stays
+    provisional_v0, so no amendment_log entry is required and validate_contract_drift Pass 2 stays green.
+  - "Decision 86: no new prose docs; forward intent -> T1.12 criterion c6, field semantics -> the contracts."
+  - "Do NOT file recommendations (task directive). Direct execution."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "ruff line length 127; type hints required; no emojis; bin/venv-python for all Python invocations."
+  - >-
+    Out of scope: the terminal graduation of the contracts to status: ratified (post-CD.25, delivered by the
+    ULF-02 ratification lane). T1.12:c1-c5 stay open.
+context:
+  - >-
+    Audit finding ULF-07 (audits/unclosed-loops-44ef5c6.yaml): the three provisional_v0 Class B contracts carry
+    re_ratification_trigger conditions but session_preflight passes metrics=None to evaluate_provisional_trigger,
+    so the alarm is dormant by construction; each contract's surfacing_note documents this.
+  - >-
+    _scan_provisional_contracts (scripts/session_preflight.py:2152) already accepts a metrics_provider param but
+    the production call site (line 1997) passes none. evaluate_provisional_trigger (contracts_enforcement.py:180)
+    skips conditions whose metric is absent (fail-safe, no false positives).
+  - >-
+    The metric vocabulary is closed: _CONDITION_LHS = {production_invocations, days_since_first_production_invocation};
+    _parse_condition supports '>=' only with an int RHS.
+  - >-
+    Design: default_provisional_metrics(doc, now) computes days_since from a new provisional_v0
+    first_production_invocation_date field. first_of OR-semantics makes the time condition a live backstop, so all
+    three alarms arm today even though none fires yet (writer/reader ~24 of 60 days; maintenance ~10 of 90).
+  - >-
+    Recommendation assessed at planning time (Option A real-metrics vs Option B deterministic-downgrade): the
+    hybrid -- wire the deterministic time metric now (credential-free), keep production_invocations authored-but-
+    dormant until a telemetry-backed provider is injected at T2.36. Stripping the traffic conditions was rejected
+    (reader's low 2000 threshold exists because it is the hottest path and may already be past threshold).
+  - >-
+    Decision-scout gate verdict FLAGS_FOUND (both accepted by the human): Decision 102 (SLOC -- resolved by
+    relocating the computation to contracts_enforcement.py, net-zero in session_preflight.py) and Decision 104
+    (coverage mapping -- resolved by keeping logic in enforcement/checks and covering it from the dedicated test files).
+  - >-
+    closes_criteria: [T1.12:c6] requires c6 to exist at plan-commit (validate_platform_roadmap check iii). c6 is
+    added (status: open) to ROADMAP-PLATFORM.yaml in THIS plan's commit as human-confirmed roadmap bookkeeping
+    (implements nothing); /implement flips it to met on the verified VP pass. T1.12 stays in_progress.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no scope file
+    overlapped main_files_changed_since_branch; no rebase deferral.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/provisional-contract-ratification-90s0f8)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md scanned via the decision-scout gate (Decisions 55/84/81/91/88/86/95/102/104 surfaced)"
+  - "All 9 scope files located and readable"
+  - "Acceptance criteria understood and verifiable"
+  - "Net-zero SLOC plan for session_preflight.py confirmed (computation relocated to contracts_enforcement.py)"
+execution_steps:
+  - >-
+    scripts/contracts_enforcement.py: add default_provisional_metrics(doc, now=None) -> dict[str, Any]. Read
+    provisional_v0.first_production_invocation_date (ISO); compute days_since_first_production_invocation =
+    max(0, (now or datetime.now(timezone.utc)).date() - date.fromisoformat(first_date)).days; return {} when the
+    field is absent or unparseable (fail-safe); supply NO production_invocations key. No module-level I/O; no raise at import.
+  - >-
+    scripts/contracts_enforcement.py: add check_re_ratification_trigger(doc) -> list[str]. For provisional_v0
+    contracts, require re_ratification_trigger.first_of to be a non-empty list of strings, each parseable via
+    _parse_condition (else an error naming the bad condition); if any condition references
+    days_since_first_production_invocation, require provisional_v0.first_production_invocation_date present and a
+    valid ISO date (else an error). Non-provisional or missing provisional_v0 -> [].
+  - >-
+    scripts/session_preflight.py: make _scan_provisional_contracts compute metrics PER CONTRACT with NET-ZERO SLOC.
+    Change the metrics_provider annotation to Callable[[Any], dict[str, Any] | None] | None (per-contract; use Any
+    to avoid importing ContractDocument). Add default_provisional_metrics to the existing local import line; remove
+    the pre-loop metrics= line and inside the loop set metrics = metrics_provider(doc) if metrics_provider else
+    default_provisional_metrics(doc). Update the docstring in place (same line count). Also refresh the now-stale
+    comments at the call site (lines ~1994-1996: "the metrics provider returns None and nothing fires" / "subset f
+    deferral") to describe the live default days-since provider -- comment lines are SLOC-free. The line-1997 call
+    site stays _scan_provisional_contracts(). Keep both touched code lines under 127 chars and the docstring at the
+    same non-blank line count; run bin/venv-python -m scripts.validate --pre right after this edit as the cheapest
+    SLOC guard (net non-blank line count must stay 1857).
+  - >-
+    scripts/checks/contracts/validate_contract_drift.py: import check_re_ratification_trigger and call it in Pass 1
+    (per-file loop) like check_required_inline_fields, appending "Contract drift: {p.name}: {err}" per error.
+  - >-
+    docs/contracts/ducklake_writer.yaml + ducklake_reader.yaml: add provisional_v0.first_production_invocation_date
+    "2026-06-08"; rewrite surfacing_note to state the time-based alarm is LIVE (session_preflight computes days_since
+    deterministically and surfaces the contract when >= threshold) and the production_invocations condition remains
+    dormant pending invocation telemetry (T2.36 / Decision 84 Phase 4); drop the "DORMANT ... passes no metrics" and
+    "NOT schema-validated" language. Leave re_ratification_trigger.first_of unchanged.
+  - >-
+    docs/contracts/ducklake_maintenance.yaml: add first_production_invocation_date "2026-06-22"; rewrite
+    surfacing_note analogously (no traffic condition -- fully live on the 90-day clock).
+  - >-
+    tests/test_contracts_enforcement.py: cover default_provisional_metrics (fired via past date + injected now;
+    not-fired via recent date; absent/malformed date -> {}) and check_re_ratification_trigger (valid -> []; unparseable
+    condition -> error; days_since without first_production_invocation_date -> error; non-provisional -> []; the three
+    live contracts -> []). 100% of new lines.
+  - >-
+    tests/test_session_preflight_contracts.py: update to the per-contract provider signature; add a synthetic
+    past-dated provisional contract that surfaces via the DEFAULT provider and a recent-dated one that does not; keep
+    the empty-dir and non-provisional cases.
+  - >-
+    tests/test_validate_contract_drift.py: add a fixture contract with a malformed re_ratification_trigger (bad
+    condition and/or missing date) asserting a Contract-drift failure; assert the gate passes on a valid provisional
+    contract and confirm the three real contracts still pass.
+  - >-
+    Execute the Verification Plan -- run each step; loop until green. On an unrecoverable failure STOP and RCA
+    (Decision 55); do not add rescue loops or workarounds.
+  - >-
+    Roadmap bookkeeping (closes_criteria walk): on the verified VP pass, flip T1.12 exit criterion c6 status open ->
+    met (met_by: provisional-contract-alarm). Do NOT flip T1.12 item status (stays in_progress; c1-c5 CD.25-gated).
+  - "Report: what changed, VP results, and confirmation that session_preflight.py SLOC is unchanged at 1857."
+work_areas: []
+rollback: >-
+  Revert the branch commit(s); no infrastructure or data-plane changes. The only stateful edit is
+  docs/ROADMAP-PLATFORM.yaml (c6); reverting removes it. No warehouse writes occur.
