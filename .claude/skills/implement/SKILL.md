@@ -97,6 +97,15 @@ Acceptance commands prove the code landed (e.g. `grep` or `pytest`). Verificatio
    d. If **FAIL**: diagnose root cause, fix the code, re-run `pytest` to confirm no regressions, re-attempt. Maximum 3 fix attempts per step. If still failing, STOP and report to the human.
 2. **All verification steps must pass** before proceeding.
 
+### Nondeterminism rule (VF-08, Decision 55 -- RCA-first, not retry-into-green)
+Track Attempts per step (see VP Compliance Gate below). This rule governs what a re-run is allowed to mean:
+- If a step **FAILS** and is then re-run with an **EMPTY `git diff`** since the prior attempt (i.e. nothing in the tree changed) and the re-run goes green, the step is **NONDETERMINISTIC** -- record it as NONDETERMINISTIC in the VP compliance table, never as PASS. An empty-diff green is evidence the failure was flaky, not fixed, and a silent PASS would hide that.
+- Re-runs stay capped at the existing 3-fix-attempt bound. The nondeterminism rule does not license looping toward green -- it only names what an unexplained green means. On a NONDETERMINISTIC result, STOP and surface to the human (Decision 55: RCA-first, no rescue loops).
+- A genuine fix requires a real code change (a **non-empty** `git diff` since the prior attempt). After such a change, the step must pass **two consecutive times** to count as PASS. These two confirmation passes verify an ALREADY-APPLIED fix and are **not** additional fix attempts -- they do not consume the 3-attempt fix budget, which governs diagnose-and-change cycles only.
+- **Interactive-era alarm (now):** while the executor is frozen (Decision 67) a human is present at every `/implement` run, so the alarm is stop-and-surface-to-human. Files nothing.
+- **Forward-note (T3.19):** when the executor goes live (CD.17 reversal), this alarm flips to auto-file a rec via `scripts.ops_data_portal` (Decision 84), matching the executor-era quarantine-that-files-a-rec pattern (CD.29). Tracked as tier_item T3.19 (`deferred_post_mvp`) -- do not implement the auto-file path now.
+- **Distinguish from declared non-determinism:** a VP step's DETECTED nondeterminism (this rule -- an agent-observed flaky re-run) is not the same thing as a verifier's DECLARED `Hermeticity.NON_HERMETIC_BY_CONSTRUCTION` property (a typed, audited characteristic of the verifier itself). Never silently relabel a detected-flaky VP step as "expected non-hermetic behavior" to justify passing it -- the two are orthogonal, and only the latter is a designed exemption.
+
 ### Tier-Specific Guidance
 - **V1:** Parse configs, check doc links, confirm formatting. Quick but mandatory.
 - **V2:** Run the changed code path with real (non-mocked) input. Confirm the feature works outside the test harness.
@@ -115,12 +124,16 @@ If the failure is due to missing credentials or infrastructure, the agent MUST:
 ### VP Compliance Gate
 Before proceeding to code review (Step 5), produce a VP compliance table in the chat output:
 ```
-| VP# | Command Executed | Actual Output (truncated) | PASS/FAIL |
+| VP# | Command Executed | Actual Output (truncated) | Attempts | PASS/FAIL |
 ```
 - The "Command Executed" must be the actual shell command run.
+- The "Attempts" column records the number of executions of that step (1 = first-try pass; a step that failed once and then passed on re-run records 2, etc.). This is the per-step attempt count referenced by the nondeterminism rule below.
+- Bound each "Actual Output" cell: truncate to roughly 200 characters (or head+tail lines for multi-line output) so the table stays a compact, pasteable artifact rather than a full transcript dump.
+- PASS/FAIL is not the only allowed status: a step whose green result is flagged by the nondeterminism rule (see Live Verification Protocol Protocol subsection) is recorded as NONDETERMINISTIC, never as PASS.
 - If ANY row is FAIL, do NOT proceed.
 - If a VP step was skipped or is awaiting a human-gated action (e.g., terraform apply), mark it BLOCKED and wait.
 - Lack of AWS credentials is NOT automatically a block. Verify the static-key chain with `aws sts get-caller-identity --profile agent_platform`; there is no interactive login to run (refresh `~/.aws/credentials` if `agent_static` was rotated).
+- This table is the proof artifact: per the IMPLEMENTATION Commit Flow below, it is appended to the PR body verbatim (with its Attempts column and any NONDETERMINISTIC markers) so the executed evidence survives past the chat transcript.
 
 ### V3 Merge Gate
 If the Verification Plan contains V3 post-deploy steps, execute the full sequence:
@@ -129,6 +142,7 @@ If the Verification Plan contains V3 post-deploy steps, execute the full sequenc
 2. Present the deploy output.
 3. WAIT for human confirmation of deployment success.
 4. Execute post-deploy VP steps.
+5. **Post the post-deploy evidence to the PR** (body or comment) before merge: the live invocation output AND a run URL (e.g. the CloudWatch/Step Functions/Lambda invocation URL, or the GitHub Actions run URL). This replaces grep-your-own-transcription as the machine-checkable record of a V3 claim (Decision 103: closure needs a proof, not a self-assertion). Do NOT merge a V3 plan without this posted evidence artifact -- code-review checks for it (see the code-review skill's V3 Post-Deploy Evidence check).
 Only when ALL steps pass can you proceed to code review.
 
 
@@ -421,7 +435,7 @@ git rebase origin/main   # STOP on conflict
 git push -u origin HEAD   # this session's harness branch
 ```
 Then via GitHub MCP (owner/repo from `git remote get-url origin`):
-1. Build the PR body. If the plan `bundled_recommendations` list is non-empty, add the `Resolves: rec-NNNN[, rec-MMMM]` trailer in the PR body, which the squash-merge commit body inherits -- per AGENTS.md `### Resolves: trailer` (triggers `rec-autoclose` to close each named rec after the squash-merge lands on main). If empty, omit it.
+1. Build the PR body. If the plan `bundled_recommendations` list is non-empty, add the `Resolves: rec-NNNN[, rec-MMMM]` trailer in the PR body, which the squash-merge commit body inherits -- per AGENTS.md `### Resolves: trailer` (triggers `rec-autoclose` to close each named rec after the squash-merge lands on main). If empty, omit it. Under a clear heading (e.g. `## VP Compliance`), append the VP compliance table to the PR body -- the same bounded table produced by the VP Compliance Gate, including the Attempts column and any NONDETERMINISTIC markers -- so the executed proof lands in the PR/merge record instead of vanishing chat (Decision 115: this PR-body table is PR-scoped ephemeral evidence, not the durable record -- the durable record is the tier_item criterion closure in the roadmap, staged by the bookkeeping walk below).
 2. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="feat({slug}): {brief-description}", body=<body from step 1>)`
 3. `mcp__github__subscribe_pr_activity(...)`; end the turn (see "Wait-for-CI").
 4. On green wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.

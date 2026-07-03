@@ -6885,26 +6885,31 @@ tier_items:
       - scripts/checks/ci_guards/validate_vp_replay.py    # new -- registered check that independently re-executes a PR plan's hermetic pre-deploy VP steps
       - scripts/validate.py
       - .claude/skills/implement/SKILL.md
+      - .claude/skills/code-review/SKILL.md
       - scripts/ops_data_portal.py
     exit_criteria:
       - id: c1
         text: "Every merged feat(...) PR body contains the executed VP compliance table (command, truncated output, attempts, PASS/FAIL); spot-check of the next three merges confirms (VF-07)"
-        status: open
+        status: met
+        met_by: audit-remediation-wave-2-cir8a4
       - id: c2
         text: "A registered check (validate_vp_replay) re-executes a PR plan's hermetic pre-deploy VP steps in pr-validate; a hermetic pre-deploy step that fails on the PR tree cannot go green; non-hermetic steps are declared and excluded (VF-01)"
         status: open
       - id: c3
         text: "A V3 merge without a posted post-deploy evidence artifact (invocation output + run URL) is flagged by code-review (VF-01)"
-        status: open
+        status: met
+        met_by: audit-remediation-wave-2-cir8a4
       - id: c4
-        text: "A synthetic flaky VP step (attempts>1, empty intervening diff) files a rec and marks the step NONDETERMINISTIC in the PR VP table instead of a silent PASS (VF-08)"
-        status: open
+        text: "A synthetic flaky VP step (attempts>1, empty intervening diff) is marked NONDETERMINISTIC in the PR VP table and stop-and-surfaced to the human -- never a silent PASS; the executor-era auto-file-rec alarm is rehomed to T3.19:c1 (VF-08)"
+        status: met
+        met_by: audit-remediation-wave-2-cir8a4
     related_candidate_decisions: [CD.29]
     related_intents: [verification-system]
     effort: M
     strategic: false
-    status: not_started
-    note: "Carrier for VF-01/07/08 (audit f80508b). depends_on T3.17 (VF-13 phase-enum hygiene is prerequisite for VP replay). Derived recs are automatable: false (Decision 44) -- touches the implement skill + validate.py verification machinery."
+    status: in_progress
+    progress_note: "2026-07-03: shipped criteria c1, c3, c4 (PLAN-audit-remediation-wave-2-cir8a4) -- VP compliance table (Attempts column, PR-body posting), V3 post-deploy evidence gate (implement + code-review), and the nondeterminism stop-and-surface rule with the VF-08 auto-file leg rehomed to T3.19. c2 (CI-replay of hermetic pre-deploy VP steps) remains open and is a separate later plan; T3.15 stays in_progress."
+    note: "Carrier for VF-01/07/08 (audit f80508b). depends_on T3.17 (VF-13 phase-enum hygiene is prerequisite for VP replay). Derived recs are automatable: false (Decision 44) -- touches the implement skill + validate.py verification machinery. c4 reconciled 2026-07-03 (PLAN-audit-remediation-wave-2-cir8a4, realized-differently rule): original text 'A synthetic flaky VP step (attempts>1, empty intervening diff) files a rec and marks the step NONDETERMINISTIC in the PR VP table instead of a silent PASS (VF-08)'; the interactive-era slice ships NONDETERMINISTIC-marking + stop-and-surface (files nothing while the executor is frozen, Decision 67); the auto-file-rec alarm is rehomed to T3.19:c1 for the executor era."
 
   - id: T3.16
     tier: T3
@@ -7012,6 +7017,26 @@ tier_items:
     strategic: false
     status: not_started
     note: "Carrier for VF-05/06 (audit f80508b). depends_on T3.1 (the registry + gate logic this item produces entries into). Unblocks T3.7 mutation targets and realizes the VF-11 differential leg (see CD.17 / CD.29 merge-authority clauses). Derived recs are automatable: false (Decision 44) -- touches the implement skill + verification machinery."
+
+  - id: T3.19
+    tier: T3
+    name: Flip interactive VP nondeterminism alarm to auto-file-rec when the executor is live
+    intent: |
+      Post-MVP successor to T3.15 c4 (VF-08): stop-and-surface-to-human while the executor is frozen
+      (Decision 67); flips to auto-file a rec via scripts.ops_data_portal (Decision 84) once live (CD.17).
+    depends_on: []
+    files_in_scope: [.claude/skills/implement/SKILL.md]
+    exit_criteria:
+      - id: c1
+        text: "When the executor is live, a detected NONDETERMINISTIC VP step (attempts>1, empty intervening diff) auto-files a rec via ops_data_portal instead of stop-and-surface; the stop-and-surface forward-note in implement/SKILL.md is replaced by the auto-file path (VF-08 flip)"
+        status: open
+    related_candidate_decisions: [CD.17, CD.29]
+    related_intents: [verification-system]
+    effort: XS
+    strategic: false
+    status: deferred_post_mvp
+    note: "Derived recs are automatable: false (Decision 117); owns the executor-era VF-08 alarm flip while T3.15 ships the interactive-era stop-and-surface behaviour."
+    progress_note: "Parked post-MVP (Decision 93); reactivate to not_started when the executor unfreeze work (CD.17 / T4.x) begins. Records the 2026-07-03 operator decision: stop-and-surface now, auto-file-rec when executor is live."
 
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
   - id: T4.1
