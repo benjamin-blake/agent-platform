@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import time
+from pathlib import Path
 
 from scripts.checks import _common
 from scripts.checks.iam_tf.validate_terraform_try import validate_terraform_try
@@ -366,3 +368,121 @@ def run_coverage_check() -> None:
     for f in uncovered:
         print(f"  - {f}")
     print("\n(Advisory only -- this does not fail the build.)")
+
+
+# --- Fast-tier heavy-dependency test deferral (rec-2485, Decision 104) ---
+#
+# requirements-fast.txt (the pr-validate CI job) deliberately omits heavy wheels
+# (torch/pandas/numpy/pyarrow/duckdb/etc, ~3GB dominant per .github/workflows/ci.yml:49-59).
+# A handful of test files import one of these at module scope, so they can never be
+# collected under the fast tier -- that is a structural, not a regression, signal (Google
+# TAP / Bazel precedent: SKIPPED-dep-unavailable is distinct from FAILED). The classifier
+# below positively identifies that ONE shape and defers it to main-validate (full tier,
+# post-merge); every other collection error or test failure stays hard-red (fail-closed).
+
+# Curated dist-name -> import-name aliases for names that differ; default is
+# name.lower().replace("-", "_").
+_DIST_TO_IMPORT_ALIASES: dict[str, str] = {
+    "scikit-learn": "sklearn",
+    "psycopg2-binary": "psycopg2",
+    "beautifulsoup4": "bs4",
+    "python-ulid": "ulid",
+}
+
+_NO_MODULE_NAMED_RE = re.compile(r"No module named ['\"]([\w.]+)['\"]")
+
+
+def _parse_requirement_dist_names(path: Path) -> set[str]:
+    """Parse a requirements file into bare distribution names.
+
+    Strips comments, extras (`[...]`), environment markers (after `;`), and version specifiers.
+    """
+    names: set[str] = set()
+    if not path.exists():
+        return names
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        line = re.sub(r"\[[^\]]*\]", "", line)
+        line = line.split(";", 1)[0].strip()
+        name = re.split(r"[<>=!~]", line, maxsplit=1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _dist_to_import_name(dist_name: str) -> str:
+    return _DIST_TO_IMPORT_ALIASES.get(dist_name, dist_name.lower().replace("-", "_"))
+
+
+def _excluded_heavy_import_names() -> set[str]:
+    """Import names deliberately excluded from the fast tier.
+
+    Derived at runtime as (requirements.txt distributions) - (requirements-fast.txt
+    distributions), no hard-coded dep list (rec-2485 acceptance).
+    """
+    full = _parse_requirement_dist_names(_common.ROOT / "requirements.txt")
+    fast = _parse_requirement_dist_names(_common.ROOT / "requirements-fast.txt")
+    return {_dist_to_import_name(dist) for dist in full - fast}
+
+
+def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Partition changed test files into (runnable, deferred) via a `--collect-only` probe.
+
+    A file defers ONLY when its collection error's root-cause ModuleNotFoundError names a
+    deliberately-excluded heavy dependency (in requirements.txt, not requirements-fast.txt)
+    that is genuinely absent (`importlib.util.find_spec` is None). Every other shape -- a real
+    test failure, a non-heavy collection error, or a collection error with no "No module named"
+    line at all -- routes to `runnable`, so the subsequent real pytest run reproduces and
+    reddens the genuine failure with full diagnostics (fail-closed).
+    """
+    excluded = _excluded_heavy_import_names()
+    runnable: list[str] = []
+    deferred: list[tuple[str, str]] = []
+    for test_file in changed_tests:
+        result = _common.run(
+            [_common.PYTHON, "-m", "pytest", "--collect-only", "-q", test_file, "-m", "not integration"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=_common.ROOT,
+        )
+        if result.returncode == 0:
+            runnable.append(test_file)
+            continue
+        combined = (result.stdout or "") + (result.stderr or "")
+        matches = _NO_MODULE_NAMED_RE.findall(combined)
+        missing = matches[-1].split(".")[0] if matches else None
+        if missing and missing in excluded and importlib.util.find_spec(missing) is None:
+            deferred.append((test_file, missing))
+            continue
+        runnable.append(test_file)
+    return runnable, deferred
+
+
+def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
+    """Orchestrate the --pre pytest-diff step: partition, warn, run, and report (Decision 104).
+
+    Partitions changed_tests into (runnable, deferred); prints a loud un-swallowable warning
+    per deferred file naming the file and its missing dependency; runs pytest ONLY on the
+    runnable subset (preserving the exit-5/Decision 55 backstop on that subset); does NOT
+    redden the gate when every changed test file legitimately defers.
+    """
+    if not changed_tests:
+        return
+    runnable, deferred = partition_changed_tests_by_collectability(changed_tests)
+    for test_file, missing_dep in deferred:
+        print(
+            f"\n=== DEFERRED TO FULL TIER (main-validate) ===\n"
+            f"{test_file}: cannot collect under the fast tier -- dependency '{missing_dep}' is "
+            "deliberately excluded from requirements-fast.txt. main-validate (full tier) runs "
+            "this file post-merge; a genuine failure there files a source=ci_rca critical rec."
+        )
+    if not runnable:
+        print(f"\nAll {len(deferred)} changed test file(s) deferred to the full tier -- fast-tier gate not reddened.")
+        return
+    print("\n=== Tests (pytest -- explicit changed files) ===")
+    pytest_result = _common.run([_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v"], cwd=_common.ROOT)
+    if pytest_result.returncode != 0:
+        failed.append("Tests (pytest)")

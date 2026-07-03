@@ -53,6 +53,7 @@ from scripts.checks._scaffolding import (  # noqa: F401,E402
     run_dependency_checks,
     run_lint_checks,
     run_precommit_checks,
+    run_pytest_diff,
     run_terraform_checks,
     run_terraform_creds_free,
 )
@@ -373,13 +374,7 @@ def main() -> None:
                     print("mypy: type errors found in changed files (informational - not blocking). Fix progressively.")
 
         def _scaffold_pytest_diff() -> None:
-            if changed_tests:
-                print("\n=== Tests (pytest -- explicit changed files) ===")
-                pytest_result = _common.run(
-                    [_common.PYTHON, "-m", "pytest", *changed_tests, "-m", "not integration", "-v"], cwd=_common.ROOT
-                )
-                if pytest_result.returncode != 0:
-                    failed.append("Tests (pytest)")
+            run_pytest_diff(changed_tests, failed)
 
         def _scaffold_budget_assertion() -> None:
             elapsed = time.monotonic() - _t0
