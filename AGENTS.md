@@ -155,6 +155,18 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 | `roadmap({ids}):` | Roadmap bookkeeping edits |
 | `scope({slug}):` | STRATEGIC plan scoping (currently suspended, Decision 67) |
 
+### Commit signing (CC-web: unsigned is expected)
+- CC-web commits land unsigned (`git log --format=%G?` -> `N`). Signing is not available in this
+  harness and is not required -- treat this as expected, not a defect.
+- Non-blocking: `main-protection` carries no `required_signatures` rule (Decision 83), `claude/*`
+  feature-branch commits are never signature-gated, and GitHub creates and verifies the
+  squash-merge commit server-side (Decision 76).
+- Attribution (`Claude <noreply@anthropic.com>`) is set via git identity and is separate from
+  cryptographic signature -- identity is already correct regardless of the `N` flag.
+- Do NOT reset-author, do NOT `git commit --amend -S`, and do NOT otherwise re-sign to chase the
+  `N` -- it only churns SHAs and wastes effort.
+- See `terraform/github/repo.tf`'s `main_protection` ruleset for the intentional-absence marker.
+
 ### Rebase phase distinction
 - **Assessment time (planning)**: do NOT auto-rebase. When main has diverged and scope files overlap, surface to the human with options (rebase now and re-enter `/plan` / proceed / abort); record any deferral in the plan's Context field. Rebasing mid-plan can silently invalidate scoping decisions.
 - **Commit-flow time (implementing)**: DO auto-rebase before pushing. After the local commit: `git fetch origin main && git rebase origin/main` -- STOP on conflict, surface to the human. If the branch was already pushed, use `--force-with-lease` (never `--force`).
