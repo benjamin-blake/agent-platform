@@ -493,27 +493,27 @@ class TestCD25SchemaAmendments:
     def test_live_platform_yaml_bootstrap_exemption_set(self) -> None:
         """Asserts the per-item bootstrap_completion_exempt set in the live YAML
         matches the canonical expected set verbatim (Part 8C of
-        docs/INTENT-pre-codegen-contract-ratification.md)."""
+        docs/INTENT-pre-codegen-contract-ratification.md).
+
+        close-audit-ulf-02 (2026-07-03): CD.1/CD.2/CD.13/CD.20/CD.21/CD.26 ratified
+        (Decisions 108-113). Strips the 16 discharged items whose gating CDs are now
+        ALL ratified (43 -> 27): T-1.0, T-1.1, T-1.2, T-1.3, T-1.4, T-1.5, T-1.6, T0.2,
+        T0.5, T0.11, T0.14, T2.3, T2.10, T2.12, T2.13, T2.16b. Every other exempt item
+        (still gated by a pending CD.25/CD.10/CD.12/CD.4/CD.5/CD.8/CD.15/CD.34 -- e.g.
+        T0.3 is ALSO gated by pending CD.10, so it stays despite CD.26 ratifying) is
+        retained verbatim.
+        """
         roadmap = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
         doc = load(roadmap)
         expected = {
-            "T-1.0",
-            "T-1.1",
-            "T-1.2",
-            "T-1.3",
-            "T-1.4",
-            "T-1.5",
-            "T-1.6",
             "T0.6",
             "T0.7a",
             "T0.7b",
             "T0.7c",
             "T0.8",
             "T0.9",
-            "T0.11",
             "T0.12",
             "T0.13",
-            "T0.14",
             "T-1.11",
             "T-1.12",
             "T-1.13",
@@ -527,24 +527,18 @@ class TestCD25SchemaAmendments:
             "T0.12.6",
             "T0.12.7",
             # Migration-realized items (platform-roadmap-reconciliation 2026-05-31):
-            # same circular ratification bind as the 29 items above -- T0.7b not yet built.
-            "T0.2",
+            # same circular ratification bind as the items above -- T0.7b not yet built.
             "T0.3",
-            "T0.5",
             "T2.1",
             "T2.2",
-            "T2.3",
-            "T2.10",
-            "T2.13",
             # Scope (c) realized-ahead-of-ratification additions (2026-06-09 roadmap audit
             # integration, finding F-002): items completed under pending gating CDs that
             # ratify post-hoc via the ops portal vehicle. Exemption ends when the gating
-            # CD ratifies (CD.5/CD.8+CD.15/CD.20/CD.34 respectively).
+            # CD ratifies (CD.5/CD.8+CD.15/CD.34 respectively; CD.2/CD.20/CD.21/CD.26 slices
+            # discharged by close-audit-ulf-02, see docstring above).
             "T0.10",
             "T2.4",
             "T2.5",
-            "T2.12",
-            "T2.16b",
             "T2.17",
         }
         actual = {item.id for item in doc.tier_items if item.bootstrap_completion_exempt}
