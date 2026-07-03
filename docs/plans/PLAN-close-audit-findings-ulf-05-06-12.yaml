@@ -1,0 +1,277 @@
+schema_version: 1
+slug: close-audit-findings-ulf-05-06-12
+intent: >-
+  Retire dead substrate residue flagged by the unclosed-loops audit -- the retired Copilot-SDK
+  inference surface (ULF-05), 565 committed executor per-run artifacts (ULF-06), and a stale
+  transient handoff (ULF-12) -- so the machine-readable repository state matches operating reality
+  (agent-first invariant, CD.13/CD.25) and the frozen scheduled-agent + executor rebuild starts from
+  a clean substrate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-close-audit-findings-ulf-05-06-12.yaml
+phase: >-
+  Platform audit-closure (ULF-05/06/12 of audits/unclosed-loops-44ef5c6.yaml). Realizes part of
+  CD.28's Copilot-SDK retirement; supersedes Decision 49 (via new Decision 116) and Decision 44
+  (via new Decision 117); adds Decision 115 (handoff lifecycle); annotates tier_items T4.1/T4.2/T4.3.
+  Not a follow-on to an in_progress item -- user_explicit audit-hygiene.
+scope:
+  # --- ULF-05: non-Lambda Copilot residue (clean) ---
+  - file: .github/workflows/refresh-copilot-multipliers.yml
+    action: Delete
+    purpose: Live monthly cron (contents:write) refreshing multipliers for a retired provider; no live consumer.
+  - file: scripts/copilot_multipliers_refresher.py
+    action: Delete
+    purpose: The refresher script the cron runs; consumers are the workflow (deleted) + its test (deleted).
+  - file: tests/test_copilot_multipliers_refresher.py
+    action: Delete
+    purpose: Tests for the deleted refresher.
+  - file: config/agent/copilot/model_multipliers.yaml
+    action: Delete
+    purpose: Config written by the refresher and validated by validate_copilot_multipliers; both retired. Not Lambda-packaged.
+  - file: scripts/checks/prompts/validate_copilot_multipliers.py
+    action: Delete
+    purpose: Check validating the deleted multipliers config.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Remove validate_copilot_multipliers from pre_sequence (line ~87) and full_sequence (line ~129).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Remove the validate_copilot_multipliers import (line ~145).
+  - file: scripts/ci_rca_tier_map.py
+    action: Modify
+    purpose: Remove validate_copilot_multipliers from _KNOWN_EXTERNAL_DEP_CHECKS (line ~25).
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: Remove the validate_copilot_multipliers function_to_category entry (line ~24) in lockstep with the registry removal.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: Remove the ~24 patch("validate.validate_copilot_multipliers") lines (patching a deleted symbol fails).
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: Update the frozen ordered-sequence equivalence oracle (Decision 104) to drop validate_copilot_multipliers from both tiers.
+  # --- ULF-05: Lambda-entangled Copilot deletion (V3) ---
+  - file: scripts/copilot_wrapper.py
+    action: Delete
+    purpose: Deprecated Copilot CLI wrapper; process-safety utils already relocated to scripts/llm_utils.py.
+  - file: tests/test_copilot_wrapper.py
+    action: Delete
+    purpose: Skipped test for the deleted wrapper.
+  - file: scripts/copilot_sdk_client.py
+    action: Delete
+    purpose: Deprecated Copilot SDK inference client; only consumer is the frozen scheduled_agent_handler (gutted below).
+  - file: tests/test_copilot_sdk_client.py
+    action: Delete
+    purpose: Tests for the deleted SDK client.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: Repoint the deferred kill_process_tree import (line ~160) from scripts.copilot_wrapper to scripts.llm_utils.
+  - file: scripts/checks/deps/validate_imports.py
+    action: Modify
+    purpose: Remove the ("copilot_wrapper", ...) entry from the import-smoke modules list (else the check fails file-not-found).
+  - file: scripts/classify_automatable.py
+    action: Modify
+    purpose: Remove copilot_wrapper.py and tests/test_copilot_wrapper entries; confirm the automatable-classification path still resolves.
+  - file: scripts/checks/misc/validate_invariants.py
+    action: Modify
+    purpose: Remove the now-dangling copilot_wrapper.py exclusion in Check 1 (@file gotcha); check still passes (no other script has the pattern).
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: Remove copilot_sdk_client.py + copilot_wrapper.py from _LAMBDA_SCRIPTS and drop the now-unused _COPILOT_SDK_PACKAGE pin.
+  - file: src/data/handlers/scheduled_agent_handler.py
+    action: Modify
+    purpose: Remove _invoke_copilot_sdk, _invoke_gemini, _get_gemini_api_key, _GEMINI_BYOK_ENDPOINT and the rec-curator copilot/gemini preload guard; restructure dispatch so github-models is retained and copilot-sdk/gemini raise an explicit retired-provider error (no silent misroute); update docstrings.
+  - file: tests/test_scheduled_agent_handler.py
+    action: Modify
+    purpose: Remove/rewrite the copilot-sdk + gemini dispatch tests (~8 copilot_sdk_inference_sync patches); retain github-models coverage; add a retired-provider-raises test.
+  - file: src/lambdas/data-pipeline/manifest.yaml
+    action: Modify
+    purpose: Remove copilot_sdk_client.py + copilot_wrapper.py from includes and the github-copilot-sdk==0.2.3 pip pin (line ~50).
+  - file: src/lambdas/ops-compaction/manifest.yaml
+    action: Modify
+    purpose: Remove copilot_sdk_client.py + copilot_wrapper.py from includes (lines ~10-11).
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: Remove test_build_app_package_installs_copilot_sdk (the SDK is no longer installed).
+  # --- ULF-05: schedule.yaml truthfulness ---
+  - file: .github/agents/schedule.yaml
+    action: Modify
+    purpose: Flip the six enabled:true flags to false to match the DISABLED EventBridge dispatch reality. Do NOT delete (T4.3) or migrate provider fields (Decision 116 realization owned by PLAN-resolve-scheduled-agent-provider).
+  # --- Roadmap edits (ULF-05 + ULF-06 scope notes) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Update CD.28 follow-on inventory (~line 1148) to reflect retired surfaces and the Decision-116
+      routing for PLAN-resolve-scheduled-agent-provider; add T4.3 scope note (schedule.yaml deletion +
+      provider migration still owned; handler copilot/gemini paths now removed; re-enable per Decision 116);
+      add T4.1/T4.2 scope note naming telemetry emission (Decision 59/95) as the replacement for the
+      retired local write sites in scripts/execute_recommendation.py.
+  # --- ULF-06: executor run artifacts ---
+  - file: logs/runs/
+    action: Delete
+    purpose: git rm 551 committed per-run JSON artifacts with zero consumers/rotation/owner.
+  - file: logs/failure-summaries/
+    action: Delete
+    purpose: git rm 14 committed failure-summary artifacts with zero consumers.
+  - file: .gitignore
+    action: Modify
+    purpose: Add logs/runs/ and logs/failure-summaries/ so the frozen executor's writes stay untracked.
+  # --- ULF-12: transient handoff ---
+  - file: docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md
+    action: Delete
+    purpose: Self-destructing transient handoff whose T2.17 apply completed; instructs its own pre-merge deletion.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 115 (transient handoffs ride PR descriptions; docs/handoffs/ document pattern retired; no guard);
+      Decision 116 (Supersedes Decision 49 -- scheduled-agent inference routing: claude -p for judgment-heavy,
+      DeepSeek API via LiteLLM for routine); Decision 117 (Supersedes Decision 44 -- executor self-modification
+      boundary minus the deleted copilot files). Re-check max Decision number at implement time (currently 114).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "Lambda deploy (V3): rebuild + deploy the active data-pipeline and ops-compaction artifacts after copilot files leave the package (Decision 79 per-Lambda gating; blanket freeze lifted). Needs the agent_platform (PlatformDev) profile with Lambda update permissions."
+  - "No terraform/*.tf files in scope; no IAM change; no apply required."
+acceptance_criteria:
+  - "git ls-files finds none of: scripts/copilot_wrapper.py, scripts/copilot_sdk_client.py, scripts/copilot_multipliers_refresher.py, config/agent/copilot/model_multipliers.yaml, scripts/checks/prompts/validate_copilot_multipliers.py, .github/workflows/refresh-copilot-multipliers.yml."
+  - "rg 'copilot_sdk|copilot-sdk' over scripts/ and .github/workflows/ returns nothing; surviving repo hits are confined to .github/agents/schedule.yaml provider fields (T4.3-owned) and historical decision/roadmap/doc text."
+  - "validate_copilot_multipliers is fully removed: absent from scripts/checks/registry.py (both tiers), not imported in scripts/validate.py, absent from scripts/ci_rca_tier_map.py and config/ci_rca_taxonomy.yaml, and the tests/test_checks_registry.py ordered oracle no longer lists it."
+  - "src/data/handlers/scheduled_agent_handler.py imports clean, retains the github-models path, and raises an explicit retired-provider error for provider in {copilot-sdk, gemini} (no silent misroute); tests/test_scheduled_agent_handler.py passes."
+  - "scripts/build_lambda.py, src/lambdas/data-pipeline/manifest.yaml, and src/lambdas/ops-compaction/manifest.yaml no longer reference the two copilot modules or the github-copilot-sdk pip package."
+  - "data-pipeline and ops-compaction rebuild + deploy succeed; invoking the deployed dispatcher returns a JSON summary dict (no ImportError from the removed modules); the deployed package does not contain copilot_wrapper.py or copilot_sdk_client.py."
+  - ".github/agents/schedule.yaml has all six agents enabled: false; schedule.yaml is NOT deleted and provider fields are unchanged."
+  - "git ls-files logs/runs logs/failure-summaries returns 0; .gitignore ignores both paths; scripts/execute_recommendation.py is unchanged (frozen write path)."
+  - "docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md is deleted (docs/handoffs/ is empty)."
+  - "docs/DECISIONS.md contains Decision 115, Decision 116 (Supersedes Decision 49), and Decision 117 (Supersedes Decision 44), each with a Warehouse ID line noting post-merge --backfill-decisions-md sync; Decision numbers are unique and sequential."
+  - "docs/ROADMAP-PLATFORM.yaml: CD.28 inventory reflects the retired surfaces and Decision-116 routing for PLAN-resolve-scheduled-agent-provider; T4.3 and T4.1/T4.2 carry the scope notes; validate_platform_roadmap passes."
+  - "bin/venv-python -m scripts.validate (full tier) is green."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Delete the non-Lambda copilot residue and confirm the files are gone.
+    command: "git rm .github/workflows/refresh-copilot-multipliers.yml scripts/copilot_multipliers_refresher.py tests/test_copilot_multipliers_refresher.py config/agent/copilot/model_multipliers.yaml scripts/checks/prompts/validate_copilot_multipliers.py && for f in .github/workflows/refresh-copilot-multipliers.yml scripts/copilot_multipliers_refresher.py config/agent/copilot/model_multipliers.yaml scripts/checks/prompts/validate_copilot_multipliers.py; do test ! -e \"$f\" || { echo \"STILL PRESENT: $f\"; exit 1; }; done && echo OK"
+    expected: All five paths removed; prints OK.
+    fix_if: A path still exists -- ensure git rm staged it and no leftover copy remains.
+  - step: 2
+    phase: pre-deploy
+    action: Remove the validate_copilot_multipliers cascade (registry both tiers, validate.py import, ci_rca_tier_map, ci_rca_taxonomy, test oracle) and confirm the registry + taxonomy checks pass with it gone.
+    command: "bin/venv-python -c \"from scripts.checks.registry import pre_sequence, full_sequence; names=[getattr(s,'name',str(s)) for s in pre_sequence()+full_sequence()]; assert not any('copilot_multipliers' in n for n in names), 'still registered'; print('registry OK')\" && bin/venv-python -m pytest tests/test_checks_registry.py -q"
+    expected: "registry OK printed; test_checks_registry passes (frozen ordered oracle updated)."
+    fix_if: "Registry still lists the check, or the oracle test fails -- update registry.py sequences and the ordered oracle in test_checks_registry.py together."
+  - step: 3
+    phase: pre-deploy
+    action: Repoint test_coverage_checker to llm_utils and confirm kill_process_tree resolves there.
+    command: "bin/venv-python -c \"from scripts.llm_utils import kill_process_tree; print('llm_utils OK')\" && ! grep -q 'from scripts.copilot_wrapper import' scripts/test_coverage_checker.py && echo 'repoint OK'"
+    expected: "Prints llm_utils OK and repoint OK."
+    fix_if: "Import fails or test_coverage_checker still imports copilot_wrapper -- fix the import site."
+  - step: 4
+    phase: pre-deploy
+    action: Delete copilot_wrapper.py + copilot_sdk_client.py and their tests; confirm no live (non-schedule) import remains and validate_imports no longer references the wrapper.
+    command: "git rm scripts/copilot_wrapper.py tests/test_copilot_wrapper.py scripts/copilot_sdk_client.py tests/test_copilot_sdk_client.py && ! grep -rn 'from scripts.copilot_wrapper\\|import scripts.copilot_wrapper\\|from scripts.copilot_sdk_client\\|import scripts.copilot_sdk_client' scripts/ src/ && echo 'no live imports'"
+    expected: "Files removed; prints 'no live imports' (schedule handler edited in step 5)."
+    fix_if: "A live import remains -- resolve it (repoint or delete the caller) before proceeding."
+  - step: 5
+    phase: pre-deploy
+    action: Gut the handler's copilot-sdk/gemini inference paths (retain github-models; retired providers raise explicit error) and run the handler unit tests.
+    command: "bin/venv-python -c \"import ast; src=open('src/data/handlers/scheduled_agent_handler.py').read(); assert '_invoke_copilot_sdk' not in src and '_invoke_gemini' not in src, 'copilot/gemini paths remain'; assert '_invoke_github_models' in src, 'github-models path lost'; ast.parse(src); print('handler OK')\" && bin/venv-python -m pytest tests/test_scheduled_agent_handler.py -q"
+    expected: "Prints handler OK; handler tests pass."
+    fix_if: "copilot/gemini paths remain, github-models lost, or tests fail -- rework the dispatch restructure and tests."
+  - step: 6
+    phase: pre-deploy
+    action: Remove the copilot files from build_lambda + both manifests, build the package, and assert the two modules are absent from the built artifact.
+    command: "bin/venv-python -m scripts.build_lambda && bin/venv-python -c \"import zipfile,glob,sys; zips=glob.glob('dist/**/*.zip',recursive=True)+glob.glob('build/**/*.zip',recursive=True); bad=[z for z in zips for n in zipfile.ZipFile(z).namelist() if n.endswith(('copilot_wrapper.py','copilot_sdk_client.py'))]; print('packages checked:',len(zips)); sys.exit(1 if bad else 0)\""
+    expected: "Build succeeds; no built zip contains copilot_wrapper.py or copilot_sdk_client.py."
+    fix_if: "Build fails (dangling reference) or a zip still bundles a copilot module -- fix _LAMBDA_SCRIPTS/_COPILOT_SDK_PACKAGE and both manifests."
+  - step: 7
+    phase: post-deploy
+    action: Deploy the two active Lambda artifacts (data-pipeline, ops-compaction).
+    command: "bin/venv-python -m scripts.build_lambda --deploy"
+    expected: "Deploy exits 0; both function code updates report success."
+    fix_if: "Deploy fails -- confirm agent_platform Lambda-update permissions and per-Lambda gating; on unrecoverable failure STOP and RCA (Decision 55)."
+  - step: 8
+    phase: post-deploy
+    action: Invoke the deployed dispatcher and assert it returns a JSON summary dict (handler imported clean; no ImportError from the removed modules).
+    command: "aws lambda invoke --function-name agent-platform-scheduled-agent-dispatcher --payload '{}' --cli-binary-format raw-in-base64-out --profile agent_platform --region eu-west-2 /tmp/ulf05_invoke.json >/tmp/ulf05_meta.json 2>&1; bin/venv-python -c \"import json; m=json.load(open('/tmp/ulf05_meta.json')); assert 'FunctionError' not in m, m; p=json.load(open('/tmp/ulf05_invoke.json')); assert isinstance(p,dict) and 'agents_run' in p, p; print('invoke OK', p)\""
+    expected: "No FunctionError; payload is a summary dict with agents_run/agents_failed keys (agents disabled -> zero run)."
+    fix_if: "FunctionError/ImportError or non-dict payload -- a removed module is still referenced on a live path; fix and redeploy in-session."
+  - step: 9
+    phase: post-deploy
+    action: Confirm the deployed package no longer ships the copilot modules.
+    command: "aws lambda get-function --function-name agent-platform-scheduled-agent-dispatcher --profile agent_platform --region eu-west-2 --query 'Configuration.[LastModified,CodeSha256]' --output text && echo 'deployed sha recorded (compare to freshly built package sha256 from step 6)'"
+    expected: "get-function returns the updated LastModified + CodeSha256 matching the just-deployed build."
+    fix_if: "SHA does not match the freshly built package -- redeploy."
+  - step: 10
+    phase: pre-deploy
+    action: git rm the executor run artifacts, gitignore both paths, and confirm zero tracked files remain.
+    command: "git rm -r --quiet logs/runs logs/failure-summaries && printf 'logs/runs/\\nlogs/failure-summaries/\\n' >> .gitignore && test \"$(git ls-files logs/runs logs/failure-summaries | wc -l)\" -eq 0 && git check-ignore logs/runs/x.json logs/failure-summaries/y.json && echo 'ULF-06 OK'"
+    expected: "Zero tracked files under both dirs; both paths are git-ignored; prints ULF-06 OK."
+    fix_if: "Files still tracked or paths not ignored -- re-run git rm and verify the .gitignore entries."
+  - step: 11
+    phase: pre-deploy
+    action: Confirm the frozen executor write path is untouched and its tests still pass.
+    command: "git diff --quiet -- scripts/execute_recommendation.py && bin/venv-python -m pytest tests/test_execute_recommendation.py -q"
+    expected: "No diff to execute_recommendation.py; executor tests pass (write path still creates dirs at runtime; no committed artifacts read)."
+    fix_if: "execute_recommendation.py changed (out of scope) or tests read committed artifacts -- revert the source change; tests should exercise the write path only."
+  - step: 12
+    phase: pre-deploy
+    action: Delete the handoff, add Decisions 115/116/117, and confirm DECISIONS.md numbering is unique and the supersessions are present.
+    command: "git rm docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md && test -z \"$(ls -A docs/handoffs 2>/dev/null)\" && grep -q '^## Decision 115' docs/DECISIONS.md && grep -q '^## Decision 116.*Supersedes Decision 49' docs/DECISIONS.md && grep -q '^## Decision 117.*Supersedes Decision 44' docs/DECISIONS.md && test \"$(grep -oE '^## Decision [0-9]+' docs/DECISIONS.md | sort | uniq -d | wc -l)\" -eq 0 && echo 'ULF-12 + decisions OK'"
+    expected: "Handoff gone; docs/handoffs empty; all three decisions present with correct supersession headers; no duplicate numbers."
+    fix_if: "A decision is missing/misnumbered or a duplicate exists -- re-check the max number and re-author."
+  - step: 13
+    phase: pre-deploy
+    action: Validate the roadmap edits (CD.28 inventory + T4.1/T4.2/T4.3 notes) and the plan document.
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-close-audit-findings-ulf-05-06-12.yaml && bin/venv-python -c \"from scripts.checks import registry, _common; failed=[]; __import__('scripts.checks.roadmap.validate_platform_roadmap', fromlist=['validate_platform_roadmap']).validate_platform_roadmap(failed); print('roadmap FAILED:',failed) if failed else print('roadmap OK')\""
+    expected: "Plan document validates; roadmap check prints roadmap OK."
+    fix_if: "Schema or roadmap check fails -- fix the offending field (e.g. progress_note placement, criterion refs)."
+  - step: 14
+    phase: pre-deploy
+    action: Final sweep -- rg acceptance for the retired copilot code/workflow surfaces.
+    command: "rg -n 'copilot_sdk|copilot-sdk' scripts/ .github/workflows/ && echo 'UNEXPECTED HITS' || echo 'SWEEP CLEAN'"
+    expected: "Prints SWEEP CLEAN (no copilot_sdk/copilot-sdk under scripts/ or .github/workflows/)."
+    fix_if: "Any hit under scripts/ or .github/workflows/ -- retire or repoint it (schedule.yaml under .github/agents/ is intentionally out of this sweep)."
+  - step: 15
+    phase: post-deploy
+    action: Run the full validate tier green.
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Full tier exits 0 (all checks green, including validate_imports, validate_invariants, validate_ci_rca_taxonomy, validate_executor_boundary, validate_platform_roadmap)."
+    fix_if: "Any check fails -- resolve before merge; a validate.py failure on main spawns a ci_rca rec (forward-fix, Decision 55)."
+constraints:
+  - "Only files listed in scope may be modified. Do NOT modify scripts/execute_recommendation.py -- the executor write path is frozen (Decision 67) and its retirement rides the T4.x rebuild (Decision 59/95)."
+  - "No rescue agents or workaround loops (Decision 55). On an unrecoverable V3 (deploy/invoke) failure, STOP and RCA -- do not paper over it."
+  - "Removal-appropriate V3 verification (Decision 48 conscious-acceptance): a functional agent smoke-test is not applicable after the copilot gut (all six agents run on the retired copilot-sdk provider and failed agents write no S3 object). Verify deploy success + dispatcher import-health + package-absence instead; the surviving github-models path stays unit-covered."
+  - "CD.28's LiteLLM-only discipline is executor-scoped ('forbidden in the executor and scripts/llm_client.py'); it does NOT bind scheduled agents. Decision 116 routes scheduled agents to claude -p (judgment) / DeepSeek-via-LiteLLM (routine). Do NOT add direct provider-SDK imports to the executor or scripts/llm_client.py."
+  - ".github/agents/schedule.yaml: flip enabled flags only. Do NOT delete it (T4.3 owns c5) and do NOT migrate provider/model fields (Decision 116 realization is owned by PLAN-resolve-scheduled-agent-provider / T4.3)."
+  - "Decisions 115/116/117 are new: re-check the current max '## Decision NNN' header at implement time (currently 114) per the numbering-race note; the referential guards catch a header mismatch. Include a Warehouse ID line on each and run ops_data_portal --backfill-decisions-md post-merge (Decision 84)."
+  - "Do not delete docs/contracts/copilot-cli.md or scripts/github_models_client.py -- out of scope; the github-models provider path survives."
+context:
+  - "Audit source: audits/unclosed-loops-44ef5c6.yaml findings ULF-05 (Copilot-SDK residue), ULF-06 (executor run artifacts), ULF-12 (stale handoff). Acceptance mirrors each finding's proposed_rec_draft, scoped to what this session actually retires."
+  - "Human clarifications (2026-07-03): (1) delete copilot_wrapper.py + copilot_sdk_client.py now WITH a Lambda deploy (chosen over deferring to T4.3); (2) use a removal-appropriate V3 verification (chosen over a full agent smoke-test or migrating an agent to github-models); (3) future transient handoffs ride PR descriptions -> Decision 115; (4) SUPERSEDE Decision 44 (not edit) via Decision 117, and SUPERSEDE Decision 49 via Decision 116 specifying scheduled-agent routing (claude -p for judgment-heavy, DeepSeek API for routine), aligned with the roadmap LiteLLM model."
+  - "Decision-scout verdict: FLAGS_FOUND (Decisions triaged: 74 of 74). CITE: Decision 48 (V3 tier + behavioural verify), Decision 79 (per-Lambda deploy gating), Decision 67 (executor freeze), Decision 86 (no new prose docs; rationale->Decisions), Decision 84 (DECISIONS.md->ops_decisions backfill). Realizes CD.28. Related: Decision 40, 55, 59/95, 60, 104. Flags resolved: Decision 49 (WARN -> superseded by Decision 116, not cited as already-retired), Decision 44 (NOTE -> superseded by Decision 117)."
+  - "Decision 116 alignment: routine tier = CD.28 Tier 1 (DeepSeek-direct via LiteLLM); judgment tier = claude -p (Claude Code headless, Max-plan OAuth per the AGENTS.md CLAUDE_CODE_OAUTH_TOKEN runbook) rather than CD.28 Tier 2 Anthropic-via-LiteLLM, justified because scheduled agents are a distinct surface from the executor (LiteLLM-only is executor-scoped) and claude -p restores agentic tool use (retiring the _preload_rec_curator_context workaround). The roadmap's PLAN-resolve-scheduled-agent-provider inventory entry is updated to this routing so the roadmap and Decision 116 stay consistent."
+  - "gates: decision-scout=FLAGS_FOUND (flags resolved via supersession Decisions 116/117); plan-critique=<verdict> after <N> round(s)."
+  - "Branch was 0 commits behind origin/main at planning time (fresh); no Main Divergence Assessment overlap. main_freshness.status=ok."
+  - "ci_rca HARD BLOCK deferral: rec-2481 (Critical, 'Terraform provider install retry misses connection reset by peer', scripts/checks/_scaffolding.py) is the sole unresolved ci_rca rec. It is UNRELATED to this audit-hygiene work (different file, different failure category) and already has an approved plan in flight (PLAN-terraform-provider-install-retry, merged as #399). Deferred here per the Related-Work exemption; no scope overlap."
+  - "Executor artifacts (ULF-06) have zero consumers: only scripts/execute_recommendation.py writes logs/runs//logs/failure-summaries/; tests/conftest.py + tests/test_execute_recommendation.py reference the paths only via the runtime write path (tmp/PYTEST guard), not the committed artifacts, so deletion is safe."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/close-audit-findings-ulf-ptqj3a)
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions read (48, 49, 44, 67, 79, 84, 86, CD.28) via decision-scout + direct read
+  - All files in scope located and readable; Lambda-packaging assessment run (compute_affected_artifacts)
+  - Acceptance criteria understood and verifiable; V3 deploy path + credentials available (agent_platform)
+execution_steps:
+  - "ULF-05a (non-Lambda residue): git rm the refresher workflow + script + test, model_multipliers.yaml, and validate_copilot_multipliers.py. Remove the check from scripts/checks/registry.py (pre + full sequences), the import in scripts/validate.py, the entry in scripts/ci_rca_tier_map.py _KNOWN_EXTERNAL_DEP_CHECKS, the function_to_category entry in config/ci_rca_taxonomy.yaml, the ~24 patch lines in tests/test_validate.py, and the ordered-oracle entries in tests/test_checks_registry.py. Run VP steps 1-2."
+  - "ULF-05b (copilot_wrapper): repoint scripts/test_coverage_checker.py kill_process_tree import to scripts.llm_utils; remove the copilot_wrapper entry from scripts/checks/deps/validate_imports.py; remove copilot_wrapper.py + tests/test_copilot_wrapper from scripts/classify_automatable.py; drop the dangling copilot_wrapper.py exclusion in scripts/checks/misc/validate_invariants.py; git rm scripts/copilot_wrapper.py + tests/test_copilot_wrapper.py. Run VP steps 3-4."
+  - "ULF-05c (copilot_sdk_client + handler): remove _invoke_copilot_sdk, _invoke_gemini, _get_gemini_api_key, _GEMINI_BYOK_ENDPOINT and the rec-curator copilot/gemini preload guard from src/data/handlers/scheduled_agent_handler.py; restructure the provider dispatch so github-models is explicitly routed and provider in {copilot-sdk, gemini} raises a clear 'provider retired; migrate per Decision 116 / PLAN-resolve-scheduled-agent-provider' error (no silent else-misroute); update docstrings. git rm scripts/copilot_sdk_client.py + tests/test_copilot_sdk_client.py; rewrite tests/test_scheduled_agent_handler.py (drop copilot/gemini patches, keep github-models, add a retired-provider-raises test). Run VP step 5."
+  - "ULF-05d (Lambda packaging): remove copilot_sdk_client.py + copilot_wrapper.py from scripts/build_lambda.py _LAMBDA_SCRIPTS and drop _COPILOT_SDK_PACKAGE; remove both files from src/lambdas/data-pipeline/manifest.yaml includes plus the github-copilot-sdk pip pin; remove both from src/lambdas/ops-compaction/manifest.yaml includes; remove tests/test_build_lambda.py::test_build_app_package_installs_copilot_sdk. Run VP step 6."
+  - "ULF-05e (deploy): build + deploy data-pipeline and ops-compaction; invoke the deployed dispatcher and verify a clean summary-dict return + package absence of the two modules. Run VP steps 7-9. On unrecoverable failure STOP and RCA (Decision 55)."
+  - "ULF-05f (schedule.yaml truthfulness): flip the six enabled:true flags in .github/agents/schedule.yaml to enabled:false; leave provider/model fields and the file itself intact."
+  - "ULF-06: git rm -r logs/runs logs/failure-summaries; append logs/runs/ and logs/failure-summaries/ to .gitignore; confirm scripts/execute_recommendation.py is untouched. Run VP steps 10-11."
+  - "ULF-12: git rm docs/handoffs/HANDOFF-ducklake-lambda-runtime-apply.md. Add to docs/DECISIONS.md (re-check max number, currently 114): Decision 115 -- transient container-to-container handoffs ride PR descriptions (ephemeral half in the PR body; durable half in the plan YAML + exit criteria); the docs/handoffs/ document pattern is retired; no freeze-style guard added. Decision 116 (Supersedes Decision 49) -- scheduled-agent inference routing: routine agents (doc-freshness, orphan-code, code-smell) -> DeepSeek API via LiteLLM (CD.28 Tier 1); judgment-heavy agents (rec-curator, transcript-review, prompt-quality) -> claude -p (Claude Code headless, Max-plan OAuth); LiteLLM-only is executor-scoped so this does not bind scheduled agents; realization owned by T4.3 / PLAN-resolve-scheduled-agent-provider; reversal/reevaluation on shared Max-pool contention or cost triggers. Decision 117 (Supersedes Decision 44) -- restate the executor self-modification boundary table with the copilot_wrapper.py and tests/test_copilot_wrapper.py rows removed (they no longer exist); classify_automatable.py is the code-level authority; enforcement (validate_executor_boundary, select_next_batch) unchanged. Give each decision a Warehouse ID line noting post-merge --backfill-decisions-md sync. Run VP step 12."
+  - "Roadmap: in docs/ROADMAP-PLATFORM.yaml update the CD.28 follow-on inventory (~line 1148) -- note that this plan retired refresh-copilot-multipliers.yml + the multipliers check/config + copilot_wrapper.py/copilot_sdk_client.py + the handler copilot/gemini paths, and rewrite the PLAN-resolve-scheduled-agent-provider entry to the Decision-116 routing (judgment->claude -p, routine->DeepSeek/LiteLLM). Add a T4.3 progress_note (schedule.yaml deletion + provider migration still owned; handler copilot/gemini paths removed this session; re-enable requires the Decision-116 routing). Add a T4.1 and T4.2 progress_note naming telemetry emission (Decision 59/95; T4.1 emit_telemetry Lambda + T4.2:c3 agent_sdk per-turn) as the replacement for the retired local write sites in scripts/execute_recommendation.py:226-268/:378-381. Run VP step 13."
+  - "Run VP step 14 (rg sweep) then VP step 15 (full validate green). Execute the Verification Plan end-to-end; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Report: what was retired (files, checks, handler paths, Lambda redeploy result), the three decisions added, the roadmap notes, and all verification results."
+work_areas: []
+rollback: >-
+  All changes are deletions + additive decisions/notes on a feature branch; revert the branch to
+  restore. The Lambda redeploy ships a smaller package with no behavioural change (the removed modules
+  had no live import after the handler gut); to roll back the deploy, redeploy the prior commit's
+  package. schedule.yaml agents remain disabled either way.
