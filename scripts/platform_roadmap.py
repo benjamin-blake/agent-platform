@@ -785,6 +785,23 @@ class PlatformRoadmapState:
             if cd.state == "pending" and cd.realization_evidence
         ]
 
+    def realized_but_pending_cds(self) -> list[dict[str, Any]]:
+        """Pending CDs whose detail carries a '[Realized' prose marker but no structured
+        realization_evidence -- a lower-confidence corroboration/ratification-review signal,
+        kept DISTINCT from ratifiable_cds() (Decision 55: prose is not deliberate corroboration).
+        """
+        result: list[dict[str, Any]] = []
+        for cd in self._doc.candidate_decisions:
+            if cd.state != "pending" or cd.realization_evidence:
+                continue
+            detail = cd.detail or ""
+            marker_idx = detail.find("[Realized")
+            if marker_idx == -1:
+                continue
+            hint = detail[marker_idx : marker_idx + 80]
+            result.append({"id": cd.id, "title": cd.title, "gates": cd.gates, "realized_hint": hint})
+        return result
+
     def to_preflight_dict(self, plans_dir: Path | None = None) -> dict[str, Any]:
         if plans_dir is None:
             plans_dir = Path(__file__).parent.parent / "docs" / "plans"
@@ -818,6 +835,7 @@ class PlatformRoadmapState:
             "active_tier": self.active_tier(),
             "blocked_on_cd": self.blocked_on_cd(),
             "ratifiable_cds": self.ratifiable_cds(),
+            "realized_but_pending_cds": self.realized_but_pending_cds(),
             "gate_evaluations": self.evaluate_gates(),
         }
 
@@ -842,6 +860,7 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "active_tier": None,
             "blocked_on_cd": [],
             "ratifiable_cds": [],
+            "realized_but_pending_cds": [],
             "gate_evaluations": [],
         }
 

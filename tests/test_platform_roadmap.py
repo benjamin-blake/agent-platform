@@ -957,6 +957,53 @@ class TestRatifiableCds:
 
 
 # ---------------------------------------------------------------------------
+# TestRealizedButPendingCds -- close-audit-ulf-02: prose-'[Realized' corroboration signal,
+# kept distinct from the deliberate realization_evidence-keyed ratifiable_cds()
+# ---------------------------------------------------------------------------
+
+
+class TestRealizedButPendingCds:
+    def test_pending_with_realized_marker_and_no_evidence_surfaced(self) -> None:
+        doc = _doc(
+            candidate_decisions=[
+                {**_cd("CD.2"), "detail": "Some prose. [Realized 2026-05-30: CC-web dev surface operational."}
+            ]
+        )
+        result = _state_from_doc(doc).realized_but_pending_cds()
+        assert len(result) == 1
+        assert result[0]["id"] == "CD.2"
+        assert result[0]["realized_hint"].startswith("[Realized")
+
+    def test_pending_with_evidence_excluded_belongs_to_ratifiable(self) -> None:
+        doc = _doc(
+            candidate_decisions=[
+                {
+                    **_cd("CD.6", realization_evidence="Realized 2026-05-28: ..."),
+                    "detail": "[Realized 2026-05-28: shipped.",
+                }
+            ]
+        )
+        result = _state_from_doc(doc).realized_but_pending_cds()
+        assert result == []
+
+    def test_pending_without_marker_excluded(self) -> None:
+        doc = _doc(candidate_decisions=[{**_cd("CD.1"), "detail": "Plain detail, no marker."}])
+        result = _state_from_doc(doc).realized_but_pending_cds()
+        assert result == []
+
+    def test_ratified_with_marker_excluded(self) -> None:
+        doc = _doc(candidate_decisions=[{**_cd("CD.99", state="ratified"), "detail": "[Realized 2026-01-01: done."}])
+        result = _state_from_doc(doc).realized_but_pending_cds()
+        assert result == []
+
+    def test_present_in_to_preflight_dict(self) -> None:
+        doc = _doc(candidate_decisions=[{**_cd("CD.2"), "detail": "[Realized 2026-05-30: shipped."}])
+        full = _state_from_doc(doc).to_preflight_dict()
+        assert "realized_but_pending_cds" in full
+        assert [c["id"] for c in full["realized_but_pending_cds"]] == ["CD.2"]
+
+
+# ---------------------------------------------------------------------------
 # TestUserActionRequired -- T-1.20: user_action_required threading
 # ---------------------------------------------------------------------------
 

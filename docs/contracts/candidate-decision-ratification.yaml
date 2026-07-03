@@ -1,5 +1,5 @@
 version: 1
-last_updated: "2026-07-02"
+last_updated: "2026-07-03"
 decisions_cited:
   - Decision-76
   - Decision-84
@@ -51,6 +51,26 @@ surfacing_signal:
     it eligible for the ratification lane. A pending CD with no realization_evidence is NOT
     surfaced -- forward-intent CDs (e.g. CD.29) stay invisible to the lane until evidence exists.
   computed_by: "PlatformRoadmapState.ratifiable_cds() -> included in to_preflight_dict['ratifiable_cds']"
+
+second_signal_realized_but_pending:
+  amendment_note: >-
+    close-audit-ulf-02 amendment (2026-07-03), building on the Decision 105 lane -- adds a SECOND,
+    lower-confidence surfacing signal, distinct from the deliberate realization_evidence signal above.
+  field: detail
+  type: "str"
+  location: "CandidateDecision.detail (scripts/platform_roadmap.py)"
+  semantics: >-
+    A pending CD whose free-text detail carries a '[Realized' prose marker but has NOT (yet) been
+    given structured realization_evidence is flagged for corroboration/ratification-review -- a
+    weaker signal than ratifiable_cds() (Decision 55: a prose annotation is not the same as a
+    deliberate corroboration decision). Ratification of such a CD promotes the prose marker into
+    structured realization_evidence at ratify time (folding it into the canonical ratified_as/
+    filed_via shape above), rather than leaving both a prose note and a separate evidence field.
+    A pending CD that already carries realization_evidence belongs to ratifiable_cds(), never to
+    this list -- the two lists are disjoint by construction.
+  computed_by: >-
+    PlatformRoadmapState.realized_but_pending_cds() -> included in
+    to_preflight_dict['realized_but_pending_cds'] (full /orient projection only).
 
 referential_guard:
   name: validate_candidate_decision_ratification

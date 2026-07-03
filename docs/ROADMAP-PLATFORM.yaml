@@ -1830,18 +1830,37 @@ tier_items:
     completed_at: "2026-05-19"
   - id: T-1.1
     tier: T-1
-    name: File adoption decisions via log-decision Lambda (CD.1-CD.19)
-    intent: Ratify the candidate decisions that gate downstream tier work. Depends on log-decision Lambda existing AND RoadmapDocument schema validating the YAML structurally. Per the bootstrap COMPLETION exemption in agent_instructions, T0.7b and T-1.5 may be marked complete with their gating CDs (CD.10/CD.12/CD.13/CD.16) still pending — those specific CDs are ratified here.
-    depends_on: [T0.7b, T-1.5]
+    name: Ratify adoption decisions via the ops-portal ratification lane (CD.1-CD.39 coverage)
+    intent: |
+      Ratify the candidate decisions that gate downstream tier work, via the ops-portal
+      ratification lane (Decision 105 -- ratifiable_cds() / the candidate-decision-ratification.yaml
+      contract / the R1/R2/R3 referential guard), not the never-built log-decision Lambda (Decision 91
+      established file_decision as the shipped vehicle instead). Ratification is a CAPABILITY, not a
+      one-time ceremony: this item completes once the lane exists, realized-but-pending CDs are
+      machine-surfaced, CD.1 is ratified, document.status has flipped draft->ratified, and a first
+      batch has demonstrated the lane end-to-end (close-audit-ulf-02). Later CDs (CD.2-CD.39) ratify
+      through the same lane in subsequent sessions without reopening this item.
+    depends_on: [T-1.5]
     files_in_scope: []
     exit_criteria:
-      - "All candidate_decisions with gates intersecting T0/T1/T2 are state == ratified"
-      - "ops_decisions table contains corresponding decision_id entries"
-      - "document.status updated from 'draft' to 'ratified' once CD.1 lands"
-      - "document.filed_via updated from 'pending_log_decision_lambda' to 'ops_decisions:dec-NNN' for CD.1"
-      - "CD.18 (sibling-branch fate) ratified BEFORE T1.5 starts; CD.19 (SCD2 timestamp policy) ratified BEFORE T2.2 starts — partial-ratification order is enforced by decision_required_before field on each CD"
+      - id: c1
+        text: "The candidate-decision-ratification lane exists (Decision 105): ratifiable_cds(), docs/contracts/candidate-decision-ratification.yaml, and the R1/R2/R3 validate_candidate_decision_ratification referential guard are live."
+        status: met
+        met_by: close-audit-ulf-02
+      - id: c2
+        text: "Realized-but-pending CDs (pending, carrying a prose '[Realized' marker but no structured realization_evidence) are machine-surfaced via PlatformRoadmapState.realized_but_pending_cds(), included in to_preflight_dict and the /orient full projection."
+        status: met
+        met_by: close-audit-ulf-02
+      - id: c3
+        text: "CD.1 is ratified (state: ratified, canonical ratified_as/filed_via shape) and document.status has flipped from draft to ratified, with document.filed_via pointing at CD.1's Decision."
+        status: met
+        met_by: close-audit-ulf-02
+      - id: c4
+        text: "A first realized-but-pending ratification batch (CD.1, CD.2, CD.13, CD.20, CD.21, CD.26) ran under interactive human sign-off, demonstrating the lane end-to-end."
+        status: met
+        met_by: close-audit-ulf-02
     related_decisions: []
-    related_candidate_decisions: [CD.1, CD.2, CD.3, CD.4, CD.5, CD.6, CD.7, CD.8, CD.9, CD.10, CD.11, CD.12, CD.13, CD.14, CD.15, CD.16, CD.17, CD.18, CD.19]
+    related_candidate_decisions: [CD.1]
     effort: S
     strategic: false
     bootstrap_completion_exempt: true
