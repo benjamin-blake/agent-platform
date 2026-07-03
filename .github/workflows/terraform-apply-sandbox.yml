@@ -236,9 +236,11 @@ jobs:
         if: success()
         working-directory: ${{ env.WORKDIR }}
         run: |
-          # Bounded retry for transient registry.terraform.io 5xx (rec-2237).
-          # Transient signatures (parity with _TRANSIENT_INIT_SIGNATURES in scripts/validate.py):
-          #   "502", "Bad Gateway", "could not query provider registry", "failed after "
+          # Bounded retry for transient registry.terraform.io 5xx (rec-2237) and provider-download
+          # network transients (rec-2481).
+          # Transient signatures (parity with _TRANSIENT_INIT_SIGNATURES in scripts/checks/_scaffolding.py):
+          #   "502", "Bad Gateway", "could not query provider registry", "failed after ",
+          #   "connection reset by peer", "i/o timeout", "TLS handshake timeout", "unexpected EOF"
           set +e
           attempt=1
           while [ "$attempt" -le 3 ]; do
@@ -248,7 +250,7 @@ jobs:
               echo "$out"
               break
             fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
               if [ "$attempt" -lt 3 ]; then
                 delay=$(( 2 ** attempt ))
                 echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
@@ -564,8 +566,10 @@ jobs:
         if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |
-          # Bounded retry for transient registry.terraform.io 5xx (parity with validate.py
-          # _TRANSIENT_INIT_SIGNATURES: 502 / Bad Gateway / could not query provider registry / failed after ).
+          # Bounded retry for transient registry.terraform.io 5xx and provider-download network
+          # transients (parity with scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES:
+          # 502 / Bad Gateway / could not query provider registry / failed after /
+          # connection reset by peer / i/o timeout / TLS handshake timeout / unexpected EOF).
           set +e
           attempt=1
           while [ "$attempt" -le 3 ]; do
@@ -575,7 +579,7 @@ jobs:
               echo "$out"
               break
             fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
               if [ "$attempt" -lt 3 ]; then
                 delay=$(( 2 ** attempt ))
                 echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
@@ -843,7 +847,7 @@ jobs:
               echo "$out"
               break
             fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after '; then
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
               if [ "$attempt" -lt 3 ]; then
                 delay=$(( 2 ** attempt ))
                 echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
