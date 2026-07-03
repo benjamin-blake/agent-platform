@@ -31,6 +31,7 @@ class TestGetGithubPat:
         monkeypatch.delenv("GITHUB_PAT_SECRET_ARN", raising=False)
         assert _get_github_pat() == ""
 
+    @pytest.mark.integration
     def test_fetches_from_secrets_manager_when_arn_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_PAT", raising=False)
         monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
@@ -40,6 +41,7 @@ class TestGetGithubPat:
             result = _get_github_pat()
         assert result == "ghp_from_secrets"
 
+    @pytest.mark.integration
     def test_returns_empty_on_secrets_manager_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_PAT", raising=False)
         monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
