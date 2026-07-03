@@ -11,6 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks._scaffolding import (
+    _excluded_heavy_import_names,
+    _parse_requirement_dist_names,
+    partition_changed_tests_by_collectability,
+)
+
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
 _spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
 _validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
@@ -71,6 +77,7 @@ validate_dependency_graph_freshness = _validate.validate_dependency_graph_freshn
 validate_import_contracts = _validate.validate_import_contracts
 validate_lockfile_sync = _validate.validate_lockfile_sync
 validate_portal_drift = _validate.validate_portal_drift
+run_pytest_diff = _validate.run_pytest_diff
 
 
 class TestDependencyGraphFreshness:
@@ -2795,6 +2802,241 @@ def _pre_mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
     return result
 
 
+class TestExcludedHeavyDeps:
+    """Excluded-heavy import-name set derivation from the REAL requirements files (rec-2485)."""
+
+    def test_heavy_deps_in_excluded_set(self) -> None:
+        excluded = _excluded_heavy_import_names()
+        for name in ("pyarrow", "pandas", "numpy", "duckdb"):
+            assert name in excluded, f"{name} should be excluded (heavy, requirements.txt-only)"
+
+    def test_fast_tier_deps_not_in_excluded_set(self) -> None:
+        excluded = _excluded_heavy_import_names()
+        for name in ("ruff", "mypy", "pytest", "pyyaml", "pydantic"):
+            assert name not in excluded, f"{name} is present in requirements-fast.txt; must not be excluded"
+
+    def test_parse_requirement_dist_names_missing_file_returns_empty_set(self, tmp_path: Path) -> None:
+        assert _parse_requirement_dist_names(tmp_path / "nonexistent-requirements.txt") == set()
+
+
+class TestFastTierCollectability:
+    """Classifier routing: (returncode, output) -> (runnable | deferred) (rec-2485).
+
+    Every heavy-dep-absence case below monkeypatches importlib.util.find_spec because pyarrow
+    (and the other heavy deps) are actually installed in this dev venv -- only requirements-fast.txt
+    (the pr-validate CI job) omits them, so genuine absence must be simulated here.
+    """
+
+    def test_heavy_dep_collection_error_defers(self) -> None:
+        """A collect-only error whose root cause is a genuinely-absent excluded-heavy dep defers."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "ModuleNotFoundError: No module named 'pyarrow'"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_some_heavy_dep_file.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_some_heavy_dep_file.py", "pyarrow")]
+
+    def test_runtime_failure_hard_fails(self) -> None:
+        """A file that collects fine but fails at runtime (pytest exit 1) still hard-fails the gate."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0 if "--collect-only" in cmd else 1
+            return result
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            run_pytest_diff(["tests/test_something.py"], failed)
+
+        assert failed == ["Tests (pytest)"]
+
+    def test_non_heavy_modulenotfound_routes_to_runnable(self) -> None:
+        """A collection error naming a repo-local (non-excluded) module routes to runnable."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "ModuleNotFoundError: No module named 'scripts.some_deleted_module'"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_something.py"])
+
+        assert runnable == ["tests/test_something.py"]
+        assert deferred == []
+
+    def test_syntaxerror_collection_error_hard_fails(self) -> None:
+        """A collection error with NO 'No module named' line (SyntaxError) routes to runnable, not deferred."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "SyntaxError: invalid syntax"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_broken.py"])
+
+        assert runnable == ["tests/test_broken.py"]
+        assert deferred == []
+
+    def test_cannot_import_name_hard_fails(self) -> None:
+        """A collection error carrying 'ImportError: cannot import name' (no 'No module named') hard-fails."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "ImportError: cannot import name 'Thing' from 'scripts.foo'"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_broken_import.py"])
+
+        assert runnable == ["tests/test_broken_import.py"]
+        assert deferred == []
+
+    def test_present_module_not_deferred(self) -> None:
+        """A ModuleNotFoundError naming an excluded-heavy dep that IS importable (find_spec not None) is not deferred."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "ModuleNotFoundError: No module named 'pyarrow'"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_some_heavy_dep_file.py"])
+
+        assert runnable == ["tests/test_some_heavy_dep_file.py"]
+        assert deferred == []
+
+    def test_iceberg_reader_defers_when_pyarrow_absent(self) -> None:
+        """Real-file proof: the actual PR #405 offending file (tests/test_iceberg_reader.py, which
+        imports pyarrow at module scope) lands in `deferred`, not `failed`, when pyarrow is simulated
+        absent via find_spec."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            if "--collect-only" in cmd:
+                result.returncode = 2
+                result.stderr = "ModuleNotFoundError: No module named 'pyarrow'"
+            else:
+                result.returncode = 0
+                result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_iceberg_reader.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_iceberg_reader.py", "pyarrow")]
+
+
+class TestRunPytestDiff:
+    """Orchestration behaviours of run_pytest_diff() -- the consumer moved out of validate.py (rec-2485)."""
+
+    def test_no_op_when_no_changed_tests(self) -> None:
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", side_effect=AssertionError("run must not be called")):
+            run_pytest_diff([], failed)
+        assert failed == []
+
+    def test_prints_loud_warning_and_does_not_redden_when_all_defer(self, capsys: pytest.CaptureFixture) -> None:
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 2
+            result.stdout = ""
+            result.stderr = "ModuleNotFoundError: No module named 'pyarrow'"
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_iceberg_reader.py"], failed)
+
+        captured = capsys.readouterr()
+        assert "DEFERRED TO FULL TIER" in captured.out
+        assert "tests/test_iceberg_reader.py" in captured.out
+        assert "pyarrow" in captured.out
+        assert failed == []
+
+    def test_runs_pytest_on_exactly_runnable_subset_in_mixed_case(self) -> None:
+        captured_cmds: list[list[str]] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                if "tests/test_iceberg_reader.py" in cmd:
+                    result.returncode = 2
+                    result.stderr = "ModuleNotFoundError: No module named 'pyarrow'"
+                else:
+                    result.returncode = 0
+            else:
+                result.returncode = 0
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_iceberg_reader.py", "tests/test_validate.py"], failed)
+
+        real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
+        assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
+        assert "tests/test_validate.py" in real_run_cmds[0]
+        assert "tests/test_iceberg_reader.py" not in real_run_cmds[0]
+        assert failed == []
+
+
 class TestPreModeDiffAware:
     """Tests that --pre passes changed files to ruff/mypy/pytest."""
 
@@ -2916,6 +3158,7 @@ class TestPreModeDiffAware:
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.stdout = "agent/test-branch\n"
+            result.stderr = ""
             result.returncode = 5 if "pytest" in cmd else 0
             return result
 
@@ -2978,6 +3221,7 @@ class TestPreModePytestSelection:
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.stdout = ""
+            result.stderr = ""
             result.returncode = 5 if "pytest" in cmd else 0
             return result
 
