@@ -1,0 +1,286 @@
+schema_version: 1
+slug: "close-audit-ulf-04-ulf-10"
+intent: >-
+  Harden the platform roadmap's governance state by replacing ad-hoc prose reconciliation with
+  machine-enforced lifecycle fields (open_questions/known_gaps status + resolution_ref) and a
+  deterministic file-size guard, so OQ/KG resolution and roadmap growth become a field-flip and a
+  red-CI signal rather than an audit-day paste -- advancing the agent-first, self-auditing control
+  plane (Decision 110 / NS.4).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-close-audit-ulf-04-ulf-10.yaml
+phase: >-
+  Platform governance hardening -- audits/unclosed-loops-44ef5c6.yaml findings ULF-04
+  (RECOGNIZED_UNDERSCOPED) + ULF-10 (UNRECOGNIZED). Extends the T-1.5 RoadmapDocument schema
+  mechanism (complete). No tier_item claimed: both findings carry item_ids: [] and are the
+  audit-finding-driven (soft-warn exception) work category, so the Tier Item Freshness Gate is skipped.
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add status (Literal[open,resolved,closed,promoted], default open) + resolution_ref (str|None)
+      to the OpenQuestion and KnownGap models; enforce "resolution_ref required when status != open"
+      in RoadmapDocument._validate_graph, mirroring the ExitCriterion (g)/(h) checks and the
+      Decision 93 deferred_post_mvp lifecycle-status precedent (fail loud at load).
+  - file: scripts/checks/roadmap/validate_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add a deterministic line-count size guard (constant _ROADMAP_MAX_LINES = 10000, Decision 114)
+      via a small pure helper (_roadmap_size_issues) that returns a FAIL list; the check appends its
+      result UNCONDITIONALLY (no in-check if-branch) so validate.py full tier fails when
+      docs/ROADMAP-PLATFORM.yaml exceeds the ceiling while the module stays at 100% per-file coverage
+      (Decision 104 gate).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Migrate the 14 prose-resolved entries (11 OQs + 3 KGs) to explicit status + resolution_ref;
+      flip KG.11 to resolved/"Decision 114" and rewrite its gap/notes to the resolution. Genuinely
+      open entries (OQ.3/5/6/14) stay status=open.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author Decision 114 (house format) raising KG.11's 2500-line/50K-token split trigger to a
+      10,000-line ceiling (single-file retained, not split), with reversal conditions and the
+      Warehouse ID dec-114 sync line per Decision 84.
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Add TestOpenQuestionKnownGapLifecycle -- valid enum accepted, invalid status raises, status!=open
+      without resolution_ref raises, with resolution_ref passes, live file loads clean.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add TestRoadmapSizeGuard exercising both branches of the _roadmap_size_issues helper
+      (over-ceiling -> one-item list; within-ceiling -> empty list) plus the constant. Decision 104
+      coverage gate maps scripts/checks/**/*.py -> tests/test_validate.py, so the check's new logic
+      must be tested here.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    OpenQuestion and KnownGap accept status in {open,resolved,closed,promoted} (any other value is a
+    ValidationError via the Literal type) and accept an optional resolution_ref string.
+  - >-
+    Loading a roadmap whose OQ/KG entry has status != open but no resolution_ref raises a
+    ValidationError (enforced in RoadmapDocument._validate_graph); loading the live roadmap succeeds.
+  - >-
+    The 14 prose-resolved entries carry explicit status + resolution_ref: KG.6=promoted/CD.18,
+    KG.8=closed/CD.21, KG.10=promoted/CD.19, OQ.1=resolved/T0.9, OQ.2=resolved/T0.10, OQ.4=resolved/CD.26,
+    OQ.7/8/9/11=resolved/CD.34, OQ.10=resolved/CD.33, OQ.12=resolved/PLAN-oq12-clone-rehearsal-lambda,
+    OQ.13=resolved/CD.31, OQ.15=resolved/Decision 91. OQ.3/5/6/14 remain status=open with no resolution_ref.
+  - >-
+    docs/DECISIONS.md contains Decision 114 in house format (Status Decided, Date, Warehouse ID
+    dec-114 with the "per Decision 84" backfill line, Decision body, Reversal conditions, Related),
+    recording the 10,000-line ceiling that supersedes KG.11's 2500-line/50K-token trigger.
+  - >-
+    validate_platform_roadmap fails when docs/ROADMAP-PLATFORM.yaml exceeds 10,000 lines and passes at
+    the current size; the _ROADMAP_MAX_LINES constant equals the Decision 114 ceiling (10000).
+  - >-
+    KG.11 carries status: resolved, resolution_ref: "Decision 114", and its gap/notes text describes
+    the resolution (threshold raised + deterministic guard).
+  - "ops_decisions carries dec-114 after ops_data_portal --backfill-decisions-md (idempotent)."
+  - "bin/venv-python -m scripts.validate (full tier) exits 0 -- all checks green."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: New schema-lifecycle tests exist and pass against the real Pydantic models (enum accept/reject, resolution_ref enforcement).
+    command: |-
+      grep -n "class TestOpenQuestionKnownGapLifecycle" tests/test_platform_roadmap.py && bin/venv-python -m pytest tests/test_platform_roadmap.py::TestOpenQuestionKnownGapLifecycle -q
+    expected: grep prints the class definition line; pytest reports all cases passed (valid enum accepted; invalid status raises ValidationError; status!=open without resolution_ref raises; with resolution_ref passes).
+    fix_if: import error, or a case does not raise/pass -> the new model fields or the _validate_graph enforcement branch is wrong.
+  - step: 2
+    phase: pre-deploy
+    action: Existing platform_roadmap tests still pass (change is backward-compatible; entries default to status=open).
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -q
+    expected: all tests pass, no regressions.
+    fix_if: a pre-existing test broke -> the schema addition is not additive/backward-compatible; make the new fields optional with defaults.
+  - step: 3
+    phase: pre-deploy
+    action: The live roadmap loads under the new schema with exactly the expected non-open entries.
+    command: |-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml'); oq=sorted(q.id for q in d.open_questions if q.status!='open'); kg=sorted(g.id for g in d.known_gaps if g.status!='open'); print(len(oq),'OQ',oq); print(len(kg),'KG',kg)"
+    expected: "11 OQ ['OQ.1', 'OQ.10', 'OQ.11', 'OQ.12', 'OQ.13', 'OQ.15', 'OQ.2', 'OQ.4', 'OQ.7', 'OQ.8', 'OQ.9'] and 4 KG ['KG.10', 'KG.11', 'KG.6', 'KG.8']."
+    fix_if: counts/ids differ -> an entry was missed, mis-typed, or an open entry was wrongly flipped.
+  - step: 4
+    phase: pre-deploy
+    action: Every non-open entry on the real file carries a resolution_ref (enforcement holds end-to-end).
+    command: |-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml'); bad=[x.id for x in (*d.open_questions,*d.known_gaps) if x.status!='open' and not x.resolution_ref]; print('BAD',bad) if bad else print('OK all non-open carry resolution_ref')"
+    expected: "OK all non-open carry resolution_ref"
+    fix_if: prints BAD [...] -> add the missing resolution_ref (or, if load already raised ValidationError, fix the offending entry then re-run).
+  - step: 5
+    phase: pre-deploy
+    action: Size-guard test exists and passes; the helper + ceiling constant are correct (both branches covered).
+    command: |-
+      grep -n "class TestRoadmapSizeGuard" tests/test_validate.py && bin/venv-python -m pytest tests/test_validate.py::TestRoadmapSizeGuard -q
+    expected: class found; tests pass -- _ROADMAP_MAX_LINES == 10000, a 10001-line synthetic input returns a one-item FAIL list, a 10000-line input returns an empty list.
+    fix_if: constant != 10000 or the helper returns the wrong list -> correct the constant/helper.
+  - step: 6
+    phase: pre-deploy
+    action: The real validate_platform_roadmap check passes on the live file (schema + criteria integrity + size guard together).
+    command: |-
+      bin/venv-python -c "from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as v; f=[]; v(f); print('FAILED',f) if f else print('roadmap check PASS')"
+    expected: "roadmap check PASS"
+    fix_if: prints FAILED [...] -> address the specific failure (schema, criteria integrity, or size overage).
+  - step: 7
+    phase: pre-deploy
+    action: Decision 114 recorded in DECISIONS.md house format with the warehouse-sync header line.
+    command: |-
+      bin/venv-python -c "import pathlib; d=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'); print('OK' if ('## Decision 114:' in d and 'dec-114' in d and 'backfill-decisions-md' in d) else 'MISSING')"
+    expected: "OK"
+    fix_if: MISSING -> add/repair the Decision 114 block. If the numbering race bumped the number past 114, use the next free number consistently across DECISIONS.md, KG.11.resolution_ref, and this command.
+  - step: 8
+    phase: pre-deploy
+    action: KG.11 is flipped to the resolution using the new lifecycle fields.
+    command: |-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml'); kg=next(g for g in d.known_gaps if g.id=='KG.11'); print(kg.status, kg.resolution_ref)"
+    expected: "resolved Decision 114"
+    fix_if: differs -> set KG.11 status=resolved and resolution_ref to match the Decision number authored in step 7.
+  - step: 9
+    phase: pre-deploy
+    action: Full validate tier is green (authoritative gate; also runs the Decision 104 coverage gate over the new check-test).
+    command: bin/venv-python -m scripts.validate
+    expected: exits 0; final summary reports all checks passed, including "Platform roadmap schema validation" and the coverage gate.
+    fix_if: any check fails -> fix per its output. Never add a CI check without adding it to validate.py first (already satisfied; the assertion lives inside the registered validate_platform_roadmap check).
+  - step: 10
+    phase: post-deploy
+    action: Sync Decision 114 to the ops_decisions warehouse (Decision 84 rebuild-from-DECISIONS.md path); run post-merge.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: exits 0; reports dec-114 upserted/synced (idempotent on re-run).
+    fix_if: portal unreachable -> confirm the assume-role chain with `aws sts get-caller-identity --profile agent_platform`, then re-run. A write that cannot complete fails loudly (Decision 84 I-4); re-run after restoring connectivity.
+constraints:
+  - Only modify the six files in scope. Out-of-scope issues become recommendations, not inline fixes.
+  - No rescue agents or workaround loops; a real failure is diagnosed and forward-fixed (Decision 55).
+  - >-
+    Warehouse invariant: DECISIONS.md is the numbering authority and source of truth for ops_decisions;
+    sync only via ops_data_portal --backfill-decisions-md (Decision 84 / I-2). Never Edit/Write
+    logs/.decisions-index.jsonl and never re-stage from a read cache.
+  - >-
+    Preserve OQ/KG notes history: append the resolution context; do not delete the existing prose audit
+    trail (the RESOLVED/Re-resolved markers stay for traceability -- the new fields make them machine-readable).
+  - >-
+    Keep model_config = ConfigDict(extra="ignore") on OpenQuestion/KnownGap (consistent with the sibling
+    passive models). Switching to extra="forbid" is a separate hardening and is out of scope here; note it
+    as a follow-up if desired.
+  - >-
+    Do NOT touch scripts/product_roadmap_schema.py or docs/ROADMAP-PRODUCT.yaml -- the product roadmap
+    defines its own OpenQuestion/KnownGap and is out of scope.
+  - >-
+    No new standing prose-architecture docs (Decision 86): the ceiling rationale lives in Decision 114 and
+    the field semantics live in the Pydantic schema -- do not create a docs/ companion.
+  - >-
+    Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens; invoke bin/venv-python (never
+    bare python). Avoid pytest -k selectors in VP commands (PROJECT_CONTEXT gotcha) -- use ::ClassName + grep.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (73 of 73 triaged). CITE:
+    Decision 84 (DECISIONS.md -> ops_decisions authoring/sync; dec-114 is the correct next number),
+    Decision 86 (extend the machine-parseable schema, not prose). RELATED/supporting: Decision 93
+    (deferred_post_mvp lifecycle-status precedent -- mirror its fail-loud model_validator enforcement),
+    Decision 110 (ratified CD.13 -- ROADMAP-PLATFORM.yaml is the agent-first structured-data exemplar;
+    cite this, not raw CD.13/NS.4), Decision 70 + Decision 103 (closure-requires-proof ethos behind the
+    mandatory resolution_ref). Precedent: CD.39 is the roadmap exit-criteria-ledger candidate decision
+    (promote-prose-to-enum) -- it is NOT DECISIONS.md "Decision 39" (that is Step Functions over Airflow).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s) (round 1 REVISE -> revised -> round 2 PROCEED)"
+  - >-
+    Lambda-deployment assessment (no deploy step required): docs/ROADMAP-PLATFORM.yaml is an assets[] entry
+    (not includes[]) of the active data-pipeline manifest (src/lambdas/data-pipeline/manifest.yaml), so
+    compute_affected_artifacts flags data-pipeline, but no build/deploy/smoke-test is needed --
+    validate_lambda_deploy_gating is advisory (reds only on import error) and the roadmap-reading consumers
+    (scheduled agents) are disabled. Precedent: PLAN-close-audit-ulf-02.yaml (same assets[]-edit situation, V2).
+  - >-
+    Decision-scout flags handled: Decision 104 [WARN] resolved by adding tests/test_validate.py to scope
+    (test_coverage_checker maps scripts/checks/**/*.py -> tests/test_validate.py). Decision 102 [NOTE] no
+    action (SLOC ratchet governs Python files only; a ratified YAML-ceiling raise is consistent). Scout
+    verified NO existing Decision governs ROADMAP-PLATFORM.yaml file size, so Decision 114 is clean.
+  - >-
+    Migration count deviation from the audit: the audit's marker-grep counted 10 resolved OQs but missed
+    OQ.12 (its clone-rehearsal resolution carries no "Resolved" keyword), so by substance there are 11
+    resolved OQs. Migrating 11 OQ + 3 KG = 14 is the correct outcome and still satisfies the validator.
+    KG.11 is separately flipped by Part 2 (it was genuinely open until this work resolves it).
+  - >-
+    Enforcement location: keep the "resolution_ref required when status != open" rule at the Pydantic
+    model level (RoadmapDocument._validate_graph), mirroring ExitCriterion (g)/(h). Because
+    validate_platform_roadmap calls load() and already catches ValidationError, the CI check surfaces the
+    violation for free -- no duplicate check-level assertion needed. The size guard is the only NEW logic
+    added to the check module.
+  - >-
+    Numbering-race note (Decision 84 I-2): 113 is the current max Decision; re-check the max "## Decision N:"
+    header in DECISIONS.md at execution time and shift to the next free number if a concurrent PR claimed
+    114 -- keep the number identical across DECISIONS.md, KG.11.resolution_ref, and VP steps 7-8.
+  - >-
+    resolution_ref is a free-form reference string (like ExitCriterion.met_by) pointing at the deciding
+    tier_item / CD / Decision / plan slug; the model only requires it be non-empty when status != open.
+    A future hardening could add a validate_platform_roadmap resolver check (cf. check (i) for met_by).
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap, no rebase required."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/audit-ulf-04-ulf-10-o56iof)
+  - docs/PROJECT_CONTEXT.md read (pytest -k gotcha, Decision 84 ID authority noted)
+  - DECISIONS.md relevant decisions triaged (decision-scout, 73 of 73)
+  - All six files in scope located and readable
+  - Acceptance criteria understood and independently verifiable
+  - Re-check the max Decision number before authoring Decision 114 (numbering race)
+execution_steps:
+  - >-
+    scripts/platform_roadmap.py: extend OpenQuestion and KnownGap with two fields each --
+    'status: Literal["open", "resolved", "closed", "promoted"] = "open"' and
+    'resolution_ref: str | None = None'. Keep model_config = ConfigDict(extra="ignore").
+  - >-
+    scripts/platform_roadmap.py: in RoadmapDocument._validate_graph, after the ExitCriterion (g)/(h)
+    checks, add checks (i)/(j): for every open_question and known_gap, if status != "open" and not
+    resolution_ref, raise ValueError naming the entry id (e.g. "open_question 'OQ.X': status='resolved'
+    requires a non-empty resolution_ref"). This mirrors the ExitCriterion met_by rule and Decision 93.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: add status + resolution_ref to the 14 prose-resolved entries per the
+    mapping -- KG.6 promoted/CD.18; KG.8 closed/CD.21; KG.10 promoted/CD.19; OQ.1 resolved/T0.9;
+    OQ.2 resolved/T0.10; OQ.4 resolved/CD.26; OQ.7 resolved/CD.34; OQ.8 resolved/CD.34; OQ.9 resolved/CD.34;
+    OQ.10 resolved/CD.33; OQ.11 resolved/CD.34; OQ.12 resolved/PLAN-oq12-clone-rehearsal-lambda;
+    OQ.13 resolved/CD.31; OQ.15 resolved/Decision 91. Leave OQ.3/OQ.5/OQ.6/OQ.14 untouched (implicit open).
+    Preserve each entry's existing notes prose.
+  - >-
+    scripts/checks/roadmap/validate_platform_roadmap.py: add a module-level constant
+    '_ROADMAP_MAX_LINES = 10_000  # Decision 114 (raised from KG.11's 2500)' and a small pure helper
+    '_roadmap_size_issues(text, ceiling=_ROADMAP_MAX_LINES) -> list[str]' returning a one-item FAIL list
+    (naming the line count, the ceiling, and Decision 114) when the line count exceeds the ceiling, else [].
+    Inside validate_platform_roadmap, after load(), append UNCONDITIONALLY:
+    'issues += _roadmap_size_issues(roadmap_path.read_text(encoding="utf-8"))' -- NO in-check if-branch,
+    so the append line is covered by the existing check-invoking tests and the helper's two branches by
+    TestRoadmapSizeGuard, keeping the module at 100% per-file coverage (Decision 104 gate). Do not add a
+    new registry entry -- extend the existing registered check (Decision 104-compliant). The size FAIL folds
+    into the existing "Platform roadmap criteria integrity" failed-label; its message text names the line
+    count/ceiling/Decision 114 so diagnosis stays unambiguous, and a separate failed-label would reintroduce
+    an uncovered if-branch -- keep the shared label.
+  - >-
+    docs/DECISIONS.md: author Decision 114 in the house format used by Decisions 112/113 -- header
+    "## Decision 114: Raise the ROADMAP-PLATFORM.yaml size ceiling to 10,000 lines and add a deterministic
+    guard (supersedes KG.11's 2500-line/50K-token trigger) (Decided)"; Status: Decided; Date: 2026-07-03;
+    Warehouse ID: dec-114 (... synced via ops_data_portal --backfill-decisions-md post-merge, per Decision 84);
+    Decision body (single-file retained not split, per AGENTS.md agent-first one-file principle / Decision 110;
+    the guard lives in validate_platform_roadmap); Reversal conditions (revisit split-per-tier when the 10,000
+    ceiling is breached or per-/plan load cost becomes prohibitive); Related (KG.11, CD.39 exit-criteria-ledger
+    precedent, Decision 84/86/93/110). Re-check the max Decision number first (numbering race).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: flip KG.11 to status: resolved, resolution_ref: "Decision 114", and rewrite
+    its gap/notes to state the resolution (threshold raised to 10,000 lines via Decision 114 + deterministic
+    line-count guard in validate_platform_roadmap; the 2500-line/50K-token trigger is superseded). Use the
+    accurate current size (~7824 lines at resolution time), not KG.11's stale "~4,900 lines" figure.
+  - >-
+    tests/test_platform_roadmap.py: add class TestOpenQuestionKnownGapLifecycle covering -- valid enum values
+    accepted on OpenQuestion and KnownGap; an invalid status value raises ValidationError; a RoadmapDocument
+    with a status!=open OQ/KG lacking resolution_ref raises ValidationError; the same with resolution_ref
+    passes; the live docs/ROADMAP-PLATFORM.yaml loads clean. Cover BOTH the open_question raise site AND the
+    known_gap raise site (checks (i) and (j) are separate loops) so platform_roadmap.py stays at 100% per-file coverage.
+  - >-
+    tests/test_validate.py: add class TestRoadmapSizeGuard covering -- _ROADMAP_MAX_LINES == 10000; the
+    _roadmap_size_issues helper returns a one-item FAIL list for a >10000-line synthetic string and an empty
+    list for a <=10000-line string (both branches -> 100% per-file coverage of the check module).
+  - >-
+    Execute the Verification Plan in order; loop until every step passes. Run VP step 10 (warehouse backfill)
+    post-merge. On an unrecoverable failure, stop and RCA rather than patching around it (Decision 55).
+  - "Report: what changed across the six files, the migrated entry set, Decision 114 number, and VP results."
+work_areas: []
+rollback: >-
+  Revert the branch commit(s); there is no infra or warehouse-schema change. dec-114 is idempotently keyed
+  on the decision number, so if the backfill already ran, removing the Decision 114 block and re-running
+  --backfill-decisions-md reconciles ops_decisions (or leave dec-114 -- it is inert once the guard/KG.11
+  edit are reverted). The OQ/KG migration is a pure additive field edit with no destructive data change.
