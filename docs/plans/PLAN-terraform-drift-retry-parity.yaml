@@ -165,7 +165,7 @@ context:
     No .tf files in scope -> CD.35 speculative-plan pipeline assessment does not apply; the
     workflow edit is bash retry-parity only.
   - "Decision-scout verdict + CITE list: NO_FLAGS; CITE = Decision 73, Decision 72, Decision 48, Decision 79, Decision 104 (74 of 74 triaged)."
-  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -186,11 +186,15 @@ execution_steps:
   - >-
     tests/test_terraform_drift_acceptance.py: add
     test_drift_workflow_init_retry_signature_parity() that imports
-    _TRANSIENT_INIT_SIGNATURES from scripts.checks._scaffolding, reads DRIFT_WORKFLOW,
-    locates the init-retry `grep -qE` line (anchor on the stable substring
-    "could not query provider registry"), and asserts every signature in the tuple is a
-    substring of that line. Follow the file's existing plain-assertion style; keep ruff
-    line-length 127.
+    _TRANSIENT_INIT_SIGNATURES from scripts.checks._scaffolding, reads DRIFT_WORKFLOW, and
+    asserts every signature in the tuple is a substring of the init-retry grep line. CRITICAL
+    line-selection robustness: select that line by the unique `grep -qE` token (drift.yml has
+    exactly one `grep -qE` line), NOT by "could not query provider registry" alone -- after
+    this change the rewritten parity comment ALSO enumerates all eight signatures and contains
+    that substring, so anchoring on it would let the comment satisfy the guard even if the
+    executable grep regressed, defeating the recurrence-prevention property VP step 4 locks in.
+    Equivalently, require the matched line to contain both the `grep -qE` token and each
+    signature. Follow the file's existing plain-assertion style; keep ruff line-length 127.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable
     failure stop and RCA (Decision 55).
