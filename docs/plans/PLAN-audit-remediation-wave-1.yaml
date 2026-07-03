@@ -1,0 +1,281 @@
+schema_version: 1
+slug: audit-remediation-wave-1
+intent: >-
+  Audit-remediation wave 1 of 6 (text/roadmap only) from the verification-system design review
+  audits/verification-system-review-f80508b.yaml (merged PR #402). Lands the design-stage text
+  amendments for findings VF-09 (head-SHA verdict binding), VF-10 (verdict-wait timeout/heartbeat),
+  VF-11 (oracle-quality precondition for unattended merges), VF-12 (per-rec differential substrate
+  unification), and VF-14 (check-vocabulary / status-alphabet reconciliation), plus four new
+  forward-intent carrier tier_items (T3.15-T3.18) for the audit's unowned interactive gaps
+  (VF-01/07/08, VF-02/03, VF-04/13, VF-05/06), and the systemic Decision-70 mis-cite correction.
+  NO recommendations are filed or bundled -- the five subsequent implementation plans carry the
+  build work and cite the tier_items created here.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-audit-remediation-wave-1.yaml
+phase: >-
+  Platform verification-system hardening (T3 verifier/graduation family + T4 executor handshake
+  contracts). Amends candidate_decisions CD.17/CD.29/CD.38 (all state: pending -- design-stage edits,
+  not ratifications) and tier_items T4.1/T4.9/T3.1 c6; reactivates T3.10; stages the operator-confirmed
+  T3.1 status closeout; creates T3.15-T3.18. Corrects the Decision-70 mis-cite in docs/DECISIONS.md +
+  docs/contracts/exit-criteria-ledger.yaml. Not a follow-on to an in_progress item's build -- user_explicit
+  audit remediation. Wave 1 of 6; waves 2-6 build against these carriers.
+scope:
+  # --- VF-09: head-SHA verdict binding + status-alphabet note (T4.9) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VF-09 (T4.9, ~L7171-7204). (a) Amend the correlation-ids exit criterion (currently "PR number,
+      check-run id, workflow-run id, rec id, execution id") to append ", and head SHA (the exact commit
+      the verdict attests)". (b) Append a new exit criterion: "Merge is permitted only when the callback's
+      verified head SHA equals the PR head at merge time; a SHA mismatch routes to re-verify, and a
+      repeated mismatch routes to ci-rca (Decision 72) -- the executor-side analogue of the terraform
+      no-TOCTOU artifact-verdict binding (Decision 92)". (c) Add to T4.9's intent a dated status-alphabet
+      note (VF-14): three overlapping status alphabets exist -- PASS/FAIL/WARN/SKIPPED (verifier harness,
+      scripts/verifiers/harness.py), PASS/FAIL (typed-checks kernel, scripts/verification_checks.py),
+      PASS/FAIL/BLOCKED (implement-skill VP table) -- and the future docs/contracts/executor-ci-handshake.yaml
+      contract owns mapping them onto the single callback verdict vocabulary (T3.10 acceptance[] unification
+      is the roadmap carrier). Append new criteria in the SAME bare-string style; do NOT rewrite the
+      "- id: T4.9" line (keeps T4.9 outside validate_platform_roadmap (ii) touched-item normalization).
+  # --- VF-10: verdict-wait timeout/heartbeat (T4.1, T4.9, CD.38) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VF-10. (a) T4.1 (~L6837-6879): append a bare-string exit criterion "Every waitForTaskToken /
+      verdict-wait state in the state machine carries HeartbeatSeconds and TimeoutSeconds; timeout
+      transitions route to ci-rca (Decision 72), never a silent re-wait -- the executor analogue of the
+      interactive dropped-green-signal backstop". (b) T4.9: append a bare-string exit criterion "Every
+      verdict-wait state (waitForTaskToken) carries HeartbeatSeconds and TimeoutSeconds sized to expected
+      verdict latency; a missing/late verdict times out to ci-rca (Decision 72), never a silent re-wait or
+      retry". (c) CD.38 (~L1775-1798): amend the existing discipline point "Verdict-callback failures
+      (stale/duplicate/auth) route to ci-rca ..., never silent retry." to read "Verdict-callback failures
+      (stale/duplicate/auth/verdict-timeout) route to ci-rca (Decision 72 / Decision 55), never silent
+      retry or re-wait; every waitForTaskToken state carries HeartbeatSeconds/TimeoutSeconds (T4.1/T4.9)."
+      Do NOT rewrite the "- id: T4.1"/"- id: T4.9" lines.
+  # --- VF-12: per-rec differential substrate unification (T3.1 c6, verification_checks.py, CD.38) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VF-12. (a) T3.1 c6 (~L6325-6328, status: met -- KEEP status/met_by unchanged): reword the named
+      production baseline-execution surface from "Step-Functions executor verify-state deferred per CD.27"
+      to "the per-rec differential verify runs as a GitHub Actions job keyed by rec id, with Step Functions
+      only dispatching and waiting -- CD.38 sole-runner rule", and append a bracketed
+      "[Amendment 2026-07-03, VF-12: ...]" note preserving the original wording and stating the criterion
+      remains met (only the named substrate is corrected; gate logic + is_admitted() shipped under
+      PLAN-t3-1-verifier-harness). (b) CD.38: append a new discipline point: "The per-rec differential
+      verify (fail-on-revert: pre-change tree -> assert FAIL; head -> assert PASS) runs as a GitHub Actions
+      job keyed by rec id -- NOT in AWS. Step Functions has a verify STATE that only dispatches and waits,
+      consistent with the sole-runner rule (resolves the T3.1 c6 vs CD.38 substrate seam, VF-12)."
+  - file: scripts/verification_checks.py
+    action: Modify
+    purpose: >-
+      VF-12: reconcile BOTH docstrings that name the per-rec differential-verify substrate so the file
+      tells ONE consistent substrate story (VF-12 acceptance: grep for 'verify state' shows one story --
+      the module edit alone would leave the "specified twice" pattern VF-12 targets). (a) The MODULE
+      docstring (L1-6): name GitHub Actions as the execution substrate (a per-rec differential verify job
+      runs in GitHub Actions keyed by rec id; Step Functions only dispatches and waits -- CD.38 sole-runner
+      rule), consistent with the T3.1 c6 amendment. (b) The is_admitted() docstring (~L320-322, cited
+      VERBATIM in the VF-12 evidence as verification_checks.py:322-323), currently "production wiring is
+      validate.py (CI) or the Step-Functions executor verify-state (deferred per CD.27)": reword so the
+      Step-Functions verify-state is the DISPATCH-and-wait state and the job runs in GitHub Actions -- e.g.
+      "production wiring is validate.py (CI) or a per-rec differential verify job in GitHub Actions keyed by
+      rec id, dispatched-and-awaited by the Step-Functions executor verify-state (CD.38 sole-runner rule;
+      the job runs in GitHub Actions, not in-cloud)". Docstring-only edits -- no code/behaviour change;
+      tests/test_verification_checks.py already exists (no new coverage surface). Sets the plan's V2 floor.
+  # --- VF-11: oracle-quality precondition for unattended merges (CD.17 primary + CD.29 point) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VF-11 (operator pick: CD.17 primary + CD.29 discipline point). (a) CD.17 (~L641-676): append a
+      bracketed "[Amendment 2026-07-03, VF-11 -- oracle-quality precondition for unattended merges]" that
+      states the reversal-trigger EXPRESSION is UNCHANGED (still keyed to T4.2/T3.2/T3.3; the clause is NOT
+      added to gates:) and adds a post-reversal MERGE-AUTHORITY discipline: once unfrozen the executor may
+      NOT merge a rec unattended while that rec's acceptance oracle is structural-only (grep_count /
+      file_presence kernel slots that pass fail-on-revert while proving only text presence) UNTIL BOTH
+      (a) T3.7 mutation-on-target is live for graduated checks AND (b) the per-rec differential verify job
+      is live (VF-12); until then structural-only acceptance is ADVISORY for unattended merges (such recs
+      route to human /plan -> /implement, where the plan VP re-derives behavioural verification). This
+      narrows the compensating-control gap VF-11 names (the human control is removed by the same unfreeze
+      event that activates the structural oracle). Honors the CD.17 [Amendment 2026-06-01] "T3.6/T3.7/T3.1
+      PRECEDE and do NOT gate the reversal trigger" -- the trigger predicate and gates: list are untouched.
+      (b) CD.29 (~L1246-1311): append a matching discipline point colocating the doctrine (CD.29 owns
+      structural-vs-behavioural / differential-admission), cross-referencing the CD.17 merge-authority
+      clause, T3.18 (differential admission), and T3.7 (mutation).
+  # --- VF-14: T3.10 reactivation + T3.1 operator-confirmed status closeout ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VF-14. (a) T3.10 (~L6618-6648): flip status deferred_post_mvp -> not_started and rewrite progress_note
+      to record the 2026-07-03 reactivation (trigger "T3.1 + T3.6 complete" now satisfied: T3.6 complete
+      2026-06-25, T3.1 closed complete in THIS change), retaining the prior deferral rationale in a bracketed
+      clause. Do NOT modify T3.10's exit_criteria or its "- id:" line. (b) T3.1 (~L6271-6338): flip item
+      status in_progress -> complete and add completed_at: "2026-07-03" (operator-confirmed per
+      Status-Trusted-Never-Inferred / CD.39; all seven exit criteria already status: met,
+      met_by: t3-1-verifier-harness); expand progress_note to record the operator-confirmed closeout and the
+      c6 substrate reconciliation (VF-12). Order in /implement: close T3.1 FIRST, then reactivate T3.10.
+  # --- New forward-intent carriers T3.15-T3.18 (audit unowned gaps) ---
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Insert four new tier_items T3.15-T3.18 (next free T3.x ids; current max T3.14) immediately AFTER T3.14
+      (~L6834) and BEFORE the "# ----- T4:" comment (~L6836), each fully-structured (id + text + status: open
+      ExitCriterion objects, since new "- id:" lines ARE touched-items under validate_platform_roadmap (ii)).
+      Exact definitions in execution_steps. depends_on wiring: T3.15 [T3.17]; T3.16 []; T3.17 []; T3.18 [T3.1].
+      All status: not_started, strategic: false, related_intents: [verification-system], with a note that
+      derived recs are automatable: false (Decision 44). Exit criteria are lifted verbatim-in-substance from
+      each audit finding's `acceptance` field.
+  # --- Decision-70 mis-cite correction (DECISIONS.md + ledger + post-merge backfill) ---
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Decision-70 mis-cite correction (audit meta.contract_notes item 1). At each of the five mis-cite
+      sites, append a NEW bracketed line beginning with the exact marker "[Amendment 2026-07-03,
+      Decision-70 mis-cite (audit f80508b): ...]" -- ADDITIVE only, leaving the original "Decision 70"
+      citation string verbatim and intact on its own line above the note (never rewrite/replace the
+      historical text). (1) L416 and L430 (inside Decision 103) -- note: the closure-proof principle cited
+      as "Decision 70" is a mis-cite; the principle is THIS decision (Decision 103, DECISIONS.md:413-416);
+      Decision 70 (DECISIONS.md:1916) is "Physical Deletion of Bootstrap Records". (2) L1253 and L1264
+      (inside Decision 87) -- note redirects the "lifecycle-state closure" citation to Decision 103;
+      Decision 70 is bootstrap-record deletion. (3) L1338 (inside Decision 84) -- SITE-SPECIFIC, NO 103
+      redirect (operator pick): note says "Decision 70" is a mis-cite (Decision 70 = bootstrap-record
+      deletion) and the queue current-state semantics referenced are Decision 84's OWN priority_queue_current
+      verb; the note must NOT mention Decision 103. Do NOT touch Decision 70 itself (L1916) or any other text.
+  - file: docs/contracts/exit-criteria-ledger.yaml
+    action: Modify
+    purpose: >-
+      Fix decisions_cited (L5): replace "Decision-70" with "Decision-103" (the ledger's Status-Trusted-
+      Never-Inferred / closure-requires-proof citation is the closure-proof principle = Decision 103, not
+      the bootstrap-deletion Decision 70). Bump last_updated to "2026-07-03". No other change (the file is
+      intentionally non-ritual; validate_contract_drift skips it -- no contract: key).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "No terraform/*.tf, no Lambda-packaged file, and no IAM change in scope. scripts/verification_checks.py is NOT in any active Lambda manifest (confirmed) -- docstring edit only, no build/deploy. V2 (not V3)."
+  - "Post-merge only: `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` re-syncs the amended Decision 103/87/84 bodies into ops_decisions (sanctioned DECISIONS.md -> ops_decisions ETL, Decision 84 I-2). Requires the agent_platform (PlatformDev) static-key chain reachable at merge time; VP step 11 runs it post-merge."
+acceptance_criteria:
+  - "VF-09: T4.9's correlation-ids criterion includes 'head SHA'; a new T4.9 criterion requires verdict.head_sha == PR head at merge (mismatch -> re-verify, repeated -> ci-rca); T4.9's intent carries the three-status-alphabet note naming executor-ci-handshake.yaml as the unifier."
+  - "VF-10: T4.1 AND T4.9 each carry a HeartbeatSeconds/TimeoutSeconds verdict-wait criterion routing timeout to ci-rca; CD.38's callback-failure discipline point enumerates 'verdict-timeout' alongside stale/duplicate/auth."
+  - "VF-12: T3.1 c6 names 'GitHub Actions job keyed by rec id' as the differential-verify substrate (Step Functions dispatches/waits) with a preserved-original-wording amendment note and status still met; scripts/verification_checks.py docstring names GitHub Actions as the substrate; CD.38 has a new differential-verify-in-GHA discipline point."
+  - "VF-11: CD.17 carries a bracketed post-reversal merge-authority clause (structural-only acceptance advisory-for-unattended-merges until T3.7 mutation-on-target + per-rec differential job live) that explicitly leaves the reversal-trigger expression and gates: list unchanged; CD.29 carries a matching cross-referencing discipline point. The CD.17 gates: list still reads [T1.5, T1.6, T2.1, T3.3, T3.4, T4.1, T4.2, T4.4] and the trigger expression still reads T4.2/T3.2/T3.3 only."
+  - "VF-14: T3.10 status is not_started with a reactivation progress_note naming the satisfied 'T3.1 + T3.6 complete' trigger; T3.1 status is complete with completed_at: 2026-07-03 and an operator-confirmed closeout progress_note; all T3.1 c1-c7 remain status: met."
+  - "New carriers: T3.15/T3.16/T3.17/T3.18 exist, tier T3, status not_started, fully-structured exit_criteria (no bare strings), depends_on T3.15=[T3.17] T3.16=[] T3.17=[] T3.18=[T3.1]; each exit criterion traces to an audit finding acceptance field (VF-01/07/08, VF-02/03, VF-04/13, VF-05/06)."
+  - "Decision-70 mis-cite: dated amendment notes present at DECISIONS.md L416/L430 (Dec 103 -> 103), L1253/L1264 (Dec 87 -> 103), and L1338 (Dec 84, site-specific, NO 103 redirect); the original 'Decision 70' strings are all still present (historical text preserved); Decision 70 at L1916 is untouched."
+  - "exit-criteria-ledger.yaml decisions_cited lists 'Decision-103' and no longer lists 'Decision-70'; last_updated is 2026-07-03."
+  - "Roadmap loads under scripts/platform_roadmap.py and validate_platform_roadmap + validate_candidate_decision_ratification pass (CDs stay state: pending -- no ratification-guard trip); the roadmap stays under the 10,000-line size guard."
+  - "bin/venv-python -m scripts.validate (full tier) exits 0, OR its ONLY failure is the pre-existing 'Import contracts (Decision 80)' check documented in the audit meta (verified to also fail on origin/main); no failure is attributable to the files this plan edits."
+  - "Post-merge: ops_data_portal --backfill-decisions-md succeeds, re-syncing the amended Decision 103/87/84 bodies to ops_decisions."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Plan document schema validation.
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-audit-remediation-wave-1.yaml"
+    expected: "PlanDocument validates (schema_version 1; V2; scope/VP/acceptance well-formed)."
+    fix_if: "Schema error -- correct the offending field per plan_document.py."
+  - step: 2
+    phase: pre-deploy
+    action: Roadmap loads under platform_roadmap.py; assert the lifecycle flips and new items are present and well-formed.
+    command: "bin/venv-python -c \"from scripts.platform_roadmap import load; from pathlib import Path; d=load(Path('docs/ROADMAP-PLATFORM.yaml')); items={i.id:i for i in d.tier_items}; assert items['T3.1'].status=='complete', items['T3.1'].status; assert getattr(items['T3.1'],'completed_at',None)=='2026-07-03', getattr(items['T3.1'],'completed_at',None); assert items['T3.10'].status=='not_started', items['T3.10'].status; new=['T3.15','T3.16','T3.17','T3.18']; assert all(n in items for n in new), [n for n in new if n not in items]; assert items['T3.15'].depends_on==['T3.17'] and items['T3.18'].depends_on==['T3.1'], (items['T3.15'].depends_on, items['T3.18'].depends_on); print('roadmap load OK')\""
+    expected: "Prints roadmap load OK (T3.1 complete + completed_at 2026-07-03, T3.10 not_started, T3.15-T3.18 present with correct deps)."
+    fix_if: "A status/dep assertion fails -- fix the roadmap edit; if load() raises, fix the YAML/structure."
+  - step: 3
+    phase: pre-deploy
+    action: Roadmap schema + candidate-decision ratification guards pass (CDs stay pending; size guard clean).
+    command: "bin/venv-python -c \"f=[]; __import__('scripts.checks.roadmap.validate_platform_roadmap',fromlist=['x']).validate_platform_roadmap(f); __import__('scripts.checks.roadmap.validate_candidate_decision_ratification',fromlist=['x']).validate_candidate_decision_ratification(f); print('roadmap guards FAILED:',f) if f else print('roadmap guards OK')\""
+    expected: "Prints roadmap guards OK (no bare-string-on-touched-item failure for T3.15-T3.18; no ratification-guard trip; under 10k lines)."
+    fix_if: "A guard fails -- if bare-string on a new item, convert its criteria to ExitCriterion objects; if ratification, ensure no CD gained ratified_as/filed_via; if size, the additions overflow (they should not)."
+  - step: 4
+    phase: pre-deploy
+    action: VF-09 landed (T4.9 head-SHA binding + status-alphabet note).
+    command: "T49=$(bin/venv-python -c \"import re; s=open('docs/ROADMAP-PLATFORM.yaml').read(); m=re.search(r'- id: T4\\.9.*?(?=\\n  - id: )', s, re.S); print(m.group(0))\"); echo \"$T49\" | grep -qi 'head SHA' && echo \"$T49\" | grep -qi 'verified head SHA equals the PR head' && echo \"$T49\" | grep -qi 'PASS/FAIL/WARN/SKIPPED' && echo \"$T49\" | grep -qi 'executor-ci-handshake' && echo 'VF-09 OK'"
+    expected: "Prints VF-09 OK (head SHA in correlation tuple + SHA-equality merge criterion + status-alphabet note naming the handshake contract, all within T4.9)."
+    fix_if: "A grep misses -- complete the missing T4.9 edit."
+  - step: 5
+    phase: pre-deploy
+    action: VF-10 landed (T4.1 + T4.9 verdict-wait + CD.38 verdict-timeout).
+    command: "bin/venv-python -c \"import re; s=open('docs/ROADMAP-PLATFORM.yaml').read(); g=lambda i: re.search(r'- id: '+re.escape(i)+r'.*?(?=\\n  - id: )', s, re.S).group(0); import sys; ok=('HeartbeatSeconds' in g('T4.1') and 'HeartbeatSeconds' in g('T4.9') and 'verdict-timeout' in g('CD.38')); print('VF-10 OK' if ok else 'VF-10 FAIL'); sys.exit(0 if ok else 1)\""
+    expected: "Prints VF-10 OK (HeartbeatSeconds criterion in both T4.1 and T4.9; 'verdict-timeout' in CD.38's discipline point)."
+    fix_if: "A term is missing -- add the timeout/heartbeat criterion to the missing item or the CD.38 enumeration."
+  - step: 6
+    phase: pre-deploy
+    action: VF-12 landed (T3.1 c6 substrate + BOTH verification_checks.py docstrings + CD.38 point; original c6 wording preserved; c6 still met; file tells one consistent substrate story).
+    command: "bin/venv-python -c \"import re,sys; s=open('docs/ROADMAP-PLATFORM.yaml').read(); t31=re.search(r'- id: T3\\.1\\b.*?(?=\\n  - id: )', s, re.S).group(0); cd38=re.search(r'- id: CD\\.38.*?(?=\\n  - id: )', s, re.S).group(0); vc=open('scripts/verification_checks.py').read(); ia=vc[vc.find('production wiring'):vc.find('production wiring')+340]; ok=('GitHub Actions job keyed by rec id' in t31 and 'Amendment 2026-07-03, VF-12' in t31 and 'Step-Functions executor verify-state deferred per CD.27' in t31 and 'GitHub Actions' in cd38 and vc.count('GitHub Actions')>=2 and 'GitHub Actions' in ia); print('VF-12 OK' if ok else 'VF-12 FAIL'); sys.exit(0 if ok else 1)\""
+    expected: "Prints VF-12 OK (T3.1 c6 names the GHA substrate AND preserves the original 'Step-Functions executor verify-state' wording in its amendment note; CD.38 point + BOTH docstrings -- module and is_admitted -- name GitHub Actions, so the file no longer specifies the substrate two ways)."
+    fix_if: "A term is missing -- reconcile the is_admitted() docstring near 'production wiring' as well as the module docstring; ensure c6 adds the GHA substrate + preserves original wording; add the CD.38 point."
+  - step: 7
+    phase: pre-deploy
+    action: VF-11 landed (CD.17 merge-authority clause + CD.29 point) AND the CD.17 reversal trigger/gates are unchanged (scout NOTE guard).
+    command: "bin/venv-python -c \"import re,sys; s=open('docs/ROADMAP-PLATFORM.yaml').read(); cd17=re.search(r'- id: CD\\.17.*?(?=\\n  - id: )', s, re.S).group(0); cd29=re.search(r'- id: CD\\.29.*?(?=\\n  - id: )', s, re.S).group(0); has_clause=('VF-11' in cd17 and 'advisory' in cd17.lower() and 'unattended' in cd17.lower() and 'T3.7' in cd17); trigger_intact=('gates: [T1.5, T1.6, T2.1, T3.3, T3.4, T4.1, T4.2, T4.4]' in cd17 and 'item_field_eq(T3.2' in cd17); cd29_ok=('VF-11' in cd29 and 'unattended' in cd29.lower()); ok=has_clause and trigger_intact and cd29_ok; print('VF-11 OK' if ok else f'VF-11 FAIL clause={has_clause} trigger_intact={trigger_intact} cd29={cd29_ok}'); sys.exit(0 if ok else 1)\""
+    expected: "Prints VF-11 OK (CD.17 has the merge-authority clause; the gates: list and T3.2 trigger predicate are unchanged; CD.29 has the matching point)."
+    fix_if: "clause missing -- add it; trigger_intact False -- the edit wrongly touched gates:/trigger, revert that (scout: touching them flips to BLOCK); cd29 missing -- add the discipline point."
+  - step: 8
+    phase: pre-deploy
+    action: New carriers T3.15-T3.18 fully-structured with exit criteria tracing to the audit findings.
+    command: "bin/venv-python -c \"from scripts.platform_roadmap import load, ExitCriterion; from pathlib import Path; d={i.id:i for i in load(Path('docs/ROADMAP-PLATFORM.yaml')).tier_items}; import sys; bad=[]; \nfor i in ['T3.15','T3.16','T3.17','T3.18']:\n it=d[i]; cs=it.exit_criteria\n if not cs or any(not isinstance(c,ExitCriterion) for c in cs): bad.append(i+':bare-or-empty')\n if it.status!='not_started': bad.append(i+':status')\nprint('carriers OK' if not bad else 'carriers FAIL '+str(bad)); sys.exit(0 if not bad else 1)\""
+    expected: "Prints carriers OK (all four exist, not_started, fully-structured non-empty exit_criteria)."
+    fix_if: "A carrier is bare/empty/misstatused -- fix its definition."
+  - step: 9
+    phase: pre-deploy
+    action: Decision-70 mis-cite -- the 5 original citations preserved (historical text), >=5 amendment notes added, 1338 site carries a note with NO Decision-103 redirect, Decision 70 header untouched, ledger fixed.
+    command: "grep -qF '(Decision 70: closure requires a closure proof, not an LLM assertion)' docs/DECISIONS.md && grep -qF 'Decision 70 (closure-proof requirement)' docs/DECISIONS.md && grep -qF 'lifecycle-state closure per Decision 70' docs/DECISIONS.md && grep -qF 'Decision 70 (lifecycle-state closure)' docs/DECISIONS.md && grep -qF 'Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb)' docs/DECISIONS.md && grep -q '^## Decision 70: Physical Deletion of Bootstrap Records' docs/DECISIONS.md && test \"$(grep -cF '[Amendment 2026-07-03' docs/DECISIONS.md)\" -ge 5 && ! grep -q 'Decision-70' docs/contracts/exit-criteria-ledger.yaml && grep -q 'Decision-103' docs/contracts/exit-criteria-ledger.yaml && grep -q 'last_updated: \"2026-07-03\"' docs/contracts/exit-criteria-ledger.yaml && bin/venv-python -c \"import sys,pathlib; d=pathlib.Path('docs/DECISIONS.md').read_text(); i=d.find('priority_queue_current verb'); nxt=d.find(chr(10)+'## Decision ',i); w=d[i:(nxt if nxt>0 else i+800)]; ok=('[Amendment 2026-07-03' in w and 'Decision 103' not in w); print('1338 OK' if ok else '1338 FAIL'); sys.exit(0 if ok else 1)\" && echo 'DEC70 OK'"
+    expected: "Prints 1338 OK then DEC70 OK: all 5 original 'Decision 70' citation strings preserved (historical text intact), Decision 70 header present, >=5 '[Amendment 2026-07-03' notes added, the 1338 site (Decision 84 block) carries an amendment note with NO 'Decision 103', and the ledger swapped Decision-70 -> Decision-103 with last_updated 2026-07-03."
+    fix_if: "A fixed-string grep fails -- an original citation was overwritten instead of annotated (restore the verbatim line, append the note as a NEW line); count < 5 -- a site's amendment note is missing; '1338 FAIL' -- the 1338 note is missing OR wrongly mentions Decision 103 (operator pick: NO redirect); a ledger grep fails -- finish the decisions_cited swap / last_updated bump."
+  - step: 10
+    phase: pre-deploy
+    action: Full validation tier, adjudicated against the documented pre-existing Import-contracts failure.
+    command: "bin/venv-python -m scripts.validate"
+    expected: >-
+      Exit 0. If non-zero, the ONLY failing check is the pre-existing "Import contracts (Decision 80)"
+      documented in the audit meta (verify it also fails on origin/main via `git stash && bin/venv-python
+      -m scripts.validate`); no failure is attributable to the roadmap/DECISIONS/ledger/verification_checks
+      edits (validate_platform_roadmap, validate_candidate_decision_ratification, contract-drift,
+      plan-document, and any DECISIONS check must be green).
+    fix_if: >-
+      Any check that parses the edited files fails -- fix the offending edit and re-run. A validate.py
+      failure on main after merge spawns a ci_rca rec (forward-fix, Decision 55).
+  - step: 11
+    phase: post-deploy
+    action: Post-merge -- re-sync the amended Decision 103/87/84 bodies into ops_decisions.
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md"
+    expected: "Backfill succeeds (DECISIONS.md -> ops_decisions ETL; dec-103/dec-087/dec-084 rows refreshed with the amendment notes). Run AFTER the squash-merge to main."
+    fix_if: "Backfill fails -- confirm the agent_platform static-key chain (aws sts get-caller-identity --profile agent_platform) and re-run; there is no offline outbox (Decision 84 I-4)."
+constraints:
+  - "Only the files listed in scope may be modified: docs/ROADMAP-PLATFORM.yaml, docs/DECISIONS.md, docs/contracts/exit-criteria-ledger.yaml, scripts/verification_checks.py (docstring only). NO recommendations are filed or bundled (closes_criteria empty) -- waves 2-6 carry the build work and cite T3.15-T3.18."
+  - "Design-stage text only: CD.17/CD.29/CD.38 stay state: pending (do NOT add ratified_as/filed_via or flip state). T4.9/T4.1/T3.10 stay deferred_post_mvp/not_started except the VF-14 T3.10 reactivation. The only status FLIP is T3.1 in_progress -> complete (operator-confirmed 2026-07-03 per Status-Trusted-Never-Inferred / CD.39; all c1-c7 already met)."
+  - "VF-11 scout NOTE (else BLOCK): the CD.17 oracle-quality clause is post-reversal MERGE-AUTHORITY discipline. Do NOT add it to CD.17's gates: list and do NOT modify the reversal-trigger predicate (stays keyed to T4.2/T3.2/T3.3). VP step 7 asserts both are unchanged."
+  - "Preserve historical text (Decision 88/94 citation-correction precedent): the Decision-70 mis-cite fix ADDS dated bracketed notes; it never deletes or rewrites the original 'Decision 70' citations. Decision 70 itself (DECISIONS.md:1916) is untouched. Line 1338 (Decision 84) gets a site-specific note with NO redirect to Decision 103 (operator pick -- avoids relabelling queue-current-state semantics as closure-proof)."
+  - "Bare-string touched-item rule (validate_platform_roadmap (ii)): the check keys on added/removed '- id:' lines. Do NOT rewrite the '- id:' lines of T4.1/T4.9/T3.1/T3.10 -- append new criteria in their existing bare-string style so they stay outside the touched set. New items T3.15-T3.18 ARE touched (their '- id:' lines are added), so author their exit_criteria as fully-structured {id, text, status: open} ExitCriterion objects."
+  - "No rescue agents or workaround loops (Decision 55). Forward-fix only. This is a docs-only V2 plan -- no deploy, no Lambda, no terraform (verification_checks.py is not Lambda-packaged)."
+  - "Backfill (VP 11) runs POST-merge only, and is the sole external-system call; it is a reconciliation ETL (Decision 84 I-2 sanctioned DECISIONS.md -> ops_decisions path), not a deploy -- does not raise the tier to V3."
+context:
+  - "Audit source: audits/verification-system-review-f80508b.yaml (audited commit f80508b; merged PR #402). Findings in scope: VF-09, VF-10, VF-11, VF-12, VF-14 + meta.contract_notes item 1 (Decision-70 mis-cite). Each new-item exit criterion is lifted from the corresponding finding's `acceptance` field. Anchor every edit by section/content, not by audit line numbers (main has moved since f80508b)."
+  - "Wave scoping: this is wave 1 of 6 (text/roadmap only). Waves 2-6 are the build plans that cite T3.15-T3.18: (2) VP re-execution + persistence (T3.15/VF-01/07/08), (3) coverage repair (T3.16/VF-02/03), (4) V-tier floor + schema hardening (T3.17/VF-04/13), (5) graduation producer + admission (T3.18/VF-05/06), plus the executor-contract build waves consuming the amended T4.9/CD.38. This plan files NO recs -- the carriers ARE the hand-off."
+  - "Decisions cited (decision-scout FLAGS_FOUND, 74/74 triaged): Decision 84 (DuckLake sole ops backend / DECISIONS.md->ops_decisions ETL -- the backfill + the 1338 self-attribution), Decision 103 (closure-proof principle -- the redirect target), Decision 70 (Physical Deletion of Bootstrap Records -- the mis-cited decision; correction preserves historical text per the Decision 88/94 precedent), Decision 87 (plans-as-warehouse -- the 1253/1264 edited site), Decision 93 (deferred_post_mvp lifecycle -- sanctions the T3.10 reactivation; new depends_on edges respect the no-live-dep invariant), Decision 86 (intent->tier_items -- the T3.15-T3.18 carriers add no prose doc), Decision 67 (STRATEGIC freeze -- plan_type IMPLEMENTATION), Decision 48 (V-tier classification -- V2 correct), CD.39 (exit-criteria ledger / Status-Trusted-Never-Inferred -- the T3.1 closeout + ledger edit), CD.29 (graduated-validation doctrine -- VF-11/VF-12 extend it), CD.38 (GH-Actions sole-runner -- VF-10/VF-12), CD.17 (freeze reversal -- VF-11, via the flag). RELATED: Decision 105 (CD ratification lane -- adding discipline_points to pending CDs does not trip validate_candidate_decision_ratification), Decision 90 (tier flips are an /implement bookkeeping step), Decision 79 (per-Lambda gating corroborates V2), Decision 80 (import-contracts -- the carved-out pre-existing failure), Decision 44 (executor self-mod boundary -- derived recs automatable: false)."
+  - "Decision-scout flags resolved: (1) CD.17 [NOTE] -- the VF-11 clause is worded as post-reversal merge-authority discipline, explicitly OUT of gates:/trigger predicate; VP step 7 guards it (touching them would flip to BLOCK). (2) Decision 73 [WARN] -- the ci-rca HARD BLOCK is deferred via a logged deferral rationale (below) with explicit operator sign-off at the /plan confirmation gate."
+  - "ci_rca HARD BLOCK deferral (logged rationale, Decision 73; operator sign-off obtained at the /plan confirmation gate 2026-07-03): the two open ci-rca recs -- rec-2482 (test_iceberg_reader.py DuckLake reader URL tests fail when a live URL leaks into the test env) and rec-2483 (terraform-drift.yml retry loop out of parity with widened _TRANSIENT_INIT_SIGNATURES) -- are UNRELATED to this docs/roadmap audit-remediation work (different files: tests/test_iceberg_reader.py and scripts/checks/_scaffolding.py / terraform-drift.yml; different failure categories: test-env isolation and terraform retry parity). No scope overlap. Deferred here per the preflight HARD-BLOCK 'logged deferral rationale' escape valve, not the Related-Work exemption."
+  - "Branch was 0 commits behind / 0 ahead of origin/main at planning time (preflight main_freshness.status=ok); no Main Divergence Assessment overlap, no rebase needed at assessment time."
+  - "Verification (VF-11 host) = CD.17 primary + matching CD.29 point (operator pick); T3.1 closeout = staged in this plan (operator confirmed); Decision-70 1338 = site-specific note, no 103 redirect (operator pick)."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (harness claude/audit-remediation-wave-1-nu7rh7)."
+  - "audits/verification-system-review-f80508b.yaml findings VF-09/10/11/12/14 + meta.contract_notes read."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Cited decision/CD sections located (Decisions 84/103/70/87/93/86/67/48/44; CD.17/CD.29/CD.38/CD.39) via decision-scout + direct read."
+  - "All edit anchors located: T4.9/T4.1/T3.1/T3.10/T3.14 tier_items; CD.17/CD.29/CD.38 candidate_decisions; DECISIONS.md sites 416/430/1253/1264/1338 + the 1916 header; exit-criteria-ledger decisions_cited; verification_checks.py docstring. Next-free ids confirmed T3.15-T3.18."
+  - "Pre-existing full-tier 'Import contracts (Decision 80)' failure confirmed on origin/main (carve-out basis)."
+  - "AWS agent_platform static-key chain available for the post-merge backfill (aws sts get-caller-identity --profile agent_platform)."
+execution_steps:
+  - "VF-09 (T4.9): in docs/ROADMAP-PLATFORM.yaml, (a) append ', and head SHA (the exact commit the verdict attests)' to the correlation-ids exit criterion; (b) append the SHA-equality merge criterion (mismatch -> re-verify, repeated -> ci-rca, Decision 72; terraform no-TOCTOU analogue, Decision 92); (c) add the three-status-alphabet note to T4.9's intent naming docs/contracts/executor-ci-handshake.yaml as the unifier (VF-14). Run VP step 4."
+  - "VF-10 (T4.1 + T4.9 + CD.38): append the HeartbeatSeconds/TimeoutSeconds verdict-wait criterion to BOTH T4.1 and T4.9 (timeout -> ci-rca, never silent re-wait); amend CD.38's callback-failure discipline point to '(stale/duplicate/auth/verdict-timeout)' and note every waitForTaskToken state carries HeartbeatSeconds/TimeoutSeconds. Run VP step 5."
+  - "VF-12 (T3.1 c6 + verification_checks.py + CD.38): reword T3.1 c6's named substrate to the GitHub-Actions per-rec differential job (Step Functions dispatches/waits) and append a bracketed [Amendment 2026-07-03, VF-12] note that PRESERVES the original 'Step-Functions executor verify-state deferred per CD.27' wording and states the criterion stays met (KEEP status: met / met_by unchanged); amend BOTH scripts/verification_checks.py docstrings that name the substrate -- the module docstring (L1-6) AND the is_admitted() docstring (~L320-322, the 'production wiring is validate.py (CI) or the Step-Functions executor verify-state (deferred per CD.27)' line the VF-12 evidence cites as :322-323) -- to name GitHub Actions as the job substrate (Step-Functions verify-state only dispatches and waits), so the file no longer specifies the substrate two ways; append a CD.38 discipline point for the GHA differential-verify job. Run VP step 6."
+  - "VF-11 (CD.17 + CD.29): append the bracketed [Amendment 2026-07-03, VF-11] merge-authority clause to CD.17 (structural-only acceptance advisory-for-unattended-merges until T3.7 mutation-on-target + per-rec differential job live; explicitly state the reversal-trigger expression and gates: list are UNCHANGED); append a matching cross-referencing discipline point to CD.29. Do NOT edit CD.17 gates: or the trigger predicate. Run VP step 7."
+  - "VF-14 (T3.1 then T3.10): FIRST flip T3.1 status in_progress -> complete + add completed_at: \"2026-07-03\" + expand its progress_note (operator-confirmed closeout per CD.39; c6 substrate reconciled VF-12; c1-c7 stay met). THEN flip T3.10 status deferred_post_mvp -> not_started + rewrite its progress_note to record the reactivation (trigger 'T3.1 + T3.6 complete' now satisfied; prior deferral rationale retained in a bracket). Do not touch either item's exit_criteria or '- id:' lines."
+  - "New carriers: insert T3.15-T3.18 after T3.14 (before '# ----- T4:'), fully-structured. Definitions below (exit criteria lifted from the audit acceptance fields):\n\n  T3.15 'Interactive VP independent re-execution + durable evidence persistence' (VF-01/07/08), depends_on [T3.17], effort M, related_candidate_decisions [CD.29], related_intents [verification-system]. exit_criteria (status: open): c1 'Every merged feat(...) PR body contains the executed VP compliance table (command, truncated output, attempts, PASS/FAIL); spot-check of the next three merges confirms (VF-07)'; c2 'A registered check (validate_vp_replay) re-executes a PR plan hermetic pre-deploy VP steps in pr-validate; a hermetic pre-deploy step that fails on the PR tree cannot go green; non-hermetic steps are declared and excluded (VF-01)'; c3 'A V3 merge without a posted post-deploy evidence artifact (invocation output + run URL) is flagged by code-review (VF-01)'; c4 'A synthetic flaky VP step (attempts>1, empty intervening diff) files a rec and marks the step NONDETERMINISTIC in the PR VP table instead of a silent PASS (VF-08)'. note: carrier for VF-01/07/08; depends_on T3.17 (VF-13 phase enum is prerequisite hygiene for VP replay); derived recs automatable: false (Decision 44).\n\n  T3.16 'Verifier-coverage selection repair (real covers + wired advisory)' (VF-02/03), depends_on [], effort S, related_candidate_decisions [CD.29, CD.12]. exit_criteria (open): c1 'check_coverage([\"zzz/nope.xyz\"]) returns the path; a differential unit test asserts it and fails on the pre-change tree (VF-02)'; c2 'pr-validate logs an uncovered-files advisory on a PR touching an uncovered file; --coverage no longer exits 0 unconditionally and is wired into a workflow/skill (VF-02)'; c3 'AthenaViewsVerifier fails (or SKIPs honestly) if its target surface is dropped; its PASS message no longer asserts unmeasured freshness; its covers is no longer [\"**\"] (VF-03)'. note: carrier for VF-02/03 (done together -- AthenaViewsVerifier is both coverage-destroyer and stale oracle); automatable: false.\n\n  T3.17 'Deterministic V-tier floor + plan verification-step schema hardening' (VF-04/13), depends_on [], effort S, related_candidate_decisions [CD.29]. exit_criteria (open): c1 'A plan with an active-manifest Lambda file in scope and verification_tier: V2 fails validate --pre; sampled historical plans still pass (VF-04)'; c2 'The tier floor uses the same inputs plan-critique 12m names (compute_affected_artifacts + .tf resource-affecting + Python-source => >=V2); conscious-acceptance deviation honoured only via an explicit plan field (VF-04)'; c3 'A plan with phase: \"pre-merge\" fails validate_plan_documents; existing plans normalized or exempted (VF-13)'. note: carrier for VF-04 (Decision 48:2414 acknowledged-but-unowned) + VF-13; prerequisite for T3.15; automatable: false.\n\n  T3.18 'Interactive graduation producer + differential admission enforcement' (VF-05/06), depends_on [T3.1], effort M, related_candidate_decisions [CD.29, CD.27]. exit_criteria (open): c1 'An /implement session whose VP has a kernel-expressible standing check either adds a registry row (with graduated_by) or logs an explicit no-graduation decision; the registry gains its first differential-admitted entry (VF-05)'; c2 'A PR adding a registry entry whose check passes on origin/main fails main-validate with \"not admitted (revert did not produce FAIL)\"; is_admitted runs a real revert_runner (git worktree at origin/main), not a simulated revert (VF-06)'; c3 'A new verifier admitted under same-PR-guard exception (b) gets the same differential-admission treatment on its covered paths (VF-06)'. note: carrier for VF-05/06; depends_on T3.1 (graduation registry); unblocks T3.7 mutation targets + realizes the VF-11 differential leg; automatable: false.\n\n  Run VP step 8."
+  - "Decision-70 mis-cite (docs/DECISIONS.md): at each site APPEND a NEW line beginning with the exact marker '[Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): ...]', leaving the original 'Decision 70' citation string verbatim on its own line above (never rewrite/replace historical text). Sites: L416 and L430 (Decision 103 -- redirect the closure-proof citation to Decision 103; note Decision 70 = bootstrap deletion at :1916), L1253 and L1264 (Decision 87 -- redirect lifecycle-state-closure to Decision 103), and L1338 (Decision 84 -- SITE-SPECIFIC: Decision 70 mis-cite corrected; queue current-state semantics attributed to Decision 84's own priority_queue_current verb; the note must NOT mention Decision 103). That is 5 amendment notes total. Leave Decision 70 (L1916) untouched. Then fix docs/contracts/exit-criteria-ledger.yaml decisions_cited (Decision-70 -> Decision-103) and bump last_updated to 2026-07-03. Run VP step 9."
+  - "Run VP step 10 (full validate, adjudicated against the pre-existing Import-contracts failure). Loop-fix any check attributable to the edited files; do NOT touch the Import-contracts check. Then commit + push + open the PR and merge per AGENTS.md git-ops."
+  - "POST-merge: run VP step 11 (ops_data_portal --backfill-decisions-md) to re-sync the amended Decision 103/87/84 bodies into ops_decisions (Decision 84). If the static-key chain is unreachable, verify with aws sts get-caller-identity --profile agent_platform and re-run (no offline outbox, Decision 84 I-4)."
+  - "Report: the T4.9/T4.1/CD.38/T3.1-c6/CD.17/CD.29 amendments, the T3.1 closeout + T3.10 reactivation, the four new carriers (with deps), the five Decision-70 notes + ledger fix, and all verification results (incl. the Import-contracts carve-out adjudication and the post-merge backfill)."
+work_areas: []
+rollback: >-
+  All changes are additive text/roadmap edits plus one status flip (T3.1) and one reactivation (T3.10)
+  on a feature branch; revert the branch to restore. No code behaviour changes (verification_checks.py edit
+  is docstring-only), no deploy, no infra. The post-merge backfill is idempotent (DECISIONS.md -> ops_decisions
+  ETL, SCD2 append); re-running it after a revert re-syncs the reverted bodies. No recs were filed, so there
+  is nothing to unwind in the ops queue.
