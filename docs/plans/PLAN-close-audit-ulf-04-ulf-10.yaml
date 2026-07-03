@@ -26,8 +26,10 @@ scope:
     action: Modify
     purpose: >-
       Add a deterministic line-count size guard (constant _ROADMAP_MAX_LINES = 10000, Decision 114)
-      via a small pure helper so validate.py full tier fails when docs/ROADMAP-PLATFORM.yaml exceeds
-      the ratified ceiling.
+      via a small pure helper (_roadmap_size_issues) that returns a FAIL list; the check appends its
+      result UNCONDITIONALLY (no in-check if-branch) so validate.py full tier fails when
+      docs/ROADMAP-PLATFORM.yaml exceeds the ceiling while the module stays at 100% per-file coverage
+      (Decision 104 gate).
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -48,8 +50,10 @@ scope:
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
-      Add TestRoadmapSizeGuard for the size-guard helper (Decision 104 coverage gate maps
-      scripts/checks/**/*.py -> tests/test_validate.py; the check's new logic must be tested here).
+      Add TestRoadmapSizeGuard exercising both branches of the _roadmap_size_issues helper
+      (over-ceiling -> one-item list; within-ceiling -> empty list) plus the constant. Decision 104
+      coverage gate maps scripts/checks/**/*.py -> tests/test_validate.py, so the check's new logic
+      must be tested here.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -106,11 +110,11 @@ verification_plan:
     fix_if: prints BAD [...] -> add the missing resolution_ref (or, if load already raised ValidationError, fix the offending entry then re-run).
   - step: 5
     phase: pre-deploy
-    action: Size-guard test exists and passes; the helper + ceiling constant are correct.
+    action: Size-guard test exists and passes; the helper + ceiling constant are correct (both branches covered).
     command: |-
       grep -n "class TestRoadmapSizeGuard" tests/test_validate.py && bin/venv-python -m pytest tests/test_validate.py::TestRoadmapSizeGuard -q
-    expected: class found; tests pass -- _ROADMAP_MAX_LINES == 10000, a 10001-line synthetic input reports the overage, a 10000-line input reports None.
-    fix_if: constant != 10000 or the helper returns the wrong value -> correct the constant/helper.
+    expected: class found; tests pass -- _ROADMAP_MAX_LINES == 10000, a 10001-line synthetic input returns a one-item FAIL list, a 10000-line input returns an empty list.
+    fix_if: constant != 10000 or the helper returns the wrong list -> correct the constant/helper.
   - step: 6
     phase: pre-deploy
     action: The real validate_platform_roadmap check passes on the live file (schema + criteria integrity + size guard together).
@@ -177,7 +181,13 @@ context:
     cite this, not raw CD.13/NS.4), Decision 70 + Decision 103 (closure-requires-proof ethos behind the
     mandatory resolution_ref). Precedent: CD.39 is the roadmap exit-criteria-ledger candidate decision
     (promote-prose-to-enum) -- it is NOT DECISIONS.md "Decision 39" (that is Step Functions over Airflow).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+  - >-
+    Lambda-deployment assessment (no deploy step required): docs/ROADMAP-PLATFORM.yaml is an assets[] entry
+    (not includes[]) of the active data-pipeline manifest (src/lambdas/data-pipeline/manifest.yaml), so
+    compute_affected_artifacts flags data-pipeline, but no build/deploy/smoke-test is needed --
+    validate_lambda_deploy_gating is advisory (reds only on import error) and the roadmap-reading consumers
+    (scheduled agents) are disabled. Precedent: PLAN-close-audit-ulf-02.yaml (same assets[]-edit situation, V2).
   - >-
     Decision-scout flags handled: Decision 104 [WARN] resolved by adding tests/test_validate.py to scope
     (test_coverage_checker maps scripts/checks/**/*.py -> tests/test_validate.py). Decision 102 [NOTE] no
@@ -230,9 +240,13 @@ execution_steps:
   - >-
     scripts/checks/roadmap/validate_platform_roadmap.py: add a module-level constant
     '_ROADMAP_MAX_LINES = 10_000  # Decision 114 (raised from KG.11's 2500)' and a small pure helper
-    (e.g. '_roadmap_line_count_over(text, ceiling=_ROADMAP_MAX_LINES) -> int | None' returning the line
-    count when it exceeds the ceiling else None). Inside validate_platform_roadmap, after load(), append a
-    FAIL to issues when the helper flags the live file (message naming the count, the ceiling, and Decision 114).
+    '_roadmap_size_issues(text, ceiling=_ROADMAP_MAX_LINES) -> list[str]' returning a one-item FAIL list
+    (naming the line count, the ceiling, and Decision 114) when the line count exceeds the ceiling, else [].
+    Inside validate_platform_roadmap, after load(), append UNCONDITIONALLY:
+    'issues += _roadmap_size_issues(roadmap_path.read_text(encoding="utf-8"))' -- NO in-check if-branch,
+    so the append line is covered by the existing check-invoking tests and the helper's two branches by
+    TestRoadmapSizeGuard, keeping the module at 100% per-file coverage (Decision 104 gate). Do not add a
+    new registry entry -- extend the existing registered check (Decision 104-compliant).
   - >-
     docs/DECISIONS.md: author Decision 114 in the house format used by Decisions 112/113 -- header
     "## Decision 114: Raise the ROADMAP-PLATFORM.yaml size ceiling to 10,000 lines and add a deterministic
@@ -245,12 +259,14 @@ execution_steps:
   - >-
     docs/ROADMAP-PLATFORM.yaml: flip KG.11 to status: resolved, resolution_ref: "Decision 114", and rewrite
     its gap/notes to state the resolution (threshold raised to 10,000 lines via Decision 114 + deterministic
-    line-count guard in validate_platform_roadmap; the 2500-line trigger is superseded).
+    line-count guard in validate_platform_roadmap; the 2500-line/50K-token trigger is superseded). Use the
+    accurate current size (~7824 lines at resolution time), not KG.11's stale "~4,900 lines" figure.
   - >-
     tests/test_platform_roadmap.py: add class TestOpenQuestionKnownGapLifecycle covering -- valid enum values
     accepted on OpenQuestion and KnownGap; an invalid status value raises ValidationError; a RoadmapDocument
     with a status!=open OQ/KG lacking resolution_ref raises ValidationError; the same with resolution_ref
-    passes; the live docs/ROADMAP-PLATFORM.yaml loads clean.
+    passes; the live docs/ROADMAP-PLATFORM.yaml loads clean. Cover BOTH the open_question raise site AND the
+    known_gap raise site (checks (i) and (j) are separate loops) so platform_roadmap.py stays at 100% per-file coverage.
   - >-
     tests/test_validate.py: add class TestRoadmapSizeGuard covering -- _ROADMAP_MAX_LINES == 10000; the
     helper returns the overage count for a >10000-line synthetic string and None for a <=10000-line string.
