@@ -3,6 +3,11 @@
 Defines deterministic primitives for the graduated-validation model.
 Adding a new primitive slot requires a new CD (CD.29 discipline).
 This module must not touch the filesystem or raise at import time.
+
+Per-rec differential-verify execution substrate (VF-12, audit f80508b): a per-rec
+differential verify job runs in GitHub Actions, keyed by rec id. Step Functions
+(the executor) only DISPATCHES that job and WAITS on its verdict -- it never runs
+the check itself in AWS (CD.38 sole-runner rule).
 """
 
 from __future__ import annotations
@@ -318,8 +323,10 @@ def is_admitted(check: BaseCheck, revert_runner: Callable[[BaseCheck], CheckResu
         revert_runner: A callable that executes ``check`` in the pre-change
             environment (e.g. a subprocess that checks out origin/main and
             returns the result).  The harness supplies this; production wiring
-            is validate.py (CI) or the Step-Functions executor verify-state
-            (deferred per CD.27).
+            is validate.py (CI) or a per-rec differential verify job in
+            GitHub Actions keyed by rec id, dispatched-and-awaited by the
+            Step-Functions executor verify-state (CD.38 sole-runner rule; the
+            job runs in GitHub Actions, not in-cloud).
     """
     result = revert_runner(check)
     return result.status == CheckStatus.FAIL
