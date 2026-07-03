@@ -336,14 +336,17 @@ def ensure_fresh_dq_results(failed: list[str]) -> None:
     _common.invoke_step("Data quality runner", [_common.PYTHON, "-m", "scripts.data_quality_runner"], failed)
 
 
-def run_coverage_check() -> None:
+def run_coverage_check(changed_files: list[str] | None = None) -> None:
     """Print scope files not covered by any registered verifier (advisory only).
 
     Wave 1 of INTENT-verification-system.md: surfaces V3 verifier coverage gaps.
     Never appends to the failed list -- exit 0 unconditionally.
+
+    changed_files: reuse an already-computed diff (e.g. the --pre closure's `changed`) to
+    avoid a redundant git call; falls back to _common.get_changed_files() when omitted.
     """
     print("\n=== Verifier coverage report (advisory) ===")
-    changed = _common.get_changed_files()
+    changed = changed_files if changed_files is not None else _common.get_changed_files()
     if not changed:
         print("No changed files detected on this branch -- coverage check has nothing to report.")
         return

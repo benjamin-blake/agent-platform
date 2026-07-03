@@ -69,7 +69,7 @@ def check_coverage(scope_files: list[str]) -> list[str]:
     """
     all_globs: list[str] = []
     for verifier_cls in REGISTRY:
-        all_globs.extend(getattr(verifier_cls, "covers", ["**"]))
+        all_globs.extend(g for g in getattr(verifier_cls, "covers", []) if g not in ("**", "*"))
 
     uncovered: list[str] = []
     for path in scope_files:

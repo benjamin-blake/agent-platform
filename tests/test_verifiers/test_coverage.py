@@ -99,3 +99,11 @@ class TestCheckCoverage:
         finally:
             REGISTRY.clear()
             REGISTRY.extend(saved)
+
+    def test_check_coverage_differential_against_real_registry(self):
+        """(T3.16:c1) Against the REAL REGISTRY (no isolated_registry fixture): an absurd path is
+        reported uncovered -- this FAILS on the pre-change tree where a "**"/"*" verifier glob
+        makes coverage structurally vacuous -- while a genuinely-covered path still returns []."""
+        uncovered = check_coverage(["zzz/definitely_not_covered.xyz"])
+        assert uncovered == ["zzz/definitely_not_covered.xyz"]
+        assert check_coverage(["config/agent/data_quality/ops.yaml"]) == []

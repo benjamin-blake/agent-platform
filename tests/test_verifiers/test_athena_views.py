@@ -1,8 +1,7 @@
-"""Tests for the AthenaViewsVerifier."""
+"""Tests for the AthenaViewsVerifier (VF-03: repointed at live DuckLake ops_decisions)."""
 
 from unittest.mock import patch
 
-import pandas as pd
 import pytest
 
 from scripts.verifiers.athena_views import AthenaViewsVerifier
@@ -11,46 +10,59 @@ from scripts.verifiers.harness import Hermeticity, VerifierStatus, VerifierTier
 
 @pytest.mark.asyncio
 async def test_athena_views_no_imports():
-    with patch.dict("sys.modules", {"boto3": None, "awswrangler": None}):
+    with patch.dict("sys.modules", {"src.common.iceberg_reader": None}):
         verifier = AthenaViewsVerifier()
-        # We need to bypass the local import in the file if it already happened,
-        # but since we are running in a fresh test process or mocking sys.modules before import:
-        # Actually, the import is inside verify().
         result = await verifier.verify()
         assert result.status == VerifierStatus.SKIPPED
         assert "not available" in result.message
 
 
 @pytest.mark.asyncio
-async def test_athena_views_no_auth():
-    with patch("boto3.Session") as mock_session:
-        mock_session.return_value.client.return_value.get_caller_identity.side_effect = Exception("No auth")
+async def test_athena_views_reader_unreachable_skips():
+    with patch("src.common.iceberg_reader.DuckLakeReader") as mock_reader_cls:
+        mock_reader_cls.return_value.named.side_effect = RuntimeError(
+            "DUCKLAKE_READER_URL not set, SSM '/agent-platform/ducklake/reader_url' unavailable, "
+            "terraform output 'ducklake_reader_function_url' unavailable, and "
+            "lambda:GetFunctionUrlConfig fallback failed -- cannot reach the DuckLake reader "
+            "(Decision 84: DuckLake is the sole ops backend)."
+        )
         verifier = AthenaViewsVerifier()
         result = await verifier.verify()
         assert result.status == VerifierStatus.SKIPPED
-        assert "session inactive" in result.message
+        assert "unreachable" in result.message
 
 
 @pytest.mark.asyncio
 async def test_athena_views_pass():
-    with patch("boto3.Session"):
-        with patch("awswrangler.athena.read_sql_query") as mock_query:
-            mock_query.return_value = pd.DataFrame({"cnt": [42]})
-            verifier = AthenaViewsVerifier()
-            result = await verifier.verify()
-            assert result.status == VerifierStatus.PASS
-            assert "Found 42 decisions" in result.message
+    with patch("src.common.iceberg_reader.DuckLakeReader") as mock_reader_cls:
+        mock_reader_cls.return_value.named.return_value = [{"ts": "2026-07-01T00:00:00+00:00"}]
+        verifier = AthenaViewsVerifier()
+        result = await verifier.verify()
+        assert result.status == VerifierStatus.PASS
+        assert "Live ops_decisions reachable" in result.message
+        assert "fresh" not in result.message.lower()
 
 
 @pytest.mark.asyncio
 async def test_athena_views_query_fail():
-    with patch("boto3.Session"):
-        with patch("awswrangler.athena.read_sql_query") as mock_query:
-            mock_query.side_effect = Exception("Query error")
-            verifier = AthenaViewsVerifier()
-            result = await verifier.verify()
-            assert result.status == VerifierStatus.FAIL
-            assert "Athena query failed" in result.message
+    with patch("src.common.iceberg_reader.DuckLakeReader") as mock_reader_cls:
+        mock_reader_cls.return_value.named.side_effect = RuntimeError(
+            "ducklake_reader 'named_read' failed (HTTP 500): unknown verb"
+        )
+        verifier = AthenaViewsVerifier()
+        result = await verifier.verify()
+        assert result.status == VerifierStatus.FAIL
+        assert "read failed" in result.message
+
+
+@pytest.mark.asyncio
+async def test_athena_views_unexpected_error_fails():
+    with patch("src.common.iceberg_reader.DuckLakeReader") as mock_reader_cls:
+        mock_reader_cls.return_value.named.side_effect = ValueError("boom")
+        verifier = AthenaViewsVerifier()
+        result = await verifier.verify()
+        assert result.status == VerifierStatus.FAIL
+        assert "unexpected error" in result.message
 
 
 def test_athena_views_tier_v3():
@@ -61,3 +73,19 @@ def test_athena_views_tier_v3():
 def test_athena_views_disposition():
     """AthenaViewsVerifier must declare NON_HERMETIC_BY_CONSTRUCTION."""
     assert AthenaViewsVerifier.hermeticity == Hermeticity.NON_HERMETIC_BY_CONSTRUCTION
+
+
+def test_athena_views_covers_is_explicit():
+    """(T3.16:c3) covers must be a narrow explicit list, never the "**" catch-all default."""
+    covers = AthenaViewsVerifier.covers
+    assert covers != ["**"]
+    assert "**" not in covers
+    assert covers  # non-empty
+
+
+def test_athena_views_no_freshness_claim_in_source():
+    """(T3.16:c3) the module must not assert a freshness claim it does not measure."""
+    import pathlib
+
+    src = pathlib.Path("scripts/verifiers/athena_views.py").read_text()
+    assert "fresh" not in src.lower()
