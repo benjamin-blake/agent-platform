@@ -1,0 +1,410 @@
+schema_version: 1
+slug: "ci-rca-observability-dashboard"
+intent: >-
+  Land the sixth and final T1.13 follow-on IMPLEMENTATION plan (INTENT Section 7 observability),
+  re-grounded from the stale Athena ops_ci_rca_telemetry table/ci_rca_health view to DuckLake/
+  warm-cache-derived preflight surfacing, and close exit-criterion c12(iii) -- the back-validation
+  "preventive_action did not hold" loop. Makes the self-improving CI-RCA contract observable so the
+  team can tell rescue-style filings from real RCAs at scale and detect when a preventive_action
+  claimed by a closed rec fails to hold. Closes c1 and c12; builds c3's warn-mode rejection-rate
+  gauge (which flips only after 7 days of data); leaves c2/c5 gated on the strict-mode cutover.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-observability-dashboard.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract) -- Section 7 observability slice, the sixth
+  and final follow-on plan named in exit-criterion c1. Closes c1 (all six follow-on plans landed) and
+  c12 (self-observability + loop-closure; parts i+ii landed via PLAN-ci-rca-probe-health-failloud, part
+  iii back-validation lands here). Builds c3's warn-mode rejection-rate gauge (c3 flips to met only
+  after 7 days of sub-5% data -- not closed here). c2 (strict-mode Decision Record flip) and c5 (live
+  end-to-end SHA roundtrip) remain gated on the strict-mode cutover.
+closes_criteria:
+  - "T1.13:c1"
+  - "T1.13:c12"
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c3 enabler. Stamp a cache-visible warn-mode would-reject marker on source=ci_rca recs that are
+      ACCEPTED in warn mode but WOULD have been rejected in strict mode (schema-deficiency at the
+      L887-899 validation site, cross-check disagreement at _run_ci_rca_cross_check checks 1-4, bundle-
+      absent, and S3-missing). Today the warn branches only logger.warning() and file the rec with NO
+      persisted trace (substrate finding: no field is stamped), so the warn-mode rejection rate -- c3's
+      load-bearing metric -- is underivable from the warm cache. The marker rides the EXISTING
+      context_v2_json blob as a portal-derived optional field on CiRcaContext
+      (warn_mode_reject: Optional[dict] = {reasons: list[str], mode_at_write: "warn"}) -- Decision-66
+      Tier-B (portal-derived, agent never sets it), NOT a new SCD2 column (Decision 103/84). The
+      schema-deficiency branch is in file_rec (context_v2_json in scope), but the bundle-absent, S3-
+      missing and cross-check-disagreement branches live in helper functions (_run_ci_rca_cross_check and
+      the bundle/S3 helpers) that today only logger.warning()/raise and return None -- stamping from
+      them requires mutating the SHARED context_v2_json dict in place (passed in around L332) BEFORE the
+      json.dumps at ~L941, gated so strict mode (which raises) never stamps. schema_version stays at 1
+      (additive optional portal-derived field; the model's le=2 already permits future use, no bump
+      needed). Strict-mode rejections raise before any write (no rec created), so strict rejection-by-
+      reason counts remain deferred to telemetry Phase 4 (T2.36) -- documented, not silently dropped.
+  - file: scripts/ci_rca_back_validation.py
+    action: Create
+    purpose: >-
+      c12(iii). New warm-cache-only sensor mirroring scripts/ci_rca_probe_health.py's structure (pure
+      functions + caller-injected rows; NEVER constructs a ducklake reader, Decision 88). Functions:
+      find_preventive_regressions(cache_rows, window_days) -> list of {new_rec_id, prior_rec_id, file,
+      preventive_action_excerpt} where an OPEN source=ci_rca rec's failed_check key (normalised from
+      rec.file) matches a CLOSED prior source=ci_rca rec whose context_v2_json.preventive_action is
+      non-empty (claimed prevention) -- a heuristic "the fix that was supposed to prevent this recurred"
+      flag for /plan cross-check (Decision 55: surfacing-only, links the prior rec, never remediates;
+      Decision 57 loop-closure "proof a fix reduced the failure mode"). context_v2_json is parsed from
+      the JSON-string cache field exactly as ci_rca_probe_health._row_rca_confidence does. Match key is
+      FILE-ONLY (rec.file) plus the closed rec carrying a preventive_action -- the roadmap c12(iii)
+      "failed_check + failure_category (bundle-derived)" match is DEFERRED because context_v2_json has no
+      failure_category field today (a c9-style enrichment would add it); this is a materially weaker
+      heuristic than the criterion's written spec, disclosed in both the ROADMAP c12(iii) re-grounding
+      and the INTENT amend so the c12 -> met flip is honest, and file-only matching over-pairs on high-
+      churn files (e.g. scripts/validate.py), which the INTENT notes so /plan treats flags as candidates
+      only (Decision 55 surfacing-only, never remediates). No new NAMED_READS
+      verb, no Lambda redeploy: the warm cache already carries context_v2_json for all rows (open +
+      closed), so the roadmap c12(iii) "needs a server-side json_extract reader verb" assumption is
+      superseded (re-grounded in ROADMAP scope below).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      c1 + c3 + c12(iii). Add two warm-cache-derived preflight sections computed in the L1962-1989
+      ci_rca block (zero new reader egress, Decision 88; reuse the _derive_ci_rca_* pattern that parses
+      context_v2_json off recs_cache): (1) _compute_ci_rca_telemetry(recs_cache, window_days=7) ->
+      "CI-RCA Telemetry (last 7d)" section + report JSON key ci_rca_telemetry: recurrence_class
+      distribution (novel/instance_of_known_pattern/regression counts from context_v2_json), warn-mode
+      reject rate (warn_mode_reject markers / total ci_rca writes in window) with the INTENT-7.2 alert
+      note (warn > 25% -> "enforcement may need tuning"; <= 5% -> "Phase-4 promotion gate met"),
+      dispute-path traffic (source=ci_rca_evidence_dispute count -- satisfies rec-2415's gate),
+      bundle-upload backlog (context_v2_json.evidence_bundle_ref.upload_status != "ok" count), and
+      why_chain_terminus_override usage count; (2) _derive_ci_rca_back_validation(recs_cache) ->
+      "CI-RCA Back-Validation (preventive_action did not hold)" section + report JSON key
+      ci_rca_back_validation, from ci_rca_back_validation.find_preventive_regressions. Add print_*
+      functions and wire both into the report dict alongside the L2039-2045 ci_rca_* keys.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Amend-only re-grounding of Section 7 (grandfathered doc, disposition_state pending in
+      docs/intent-migration/MANIFEST.yaml -- Decision 86, intent-doc-freeze guard passes on amend).
+      Replace the STALE Athena ops_ci_rca_telemetry table (7.1) and ci_rca_health view (7.3) design with
+      the DuckLake/warm-cache preflight surfacing actually built here; state explicitly which 7.1 metrics
+      are cache-derivable (recurrence_class distribution, warn-mode reject rate, dispute-path traffic,
+      bundle-upload backlog, override usage) versus DEFERRED to telemetry Phase 4 (strict-mode rejection-
+      by-reason counts and cross-check disagreement rate on rejected writes -- no rec is created on a
+      strict rejection). Document the warn_mode_reject marker (Tier-B portal-derived, rides
+      context_v2_json) and the back-validation preventive-regression surfacing (including that the match
+      is FILE-ONLY and the failed_check+failure_category match is deferred until a failure_category field
+      lands in context_v2_json, and that file-only matching over-pairs on high-churn files so /plan treats
+      flags as candidates only). Of Section 7.2's three thresholds, state that the 25% warn-alert and 5%
+      Phase-4-promotion-gate are cache-derivable and surfaced, while the 10% strict-mode-rejection alert is
+      DEFERRED with the strict rejection-by-reason counts to telemetry Phase 4 (T2.36) -- so the amend does
+      not read as silently dropping the third threshold. Route the mandated first threshold-tuning follow-on
+      to a FILED REC (do not add standing prose enumerating it) -- Decision 86 field-semantics/forward-intent routing.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping staged here, flipped by /implement on a verified VP pass (Status-Trusted-Never-
+      Inferred): c1 -> status: met, met_by: ci-rca-observability-dashboard (all six follow-on plans now
+      landed); c12 -> status: met, met_by: ci-rca-observability-dashboard (part iii back-validation
+      landed cache-derived). Add a c3 progress note (warn-mode reject-rate gauge built; c3 stays OPEN
+      until 7 days of sub-5% data accrue). Re-ground c12(iii) on BOTH dimensions of the delivered
+      reality, not just the reader-verb clause: (a) "the join needs a NEW ducklake_reader named-read verb
+      with server-side json_extract predicates" is superseded -- the warm cache carries context_v2_json
+      for all rows, so the join is Python-side over the warm cache, zero egress, no new verb, no Lambda
+      redeploy; AND (b) the "failed_check + failure_category (bundle-derived)" match key is DELIVERED as
+      FILE-ONLY, with the failure_category dimension DEFERRED until a failure_category field lands in
+      context_v2_json (a c9-style enrichment) -- a materially weaker heuristic than the written spec,
+      disclosed here so the c12 -> met flip is honest rather than overclaiming against the criterion text.
+      Confirm c2/c5 stay OPEN (gated on strict-mode). Append a T1.13 progress_note entry summarising this slice.
+  - file: tests/test_ci_rca_back_validation.py
+    action: Create
+    purpose: >-
+      c12(iii). Unit tests for the sensor mirroring tests/test_ci_rca_probe_health.py's fixture style
+      (build dict cache rows with context_v2_json = json.dumps({...}); fixed NOW clock). Assert:
+      find_preventive_regressions flags an OPEN ci_rca rec whose file matches a CLOSED prior ci_rca rec
+      with a non-empty preventive_action; does NOT flag when the prior rec is open, when files differ,
+      when the prior rec has no preventive_action, or when the prior rec is a different source; window
+      filtering; empty result on no matches. MUST include an assertion that no ducklake reader is
+      constructed in the derivation path (patch _make_reader / make_reader to raise and confirm the
+      function still runs off the injected cache list) -- guards the Decision-88 zero-egress claim.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      c3 enabler. Add a test class TestWarnModeRejectMarker: in warn mode, a source=ci_rca write whose
+      context_v2_json is schema-deficient / whose cross-check disagrees / that is bundle-absent is
+      ACCEPTED and the filed rec's context_v2_json carries warn_mode_reject.reasons naming the tripped
+      check(s); in strict mode the same write RAISES (no rec, no marker); a fully-conformant warn-mode
+      write carries NO warn_mode_reject marker (absent, not empty). Assert the marker survives a
+      CiRcaContext round-trip (model parse of the persisted context_v2_json preserves the field).
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      c1 + c3 + c12(iii). Add TestCiRcaTelemetrySection asserting _compute_ci_rca_telemetry computes the
+      recurrence-class distribution, warn-mode reject rate (from warn_mode_reject markers), dispute-path
+      count, upload backlog, and override usage from synthetic cache rows with correct window filtering,
+      that the 25%/5% threshold note fires at the right boundaries, and that the ci_rca_telemetry key
+      lands in the report JSON. Add TestCiRcaBackValidationSection asserting _derive_ci_rca_back_validation
+      surfaces the flagged pairs and populates the ci_rca_back_validation report key, computed with zero
+      new reader egress (patch the reader to raise).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    No terraform in scope. No new ducklake_reader NAMED_READS verb (the back-validation join is
+    Python-side over the warm cache, which already carries context_v2_json), so no reader-Lambda
+    rebuild/redeploy and no NAMED_READS_VERSION bump.
+  - >-
+    Lambda assessment (no deploy required): only docs/ROADMAP-PLATFORM.yaml is a bundled assets: entry
+    of the active data-pipeline Lambda (src/lambdas/data-pipeline/manifest.yaml), and the edit here is
+    read-only bookkeeping data, not runtime code. None of the runtime Python scope files
+    (ops_data_portal.py, ci_rca_back_validation.py, session_preflight.py) match a Lambda packaging
+    pattern -- VP step 8 confirms this via lambda_manifest.compute_affected_artifacts. Divergence from
+    the letter of the per-Lambda build-gate is stated explicitly per the justify-do-not-silently-skip
+    rule; scheduled agents are disabled per the AGENTS.md runbook.
+acceptance_criteria:
+  - >-
+    c3 enabler (warn-reject marker): in warn mode a source=ci_rca write that would fail a strict check
+    (schema-deficiency, cross-check disagreement, bundle-absent, or S3-missing) is accepted with a
+    warn_mode_reject marker riding context_v2_json naming the tripped check(s); in strict mode the same
+    write raises with no rec created; a conformant warn write carries no marker -- verified by
+    tests/test_ops_data_portal.py::TestWarnModeRejectMarker.
+  - >-
+    c12(iii) back-validation: scripts/ci_rca_back_validation.find_preventive_regressions flags an open
+    ci_rca rec matching a closed prior ci_rca rec (by file) whose preventive_action claimed prevention,
+    links the prior rec, and constructs no ducklake reader in its read path -- verified by
+    tests/test_ci_rca_back_validation.py.
+  - >-
+    c1/c3 telemetry surfacing: session_preflight prints a "CI-RCA Telemetry (last 7d)" section
+    (recurrence-class distribution, warn-mode reject rate with the 25%/5% threshold note, dispute-path
+    traffic, bundle-upload backlog, override usage) and a "CI-RCA Back-Validation" section, and emits
+    ci_rca_telemetry and ci_rca_back_validation into the preflight report JSON -- all computed from the
+    warm recs cache with zero new reader egress (Decision 88).
+  - >-
+    docs/INTENT-ci-rca-methodology.md Section 7 is re-grounded from the Athena ops_ci_rca_telemetry
+    table/ci_rca_health view to the DuckLake/warm-cache surfacing, distinguishes cache-derivable metrics
+    from Phase-4-deferred ones, documents the warn_mode_reject marker and back-validation, and the
+    intent-doc-freeze guard still passes (amend of the grandfathered doc).
+  - >-
+    No code references the stale ops_ci_rca_telemetry table or ci_rca_health view after this change
+    (grep is empty) -- confirming the Section 7 re-grounding retired only prose, no live surface.
+  - >-
+    Staged roadmap bookkeeping: c1 and c12 are set to status: met (met_by: ci-rca-observability-dashboard)
+    only after VP steps pass; c3 carries a gauge-built-pending-data note; c2/c5 remain OPEN; c12(iii)
+    server-side-verb text is re-grounded to cache-derived.
+  - "bin/venv-python -m scripts.validate --pre passes (source registry, ci_rca guards, intent-doc-freeze, sloc)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Warn-mode reject marker stamped on accepted recs; strict mode still raises (mocked writer/boto3).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestWarnModeRejectMarker -q
+    expected: >-
+      Warn mode accepts a schema-deficient / cross-check-disagreeing / bundle-absent ci_rca write and the
+      filed rec's context_v2_json carries warn_mode_reject.reasons naming the tripped check(s); strict
+      mode raises with no rec; a conformant warn write carries no marker; the marker survives a
+      CiRcaContext round-trip.
+    fix_if: >-
+      If a warn-would-reject rec is filed with no marker, the warn-mode rejection rate stays underivable
+      and c3's gauge is vacuous -- add the portal stamp in every warn branch (L367-368/379-380/462-464/
+      894-899). If strict mode stamps instead of raising, the reject path regressed.
+  - step: 2
+    phase: pre-deploy
+    action: Back-validation matcher flags preventive-regression pairs from synthetic cache; no reader built.
+    command: bin/venv-python -m pytest tests/test_ci_rca_back_validation.py -q
+    expected: >-
+      find_preventive_regressions flags an open ci_rca rec whose file matches a closed prior ci_rca rec
+      with a non-empty preventive_action and links the prior rec; does not flag on open-prior / file-
+      mismatch / no-preventive_action / wrong-source; window filter honoured; empty on no match; the
+      reader-raises patch does not fire (zero egress).
+    fix_if: >-
+      A false positive means the match key is too loose (require closed status + non-empty
+      preventive_action + file match); a reader construction means the derivation touched the reader --
+      it must run only off the injected cache list (Decision 88).
+  - step: 3
+    phase: pre-deploy
+    action: Preflight telemetry + back-validation sections computed from cache and emitted into report JSON.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py::TestCiRcaTelemetrySection tests/test_session_preflight.py::TestCiRcaBackValidationSection -q
+    expected: >-
+      _compute_ci_rca_telemetry returns the recurrence-class distribution, warn-mode reject rate, dispute
+      count, upload backlog and override usage over the 7d window; the 25%/5% threshold note fires at the
+      boundaries; _derive_ci_rca_back_validation surfaces the flagged pairs; both keys (ci_rca_telemetry,
+      ci_rca_back_validation) appear in the report JSON; the reader-raises patch does not fire.
+    fix_if: >-
+      Missing report keys mean downstream consumers cannot see the signals; a wrong rate means the window
+      filter or warn_mode_reject counting is off; a reader call violates the Decision-88 zero-egress claim.
+  - step: 4
+    phase: pre-deploy
+    action: End-to-end preflight prints both new sections without error (real warm-cache path, degraded-safe).
+    command: bin/venv-python -m scripts.session_preflight 2>&1 | grep -E "CI-RCA Telemetry|CI-RCA Back-Validation"
+    expected: >-
+      Both section headers print in a live preflight run (empty bodies are acceptable when the cache has
+      no in-window ci_rca recs); no traceback, no reader egress beyond the existing warm-cache pull.
+    fix_if: >-
+      A traceback means the derive/print wiring mishandles an empty or malformed context_v2_json (guard
+      the json.loads per the _derive_ci_rca_undetermined_open pattern); a missing header means the section
+      was not wired into the print path.
+  - step: 5
+    phase: pre-deploy
+    action: Stale Athena surface fully retired -- no code references the telemetry table or health view.
+    command: bash -c "! grep -rn 'ops_ci_rca_telemetry\|ci_rca_health' scripts/ src/ config/ tests/ 2>/dev/null | grep -v INTENT && echo STALE-CLEAR"
+    expected: "Prints STALE-CLEAR -- no live code references the retired Athena table/view (only INTENT prose, re-grounded)."
+    fix_if: >-
+      A hit outside INTENT means the re-grounding missed a live reference -- the Section 7 surface was
+      never implemented in code, so any hit is a stray that must be removed or re-pointed to the cache path.
+  - step: 6
+    phase: pre-deploy
+    action: INTENT amend does not trip the intent-doc-freeze guard; grandfathered doc still allowed.
+    command: bin/venv-python -c "import sys; sys.argv=['v']; from scripts.validate import validate_intent_doc_freeze as c; f=[]; c(f); print('FAIL:'+';'.join(f) if f else 'FREEZE-OK')"
+    expected: "Prints FREEZE-OK -- docs/INTENT-ci-rca-methodology.md is grandfathered (amend permitted); no net-new INTENT doc created."
+    fix_if: >-
+      A freeze failure means the edit was mistaken for a new doc or the doc is not in
+      docs/intent-migration/MANIFEST.yaml -- keep the change as an amend of the grandfathered path.
+  - step: 7
+    phase: pre-deploy
+    action: Fast tier is green end-to-end (registry, ci_rca guards, freeze, sloc).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Fast tier passes: check_source_registry, validate_ci_rca_taxonomy, validate_ci_rca_trigger,
+      validate_ci_workflow_guards, validate_intent_doc_freeze, validate_sloc_limits all green.
+    fix_if: "The named failing check points at the specific surface to fix (registry / guard / freeze / sloc)."
+  - step: 8
+    phase: pre-deploy
+    action: Confirm no runtime scope file is Lambda-packaged (V2 tier holds; only ROADMAP is a read-only asset).
+    command: bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as f; a=f(['scripts/ops_data_portal.py','scripts/ci_rca_back_validation.py','scripts/session_preflight.py']); print('AFFECTED:',a if a else 'none (V2 holds)')"
+    expected: "Prints none (V2 holds) -- no active Lambda artifact requires build/deploy/smoke-test for the runtime scope files."
+    fix_if: >-
+      If an active artifact is flagged, the plan must add per-Lambda build/deploy/smoke-test steps (V3) --
+      but ops_data_portal/session_preflight are not Lambda-packaged, so none is expected.
+  - step: 9
+    phase: pre-deploy
+    action: Plan document validates against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-observability-dashboard.yaml
+    expected: "Plan validates (schema_version, slug/plan_path consistency, non-empty VP with commands, execution_steps, closes_criteria refs resolve)."
+    fix_if: "Schema errors name the offending field -- correct and re-validate."
+constraints:
+  - >-
+    Decision 55 (loud-failure / no autonomous remediation): the back-validation sensor FLAGS candidate
+    preventive-action regressions for /plan cross-check and links the prior rec; it never remediates.
+    No rescue agents or workaround loops.
+  - >-
+    Decision 88 (Neon egress budget): the telemetry section, the back-validation matcher, and the
+    warn-reject rate all read ONLY the warm recommendation cache already loaded by preflight -- no new
+    ducklake_reader call, no _make_reader() in any read path; tests assert the reader is never built.
+  - >-
+    Decision 103 / Decision 84 (no new Class-A column; ducklake_writer owns the keyspace; Single Portal
+    Invariant): the warn_mode_reject marker rides the EXISTING context_v2_json VARCHAR (a field on the
+    CiRcaContext blob), never a new SCD2 column; all writes go through the portal, the warm cache is a
+    read source only.
+  - >-
+    Decision 66 (Precision Context Injection, Tier B): warn_mode_reject is portal-derived at write time
+    (like automatable/risk), never agent-authored; the ci-rca agent prompt is not changed.
+  - >-
+    Decision 86 (intent-doc-freeze): docs/INTENT-ci-rca-methodology.md is AMENDED (grandfathered,
+    disposition_state pending), never re-created; the mandated threshold-tuning follow-on is routed to a
+    filed rec, not standing prose.
+  - >-
+    Decision 72 (RCA-as-Plan-Source) / Decision 73 (public repo, forward-fix): the new sections extend
+    the existing source=ci_rca preflight consumer surface; gauge/section strings carry no AWS account IDs,
+    ARNs, ExternalIds, or internal hostnames.
+  - >-
+    Decision 57 (control-plane loop-closure): the "preventive_action did not hold" back-validation is the
+    "proof a fix reduced the failure mode that caused it" transition (c12(iii)).
+  - >-
+    Status-Trusted-Never-Inferred: this plan STAGES the c1/c12 status flips as a roadmap Scope edit; the
+    actual flip happens in /implement's bookkeeping walk on a verified VP pass. c3 (pending 7d data), c2
+    and c5 remain OPEN.
+context:
+  - >-
+    Sixth and final T1.13 follow-on plan (c1 names it: PLAN-ci-rca-observability-dashboard). Successor to
+    PLAN-ci-rca-probe-health-failloud, which explicitly deferred "full Section-7 ops_ci_rca_telemetry
+    table emission and c12(iii) back-validation loop to a successor plan."
+  - >-
+    Substrate findings (fresh-context research, 2026-07-03): (a) warn-mode would-reject stamps NO marker
+    on the filed rec today -- only logger.warning lines (ops_data_portal.py L367-368/379-380/462-464/
+    894-899) -- so c3's warn-mode rejection rate is underivable from the cache without this plan's marker;
+    (b) strict-mode rejections raise before any write (no rec created), so strict rejection-by-reason
+    counts are NOT cache-derivable and are deferred to telemetry Phase 4 (T2.36); (c) context_v2_json is
+    carried in the warm cache (logs/.recommendations-log.jsonl) as a JSON string for all 1188 rows (open
+    + closed), so back-validation is Python-side over the cache with zero egress -- no new NAMED_READS
+    verb; (d) CiRcaContext has no extra="forbid", but the marker is added as an explicit model field
+    (not relied on as silent extra) so it survives re-validation.
+  - >-
+    Re-grounding (stale reference): INTENT Section 7.1 ops_ci_rca_telemetry Athena table + 7.3
+    ci_rca_health view are superseded by the DuckLake closed boundary (Decision 84/81); no code
+    implements them (grep empty). The plan re-grounds the prose to the warm-cache surfacing and re-grounds
+    ROADMAP c12(iii)'s "needs a server-side json_extract reader verb" clause to the cache-derived reality.
+  - >-
+    Templates to mirror: scripts/ci_rca_probe_health.py (warm-cache-only sensor, caller-injected rows, no
+    reader) for ci_rca_back_validation.py; the _derive_ci_rca_undetermined_open / _compute_ci_rca_abstention
+    functions in session_preflight.py (L466-529) for the context_v2_json-parsing derive pattern; the
+    L2039-2045 report dict block for the new JSON keys.
+  - >-
+    Decision-scout gate (Step 6a) returned FLAGS_FOUND (triaged 77/77): four NOTE flags, all resolved and
+    recorded -- 103/84 (marker rides context_v2_json, no new column), 48/79 (within-repo JSON-blob
+    validation, not cross-service; no scope file Lambda-packaged -> V2 holds, VP step 8), 86 (grandfathered
+    amend + tuning follow-on routed to a rec). CITE list (verbatim): 84, 88, 103, 72, 55, 57, 86, 73, 66.
+    Related: 81, 61, 60, 90.
+  - >-
+    gates: decision-scout=FLAGS_FOUND (77/77, all NOTE resolved); plan-critique=PROCEED after 1 round
+    (three required tightenings folded in: c12 file-only-match-key disclosure, 10%-threshold deferral in
+    the INTENT, multi-function marker stamping + no schema_version bump).
+  - >-
+    rec-2415 (Low, dispute-frequency throttle) is gated on this plan's Section 7.1 dispute-traffic gauge;
+    the gauge lands here and satisfies the gate, but the throttle needs the empirical traffic data the
+    gauge produces, so it is NOT bundled and stays a follow-on. rec-2281 (_derive_ci_rca_closed no result
+    cap) touches session_preflight.py but was not folded (kept out of scope to bound the change).
+  - >-
+    No open ci-rca unresolved recs at planning time (ci_rca_unresolved_recs empty -- no HARD BLOCK).
+    Branch was behind origin/main at planning time; origin/main's audit-remediation-wave-3 edited BOTH
+    docs/plans/PLAN-audit-remediation-wave-3.yaml AND docs/ROADMAP-PLATFORM.yaml (flipping tier_item
+    T3.16 to complete) -- ROADMAP-PLATFORM.yaml is a scope file of this plan, but the divergence is in the
+    T3.16 section with no textual overlap with T1.13, so the commit-flow-time auto-rebase merges cleanly;
+    /implement must rebase and re-confirm the T1.13 bookkeeping edits apply before pushing.
+  - >-
+    c3 flips to met only after 7 days of sub-5% warn-mode reject-rate data -- a later observation/tuning
+    session (or the c2 strict-flip Decision session) closes it; this plan builds the gauge, it cannot flip
+    the time-gated criterion. The mandated first threshold-tuning rec (INTENT 7.2) is filed as a follow-on
+    once a full week of data exists.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-oxe8bv)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant decisions surfaced via decision-scout (84, 88, 103, 72, 55, 57, 86, 73, 66)
+  - All files in scope located and readable (ci_rca_back_validation.py + test are new)
+  - Acceptance criteria understood and verifiable
+  - CI_RCA_STRICT_MODE default is warn; the warn-reject marker paths validated via a test that toggles the flag
+execution_steps:
+  - >-
+    Modify scripts/ops_data_portal.py: add warn_mode_reject: Optional[dict] to CiRcaContext (portal-
+    derived, Tier-B; schema_version stays at 1 -- additive optional field, le=2 already permits future
+    use, no bump). In each warn-would-reject branch stamp the tripped-check reasons into the SHARED
+    context_v2_json dict in place before the json.dumps (~L941): the schema-deficiency branch is in
+    file_rec (dict in scope), but the bundle-absent, S3-missing and cross-check checks 1-4 branches are in
+    helper functions (_run_ci_rca_cross_check + bundle/S3 helpers) that today only log/raise -- mutate the
+    passed-in dict there, gated so strict mode (which raises before write) never stamps.
+  - >-
+    Create scripts/ci_rca_back_validation.py mirroring ci_rca_probe_health.py -- pure
+    find_preventive_regressions over the warm cache (open ci_rca rec file-matching a closed prior ci_rca
+    rec with a non-empty preventive_action), caller-injected rows, no reader egress.
+  - >-
+    Modify scripts/session_preflight.py: add _compute_ci_rca_telemetry + _derive_ci_rca_back_validation and
+    their print_* functions; compute both in the L1962-1989 ci_rca block from the warm cache; wire
+    ci_rca_telemetry and ci_rca_back_validation into the report dict.
+  - >-
+    Amend docs/INTENT-ci-rca-methodology.md Section 7.1/7.2/7.3: re-ground Athena -> DuckLake/warm-cache,
+    document derivable-vs-deferred metrics, the warn_mode_reject marker, back-validation, and the 25%/5%
+    thresholds; route the tuning follow-on to a filed rec. Amend-only, grandfathered doc.
+  - >-
+    Stage docs/ROADMAP-PLATFORM.yaml bookkeeping: c1 -> met, c12 -> met (met_by ci-rca-observability-
+    dashboard), c3 progress note (gauge built, stays open pending 7d data), re-ground c12(iii) server-side-
+    verb text to cache-derived, confirm c2/c5 open, append a T1.13 progress_note entry.
+  - >-
+    Add tests/test_ci_rca_back_validation.py; extend tests/test_ops_data_portal.py (TestWarnModeRejectMarker)
+    and tests/test_session_preflight.py (TestCiRcaTelemetrySection, TestCiRcaBackValidationSection).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA
+    (Decision 55). The /implement bookkeeping walk flips c1/c12 only after VP steps 1-7 pass.
+  - "Report: what was implemented, verification results, and confirmation that c2/c3/c5 remain open."
+work_areas: []
+rollback: >-
+  All changes are additive and flag-gated (CI_RCA_STRICT_MODE default warn; the warn_mode_reject marker is
+  an optional context_v2_json field, the two preflight sections are additive, the back-validation module is
+  new and surfacing-only). Revert the branch commit to remove the marker, the sensor, the preflight
+  sections, and the INTENT/ROADMAP edits; the roadmap bookkeeping flips revert with it. No infra, no data
+  migration, no reader-verb/Lambda change to unwind.
