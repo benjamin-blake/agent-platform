@@ -1,0 +1,162 @@
+schema_version: 1
+slug: "iceberg-reader-ducklake-url-test-isolation"
+intent: >-
+  Resolve ci-rca rec-2482 by making two DuckLakeReader URL-resolution unit tests hermetic so
+  validate.py stops failing on an environment-dependent live-URL leak; a deterministic presubmit
+  gate is a precondition for the self-improvement loop (Decision 72/73 CI-RCA forward-fix).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-iceberg-reader-ducklake-url-test-isolation.yaml
+phase: >-
+  CI-RCA forward-fix (Decision 72/73); ci_rca soft-warn exception category, no tier_item. Neither
+  product nor platform axis advances -- hygiene fix restoring gate determinism.
+scope:
+  - file: tests/test_iceberg_reader.py
+    action: Modify
+    purpose: >-
+      Add the missing SSM-step isolation to test_ducklake_reader_url_loud_fail_when_unset and
+      test_ducklake_reader_url_api_fallback so a live ducklake_reader Function URL cannot leak in.
+bundled_recommendations:
+  - rec-2482
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    test_ducklake_reader_url_api_fallback passes even when the runtime environment can resolve a
+    live DuckLake reader URL (the SSM step is mocked, so the chain reaches the API fallback and
+    returns https://api.example).
+  - >-
+    test_ducklake_reader_url_loud_fail_when_unset passes -- raises RuntimeError matching
+    "DUCKLAKE_READER_URL not set" -- under the same conditions.
+  - >-
+    tests/test_iceberg_reader.py passes in full with no regressions (integration parity tests skip
+    when warehouse credentials are unavailable).
+  - >-
+    src/common/iceberg_reader.py is unchanged; the fix is test-only (git diff against origin/main
+    touches only tests/test_iceberg_reader.py).
+  - rec-2482 transitions to closed after merge via the Resolves trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Run the two previously-failing tests (rec-2482 acceptance command) in this environment.
+    command: bin/venv-python -m pytest tests/test_iceberg_reader.py::test_ducklake_reader_url_api_fallback tests/test_iceberg_reader.py::test_ducklake_reader_url_loud_fail_when_unset -q
+    expected: 2 passed.
+    fix_if: >-
+      If either still fails the SSM mock is not taking effect -- confirm monkeypatch.setattr targets
+      ir (src.common.iceberg_reader) with attribute "_resolve_function_url_via_ssm" and a
+      lambda *a, **k None return, placed after the delenv line.
+  - step: 2
+    phase: pre-deploy
+    action: Run the full test file to confirm no regressions in the neighbouring reader tests.
+    command: bin/venv-python -m pytest tests/test_iceberg_reader.py -q
+    expected: All selected tests pass; integration-marked parity tests are skipped without warehouse credentials.
+    fix_if: >-
+      If a non-target test fails, revert any incidental edits and keep only the two SSM-mock
+      additions.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the change is test-only (the source resolution chain is correct and untouched).
+    command: git fetch origin main --quiet && git diff --name-only origin/main -- src/common/iceberg_reader.py
+    expected: Empty output -- src/common/iceberg_reader.py is not modified.
+    fix_if: If the source file appears, move the change back into the test file; do not alter _reader_url().
+  - step: 4
+    phase: pre-deploy
+    action: Run the fast presubmit gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS (the previously-failing DuckLake URL tests no longer fail).
+    fix_if: Address the specific failing check surfaced by validate.py; do not add a CI check without adding it to validate.py first.
+  - step: 5
+    phase: post-deploy
+    action: After the squash-merge (with the Resolves trailer), confirm rec-2482 auto-closed.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync && grep -F '"rec-2482"'
+      logs/.recommendations-log.jsonl | grep -q '"status": "closed"' && echo REC_2482_CLOSED
+    expected: Prints REC_2482_CLOSED (rec-autoclose.yml processed the Resolves trailer).
+    fix_if: >-
+      If still open, confirm the squash-merge body contained "Resolves: rec-2482"; otherwise close
+      manually via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2482 --status closed
+      --resolution "SSM-step isolation added to the two DuckLake reader URL tests".
+constraints:
+  - >-
+    Only modify tests/test_iceberg_reader.py. Out-of-scope issues become recommendations, not inline
+    fixes -- the broader socket-hermeticity gap is filed as rec-2484 (source=manual) and is NOT in
+    scope here.
+  - >-
+    Do NOT modify src/common/iceberg_reader.py. The four-step _reader_url() resolution chain
+    (env -> SSM -> terraform -> API -> loud-fail) is correct; this is a test-isolation defect only.
+  - >-
+    Preserve the loud-fail RuntimeError path (Decision 55/81): test_ducklake_reader_url_loud_fail_when_unset
+    must still assert RuntimeError with match "DUCKLAKE_READER_URL not set".
+  - >-
+    Use the exact mock idiom already present in the file:
+    monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None) -- mirroring the
+    _resolve_function_url_via_api patches in these two tests and TestDuckLakeReaderSSMResolution
+    (tests/test_iceberg_reader.py line 859).
+  - No rescue agents or workaround loops (Decision 55).
+  - ruff formatting, line length 127; no emojis; ASCII hyphens only.
+context:
+  - >-
+    Root cause: DuckLakeReader._reader_url() resolves env -> SSM -> terraform -> API -> loud-fail.
+    Both tests patch env (delenv), terraform (subprocess.run -> FileNotFoundError) and API
+    (_resolve_function_url_via_api) but leave the SSM step (_resolve_function_url_via_ssm) live. A
+    live ssm:get_parameter on /agent-platform/ducklake/reader_url returns a real
+    lambda-url.eu-west-2.on.aws URL that short-circuits the chain before the steps the tests target.
+  - >-
+    Confirmed in this environment: both tests fail on an unmodified checkout (api_fallback returns
+    the live URL instead of https://api.example; loud_fail DID NOT RAISE). With the SSM mock applied
+    both pass (proven via a throwaway repro; source unchanged).
+  - >-
+    Why the pytest socket backstop does not catch it: addopts set --disable-socket
+    --allow-hosts=127.0.0.1,::1. Because --allow-hosts is non-empty, pytest-socket's
+    pytest_runtest_setup takes the socket_allow_hosts() connect-guard path (patches
+    socket.socket.connect only, not getaddrinfo) instead of full disable_socket(), and that guard is
+    empirically ineffective against boto3/urllib3. This class-wide gap is filed as rec-2484 for a
+    separate follow-up and is out of scope here.
+  - >-
+    Sibling precedent: TestDuckLakeReaderSSMResolution (tests/test_iceberg_reader.py line 798+)
+    already patches _resolve_function_url_via_ssm in every test; this fix brings the two standalone
+    tests up to that pattern.
+  - >-
+    HARD BLOCK / Related-Work: two ci-rca recs were open at planning time (rec-2482, rec-2483). This
+    plan satisfies Related-Work condition 1 (same file: tests/test_iceberg_reader.py is rec-2482's
+    source_file) and condition 3 (same failure category: pytest regression / test isolation).
+    rec-2483 (terraform-drift retry parity) is owned by another agent.
+  - >-
+    Main divergence: branch was 0 commits behind origin/main at planning time with no scope-file
+    overlap; no rebase required at planning time.
+  - >-
+    Resolves trailer: the squash-merge commit body MUST include "Resolves: rec-2482" to trigger
+    rec-autoclose.yml.
+  - >-
+    Decision-scout verdict: NO_FLAGS (74 of 74 triaged). CITE (verbatim): Decision 79, Decision 81,
+    Decision 84, Decision 55. RELATED: Decision 48, Decision 62, Decision 72.
+  - "gates: decision-scout=NO_FLAGS; plan-critique=pending"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/iceberg-reader-ducklake-url-tests-0uzapk)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision surface triaged via decision-scout (NO_FLAGS, 74 of 74)
+  - tests/test_iceberg_reader.py located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In tests/test_iceberg_reader.py, test_ducklake_reader_url_loud_fail_when_unset: after the
+    monkeypatch.delenv("DUCKLAKE_READER_URL", ...) line, add
+    monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None) so the SSM step
+    returns None and the chain reaches the loud-fail RuntimeError.
+  - >-
+    In tests/test_iceberg_reader.py, test_ducklake_reader_url_api_fallback: after the
+    monkeypatch.delenv("DUCKLAKE_READER_URL", ...) line, add the same
+    monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None) so the chain
+    reaches the API fallback and returns https://api.example.
+  - Run ruff check (and format) on tests/test_iceberg_reader.py to confirm no lint regressions.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
+    and RCA (Decision 55).
+  - >-
+    Commit as feat(iceberg-reader-ducklake-url-test-isolation): ..., push the harness branch, open a
+    PR to main, ensure the squash-merge body carries "Resolves: rec-2482", subscribe to PR activity,
+    and end the turn.
+  - "Report: what was implemented, verification results, and rec-2482 closure state."
+work_areas: []
+rollback: >-
+  Revert the two monkeypatch.setattr additions in tests/test_iceberg_reader.py. The source file is
+  untouched, so there is no runtime rollback surface.
