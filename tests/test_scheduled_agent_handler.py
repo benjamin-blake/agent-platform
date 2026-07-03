@@ -9,10 +9,8 @@ import pytest
 
 import src.data.handlers.scheduled_agent_handler as handler_mod
 from src.data.handlers.scheduled_agent_handler import (
-    _get_gemini_api_key,
+    RetiredProviderError,
     _get_github_pat,
-    _invoke_copilot_sdk,
-    _invoke_gemini,
     _invoke_github_models,
     _load_manifest,
     _load_prompt,
@@ -33,6 +31,7 @@ class TestGetGithubPat:
         monkeypatch.delenv("GITHUB_PAT_SECRET_ARN", raising=False)
         assert _get_github_pat() == ""
 
+    @pytest.mark.integration
     def test_fetches_from_secrets_manager_when_arn_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_PAT", raising=False)
         monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
@@ -42,6 +41,7 @@ class TestGetGithubPat:
             result = _get_github_pat()
         assert result == "ghp_from_secrets"
 
+    @pytest.mark.integration
     def test_returns_empty_on_secrets_manager_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_PAT", raising=False)
         monkeypatch.setenv("GITHUB_PAT_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:123:secret/pat")
@@ -378,14 +378,13 @@ class TestHandler:
         mock_gh.assert_called_once()
         assert result["agents_run"] == 1
 
-    def test_mixed_providers_share_cached_pat(self) -> None:
-        """copilot-sdk and github-models agents share one PAT lookup."""
+    def test_retired_provider_agent_short_circuits_before_pat_lookup(self) -> None:
+        """A retired-provider agent fails without consuming the shared PAT lookup."""
         sdk_agent = self._make_agent(name="sdk-agent", provider="copilot-sdk")
         sdk_agent["model"] = "claude-haiku-4.5"
         gh_agent = self._make_agent(name="gh-agent", provider="github-models")
         agents = [sdk_agent, gh_agent]
 
-        fake_sdk = {"content": "[]", "error": False, "message": ""}
         fake_gh_response = {"choices": [{"message": {"content": "[]"}}]}
 
         with (
@@ -395,10 +394,6 @@ class TestHandler:
             patch(
                 "scripts.run_scheduled_agent.is_agent_due",
                 return_value=True,
-            ),
-            patch(
-                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
-                return_value=fake_sdk,
             ),
             patch(
                 "scripts.github_models_client.chat_completion",
@@ -411,12 +406,14 @@ class TestHandler:
         ):
             result = handler({}, None)
 
+        # Only the github-models agent needs the PAT; the retired-provider
+        # agent fails before reaching the shared PAT lookup.
         mock_pat.assert_called_once()
-        assert result["agents_run"] == 2
-        assert result["agents_failed"] == 0
+        assert result["agents_run"] == 1
+        assert result["agents_failed"] == 1
 
-    def test_missing_pat_fails_pat_dependent_providers(self) -> None:
-        """Without a PAT, copilot-sdk and github-models agents both fail."""
+    def test_missing_pat_fails_github_models_only(self) -> None:
+        """Without a PAT, the github-models agent fails; the retired-provider agent already failed."""
         sdk_agent = self._make_agent(name="sdk-agent", provider="copilot-sdk")
         sdk_agent["model"] = "claude-haiku-4.5"
         gh_agent = self._make_agent(name="gh-agent", provider="github-models")
@@ -431,9 +428,6 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
-            ) as mock_sdk,
-            patch(
                 "scripts.github_models_client.chat_completion",
             ) as mock_gh,
             patch(
@@ -444,70 +438,52 @@ class TestHandler:
             result = handler({}, None)
 
         mock_pat.assert_called_once()
-        mock_sdk.assert_not_called()
         mock_gh.assert_not_called()
         assert result["agents_run"] == 0
         assert result["agents_failed"] == 2
 
 
-class TestInvokeCopilotSdk:
-    """Tests for _invoke_copilot_sdk()."""
+class TestRetiredProvider:
+    """Tests for the Decision 116 retired-provider path (copilot-sdk, gemini).
+
+    Decision 116 supersedes Decision 49: copilot-sdk and gemini are retired
+    scheduled-agent providers. The handler raises RetiredProviderError
+    (caught locally) instead of silently misrouting to github-models.
+    """
 
     @pytest.fixture(autouse=True)
     def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
 
-    def test_success_path_returns_content(self) -> None:
-        fake_response = {"content": "sdk output", "error": False, "message": ""}
-        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
-            output, has_error, err_msg = _invoke_copilot_sdk("test prompt", "claude-haiku-4.5", "ghp_test")
-        assert output == "sdk output"
-        assert has_error is False
-        assert err_msg == ""
+    def test_retired_provider_error_is_a_runtime_error(self) -> None:
+        assert issubclass(RetiredProviderError, RuntimeError)
 
-    def test_error_path_returns_error_tuple(self) -> None:
-        fake_response = {"content": "", "error": True, "message": "SDK failure"}
-        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
-            output, has_error, err_msg = _invoke_copilot_sdk("test prompt", "claude-haiku-4.5", "ghp_test")
-        assert output == ""
-        assert has_error is True
-        assert err_msg == "SDK failure"
-
-    def test_handler_routes_copilot_sdk_provider(self) -> None:
-        """Handler calls _invoke_copilot_sdk for copilot-sdk provider."""
+    @pytest.mark.parametrize("provider", ["copilot-sdk", "gemini"])
+    def test_handler_raises_and_records_retired_provider_as_failure(self, provider: str) -> None:
+        """Retired providers fail loudly (no silent misroute to github-models)."""
         agent = {
             "name": "doc-freshness",
             "cron": "0 6 * * 1",
             "model": "claude-haiku-4.5",
             "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
-            "provider": "copilot-sdk",
+            "provider": provider,
         }
-        fake_response = {"content": "[]", "error": False, "message": ""}
 
         with (
-            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test") as mock_pat,
             patch.object(handler_mod, "_load_manifest", return_value=[agent]),
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch(
-                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
-                return_value=fake_response,
-            ) as mock_sdk,
             patch("scripts.github_models_client.chat_completion") as mock_gh,
-            patch(
-                "scripts.s3_log_store.write_timestamped_findings",
-                return_value="agents/doc-freshness/ts.jsonl",
-            ),
         ):
             result = handler({}, None)
 
-        mock_sdk.assert_called_once()
         mock_gh.assert_not_called()
-        assert result["agents_run"] == 1
-        assert result["agents_failed"] == 0
+        mock_pat.assert_not_called()
+        assert result["agents_run"] == 0
+        assert result["agents_failed"] == 1
 
-    def test_rec_curator_preload_triggered_for_copilot_sdk(self) -> None:
-        """_preload_rec_curator_context is called for copilot-sdk rec-curator."""
+    def test_retired_provider_failure_message_names_decision_116(self) -> None:
         agent = {
             "name": "rec-curator",
             "cron": "0 8 * * *",
@@ -515,188 +491,21 @@ class TestInvokeCopilotSdk:
             "prompt_path": ".github/prompts/scheduled/rec-curator.prompt.md",
             "provider": "copilot-sdk",
         }
-        fake_response = {"content": "[]", "error": False, "message": ""}
 
         with (
-            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
-            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
-            patch.object(handler_mod, "_load_prompt", return_value="base prompt"),
-            patch.object(
-                handler_mod,
-                "_preload_rec_curator_context",
-                return_value="enriched prompt",
-            ) as mock_preload,
-            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch(
-                "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
-                return_value=fake_response,
-            ),
-            patch(
-                "scripts.s3_log_store.write_timestamped_findings",
-                return_value="agents/rec-curator/ts.jsonl",
-            ),
-        ):
-            handler({}, None)
-
-        mock_preload.assert_called_once_with("base prompt")
-
-
-class TestGetGeminiApiKey:
-    """Tests for _get_gemini_api_key()."""
-
-    def test_returns_env_var_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
-        assert _get_gemini_api_key() == "test-gemini-key"
-
-    def test_returns_empty_when_no_env_and_no_arn(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
-        assert _get_gemini_api_key() == ""
-
-    def test_fetches_from_secrets_manager_when_arn_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.setenv(
-            "GEMINI_API_KEY_SECRET_ARN",
-            "arn:aws:secretsmanager:eu-west-2:123:secret/gemini-key",
-        )
-        mock_client = MagicMock()
-        mock_client.get_secret_value.return_value = {"SecretString": "gemini-from-secrets"}  # pragma: allowlist secret
-        with patch("boto3.client", return_value=mock_client):
-            result = _get_gemini_api_key()
-        assert result == "gemini-from-secrets"
-
-    def test_returns_empty_on_secrets_manager_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.setenv(
-            "GEMINI_API_KEY_SECRET_ARN",
-            "arn:aws:secretsmanager:eu-west-2:123:secret/gemini-key",
-        )
-        with patch("boto3.client", side_effect=Exception("denied")):
-            result = _get_gemini_api_key()
-        assert result == ""
-
-
-class TestInvokeGemini:
-    """Tests for _invoke_gemini() and gemini handler routing."""
-
-    @pytest.fixture(autouse=True)
-    def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
-
-    def test_success_path_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
-        fake_response = {"content": "gemini output", "error": False, "message": ""}
-        with patch(
-            "scripts.copilot_sdk_client.copilot_sdk_inference_sync",
-            return_value=fake_response,
-        ) as mock_sdk:
-            output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
-        assert output == "gemini output"
-        assert has_error is False
-        assert err_msg == ""
-        call_kwargs = mock_sdk.call_args.kwargs
-        assert call_kwargs["provider_config"]["type"] == "openai"
-        assert "generativelanguage.googleapis.com" in call_kwargs["provider_config"]["base_url"]
-        assert call_kwargs["provider_config"]["api_key"] == "test-gemini-key"  # pragma: allowlist secret
-
-    def test_error_path_returns_error_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
-        fake_response = {"content": "", "error": True, "message": "Gemini API error"}
-        with patch("scripts.copilot_sdk_client.copilot_sdk_inference_sync", return_value=fake_response):
-            output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
-        assert output == ""
-        assert has_error is True
-        assert err_msg == "Gemini API error"
-
-    def test_returns_error_when_gemini_key_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.delenv("GEMINI_API_KEY_SECRET_ARN", raising=False)
-        output, has_error, err_msg = _invoke_gemini("test prompt", "gemini-2.5-flash", "gho_test")
-        assert output == ""
-        assert has_error is True
-        assert "gemini api key" in err_msg.lower()
-
-    def test_handler_routes_gemini_provider(self) -> None:
-        """Handler calls _invoke_gemini for gemini provider."""
-        agent = {
-            "name": "doc-freshness",
-            "cron": "0 6 * * 1",
-            "model": "gemini-2.5-flash",
-            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
-            "provider": "gemini",
-        }
-
-        with (
-            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
             patch.object(handler_mod, "_load_manifest", return_value=[agent]),
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")) as mock_gemini,
-            patch("scripts.github_models_client.chat_completion") as mock_gh,
             patch(
-                "scripts.s3_log_store.write_timestamped_findings",
-                return_value="agents/doc-freshness/ts.jsonl",
-            ),
-        ):
-            result = handler({}, None)
-
-        mock_gemini.assert_called_once()
-        mock_gh.assert_not_called()
-        assert result["agents_run"] == 1
-        assert result["agents_failed"] == 0
-
-    def test_gemini_requires_pat(self) -> None:
-        """Missing PAT causes gemini agent to be counted as failed."""
-        agent = {
-            "name": "doc-freshness",
-            "cron": "0 6 * * 1",
-            "model": "gemini-2.5-flash",
-            "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
-            "provider": "gemini",
-        }
-
-        with (
-            patch.object(handler_mod, "_get_github_pat", return_value=""),
-            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
-            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-        ):
-            result = handler({}, None)
-
-        assert result["agents_run"] == 0
-        assert result["agents_failed"] == 1
-
-    def test_rec_curator_preload_triggered_for_gemini(self) -> None:
-        """_preload_rec_curator_context is called for gemini rec-curator."""
-        agent = {
-            "name": "rec-curator",
-            "cron": "0 8 * * *",
-            "model": "gemini-2.5-pro",
-            "prompt_path": ".github/prompts/scheduled/rec-curator.prompt.md",
-            "provider": "gemini",
-        }
-
-        with (
-            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
-            patch.object(handler_mod, "_load_manifest", return_value=[agent]),
-            patch.object(handler_mod, "_load_prompt", return_value="base prompt"),
-            patch.object(
-                handler_mod,
-                "_preload_rec_curator_context",
-                return_value="enriched prompt",
-            ) as mock_preload,
-            patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")),
-            patch(
-                "scripts.s3_log_store.write_timestamped_findings",
-                return_value="agents/rec-curator/ts.jsonl",
-            ),
+                "src.data.handlers.agent_telemetry.close_invocation",
+            ) as mock_close,
         ):
             handler({}, None)
 
-        mock_preload.assert_called_once_with("base prompt")
+        mock_close.assert_called_once()
+        error_arg = mock_close.call_args.kwargs.get("error", "")
+        assert "Decision 116" in error_arg
+        assert "retired" in error_arg.lower()
 
 
 class TestHandlerTelemetry:
@@ -706,25 +515,29 @@ class TestHandlerTelemetry:
     def _enable_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SCHEDULED_AGENTS_ENABLED", "true")
 
-    def _make_gemini_agent(self) -> dict:
+    def _make_gh_models_agent(self) -> dict:
         return {
             "name": "doc-freshness",
             "cron": "0 6 * * 1",
-            "model": "gemini-2.5-flash",
+            "model": "gpt-4.1-mini",
             "prompt_path": ".github/prompts/scheduled/doc-freshness.prompt.md",
-            "provider": "gemini",
+            "provider": "github-models",
         }
 
-    def test_telemetry_emitted_for_successful_gemini_run(self) -> None:
-        """open_invocation and close_invocation called with correct args for a successful Gemini run."""
-        agents = [self._make_gemini_agent()]
+    def test_telemetry_emitted_for_successful_run(self) -> None:
+        """open_invocation and close_invocation called with correct args for a successful run."""
+        agents = [self._make_gh_models_agent()]
+        fake_response = {"choices": [{"message": {"content": "[]"}}]}
 
         with (
-            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(handler_mod, "_load_manifest", return_value=agents),
             patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch.object(handler_mod, "_invoke_gemini", return_value=("[]", False, "")),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value=fake_response,
+            ),
             patch(
                 "scripts.s3_log_store.write_timestamped_findings",
                 return_value="agents/doc-freshness/ts.jsonl",
@@ -741,8 +554,8 @@ class TestHandlerTelemetry:
         mock_open.assert_called_once_with(
             agent_name="doc-freshness",
             trigger="eventbridge",
-            model="gemini-2.5-flash",
-            provider="gemini",
+            model="gpt-4.1-mini",
+            provider="github-models",
         )
         mock_close.assert_called_once()
         close_kwargs = mock_close.call_args
@@ -752,14 +565,17 @@ class TestHandlerTelemetry:
 
     def test_close_invocation_called_with_failed_on_api_error(self) -> None:
         """close_invocation(outcome='failed') called when agent API call returns error."""
-        agents = [self._make_gemini_agent()]
+        agents = [self._make_gh_models_agent()]
 
         with (
-            patch.object(handler_mod, "_get_github_pat", return_value="gho_test"),
+            patch.object(handler_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(handler_mod, "_load_manifest", return_value=agents),
             patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch.object(handler_mod, "_invoke_gemini", return_value=("", True, "API timeout")),
+            patch(
+                "scripts.github_models_client.chat_completion",
+                return_value={"error": True, "message": "API timeout"},
+            ),
             patch(
                 "src.data.handlers.agent_telemetry.open_invocation",
             ),

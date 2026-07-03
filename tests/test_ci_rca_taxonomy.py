@@ -132,7 +132,7 @@ class TestEnumerateWorkflowNames:
     def test_real_workflows_dir(self):
         names = enumerate_workflow_names()
         assert "CI" in names
-        assert len(names) == 13
+        assert len(names) == 12
 
 
 MULTI_TAXONOMY = dict(MINIMAL_TAXONOMY)

@@ -255,45 +255,6 @@ class TestLambdaScriptsAndSdkConfig:
         assert "bedrock_client.py" not in _LAMBDA_SCRIPTS
 
 
-class TestBuildAppPackageSdkInstall:
-    """Verify Copilot SDK install step is present."""
-
-    def test_build_app_package_installs_copilot_sdk(self, tmp_path):
-        """build_app_package calls pip to install github-copilot-sdk."""
-
-        from scripts.build_lambda import build_app_package
-
-        (tmp_path / "app").mkdir()
-
-        sdk_calls: list[list] = []
-
-        def mock_run(cmd, *args, **kwargs):
-            sdk_calls.append(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            return mock
-
-        with (
-            patch("shutil.copytree"),
-            patch("shutil.copy2"),
-            patch("scripts.build_lambda.subprocess.run", side_effect=mock_run),
-            patch("pathlib.Path.exists", return_value=False),
-            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
-            patch(
-                "zipfile.ZipFile.__enter__",
-                return_value=MagicMock(writestr=MagicMock()),
-            ),
-            patch("zipfile.ZipFile.__exit__", return_value=False),
-            patch("pathlib.Path.rglob", return_value=[]),
-            patch("pathlib.Path.mkdir"),
-        ):
-            with patch("scripts.build_lambda.OUTPUT_DIR", tmp_path):
-                build_app_package(tmp_path)
-
-        sdk_install_calls = [c for c in sdk_calls if any("github-copilot-sdk" in str(a) for a in c)]
-        assert sdk_install_calls, "Copilot SDK install should be present (reverted from Bedrock migration)"
-
-
 class TestBuildLambdaConfigScope:
     """Verify Lambda zips contain only config.yaml + lambda/<name>/ (T-1.7)."""
 

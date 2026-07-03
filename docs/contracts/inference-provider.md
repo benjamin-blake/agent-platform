@@ -23,13 +23,13 @@ LiteLLM is the only Layer-1 inference protocol surface under CD.28. Direct provi
 ### Operative state (until T4.2 lands)
 
 - **`gemini-cli`** -- Executor pipeline (`scripts/llm_client._gemini_call`), Gemini 3 models via local CLI headless mode. See Decision 53.
-- Lambda scheduled agents are DISABLED (May 2026; see AGENTS.md runbook). Their `schedule.yaml` entries still declare `provider: copilot-sdk` under Decision 49; migration to LiteLLM is owned by CD.28's PLAN-resolve-scheduled-agent-provider follow-on.
+- Lambda scheduled agents are DISABLED (May 2026; see AGENTS.md runbook). Their `schedule.yaml` entries still declare `provider: copilot-sdk` (T4.3-owned; not migrated by this contract). Per Decision 116 (supersedes Decision 49), routine/non-agentic agents migrate to LiteLLM Tier 1 (DeepSeek) and judgment/agentic agents migrate to `claude -p`; realization is owned by CD.28's PLAN-resolve-scheduled-agent-provider follow-on.
 
 ### Retired providers
 
 - **`bedrock`** -- RETIRED per CD.28. `scripts/bedrock_client.py` and all dispatch branches were deleted by the T1.15 sweep (this contract's v7.0 revision). No rollback path in code; reintroduction requires a new decision.
-- **`copilot-sdk`** -- RETIRED from the active provider set per CD.28/Decision 49 reconciliation. `scripts/copilot_sdk_client.py` and the handler dispatch branch remain in-tree solely for the disabled scheduled agents until PLAN-resolve-scheduled-agent-provider retires them.
-- **`gemini` (BYOK via Copilot SDK)** -- Deprecated (Decision 52). Handler branch retained for the disabled scheduled agents only.
+- **`copilot-sdk`** -- RETIRED from the active provider set per Decision 116 (supersedes Decision 49). `scripts/copilot_sdk_client.py` and the handler dispatch branch are deleted; an agent declaring this provider raises `RetiredProviderError` and is recorded as a failed invocation (no silent misroute).
+- **`gemini` (BYOK via Copilot SDK)** -- RETIRED alongside `copilot-sdk` per Decision 116. Same `RetiredProviderError` handling.
 
 ---
 
@@ -76,8 +76,8 @@ agents:
 
 | Value | Client used | Where valid |
 |-------|-------------|-------------|
-| `copilot-sdk` | `scripts/copilot_sdk_client.copilot_sdk_inference_sync()` | Disabled scheduled agents only (Decision 49, pending PLAN-resolve-scheduled-agent-provider) |
-| `gemini` | `copilot_sdk_inference_sync()` with BYOK `ProviderConfig` | Deprecated (Decision 52); handler branch retained for disabled agents |
+| `copilot-sdk` | RETIRED -- raises `RetiredProviderError` | Not valid anywhere; Decision 116 (supersedes Decision 49). Existing `schedule.yaml` entries fail loudly until PLAN-resolve-scheduled-agent-provider migrates them |
+| `gemini` | RETIRED -- raises `RetiredProviderError` | Not valid anywhere; retired alongside `copilot-sdk` per Decision 116 |
 | `github-models` | `scripts/github_models_client.chat_completion()` | Local only -- MUST NOT be used in Lambda; the absent-field default |
 | `litellm` | T4.2 transport (not yet built) | Future-state per CD.28; do not declare until PLAN-resolve-scheduled-agent-provider lands |
 
@@ -165,12 +165,10 @@ Compatibility note: `excluded_tools` and `system_prompt` are still accepted by `
 
 ```python
 provider = agent.get("provider", "github-models")
-if provider == "copilot-sdk":
-    # Disabled scheduled agents (Decision 49, pending LiteLLM migration)
-    output, has_error, err_msg = _invoke_copilot_sdk(prompt_text, model, pat, max_tokens=max_tokens)
-elif provider == "gemini":
-    # Gemini BYOK via Copilot SDK (deprecated, Decision 52)
-    output, has_error, err_msg = _invoke_gemini(prompt_text, model, pat)
+if provider in ("copilot-sdk", "gemini"):
+    # Retired per Decision 116 (supersedes Decision 49) -- raises RetiredProviderError,
+    # caught locally and recorded as a failed invocation (no silent misroute).
+    raise RetiredProviderError(...)
 else:
     # github-models path (local/legacy; the absent-field default)
     output, has_error, err_msg = _invoke_github_models(prompt_text, model, pat)

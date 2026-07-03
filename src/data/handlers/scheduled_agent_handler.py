@@ -13,10 +13,11 @@ SCHEDULED_AGENT_MODEL  : Optional model override.
 
 Providers
 ---------
-- ``copilot-sdk``: GitHub Copilot SDK; uses PAT from Secrets Manager.
-  Governed by Decision 49 pending PLAN-resolve-scheduled-agent-provider.
-- ``gemini``: Gemini via Copilot SDK BYOK; needs PAT + Gemini API key.
 - ``github-models``: GitHub Models API (local/legacy; not for Lambda).
+- ``copilot-sdk`` / ``gemini``: retired per Decision 116 (supersedes
+  Decision 49). Agents still configured with either provider in
+  schedule.yaml raise ``RetiredProviderError`` and are recorded as failed;
+  migration is owned by PLAN-resolve-scheduled-agent-provider / T4.3.
 
 Bedrock dispatch was retired per CD.28 (T1.15 sweep).
 
@@ -68,31 +69,6 @@ def _get_github_pat() -> str:
         return ""
 
 
-def _get_gemini_api_key() -> str:
-    """Retrieve the Gemini API key from Secrets Manager or environment.
-
-    Returns the key string, or an empty string if retrieval fails.
-    """
-    key_env = os.environ.get("GEMINI_API_KEY", "").strip()
-    if key_env:
-        return key_env
-
-    secret_arn = os.environ.get("GEMINI_API_KEY_SECRET_ARN", "").strip()
-    if not secret_arn:
-        logger.error("GEMINI_API_KEY_SECRET_ARN not set and GEMINI_API_KEY not set")
-        return ""
-
-    try:
-        import boto3
-
-        client = boto3.client("secretsmanager", region_name="eu-west-2")
-        response = client.get_secret_value(SecretId=secret_arn)
-        return response.get("SecretString", "").strip()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to retrieve Gemini API key from Secrets Manager: %s", exc)
-        return ""
-
-
 def _load_prompt(prompt_path: str) -> str:
     """Read a prompt file, checking repo root then /var/task."""
     candidates = [
@@ -121,56 +97,8 @@ def _load_manifest() -> list[dict[str, Any]]:
     return []
 
 
-def _invoke_copilot_sdk(prompt_text: str, model: str, pat: str, max_tokens: int = 4096) -> tuple[str, bool, str]:
-    """Invoke Copilot SDK. Returns (output, error, message)."""
-    from scripts.copilot_sdk_client import copilot_sdk_inference_sync
-
-    response = copilot_sdk_inference_sync(
-        prompt=prompt_text,
-        model=model,
-        github_token=pat,
-        max_tokens=max_tokens,
-    )
-    if response.get("error"):
-        return "", True, response.get("message", "")
-    return response.get("content", ""), False, ""
-
-
-_GEMINI_BYOK_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/"
-
-
-def _invoke_gemini(prompt_text: str, model: str, pat: str) -> tuple[str, bool, str]:
-    """Invoke Gemini via Copilot SDK BYOK. Returns (output, error, message).
-
-    Reads the Gemini API key from ``GEMINI_API_KEY`` env var (local) or
-    ``GEMINI_API_KEY_SECRET_ARN`` Secrets Manager secret (Lambda).  The GitHub
-    PAT (``pat``) is still required by the Copilot CLI binary for startup auth
-    even when inference is routed to Gemini.
-
-    Uses a 600s timeout (vs. the 300s default) to accommodate large prompts
-    such as orphan-code and transcript-review that require extended analysis.
-    """
-    from scripts.copilot_sdk_client import copilot_sdk_inference_sync
-
-    gemini_key = _get_gemini_api_key()
-    if not gemini_key:
-        return "", True, "Gemini API key not available"
-
-    provider_config: dict[str, str] = {
-        "type": "openai",
-        "base_url": _GEMINI_BYOK_ENDPOINT,
-        "api_key": gemini_key,
-    }
-    response = copilot_sdk_inference_sync(
-        prompt=prompt_text,
-        model=model,
-        github_token=pat,
-        provider_config=provider_config,
-        timeout=600.0,
-    )
-    if response.get("error"):
-        return "", True, response.get("message", "")
-    return response.get("content", ""), False, ""
+class RetiredProviderError(RuntimeError):
+    """Raised when an agent's schedule.yaml ``provider`` field names a retired provider."""
 
 
 def _query_athena_to_json(query: str) -> list[dict]:
@@ -323,10 +251,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     to S3 using the convention ``agents/{name}/{timestamp}.jsonl``.
 
     Routes inference by the agent's ``provider`` field:
-    - ``copilot-sdk``: uses GitHub Copilot SDK (Decision 49)
-    - ``gemini``: uses Gemini via Copilot SDK BYOK
     - ``github-models``: uses GitHub Models API (local/legacy; the
       absent-field default)
+    - ``copilot-sdk`` / ``gemini``: retired per Decision 116 -- raises
+      ``RetiredProviderError``, recorded as a failed invocation (no silent
+      misroute); migration owned by PLAN-resolve-scheduled-agent-provider.
 
     Bedrock dispatch was retired per CD.28.
 
@@ -412,74 +341,38 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             _close_invocation(outcome="failed", error="prompt not found")
             continue
 
-        # rec-curator requires its S3 input files injected inline because
-        # the Lambda environment cannot execute bash tool calls.
-        if name == "rec-curator" and provider in ("copilot-sdk", "gemini"):
-            prompt_text = _preload_rec_curator_context(prompt_text)
+        if provider in ("copilot-sdk", "gemini"):
+            try:
+                raise RetiredProviderError(
+                    f"provider '{provider}' retired per Decision 116 (supersedes Decision 49); "
+                    "migrate per PLAN-resolve-scheduled-agent-provider / T4.3"
+                )
+            except RetiredProviderError as exc:
+                logger.error("Skipping agent '%s': %s", name, exc)
+                agents_failed += 1
+                _close_invocation(outcome="failed", error=str(exc))
+                continue
 
         import time as _time
 
-        if provider == "copilot-sdk":
-            if not pat_checked:
-                pat = _get_github_pat()
-                pat_checked = True
-            if not pat:
-                logger.error("Skipping agent '%s': GitHub PAT not available", name)
-                agents_failed += 1
-                _close_invocation(outcome="failed", error="PAT not available")
-                continue
-            max_tokens = 8192 if name == "rec-curator" else 4096
-            _t0 = _time.monotonic()
-            output, has_error, err_msg = _invoke_copilot_sdk(prompt_text, model, pat, max_tokens=max_tokens)
-            _call_dur = int(_time.monotonic() - _t0)
-            _record_model_call(
-                provider=provider,
-                model=model,
-                purpose="findings",
-                error=err_msg if has_error else None,
-                duration_seconds=_call_dur,
-            )
-        elif provider == "gemini":
-            if not pat_checked:
-                pat = _get_github_pat()
-                pat_checked = True
-            if not pat:
-                logger.error("Skipping agent '%s': GitHub PAT not available", name)
-                agents_failed += 1
-                _close_invocation(outcome="failed", error="PAT not available")
-                continue
-            _t0 = _time.monotonic()
-            output, has_error, err_msg = _invoke_gemini(prompt_text, model, pat)
-            _call_dur = int(_time.monotonic() - _t0)
-            _record_model_call(
-                provider=provider,
-                model=model,
-                purpose="findings",
-                error=err_msg if has_error else None,
-                duration_seconds=_call_dur,
-            )
-        else:
-            if not pat_checked:
-                pat = _get_github_pat()
-                pat_checked = True
-            if not pat:
-                logger.error(
-                    "Skipping agent '%s': GitHub PAT not available",
-                    name,
-                )
-                agents_failed += 1
-                _close_invocation(outcome="failed", error="PAT not available")
-                continue
-            _t0 = _time.monotonic()
-            output, has_error, err_msg = _invoke_github_models(prompt_text, model, pat)
-            _call_dur = int(_time.monotonic() - _t0)
-            _record_model_call(
-                provider=provider,
-                model=model,
-                purpose="findings",
-                error=err_msg if has_error else None,
-                duration_seconds=_call_dur,
-            )
+        if not pat_checked:
+            pat = _get_github_pat()
+            pat_checked = True
+        if not pat:
+            logger.error("Skipping agent '%s': GitHub PAT not available", name)
+            agents_failed += 1
+            _close_invocation(outcome="failed", error="PAT not available")
+            continue
+        _t0 = _time.monotonic()
+        output, has_error, err_msg = _invoke_github_models(prompt_text, model, pat)
+        _call_dur = int(_time.monotonic() - _t0)
+        _record_model_call(
+            provider=provider,
+            model=model,
+            purpose="findings",
+            error=err_msg if has_error else None,
+            duration_seconds=_call_dur,
+        )
 
         if has_error:
             logger.error("Agent '%s' API call failed: %s", name, err_msg)
