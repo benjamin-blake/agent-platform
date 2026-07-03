@@ -524,6 +524,10 @@ Key constraints (binding):
   with a recorded proof. All semantic verdicts (superseded, duplicate, contradicted, etc.)
   produce a `close_proposed` command for human or policy confirmation -- never a direct close
   (Decision 70: closure requires a closure proof, not an LLM assertion).
+  [Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): the closure-proof principle cited
+  above as "Decision 70" is a mis-cite -- the principle is THIS decision (Decision 103); Decision 70
+  (DECISIONS.md, "Physical Deletion of Bootstrap Records") governs bootstrap-record deletion, not
+  closure-proof semantics.]
 - Relevance state is computed READ-TIME or stored in a named projection
   (`docs/contracts/recommendation-relevance.yaml`) -- NO new Class A columns on
   `ops_recommendations` (Decision 84: the ducklake_writer owns the keyspace).
@@ -540,6 +544,11 @@ skill freshness gates.
 **Related:** Decision 70 (closure-proof requirement), Decision 84 (named projection / read-only
 boundary), Decision 88 (read-cache surfacing), Decision 55 (no auto-action on semantic judgment),
 T3.8 (implementation item), T3.9 (post-merge reconciliation complement).
+
+[Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): the "Decision 70 (closure-proof
+requirement)" citation above is a mis-cite -- the closure-proof principle is THIS decision
+(Decision 103); Decision 70 governs Physical Deletion of Bootstrap Records, not closure-proof
+semantics.]
 
 ## Decision 102: SLOC Waiver Ratchet -- amends Decision 43 SLOC row (Decided)
 
@@ -1361,6 +1370,9 @@ The free-tier breach proved the cap is real and the access pattern, not the work
 3. Until the flip, `ops_plans` is a downstream read-projection of the git-authoritative `PLAN-{slug}.yaml`, populated by git->warehouse ETL. This is the legitimate write path under the Decision 84 warehouse-SoT invariant -- the same sanctioned "ETL from a non-warehouse source of truth" pattern as `DECISIONS.md -> ops_decisions`, not a read-cache-as-write-source violation. The warehouse-SoT invariant remains absolute for operational records (recs, decisions, queue); plans are scoped as projection-until-T4.x.
 4. Lifecycle splits across three surfaces, by purpose:
    - `ops_plans` (SCD2) -- the plan document + status gate: `pending -> approved | rejected | needs-revision` (lifecycle-state closure per Decision 70).
+     [Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): the "lifecycle-state closure per
+     Decision 70" citation above is a mis-cite -- the closure-proof principle is Decision 103;
+     Decision 70 governs Physical Deletion of Bootstrap Records.]
    - `ops_plan_revisions` -- machine-actionable revision directives (the imperative: "change X -> Y"), authored by the critique agent for planning-agent consumption. A revision-request is to a plan what a rec is to the repo; the two may converge in shape later but are not unified now.
    - telemetry -- the critique's full deliberation/rationale (observability), for optimization and debugging. The imperative lives in `ops_plan_revisions`; the deliberation lives in telemetry; they are not duplicated.
 5. RBAC is enforced at the verb layer, extending the Decision 84 closed writer boundary (I-2 writer-owned keyspace, I-3 named verbs) and the Decision 81 cl.2 extensible verb surface: planning agents get an `insert_plan` verb that hardcodes `status=pending` and cannot mutate status; critique agents get `set_plan_status` + `insert_revision` and cannot author plan bodies. All plan writes transit `ops_data_portal` (Single-Portal Invariant, Decisions 69/78); ids are writer-allocated atomically, never client-side.
@@ -1372,6 +1384,10 @@ No downstream warehouse consumer of plans exists today, and the ones that would 
 **Forward note:** At the T4.x authority-flip, Decision 85's git-authoritative clause for plans (and the plan-scoping of the Decision 84 invariant in cl.3 above) is superseded by warehouse-authoritative; until then both stand. Build work, when it lands, decomposes into atomic IMPLEMENTATION-type plans -- no STRATEGIC plan is authored under the CD.17 freeze (Decision 67 STRATEGIC clause).
 
 **Related:** Decision 84 (DuckLake sole ops backend; writer-owned keyspace; named-verb boundary -- substrate + write-path precedent), Decision 85 (`PLAN-{slug}.yaml` / `PlanDocument` -- the entity promoted), Decision 76 cl.3 (web PR/merge -- preserved interactive approval surface), Decision 81 cl.2 (extensible verb surface), Decision 86 (forward-routing form; intent-doc-freeze), Decisions 69/78 (Single-Portal Invariant), Decision 70 (lifecycle-state closure), Decision 75 (frame-lock-aware deferral), Decision 57 (autonomous-improvement control plane -- the loop this extends), CD.17/T4.2 (executor-freeze gate), T4.5-T4.7 tier_items (forward build), `docs/ROADMAP-PLATFORM.yaml`.
+
+[Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): the "Decision 70 (lifecycle-state
+closure)" citation above is a mis-cite -- the closure-proof principle is Decision 103; Decision 70
+governs Physical Deletion of Bootstrap Records, not lifecycle-state closure.]
 
 ---
 
@@ -1446,6 +1462,11 @@ The T2.19 recs-first cutover left the ops store straddling two warehouses. The r
 **Operational consequences:** destructive Lambda actions gain explicit-confirm guards (create_ops_tables force_recreate; catalog_reinit loses its production-schema default); the telemetry preflight health check is stubbed until telemetry re-lands on DuckLake (Phase 4); catalog DR remains the existing ducklake_catalog_dr nightly pg_dump, with the restore-drill format gap tracked as rec-2113.
 
 **Related:** Decision 81 (CD.33 architecture retained and extended), Decision 79 (per-Lambda deploy gating governs the reader/writer redeploys), Decision 70 (queue current-state semantics preserved inside the priority_queue_current verb), Decision 69 (Single Portal Invariant unchanged), Decision 55 (loud-failure doctrine), T2.26/T2.27/T2.28 (roadmap carriers), T2.36 (Phase 4 telemetry re-lands on DuckLake).
+
+[Amendment 2026-07-03, Decision-70 mis-cite (audit f80508b): the "Decision 70 (queue current-state
+semantics preserved inside the priority_queue_current verb)" citation above is a mis-cite --
+Decision 70 governs Physical Deletion of Bootstrap Records, not queue current-state semantics; the
+queue current-state semantics referenced here are this decision's own `priority_queue_current` verb.]
 
 ---
 
