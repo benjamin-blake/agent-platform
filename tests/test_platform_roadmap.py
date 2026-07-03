@@ -14,6 +14,8 @@ from scripts.platform_roadmap import (
     ExitCriterion,
     GateRuleEvaluator,
     GateRuleParser,
+    KnownGap,
+    OpenQuestion,
     PlatformRoadmapState,
     RoadmapDocument,
     TierItem,
@@ -1408,3 +1410,91 @@ class TestCompletionBlockedOnCd:
         result = state.to_preflight_dict(plans_dir=tmp_path)
         ip = next(i for i in result["in_progress"] if i["id"] == "T0.1")
         assert ip["completion_blocked_on_cd"] == ["CD.77"]
+
+
+# ---------------------------------------------------------------------------
+# TestOpenQuestionKnownGapLifecycle -- PLAN-close-audit-ulf-04-ulf-10 (Decision 114)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenQuestionKnownGapLifecycle:
+    """status/resolution_ref lifecycle fields on OpenQuestion and KnownGap (checks (i)/(j))."""
+
+    def _doc_with_oq(self, *oqs: dict) -> dict:
+        d = copy.deepcopy(_BASE_DOC)
+        d["open_questions"] = list(oqs)
+        return d
+
+    def _doc_with_kg(self, *kgs: dict) -> dict:
+        d = copy.deepcopy(_BASE_DOC)
+        d["known_gaps"] = list(kgs)
+        return d
+
+    def test_open_question_status_enum_accepted(self) -> None:
+        for s in ("open", "resolved", "closed", "promoted"):
+            oq = OpenQuestion(id="OQ.1", question="q", status=s, resolution_ref="x" if s != "open" else None)
+            assert oq.status == s
+
+    def test_known_gap_status_enum_accepted(self) -> None:
+        for s in ("open", "resolved", "closed", "promoted"):
+            kg = KnownGap(id="KG.1", gap="g", status=s, resolution_ref="x" if s != "open" else None)
+            assert kg.status == s
+
+    def test_open_question_invalid_status_raises(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            OpenQuestion(id="OQ.1", question="q", status="bogus")  # type: ignore[arg-type]
+
+    def test_known_gap_invalid_status_raises(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            KnownGap(id="KG.1", gap="g", status="bogus")  # type: ignore[arg-type]
+
+    def test_open_question_defaults_to_open_no_resolution_ref(self) -> None:
+        oq = OpenQuestion(id="OQ.1", question="q")
+        assert oq.status == "open"
+        assert oq.resolution_ref is None
+
+    def test_known_gap_non_open_without_resolution_ref_raises(self) -> None:
+        from pydantic import ValidationError
+
+        d = self._doc_with_kg({"id": "KG.1", "gap": "g", "status": "resolved"})
+        with pytest.raises(ValidationError, match="resolution_ref"):
+            RoadmapDocument.model_validate(d)
+
+    def test_open_question_non_open_without_resolution_ref_raises(self) -> None:
+        from pydantic import ValidationError
+
+        d = self._doc_with_oq({"id": "OQ.1", "question": "q", "status": "resolved"})
+        with pytest.raises(ValidationError, match="resolution_ref"):
+            RoadmapDocument.model_validate(d)
+
+    def test_open_question_non_open_with_resolution_ref_passes(self) -> None:
+        d = self._doc_with_oq({"id": "OQ.1", "question": "q", "status": "resolved", "resolution_ref": "T0.9"})
+        doc = RoadmapDocument.model_validate(d)
+        assert doc.open_questions[0].status == "resolved"
+        assert doc.open_questions[0].resolution_ref == "T0.9"
+
+    def test_known_gap_non_open_with_resolution_ref_passes(self) -> None:
+        d = self._doc_with_kg({"id": "KG.1", "gap": "g", "status": "promoted", "resolution_ref": "CD.18"})
+        doc = RoadmapDocument.model_validate(d)
+        assert doc.known_gaps[0].status == "promoted"
+        assert doc.known_gaps[0].resolution_ref == "CD.18"
+
+    def test_open_question_open_status_no_resolution_ref_required(self) -> None:
+        d = self._doc_with_oq({"id": "OQ.1", "question": "q", "status": "open"})
+        doc = RoadmapDocument.model_validate(d)
+        assert doc.open_questions[0].status == "open"
+        assert doc.open_questions[0].resolution_ref is None
+
+    def test_live_roadmap_loads_clean(self) -> None:
+        roadmap = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
+        doc = load(roadmap)
+        non_open_oq = [q for q in doc.open_questions if q.status != "open"]
+        non_open_kg = [g for g in doc.known_gaps if g.status != "open"]
+        assert len(non_open_oq) == 11
+        assert len(non_open_kg) == 4
+        for entry in (*non_open_oq, *non_open_kg):
+            assert entry.resolution_ref, f"{entry.id} has non-open status but no resolution_ref"

@@ -10,6 +10,17 @@ import sys
 from scripts.checks import _common, registry
 
 _40HEX_RE = re.compile(r"^[0-9a-f]{40}$")
+_ROADMAP_MAX_LINES = 10_000  # Decision 114 (raised from KG.11's 2500)
+
+
+def _roadmap_size_issues(text: str, ceiling: int = _ROADMAP_MAX_LINES) -> list[str]:
+    """Return a one-item FAIL list if text exceeds ceiling lines, else []."""
+    line_count = len(text.splitlines())
+    if line_count > ceiling:
+        return [
+            f"  FAIL: docs/ROADMAP-PLATFORM.yaml is {line_count} lines, exceeding the {ceiling}-line ceiling (Decision 114)"
+        ]
+    return []
 
 
 @registry.register("validate_platform_roadmap", owner="platform")
@@ -46,6 +57,7 @@ def validate_platform_roadmap(failed: list[str]) -> None:
 
         doc = load(roadmap_path)
         issues: list[str] = []
+        issues += _roadmap_size_issues(roadmap_path.read_text(encoding="utf-8"))
 
         # (i) met criterion met_by resolves to a real plan file OR a 40-hex sha
         plans_root = _common.ROOT / "docs" / "plans"

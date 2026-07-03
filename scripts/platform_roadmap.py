@@ -407,6 +407,8 @@ class OpenQuestion(BaseModel):
     question: str
     resolution_tier: str = ""
     notes: str = ""
+    status: Literal["open", "resolved", "closed", "promoted"] = "open"
+    resolution_ref: str | None = None
 
 
 class KnownGap(BaseModel):
@@ -414,6 +416,8 @@ class KnownGap(BaseModel):
     id: str
     gap: str
     notes: str = ""
+    status: Literal["open", "resolved", "closed", "promoted"] = "open"
+    resolution_ref: str | None = None
 
 
 class NorthStarPrinciple(BaseModel):
@@ -553,6 +557,16 @@ class RoadmapDocument(BaseModel):
                         f"tier_item '{item.id}' criterion '{crit.id}': "
                         f"rehomed met_by='{crit.met_by}' does not resolve to a known tier_item id"
                     )
+
+        # (i) non-open open_questions require a non-empty resolution_ref
+        for oq in self.open_questions:
+            if oq.status != "open" and not oq.resolution_ref:
+                raise ValueError(f"open_question '{oq.id}': status='{oq.status}' requires a non-empty resolution_ref")
+
+        # (j) non-open known_gaps require a non-empty resolution_ref
+        for kg in self.known_gaps:
+            if kg.status != "open" and not kg.resolution_ref:
+                raise ValueError(f"known_gap '{kg.id}': status='{kg.status}' requires a non-empty resolution_ref")
 
         return self
 
