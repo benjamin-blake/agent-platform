@@ -1,0 +1,328 @@
+schema_version: 1
+slug: "pr-validate-heavy-dep-test-deferral"
+intent: >-
+  Restore fast-tier presubmit correctness by routing heavy-dependency test files
+  (uncollectable under requirements-fast.txt) to the full tier instead of hard-failing,
+  so the required pr-validate gate stops false-reddening on a whole class of test files
+  and the self-improvement loop's merge path stays unblocked.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-pr-validate-heavy-dep-test-deferral.yaml
+phase: >-
+  Platform / CI-CD governance -- two-tier diff-aware presubmit (Decision 73). Not tied to a
+  specific tier_item; ad-hoc fix for rec-2485 (fast-tier gate correctness on heavy-dep test files).
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      House the ENTIRE fast-tier collectability mechanism so all new logic is coverage-mappable to
+      tests/test_validate.py (Decision 104) and validate.py stays thin: (1) derive the deliberately-
+      excluded heavy-import set from requirements.txt minus requirements-fast.txt; (2) partition changed
+      test files into (runnable, deferred) via a per-file `pytest --collect-only` probe; (3) a module-level
+      orchestration function `run_pytest_diff(changed_tests, failed)` that emits the loud deferred-file
+      warnings, runs pytest ONLY on the runnable subset (preserving pass/fail + the exit-5 backstop on that
+      subset), and does NOT redden when every changed test legitimately defers. Reference shared primitives
+      via _common.<name>. If this breaches the module's SLOC budget (Decision 102), extract to a dedicated
+      scripts/checks/<domain>/*.py module (still maps to tests/test_validate.py for coverage).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Reduce the _scaffold_pytest_diff closure (lines 376-383) to a one-line BARE delegation
+      `run_pytest_diff(changed_tests, failed)` -- add run_pytest_diff to the existing line-42
+      `from scripts.checks._scaffolding import (...)` facade block and call it bare (matching how
+      run_lint_checks / run_precommit_checks are already called; `_scaffolding` is NOT a bound module name).
+      Moves ALL consumer/orchestration branch logic out of validate.py into the coverage-mappable _scaffolding
+      module (Decision 104). Keeps validate.py's changed surface to the single delegation line + one import
+      name (covered by the existing TestPreModeDiffAware --pre path).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      V2 unit tests -- classifier routing (defer heavy-dep collection error; hard-fail exit-1 real failure;
+      hard-fail non-heavy/non-"No module named" collection error; preserve exit-5), excluded-set derivation
+      from the real requirements files, AND orchestration behaviours of run_pytest_diff (loud deferred
+      warning printed; no-redden when all defer; pytest runs only on the runnable subset). Also update the
+      existing TestPreModeDiffAware _pre_mock_run (~line 2799) to satisfy the new `--collect-only` probe
+      calls. Coverage-gate maps scripts/checks/**/*.py here.
+bundled_recommendations: [rec-2485]
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A changed test file that fails collection SOLELY because a deliberately-excluded heavy dependency
+    (in requirements.txt but not requirements-fast.txt, genuinely unimportable) is absent is DEFERRED
+    (not appended to `failed`), and a loud CI-log warning naming the file and the missing dependency
+    is printed.
+  - A changed test file with a real (run-time) test failure -- pytest exit 1 -- still hard-fails the gate.
+  - >-
+    A changed test file with a collection error whose root cause is NOT a genuinely-absent excluded-heavy
+    dep still hard-fails the gate -- covering BOTH ModuleNotFoundError for a repo-local or fast-tier-present
+    module AND collection errors that carry NO "No module named X" line at all (SyntaxError;
+    `ImportError: cannot import name`). The parser is fail-closed: anything it cannot positively identify as
+    a genuinely-absent excluded-heavy dep routes to `runnable` (hard-fail).
+  - >-
+    The excluded-heavy import-name set is DERIVED at runtime from requirements.txt minus
+    requirements-fast.txt: pyarrow, pandas, numpy, duckdb are IN the set; ruff, mypy, pytest, pyyaml,
+    pydantic are NOT.
+  - The exit-5 (0 collected) Decision 55 backstop is preserved on the runnable subset of changed test files.
+  - >-
+    Orchestration (run_pytest_diff): when every changed test file defers, the gate does NOT redden; when
+    only some defer, pytest runs on EXACTLY the runnable subset; each deferred file prints a loud warning
+    naming the file and its missing dependency. All three behaviours are unit-tested in tests/test_validate.py.
+  - >-
+    Per-file 100% line coverage holds for BOTH modified source files (scripts/validate.py and
+    scripts/checks/_scaffolding.py), verified by running the full-tier coverage gate explicitly pre-merge --
+    so no post-merge main-validate coverage red (which would file a critical ci-rca rec) can occur.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` runs green on this branch (new classifier + tests collect
+    and pass; no SLOC, lint, or mypy regression -- coverage is NOT a --pre check, see the dedicated coverage
+    VP step), and prints the "Tests (pytest -- explicit changed files)" header (rec-2485 acceptance).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Classifier routing unit tests -- prove the (returncode, output) -> (runnable | deferred | failed)
+      decision mapping with _common.run mocked to the canonical triples empirically captured in planning
+      (heavy-dep collection error -> deferred; exit-1 real failure -> failed; non-heavy collection error
+      -> runnable then real-run hard-fail).
+    command: 'grep -q "class TestFastTierCollectability" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability" -v'
+    expected: exit 0; every routing assertion passes.
+    fix_if: >-
+      A routing assertion fails -- the classifier mis-partitions (defers a real regression, or fails a
+      genuine heavy-dep file). Inspect the (returncode, parsed-missing-module) -> decision path.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Fail-closed parser proof (the property the whole design rests on) -- a collection error with NO
+      trailing "No module named X" line (a SyntaxError, and separately an `ImportError: cannot import name`)
+      must route to `runnable` (hard-fail), NOT `deferred`; and a ModuleNotFoundError for a module that IS
+      importable (find_spec not None) must also NOT defer. This is the exact shape a subtly-wrong classifier
+      could mis-defer and is named in acceptance criterion 3.
+    command: 'grep -q "def test_syntaxerror_collection_error_hard_fails" tests/test_validate.py && grep -q "def test_cannot_import_name_hard_fails" tests/test_validate.py && grep -q "def test_present_module_not_deferred" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability" -v'
+    expected: >-
+      exit 0; all three fail-closed methods exist and pass -- each non-identifiable-heavy-dep collection
+      error routes to runnable/hard-fail.
+    fix_if: >-
+      A non-"No module named" error (or a present-module ModuleNotFoundError) is deferred -- the parser is
+      not fail-closed. Ensure the defer branch requires a parsed missing module AND membership in the
+      excluded set AND find_spec is None; every other shape falls through to runnable.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Excluded-heavy set derivation against the REAL requirements files -- assert pyarrow/pandas/numpy/
+      duckdb are IN the derived set and ruff/mypy/pytest/pyyaml/pydantic are NOT.
+    command: 'grep -q "class TestExcludedHeavyDeps" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestExcludedHeavyDeps" -v'
+    expected: exit 0; membership assertions pass reading requirements.txt and requirements-fast.txt.
+    fix_if: >-
+      A fast-tier dep leaks into the excluded set (would wrongly defer) or a heavy dep is missing (would
+      wrongly hard-fail). Fix the requirements parse or the dist->import alias map.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Real-file deferral behavioural proof -- with pyarrow simulated absent (monkeypatch find_spec),
+      tests/test_iceberg_reader.py must land in `deferred`, not `failed`.
+    command: 'grep -q "def test_iceberg_reader_defers_when_pyarrow_absent" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability::test_iceberg_reader_defers_when_pyarrow_absent" -v'
+    expected: exit 0; the real offending file is classified as deferred when its dep is absent.
+    fix_if: The real file is not deferred -- the probe/parse/derivation path is broken for a genuine case.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Orchestration behaviours of run_pytest_diff (the consumer branches moved out of validate.py) --
+      loud deferred-file warning printed (file + missing dep); gate does NOT redden when all changed
+      tests defer; pytest runs on EXACTLY the runnable subset in the mixed case.
+    command: 'grep -q "class TestRunPytestDiff" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestRunPytestDiff" -v'
+    expected: exit 0; all three orchestration behaviours assert true.
+    fix_if: >-
+      A behaviour fails -- e.g. the gate reddens on an all-deferred run, or pytest is invoked on deferred
+      files. Fix run_pytest_diff so `failed` is only touched by a non-zero run on the runnable subset.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Per-file 100% coverage gate on BOTH modified source files, run EXPLICITLY pre-merge. validate_test_coverage
+      is full-tier-only (registry.py: full_sequence, not pre_sequence), so --pre (VP step 7) does NOT catch a
+      coverage shortfall; this step runs the real gate the post-merge main-validate would, catching the red
+      before merge (prevents a critical ci-rca rec -- the exact disruption this plan prevents).
+    command: bin/venv-python -m scripts.test_coverage_checker --check-coverage --files scripts/validate.py scripts/checks/_scaffolding.py
+    expected: exit 0; both scripts/validate.py and scripts/checks/_scaffolding.py report 100% per-file line coverage.
+    fix_if: >-
+      A file is below 100% -- add tests for the uncovered lines. If validate.py's one-line delegation is
+      uncovered, extend TestPreModeDiffAware to drive a changed test file through the --pre closure; if
+      _scaffolding lines are uncovered, add the missing routing/orchestration unit tests.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full fast-tier gate green on branch -- the exact required pr-validate check and rec-2485's own stored
+      acceptance oracle. NOTE: --pre covers SLOC/lint/mypy but NOT per-file coverage (that is VP step 6).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      exit 0, "All checks passed"; the "Tests (pytest -- explicit changed files)" header is present;
+      no validate_sloc_limits, ruff, or mypy failure from the new code.
+    fix_if: >-
+      Gate reddens -- address the specific failing check. If validate_sloc_limits flags _scaffolding.py,
+      extract the classifier to a dedicated scripts/checks/<domain>/*.py module (still maps to
+      tests/test_validate.py for coverage).
+constraints:
+  - >-
+    Only modify the three scope files. Do NOT touch tests/test_iceberg_reader.py (carries an unmerged,
+    unrelated fix on PR #405) and do NOT modify requirements-fast.txt (the deferral approach adds no
+    wheels).
+  - >-
+    No rescue agents or workaround loops (Decision 55). The deferral is a narrow, positively-identified
+    routing decision, not a swallow: ONLY exit-2 collection errors whose root-cause ModuleNotFoundError
+    names a deliberately-excluded heavy dep (in requirements.txt, not requirements-fast.txt, and
+    find_spec == None) defer. pytest exit 1, exit 2 for any other reason, and exit 5 stay hard-red.
+  - >-
+    Deferral warnings MUST be loud and un-swallowable in the CI log (printed to stdout inside the
+    pytest-diff step), naming each deferred file and its missing dependency, and stating that
+    main-validate (full tier) runs it post-merge.
+  - >-
+    The excluded-heavy set MUST be derived at runtime from requirements.txt minus requirements-fast.txt
+    (no hard-coded dep list). A small curated dist->import alias map covers only names that differ:
+    scikit-learn->sklearn, psycopg2-binary->psycopg2, beautifulsoup4->bs4, python-ulid->ulid; strip
+    extras (pyiceberg[glue,duckdb]->pyiceberg); default otherwise = name.lower() with '-'->'_'.
+  - >-
+    Code placement per Decision 104: ALL new logic (excluded-set derivation, per-file partition, AND the
+    run_pytest_diff orchestration/reporting) lives under scripts/checks/ referencing shared primitives via
+    _common.<name>; scripts/validate.py's _scaffold_pytest_diff closure is reduced to a ONE-LINE BARE call
+    `run_pytest_diff(changed_tests, failed)` (added to the line-42 facade import) -- no consumer branch logic
+    remains in validate.py. Keep within the SLOC budget (Decision 102) or split into a dedicated
+    scripts/checks/<domain>/*.py module; IF the split is taken, update VP step 6's `--files` list to include
+    the new module so the pre-merge coverage gate still mirrors the post-merge one.
+  - >-
+    Coverage-gate reality (do not re-introduce the false claim): validate_test_coverage (100% per-file line
+    coverage on changed source files) runs in full_sequence ONLY, NOT pre_sequence -- so `validate --pre`
+    does NOT catch a coverage shortfall. Every new/changed line in BOTH scripts/validate.py (the delegation)
+    and scripts/checks/_scaffolding.py must be covered by tests/test_validate.py, and VP step 6 runs the real
+    coverage gate pre-merge. The `--collect-only` probe adds _common.run calls to the main() --pre path that
+    TestPreModeDiffAware's _pre_mock_run (tests/test_validate.py ~line 2799) intercepts; that mock is
+    cmd-agnostic (returns returncode 0 for every call), so it should already handle the probe -- treat this as
+    VERIFY-ONLY: run the existing TestPreModeDiffAware / TestPreModePytestSelection tests unchanged and edit
+    the mock only if a real failure appears.
+  - >-
+    Respect the fast-tier budget (Decision 80 / _FAST_TIER_BUDGET_SECONDS, 5 min): probe with
+    `--collect-only` (no test execution) and only per changed test file (typically 1-3); add no per-file
+    real test runs. The existing budget assertion remains the backstop.
+  - Linux/bash-compatible commands only; use bin/venv-python for all Python invocations.
+  - >-
+    Test hygiene (tests/CLAUDE.md): single consolidated import block (ruff-format drops symbols from a
+    second block); mock both subprocess.run and _common.run where subprocess is exercised; no pytest -k
+    or `python -c` in acceptance commands (run by ::ClassName).
+context:
+  - >-
+    Root cause: scripts/validate.py:376-383 hard-fails on ANY non-zero pytest exit; requirements-fast.txt
+    omits heavy wheels (rationale at .github/workflows/ci.yml:49-59, ~3GB torch+CUDA dominant);
+    tests/test_iceberg_reader.py:16 imports pyarrow. This is a CLASS: 8 test files carry heavy top-level
+    imports (pandas x5, numpy x3, duckdb x1, pyarrow x1). The diff-aware pytest step (PR #334) postdates
+    them, so the gap was latent until PR #405 first touched one.
+  - >-
+    Industry precedent (Google TAP / Bazel): tests declare a dependency closure and are scheduled only
+    in a context that satisfies it; SKIPPED/filtered (dep-unavailable, routed elsewhere) is distinct from
+    FAILED (ran and broke) and ERROR (real build/collection failure). Our two-tier model (Decision 73) is
+    the analogue -- main-validate (requirements.txt) is the closure-complete tier; deferral supplies the
+    missing routing.
+  - >-
+    Decision 55 justification (ON RECORD, per decision-scout NOTE): the deferral is structural-
+    uncollectability routing, not a swallow. The fast tier NEVER could import these files (dep deliberately
+    absent), so its only-ever signal on them was "cannot collect," never pass/fail. Deferral removes zero
+    coverage and relocates it to main-validate (post-merge), where a genuine break files a source=ci_rca
+    critical rec (Decision 72). Every genuine red stays hard (exit 1; exit 2 non-heavy; exit 5).
+  - >-
+    Frame-lock note (Decision 75) -- rejected alternatives: (i) mark the 8 tests @pytest.mark.integration
+    (semantically wrong -- they are mocked unit tests; requires editing out-of-scope test_iceberg_reader.py;
+    does not generalize); (ii) add deps to requirements-fast.txt / option (a) (erodes the lean-fast-tier
+    budget, ~250MB+ wheels on every PR, does not cover a future torch/awswrangler import, leaves 7 latent
+    landmines); (iii) separate heavy-dep presubmit shard (new required check + signal-green needs-wiring +
+    reintroduces heavy wheels). Chosen: runtime dependency-aware deferral -- generalizes, zero wheel cost,
+    in-scope, fail-closed-preserving.
+  - >-
+    Empirical exit codes (validated in planning): heavy-import file -> `pytest --collect-only` exit 2 +
+    "No module named 'X'"; runtime-failing but collectable file -> collect-only exit 0 (caught by the real
+    run -> exit 1); deleted repo symbol -> collect-only exit 2 naming a repo-local top-level (not in the
+    excluded set -> hard-fail).
+  - >-
+    HARD BLOCK deferral rationale (2 open ci-rca recs, both surfaced by preflight and reviewed in THIS
+    planning session per Decision 72/73). rec-2482 (test-isolation env-leak in tests/test_iceberg_reader.py,
+    being fixed on PR #405): rec-2485 genuinely UNBLOCKS PR #405 -- that PR touches test_iceberg_reader.py
+    (pyarrow) and cannot pass pr-validate until this fix lands -- so the work is CI-recovery-adjacent and
+    complementary to, not competing with, ci-rca resolution. rec-2483 (terraform-drift.yml retry-signature
+    parity): a scheduled-workflow post-merge DRIFT CANARY that does NOT gate the PR merge path, so deferring
+    it to its own plan does not queue-jump the pr-validate gate this plan fixes. This plan shares no file,
+    Decision, or failure-category with either rec.
+  - >-
+    Closure mechanism (rec-2485, Decision 103 / rec-autoclose): status flips to closed post-merge via the
+    `Resolves: rec-2485` squash-merge trailer (driven by bundled_recommendations), triggering
+    rec-autoclose.yml. VP step 7 (`validate --pre` + the pytest-diff header) is rec-2485's own stored
+    acceptance oracle (structural landing proof); no in-branch pre-merge status-flip VP step is possible.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (74 of 74 triaged); CITE = Decision 73, Decision 60,
+    Decision 104, Decision 72, Decision 48, Decision 55. RELATED = Decision 80 (fast-tier budget), Decision 75
+    (frame-lock), Decision 102 (SLOC), Decision 79/44 (confirmed NOT Lambda-packaged and NOT executor-boundary
+    -> V2, no deploy step; compute_affected_artifacts -> {}).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 4 round(s) (r1-r3 REVISE resolved; r4 confirm)"
+  - >-
+    Coverage-gate placement (verified against registry.py): validate_test_coverage runs in full_sequence
+    ONLY, not pre_sequence; validate_sloc_limits IS in pre_sequence. So `validate --pre` verifies SLOC but
+    NOT per-file coverage. All new/changed lines in scripts/validate.py (one-line delegation) and
+    scripts/checks/_scaffolding.py (all new logic) map to tests/test_validate.py; VP step 6 runs the real
+    coverage gate pre-merge to prevent a post-merge main-validate coverage red -> critical ci_rca rec.
+  - >-
+    Coverage-gate maps scripts/checks/**/*.py -> tests/test_validate.py (put V2 tests there). main was
+    (0 behind, 0 ahead) of origin/main at planning time; no scope-file divergence. No .tf in scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/pr-validate-heavy-deps-jw6lop)
+  - docs/PROJECT_CONTEXT.md read (two-tier presubmit, section 6)
+  - Decision-scout gate run (FLAGS_FOUND, 74/74); Decision 55 NOTE resolution recorded in context
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable (V2, mocked-subprocess unit tests + real derivation + full --pre)
+execution_steps:
+  - >-
+    scripts/checks/_scaffolding.py -- add `_excluded_heavy_import_names()`: parse requirements.txt and
+    requirements-fast.txt (strip version specifiers, extras `[...]`, and comments), compute the set
+    difference of distribution names, map each to its import name via the curated alias dict (default
+    name.lower().replace('-','_')), and return the import-name set. Read both files via _common.ROOT.
+  - >-
+    scripts/checks/_scaffolding.py -- add `partition_changed_tests_by_collectability(changed_tests) ->
+    tuple[list[str], list[tuple[str,str]]]` returning (runnable, deferred). For each file: run
+    `[_common.PYTHON, "-m", "pytest", "--collect-only", "-q", file, "-m", "not integration"]` via
+    _common.run(capture_output=True, text=True). exit 0 -> runnable. exit != 0 -> parse the last
+    "No module named 'X'"; if X.split('.')[0] is in the excluded-heavy set AND
+    importlib.util.find_spec(X.split('.')[0]) is None -> deferred [(file, dep)]; else -> runnable (so the
+    subsequent real pytest run reproduces and reddens the genuine collection error with full diagnostics).
+  - >-
+    scripts/checks/_scaffolding.py -- add `run_pytest_diff(changed_tests: list[str], failed: list[str]) ->
+    None` (the orchestration/consumer function -- keeps ALL new logic coverage-mappable to test_validate.py):
+    return early if no changed_tests; call partition_changed_tests_by_collectability; print a loud
+    "DEFERRED TO FULL TIER (main-validate)" block per deferred file (file + missing dep); if runnable is
+    non-empty, print the "=== Tests (pytest -- explicit changed files) ===" header and run pytest on the
+    runnable subset via _common.run, appending "Tests (pytest)" to `failed` on non-zero (preserving the
+    exit-5 backstop for that subset); if runnable is empty but deferred is non-empty, print a summary and do
+    NOT touch `failed`.
+  - >-
+    scripts/validate.py -- add `run_pytest_diff` to the existing line-42
+    `from scripts.checks._scaffolding import (...)` facade block, then reduce the _scaffold_pytest_diff
+    closure to a ONE-LINE BARE call `run_pytest_diff(changed_tests, failed)` (NOT module-qualified --
+    `_scaffolding` is not a bound name; every existing _scaffolding function is called bare). No consumer
+    branch logic remains in validate.py; its changed surface is the delegation line + import name, covered by
+    the existing TestPreModeDiffAware --pre path.
+  - >-
+    tests/test_validate.py -- add `class TestExcludedHeavyDeps` (test_heavy_deps_in_excluded_set,
+    test_fast_tier_deps_not_in_excluded_set -- derivation from the real requirements files);
+    `class TestFastTierCollectability` with _common.run mocked to the canonical triples:
+    test_heavy_dep_collection_error_defers; test_runtime_failure_hard_fails (exit 1);
+    test_non_heavy_modulenotfound_routes_to_runnable (repo-local top-level);
+    test_syntaxerror_collection_error_hard_fails and test_cannot_import_name_hard_fails (collection errors
+    with NO "No module named X" line -> runnable/hard-fail); test_present_module_not_deferred (find_spec not
+    None); test_iceberg_reader_defers_when_pyarrow_absent (monkeypatch find_spec); and
+    `class TestRunPytestDiff` exercising run_pytest_diff end-to-end (mocked _common.run) -- deferred warning
+    printed, `failed` untouched when all defer, pytest invoked on EXACTLY the runnable subset in the mixed
+    case. Update the existing TestPreModeDiffAware _pre_mock_run (~line 2799) to return returncode 0 for the
+    new `--collect-only` probe calls. Single consolidated import block (ruff-format gotcha); mock both
+    subprocess.run and _common.run where exercised.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass, INCLUDING VP step 6 (the full-tier
+    per-file coverage gate on both modified files, which `--pre` does not run). If validate_sloc_limits flags
+    _scaffolding.py, extract the classifier to a dedicated scripts/checks/<domain>/*.py module and re-run.
+    On any unrecoverable failure, stop and RCA (Decision 55) rather than looping workarounds.
+  - 'Report: what was implemented, verification results, and confirmation the fast-tier gate is green on the branch.'
+work_areas: []
+rollback: >-
+  Revert the three-file diff; the pytest-diff step returns to unconditional hard-fail on any non-zero
+  pytest exit. No data or infrastructure state to unwind (pure CI-tooling logic).
