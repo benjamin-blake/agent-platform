@@ -1,0 +1,48 @@
+name: ghas-probe
+
+# Standing GHAS live-probe (audit finding ULF-01, Decision 83/101).
+#
+# Verifies -- against the live GitHub API, not Terraform configuration -- that the three
+# confidential-data-boundary controls (secret-scanning, secret-scanning push-protection, Actions
+# permissions) are actually enabled. Decision 83 recorded these as applied-per-Terraform but left
+# live verification outstanding; this workflow closes that gap on a recurring schedule.
+#
+# Design invariants (Decision 55 / Decision 80 / Decision 101):
+#   - LOUD-FAIL, not skip: the runner (scripts.checks.misc.validate_ghas_probe, _run_cli) exits
+#     non-zero on a proven-disabled control AND on any inability to verify (missing/expired/
+#     mis-scoped token, 401/403, transport error) -- a token that silently stops working must
+#     never read green, or ULF-01 is reintroduced one level up.
+#   - No PR-triggered runs: the secret is never exposed to a fork-triggered run.
+#   - Single probe implementation: this workflow invokes the same _probe() helper used by the
+#     registered validate.py check (Decision 80) -- it does not reimplement the API calls.
+#   - Control-state-only: the runner never prints raw response bodies or the token itself
+#     (Decision 101 -- this is a PUBLIC repository).
+#   - Alarm-only: this workflow detects and fails loudly; it never mutates any GitHub setting.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Run GHAS live-probe (loud-fail)
+        env:
+          GHAS_PROBE_TOKEN: ${{ secrets.GHAS_PROBE_TOKEN }}
+        run: python -m scripts.checks.misc.validate_ghas_probe

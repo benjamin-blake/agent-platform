@@ -107,6 +107,7 @@ FROZEN_FULL_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_environment_taxonomy"),
     ("check", "validate_complexity"),
     ("check", "validate_scheduled_agent_logs"),
+    ("check", "validate_ghas_probe"),
     ("check", "validate_hermeticity_flags"),
     ("check", "validate_verifier_hermeticity"),
     ("check", "validate_verifier_same_pr_guard"),

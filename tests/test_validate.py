@@ -5,7 +5,9 @@ and the _load_coverage_checker / _load_prompt_compliance helpers.
 """
 
 import importlib.util
+import json
 import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +18,7 @@ from scripts.checks._scaffolding import (
     _parse_requirement_dist_names,
     partition_changed_tests_by_collectability,
 )
+from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
 
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
 _spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
@@ -24,6 +27,7 @@ _spec.loader.exec_module(_validate)  # type: ignore[union-attr]
 sys.modules["validate"] = _validate
 
 validate_scheduled_agent_logs = _validate.validate_scheduled_agent_logs
+validate_ghas_probe = _validate.validate_ghas_probe
 validate_cli_tools_in_prompts = _validate.validate_cli_tools_in_prompts
 validate_test_coverage = _validate.validate_test_coverage
 validate_prompt_compliance = _validate.validate_prompt_compliance
@@ -5337,3 +5341,165 @@ class TestRoadmapSizeGuard:
         text = "line\n" * 10000
         issues = _roadmap_size_issues(text, ceiling=10000)
         assert issues == []
+
+
+class TestValidateGhasProbe:
+    """Tests for validate_ghas_probe() (CHECK, skip-when-unscoped) and _run_cli() (RUNNER, loud-fail)."""
+
+    class _FakeResponse:
+        def __init__(self, status: int, body: bytes) -> None:
+            self.status = status
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self) -> "TestValidateGhasProbe._FakeResponse":
+            return self
+
+        def __exit__(self, *exc_info: object) -> bool:
+            return False
+
+    @staticmethod
+    def _repo_body(secret_scanning: str = "enabled", push_protection: str = "enabled") -> bytes:
+        return json.dumps(
+            {
+                "security_and_analysis": {
+                    "secret_scanning": {"status": secret_scanning},
+                    "secret_scanning_push_protection": {"status": push_protection},
+                }
+            }
+        ).encode("utf-8")
+
+    @staticmethod
+    def _actions_body(enabled: bool = True, allowed_actions: str = "all") -> bytes:
+        return json.dumps({"enabled": enabled, "allowed_actions": allowed_actions}).encode("utf-8")
+
+    def _make_urlopen(self, secret_scanning: str = "enabled", push_protection: str = "enabled", actions_enabled: bool = True):
+        def _urlopen(request: object, timeout: float = 15) -> "TestValidateGhasProbe._FakeResponse":
+            url = request.full_url  # type: ignore[attr-defined]
+            if url.endswith("/actions/permissions"):
+                return self._FakeResponse(200, self._actions_body(enabled=actions_enabled))
+            if url.endswith("/secret-scanning/alerts"):
+                return self._FakeResponse(200, b"[]")
+            return self._FakeResponse(200, self._repo_body(secret_scanning, push_protection))
+
+        return _urlopen
+
+    # -- CHECK: validate_ghas_probe(failed) --
+
+    def test_check_passes_all_controls_enabled(self) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed == []
+
+    def test_check_fails_on_disabled_control(self) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch(
+                "scripts.checks.misc.validate_ghas_probe.urlopen",
+                side_effect=self._make_urlopen(secret_scanning="disabled"),
+            ),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed != []
+        assert "disabled" in failed[0]
+
+    def test_check_skips_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
+        with patch("scripts.checks.misc.validate_ghas_probe.urlopen") as mock_urlopen:
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed == []
+        mock_urlopen.assert_not_called()
+
+    def test_check_skips_on_auth_error(self) -> None:
+        def _raise_401(request: object, timeout: float = 15) -> None:
+            raise urllib.error.HTTPError(url="x", code=401, msg="Unauthorized", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_401),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed == []
+
+    def test_check_skips_on_transport_error(self) -> None:
+        def _raise_url_error(request: object, timeout: float = 15) -> None:
+            raise urllib.error.URLError("network unreachable")
+
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_url_error),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed == []
+
+    def test_check_never_prints_token(self, capsys: pytest.CaptureFixture) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "super-secret-token"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert "super-secret-token" not in capsys.readouterr().out
+
+    # -- RUNNER: _run_cli() --
+
+    def test_runner_returns_zero_when_all_enabled(self) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
+        ):
+            assert _ghas_run_cli() == 0
+
+    def test_runner_nonzero_on_disabled_control(self) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch(
+                "scripts.checks.misc.validate_ghas_probe.urlopen",
+                side_effect=self._make_urlopen(actions_enabled=False),
+            ),
+        ):
+            assert _ghas_run_cli() != 0
+
+    def test_runner_nonzero_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
+        with patch("scripts.checks.misc.validate_ghas_probe.urlopen") as mock_urlopen:
+            assert _ghas_run_cli() != 0
+        mock_urlopen.assert_not_called()
+
+    def test_runner_nonzero_on_auth_error(self) -> None:
+        def _raise_403(request: object, timeout: float = 15) -> None:
+            raise urllib.error.HTTPError(url="x", code=403, msg="Forbidden", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_403),
+        ):
+            assert _ghas_run_cli() != 0
+
+    def test_runner_nonzero_on_transport_error(self) -> None:
+        def _raise_url_error(request: object, timeout: float = 15) -> None:
+            raise urllib.error.URLError("network unreachable")
+
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_url_error),
+        ):
+            assert _ghas_run_cli() != 0
+
+    def test_runner_never_prints_token(self, capsys: pytest.CaptureFixture) -> None:
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "super-secret-token"}),
+            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
+        ):
+            _ghas_run_cli()
+        assert "super-secret-token" not in capsys.readouterr().out
