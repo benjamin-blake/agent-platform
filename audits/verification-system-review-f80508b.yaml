@@ -1,0 +1,843 @@
+---
+# Read-only design review of the verification system (interactive + AWS executor).
+# Every change herein is PROPOSED, never executed. The human disposes.
+audit:
+  meta:
+    audited_commit: f80508b
+    base_branch: main
+    model: "Claude (Anthropic); exact model id withheld from repo artifacts per harness policy"
+    methodology_version: 1
+    scope_surfaces: [interactive, aws-executor]
+    degraded_dedup: false
+    contract_notes: >-
+      (1) Decision-70 mis-cite confirmed and SYSTEMIC: the closure-proof principle is attributed
+      to Decision 70 at docs/DECISIONS.md:416 and :430 (Decision 103), and the same wrong target
+      recurs at :1253/:1264 (Decision 87, "lifecycle-state closure") and :1338 (Decision 84);
+      actual Decision 70 (DECISIONS.md:1916) is bootstrap-record deletion. docs/contracts/
+      exit-criteria-ledger.yaml:5 also lists Decision-70 in decisions_cited. (2) The phrase
+      "Status-Trusted-Never-Inferred" appears nowhere in DECISIONS.md; it lives only in the
+      skills (planning SKILL.md:94, implement SKILL.md:193) and the ledger contract. The
+      principle itself is Decision 103 at DECISIONS.md:413-416. (3) docs/ROADMAP-PLATFORM.yaml
+      carries no document-level last_updated field. (4) Product/ML-output verification (are the
+      models/features/signals correct) is a boundary the dev-loop system does not cover; out of
+      scope here per the task. (5) docs/INTENT-verification-system.md is grandfathered and slated
+      for extraction (MANIFEST id verification-system, "CD.14 demote list"); its Wave-3/4a
+      intents (harness executes the VP; critique calls check_coverage) were never extracted to
+      any tier_item -- see VF-01/VF-02. (6) validate --pre at audit time failed one check,
+      'Import contracts (Decision 80)' -- pre-existing on the f80508b base and unrelated to the
+      two report files (PLAN-implement-code-review-audit-fixes.yaml already carves it out as
+      pre-existing in its acceptance criteria); recorded here per audit mechanics, no guard
+      modified. Same run printed 'Verification registry (T3.1) ... OK: 0 graduated checks',
+      corroborating the empty-registry observation at the validator level.
+    stale_anchors:
+      - "prompt described T3.10 as 'single acceptance[] surface'; actual item title is 'Retire
+        legacy verification projection writes (CD.29 enforcement side)' (ROADMAP:6618-6648) --
+        same substance, different name"
+
+  question_answers:
+    - q: Q1
+      verdict: "strong -- several genuinely frontier mechanisms, but the design's own central principle (no cooperative self-evaluation) is not yet applied to its own interactive dev loop"
+      external_checklist:
+        - {property: "TAP presubmit/postsubmit split", met: yes, evidence: "Decision 60/73/104; scripts/checks/registry.py:79-199 (pre_sequence vs full_sequence); ci.yml pr-validate=--pre, main-validate=full; Main Canary every 3h (main-canary.yml:5)"}
+        - {property: "Hermetic & reproducible verification", met: partial, evidence: "T3.6 complete 2026-06-25; AST hermeticity gate validate_verifier_hermeticity.py:14-54; Hermeticity enum harness.py:59-70; but VP commands are arbitrary shell with no hermeticity control, and live-reader DQ stays on the gate until T1.6 (not_started)"}
+        - {property: "Mutation testing", met: no, evidence: "T3.7 not_started (ROADMAP:6487-6544); CD.30 pending; no mutmut anywhere on disk"}
+        - {property: "Differential / fail-on-revert verification", met: partial, evidence: "is_admitted() shipped (verification_checks.py:309-325) but its only production caller is a self-test with a SIMULATED revert (validate_differential_gate_baseline.py:50-53); per-rec fail-before/pass-after designed in CD.29:1251-1255, unbuilt"}
+        - {property: "Selection / affected-targets correctness", met: partial, evidence: "diff-aware test selection is real (validate.py:344-383 explicit changed-test paths; validate_test_coverage diff-scoped) but verifier selection is dead: check_coverage() can never report an uncovered file (VF-02, observed)"}
+        - {property: "Flaky-test detection & quarantine", met: partial, evidence: "Decision 62 amendment (DECISIONS.md:2335) + T1.6 own the DQ flake source; CD.29:1269-1272 designs quarantine-with-rec; no detection mechanism exists on either surface today (VF-08)"}
+        - {property: "Provenance / attestation (SLSA-style)", met: partial, evidence: "terraform slice is strong: apply consumes the SAME plan.bin the guard inspected, no re-plan/no TOCTOU, plan_sha in the convergence record (Decision 77/92; planning SKILL.md:240-245); code slice: strict=false merges (Decision 83, DECISIONS.md:1352), VP evidence ephemeral chat (VF-07)"}
+      basis: [VF-01, VF-02, VF-07, VF-08, VF-11]
+      prose: >-
+        The current+planned design LEADS external practice in three places: (a) gate-escape
+        forensics -- the ci-rca evidence bundle computes a tri-state vacuous_pass datum and a
+        deterministic escape_mode taxonomy (check_ran_vacuously / check_absent / tier_misplaced /
+        no_premerge_gate_by_design) for every main failure (T1.13, shipped 2026-06-30;
+        ci-rca.yml:52-54), which is beyond what most industrial CI systems record; (b)
+        instruction-layer drift enforcement -- skills carry machine-readable behavioural
+        invariants verified by prompt_compliance in the full tier, so the process definition
+        itself is under CI; (c) the terraform verification path (speculative plan, guard on
+        plan-CONTENT, same-artifact apply, durable convergence record, red-record refusal) is a
+        complete provenance chain. It LAGS the frontier on mutation testing, verifier-selection
+        correctness, flake detection (all designed, none live), and -- the sharpest lag -- on
+        independent re-execution of the per-change proof: INTENT-verification-system.md:25
+        diagnoses "LLMs evaluate their own work ... cooperative self-evaluation" as the root
+        failure mode, yet the interactive VP is still executed and self-reported by the
+        implementing agent (VF-01). Verdict: strong, not frontier -- see maturity.
+    - q: Q2
+      verdict: partial
+      per_item:
+        - {id: CD.29, state: designed, closes_gap: partial, residual: "closes the advisory-verification default (flip to hard-gate post-T3.6, which is complete) and articulates per-rec vs repo-wide defence in depth; leaves structural-oracle depth (VF-11), the interactive-era graduation producer (VF-05), and quarantine DETECTION mechanics unowned"}
+        - {id: CD.38, state: designed, closes_gap: yes, residual: "fully closes independent execution for the executor (GitHub Actions sole runner, AWS waits on verdicts); residuals are contract-level: SHA binding (VF-09), verdict-timeout (VF-10), differential-job substrate seam vs T3.1 c6 (VF-12)"}
+        - {id: CD.30, state: designed, closes_gap: yes, residual: "diff-line ratchet supersedes the gameable 100%-per-file floor; delivery rides entirely on T3.7"}
+        - {id: CD.27, state: designed, closes_gap: yes, residual: "substrate only; ECS >15-min escape (arn:aws:states:::ecs:runTask.sync) is sound; verification correctly lives outside it per CD.38"}
+        - {id: T3.1, state: built, closes_gap: partial, residual: "all c1-c7 met (kernel, registry contract dec-102, same-PR guard, differential gate logic, validate wiring); residuals: no interactive producer (VF-05), differential gate not executed against NEW entries (VF-06)"}
+        - {id: T3.2, state: designed, closes_gap: yes, residual: "causal-chain E2E verifier; on the CD.17 reversal critical path (item_field_eq(T3.2,'latest_run.verdict','PASS')); also unblocks T2.15's CausalChainVerifier re-registration"}
+        - {id: T3.6, state: built, closes_gap: yes, residual: "hermeticity audit complete 2026-06-25; AST gate live; CD.29 hermeticity precondition satisfied"}
+        - {id: T3.7, state: designed, closes_gap: partial, residual: "owns who-verifies-the-verifiers (mutation-on-graduation, assertion-free lint, registry orphan detection, ratchet); but mutation targets only GRADUATED checks -- an empty set until VF-05 is fixed -- and T3.7 is explicitly NOT on the CD.17 reversal path (ROADMAP:667-671), so the executor can unfreeze before any oracle-quality machinery exists (VF-11)"}
+        - {id: T3.10, state: deferred, closes_gap: partial, residual: "deferred_post_mvp: the acceptance[]-surface unification ships after MVP, so two check vocabularies persist through the window in which the executor is rebuilt (VF-14)"}
+        - {id: T4.1, state: designed, closes_gap: yes, residual: "state machine ends at file_pr + emit_telemetry -- no merge state; MVP merge authority stays with CI + human/auto-merge, which is coherent; add a verdict-wait timeout criterion (VF-10)"}
+        - {id: T4.9, state: deferred, closes_gap: partial, residual: "the handshake contract (callback auth, duplicate idempotency, stale rejection) is the executor's entire verification transport yet is deferred_post_mvp; correlation tuple omits head SHA (VF-09)"}
+        - {id: T4.11, state: deferred, closes_gap: partial, residual: "verification-attempt budgets enforced by Step Functions state land post-MVP; until then bad-output retry prohibition is persona prompt discipline only"}
+        - {id: T2.15, state: designed, closes_gap: yes, residual: "restores the three deliberately deferred coverage pieces (ops_execution_plans DQ, session-log DQ successor, CausalChainVerifier); gated on T3.2/CD.17 by construction"}
+        - {id: T0.12.5, state: built, closes_gap: yes, residual: "typed-checks field shape ratified; the recorded field-shape-vs-enforcement skew (CD.29:1295-1299) is explicit, not silent"}
+        - {id: T1.6, state: designed, closes_gap: yes, residual: "alarm-not-gate reshape removes the live-reader flake source from the merge gate (Decision 62 amendment); until built, DQ verifier hangs can flap the full gate"}
+        - {id: T1.13, state: built, closes_gap: partial, residual: "vacuous_pass evidence shipped (c8); the c10 cross-check spine that makes the bundle BINDING on the RCA agent is still open"}
+      prose: >-
+        The planned work is architecturally right and, where shipped, well-built. Two structural
+        insufficiencies keep the verdict at partial. First, SEQUENCING: the oracle-quality layer
+        (T3.7 mutation, CD.30 ratchet, Decision 66 Tier D) is deliberately NOT on the CD.17
+        executor-unfreeze critical path, so the autonomous consumer of rec acceptance oracles can
+        go live while those oracles are still un-audited structural greps (VF-11). Second,
+        OWNERSHIP HOLES: no roadmap item owns (a) independent re-execution or persistence of the
+        interactive VP -- the INTENT doc designed it (harness --plan, Wave 3) but the roadmap
+        extraction never carried it (VF-01, VF-07); (b) the verifier-coverage selection repair
+        (VF-02/VF-03); (c) a deterministic V-tier floor in validate.py -- Decision 48:2414 calls
+        for exactly this rec and none was ever filed (VF-04); (d) an interactive-era graduation
+        producer (VF-05). Everything else live-gapped is owned by a named item and needs
+        building, not redesign.
+    - q: Q3
+      verdict: vacuous-paths-exist
+      per_check_vacuity: >-
+        Limb A is mostly healthy on the interactive surface TODAY: the empirical pass over the 8
+        most recent plans found V2 VPs that genuinely execute the changed feature (live warehouse
+        ETL in close-audit-ulf-02 step 9; module CLI + live two-run in cost-reconciliation step
+        3/9) and would fail on revert at the unit level. Three vacuity classes survive: (1) the
+        single sampled V3 plan (close-audit-ulf-01) has post-deploy VP COMMANDS that grep the
+        author's own transcription in DECISIONS.md for a run URL rather than re-invoking the
+        deployed system -- the live invocation is real but the machine-checkable verdict is
+        circular (observed); (2) rec acceptance oracles are overwhelmingly `grep -q` structural
+        checks (observed across the 10-rec sample, including High-priority rec-940), which
+        survive fail-on-revert while proving only text presence (VF-11); (3) a HARD_GATE verifier
+        passes vacuously in production: AthenaViewsVerifier reports "Views are fresh. Found 45
+        decisions" against the frozen pre-Decision-84 Iceberg copy while main carries 74 decision
+        headers and dec-114 exists (VF-03, observed live).
+      set_completeness: >-
+        Limb B is process-covered but not machine-covered. Every plan must carry a VP spanning
+        its scope (schema min-1-step + critique 12c judging exercise-the-feature), and the
+        two-tier CI re-executes the repo-wide envelope. But the designed machine backstop for
+        selection -- check_coverage over verifier covers globs -- can never fire: a registered
+        verifier inherits covers=["**"], so every path reports covered (empirically confirmed:
+        check_coverage(['zzz/definitely_not_covered.xyz']) == []); --coverage additionally exits
+        0 unconditionally and is wired into no workflow or skill (VF-02). Error paths,
+        idempotency and rollback are exercised only when a plan author writes them; no dimension
+        of the gate demands them (the rollback field is optional prose).
+      vacuous_paths:
+        - "V3 post-deploy self-attestation: agent performs live run, transcribes evidence, VP command greps its own transcription (PLAN-close-audit-ulf-01 step 9, observed)"
+        - "Structural acceptance oracle on a rec: grep -q passes fail-on-revert yet proves only string presence; becomes the executor's merge oracle at unfreeze (VF-11)"
+        - "Uncovered changed surface: a file outside every verifier's covers merges with no signal, because the coverage reporter is structurally unable to report it (VF-02)"
+        - "Stale-oracle verifier: AthenaViewsVerifier green against a retired data surface on every main-validate and canary run (VF-03)"
+      prose: >-
+        A green interactive verdict today proves: the diff lints, changed tests pass, 100% of
+        changed Python lines execute under independent CI, repo invariants hold, a fresh-context
+        reviewer judged the diff against the plan, and the author REPORTS the per-plan VP passed.
+        The residual trust assumption is precisely the author's report on the one check that
+        exercises the promised behaviour end-to-end -- plus the four vacuous paths above. The
+        system's own ci-rca instrumentation (vacuous_pass, escape_mode) shows it already treats
+        vacuity as a first-class enemy at the CI seam; the same discipline has not yet reached
+        the VP and the verifier registry.
+    - q: Q4
+      prose: "See architecture_recommendation. One-line preview: interactive = hybrid (keep deterministic self-authored VP, add CI re-execution of the hermetic subset + durable evidence; agents stay in the judgment lanes); aws-executor = script (endorse CD.38 exactly as written, with three contract amendments: per-rec differential job in GHA, head-SHA verdict binding, callback timeout-to-RCA)."
+    - q: Q5
+      answers:
+        - question: "Who should independently re-execute the interactive VP?"
+          answer: >-
+            CI should, for the hermetic pre-deploy subset -- not a fresh agent. The VP is already
+            machine-readable (PlanDocument.verification_plan with required executable commands),
+            so a pr-validate step that parses the diff's plan and runs its pre-deploy steps buys
+            independence at near-zero marginal cost; a zero-context agent re-running shell
+            commands adds cost without adding independence beyond what CI gives. Self-attestation
+            is NOT acceptable as the steady state here because the compensating controls do not
+            property-match: code-review reads but does not run (code-review SKILL.md), and CI
+            runs the repo, not the plan. The one mitigating structural fact: the ORACLE predates
+            the code (VP authored at /plan, critiqued fresh, executed by a different /implement
+            session), so the residual risk is misreporting/substitution, not oracle rigging --
+            which is exactly what re-execution eliminates. (VF-01)
+        - question: "Should VP steps graduate into the zero-entry registry, or is per-plan-throwaway correct?"
+          answer: >-
+            Selective graduation, and the admission bar already exists on paper: differential
+            fail-on-revert (is_admitted) plus hermeticity. Most VP steps SHOULD be throwaway
+            (they verify a transition, not an invariant); the graduation candidates are steps
+            that assert a standing property (contract shape, guard behaviour, live-path
+            liveness). Today the decision is not deliberate -- it is structurally impossible,
+            because no workflow surface mentions graduation (zero hits across .claude/skills and
+            .claude/commands) and CD.29's producer flow is executor-era. Add an /implement
+            post-VP graduation prompt with is_admitted executed live (VF-05, VF-06).
+        - question: "Should coverage-of-changed-surface be a merge GATE or stay advisory?"
+          answer: >-
+            Advisory now, gate later, exactly as INTENT-verification-system.md:598 designed
+            ("progressive enforcement") -- but the current question is moot until the mechanism
+            can fire at all: check_coverage is vacuous under the inherited ["**"] covers and
+            --coverage is wired nowhere (VF-02). Repair first (explicit covers on
+            AthenaViewsVerifier; treat "**" as non-covering in check_coverage), wire it into
+            pr-validate as a visible advisory, then gate V3-tier plans once the verifier
+            catalogue justifies it.
+        - question: "Is SKIPPED (creds/infra down) a silent vacuous pass or sound degradation?"
+          answer: >-
+            Sound degradation, on evidence. At the VP level SKIPPED is outlawed outright ("only
+            PASS or FAIL", implement SKILL.md:107-113). At the harness level SKIPPED is loudly
+            labelled, and the property it leaves unproven is re-proven by a matched control:
+            Main Canary runs the identical full tier with real OIDC creds every 3 hours
+            (main-canary.yml:5,47-50) and its failures file ci-rca recs (ci-rca.yml:12) -- it
+            would fail if a SKIPPED-masked defect were real. Residual: the DEGRADED->SKIPPED
+            reduction inside DataQualityVerifier gives a backend outage a green main for up to
+            ~3h; acceptable at this scale, and T1.6/Decision 62 own the durable reshape.
+        - question: "Is self-assigned V-tier trustworthy with no automated classifier?"
+          answer: >-
+            Partially. The tier RULE is now deterministic on paper (plan-critique 12m:
+            resource-affecting .tf or active-manifest Lambda => V3; Python => >=V2; Decision 79
+            made Lambda-tier follow the manifest graph) but it is applied by an LLM critique
+            agent, not by validate.py -- Decision 48:2414 admits "documentation-enforced only"
+            and the rec it calls for was never filed (0 dedup hits). The empirical sample shows
+            honest tiering, including conscious-acceptance write-ups (cost-reconciliation
+            declares V2 and justifies why against Decision 48). Trustworthy today by culture;
+            enforce it for the executor era with a ~50-line deterministic floor check (VF-04).
+        - question: "Flakiness: is there a DETECTION mechanism for agent-declared 'flaky, passed on re-run', or only a manual label?"
+          answer: >-
+            No detection mechanism exists on either surface. The implement protocol bounds FIX
+            attempts (3, then stop) but a bare re-run-to-green with no intervening diff is
+            indistinguishable from a fix in the chat record and nothing records attempt counts.
+            This is the rescue-loop-in-disguise the prompt names, and it is distinct from
+            declared non-determinism (Hermeticity.NON_HERMETIC_BY_CONSTRUCTION is a typed,
+            audited property; an agent's 'flaky' label is not). CD.29's
+            quarantine-that-files-a-rec and T1.6's alarm-not-gate own the executor/DQ classes;
+            interactive VP re-runs are unowned (VF-08). Cheap fix: attempt-count column in the
+            persisted VP table; >1 attempt with empty diff auto-files a rec.
+        - question: "Is the CD.38 callback-wait model sound at scale, and what are the T4.9 handshake failure modes?"
+          answer: >-
+            The model is sound and cheap at this scale (Step Functions waitForTaskToken costs
+            nothing while waiting; GHA minutes are the marginal cost; ECS escape handles >15-min
+            determinism). Three failure modes need contract text: (1) verdict never arrives --
+            no timeout criterion exists on T4.1/T4.9; the interactive surface already solves the
+            analogous dropped-signal problem (continue-on-error green comment + one-shot
+            send_later backstop), the executor needs HeartbeatSeconds/timeout->ci-rca (VF-10);
+            (2) verdict for the wrong artifact -- the T4.9 correlation tuple (PR number,
+            check-run id, workflow-run id, rec id, execution id; ROADMAP:7196) omits head SHA,
+            and branch protection is strict=false, so a stale-green merge is expressible; bind
+            verdicts to SHAs and assert equality at merge (VF-09); (3) correlation-id integrity
+            -- T4.9 already specifies auth, duplicate-idempotency and stale rejection with unit
+            tests; adequate as designed.
+        - question: "Defence-in-depth cost: is 'CI is authoritative' the right tiebreak, and is the per-rec/repo-wide overlap redundant?"
+          answer: >-
+            Yes and complementary, not redundant. CD.29:1251-1255 states the distinction
+            precisely: per-change verification answers "did THIS change do what was asked" and
+            can run differential baselines that repo-wide validation structurally cannot;
+            validation answers "is the repo still sound". CI-authoritative (Decision 73/83/89)
+            is the right tiebreak because CI is the only executor-independent, environment-
+            pinned run. The observed overlap (plans ending VPs with a full `scripts.validate`
+            step CI will re-run anyway) costs minutes, not correctness -- and pre-merge full
+            runs prevent post-merge red mains, which cost far more.
+        - question: "Same-PR guard adequacy: can an author admit a trivially-passing verifier even if they cannot weaken one?"
+          answer: >-
+            Yes, today. The guard (validate_verifier_same_pr_guard, --pre tier) blocks weakening
+            an EXISTING verifier alongside covered code, but exception (b) deliberately admits
+            brand-new verifiers with their covered code, and validate_verification_registry
+            checks schema only -- nothing executes the differential admission gate against a NEW
+            registry entry or verifier (is_admitted's sole production caller simulates its
+            revert). The designed answer (differential gate at admission, mutation-on-graduation
+            in T3.7) is right; it is not yet executable machinery (VF-06). Latent while the
+            registry holds zero entries.
+        - question: "(added) Does the closes_criteria/roadmap ledger inherit the VP's trust model?"
+          answer: >-
+            Yes -- and this widens VF-01's blast radius beyond the merge. The exit-criteria
+            ledger flips criterion status open->met "on a verified VP pass" (exit-criteria-
+            ledger.yaml:35-37; implement SKILL.md:179-198), i.e. on the author's self-reported
+            table. Status-Trusted-Never-Inferred correctly bans INFERENCE, but the trusted proof
+            is currently an attestation, not an independently produced fact. CI re-execution of
+            the VP (VF-01) hardens roadmap state for free.
+        - question: "(added) When the executor unfreezes, do human PRs and executor PRs hit the same gate?"
+          answer: >-
+            By design, yes -- CD.38's "GitHub Actions is the sole verifier/validation runner"
+            plus branch protection means both PR classes face pr-validate + terraform-validate
+            and post-merge full-validate identically. This is the design's strongest consistency
+            property; the divergence risk is upstream of the gate (rec acceptance oracles vs
+            plan VPs -- two vocabularies until T3.10, VF-14), not at it.
+  per_surface_assessment:
+      - surface: interactive
+        maturity: solid
+        strengths: >-
+          Layered and honest: schema-enforced executable VPs whose oracles predate the code;
+          fresh-context critique and code-review gates with deterministic verdict rules;
+          two-tier diff-aware CI with a hard wall-clock budget and audited escape hatch;
+          forward-fix RCA culture with deterministic gate-escape evidence (vacuous_pass,
+          escape_mode); terraform path with true artifact-verdict binding; instruction surfaces
+          themselves under CI (prompt_compliance).
+        top_gaps: [VF-01, VF-02, VF-03, VF-04, VF-07]
+      - surface: aws-executor
+        maturity: strong
+        strengths: >-
+          The design (CD.27 + CD.38 + T4.1/T4.9) is independently-executed-by-construction:
+          personas never run their own verdicts, GitHub Actions owns all verification, Step
+          Functions only waits on callbacks, failures route to ci-rca and never silently retry,
+          and concurrency=1 + deterministic-only retries encode RCA-first. Design-stage rating:
+          nothing is built (confirmed: no Step Functions/executor orchestration terraform
+          exists on disk).
+        top_gaps: [VF-11, VF-09, VF-10, VF-12]
+
+  rubric_ratings:
+    - {surface: interactive, dimension: VD1, rating: adequate, evidence: "harness.py:59-70; validate_verifier_hermeticity.py:14-54; T3.6 complete", note: "Verifier classes hermeticity-typed and AST-gated; VP commands are arbitrary shell with no hermeticity control; live-reader DQ on gate until T1.6"}
+    - {surface: interactive, dimension: VD2, rating: weak, evidence: "implement SKILL.md:83-133,115-123", note: "Per-change proof self-executed+self-reported (VF-01); oracle-predates-code and V3 human deploy gate mitigate; CI independent but repo-wide only"}
+    - {surface: interactive, dimension: VD3, rating: adequate, evidence: "planning SKILL.md:278-287; plan-critique SKILL.md:50; empirical 8-plan sample", note: "Anti-patterns listed AND critique-enforced (LLM judgment); schema bans prose-only steps; sampled V2 VPs differential; V3 sample circular (Q3); no machine fail-on-revert per step"}
+    - {surface: interactive, dimension: VD4, rating: weak, evidence: "DECISIONS.md:2414; plan-critique SKILL.md:67", note: "Deterministic tier rule exists but LLM-applied; no validate.py floor check (VF-04); Lambda slice machine-checked via manifests (Decision 79)"}
+    - {surface: interactive, dimension: VD5, rating: strong, evidence: "CD.29:1251-1255; registry.py:79-199; main-canary.yml", note: "Per-change VP + two-tier repo CI + 3h canary; distinction explicitly doctrinal"}
+    - {surface: interactive, dimension: VD6, rating: weak, evidence: "plan_document.py:33; ROADMAP T3.10:6618-6648", note: "acceptance/verification (rec) vs acceptance_criteria/verification_plan (plan); phase free-text (VF-13); unification deferred post-MVP (VF-14)"}
+    - {surface: interactive, dimension: VD7, rating: weak, evidence: "config/agent/verification_registry/registry.yaml:6; zero graduation refs in skills", note: "Registry shipped 4 days before audit, empty; no interactive producer (VF-05); throwaway-vs-guard not a deliberate per-plan decision"}
+    - {surface: interactive, dimension: VD8, rating: strong, evidence: "Decision 55:1964-1970; Decision 72; ci-rca.yml; T1.13 vacuous_pass wave", note: "RCA-not-rescue enforced end-to-end; forward-fix; deterministic gate-escape evidence; planning-queue hard block on ci-rca recs"}
+    - {surface: interactive, dimension: VD9, rating: n/a, evidence: "", note: "No orchestration substrate on this surface"}
+    - {surface: interactive, dimension: VD10, rating: adequate, evidence: "implement SKILL.md:107-113; data_quality.py:110-123; main-canary.yml:5", note: "VP-level SKIPPED outlawed; harness SKIPPED visible and canary-compensated; DEGRADED->green window <=3h"}
+    - {surface: interactive, dimension: VD11, rating: weak, evidence: "harness.py:108; __init__.py:71-77; empirical check_coverage()==[]", note: "Verifier selection structurally vacuous + unwired (VF-02); test-side selection (pytest changed files, diff coverage) is real"}
+    - {surface: interactive, dimension: VD12, rating: adequate, evidence: "planning SKILL.md:240-245 (plan_sha); DECISIONS.md:1352 (strict=false); implement SKILL.md:115-123", note: "Terraform slice has true artifact binding; code merge deliberately non-strict with post-merge re-proof; VP verdict/evidence ephemeral chat (VF-07)"}
+    - {surface: aws-executor, dimension: VD1, rating: strong, evidence: "CD.29:1273-1276; CD.27:1047-1055", note: "Hermeticity is a ratified PRECONDITION of hard-gating; deterministic-only retries; as designed"}
+    - {surface: aws-executor, dimension: VD2, rating: strong, evidence: "CD.38:1782-1798; T4.9:7195", note: "GHA sole runner; personas never self-verify; AWS waits on verdicts -- independence by construction"}
+    - {surface: aws-executor, dimension: VD3, rating: adequate, evidence: "T3.1 c6:6327-6329; CD.29:1251-1255", note: "Per-rec fail-before/pass-after designed; structural oracles survive it (VF-11); mutation not on unfreeze path"}
+    - {surface: aws-executor, dimension: VD4, rating: adequate, evidence: "Decision 79:1573; CD.24:876", note: "Lambda tier mechanically follows manifest graph; no general deterministic classifier (VF-04 shared)"}
+    - {surface: aws-executor, dimension: VD5, rating: strong, evidence: "CD.29:1251-1255", note: "Per-rec verification vs repo-wide validation both required, neither subsumes -- explicit doctrine"}
+    - {surface: aws-executor, dimension: VD6, rating: adequate, evidence: "T0.12.5 complete; T3.10 deferred:6647", note: "acceptance[] typed-checks consolidation ratified at field level; legacy projection retirement post-MVP (VF-14)"}
+    - {surface: aws-executor, dimension: VD7, rating: adequate, evidence: "T3.1 intent:6282-6286; T3.7:6494-6497", note: "Graduation IS the designed core loop (per-rec pass -> registry -> mutation audit); producer flow exists only in the deferred executor design"}
+    - {surface: aws-executor, dimension: VD8, rating: strong, evidence: "CD.38:1798; T4.11:7244-7252", note: "Callback failures route to ci-rca never silent retry; budgets designed (deferred); Decision 55 pervades"}
+    - {surface: aws-executor, dimension: VD9, rating: adequate, evidence: "CD.27:1014-1018; T4.1:6848-6874; T4.9:7194-7199", note: "Callback-wait + ECS escape sound at this scale; missing: verdict-wait timeout (VF-10), SHA binding (VF-09), differential-job substrate seam (VF-12)"}
+    - {surface: aws-executor, dimension: VD10, rating: adequate, evidence: "INTENT constraint 7:632; CD.29:1269-1272", note: "Quarantine-files-a-rec replaces permanent advisory; SKIPPED-at-postflight allows merge with warning event in the frozen baseline -- successor design must not inherit it silently"}
+    - {surface: aws-executor, dimension: VD11, rating: weak, evidence: "inherits VF-02 mechanism; no rec-level affected-targets mapping in T4.x", note: "Selection correctness for per-rec checks unowned beyond acceptance-covers-what-it-covers"}
+    - {surface: aws-executor, dimension: VD12, rating: adequate, evidence: "T4.9:7196; DECISIONS.md:1352", note: "Durable GHA logs + correlation ids are good provenance; head-SHA binding absent (VF-09); PRE_PASS/FULL_PASS reduction crisp"}
+
+  architecture_recommendation:
+    interactive:
+      verdict: hybrid
+      execution_routing: >-
+        (a) Deterministic/stable-oracle checks: KEEP the VP as author-written deterministic
+        script steps (already schema-enforced executable commands) and ADD independent
+        re-execution -- a pr-validate step parses the PR's PLAN-*.yaml and re-runs the hermetic
+        pre-deploy VP steps, comparing expected; non-hermetic steps are declared and excluded,
+        mirroring the Hermeticity enum. (b) Judgment checks: zero-context agents stay exactly
+        where they are (plan-critique on the oracle BEFORE code exists; code-review on the diff
+        after) -- do NOT hand VP execution to a fresh agent; it adds cost, not independence,
+        over CI. (c) Environment-bound/destructive V3: human-gated deploy stays; post-deploy
+        evidence becomes DURABLE (invocation output + run URL posted to the PR, not chat) and
+        the code-review agent's checklist gains "inspect the attested evidence artifact";
+        re-invokable smokes graduate into the registry.
+      authorship_fix: >-
+        The surface already has the strongest cheap anti-circularity property available: the
+        oracle (VP expected outcomes) is authored at /plan time and fresh-context critiqued
+        BEFORE any implementation exists, and /implement runs in a separate session. Preserve
+        that ordering as an explicit invariant ("VP steps may be added during /implement only
+        with a logged rationale"); the residual misreport/substitute risk is eliminated by CI
+        re-execution, not by more review.
+      mechanism: >-
+        (1) XS: implement SKILL.md commit flow appends the VP compliance table (+ attempt counts)
+        to the PR body. (2) M: new validate.py check `validate_vp_replay` (registered per
+        Decision 104) -- on PRs whose diff adds/modifies docs/plans/PLAN-*.yaml, execute that
+        plan's pre-deploy steps tagged hermetic; report per-step verdicts. (3) S: /implement
+        gains a post-VP graduation prompt that runs is_admitted live against origin/main for
+        candidate steps (feeds VF-05/VF-06).
+      what_changes: "VP verdict becomes independently produced for the hermetic subset and durably recorded for all of it; ledger criterion flips (closes_criteria) inherit a machine fact instead of an attestation."
+      cost: "One CI step bounded by the existing 5-minute fast-tier budget (hermetic VP steps in the sample run in seconds); XS skill edit; no new infrastructure."
+      rationale: >-
+        INTENT-verification-system.md:25 named cooperative self-evaluation as the root failure
+        mode and prescribed harness execution (Wave 3, integration point 3); the harness never
+        gained --plan and the roadmap never extracted the item. The VP is already a
+        deterministic per-plan script -- the missing property is WHO runs and records it, which
+        CI supplies for free. Empirical support: sampled VPs are executable and mostly
+        differential today, so replay is cheap; the one V3 sample shows exactly the circularity
+        replay would remove.
+      confidence: CONFIRMED
+    aws_executor:
+      verdict: script
+      execution_routing: >-
+        Endorse CD.38 exactly as written: GitHub Actions executes ALL verification (PR --pre,
+        main full-validate, registry execution); Step Functions records correlation ids and
+        waits on callbacks; >15-min deterministic steps ride the T4.1 ECS escape; NO in-cloud
+        verifier runner, NO agent-produced verdicts. Add one execution lane the current text
+        leaves ambiguous: a per-rec differential verify JOB in GitHub Actions (checkout
+        pre-change tree, run candidate checks, assert FAIL; checkout head, assert PASS), keyed
+        by rec id -- this realizes T3.1 c6's "executor verify-state" WITHOUT violating CD.38's
+        sole-runner rule (VF-12). Zero-context agents appear in exactly one verification role:
+        the code_review persona inspecting durable attested evidence for
+        environment-bound/destructive V3 outcomes -- never producing the pass/fail for
+        deterministic checks.
+      authorship_fix: >-
+        Executor-era oracles (rec acceptance) are often authored by a DIFFERENT agent than the
+        implementer (ci-rca, code-review, curator) -- structurally better than interactive. The
+        live risk is oracle WEAKNESS, not oracle rigging: structural grep oracles survive
+        fail-on-revert (VF-11). Fix at admission and audit time: differential job at PR time,
+        mutation-on-graduation (T3.7) pulled onto the pre-unfreeze path for any rec class the
+        executor will merge unattended, and Decision 66 Tier D (semantic acceptance judge --
+        LLM in an ADVISORY authoring-time role, consistent with Decision 59) actually filed as
+        the rec Decision 66 promised.
+      mechanism: "Contract text edits to T4.9 (+ head SHA in the correlation tuple; merge permitted only when verdict.head_sha == PR head at merge time; verdict-wait HeartbeatSeconds/timeout routes to ci-rca) and to T3.1 c6 / CD.38 (differential verify runs as a GHA job, Step Functions waits). All are design-stage edits -- nothing is built yet (confirmed on disk: no executor/Step Functions terraform exists)."
+      what_changes: "The executor merges only on a verdict cryptographically tied to the artifact it verified, produced by an independent runner, with fail-on-revert proven per rec, and with every no-verdict path terminating in RCA instead of a silent wait."
+      cost: "Roadmap/contract text now (XS); at build time, one additional GHA workflow and ~2 state-machine states; GHA minutes per rec (~2-5 min) -- negligible against persona LLM cost."
+      rationale: >-
+        CD.38 is the correct call and is already frontier-shaped (TAP flow, sole-runner
+        invariant, foreclosing any AWS verifier runner). The additions close the three
+        expressible failure modes -- wrong-SHA verdict (strict=false makes it real), absent
+        verdict (no timeout owner), and the sole seam where the roadmap still gestures at
+        in-cloud verification (T3.1 c6 wording).
+      confidence: CONFIRMED
+
+  findings:
+    - id: VF-01
+      surface: interactive
+      question: Q4
+      dimension: VD2
+      title: "Per-plan VP is executed and reported by the change author; never independently re-executed, never persisted"
+      evidence: ".claude/skills/implement/SKILL.md:83-133 (protocol + chat-only compliance table); scripts/verifiers/harness.py:155-166 (no --plan mode); docs/INTENT-verification-system.md:7,25,243-253 (designed replacement never built)"
+      evidence_kind: static
+      current_behavior: >-
+        /implement runs each VP step itself, judges PASS/FAIL, and prints a compliance table in
+        chat; merge, roadmap criterion flips (closes_criteria -> met), and rec closure all key
+        off that self-report. No mechanism re-executes any VP step; the table is not persisted
+        to the PR or anywhere durable.
+      ideal_behavior: "The pass/fail for the per-change proof is produced by something other than the author (CI replay of the hermetic subset) and recorded durably; V3 post-deploy outcomes rest on durable attested evidence inspected by the fresh-context reviewer."
+      gap: "The one check that exercises the promised behaviour end-to-end is the one check whose verdict is an attestation."
+      compensating_controls_considered: >-
+        Code-review (fresh context, reads diff+plan, checks acceptance criteria) does not RUN
+        the code -- not property-matched for a runtime proof. CI/validate re-executes the
+        repo-wide envelope incl. 100% changed-line coverage (validate_test_coverage) -- a real
+        partial match for V2 (changed lines provably execute under independent CI) but not for
+        V3 post-deploy behaviour or plan-specific expected outputs (weak assertions pass,
+        CD.30's own admission). V3 Merge Gate inserts a human at the DEPLOY step
+        (implement SKILL.md:125-132) but post-deploy verification returns to self-attestation.
+        Judged insufficient in combination for V3 and for expected-output fidelity generally.
+      change_type: enforce
+      proposed_change: >-
+        (a) Append the VP compliance table (command, truncated actual output, attempts,
+        PASS/FAIL) to the PR body in the implement commit flow. (b) Add registered check
+        validate_vp_replay: when a PR's diff contains its PLAN-*.yaml, re-execute the plan's
+        hermetic pre-deploy VP steps in pr-validate and fail on divergence from `expected`.
+        (c) For V3: require post-deploy evidence (invocation output + run URL) be posted to the
+        PR before merge; code-review checklist verifies the artifact exists and coheres.
+      acceptance: "A PR whose plan carries a hermetic pre-deploy VP step that fails on the PR tree cannot go green; the merged PR body contains the VP table; a V3 merge without a posted evidence artifact is flagged by code-review."
+      severity: high
+      severity_rationale: >-
+        Not critical: the empirical sample shows honest VPs, multiple independent layers catch
+        broad defect classes, and a vacuous green needs BOTH a mis-attested VP AND repo-wide
+        blindness. High because the compensating controls do not property-match the V3/runtime
+        slice, the blast radius includes roadmap ledger state (criterion flips trust this
+        attestation), and a feasible, net-positive independent re-execution is left undone.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.29, T3.1, CD.38]
+        dedup_search_terms: ["re-execute", "self-report", "harness --plan", "VP replay", "independent verification", "cooperative self-evaluation"]
+        dedup_hit_count: 0
+        note: "CD.29/T3.1 own graduated-check execution and CD.38 owns executor-side independence; NO item or rec owns interactive VP re-execution/persistence. INTENT Wave 3 designed it; the extraction to the roadmap never happened (INTENT is on the demote list)."
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Item (a) is XS and independent; (b) fits the Decision 104 registry pattern and the 5-min budget"}
+    - id: VF-02
+      surface: interactive
+      question: Q3
+      dimension: VD11
+      title: "Verifier-coverage selection is structurally vacuous (inherited covers=[\"**\"]) and wired into nothing"
+      evidence: "scripts/verifiers/harness.py:108 (default covers); scripts/verifiers/athena_views.py:18-25 (no covers override); scripts/verifiers/__init__.py:71-77; empirical: check_coverage(['zzz/definitely_not_covered.xyz']) == []; scripts/validate.py:270-273 (--coverage advisory, exits 0); no caller in ci.yml or any skill"
+      evidence_kind: observed
+      current_behavior: >-
+        AthenaViewsVerifier inherits the base-class covers ["**"]; check_coverage() unions all
+        registered covers, so every path in any input is "covered" and the uncovered list is
+        always empty. --coverage additionally exits 0 unconditionally and no workflow, skill, or
+        CI job invokes it. The report prints "All scope files covered", which is actively
+        misleading.
+      ideal_behavior: "Selection correctness is first-class: every registered verifier declares real covers; a changed file matched by no verifier is at least visibly reported on every PR, with a documented path to gating (INTENT progressive enforcement)."
+      gap: "The designed machine backstop for set-completeness cannot fire, and nothing tells anyone it cannot."
+      compensating_controls_considered: >-
+        The per-plan VP process covers changed files by construction (schema min-1 step +
+        critique 12c) -- but that control is the self-attested VP (VF-01) and does not exist for
+        no-plan PRs (branch protection requires only pr-validate + terraform-validate). Judged
+        insufficient: the compensator is the very mechanism whose backstop this was designed to
+        be.
+      change_type: enforce
+      proposed_change: >-
+        (a) Give AthenaViewsVerifier explicit covers (or repoint per VF-03). (b) In
+        check_coverage(), treat "**" as non-covering (or remove the base-class default so
+        covers is mandatory). (c) Add a unit test asserting an absurd path IS reported
+        uncovered (differential: this test fails on today's tree). (d) Wire the report into
+        pr-validate output as a visible advisory; revisit gating for V3 plans once the
+        catalogue matures.
+      acceptance: "check_coverage(['zzz/nope.xyz']) returns the path; pr-validate logs an uncovered-files section on a PR touching an uncovered file."
+      severity: high
+      severity_rationale: "A changed file can merge with NO covering check and no signal -- the definition of coverage-by-omission -- and the failure is silent-by-construction (the tool reports the opposite). Effort is small; severity reflects the live vacuous path, not the fix cost."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["coverage gate", "verifier coverage", "covers glob", "check_coverage", "--coverage"]
+        dedup_hit_count: 0
+        note: "T2.15 c3 touches covers globs only for CausalChainVerifier's future re-registration; the INTENT spec's check_coverage (INTENT:165-171) had no ['**'] default -- the implementation diverged from spec; no rec or item owns the repair."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Pairs naturally with VF-03"}
+    - id: VF-03
+      surface: interactive
+      question: Q3
+      dimension: VD3
+      title: "AthenaViewsVerifier is a stale-oracle verifier: HARD_GATE green against a retired data surface, live today"
+      evidence: "scripts/verifiers/athena_views.py:51-70; live run 2026-07-03: PASS 'Athena connected... Views are fresh. Found 45 decisions' vs 74 '## Decision' headers on main and dec-114 in the warehouse; Decision 84 (DECISIONS.md:1320-1338; AGENTS.md ops-tables section): ops_decisions is DuckLake sole backend, 'the frozen Iceberg copy stopped being coherent the day writes moved'"
+      evidence_kind: observed
+      current_behavior: "The verifier's liveness probe queries the Athena view ops_decisions_current -- a frozen pre-migration copy (45 rows vs >=74 live) -- and reports 'Views are fresh' on every main-validate and 3-hourly canary run. Its retention condition ('retained until the decisions table migrates to DuckLake', athena_views.py:52) expired on 2026-06-11 and nobody retired it."
+      ideal_behavior: "Every registered verifier's oracle targets a live source-of-truth surface; a verifier whose target is retired is itself retired or repointed in the same cutover (the implement skill's replacement-closure discipline, applied to verifiers)."
+      gap: "A hard-gate health check that cannot detect the failure class it was built for (view rot on live tables) and asserts freshness of incoherent data."
+      compensating_controls_considered: "DataQualityVerifier routes migrated recs checks to the DuckLake reader (data_quality.py:81-83), so live-table quality IS checked elsewhere; harm is a false 'fresh' signal + this verifier being the ['**'] coverage-destroyer (VF-02). Not merge-unsound for any specific change, hence medium."
+      change_type: rescope
+      proposed_change: "Repoint the probe at a live surface (DuckLake reader named-verb liveness, or the still-Athena ops_session_log/ops_execution_plans until T2.26 disposes of them), drop the 'Views are fresh' claim from the message, and declare explicit covers. If no live Athena surface warrants a gate, retire the verifier via the CD.12 mark-then-drop discipline."
+      acceptance: "The verifier fails (or SKIPs with an honest message) if its target surface is dropped; its PASS message no longer asserts freshness it does not measure; covers no longer ['**']."
+      severity: medium
+      severity_rationale: "Vacuous pass of a repo-health check, not of a change verdict; burns ~8s/run on main-validate and canary; primary cost is trust erosion and the VF-02 interaction."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["athena_views", "AthenaViewsVerifier", "ops_decisions_current", "view freshness"]
+        dedup_hit_count: 0
+        note: "T2.15 owns only CausalChainVerifier; T2.26 owns the remaining Athena TABLES, not this verifier; no rec targets it."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Do together with VF-02"}
+    - id: VF-04
+      surface: interactive
+      question: Q5
+      dimension: VD4
+      title: "V-tier floor is deterministic on paper but enforced only by LLM judgment; Decision 48's own named fix was never filed"
+      evidence: "DECISIONS.md:2409,2414 ('documentation-enforced only. No automated detection currently exists. A future rec should add a deterministic tier classifier to validate.py'); .claude/skills/plan-critique/SKILL.md:67 (12m rule, LLM-applied); scripts/checks/roadmap/validate_plan_documents.py (schema-only)"
+      evidence_kind: static
+      current_behavior: "verification_tier is self-assigned by the planning agent; plan-critique 12m applies a deterministic floor rule (resource-affecting .tf or active-manifest Lambda => V3; Python source => >=V2) as judgment; validate.py validates plan schema but not tier fitness. Dedup: zero open recs for a tier classifier -- the rec Decision 48 called for was never filed."
+      ideal_behavior: "validate_plan_documents computes the tier floor from the plan's scope (lambda_manifest compute_affected_artifacts + .tf resource-affecting detection) and fails a plan declaring a lower tier -- machine-enforcing exactly the 12m rule."
+      gap: "Tier under-declaration is catchable by a ~50-line deterministic check but currently rides on critique-agent diligence."
+      compensating_controls_considered: "plan-critique 12m is a real control and empirically the 8-plan sample shows honest, argued tier calls (incl. conscious-acceptance write-ups); Decision 79's manifest checks machine-gate the Lambda slice. Sufficient for today's supervised loop -- medium, not high; must be closed before the tier feeds an unattended executor."
+      change_type: enforce
+      proposed_change: "Add the tier-floor computation to validate_plan_documents (or a sibling registered check) using the same inputs 12m names; critique keeps the judgment residue (e.g. justifying conscious-acceptance deviations, which the check can honour via an explicit plan field)."
+      acceptance: "A plan with an active-manifest Lambda file in scope and verification_tier: V2 fails validate --pre; the sampled historical plans still pass."
+      severity: medium
+      severity_rationale: "Live but culturally compensated; becomes high the day rec/plan tiers gate an autonomous merge."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["tier classifier", "automated tier detection", "verification tier enforce"]
+        dedup_hit_count: 0
+        note: "Acknowledged in Decision 48 as future work; no rec or tier_item carries it -- acknowledged-but-unowned."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+    - id: VF-05
+      surface: interactive
+      question: Q5
+      dimension: VD7
+      title: "Graduation registry has no interactive-era producer: nothing in any workflow can populate it"
+      evidence: "config/agent/verification_registry/registry.yaml:6 (entries: []); grep 'graduat|verification_registry|registry.yaml' across .claude/skills/ and .claude/commands/ = 0 hits; CD.29:1282-1293 (producer flow is per-REC, executor-era); T3.7:6494-6497 (mutation targets graduated checks only)"
+      evidence_kind: observed
+      current_behavior: "The registry (ratified dec-102, 2026-06-29) is empty and will remain so: the only designed producer is the frozen executor's per-rec flow, and neither /plan, /implement, nor code-review mentions graduation. Proven VP checks are discarded per-plan by default rather than by decision. T3.7's mutation machinery, when built, will have an empty target set."
+      ideal_behavior: "At /implement close, VP steps that assert standing properties are offered for graduation, admitted only on a live is_admitted fail-on-revert run, and recorded per the contract -- making throwaway-vs-guard a deliberate per-step decision."
+      gap: "A shipped persistence mechanism with no feed during an indefinite freeze window."
+      compensating_controls_considered: "Not 'built-but-dead': the mechanism is 4 days old. But no compensating producer exists or is planned for the interactive era; assessed as an insufficiency on CD.29/T3.1 scope, not a defect in what shipped."
+      change_type: persist
+      proposed_change: "Add a graduation step to the implement skill (post-VP-pass, pre-commit): enumerate VP steps expressible in the six-slot kernel, run is_admitted against origin/main for candidates, write admitted rows via the contract shape, and record 'none graduated' explicitly otherwise."
+      acceptance: "An /implement session whose VP contains a kernel-expressible standing check either adds a registry row (with graduated_by) or logs an explicit no-graduation decision; registry gains its first differential-admitted entry."
+      severity: medium
+      severity_rationale: "No unsound green today; cost is compounding loss of proven regression guards and a starved T3.7."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T3.1, CD.29, T3.7]
+        dedup_search_terms: ["graduation", "registry entries", "promote check", "verification_registry"]
+        dedup_hit_count: 0
+        note: "T3.1 delivered the mechanism per its criteria; CD.29's producer is executor-gated; no item owns an interactive producer. 4 'graduat' rec hits are ops-decisions/rescue-agent domain, unrelated."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Unblocks T3.7's target set; pairs with VF-06"}
+    - id: VF-06
+      surface: interactive
+      question: Q5
+      dimension: VD2
+      title: "Differential admission gate is not executed against new registry entries; admission is procedural"
+      evidence: "scripts/verification_checks.py:309-325 (is_admitted; docstring defers production wiring); scripts/checks/verification/validate_differential_gate_baseline.py:50-53 (sole caller; revert SIMULATED); validate_verification_registry.py:9-18 (schema-only); validate_verifier_same_pr_guard.py:66-69 (exception b admits new verifier + covered code same PR, per CD.29)"
+      evidence_kind: static
+      current_behavior: "An author could insert a trivially-passing registry entry (or a new tautological verifier alongside its covered code, via same-PR exception b) and no machine would run fail-on-revert against it; the CI 'baseline' check self-tests the gate with a stubbed revert_runner, it does not gate admissions."
+      ideal_behavior: "When a diff adds/modifies a registry entry, the full tier executes the entry's check against origin/main (assert FAIL) and against HEAD (assert PASS); a new verifier admitted under exception (b) gets the same treatment on its covered paths."
+      gap: "The admission bar exists as reviewed code and contract language, not as executed machinery."
+      compensating_controls_considered: "Latent while entries==0 (VF-05); same-PR guard blocks the WEAKEN case; code-review would likely flag a tautological entry. Insufficient once graduation starts: a tautology admitted once persists as false assurance and T3.7's on-target mutation (the designed catcher) is unbuilt."
+      change_type: enforce
+      proposed_change: "Extend validate_verification_registry (full tier): for entries added in the diff, materialize the check from its slot definition and run is_admitted with a real revert_runner (git worktree at origin/main); refuse WARN/SKIP outcomes."
+      acceptance: "A PR adding a registry entry whose check passes on origin/main fails main-validate with 'not admitted (revert did not produce FAIL)'."
+      severity: medium
+      severity_rationale: "Blocks a defined vacuous-pass class at the door it was designed for; latent today, mandatory before graduation volume or executor autonomy."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T3.1, CD.27, T3.7]
+        dedup_search_terms: ["is_admitted", "differential admission", "fail on revert", "tautolog"]
+        dedup_hit_count: 0
+        note: "T3.1 c6 required gate logic + NAMING the execution surfaces (met as written); the actual per-entry execution has no owner until the deferred CD.27 verify-state -- and see VF-12 for where that should run."
+      effort: M
+      depends_on: [VF-05]
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Meaningful once the registry has a producer"}
+    - id: VF-07
+      surface: interactive
+      question: Q5
+      dimension: VD12
+      title: "VP verdict and evidence are ephemeral chat output; merges and ledger flips leave no durable proof artifact"
+      evidence: ".claude/skills/implement/SKILL.md:115-123 ('produce a VP compliance table in the chat output'); PR-body construction (implement SKILL.md:423-428) carries only the Resolves trailer; telemetry_verification_results table exists in DQ config but the telemetry store is dead pending T2.36"
+      evidence_kind: static
+      current_behavior: "After the session ends, no artifact records which VP commands ran, their outputs, or attempt counts; the squash-merge and any closes_criteria flips reference a proof no one can later inspect."
+      ideal_behavior: "Verdict + evidence durable before the irreversible act: the VP table (with actual outputs and attempt counts) lands in the PR body/comment; executor-era results flow to telemetry_verification_results when T2.36 revives the store."
+      gap: "Evidence-before-irreversible-acts holds for terraform (convergence record) but not for the code path's per-change proof."
+      compensating_controls_considered: "Git history + CI logs are durable but record the repo-wide envelope, not the per-plan proof; the plan YAML records intent, not results. Insufficient for audits exactly like this one (the empirical pass had to infer VP execution from plan text)."
+      change_type: persist
+      proposed_change: "XS skill edit: the IMPLEMENTATION commit flow appends the VP compliance table to the PR body (bounded: truncate outputs). Note attempt counts feed VF-08."
+      acceptance: "Every merged feat(...) PR body contains the executed VP table; spot-check of the next three merges confirms."
+      severity: medium
+      severity_rationale: "Clear-fix durability gap; does not weaken the proof itself, weakens its auditability and everything downstream that trusts it."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["verification results persist", "VP table", "telemetry_verification_results", "PR body evidence"]
+        dedup_hit_count: 0
+        note: "T2.36 owns the telemetry store rebuild (executor-era results), not interactive PR-level persistence; no rec found."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Do first; enables VF-01(a) and VF-08"}
+    - id: VF-08
+      surface: interactive
+      question: Q5
+      dimension: VD3
+      title: "Bare re-run-to-green on a VP step is undetectable: no attempt accounting, no flake quarantine on this surface"
+      evidence: ".claude/skills/implement/SKILL.md:93-98 (3 fix attempts; no record of bare re-runs); CD.29:1269-1272 (quarantine design, executor-era, pending); T1.6 not_started (DQ flake source); Decision 62 amendment DECISIONS.md:2335"
+      evidence_kind: static
+      current_behavior: "An agent that re-runs a REAL failure, sees it pass once, and proceeds produces a table indistinguishable from first-try success. Declared non-determinism is typed and audited for verifier classes (Hermeticity enum + AST gate) but VP steps have no equivalent, and nothing distinguishes 'fixed' from 'retried into green'."
+      ideal_behavior: "Attempt counts are recorded per VP step; >1 attempt with no intervening diff is treated as detected non-determinism: auto-file a rec (RCA-first), never a silent proceed -- CD.29's quarantine semantics applied to the interactive surface."
+      gap: "A rescue-loop-in-disguise (Decision 55's failure mode) is expressible inside the VP protocol with zero telemetry."
+      compensating_controls_considered: "Decision 55 culture + the 3-attempt cap bound the loop; hermeticity work (T3.6 complete, T1.6 pending) shrinks the flake supply. No control DETECTS the event; judged a real but bounded hole."
+      change_type: add
+      proposed_change: "Extend the persisted VP table (VF-07) with an attempts column and a rule in the implement skill: attempts>1 with empty `git diff` since the prior attempt => mark step NONDETERMINISTIC, file a rec via the portal, and require the step to pass twice consecutively to count."
+      acceptance: "A synthetic flaky VP step produces a filed rec and a NONDETERMINISTIC marker in the PR's VP table instead of a silent PASS."
+      severity: medium
+      severity_rationale: "Real vacuous-pass vector but requires an actual flake plus agent shortcut; supply is being reduced by owned hermeticity work."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.29, T1.6]
+        dedup_search_terms: ["flaky", "quarantine", "re-run", "nondeterministic test"]
+        dedup_hit_count: 1
+        note: "rec-2443 is taxonomy documentation, unrelated; CD.29 quarantine + T1.6 own the executor/DQ classes; interactive VP re-run detection unowned."
+      effort: S
+      depends_on: [VF-07]
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: ""}
+    - id: VF-09
+      surface: aws-executor
+      question: Q5
+      dimension: VD12
+      title: "T4.9 correlation tuple omits head SHA: no artifact-verdict binding at executor merge time under strict=false protection"
+      evidence: "ROADMAP T4.9:7196 (correlation ids: PR number, check-run id, workflow-run id, rec id, execution id); DECISIONS.md:1352 (strict_required_status_checks_policy=false); contrast: terraform path binds artifact to verdict (same plan.bin, plan_sha in convergence record, Decision 92 point 2; planning SKILL.md:240-245); T2.20's post-merge wake is SHA-keyed"
+      evidence_kind: static
+      current_behavior: "As designed, the executor merges on PRE_PASS correlated by PR number/check-run id; nothing in the contract asserts the verdict's commit equals the PR head at merge, and non-strict protection makes a stale-green (push-after-verdict, or base-moved) merge expressible with no human in the loop."
+      ideal_behavior: "Verdict records the exact head SHA it verified; the merge state asserts verdict.head_sha == current PR head (and optionally base freshness policy), else re-verify -- mirroring the terraform no-TOCTOU discipline already ratified."
+      gap: "The repo's own strongest pattern (bind the applied artifact to the inspected artifact) is not carried into the executor verification contract."
+      compensating_controls_considered: "Interactive practice re-checks check runs before merging (AGENTS.md step 4) with a human adjacent; post-merge main full-validate + canary + ci-rca forward-fix catch stale-green integration breakage within minutes-to-hours. Sufficient for supervised merges; insufficient as the standing rule for unattended merges -- hence a design-stage medium, filed against the contract not the (unbuilt) code."
+      change_type: clarify
+      proposed_change: "Amend T4.9's exit criteria (and the future docs/contracts/executor-ci-handshake.yaml): add head_sha to the correlation tuple; add criterion 'merge is permitted only when the callback's verified head SHA equals the PR head at merge time; mismatch routes to re-verify, repeated mismatch to ci-rca'."
+      acceptance: "T4.9 contract text carries the SHA-binding criterion before any T4.x build plan consumes it."
+      severity: medium
+      severity_rationale: "Unbuilt surface -- no live exposure; cost of the fix now is one contract line, cost later is a TOCTOU class in an autonomous merger."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T4.9, CD.38]
+        dedup_search_terms: ["head sha", "stale callback", "wrong SHA", "TOCTOU", "artifact binding"]
+        dedup_hit_count: 0
+        note: "T4.9 owns stale-CALLBACK rejection generically; SHA-level artifact binding is absent from its criteria and CD.38's text."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Text-only; T4.9 is deferred_post_mvp so the edit is cheap now"}
+    - id: VF-10
+      surface: aws-executor
+      question: Q5
+      dimension: VD9
+      title: "Verdict-never-arrives has no owner: no wait-timeout/heartbeat criterion on the callback-wait states"
+      evidence: "CD.38:1798 enumerates callback failures as 'stale/duplicate/auth' only; T4.1 exit_criteria:6869-6874 (no timeout criterion); T4.9:7194-7199 (auth/duplicate/stale covered; absence of timeout); contrast: interactive flow explicitly engineers for the dropped green signal (AGENTS.md git-ops step 4: continue-on-error comment + one-shot send_later backstop)"
+      evidence_kind: static
+      current_behavior: "The design says Step Functions WAITS on GitHub Actions verdict callbacks; if the callback never fires (workflow cancelled, token lost, comment/dispatch dropped -- the exact failure the interactive surface's backstop exists for), no state, criterion, or discipline point defines the timeout or its routing."
+      ideal_behavior: "Every waitForTaskToken state carries HeartbeatSeconds/TimeoutSeconds sized to the expected verdict latency; timeout routes to ci-rca (Decision 72), never silent re-wait or retry."
+      gap: "The one no-signal failure mode the interactive surface already engineered around is unnamed in the executor design."
+      compensating_controls_considered: "Step Functions has native timeout support so the build would likely add one anyway; T4.11 budgets bound attempt counts but not wall-clock waits. Design-stage medium: cheap to fix in text, expensive to discover in production."
+      change_type: clarify
+      proposed_change: "Add to T4.1 (state machine) and T4.9 (contract): explicit heartbeat/timeout on all verdict-wait states with timeout->ci-rca routing; enumerate 'verdict timeout' alongside stale/duplicate/auth in CD.38's discipline point."
+      acceptance: "T4.1/T4.9 texts name the timeout semantics before the state machine is authored."
+      severity: medium
+      severity_rationale: "Unbuilt; a hung autonomous pipeline is an availability failure, not an unsound merge -- but it silently stalls the whole improvement loop."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T4.1, T4.9, T4.11]
+        dedup_search_terms: ["timeout", "heartbeat", "verdict never", "callback wait"]
+        dedup_hit_count: 0
+        note: "T4.11 bounds revision/attempt budgets, not verdict waits; no item names wait-timeout."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Text-only"}
+    - id: VF-11
+      surface: aws-executor
+      question: Q3
+      dimension: VD3
+      title: "Structural acceptance oracles remain the executor's merge basis at unfreeze: oracle-quality machinery is not on the CD.17 critical path"
+      evidence: "Observed rec sample: acceptance overwhelmingly `grep -q` (e.g. rec-940 High: grep -q 'enable_pr_auto_merge' SKILL.md; rec-931/932; ci-rca rec-2481: grep -q 'connection reset by peer'); Decision 48:2406 (behavioural, never structural) vs Decision 66 Tier B lint (bans python -c/--pre/line-numbers, permits bare grep); Tier D 'Not yet implemented' (DECISIONS.md:2271); CD.17 amendment: T3.7 'PRECEDE and do NOT gate the reversal' (ROADMAP:667-671); T3.7 not_started; kernel slots include grep_count/file_presence (verification_checks.py:113-200)"
+      evidence_kind: observed
+      current_behavior: >-
+        Rec acceptance -- the field CD.29 evolves into the executor's typed verification -- is
+        structural text-presence in nearly every sampled rec, including High priority. The
+        designed differential gate does not catch this class: `grep -q <new string>` FAILS on
+        revert (string absent pre-change) and PASSES after, so it clears fail-before/pass-after
+        while proving nothing behavioural. The three designed catchers (mutation-on-target T3.7,
+        CD.30 ratchet, Decision 66 Tier D judge) are respectively not_started, pending-on-T3.7,
+        and unimplemented-with-no-rec-filed; none gates CD.17 reversal, whose trigger is keyed
+        to T4.2/T3.2/T3.3 only.
+      ideal_behavior: "Before any rec class is merged unattended, its acceptance oracle class has passed an oracle-quality bar: behavioural primitives preferred (test_selector/command_output_matches), structural primitives admitted only with a mutation-on-target or paired behavioural check."
+      gap: "A green executor verdict can certify text presence, not behaviour, for the exact artifacts it will merge without a human."
+      compensating_controls_considered: "Today: humans consume recs via /plan->/implement, where the plan VP re-derives real verification (observed: the plan for rec-2481 added behavioural unit tests beyond the rec's grep) -- a genuine property-matched control WHILE the freeze holds. That control is precisely what unfreezing removes, and the reversal trigger does not require its replacement to exist."
+      change_type: retune_gate
+      proposed_change: "Either add to CD.17's reversal trigger (or to CD.29's ratification preconditions) an oracle-quality gate for autonomously-merged rec classes: T3.7 mutation-on-target live for graduated checks AND per-rec differential job live (VF-12) AND structural-only acceptance demoted to advisory for unattended merges; or explicitly ratify the narrower rule that unattended merges require a behavioural-slot check."
+      acceptance: "The ratified reversal/ratification text names an oracle-quality precondition; a rec whose only check is grep_count cannot be merged unattended once the executor is live."
+      severity: high
+      severity_rationale: "A planned-item absence that leaves a designed-in vacuous path scheduled to go live: the human compensating control is removed by the same event (unfreeze) that activates the oracle, and no gating item replaces it. High rather than critical because the executor is unbuilt and CD.29's hard-gate flip is itself still pending -- there is time to retune."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.29, CD.30, T3.7, CD.17]
+        dedup_search_terms: ["mutation", "Tier D", "semantic judge", "behavioural acceptance", "structural grep"]
+        dedup_hit_count: 2
+        note: "rec-2340/rec-658 hits are unrelated test-idiom recs; Decision 66 Tier D promised a rec that was never filed; T3.7 owns the machinery but not the sequencing constraint."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Sequencing/ratification text change now; machinery lands with T3.7"}
+    - id: VF-12
+      surface: aws-executor
+      question: Q2
+      dimension: VD9
+      title: "Per-rec differential verification substrate is specified twice, inconsistently: T3.1 c6's 'executor verify-state' vs CD.38's 'AWS never runs verifiers'"
+      evidence: "T3.1 c6 ROADMAP:6327-6329 ('the executor's per-rec verify state ... checks out the pre-change tree, runs the candidate, and asserts FAIL', substrate per CD.27); CD.38:1796 ('GitHub Actions is the sole verifier/validation runner; AWS never runs validate.py or verifiers in-cloud'); verification_checks.py:322-323 docstring repeats the CD.27 wording"
+      evidence_kind: static
+      current_behavior: "Two pending texts route the same check (per-rec fail-on-revert) to different substrates: a Step Functions verify-state (CD.27 lineage) and GitHub Actions (CD.38). Both cannot hold; whichever plan builds first will encode the ambiguity."
+      ideal_behavior: "One sentence resolves it: the differential verify runs as a GitHub Actions job keyed by rec id (pre-change checkout -> assert FAIL -> head checkout -> assert PASS); Step Functions has a verify STATE that only dispatches and waits, consistent with CD.38."
+      gap: "Cross-document contradiction inside the unbuilt design; cheap now, confusing later."
+      compensating_controls_considered: "Both texts are pending CDs so no built system is wrong yet; the CD.25 ratification ritual would likely surface it -- but T3.1 c6 is already marked met with the old wording, so the ritual has passed its natural checkpoint."
+      change_type: unify
+      proposed_change: "Amend T3.1 c6's wording and the verification_checks.py docstring to name GitHub Actions as the execution substrate for per-rec differential verification (Step Functions waits), and add a matching discipline point to CD.38."
+      acceptance: "grep for 'verify state' across roadmap + kernel shows one consistent substrate story."
+      severity: medium
+      severity_rationale: "A cross-surface inconsistency that will ship if unaddressed; zero runtime exposure today."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.38, CD.27, T3.1]
+        dedup_search_terms: ["verify state", "verify-state", "sole verifier runner", "in-cloud verifier"]
+        dedup_hit_count: 0
+        note: "CD.38 says it 'forecloses any future plan reintroducing an AWS verifier runner' -- T3.1 c6's text predates and was not reconciled."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Text-only"}
+    - id: VF-13
+      surface: interactive
+      question: Q3
+      dimension: VD6
+      title: "VerificationStep.phase is free-text; observed plans use three different vocabularies for the pre/post boundary"
+      evidence: "scripts/plan_document.py:33 (phase: str, min_length=1); planning SKILL.md:393 template comment 'pre-deploy | post-deploy'; observed: PLAN-close-audit-ulf-02 uses 'pre-merge/post-merge', PLAN-cost-reconciliation-job uses free labels ('Trigger evaluation', 'Coverage'); plan-critique 12c enforces the enum for V3 plans only"
+      evidence_kind: observed
+      current_behavior: "The field that decides WHEN a verification step runs (and which steps the V3 Merge Gate sequences around) is schema-unconstrained; three vocabularies coexist in the last 8 plans."
+      ideal_behavior: "A closed enum (pre-deploy | post-deploy, or an explicitly ratified superset) so machine consumers -- VP replay (VF-01), the future executor's step router -- can key on it."
+      gap: "Harmless to humans today; a parsing landmine for every machine consumer the roadmap plans."
+      compensating_controls_considered: "Critique 12c catches V3 mislabels; V1/V2 phases are informational today. Low severity accordingly."
+      change_type: enforce
+      proposed_change: "Constrain phase to a Literal in plan_document.py (grandfather existing plans via schema_version or a one-time normalization commit)."
+      acceptance: "A plan with phase: 'pre-merge' fails validate_plan_documents; existing plans normalized or exempted."
+      severity: low
+      severity_rationale: "Consistency/clarity; blocks nothing today."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["phase enum", "pre-deploy post-deploy", "VerificationStep"]
+        dedup_hit_count: 0
+        note: ""
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "", note: "Do alongside any plan_document.py touch; prerequisite hygiene for VF-01(b)"}
+    - id: VF-14
+      surface: shared
+      question: Q1
+      dimension: VD6
+      title: "Two check vocabularies and three status alphabets persist through the MVP window in which the executor is rebuilt"
+      evidence: "Plan: acceptance_criteria + verification_plan (plan_document.py:70-71); rec: acceptance (+ legacy verification projection) -- unification owned by T3.10, deferred_post_mvp (ROADMAP:6647); statuses: PASS/FAIL/WARN/SKIPPED (harness.py:20-27) vs PASS/FAIL (verification_checks.py:17-19) vs PASS/FAIL/BLOCKED (implement SKILL.md:115-123)"
+      evidence_kind: static
+      current_behavior: "The interactive and rec surfaces speak different check dialects, and three overlapping status alphabets exist; T3.10 (retire the legacy verification projection; single acceptance[] surface) is parked post-MVP while T4.x executor design proceeds."
+      ideal_behavior: "One check vocabulary (the six-slot kernel) and one status/severity alphabet shared by plans, recs, verifiers, and the executor callback contract before the executor consumes any of them."
+      gap: "Consistency debt scheduled to mature exactly when the second consumer arrives."
+      compensating_controls_considered: "T0.12.5 already ratified the typed acceptance field shape, so the rec side has its target form; blocking semantics are already unified at the CI gate. Low."
+      change_type: unify
+      proposed_change: "When T4.x planning begins, reactivate T3.10 (its own progress_note names the trigger: T3.1 + T3.6 complete -- both now effectively true) rather than letting the executor build against the legacy dual surface; map the three status alphabets in the T4.9 contract."
+      acceptance: "T3.10 reactivated (not_started) before any T4.1 implementation plan is written, or an explicit decision records why not."
+      severity: low
+      severity_rationale: "Ordering nudge on owned work, not a defect."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T3.10, T0.12.5, T4.9]
+        dedup_search_terms: ["single acceptance surface", "verification projection", "vocabulary unification"]
+        dedup_hit_count: 0
+        note: "T3.10 owns the substance; the finding is its sequencing relative to T4.x."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: "T4.x planning start", note: ""}
+
+  rejected_candidates:
+    - candidate: "Executor 'verification' is advisory (run_verification never blocks) -- a defect"
+      why_dismissed: "Deliberate, recorded baseline of the FROZEN PoC, not the design target: CD.29:1309 explicitly flips the default to required/hard-gate and CD.29:1273-1276 sequences the flip behind hermeticity (T3.6, complete 2026-06-25) precisely because flakiness is why it was advisory. The skew window is itself recorded (CD.29:1295-1299), not silent."
+      compensating_control: "CD.29 hard-gate flip + T3.6 hermeticity precondition (satisfied)"
+      control_property_match: "The control targets the same property (advisory verdicts have no consequence) and the recorded flip makes the advisory state fail loudly at ratification review; frozen executor executes nothing meanwhile (Decision 67/CD.17)."
+      decision_or_item_id: "CD.29 / T3.6 / CD.17"
+    - candidate: "Empty graduation registry = built-but-dead mechanism"
+      why_dismissed: "Mischaracterization on timing: the contract ratified 2026-06-29 (dec-102), four days before this audit -- 'correctly empty so far'. The real, narrower defect is the absent interactive producer, filed as VF-05; 'dead' would require a feed that exists and is ignored."
+      compensating_control: "n/a (recharacterized, residual filed as VF-05)"
+      control_property_match: "n/a"
+      decision_or_item_id: "T3.1 (all criteria met 2026-06-29)"
+    - candidate: "SKIPPED on creds/backend-down is a silent vacuous pass"
+      why_dismissed: "At VP level SKIPPED is outlawed ('only PASS or FAIL', creds failure = FAIL + stop). At harness level SKIPPED is visible, named per check, and time-bounded by an independent re-executor."
+      compensating_control: "Main Canary runs the identical full tier (incl. verifier harness + DQ) with real OIDC creds every 3h; failures trigger ci-rca recs"
+      control_property_match: "Exercises the SAME checks the skip left unproven, on the same tree, with credentials guaranteed by the job itself (main-canary.yml:22-26,47-50); if a skipped-over defect were real the canary run fails and files a critical rec (ci-rca.yml:12,34). Residual <=3h window judged acceptable; durable reshape owned by T1.6/Decision 62."
+      decision_or_item_id: "Decision 60 / Decision 62 / T1.6"
+    - candidate: "Author can weaken their own verifier (same-PR conflict of interest)"
+      why_dismissed: "The exact control exists and runs in the fast tier on every PR: modifying a verifier file alongside any file it covers fails --pre."
+      compensating_control: "validate_verifier_same_pr_guard (registry.py:107; validate_verifier_same_pr_guard.py:32-100)"
+      control_property_match: "Directly exercises the property (verifier and covered code in one diff) and fails the gate when it holds; counterfactual verified by reading the violation branch. Residual (ADMITTING a new trivially-passing check) is filed separately as VF-06."
+      decision_or_item_id: "T3.1 c3"
+    - candidate: "strict=false branch protection permits stale-green merges -- unsound for the interactive surface"
+      why_dismissed: "Deliberate non-wedging choice (Decision 83) in a solo-developer, low-concurrency repo, and the unproven property is re-proven post-merge on the actual merged tree."
+      compensating_control: "main-validate full tier runs on every push to main; failure files a critical ci-rca rec that hard-blocks the planning queue (Decision 73); Main Canary re-runs 8x/day"
+      control_property_match: "A stale-green merge whose integration is actually broken fails the post-merge full tier on the merged SHA -- the precise property strict=false leaves unproven -- and the forward-fix loop forces resolution before new planning. For the UNATTENDED executor the same dismissal does not hold; carried forward as VF-09."
+      decision_or_item_id: "Decision 83 / Decision 73"
+    - candidate: "Prose-only / non-executable VP steps let the implementer substitute weaker checks"
+      why_dismissed: "Machine-closed: the schema rejects empty commands and the critique gate judges command quality."
+      compensating_control: "plan_document.py:39-44 (_command_non_empty, enforced in both validate tiers) + plan-critique 12c"
+      control_property_match: "The schema check fails exactly when the defect (no executable command) is present -- verified by the validator code path; 12c adds the exercise-the-feature judgment on top."
+      decision_or_item_id: "T1.11 / CD.22"
+    - candidate: "--pre omitting the verifier harness/DQ/full pytest is a gate hole"
+      why_dismissed: "This is the designed TAP presubmit/postsubmit split, with the fast tier budget-asserted and the full tier authoritative post-merge under forward-fix; collapsing them would break the 5-min edit loop the design optimizes."
+      compensating_control: "main-validate (full) on merge + Main Canary + ci-rca forward-fix; local 'run full before PR' discipline (implement SKILL.md:369-370)"
+      control_property_match: "Everything --pre skips runs post-merge on the merged tree within minutes; escapes are not silent -- they file critical recs with the T1.13 evidence bundle attributing the escape_mode."
+      decision_or_item_id: "Decision 60 / Decision 73 / Decision 104"
+    - candidate: "--ignore-budget escape hatch lets a slow gate get routed around silently"
+      why_dismissed: "The hatch is CI-forbidden, audited, and currently unused; the gate-integrity signal is live and quiet."
+      compensating_control: "validate.py:301-303 (forbidden when CI=true); _file_budget_bypass_rec audit rec on every use; preflight budget_bypass_alert surfaced in /plan (planning SKILL.md:48) -- observed null (0 bypasses in 7d)"
+      control_property_match: "Every bypass event files a durable rec and surfaces at the next planning session -- the control fires exactly when the defect (bypass use) occurs. Known bug in the BREACH-rec filing path is already owned by open rec-2156."
+      decision_or_item_id: "Decision 73 / rec-2156"
+    - candidate: "Self-assigned V-tier is untrustworthy (no automated classifier) -- critical"
+      why_dismissed: "Downgraded, not dismissed outright: the deterministic rule exists (critique 12m), the Lambda slice is machine-derived from manifests (Decision 79), and the 8-plan sample shows honest, argued tier declarations including conscious-acceptance write-ups. Residual enforcement gap filed at medium as VF-04."
+      compensating_control: "plan-critique 12m tier-fitness check + Decision 79 manifest-graph V3 triggers + validate_lambda_* checks"
+      control_property_match: "12m applies the same floor rule a classifier would and REVISEs on violation (it would fire on a real under-declared plan); its weakness is being LLM-applied, which is VF-04's subject, not grounds for a critical."
+      decision_or_item_id: "Decision 48 / Decision 79"
+
+  summary:
+    total_findings: 14
+    novel_count: 5
+    planned_insufficient_count: 9
+    planned_unbuilt_count: 0
+    top_improvements: [VF-01, VF-02, VF-11, VF-05, VF-09]
+    highest_leverage_change: VF-01
+    maturity_interactive: solid
+    maturity_aws_executor: strong
