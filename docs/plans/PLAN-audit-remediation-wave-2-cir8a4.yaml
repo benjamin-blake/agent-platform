@@ -1,0 +1,349 @@
+schema_version: 1
+slug: "audit-remediation-wave-2-cir8a4"
+intent: >-
+  Harden the interactive Live Verification Protocol so a per-change proof is durable and
+  auditable instead of ephemeral chat: the executed VP compliance table (with an Attempts
+  column) is posted to the PR body, bare re-run-to-green nondeterminism is detected and
+  surfaced, and V3 post-deploy claims must carry posted evidence (invocation output + run URL)
+  that code-review checks -- closing audit findings VF-07, VF-08, and VF-01(a)+(c) and three of
+  the four T3.15 exit criteria.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-audit-remediation-wave-2-cir8a4.yaml
+phase: >-
+  Platform T3 (verification system). Carrier tier_item T3.15 "Interactive VP independent
+  re-execution + durable evidence persistence" (first implementation slice; closes c1/c3/c4,
+  leaves c2 for the later VF-01(b) CI-replay plan). Adds post-MVP T3.19 for the VF-08 alarm flip.
+scope:
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      VF-07 (Attempts column + bounded VP compliance table, appended to the PR body in the
+      IMPLEMENTATION Commit Flow); VF-08 (nondeterminism rule in the Live Verification Protocol,
+      stop-and-surface alarm); VF-01 V3 leg (V3 Merge Gate requires posted post-deploy evidence).
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: >-
+      VF-01(c) -- add a V3-plan checklist item: verify the posted evidence artifact exists,
+      names a real run URL, and coheres with the plan's post-deploy expected outcomes; absence
+      => High finding (drives Verdict: REVISE).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      (A) Add post-MVP tier_item T3.19 (status deferred_post_mvp) owning the future flip of the
+      VF-08 alarm from stop-and-surface to auto-file-rec when the executor goes live. (B) Add
+      .claude/skills/code-review/SKILL.md to T3.15.files_in_scope (currently omitted though c3
+      requires it). (C) Reconcile T3.15:c4 text to the mechanism this slice actually ships
+      (NONDETERMINISTIC-marking + stop-and-surface), rehoming the auto-file-rec clause to T3.19:c1
+      and preserving the original c4 wording in T3.15's note (realized-differently rule). The
+      closes_criteria flip of T3.15 c1/c3/c4 is applied by the /implement bookkeeping walk on a
+      verified VP pass, not hand-edited here.
+bundled_recommendations: []
+infrastructure_dependencies: []
+closes_criteria: ["T3.15:c1", "T3.15:c3", "T3.15:c4"]
+acceptance_criteria:
+  - >-
+    .claude/skills/implement/SKILL.md VP Compliance Gate table carries an "Attempts" column
+    (header: VP# | Command | Actual Output (truncated) | Attempts | PASS/FAIL) and a documented
+    bounded-size rule (per-cell output truncation), and the table is specified as appended to
+    the PR body in the IMPLEMENTATION Commit Flow. (VF-07 / T3.15:c1)
+  - >-
+    .claude/skills/implement/SKILL.md Live Verification Protocol carries the nondeterminism
+    rule: a failed step re-run with an EMPTY git diff since the prior attempt that goes green is
+    marked NONDETERMINISTIC and never recorded as PASS; re-runs stay capped at the existing
+    3-attempt bound (no looping toward green); a genuine fix (non-empty diff) must pass two
+    consecutive times to count (these confirmation passes are not additional fix attempts); the
+    alarm is stop-and-surface-to-human, with a forward-note that it flips to auto-file-rec when
+    the executor is live (T3.19); explicitly distinguished from declared non-determinism
+    (Hermeticity.NON_HERMETIC_BY_CONSTRUCTION); cites Decision 55. (VF-08 / T3.15:c4)
+  - >-
+    .claude/skills/implement/SKILL.md V3 Merge Gate requires post-deploy V3 evidence (live
+    invocation output + a run URL) be posted to the PR before merge, replacing
+    grep-your-own-transcription as the machine-checkable record (cites Decision 103).
+    (VF-01 V3 leg / T3.15:c3)
+  - >-
+    .claude/skills/code-review/SKILL.md carries a V3-plan checklist item that raises a
+    High-priority finding (=> Verdict: REVISE) when the posted evidence artifact is absent,
+    lacks a real run URL, or contradicts the plan's post-deploy expected outcomes.
+    (VF-01(c) / T3.15:c3)
+  - >-
+    docs/ROADMAP-PLATFORM.yaml gains tier_item T3.19 with status deferred_post_mvp owning the
+    VF-08 alarm flip, and T3.15.files_in_scope lists .claude/skills/code-review/SKILL.md.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T3.15:c4 text is reconciled to the shipped interactive-era
+    mechanism (marked NONDETERMINISTIC + stop-and-surfaced, files nothing) with the auto-file-rec
+    clause rehomed to T3.19:c1, and the original c4 wording preserved in T3.15's note
+    (realized-differently rule / F-006/F-014) -- so the flipped c4 re-adjudicates true.
+  - >-
+    scripts.prompt_compliance --all exits 0 (the protected Behavioural Invariants block is
+    intact) and scripts.validate --pre exits 0 (roadmap schema + plan closes_criteria referential
+    integrity hold).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Assert the VP compliance table gained an Attempts column between Actual Output and PASS/FAIL.
+    command: grep -nE 'VP#.*Command.*Attempts.*PASS/FAIL' .claude/skills/implement/SKILL.md
+    expected: One matching table-header line containing the Attempts column.
+    fix_if: No match -- the Attempts column was not added or the header shape diverged.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the nondeterminism rule landed, keying only on tokens ABSENT from the pre-edit file
+      (verified 2026-07-03) so the check is differential, not a no-op.
+    command: >-
+      bin/venv-python -c "t=open('.claude/skills/implement/SKILL.md').read();
+      req=['NONDETERMINISTIC','two consecutive','NON_HERMETIC_BY_CONSTRUCTION','T3.19'];
+      miss=[x for x in req if x not in t]; print('MISSING:',miss) if miss else print('ALL_PRESENT')"
+    expected: ALL_PRESENT
+    fix_if: Prints MISSING [...] -- the named nondeterminism-rule tokens are absent.
+  - step: 3
+    phase: pre-deploy
+    action: Assert the IMPLEMENTATION Commit Flow appends the VP compliance table to the PR body.
+    command: grep -n 'append the VP compliance table to the PR body' .claude/skills/implement/SKILL.md
+    expected: One match in the IMPLEMENTATION Commit Flow section.
+    fix_if: No match -- the commit flow still builds a PR body without the VP table.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert the V3 Merge Gate requires posted post-deploy evidence, keying on tokens ABSENT from
+      the pre-edit file (verified 2026-07-03).
+    command: >-
+      bin/venv-python -c "t=open('.claude/skills/implement/SKILL.md').read();
+      req=['post-deploy evidence','run URL','Decision 103'];
+      miss=[x for x in req if x not in t]; print('MISSING:',miss) if miss else print('ALL_PRESENT')"
+    expected: ALL_PRESENT
+    fix_if: Prints MISSING [...] -- the V3 posted-evidence requirement is incomplete.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert code-review carries the V3 posted-evidence checklist item, keying on tokens ABSENT
+      from the pre-edit file (verified 2026-07-03; 'High' was dropped as non-discriminating).
+    command: >-
+      bin/venv-python -c "t=open('.claude/skills/code-review/SKILL.md').read();
+      req=['run URL','evidence artifact','post-deploy evidence'];
+      miss=[x for x in req if x not in t]; print('MISSING:',miss) if miss else print('ALL_PRESENT')"
+    expected: ALL_PRESENT
+    fix_if: Prints MISSING [...] -- the V3-evidence checklist item did not land.
+  - step: 6
+    phase: pre-deploy
+    action: Assert T3.19 exists as a deferred_post_mvp item owning the VF-08 alarm flip.
+    command: "grep -A16 'id: T3.19' docs/ROADMAP-PLATFORM.yaml | grep -q 'status: deferred_post_mvp' && echo OK"
+    expected: OK
+    fix_if: No OK -- T3.19 is missing or not status deferred_post_mvp.
+  - step: 7
+    phase: pre-deploy
+    action: Assert T3.15.files_in_scope now includes the code-review skill.
+    command: "grep -A32 'id: T3.15' docs/ROADMAP-PLATFORM.yaml | grep -q 'code-review/SKILL.md' && echo OK"
+    expected: OK
+    fix_if: No OK -- code-review/SKILL.md was not added to T3.15.files_in_scope.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Assert T3.15:c4 was reconciled to the shipped mechanism and the rec-filing clause rehomed to
+      T3.19:c1 (verifies the realized-differently rewrite, not just that an edit happened).
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
+      ti={i['id']:i for i in d['tier_items']};
+      g=lambda it,cid: next((c['text'] for c in ti.get(it,{}).get('exit_criteria',[]) if c['id']==cid),'');
+      c4=g('T3.15','c4'); t19=g('T3.19','c1');
+      print('RECONCILED' if ('stop-and-surface' in c4 and 'files a rec' not in c4 and 'auto-file' in t19) else 'NOT_RECONCILED')"
+    expected: RECONCILED
+    fix_if: NOT_RECONCILED -- c4 still claims rec-filing, or T3.19:c1 does not own the auto-file path.
+  - step: 9
+    phase: pre-deploy
+    action: Regression -- prompt compliance stays green (protected Behavioural Invariants block intact).
+    command: bin/venv-python -m scripts.prompt_compliance --all
+    expected: "Exit 0; prints 'no violations'."
+    fix_if: Non-zero exit or a violation line -- an edit corrupted the invariants block or a layer claim.
+  - step: 10
+    phase: pre-deploy
+    action: Regression -- full presubmit fast tier passes (roadmap schema + plan closes_criteria integrity).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0.
+    fix_if: Non-zero exit -- inspect the failing check (likely roadmap schema on T3.19 or a closes_criteria ref).
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Assert the plan itself carries the exact closes_criteria set, so the /implement bookkeeping
+      flip cannot be silently skipped (validate --pre's referential check passes vacuously on an
+      absent field, so this guard is separate).
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/plans/PLAN-audit-remediation-wave-2-cir8a4.yaml'));
+      cc=d.get('closes_criteria') or []; print('OK' if set(cc)=={'T3.15:c1','T3.15:c3','T3.15:c4'} else 'MISSING')"
+    expected: OK
+    fix_if: MISSING -- the top-level closes_criteria field is absent, empty, or does not equal the three declared refs.
+constraints:
+  - >-
+    V1 instruction-artifact edits only (markdown skills + roadmap YAML). No Python, no .tf, no
+    Lambda, no schema code. (Decision 48)
+  - >-
+    Lambda carve-out: docs/ROADMAP-PLATFORM.yaml is a read-only `asset` of the active
+    `data-pipeline` Lambda (compute_affected_artifacts(['docs/ROADMAP-PLATFORM.yaml']) ==
+    {'data-pipeline': [...]}), but editing roadmap CONTENT does not change that Lambda's runtime
+    behaviour, so no build/deploy/smoke-test is required and the tier stays V1 (Decision 48/79
+    non-runtime-edit refinement; the standing roadmap(...)-commits-without-deploy convention).
+    /implement's Lambda Deployment Assessment must NOT mechanically escalate this V1 plan to V3
+    on the data-pipeline trigger.
+  - >-
+    Do NOT edit the '## Behavioural Invariants' YAML block in .claude/skills/implement/SKILL.md
+    (~lines 17-25) -- it is a protected region parsed by scripts/prompt_compliance.py. All edits
+    are to the prose sections below it. Keep prompt_compliance --all green.
+  - >-
+    Do NOT file or bundle recommendations. The VF-08 rec-filing is RUNTIME instruction text
+    authored into the skill for FUTURE executor-era sessions (the T3.19 flip), not a rec filed
+    by this plan; the interactive-era behaviour shipped now is stop-and-surface, which files
+    nothing.
+  - >-
+    No rescue agents or workaround loops (Decision 55). The nondeterminism rule is RCA-first
+    (flag + surface); an empty-diff green is flagged, never accepted; re-runs stay capped and
+    route to the alarm; the two-consecutive-passes requirement is a hardening check on an
+    ALREADY-FIXED (non-empty-diff) step, NOT a re-run-until-green loop, and the confirmation
+    passes do not consume the 3-attempt fix budget.
+  - >-
+    PR-body VP table and V3 evidence are PR-scoped ephemeral state persisted in the PR body
+    (Decision 115), not chat; the DURABLE record is the T3.15 criterion closure in the roadmap.
+    Do not describe the PR-body table as the survives-past-PR durable half.
+  - >-
+    The closes_criteria flip (T3.15 c1/c3/c4 -> met) is applied by the /implement bookkeeping
+    walk on a verified VP pass. T3.15 stays in_progress (c2 open AND depends_on T3.17 incomplete);
+    do NOT flip T3.15 to complete.
+context:
+  - >-
+    Source: audits/verification-system-review-f80508b.yaml, findings VF-07 (VP evidence
+    ephemeral), VF-08 (no attempt accounting / flake detection), VF-01(a) (VP table to PR body)
+    and VF-01(c) (code-review checks V3 evidence). VF-01(b) -- the validate_vp_replay CI replay
+    check (T3.15:c2) -- is explicitly a separate later plan; c2 stays open.
+  - >-
+    Carrier tier_item T3.15 was created by the wave-1 audit-remediation roadmap plan. This is the
+    first implementation slice against it (currently status not_started -> in_progress after this;
+    strict-subset pass since c2 remains open).
+  - >-
+    T3.15 depends_on T3.17 (not_started). That dependency is material ONLY to c2 (VP replay needs
+    T3.17's hardened phase enum), NOT to c1/c3/c4 (instruction-file legs). Starting T3.15 now is
+    within the bootstrap allowance (start allowed, completion gated); this plan does not complete
+    T3.15, so the unmet T3.17 dependency is not violated.
+  - >-
+    VF-08 realized-differently (critique round 1): the audit's c4 text bundled two behaviours
+    (mark NONDETERMINISTIC + file a rec). This slice ships only the NONDETERMINISTIC-marking +
+    stop-and-surface half; the auto-file-rec half is executor-era. Rather than flip a c4 that
+    claims rec-filing (which would not re-adjudicate true), execution step (C) rewrites c4 to the
+    shipped mechanism and rehomes rec-filing to T3.19:c1, preserving the original wording in
+    T3.15's note (implement/SKILL.md "Exit-criteria truth maintenance"; audit F-006/F-014).
+  - >-
+    Operator decision (2026-07-03): VF-08 alarm = stop-and-surface-to-human now (executor frozen,
+    Decision 67, so a human is present at every /implement run); flip to auto-file-rec via
+    scripts.ops_data_portal (Decision 84) when the executor goes live (CD.17 reversal), matching
+    the executor-era quarantine-that-files-a-rec pattern (CD.29). Captured as post-MVP T3.19
+    (Decision 86 routes forward intent -> tier_items) plus an inline forward-note in the skill.
+  - >-
+    ci-rca: rec-2482 (tests/test_iceberg_reader.py DuckLake-reader URL test-env leak) was cleared
+    (status closed; ci_rca_unresolved=0) before commitment -- no deferral rationale required.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE). CITE: Decision 48, Decision 84, Decision 103. NOTE flags: Decision 55 (two-pass wording must not read as retry-into-green), Decision 115 (frame PR-body evidence as ephemeral, roadmap closure as durable). Correction: cite Decision 117 (not superseded Decision 44) for the executor-self-modification boundary -- the edited skills are confirmed out-of-boundary. RELATED: Decision 67, 90, 76, 87, 79/117, CD.29."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s) (r1: c4 closure-honesty [blocking] + Lambda carve-out + VP-token precision; r2: missing top-level closes_criteria field [blocking]; r3: PROCEED, no new findings)"
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main."
+  - "c1 empirical residue: c1's 'spot-check of the next three merges confirms' is a forward-looking confirmation, not this session's evidence. This slice closes the instruction-leg (the PR-body VP-table mechanism is installed); this plan's own feat PR is the first data point, and the three-merge spot-check accrues over later sessions."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/audit-remediation-wave-2-cir8a4)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (decision-scout gate triaged 77 of 77; CITE list recorded in context)
+  - All files in scope located and readable (.claude/skills/implement/SKILL.md, .claude/skills/code-review/SKILL.md, docs/ROADMAP-PLATFORM.yaml)
+  - Protected Behavioural Invariants block in implement/SKILL.md identified (~lines 17-25) and excluded from edits
+  - closes_criteria refs T3.15:c1, T3.15:c3, T3.15:c4 exist in docs/ROADMAP-PLATFORM.yaml
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Edit .claude/skills/implement/SKILL.md "VP Compliance Gate" section: change the table header
+    to "| VP# | Command Executed | Actual Output (truncated) | Attempts | PASS/FAIL |"; add a
+    bullet that the Attempts column records the number of executions of that step (1 = first-try
+    pass); add a bounded-size rule (truncate each Actual Output cell, e.g. <= ~200 chars / head+tail
+    lines); add NONDETERMINISTIC as an allowed status alongside PASS/FAIL/BLOCKED; and state the
+    table is the proof artifact appended to the PR body (cross-ref the IMPLEMENTATION Commit Flow).
+  - >-
+    Edit .claude/skills/implement/SKILL.md "Live Verification Protocol" (Protocol subsection): add
+    a nondeterminism rule -- track Attempts per step; a step that FAILS and is then re-run with an
+    EMPTY `git diff` since the prior attempt and passes is NONDETERMINISTIC (record NONDETERMINISTIC,
+    never PASS); re-runs stay capped at the existing 3 fix attempts and must not be looped toward a
+    green; a genuine fix requires a real code change (non-empty diff), after which the step must pass
+    TWO consecutive times to count as PASS. Clarify that the two confirmation passes verify an
+    ALREADY-APPLIED fix and are NOT additional fix attempts -- they do not consume the 3-attempt fix
+    budget, which governs diagnose-and-change cycles only. On a NONDETERMINISTIC step STOP and
+    surface to the human (interactive-era alarm while the executor is frozen, Decision 67). Add a
+    forward-note: when the executor goes live (CD.17 reversal) this flips to auto-file a rec via
+    scripts.ops_data_portal (Decision 84), per T3.19, matching the executor-era CD.29
+    quarantine-that-files-a-rec pattern. Explicitly distinguish this DETECTED non-determinism from
+    DECLARED non-determinism (Hermeticity.NON_HERMETIC_BY_CONSTRUCTION -- a typed, audited verifier
+    property; an agent-observed flaky VP step is not that and must never be silently labelled
+    "flaky" and passed). Anchor to Decision 55 (RCA-first, not retry-into-green).
+  - >-
+    Edit .claude/skills/implement/SKILL.md "IMPLEMENTATION Commit Flow" (PR-body construction step):
+    add an instruction to "append the VP compliance table to the PR body" (the same bounded table
+    from the VP Compliance Gate, including the Attempts column and any NONDETERMINISTIC markers),
+    under a clear heading, so the executed proof lands in the PR/merge record instead of vanishing
+    chat (Decision 115 ephemeral-state home). Keep it bounded (truncate outputs).
+  - >-
+    Edit .claude/skills/implement/SKILL.md "V3 Merge Gate": add a step requiring that before merge
+    the post-deploy V3 evidence -- the live invocation output AND a run URL (e.g. the
+    CloudWatch/Step Functions/Lambda invocation URL or the GitHub Actions run URL) -- be posted to
+    the PR (body or comment). This replaces grep-your-own-transcription as the machine-checkable
+    record (Decision 103: closure needs a proof, not a self-assertion). Do not merge a V3 plan
+    without the posted evidence artifact.
+  - >-
+    Edit .claude/skills/code-review/SKILL.md: add a "V3 Post-Deploy Evidence" checklist item (a new
+    subsection before "## Output Format", and a matching line in the review flow) instructing the
+    reviewer, for V3-tier plans only, to verify the PR carries a post-deploy evidence artifact
+    (invocation output + a real run URL) that coheres with the plan's post-deploy expected outcomes.
+    If the artifact is absent, does not name a real run URL, or contradicts the plan's expected
+    post-deploy outcomes, raise a High-priority finding (which drives Verdict: REVISE per the
+    deterministic rule).
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml (A): insert a new tier_item T3.19 immediately after T3.18,
+    following the existing tier_item schema. Fields -- id T3.19; tier T3; name "Flip interactive VP
+    nondeterminism alarm to auto-file-rec when the executor is live"; status deferred_post_mvp;
+    effort XS; strategic false; depends_on [] (a deferred item must not be depended on by any live
+    item; this one depends on nothing); files_in_scope holding only .claude/skills/implement/SKILL.md;
+    related_candidate_decisions [CD.17, CD.29]; related_intents [verification-system]; note "Derived
+    recs are automatable: false (Decision 117); owns the executor-era VF-08 alarm flip while T3.15
+    ships the interactive-era stop-and-surface behaviour". intent -- a post-MVP successor to T3.15
+    c4 (VF-08): while the executor is frozen (Decision 67) a human is
+    present so the alarm is stop-and-surface; when the executor goes live (CD.17 reversal) it flips to
+    auto-file a rec via scripts.ops_data_portal (Decision 84), reaching parity with the executor-era
+    quarantine-that-files-a-rec pattern (CD.29). One open exit criterion c1 -- "When the executor is
+    live, a detected NONDETERMINISTIC VP step (attempts>1, empty intervening diff) auto-files a rec
+    via ops_data_portal instead of stop-and-surface; the stop-and-surface forward-note in
+    implement/SKILL.md is replaced by the auto-file path (VF-08 flip)". progress_note -- parked
+    post-MVP (Decision 93); reactivate to not_started when the executor unfreeze work (CD.17 / T4.x)
+    begins; record the 2026-07-03 operator decision (stop-and-surface now, auto-file-rec when executor
+    live). Then run validate --pre to confirm the roadmap schema accepts T3.19.
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml (B): in tier_item T3.15, add .claude/skills/code-review/SKILL.md
+    to files_in_scope (VF-01(c) edits that file though the item currently omits it).
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml (C): reconcile T3.15:c4 to the mechanism this slice actually
+    ships (realized-differently rule; implement/SKILL.md "Exit-criteria truth maintenance"). Rewrite
+    c4's text to: "A synthetic flaky VP step (attempts>1, empty intervening diff) is marked
+    NONDETERMINISTIC in the PR VP table and stop-and-surfaced to the human -- never a silent PASS;
+    the executor-era auto-file-rec alarm is rehomed to T3.19:c1 (VF-08)". Append a line to T3.15's
+    note preserving the original c4 wording and recording the reconciliation, e.g.: "c4 reconciled
+    2026-07-03 (PLAN-audit-remediation-wave-2-cir8a4, realized-differently rule): original text 'A
+    synthetic flaky VP step (attempts>1, empty intervening diff) files a rec and marks the step
+    NONDETERMINISTIC in the PR VP table instead of a silent PASS (VF-08)'; the interactive-era slice
+    ships NONDETERMINISTIC-marking + stop-and-surface (files nothing while the executor is frozen,
+    Decision 67); the auto-file-rec alarm is rehomed to T3.19:c1 for the executor era." Do this in
+    the SAME staged YAML edit as (A)/(B) so the closes_criteria flip of c4 lands on a re-adjudicable
+    criterion.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; a FAIL is not negotiable (V1
+    is fully local, so no unrecoverable-V3 case). Confirm prompt_compliance --all and validate --pre
+    both exit 0.
+  - >-
+    Let the /implement bookkeeping walk apply the closes_criteria flip (T3.15 c1/c3/c4 -> met,
+    met_by=audit-remediation-wave-2-cir8a4) and stage T3.15 status in_progress + progress_note on
+    the verified VP pass. T3.15 stays in_progress (c2 open, T3.17 incomplete) -- do NOT flip to
+    complete. Surface if the walk reports all-criteria-met (it will not, since c2 is open).
+  - "Report: what was implemented (the five skill/roadmap edits + T3.19 + files_in_scope + c4 reconciliation), verification-plan results, and the T3.15 criterion flips."
+work_areas: []
+rollback: >-
+  Instruction-file + roadmap-YAML edits only; no runtime/infra state changes. Revert with
+  `git revert` of the feat commit (restores the prior skill text, drops T3.19, restores
+  T3.15.files_in_scope and the original c4 text). Any closes_criteria flips revert with the same
+  commit.
