@@ -13,7 +13,7 @@ argument-hint: [docs/plans/PLAN-slug.yaml]
 ```bash
 bin/venv-python -m scripts.session_preflight
 ```
-The script emits only a one-line summary to stdout (the full report would cost ~12-15k tokens per session for a payload that's already on disk). Read `logs/.preflight-report.json` with the `Read` tool to get the constraint-evaluation surface.
+stdout is a one-line summary; Read logs/.preflight-report.json for the full constraint surface.
 
 Preflight runs `git fetch origin main` and emits `main_freshness` (status, commits_behind, commits_ahead, main_files_changed_since_branch). The report is slim: roadmap state carries only `next_eligible` + `strategic_pending`; `non_automatable_details` is dropped (Decision 73). Handle constraints (including the `main_freshness` cases) as defined in the **Preflight Constraints** section of your `implement` skill. After Step 2 loads the plan, apply the **Main Divergence Check** from the skill before proceeding to Step 3.
 
@@ -47,7 +47,7 @@ If either command prints `NOT_FOUND`, list `docs/plans/PLAN-*.yaml` and ask the 
 
 Read the entire plan file. Extract Intent, Plan Type, Verification Tier, Work Areas (STRATEGIC) or Execution Steps (IMPLEMENTATION), Verification Plan, and Constraints.
 **If no plan file exists, STOP.**
-Also read `docs/PROJECT_CONTEXT.md` and `docs/DECISIONS.md` before proceeding.
+Also read `docs/PROJECT_CONTEXT.md`. Read only the decisions cited in the plan context (locate each via `rg "^## Decision N:" docs/DECISIONS.md`); do not load the full file.
 
 ## Step 3: Dispatch by Plan Type
 

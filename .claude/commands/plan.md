@@ -17,7 +17,7 @@ model: opus[1m]
 bin/venv-python -m scripts.session_preflight
 ```
 
-The script emits only a one-line summary to stdout (the full report would cost ~12-15k tokens per session for a payload that's already on disk). The full report is at `logs/.preflight-report.json`. Read that file with the `Read` tool to get the constraint-evaluation surface.
+stdout is a one-line summary; Read logs/.preflight-report.json for the full constraint surface.
 
 Preflight runs `git fetch origin main` and emits `main_freshness` (status, commits_behind, commits_ahead, main_files_changed_since_branch). Do NOT manually `git pull --rebase origin main` here -- that's a destructive operation on a feature branch and should only happen via the Step 4 Main Divergence Assessment after Scope is known and the human has chosen to rebase.
 
@@ -38,13 +38,13 @@ Save the printed UUID for the `session_postflight --close-session` call in Step 
 Use the preflight JSON `context` field (`roadmap_phase`, `open_decisions_count`, `recent_sessions`). Read `docs/PROJECT_CONTEXT.md` fully.
 If the request references a recommendation ID, search `logs/.recommendations-log.jsonl`, read briefing files if they exist, and load dependencies.
 
-**Orientation:** Run `/orient` before `/plan` to choose what to work on. `/plan` assumes a specific item (or ci-rca rec) has already been selected. If no item has been chosen yet, recommend `/orient` now before proceeding to Step 3.
+**Orientation and CI-RCA block:** see the planning skill's Platform Roadmap Eligibility section for orientation responsibility and the HARD BLOCK conditions on open ci-rca recs -- run `/orient` first if no item has been chosen yet.
 
-**CI-RCA block-respect:** if `ci_rca_unresolved_recs` is non-empty, `/plan` cannot scope unrelated work -- HARD BLOCK. See the Related-Work Check in your `planning` skill for the three conditions that permit planning despite open ci-rca recs. Full triage is surfaced by `/orient`.
+**Resume check:** if a `docs/plans/PLAN-*.yaml` matching the stated intent already exists on this branch (committed or not), present it and offer resume-at-step: Step 9 (uncritiqued), Step 11 (approved, unmerged), or discard and restart. Do not re-derive Steps 3-6 for an already-confirmed plan without human direction.
 
 ## Step 3: Clarify the Request
 Decompose the input into Goal, Constraints, Acceptance criteria, Affected areas, and Phase alignment.
-If vague, ask 2-5 questions. Watch for ROADMAP misalignment (the platform/product roadmap state is already in the preflight JSON `next_eligible` / `strategic_pending` fields). Decision-contradiction checking is delegated to the `decision-scout` subagent gate in Step 6 -- do NOT read `docs/DECISIONS.md` from the planning agent to look for contradictions, that's a 25k-token cost the subagent avoids.
+If vague, ask 2-5 questions. Watch for ROADMAP misalignment (the platform/product roadmap state is already in the preflight JSON `next_eligible` / `strategic_pending` fields). Decision-contradiction checking is delegated to the `decision-scout` subagent gate in Step 6 -- do NOT read `docs/DECISIONS.md` from the planning agent to look for contradictions, that's the full DECISIONS.md, currently >200KB, a cost the subagent avoids.
 Suggest 3-5 open recommendations from `logs/.recommendations-log.jsonl` that align with the current task.
 
 ## Step 4: Identify Affected Files
@@ -64,27 +64,7 @@ Design the Verification Plan using the exact design guidelines and anti-patterns
 ## Step 6: Present Findings and Confirm
 
 ### Step 6a: Decision Scout Gate (MANDATORY, before presentation)
-**DO NOT present findings to the human until this gate completes.** Launch a zero-context Claude subagent via the `Agent` tool to run the `decision-scout` skill. The fresh context is the point: it lets the subagent read the full 25k-token `docs/DECISIONS.md` without that cost ever entering the planning agent's context.
-
-Substitute the synthesis you produced in Steps 3-5 into the prompt. Invoke with:
-- `subagent_type: "general-purpose"`
-- `description: "Decision scout gate"`
-- `prompt:` a self-contained brief that supplies (a) Intent (1-2 sentences from Step 3), (b) Proposed approach (paragraph from Steps 3-5 synthesis), (c) Scope file list (from Step 4), (d) Verification Tier (from Step 5), (e) any decision IDs already cited by the human, and (f) instruction to invoke the `decision-scout` skill via the `Skill` tool and return its structured output verbatim.
-
-Example prompt body:
-> "You are running the decision-scout gate in a fresh context window. Invoke the `decision-scout` skill via the Skill tool. The skill needs the following inputs (use them in your scout analysis):
-> - Intent: [1-2 sentences from clarification]
-> - Proposed approach: [paragraph synthesis]
-> - Scope files: [list from Step 4]
-> - Verification Tier: [V1 | V2 | V3]
-> - Explicitly cited decisions: [list of IDs the human mentioned, or 'none']
->
-> Return the skill's `## Decision Scout Report` output verbatim, including the final `Verdict:` line. Do not edit any files."
-
-Read the report returned by the subagent. Handle per Verdict:
-- **NO_FLAGS** -- proceed to Step 6b. Include the CITE list in the presentation as "Decisions this plan must reference: ...".
-- **FLAGS_FOUND** -- surface each WARN/NOTE flag to the human in the Step 6b presentation under a new "Decision Flags" section. The human decides per-flag: pivot, defer with note, or accept.
-- **BLOCK** -- STOP. Surface the BLOCK contradiction to the human and propose pivots. Do NOT present the original approach for confirmation; that would invite the human to confirm a proposal you already know contradicts an active decision. After pivoting, re-dispatch this gate against the revised approach.
+**DO NOT present findings to the human until this gate completes.** Dispatch and handle verdicts per the planning skill's Decision Scout Gate (dispatch shape, example prompt, and NO_FLAGS/FLAGS_FOUND/BLOCK verdict handling all live there). Substitute the synthesis produced in Steps 3-5 into the dispatch.
 
 ### Step 6b: Present and Confirm
 Present: Summary, Proposed approach, Options, Open questions, Decision flags (if any), and Decisions to cite (from the scout's CITE list).
@@ -113,30 +93,16 @@ git commit -m "plan({slug}): initial plan"
 
 ## Step 9: Plan Critique Gate (MANDATORY)
 **DO NOT output the completion message until this step completes.**
-Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-critique` skill in a fresh context window. The fresh context IS the point of this gate -- it eliminates cognitive bias from the planning agent. Do NOT invoke the `plan-critique` skill in the current session via the `Skill` tool, and do NOT shell out to `run_skill.py` (the legacy gemini-CLI dispatcher is removed).
-
-Substitute `{slug}` with the actual branch slug (e.g. `bootstrap-speedup`). Invoke with:
-- `subagent_type: "general-purpose"`
-- `description: "Plan critique gate"`
-- `prompt:` a self-contained brief that (a) names the target plan absolute path, (b) instructs the subagent to invoke the `plan-critique` skill via the `Skill` tool against that path, (c) lists the required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`), (d) requires the subagent to read every file in the plan's Scope table for IMPLEMENTATION plans, (e) requires the subagent to return the skill's structured output verbatim including the final `Recommendation: PROCEED / REVISE` line, and (f) forbids the subagent from editing any files.
-
-Example prompt body (adapt the path):
-> "You are running the plan-critique gate. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current -- the branch may have been open long enough for main to have moved. Then invoke the `plan-critique` skill via the Skill tool to critique `/home/user/agent-platform/docs/plans/PLAN-{slug}.yaml`. Read the skill's required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`). For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows differences, note in your critique that the working-tree versions used for evaluation may lag main. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict. Do not edit any files."
-
-Read the critique output returned by the subagent.
-If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan.
-Loop if REVISE. Proceed if PROCEED.
+Invoke per the planning skill's Critique Gate (dispatch shape, example prompt, required-context files, and verdict handling all live there). Substitute `{slug}` with the actual branch slug. Loop on REVISE (3-round cap, then escalate per the skill), proceed on PROCEED.
 
 Note: this gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY plans, the deliverable gets its own critique in Step 10.
 
 ## Step 10: Multi-Perspective Report Critique Gate (REPORT-ONLY only, MANDATORY)
 **If Plan Type is IMPLEMENTATION or STRATEGIC, SKIP this step entirely and proceed to Step 11.**
 
-For REPORT-ONLY plans, the Step 9 plan-critique gate reviewed the planning artefact (PLAN-{slug}.yaml) but NOT the report deliverable itself. The deliverable carries its own correctness burden -- design soundness, internal consistency, alignment with live repo state, blast radius of any proposed changes -- and needs independent zero-context critique.
+For REPORT-ONLY plans, the Step 9 plan-critique gate reviewed the planning artefact (PLAN-{slug}.yaml) but NOT the report deliverable itself, which needs its own independent zero-context critique.
 
-Apply the **Report Critique Gate** methodology from your `planning` skill. Summary: launch AT LEAST 2 zero-context subagents IN PARALLEL via the `Agent` tool, each with a distinct perspective on the deliverable (architect/risk/etc.), synthesize their findings, present to the human, iterate based on human direction, re-launch critiques after each revision until convergence.
-
-Convergence rule: both agents return PROCEED on a fresh round, OR the human explicitly accepts the current state with a defined deferral (e.g. "fix the HIGH-severity items and defer the rest to phase plans"). Each material revision lands as its own commit on the branch during the loop.
+Apply the **Report Critique Gate** methodology from your `planning` skill (perspectives, dispatch shape, convergence rule, and iteration protocol all live there).
 
 ## Step 11: Commit approved PLAN-{slug}.yaml and merge to main
 After all critique gates have approved the work, commit any uncommitted changes to the branch:
@@ -154,16 +120,7 @@ Then push and merge the plan to `main` via GitHub MCP so the next `/implement` s
 5. On green CI wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
 
 ## Step 12: Confirm
-Output the final confirmation message based on Plan Type (IMPLEMENTATION / STRATEGIC / REPORT-ONLY) exactly as specified in your `planning` skill. The handoff message must name the explicit plan path so the human can paste it directly:
-
-```
-Planning complete. The plan is merged to main at docs/plans/PLAN-{slug}.yaml.
-To implement, open a NEW Claude Code session and paste:
-
-    /implement docs/plans/PLAN-{slug}.yaml
-
-Summary: {one line on what the plan does}.
-```
+Emit the Plan-Type-specific confirmation message from the planning skill's Confirmation Messages section, naming the explicit plan path so the human can paste it directly.
 
 Finally, close the telemetry session:
 ```bash

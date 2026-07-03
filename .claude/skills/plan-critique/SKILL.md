@@ -3,9 +3,6 @@ name: plan-critique
 description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.yaml before implementation. Mandatory gate between planning and implementation."
 required-context:
   - docs/PROJECT_CONTEXT.md
-  - docs/ROADMAP-PRODUCT.yaml
-  - docs/ROADMAP-PLATFORM.yaml
-  - docs/DECISIONS.md
 ---
 
 ## Intent
@@ -22,11 +19,11 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.yaml`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.yaml` and read the most recently modified one (fall back to `PLAN-*.md` only if no .yaml exists, and note the deprecation in your output).
 
-2. Read `docs/PROJECT_CONTEXT.md` (for North Star and rules).
+2. Read `docs/PROJECT_CONTEXT.md` in full (for North Star and rules).
 
-3. Read `docs/ROADMAP-PRODUCT.yaml` (for product phase alignment) and `docs/ROADMAP-PLATFORM.yaml` (for platform tier item alignment).
+3. **Targeted roadmap extraction, not a full-file read:** extract only the `tier_items[]` (from `docs/ROADMAP-PLATFORM.yaml`) and product-phase entries (from `docs/ROADMAP-PRODUCT.yaml`) the plan's `phase` and `context` fields name, via a `bin/venv-python -c` yaml.safe_load projection -- do not `Read` either file in full (ROADMAP-PLATFORM.yaml alone is >600KB).
 
-4. Read `docs/DECISIONS.md` (for conflicts with prior decisions).
+4. **Targeted decision extraction + conflict-sweep, not a full-file read:** read only the decision sections named in the plan's context `Decision-scout verdict + CITE list` (locate each via `rg "^## Decision N:" docs/DECISIONS.md`), plus a conflict-sweep: `rg` 2-3 keywords drawn from the plan's approach over `^## Decision` headers in `docs/DECISIONS.md` to catch a contradiction the scout's CITE list omitted. Do not Read the full ~230KB file -- the decision-scout gate already paid that cost minutes earlier in the same workflow.
 
 5. **For IMPLEMENTATION plans:** Read the files listed in the plan's `scope` list (the `## Scope` table in legacy .md plans) to verify the plan's accuracy. For STRATEGIC plans, this is not required — work areas are high-level and do not require file-level verification.
 
@@ -52,7 +49,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 12c. **Verification Plan executable command check (IMPLEMENTATION plans only):** Every `verification_plan` entry MUST have a `command` field containing a literal executable shell command or Python one-liner (the `PlanDocument` schema rejects empty commands; your job is to judge whether the command actually exercises the feature rather than being a structural-only check). FAIL if any VP step is prose-only with no executable command. For V3 plans, every VP step's `phase` must be `pre-deploy` or `post-deploy`. If either check fails, recommend REVISE with the specific VP steps that need commands or tags added.
 
-12d. **STRATEGIC plan gate:** If the plan's `## Plan Type` is `STRATEGIC` AND `docs/DECISIONS.md` contains an active Decision 67, recommend REVISE with: "STRATEGIC plans are blocked while Decision 67 is active (telemetry tables not yet confirmed operational). Convert to an IMPLEMENTATION plan or wait for Decision 67 reversal."
+12d. **STRATEGIC plan gate:** If the plan's `## Plan Type` is `STRATEGIC` AND the executor freeze is still active per AGENTS.md Temporary Operational Constraints (pending CD.17 reversal), recommend REVISE with: "STRATEGIC plans are suspended while the executor freeze holds (CD.17): the autonomous executor has no consumer for STRATEGIC-decomposed recommendations. Convert to an IMPLEMENTATION plan, or split into multiple atomic IMPLEMENTATION plans, or wait for CD.17 reversal."
 
 12k. **Closure obligation check (CONDITIONAL -- IMPLEMENTATION plans only):** This check fires ONLY when the plan meets one of the two trigger conditions below. Additive plans that do neither are explicitly exempt.
 
@@ -64,6 +61,10 @@ Trigger condition 1 -- **Rec-resolving plan**: the plan's `intent`, `context`, `
 Trigger condition 2 -- **Surface-retiring plan**: the plan's `scope` includes a row with `action: Delete` OR an explicit X->Y migration/cutover (old path deleted, Lambda retired, write path swapped, config flag removed, backend superseded).
 - Required: at least one VP step that confirms the old surface is unreachable or deleted (grep for call sites, `test -f` for deleted files, import smoke-test, etc.).
 - If missing, recommend REVISE: "Surface-retiring plan omits stale-reference sweep VP step: add a VP step that verifies the old surface is dead."
+
+12l. **closes_criteria check (follow-on plans, IMPLEMENTATION only):** If the plan's phase/context names an `in_progress` tier_item, `closes_criteria` MUST be non-empty; each ref must name a criterion carrying `status: open` in `docs/ROADMAP-PLATFORM.yaml`; and `acceptance_criteria` must map 1:1 onto the chosen open criteria. If any of these fail, recommend REVISE: "Follow-on plan omits or misdeclares closes_criteria: [specifics]." A plan targeting no in_progress tier_item is exempt from this check.
+
+12m. **Tier fitness check:** `verification_tier` must satisfy the planning skill's Verification Tier Guidelines, narrowed by an intentional refinement (Decision 48/79) so comment-only `.tf` or docstring-only Python edits are not force-escalated: a **resource-affecting** `.tf` scope file (not comment-only) OR an **active-manifest** Lambda scope file (`status: active` in its manifest -- Decision 79; `status: stub` does not trigger this) => `V3`; any Python source scope file => `>= V2`. A lower declared tier than the qualifying scope requires => recommend REVISE citing the specific scope file and the tier it demands.
 
 ### Phase 2b: Frame Challenge (MANDATORY)
 
@@ -89,6 +90,8 @@ Ask the following five questions against the plan's chosen approach. For each, w
 
 ```
 ## Plan Critique
+
+**Files Read:** [plan path; docs/PROJECT_CONTEXT.md; targeted roadmap items: <ids>; targeted decision sections: <ids>; scope files (IMPLEMENTATION only)] -- count must match the scope entry count
 
 **Plan Type:** STRATEGIC / IMPLEMENTATION / REPORT-ONLY
 
@@ -118,6 +121,10 @@ Ask the following five questions against the plan's chosen approach. For each, w
 **Lambda Deployment Completeness:** Complete / Missing [list missing steps]
 
 **VP Executable Commands:** Complete / Missing commands for VP rows [list] / Missing pre/post-deploy tags [list]
+
+**Closure Obligation (12l, follow-on plans):** N/A (not a follow-on) / Compliant / Missing [specifics]
+
+**Tier Fitness (12m):** Compliant / REVISE -- [scope file] requires [tier] but plan declares [lower tier]
 
 **Recommendation:** PROCEED / REVISE [with specific suggestions if REVISE]
 ```

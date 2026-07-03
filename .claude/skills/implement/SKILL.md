@@ -2,6 +2,9 @@
 name: implement
 description: Deep methodology for executing implementation plans, including live verification protocols, strategic scoping gates, code review integration, and commit flows.
 model: sonnet
+required-context:
+  - logs/.preflight-report.json
+  - docs/PROJECT_CONTEXT.md
 ---
 
 # Implement Methodology & Rules
@@ -30,27 +33,6 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`main_freshness.status == "fetch_failed"`** -- Informational. Surface: "Could not refresh `origin/main` ([error]). Step 5 code-review will diff against the stale local main ref; Scope-overlap check will be skipped." Continue.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 2 Main Divergence Check (below). Non-blocking at this step.
 - **`validate` (presubmit) non-zero exit** -- The gate has detected pre-existing blockers on the branch. File each failed check as a recommendation via the portal (`automatable: false`), surface to human with go/no-go, STOP if no-go. Credentials-unavailable -> skip with actionable guidance per Decision 60; do not crash.
-
-## Documentation Artefact Design
-
-This repository is agent-first. When implementing documentation changes, apply these rules:
-
-- Prefer extending an existing machine-readable source over creating a new document.
-- A new file is warranted only when it has a distinct machine-parseable role (e.g., a
-  decision manifest YAML, a registry YAML). Never create a human-readable companion
-  alongside a machine-readable source -- that produces drift by design.
-- Canonical field documentation pattern: ops.yaml extended contract. Add `description`
-  and `semantics` metadata fields directly to the column entry in ops.yaml or
-  telemetry.yaml. These fields are ignored by the DQ runner and consumed by agents.
-  Do not create a separate briefing doc for the same information.
-- When a plan step proposes a new document, ask: "Could this information be a metadata
-  field in an existing YAML?" If yes, prefer that over a new file.
-- Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
-  route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
-  Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
-  forbidden. The validate.py intent-doc-freeze guard enforces this on-disk.
-  Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml and
-  retire as extraction waves complete.
 
 ## Main Divergence Check (Workflow Step 2 -- after plan load)
 Once the PLAN-{slug}.yaml `scope` list is parsed, intersect the scope file paths with `main_freshness.main_files_changed_since_branch` from the preflight report. If any scope file overlaps:
@@ -166,6 +148,8 @@ Agent prompt template:
 - Cap response length (~800-900 words) to keep the report focused.
 
 Do NOT pre-brief the subagent on what to look for -- that biases the review and defeats the anti-bias gate. The subagent applies the `code-review` skill methodology on its own.
+
+If the gate subagent errors or returns output missing the required Verdict/Recommendation line, the gate has NOT completed -- re-dispatch; never proceed past an incomplete gate.
 
 ### Handling Findings
 - **Critical and High**: You MUST implement fixes for these findings before proceeding. They are mandatory extensions of the original plan. After fixing, re-run `bin/venv-python -m scripts.validate --pre` to confirm no regressions.
