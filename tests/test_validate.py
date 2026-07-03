@@ -2097,6 +2097,18 @@ class TestRunCoverageCheck:
         assert "- docs/foo.md" in captured.out
         assert "Advisory only" in captured.out
 
+    def test_run_coverage_check_uses_supplied_changed_files(self, capsys) -> None:
+        """A supplied changed_files list is used verbatim, skipping the get_changed_files() call
+        (VF-02(d): the --pre closure reuses its already-computed diff -- budget-safe)."""
+        with (
+            patch("scripts.checks._common.get_changed_files") as mock_get_changed,
+            patch("scripts.verifiers.check_coverage", return_value=["docs/foo.md"]),
+        ):
+            run_coverage_check(changed_files=["docs/foo.md", "scripts/ops_data_portal.py"])
+        captured = capsys.readouterr()
+        assert "1 of 2 scope files lack verifier coverage" in captured.out
+        mock_get_changed.assert_not_called()
+
 
 class TestExtractEnforcedMap:
     """Unit tests for _extract_enforced_map() YAML parser."""

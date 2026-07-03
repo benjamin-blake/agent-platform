@@ -105,6 +105,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_lockfile_sync"),
         _c("validate_verifier_same_pr_guard"),
         _c("validate_verification_registry"),
+        _s("coverage_report"),
         _s("budget_assertion"),
     ]
 

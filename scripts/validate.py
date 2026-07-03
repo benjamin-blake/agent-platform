@@ -376,6 +376,9 @@ def main() -> None:
         def _scaffold_pytest_diff() -> None:
             run_pytest_diff(changed_tests, failed)
 
+        def _scaffold_coverage_report() -> None:
+            run_coverage_check(changed)
+
         def _scaffold_budget_assertion() -> None:
             elapsed = time.monotonic() - _t0
             if args.ignore_budget:
@@ -397,6 +400,7 @@ def main() -> None:
             "precommit_changed": _scaffold_precommit_changed,
             "mypy_diff": _scaffold_mypy_diff,
             "pytest_diff": _scaffold_pytest_diff,
+            "coverage_report": _scaffold_coverage_report,
             "budget_assertion": _scaffold_budget_assertion,
         }
 
