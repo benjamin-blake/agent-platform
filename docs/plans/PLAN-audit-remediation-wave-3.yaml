@@ -19,9 +19,11 @@ scope:
   - file: scripts/verifiers/__init__.py
     action: Modify
     purpose: >-
-      VF-02: make check_coverage() honest -- skip the "**"/"*" wildcard globs (a verifier claiming
-      "**" makes no selection claim) and change the getattr fallback from ["**"] to []. REGISTRY
-      unchanged. This is the task-sanctioned "treat ** as non-covering" option; harness.py is NOT touched.
+      VF-02: make check_coverage() honest. The LOAD-BEARING fix is skipping the "**"/"*" wildcard globs
+      when building all_globs (a verifier claiming "**" makes no selection claim). Also tidy the getattr
+      fallback ["**"]->[] as a defensive/future-proof change -- inert today because the base
+      Verifier.covers=["**"] (harness.py:108) means getattr always finds the attribute and never reaches
+      the default. REGISTRY unchanged. Task-sanctioned "treat ** as non-covering" option; harness.py NOT touched.
   - file: scripts/verifiers/athena_views.py
     action: Modify
     purpose: >-
@@ -258,9 +260,10 @@ pre_implementation_checklist:
   - "rec-2482 status re-checked at implement time (the logged deferral holds regardless)"
 execution_steps:
   - >-
-    scripts/verifiers/__init__.py -- in check_coverage(), build all_globs by skipping the "**"/"*" wildcards
-    and change the per-verifier fallback from getattr(cls,"covers",["**"]) to getattr(cls,"covers",[]); leave
-    REGISTRY and run_all_verifiers untouched.
+    scripts/verifiers/__init__.py -- in check_coverage(), the OPERATIVE change is skipping the "**"/"*"
+    wildcards when building all_globs (this is what makes coverage honest). Also change the per-verifier
+    fallback getattr(cls,"covers",["**"]) -> getattr(cls,"covers",[]) as a defensive tidy (inert today: the
+    base Verifier.covers=["**"] means getattr never hits the default). Leave REGISTRY and run_all_verifiers untouched.
   - >-
     scripts/verifiers/athena_views.py -- repoint verify() at DuckLakeReader().named("decisions_max_updated")
     (import from src.common.iceberg_reader): PASS on a returned value with an honest message (live ops_decisions
