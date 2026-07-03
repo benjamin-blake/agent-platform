@@ -44,8 +44,11 @@ acceptance_criteria:
     is printed.
   - A changed test file with a real (run-time) test failure -- pytest exit 1 -- still hard-fails the gate.
   - >-
-    A changed test file with a collection error whose root-cause module is NOT an excluded-heavy dep
-    (deleted repo symbol, syntax error, undeclared/typo'd dependency) still hard-fails the gate.
+    A changed test file with a collection error whose root cause is NOT a genuinely-absent excluded-heavy
+    dep still hard-fails the gate -- covering BOTH ModuleNotFoundError for a repo-local or fast-tier-present
+    module AND collection errors that carry NO "No module named X" line at all (SyntaxError;
+    `ImportError: cannot import name`). The parser is fail-closed: anything it cannot positively identify as
+    a genuinely-absent excluded-heavy dep routes to `runnable` (hard-fail).
   - >-
     The excluded-heavy import-name set is DERIVED at runtime from requirements.txt minus
     requirements-fast.txt: pyarrow, pandas, numpy, duckdb are IN the set; ruff, mypy, pytest, pyyaml,
@@ -71,6 +74,20 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
+      Fail-closed parser proof (the property the whole design rests on) -- a collection error with NO
+      trailing "No module named X" line (a SyntaxError, and separately an `ImportError: cannot import name`)
+      must route to `runnable` (hard-fail), NOT `deferred`; and a ModuleNotFoundError for a module that IS
+      importable (find_spec not None) must also NOT defer. This is the exact shape a subtly-wrong classifier
+      could mis-defer and is named in acceptance criterion 3.
+    command: 'grep -q "def test_syntaxerror_collection_error_hard_fails" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability" -v -k "syntaxerror or cannot_import or present_module"'
+    expected: exit 0; each non-identifiable-heavy-dep collection error routes to runnable/hard-fail.
+    fix_if: >-
+      A non-"No module named" error (or a present-module ModuleNotFoundError) is deferred -- the parser is
+      not fail-closed. Ensure the defer branch requires a parsed missing module AND membership in the
+      excluded set AND find_spec is None; every other shape falls through to runnable.
+  - step: 3
+    phase: pre-deploy
+    action: >-
       Excluded-heavy set derivation against the REAL requirements files -- assert pyarrow/pandas/numpy/
       duckdb are IN the derived set and ruff/mypy/pytest/pyyaml/pydantic are NOT.
     command: 'grep -q "class TestExcludedHeavyDeps" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestExcludedHeavyDeps" -v'
@@ -78,7 +95,7 @@ verification_plan:
     fix_if: >-
       A fast-tier dep leaks into the excluded set (would wrongly defer) or a heavy dep is missing (would
       wrongly hard-fail). Fix the requirements parse or the dist->import alias map.
-  - step: 3
+  - step: 4
     phase: pre-deploy
     action: >-
       Real-file deferral behavioural proof -- with pyarrow simulated absent (monkeypatch find_spec),
@@ -86,11 +103,12 @@ verification_plan:
     command: 'grep -q "def test_iceberg_reader_defers_when_pyarrow_absent" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability::test_iceberg_reader_defers_when_pyarrow_absent" -v'
     expected: exit 0; the real offending file is classified as deferred when its dep is absent.
     fix_if: The real file is not deferred -- the probe/parse/derivation path is broken for a genuine case.
-  - step: 4
+  - step: 5
     phase: pre-deploy
     action: >-
-      Full fast-tier gate green on branch -- regression + rec-2485 acceptance + SLOC/coverage/lint/mypy
-      on the new code. This is the exact required pr-validate check.
+      Full fast-tier gate green on branch -- regression + rec-2485 acceptance oracle + SLOC/coverage/lint/
+      mypy on the new code. This is the exact required pr-validate check and is rec-2485's own stored
+      acceptance command.
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
       exit 0, "All checks passed"; the "Tests (pytest -- explicit changed files)" header is present;
@@ -164,17 +182,25 @@ context:
     run -> exit 1); deleted repo symbol -> collect-only exit 2 naming a repo-local top-level (not in the
     excluded set -> hard-fail).
   - >-
-    HARD BLOCK deferral rationale (2 open ci-rca recs at planning time): this plan shares no file, Decision,
-    or failure-category with rec-2482 (test-isolation env-leak in tests/test_iceberg_reader.py, being fixed
-    on PR #405) or rec-2483 (terraform-drift.yml retry parity). Both have distinct root causes/scopes/owners
-    and are deferred to their own plans. Fixing rec-2485 UNBLOCKS PR #405 (the rec-2482 fix), so this work is
-    complementary to -- not competing with -- ci-rca resolution.
+    HARD BLOCK deferral rationale (2 open ci-rca recs, both surfaced by preflight and reviewed in THIS
+    planning session per Decision 72/73). rec-2482 (test-isolation env-leak in tests/test_iceberg_reader.py,
+    being fixed on PR #405): rec-2485 genuinely UNBLOCKS PR #405 -- that PR touches test_iceberg_reader.py
+    (pyarrow) and cannot pass pr-validate until this fix lands -- so the work is CI-recovery-adjacent and
+    complementary to, not competing with, ci-rca resolution. rec-2483 (terraform-drift.yml retry-signature
+    parity): a scheduled-workflow post-merge DRIFT CANARY that does NOT gate the PR merge path, so deferring
+    it to its own plan does not queue-jump the pr-validate gate this plan fixes. This plan shares no file,
+    Decision, or failure-category with either rec.
+  - >-
+    Closure mechanism (rec-2485, Decision 103 / rec-autoclose): status flips to closed post-merge via the
+    `Resolves: rec-2485` squash-merge trailer (driven by bundled_recommendations), triggering
+    rec-autoclose.yml. VP step 5 (`validate --pre` + the pytest-diff header) is rec-2485's own stored
+    acceptance oracle (structural landing proof); no in-branch pre-merge status-flip VP step is possible.
   - >-
     Decision-scout verdict + CITE list: FLAGS_FOUND (74 of 74 triaged); CITE = Decision 73, Decision 60,
     Decision 104, Decision 72, Decision 48, Decision 55. RELATED = Decision 80 (fast-tier budget), Decision 75
     (frame-lock), Decision 102 (SLOC), Decision 79/44 (confirmed NOT Lambda-packaged and NOT executor-boundary
     -> V2, no deploy step; compute_affected_artifacts -> {}).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
   - >-
     Coverage-gate maps scripts/checks/**/*.py -> tests/test_validate.py (put V2 tests there). main was
     (0 behind, 0 ahead) of origin/main at planning time; no scope-file divergence. No .tf in scope.
@@ -206,10 +232,15 @@ execution_steps:
     appending "Tests (pytest)" to `failed` on non-zero (preserving the exit-5 backstop for that subset);
     if runnable is empty but deferred is non-empty, print a summary and do NOT redden.
   - >-
-    tests/test_validate.py -- add `class TestExcludedHeavyDeps` (derivation from the real requirements
-    files) and `class TestFastTierCollectability` (routing with _common.run mocked to the canonical
-    triples, plus `test_iceberg_reader_defers_when_pyarrow_absent` monkeypatching find_spec). Single
-    consolidated import block; mock subprocess appropriately.
+    tests/test_validate.py -- add `class TestExcludedHeavyDeps` (test_heavy_deps_in_excluded_set,
+    test_fast_tier_deps_not_in_excluded_set -- derivation from the real requirements files) and
+    `class TestFastTierCollectability` with _common.run mocked to the canonical triples:
+    test_heavy_dep_collection_error_defers; test_runtime_failure_hard_fails (exit 1);
+    test_non_heavy_modulenotfound_routes_to_runnable (repo-local top-level);
+    test_syntaxerror_collection_error_hard_fails and test_cannot_import_name_hard_fails (collection errors
+    with NO "No module named X" line -> runnable/hard-fail); test_present_module_not_deferred (find_spec not
+    None); test_iceberg_reader_defers_when_pyarrow_absent (monkeypatch find_spec). Single consolidated import
+    block (ruff-format gotcha); mock both subprocess.run and _common.run where exercised.
   - >-
     Execute the Verification Plan -- run each step; loop until all pass. If validate_sloc_limits flags
     _scaffolding.py, extract the classifier to a dedicated scripts/checks/<domain>/*.py module and re-run.
