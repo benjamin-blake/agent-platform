@@ -1,19 +1,19 @@
 ---
 name: decision-scout
-description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the 25k-token DECISIONS.md cost does not bloat the planning agent."
+description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the full DECISIONS.md cost (currently >200KB) does not bloat the planning agent."
 required-context:
   - docs/DECISIONS.md
 ---
 
 ## Intent
 
-Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a contradiction to resolve, or as a related-work pointer. The 25k-token `docs/DECISIONS.md` only enters this subagent's context, never the parent planning agent's; only the structured summary returns.
+Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a contradiction to resolve, or as a related-work pointer. The full `docs/DECISIONS.md` (currently >200KB) only enters this subagent's context, never the parent planning agent's; only the structured summary returns.
 
 This is a BLOCKING gate before `/plan` Step 6 "Present Findings and Confirm". A superficial scan that misses a contradiction is worse than not running -- the parent agent and human both trust this output to be exhaustive.
 
 ### Why a subagent and not inline grep
 
-The naive alternative is to grep `docs/DECISIONS.md` from the planning agent for keywords from the proposed approach. That misses decisions that contradict implicitly (different vocabulary, similar concept) and forces the planning agent to load enough of DECISIONS.md to make a judgement -- the exact 25k-token cost this gate exists to avoid.
+The naive alternative is to grep `docs/DECISIONS.md` from the planning agent for keywords from the proposed approach. That misses decisions that contradict implicitly (different vocabulary, similar concept) and forces the planning agent to load enough of DECISIONS.md to make a judgement -- the exact >200KB-file cost this gate exists to avoid.
 
 ### Lambda migration contract
 
@@ -25,7 +25,7 @@ When `docs/DECISIONS.md` is replaced by a Lambda-backed tool query (in-flight pe
 
 ### Phase 1: Load Inputs (MANDATORY)
 
-1. Read the **entire** `docs/DECISIONS.md` -- do not Read with offset/limit. A decision near the bottom of the file is just as likely to contradict the proposed approach as one near the top. (Post-Lambda-migration: call the decisions tool with no filter; pagination is acceptable only if the tool guarantees ordering by recency-of-relevance.)
+1. Read the **entire** `docs/DECISIONS.md` -- do not Read with offset/limit. A decision near the bottom of the file is just as likely to contradict the proposed approach as one near the top. (Post-Lambda-migration: call the decisions tool with no filter; pagination is acceptable only if the tool guarantees ordering by recency-of-relevance.) Before triage, run `rg -c "^## Decision " docs/DECISIONS.md` and record the count M -- this is the LIVE-FILE header count (currently 67), NOT the max decision number (which reflects archive entries and numbering gaps) and NOT inclusive of `docs/DECISIONS_ARCHIVE.md`, per Decision 105.
 
 2. Read the caller's input brief, which is mandated to include:
    - **Intent** (1-2 sentences from `/plan` Step 3 clarification)
@@ -57,11 +57,11 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
    native-primitive principle. Cross-reference Decision 100 (which extends Decision 75 to ALL managed services,
    not only AWS-native primitives).
 
-5. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed, not superseded, not deferred). If a decision is reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
+6. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed, not superseded, not deferred). If a decision is reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
 
 ### Phase 3: Structured Output
 
-6. Return exactly this output. Each section is mandatory even when empty (so the planning agent's parsing logic does not have to branch).
+7. Return exactly this output. Each section is mandatory even when empty (so the planning agent's parsing logic does not have to branch).
 
 ```
 ## Decision Scout Report
@@ -89,9 +89,11 @@ NO_FLAGS | FLAGS_FOUND | BLOCK
 (NO_FLAGS = no CONTRADICT entries; CITE-only is still NO_FLAGS.
 FLAGS_FOUND = at least one CONTRADICT at WARN or NOTE severity.
 BLOCK = at least one CONTRADICT at BLOCK severity; planning agent must pivot before confirming.)
+
+Decisions triaged: N of M
 ```
 
-7. Cap total response at ~1,200 words. The planning agent reads this verbatim and surfaces it to the human; bloat dilutes the signal.
+8. Cap total response at ~1,200 words. The planning agent reads this verbatim and surfaces it to the human; bloat dilutes the signal.
 
 ---
 
@@ -102,6 +104,7 @@ Verify before returning:
 - [ ] Every CITE and CONTRADICT entry names a decision number that actually exists in the file
 - [ ] Every CONTRADICT entry has both a clause-level citation AND a severity
 - [ ] The Verdict line is one of the three exact strings (no variations)
+- [ ] The "Decisions triaged: N of M" line is present and N equals M (the rg -c count from Phase 1)
 - [ ] Total length under 1,200 words
 
 If any checkbox is false, fix before returning. The caller (planning agent) cannot self-verify these; a malformed output forces re-dispatch and wastes the latency budget.

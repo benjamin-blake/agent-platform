@@ -2,6 +2,10 @@
 name: planning
 description: Deep methodology and rules for software planning, complexity assessment, and verification tier design. Use this when running the /plan workflow or when architecting new features.
 model: opus[1m]
+required-context:
+  - logs/.preflight-report.json
+  - docs/PROJECT_CONTEXT.md
+  - docs/ROADMAP-PLATFORM.yaml
 ---
 
 # Planning Methodology & Rules
@@ -217,19 +221,12 @@ print(verdict, '|', evidence[:120])
 
 ## Documentation Artefact Design
 
-This repository is agent-first. When a plan creates or modifies documentation artefacts,
-apply these rules:
+When a plan creates or modifies documentation artefacts, apply these rules:
 
-- Prefer extending an existing machine-readable source over creating a new document.
-- A new file is warranted only when it has a distinct machine-parseable role (e.g., a
-  decision manifest YAML, a registry YAML). Never create a human-readable companion
-  alongside a machine-readable source -- that produces drift by design.
 - Canonical field documentation pattern: ops.yaml extended contract. Add `description`
   and `semantics` metadata fields directly to the column entry in ops.yaml or
   telemetry.yaml. These fields are ignored by the DQ runner and consumed by agents.
   Do not create a separate briefing doc for the same information.
-- When a plan step proposes a new document, ask: "Could this information be a metadata
-  field in an existing YAML?" If yes, prefer that over a new file.
 - Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
   route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
   Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
@@ -328,25 +325,30 @@ catches any resulting header mismatch, so shifting to the next free number at ex
 
 ## Decision Scout Gate (Workflow Step 6a, pre-presentation)
 
-This gate fires BEFORE Step 6b's presentation to the human. Its job is to surface any active decisions the proposed approach must cite, contradict, or pivot around -- without paying the 25k-token cost of loading `docs/DECISIONS.md` into the planning agent.
+This gate fires BEFORE Step 6b's presentation to the human. Its job is to surface any active decisions the proposed approach must cite, contradict, or pivot around -- without paying the cost of loading the full DECISIONS.md, currently >200KB, into the planning agent.
+
+**Example prompt body:**
+> "You are running the decision-scout gate in a fresh context window. Invoke the `decision-scout` skill via the Skill tool. The skill needs the following inputs (use them in your scout analysis):
+> - Intent: [1-2 sentences from clarification]
+> - Proposed approach: [paragraph synthesis]
+> - Scope files: [list from Step 4]
+> - Verification Tier: [V1 | V2 | V3]
+> - Explicitly cited decisions: [list of IDs the human mentioned, or 'none']
+>
+> Return the skill's `## Decision Scout Report` output verbatim, including the final `Verdict:` line. Do not edit any files."
 
 **Dispatch shape:**
 - `subagent_type: "general-purpose"` (needs `Skill`, `Read` access)
 - `description: "Decision scout gate"`
-- `prompt:` self-contained brief that supplies Intent (Step 3), Proposed approach (Steps 3-5 synthesis), Scope file list (Step 4), Verification Tier (Step 5), and any decision IDs already cited by the human. Instruct the subagent to invoke the `decision-scout` skill via the `Skill` tool and return the structured `## Decision Scout Report` output verbatim.
+- `prompt:` a self-contained brief per the example above, supplying Intent (Step 3), Proposed approach (Steps 3-5 synthesis), Scope file list (Step 4), Verification Tier (Step 5), and any decision IDs already cited by the human. Instruct the subagent to invoke the `decision-scout` skill via the `Skill` tool and return the structured `## Decision Scout Report` output verbatim.
 
 **Verdict handling:**
-- **NO_FLAGS** -> Proceed to Step 6b. Include the scout's CITE list in the presentation as "Decisions this plan must reference."
+- **NO_FLAGS** -> Proceed to Step 6b. Include the scout's CITE list in the presentation as "Decisions this plan must reference." Record in the plan template's `context:` list: "Decision-scout verdict + CITE list (verbatim decision ids)" and "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s))".
 - **FLAGS_FOUND** -> Surface each WARN/NOTE flag to the human in Step 6b's presentation under a "Decision Flags" section. Human chooses per-flag: pivot, defer with note, or accept-as-is. If the human pivots on any flag in a way that changes the proposed approach materially, re-dispatch this gate against the revised approach before re-presenting.
 - **BLOCK** -> STOP. Do NOT present the original approach for confirmation. Surface the BLOCK contradiction and propose pivots, then re-dispatch the gate against the revised approach. Confirming a known-blocking approach would invite the human to ratify a plan that contradicts an active decision.
+- **Gate-error:** if the gate subagent errors or returns output missing the required `Verdict:` line, the gate has NOT completed -- re-dispatch; never proceed past an incomplete gate. Likewise, if the report's "Decisions triaged: N of M" line is missing, or N != M, treat the gate as incomplete and re-dispatch -- a mismatch means the scout truncated its read of DECISIONS.md.
 
-**Why this gate and not inline grep of DECISIONS.md:**
-- Loading the full 25k DECISIONS.md into the planning agent for every session is wasteful (most sessions touch zero decisions).
-- Greping for keywords misses implicit contradictions (different vocabulary, similar concept).
-- The subagent runs in fresh context, so the file cost is paid once per gate dispatch and discarded when the subagent returns. Only the structured ~500-1500-token summary returns.
-
-**Lambda migration contract:**
-When `docs/DECISIONS.md` is replaced by a Lambda-backed tool query, the only internal change to the scout is its file-read step. The dispatch shape and verdict handling above are stable. Do not optimise this gate's invocation around the file format; treat decisions as an opaque query interface.
+**Why a subagent and not inline grep, and the Lambda migration contract:** see the `decision-scout` skill -- it owns the isolation rationale and the stable-interface contract for when DECISIONS.md is replaced by a Lambda-backed tool query.
 
 **Convergence rule:**
 Do not loop more than 3 times. If the gate keeps returning BLOCK after 3 revisions, escalate to the human: "After N revisions the decision-scout still flags BLOCK on [decision N]. Continued pivoting suggests either the underlying intent contradicts the decision (re-scope the request) or the decision needs to be revisited (file a recommendation to revise the decision). How would you like to proceed?"
@@ -356,7 +358,7 @@ Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any 
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
 
 ## Create Branch (Workflow Step 7)
-On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`). The planning agent works on that harness branch -- do NOT create an `agent/` branch. See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, never agent/).
+See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, harness branch vs never agent/).
 
 Verify you are on the harness branch and not on `main`:
 ```bash
@@ -398,6 +400,8 @@ constraints:
   - No rescue agents or workaround loops (Decision 55)
 context:
   - Relevant decisions, phase dependencies, known gotchas
+  - "Decision-scout verdict + CITE list (verbatim decision ids)"                  # REQUIRED ITEM (WF-04a)
+  - "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)" # REQUIRED ITEM (WF-08)
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -441,7 +445,7 @@ Apply this check when writing the PLAN file. It is CONDITIONAL -- additive plans
 ## Critique Gate (Workflow Step 9)
 **DO NOT output the completion message until this step completes.**
 
-Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-critique` skill in a fresh context window. The fresh-context requirement is non-negotiable: it eliminates the cognitive bias the planning agent has from authoring the artefact. Do NOT invoke the `plan-critique` skill in the current session via the `Skill` tool (same context = same bias). Do NOT shell out to `scripts.agent_development.run_skill` (the gemini-CLI dispatcher is removed).
+Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-critique` skill in a fresh context window. The fresh-context requirement is non-negotiable: it eliminates the cognitive bias the planning agent has from authoring the artefact. Do NOT invoke the `plan-critique` skill in the current session via the `Skill` tool (same context = same bias). Do not use `scripts.agent_development.run_skill` -- it is broken per rec-568; dispatch the gate via the `Agent` tool + `Skill` instead.
 
 **Invocation shape:**
 - `subagent_type: "general-purpose"` (needs `Skill`, `Read`, and `Grep` access)
@@ -449,17 +453,20 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
 - `prompt:` self-contained, mentions:
   - The absolute path to `docs/plans/PLAN-{slug}.yaml` (a `.md` path is deprecated -- surface a deprecation warning and proceed)
   - Instruction to invoke the `plan-critique` skill via the `Skill` tool against that path
-  - The required-context files (`docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`)
+  - The skill's required-context files per its frontmatter (`docs/PROJECT_CONTEXT.md` full read; `docs/ROADMAP-PRODUCT.yaml`/`docs/ROADMAP-PLATFORM.yaml`/`docs/DECISIONS.md` targeted, not full-file -- see the `plan-critique` skill's Phase 1)
   - For IMPLEMENTATION plans: instruction to also read every file in the plan's Scope table
   - Requirement to return the skill's structured output verbatim, including the final `Recommendation: PROCEED / REVISE` line
   - Forbid file edits
 
 **Example prompt body:**
-> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.yaml`. Read the skill's required-context files: `docs/PROJECT_CONTEXT.md`, `docs/ROADMAP-PRODUCT.yaml`, `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`. For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
+> "You are running the plan-critique gate in a fresh context window. **First, run `git fetch origin main --quiet`** so the local `origin/main` ref is current. Then invoke the `plan-critique` skill via the Skill tool to critique `/abs/path/to/docs/plans/PLAN-{slug}.yaml`. Read `docs/PROJECT_CONTEXT.md` in full; extract only the roadmap items and decision sections the plan names per the skill's Phase 1 (do not load full ROADMAP-PLATFORM.yaml/ROADMAP-PRODUCT.yaml/DECISIONS.md). For IMPLEMENTATION plans, also read every file in the plan's Scope table. If `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` shows divergence, note that the critique evaluates against the branch's (possibly stale) view of these docs. Return the skill's structured critique output verbatim, including the final `Recommendation:` verdict line. Do not edit any files."
 
 Read the critique output returned by the subagent.
 If it suggests revisions, update the plan with these fixes and re-launch the same subagent invocation against the revised plan. Each Agent call is a fresh window, so the re-launch genuinely re-evaluates.
 Loop if REVISE. Proceed if PROCEED.
+If the gate subagent errors or returns output missing the required `Recommendation:` line, the gate has NOT completed -- re-dispatch; never proceed past an incomplete gate.
+
+Convergence rule: after 3 REVISE rounds, escalate to the human with the unresolved findings and options (accept-with-deferral / re-scope / abandon), mirroring the Step 6a decision-scout convergence rule.
 
 This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY plans, the deliverable gets its own critique in Step 10.
 
