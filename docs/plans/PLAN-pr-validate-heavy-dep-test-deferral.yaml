@@ -79,8 +79,10 @@ verification_plan:
       must route to `runnable` (hard-fail), NOT `deferred`; and a ModuleNotFoundError for a module that IS
       importable (find_spec not None) must also NOT defer. This is the exact shape a subtly-wrong classifier
       could mis-defer and is named in acceptance criterion 3.
-    command: 'grep -q "def test_syntaxerror_collection_error_hard_fails" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability" -v -k "syntaxerror or cannot_import or present_module"'
-    expected: exit 0; each non-identifiable-heavy-dep collection error routes to runnable/hard-fail.
+    command: 'grep -q "def test_syntaxerror_collection_error_hard_fails" tests/test_validate.py && grep -q "def test_cannot_import_name_hard_fails" tests/test_validate.py && grep -q "def test_present_module_not_deferred" tests/test_validate.py && bin/venv-python -m pytest "tests/test_validate.py::TestFastTierCollectability" -v'
+    expected: >-
+      exit 0; all three fail-closed methods exist and pass -- each non-identifiable-heavy-dep collection
+      error routes to runnable/hard-fail.
     fix_if: >-
       A non-"No module named" error (or a present-module ModuleNotFoundError) is deferred -- the parser is
       not fail-closed. Ensure the defer branch requires a parsed missing module AND membership in the
