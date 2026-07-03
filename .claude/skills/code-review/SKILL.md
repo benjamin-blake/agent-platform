@@ -51,7 +51,8 @@ Perform a focused code review of the current branch changes. Build the review sc
 
 3. **Read project configuration** — pyproject.toml, requirements.txt, setup scripts, and CI/CD workflows.
 4. **Cross-reference** documentation claims against actual implementation.
-5. **Produce a single structured report** using the format below.
+5. **For V3-tier plans, run the V3 Post-Deploy Evidence check** (see below) before producing the report.
+6. **Produce a single structured report** using the format below.
 
 **Direct-import scoping rule:** If a changed file imports `from src.common.config import Config`, then `src/common/config.py` is in scope. Do not recursively follow imports — only 1 level deep. Test files are in scope only if files under `tests/` appear in the diff or the plan Scope table.
 
@@ -144,6 +145,25 @@ Evaluate the repository across each of the following dimensions. For every issue
 - **Architecture decision records** — Are key design decisions documented with rationale?
 - **Copilot/agent instructions** — Is `docs/PROJECT_CONTEXT.md` accurate and maintained?
 - **Inline TODOs and FIXMEs** — Are they actionable and specific?
+
+---
+
+## V3 Post-Deploy Evidence
+
+Applies only when the plan's `verification_tier` is V3. Verify the PR (body or comments) carries
+a posted post-deploy evidence artifact: live invocation output AND a real run URL (e.g. a
+CloudWatch/Step Functions/Lambda invocation URL, or a GitHub Actions run URL) that coheres with
+the plan's post-deploy expected outcomes (Decision 103 -- closure needs a proof, not a
+self-assertion, replacing grep-your-own-transcription).
+
+Raise a **High-priority finding** (drives `Verdict: REVISE` per the deterministic rule below) if:
+- The evidence artifact is absent from the PR entirely, or
+- It is present but does not name a real run URL (e.g. a placeholder, a local-only path, or no
+  URL at all), or
+- It contradicts the plan's post-deploy expected outcomes (e.g. the invocation output shows an
+  error or an unexpected result the plan did not anticipate).
+
+Not applicable to V1/V2-tier plans -- skip this check for those and do not raise a finding.
 
 ---
 
