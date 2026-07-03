@@ -2111,6 +2111,7 @@ def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
             "active_tier": state.get("active_tier"),
             "blocked_on_cd": state.get("blocked_on_cd", []),
             "ratifiable_cds": state.get("ratifiable_cds", []),
+            "realized_but_pending_cds": state.get("realized_but_pending_cds", []),
             "gate_evaluations": state.get("gate_evaluations", []),
         }
     return {

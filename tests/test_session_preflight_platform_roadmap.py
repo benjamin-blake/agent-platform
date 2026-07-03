@@ -112,6 +112,12 @@ class TestRoadmapDetailProjection:
         for item in full["next_eligible"]:
             assert "user_action_required" in item, f"full next_eligible item missing key: {item}"
 
+    def test_full_realized_but_pending_cds_key_present(self) -> None:
+        """close-audit-ulf-02: full projection carries the new realized_but_pending_cds key."""
+        full = _slim_roadmap_state(self._full_state(), full=True)
+        assert "realized_but_pending_cds" in full
+        assert isinstance(full["realized_but_pending_cds"], list)
+
 
 @pytest.mark.skipif(not _LIVE_PRODUCT_YAML.exists(), reason="live ROADMAP-PRODUCT.yaml not present")
 class TestProductRoadmapProjectionUnchanged:
