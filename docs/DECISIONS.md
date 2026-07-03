@@ -2,6 +2,39 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 114: Raise the ROADMAP-PLATFORM.yaml size ceiling to 10,000 lines and add a deterministic guard (supersedes KG.11's 2500-line/50K-token trigger) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-114 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Supersedes KG.11's Round-2-adversarial-era 2500-line/50K-token split-into-per-tier-files trigger.
+The file is retained as a single file (agent-first, agent-loading-efficiency one-file principle,
+AGENTS.md "Agent-First Repository" section / Decision 110 -- ROADMAP-PLATFORM.yaml is the realized
+agent-first structured-data exemplar); splitting into per-tier YAML files with a manifest was
+assessed and rejected because it trades one coherent load for N files an agent must reassemble,
+which is the exact anti-pattern Decision 110 and the agent-first principles guard against. In place
+of the split, the ceiling is raised to 10,000 lines and a deterministic, code-enforced guard is
+added: `scripts/checks/roadmap/validate_platform_roadmap.py` gains a module-level constant
+`_ROADMAP_MAX_LINES = 10_000` and a pure helper `_roadmap_size_issues()` that fails the check (full
+`validate.py` tier) when the live file exceeds the ceiling. This closes KG.11 (flipped to
+`status: resolved`, `resolution_ref: "Decision 114"`) and is the first ratified use of the new
+OpenQuestion/KnownGap `status`/`resolution_ref` lifecycle fields (`scripts/platform_roadmap.py`,
+mirroring the ExitCriterion met/rehomed precedent and the Decision 93 fail-loud enforcement style).
+
+**Reversal conditions:** revisit a per-tier split (or a different ceiling) when the file breaches
+the 10,000-line ceiling again, or when `/plan`-time load cost of the single file becomes prohibitive
+in practice (not merely theoretical).
+
+**Related:** KG.11 (the gap this resolves), CD.39 (the roadmap exit-criteria-ledger
+promote-prose-to-enum precedent this migration follows for OQ/KG), Decision 84 (DECISIONS.md ->
+ops_decisions authoring/sync authority), Decision 86 (extend the machine-parseable schema, not
+prose), Decision 93 (deferred_post_mvp fail-loud lifecycle-status precedent), Decision 110 (ratified
+CD.13 -- the agent-first structured-data exemplar this decision preserves).
+
+---
+
 ## Decision 113: Ratify CD.26 -- Pattern-B agent auth (static-key + chained AssumeRole) supersedes Identity Center for the personal account (Decided)
 
 **Status:** Decided

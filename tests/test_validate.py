@@ -4998,3 +4998,36 @@ class TestValidatePortalDrift:
             failed: list[str] = []
             validate_portal_drift(failed)
         assert any("portal file missing: README.md" in f for f in failed)
+
+
+class TestRoadmapSizeGuard:
+    """Tests for _roadmap_size_issues() / _ROADMAP_MAX_LINES (Decision 114, PLAN-close-audit-ulf-04-ulf-10)."""
+
+    def test_ceiling_constant_is_10000(self) -> None:
+        from scripts.checks.roadmap.validate_platform_roadmap import _ROADMAP_MAX_LINES
+
+        assert _ROADMAP_MAX_LINES == 10000
+
+    def test_over_ceiling_returns_one_item_fail_list(self) -> None:
+        from scripts.checks.roadmap.validate_platform_roadmap import _roadmap_size_issues
+
+        text = "\n" * 10001
+        issues = _roadmap_size_issues(text, ceiling=10000)
+        assert len(issues) == 1
+        assert "10001" in issues[0]
+        assert "10000" in issues[0]
+        assert "Decision 114" in issues[0]
+
+    def test_within_ceiling_returns_empty_list(self) -> None:
+        from scripts.checks.roadmap.validate_platform_roadmap import _roadmap_size_issues
+
+        text = "\n" * 9999
+        issues = _roadmap_size_issues(text, ceiling=10000)
+        assert issues == []
+
+    def test_exactly_at_ceiling_returns_empty_list(self) -> None:
+        from scripts.checks.roadmap.validate_platform_roadmap import _roadmap_size_issues
+
+        text = "line\n" * 10000
+        issues = _roadmap_size_issues(text, ceiling=10000)
+        assert issues == []
