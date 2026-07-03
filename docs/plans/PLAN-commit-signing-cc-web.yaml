@@ -1,0 +1,154 @@
+schema_version: 1
+slug: "commit-signing-cc-web"
+intent: >-
+  Remove a recurring CC-web agent-workflow friction (effort wasted chasing unsignable commit
+  signatures) by recording the deliberate no-required-signatures stance where it stops the churn --
+  the self-improvement loop turning a captured friction point into durable guidance.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-commit-signing-cc-web.yaml
+phase: >-
+  Platform / agent-workflow friction reduction (CC-web git-ops guidance). Ad-hoc, user-requested;
+  names no tier_item -- soft-warn exception category user_explicit_out_of_scope, so the Tier Item
+  Freshness Gate is skipped.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add a "### Commit signing (CC-web: unsigned is expected)" subsection under "## Git-ops
+      procedure" (between "### Commit-message conventions" and "### Rebase phase distinction")
+      stating that unsigned CC-web commits are expected and non-blocking, and directing agents not
+      to reset-author / --amend -S / re-sign to chase the cosmetic "N" flag.
+  - file: terraform/github/repo.tf
+    action: Modify
+    purpose: >-
+      Add an intentional-absence comment marker inside the github_repository_ruleset.main_protection
+      rules {} block documenting that required_signatures is deliberately omitted (CC-web cannot
+      sign; requiring it would wedge the squash-merge flow) and must not be added. Comment-only.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/github/repo.tf change is COMMENT-ONLY: zero `terraform plan` diff, no apply, no IAM,
+    no resource mutation. The terraform/github/ root is human-gate-applied (Decision 83 / CD.20),
+    separate from the terraform/personal/ sandbox auto-apply pipeline; this edit never runs an
+    apply and never engages the terraform_apply_guard (Decision 77 / 92 not engaged). HCL validity
+    and formatting are proven creds-free by `scripts.validate --terraform-only` because
+    terraform/github is a member of _TERRAFORM_ROOTS (scripts/checks/_scaffolding.py).
+acceptance_criteria:
+  - >-
+    AGENTS.md "## Git-ops procedure" contains a commit-signing subsection stating that unsigned
+    CC-web commits are expected and non-blocking (no required_signatures on main-protection;
+    feature-branch commits not signature-gated; GitHub signs the squash-merge commit server-side)
+    AND directing agents not to reset-author / --amend -S / re-sign to chase the "N".
+  - >-
+    terraform/github/repo.tf main_protection ruleset carries an intentional "No required_signatures"
+    marker comment AND still has NO `required_signatures = true` rule (the requirement stays absent).
+  - >-
+    `bin/venv-python -m scripts.validate --terraform-only` exits 0 (fmt-check + validate of all
+    terraform roots including terraform/github/).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` exits 0 (full fast-tier presubmit gate).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Assert the AGENTS.md commit-signing guidance is present with the do-not-re-sign directive.
+    command: grep -q "### Commit signing" AGENTS.md && grep -Eiq "do not.*(reset-author|amend|re-sign)" AGENTS.md
+    expected: Exit 0 -- the subsection header and the "do not re-sign" directive are both present.
+    fix_if: Non-zero means the subsection or the directive line is missing/mis-worded; add or correct it.
+  - step: 2
+    phase: pre-deploy
+    action: Assert the intentional TF marker is present and no required_signatures rule was added.
+    command: grep -q "No required_signatures" terraform/github/repo.tf && ! grep -Eq "required_signatures[[:space:]]*=[[:space:]]*true" terraform/github/repo.tf
+    expected: Exit 0 -- marker comment present AND no `required_signatures = true` line exists.
+    fix_if: Non-zero means the marker is missing or an enabling rule leaked in; fix so the marker is present and the requirement stays absent.
+  - step: 3
+    phase: pre-deploy
+    action: Run the credential-free terraform gate (the CI terraform-validate job's single source of truth).
+    command: bin/venv-python -m scripts.validate --terraform-only
+    expected: Exit 0 -- init -backend=false + validate + fmt -check pass across all _TERRAFORM_ROOTS, including terraform/github/repo.tf.
+    fix_if: fmt or validate error on repo.tf -- run `terraform fmt terraform/github/` to normalise the comment indentation, then re-run.
+  - step: 4
+    phase: pre-deploy
+    action: Run the full fast-tier presubmit gate (authoritative PR gate).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 -- all diff-aware checks pass.
+    fix_if: A doc/markdown/lint check fails -- read the failure output and correct within the two scoped files only.
+constraints:
+  - Only modify AGENTS.md and terraform/github/repo.tf. No other files.
+  - >-
+    The terraform/github/repo.tf edit is comment-only. Do NOT run `terraform apply`, do NOT add any
+    `required_signatures` rule, and do NOT route this change through any apply pipeline -- the marker
+    documents the requirement's intentional ABSENCE.
+  - >-
+    Do NOT restate the guidance in skills or commands -- AGENTS.md "## Git-ops procedure" is the sole
+    canonical git-ops authority ("All other surfaces (skills, commands) point here and do not
+    restate."). Editing AGENTS.md alone is correct and sufficient.
+  - >-
+    Frame the guidance forward (signatures are deliberately not required; the harness cannot sign).
+    Do NOT reintroduce Decision 89's stale "branch protection unavailable / signatures impossible"
+    premise -- it was reversed by Decision 83.
+  - No new standing prose-architecture doc under docs/ (Decision 86) -- guidance lands in AGENTS.md (L1).
+  - >-
+    Public-content boundary (Decision 101) -- both files are public; carry only
+    platform-engineering content: no account IDs, ARNs, ExternalIds, secrets, or trading alpha.
+  - No emojis; ASCII hyphens only. Keep the new AGENTS.md prose consistent with surrounding style.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Friction source: in CC-web the harness commit-signing key (~/.ssh/commit_signing_key.pub) is a
+    0-byte placeholder, so commit.gpgsign is set but signing fails silently; commits land unsigned
+    (`git log --format=%G?` -> "N"). Agents then waste effort with reset-author / `git commit
+    --amend -S` / re-amend loops (SHA churn) before concluding it is an environment limitation.
+    Surfaced from a planning-session transcript supplied by the user 2026-07-03.
+  - >-
+    Finding: the repo has NO signed-commit requirement. terraform/github/repo.tf main_protection
+    ruleset has no required_signatures rule; no Decision mandates signing; 0 open recs about it;
+    recent claude/*/plan PRs (#391-#394) merged cleanly today. The "N" is a cosmetic Claude-Code-web
+    harness flag on feature-branch commits GitHub never gates; GitHub signs the squash-merge commit
+    server-side.
+  - >-
+    terraform/github/ is validated creds-free by `scripts.validate --terraform-only`
+    (_TERRAFORM_ROOTS in scripts/checks/_scaffolding.py = terraform, terraform/personal,
+    terraform/github, terraform/bootstrap), so the comment marker is CI-covered by the
+    terraform-validate required check.
+  - >-
+    User decisions (2026-07-03, via AskUserQuestion): direction = keep unsigned OK + stop the churn;
+    depth = guidance + intentional TF marker (NO Decision record).
+  - "Decision-scout verdict + CITE list: NO_FLAGS (73 of 73 triaged). CITE: Decision 83 (main-protection config authority -- no required_signatures by design; non-wedging so squash-merge holds), Decision 76 (CC-web squash-merge-via-GitHub-MCP; server-side merge commit), Decision 86 (guidance routes to AGENTS.md; no new prose doc). RELATED: Decision 101 (public-content boundary -- the correct authority, not Decision 73), Decision 89 (reversed premise -- awareness only), Decision 55 (document-limit-do-not-loop)."
+  - "gates: decision-scout=NO_FLAGS after 1 round; plan-critique=PROCEED after 1 round"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/github-signed-commits-fk1y6q)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision alignment checked via decision-scout gate (NO_FLAGS, 73/73)
+  - Both files in scope located and readable (AGENTS.md "## Git-ops procedure" at ~line 129; terraform/github/repo.tf main_protection ruleset at ~line 55)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify AGENTS.md: insert a "### Commit signing (CC-web: unsigned is expected)" subsection under
+    "## Git-ops procedure", placed after "### Commit-message conventions" and before "### Rebase
+    phase distinction". Content: (a) CC-web commits land unsigned (%G? = N) because the harness does
+    not provision a working commit-signing key (observed: the SSH signing key is an empty
+    placeholder) -- expected, not a defect. Frame the guidance around the DURABLE fact (signing is
+    not available in CC-web and is not required), not the specific failure mechanism, so it stays
+    correct if harness internals change; (b) non-blocking -- main-protection
+    has no required_signatures (Decision 83), claude/* feature-branch commits are never
+    signature-gated, and GitHub creates + verifies the squash-merge commit server-side (Decision 76);
+    (c) attribution (Claude <noreply@anthropic.com>) is set via git identity and is SEPARATE from
+    cryptographic signature -- identity is already correct; (d) an explicit directive: do NOT
+    reset-author, do NOT `git commit --amend -S`, do NOT otherwise re-sign to chase the "N" -- it only
+    churns SHAs and wastes effort; (e) a cross-reference to the terraform/github/repo.tf marker.
+  - >-
+    Modify terraform/github/repo.tf: add a comment inside the github_repository_ruleset.main_protection
+    `rules {}` block (near required_linear_history) explaining that required_signatures is intentionally
+    omitted (CC-web harness signing key is a 0-byte placeholder; requiring signatures would wedge the
+    Decision 76 squash-merge flow), "Intentional -- do not add", with a pointer to the AGENTS.md
+    subsection. Run `terraform fmt terraform/github/` to normalise. Do not change any resource attribute.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass. All steps are
+    pre-deploy and creds-free. On a persistent V1 check failure, stop and diagnose within scope
+    (Decision 55); do not add rescue loops.
+  - "Report: what was implemented (the two edits) and the verification results (all four VP steps)."
+work_areas: []
+rollback: >-
+  Revert the two edits (git revert / restore AGENTS.md and terraform/github/repo.tf). Both are
+  documentation-only; there is no infrastructure state to unwind.
