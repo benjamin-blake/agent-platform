@@ -213,14 +213,21 @@ class TestCompletionBlockedOnCdProjection:
                 f"{entry['id']}: completion_blocked_on_cd must be a list"
             )
 
-    def test_t120_surfaces_cd1_as_completion_gate(self) -> None:
-        """T-1.20 in_progress entry includes CD.1 in completion_blocked_on_cd."""
+    def test_t112_surfaces_pending_gating_cd(self) -> None:
+        """close-audit-ulf-02 (2026-07-03): T-1.20 completed once CD.1 AND CD.13 both
+        ratified (Decisions 108/110), so it no longer surfaces a completion gate and is
+        absent from in_progress. Re-point this test to a still-in_progress item gated by
+        a real pending CD -- T1.12 is in_progress and gated by pending CD.10/CD.11/CD.25 --
+        preserving the test's intent (completion_blocked_on_cd surfaces a real pending
+        gate) against live post-ratification state."""
         state = self._full_state()
         full = _slim_roadmap_state(state, full=True)
         t120 = next((i for i in full.get("in_progress", []) if i["id"] == "T-1.20"), None)
-        assert t120 is not None, "T-1.20 expected in in_progress"
-        assert "CD.1" in t120["completion_blocked_on_cd"], (
-            f"CD.1 expected in T-1.20 completion_blocked_on_cd, got {t120['completion_blocked_on_cd']}"
+        assert t120 is None, "T-1.20 expected complete (absent from in_progress) post-ratification"
+        t112 = next((i for i in full.get("in_progress", []) if i["id"] == "T1.12"), None)
+        assert t112 is not None, "T1.12 expected in in_progress"
+        assert "CD.25" in t112["completion_blocked_on_cd"], (
+            f"CD.25 expected in T1.12 completion_blocked_on_cd, got {t112['completion_blocked_on_cd']}"
         )
 
     def test_slim_projection_omits_in_progress(self) -> None:

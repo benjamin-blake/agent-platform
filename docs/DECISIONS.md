@@ -2,6 +2,157 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 113: Ratify CD.26 -- Pattern-B agent auth (static-key + chained AssumeRole) supersedes Identity Center for the personal account (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-113 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.26. Realized 2026-05-29 -- `terraform/personal/platform_roles.tf` provisions Pattern B
+(static-key + chained AssumeRole with two IAM roles, PlatformDev and PlatformAdmin), verified live
+(PR #4; T0.3 complete). The session-start static-key assume-role chain verification hook
+(`.claude/hooks/session_start_aws.sh`, PR #4) is operational. This supersedes the Identity Center
+prep from PR-361 (commit 26ac4c2) for the personal account -- SSO remains a company-account
+(company-aws-profile) requirement only, never a personal-account one. The two-principal semantic
+(PlatformDev for daily ops, PlatformAdmin for admin/import-mode) is preserved verbatim, implemented
+via IAM roles + ExternalId conditions (confused-deputy defense) instead of SSO permission sets.
+Ratifying clears the completion gate CD.26 places on T0.3 (already complete) -- necessary, not
+sufficient for the rest of T0.
+
+**Reversal conditions:** re-open as a candidate only if SSO/Identity Center is reconsidered for the
+personal account (e.g. a second account or an SSO requirement emerges for it).
+
+**Related:** Decision 105 (the ratification lane executing this), CD.10 (two-principal allow-list
+model the auth primitive change preserves).
+
+---
+
+## Decision 112: Ratify CD.21 -- CI migrated from self-hosted EC2 runner to GitHub-hosted runners + OIDC federation (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-112 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.21. Realized 2026-05-28 -- OIDC federation and CI migration to GitHub-hosted
+`ubuntu-latest` runners are complete per Decision 73 (PR #1; `terraform/personal/oidc.tf` +
+workflow migration). The self-hosted EC2 runner is retired; `terraform/ec2_runner.tf` is retained
+(not deleted), carrying a deprecation header pointing at this Decision, per the indefinite-retention
+rationale in CD.21's detail (a portfolio-positive architectural-evolution artefact with no ongoing
+operational cost once the EC2 instance is terminated). This narrowly supersedes Decision 68 on the
+runner-hosting question only -- Decision 68's other content is unaffected. Ratifying clears the
+completion gate CD.21 places on T2.10.
+
+**Reversal conditions:** re-open as a candidate only if CI moves off GitHub-hosted runners + OIDC
+federation.
+
+**Related:** Decision 73 (the migration realizing it), Decision 68 (superseded on the hosting
+question only), Decision 105 (the ratification lane executing this).
+
+---
+
+## Decision 111: Ratify CD.20 -- Repository public-flip + curated-portal (not operational-data-export) commitment (scoped, necessary not sufficient) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-111 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.20, SCOPED to the realized COMMITMENT, not the fully-finished portal. Realized
+(partial) 2026-05-30 -- the public flip completed (T2.13) per Decision 76; the hard invariant that
+the public surface is a curated portal (README.md, AGENTS.md, EVALUATION-PROMPTS.yaml,
+`.devcontainer/`, SECURITY.md) rather than an export of operational data (`ops_recommendations`,
+`ops_decisions`, `ops_session_log`, telemetry) is in force. T2.12 (GHAS + branch protection)
+completed 2026-06-08 (Decision 83). T2.11b is partial (2026-06-18): SECURITY.md's projection-at-top
+enriched, EVALUATION-PROMPTS.yaml authored (12 questions, all answer-loci resolve). This Decision
+asserts ONLY that the public-flip + curated-portal COMMITMENT is realized and in force -- it does
+NOT claim portal completion is finished: T2.11a (`.devcontainer`, not started) and the T2.11b
+architecture diagram (gated on T2.13 + T2.11a) remain open and are tracked by their own tier items,
+not closed by this ratification. Ratifying clears the completion gate CD.20 places on its gated
+items -- necessary, not sufficient; T2.11a/T2.11b's own code exit criteria are the vehicle for
+finishing the portal.
+
+**Reversal conditions:** re-open as a candidate only if the public-repo decision is reversed (the
+repo returns private) or the curated-portal-projection invariant is abandoned.
+
+**Related:** Decision 76 (the flip), Decision 83 (T2.12 GHAS + branch protection), Decision 101
+(public-content boundary this ratification upholds), Decision 105 (the ratification lane executing
+this).
+
+---
+
+## Decision 110: Ratify CD.13 -- ROADMAP-PLATFORM.yaml is the realized agent-first structured-data exemplar (scoped, necessary not sufficient) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-110 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.13, SCOPED to the realized exemplar, not the broader documentation-migration vision.
+ROADMAP-PLATFORM.yaml is pure YAML -- structured `tier_items` + `cross_tier_gates` +
+`candidate_decisions`, no narrative prose -- and is consumed as structured data by the
+planning/decision-scout/plan-critique/implement skills every session. Its own gated work (T-1.2,
+T-1.3, T-1.4, T-1.5) is complete. This Decision asserts ONLY that the roadmap itself is the realized
+agent-first structured-data exemplar; it does NOT assert the broader vision in CD.13's detail --
+"future repo documentation follows this shape; markdown-with-prose is fully retired" -- is finished.
+That broader migration is ongoing under T5.5 (INTENT-doc extraction) and is not closed by this
+ratification. Ratifying clears the completion gate CD.13 places on T-1.2..T-1.5 (already complete)
+and, via T-1.20's `related_candidate_decisions`, contributes to unwedging T-1.20 -- necessary, not
+sufficient for the broader doc-migration vision.
+
+**Reversal conditions:** re-open as a candidate only if the roadmap ceases to be the canonical
+agent-first structured-data exemplar (e.g. a return to markdown-with-prose canonical docs).
+
+**Related:** Decision 86 (rationale-to-Decisions / field-semantics-to-contracts, no new prose-
+architecture docs -- the discipline this exemplar embodies), Decision 105 (the ratification lane
+executing this); T5.5 (the ongoing broader migration this Decision does not claim finished).
+
+---
+
+## Decision 109: Ratify CD.2 -- Dev surface = Claude Code on the web; Windows VM opportunistic until T5.1 (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-109 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.2. Realized 2026-05-30 -- the CC-web (Claude Code on the web) dev surface is
+operational as the primary dev surface per Decision 76 (web-workflow-migration, PR #10) and
+`bin/setup-cloud-env.sh` static-key setup (PRs #4/#6). The Windows VM remains opportunistically
+usable until T5.1. Ratifying clears the completion gate CD.2 places on T0 -- necessary, not
+sufficient: T0.4/T0.6/T0.7+ remain outstanding and are tracked by their own tier items.
+
+**Reversal conditions:** re-open as a candidate only if CC-web ceases to be the primary dev surface.
+
+**Related:** Decision 76 (the web-workflow migration realizing it), Decision 105 (the ratification
+lane executing this).
+
+---
+
+## Decision 108: Ratify CD.1 -- ROADMAP-PLATFORM.yaml (this document) adopted as the canonical platform-sequencing source of truth (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-108 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.1. ROADMAP-PLATFORM.yaml has been the canonical platform-sequencing source of truth
+governing every `/orient`, `/plan`, `/implement` session since PR #335; the platform sections of
+ROADMAP-PRODUCT.md are superseded by it. Ratifying clears the completion gate CD.1 places on T-1
+(via the tier shortcut in its `gates` field) -- necessary, not sufficient: T-1's own open code exit
+criteria (e.g. the remaining T-1.x items) remain a separate, ongoing concern.
+
+**Reversal conditions:** re-open as a candidate only if a different canonical platform-roadmap
+document or format is adopted (foundational -- would require re-deriving every downstream
+skill/gate that reads this file).
+
+**Related:** Decision 105 (the ratification lane executing this), Decision 91 (file_decision is the
+shipped ratification vehicle, not the never-built log-decision Lambda), Decision 90 (tier-status
+flips are a separate `/implement` bookkeeping step from ratification itself).
+
+---
+
 ## Decision 107: Ratify CD.34 -- DuckLake catalog backend RDS PostgreSQL -> Neon serverless Postgres (Decision-88-amended framing) (Decided)
 
 **Status:** Decided
