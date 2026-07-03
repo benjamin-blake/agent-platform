@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.checks._scaffolding import _TRANSIENT_INIT_SIGNATURES
 from scripts.executor.acceptance_lint import lint_acceptance_command
 
 WORKFLOWS_DIR = Path(".github/workflows")
@@ -93,3 +94,20 @@ def test_drift_workflow_has_lock_skip_branch() -> None:
     assert "Error acquiring the state lock" in content, (
         "terraform-drift.yml is missing the lock-acquisition-failure skip branch"
     )
+
+
+def test_drift_workflow_init_retry_signature_parity() -> None:
+    """The init-retry grep -qE line in terraform-drift.yml must carry every signature in
+    _TRANSIENT_INIT_SIGNATURES, not merely the parity comment above it.
+
+    Anchoring on "grep -qE" alone (rather than on a signature substring like "could not
+    query provider registry") is required: the rewritten parity comment also enumerates all
+    eight signatures, so a substring anchor would let the comment satisfy this guard even if
+    the executable grep regressed.
+    """
+    lines = DRIFT_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    grep_lines = [ln for ln in lines if not ln.lstrip().startswith("#") and "grep -qE" in ln]
+    assert len(grep_lines) == 1, f"expected exactly one non-comment grep -qE line, found {len(grep_lines)}"
+    retry_line = grep_lines[0]
+    missing = [sig for sig in _TRANSIENT_INIT_SIGNATURES if sig not in retry_line]
+    assert not missing, f"terraform-drift.yml init-retry grep -qE line is missing signatures: {missing}"
