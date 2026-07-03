@@ -1,0 +1,205 @@
+schema_version: 1
+slug: "terraform-drift-retry-parity"
+intent: >-
+  Restore parity between terraform-drift.yml's terraform-init retry loop and the widened
+  _TRANSIENT_INIT_SIGNATURES so a transient provider-download network failure during a
+  scheduled drift run retries instead of reddening the drift canary, keeping the alarm a
+  signal of real infra drift rather than an upstream network flake.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-terraform-drift-retry-parity.yaml
+phase: >-
+  CI/CD reliability hardening -- ci-rca forward-fix for rec-2483 (soft-warn exception
+  category ci_rca; no tier_item). Executes Decision 73 clause 3 forward-fix model.
+scope:
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Widen the terraform-init retry `grep -qE` pattern (line 156) from the original 4
+      registry-5xx signatures to the full 8-signature set already carried by
+      scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES and the three mirrored
+      `grep -qE` sites in terraform-apply-sandbox.yml, so a provider-download network reset
+      retries. Correct the stale parity comment (lines 144-146) to enumerate all 8
+      signatures and reference the true SoT scripts/checks/_scaffolding.py (not
+      scripts/validate.py, which only re-exports the tuple).
+  - file: tests/test_terraform_drift_acceptance.py
+    action: Modify
+    purpose: >-
+      Add a regression guard test that imports _TRANSIENT_INIT_SIGNATURES from
+      scripts.checks._scaffolding and asserts every signature appears on the drift
+      workflow's init-retry `grep -qE` line, so a future widening that forgets drift.yml
+      reddens CI. Closes the root-cause gap: no test enforced drift-workflow retry parity.
+bundled_recommendations:
+  - rec-2483
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The terraform-init retry `grep -qE` pattern in .github/workflows/terraform-drift.yml
+    includes all four network-transient signatures "connection reset by peer",
+    "i/o timeout", "TLS handshake timeout", and "unexpected EOF" in addition to the
+    original four (rec-2483 acceptance anchor: grep -qE 'connection reset by peer'
+    .github/workflows/terraform-drift.yml).
+  - >-
+    The eight signatures on the drift workflow's `grep -qE` line are byte-identical to the
+    set in scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES and the three `grep -qE`
+    sites in .github/workflows/terraform-apply-sandbox.yml, keeping bash<->Python parity.
+  - >-
+    A new test in tests/test_terraform_drift_acceptance.py imports _TRANSIENT_INIT_SIGNATURES
+    and fails if any signature is absent from the drift workflow's init-retry `grep -qE`
+    line; the full drift-acceptance guard file passes.
+  - >-
+    The parity comment block in terraform-drift.yml no longer claims parity while listing a
+    subset -- it enumerates all eight signatures and references scripts/checks/_scaffolding.py.
+  - "rec-2483 is closed on merge via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the terraform-drift acceptance guard suite, including the new signature-parity
+      test and the existing structural invariants (no-apply, detailed-exitcode, lock-skip,
+      acceptance-lint). The suite loads every workflow via yaml.safe_load, so a malformed
+      drift.yml also fails here.
+    command: bin/venv-python -m pytest tests/test_terraform_drift_acceptance.py -q
+    expected: >-
+      All tests pass, including test_drift_workflow_init_retry_signature_parity.
+    fix_if: >-
+      A parity-test failure means a signature is missing from the `grep -qE` line; a
+      collection/YAML error means the workflow edit broke YAML structure.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert each of the four NEW signatures lands on an executable `grep -qE` line in
+      terraform-drift.yml (not merely in a comment), proving the retry pattern -- not just
+      the documentation -- was widened.
+    command: |-
+      for s in "connection reset by peer" "i/o timeout" "TLS handshake timeout" "unexpected EOF"; do grep -F "$s" .github/workflows/terraform-drift.yml | grep -q "grep -qE" || { echo "MISSING on grep -qE line: $s"; exit 1; }; done && echo PARITY_OK
+    expected: Prints PARITY_OK.
+    fix_if: >-
+      "MISSING on grep -qE line: <sig>" means the signature landed only in a comment or was
+      not added to the executable retry pattern at line 156.
+  - step: 3
+    phase: pre-deploy
+    action: Verify rec-2483's own acceptance criterion verbatim.
+    command: "grep -qE 'connection reset by peer' .github/workflows/terraform-drift.yml && echo REC2483_OK"
+    expected: Prints REC2483_OK (exit 0).
+    fix_if: Non-zero exit means the primary signature was not added to the workflow.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the new guard tracks the source of truth (imports the shared tuple) rather than
+      hardcoding a signature list, so it catches the NEXT un-mirrored widening -- the
+      recurrence-prevention property, not a static snapshot.
+    command: "grep -q '_TRANSIENT_INIT_SIGNATURES' tests/test_terraform_drift_acceptance.py && echo GUARD_TRACKS_SOT"
+    expected: Prints GUARD_TRACKS_SOT.
+    fix_if: >-
+      Non-zero exit means the test hardcoded the signatures instead of importing
+      _TRANSIENT_INIT_SIGNATURES from scripts.checks._scaffolding; refactor to import the SoT.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure obligation: after the squash-merge (Resolves: rec-2483) and an ops cache pull,
+      confirm rec-2483 is closed.
+    command: |-
+      bin/venv-python -m scripts.sync_ops pull && grep '"rec-2483"' logs/.recommendations-log.jsonl | grep -Eq '"status": ?"closed"' && echo REC2483_CLOSED
+    expected: Prints REC2483_CLOSED once rec-autoclose.yml has processed the Resolves trailer.
+    fix_if: >-
+      If still open, run the fallback: bin/venv-python -m scripts.ops_data_portal
+      --update-rec rec-2483 --status closed --resolution "widened terraform-drift.yml init
+      retry grep to full 8-signature parity and added a parity regression guard".
+constraints:
+  - Only modify the two files listed in scope.
+  - >-
+    Maintain bash<->Python signature parity: the drift init-retry grep must match
+    scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES exactly. All eight signatures
+    are ERE-metacharacter-free so substring (Python `in`) vs ERE (bash `grep -qE`) parity holds.
+  - >-
+    Widen ONLY the single init-retry grep site (line 156). Do NOT touch the unrelated greps
+    in the same file (the NoSuchKey/404 convergence-read grep at ~line 188, the "Error
+    acquiring the state lock" lock-skip grep at ~line 235) -- they are not init retries.
+  - >-
+    terraform-drift.yml is alarm-only (Decision 92 point 6 / Decision 77): no terraform
+    apply, no auto-remediation. This change widens init resilience only and preserves the
+    alarm-only posture; the test file's existing no-apply guard enforces it.
+  - >-
+    Do NOT add a generic "Failed to install provider" header to the pattern -- it would
+    retry genuine non-transient bad-pin failures and mask real drift (Decision 55).
+  - No rescue agents or workaround loops (Decision 55); this is a true-locus forward-fix.
+  - >-
+    Python 3.12, type hints, ruff format line length 127, ASCII hyphens, no emojis; invoke
+    Python via bin/venv-python.
+context:
+  - >-
+    rec-2483 (Medium, source=ci_rca) is the plan source per Decision 72
+    (RCA-as-Plan-Source); this plan is its sanctioned /plan consumption and resolves it. It
+    was flagged by code-review during PLAN-terraform-provider-install-retry, out of that
+    plan's 3-file scope.
+  - >-
+    Decision 73 clause 3 forward-fix-not-auto-revert governs: the fix lands forward on the
+    true locus, never as a revert.
+  - >-
+    Sibling PLAN-terraform-provider-install-retry (rec-2481, PR #400) widened
+    _TRANSIENT_INIT_SIGNATURES to 8 in scripts/checks/_scaffolding.py and the three
+    `grep -qE` sites in terraform-apply-sandbox.yml. terraform-drift.yml is a 4th,
+    independent grep site that was outside that plan's 3-file scope; its line-145 comment
+    claims parity but its line-156 grep still carries only the original 4 signatures.
+  - >-
+    Root cause: no test enforced parity between the drift workflow's retry grep and the SoT
+    tuple, so the drift persisted silently until code-review. The new guard closes that gap
+    (Decision 55 RCA-first: fix the class, not just the instance).
+  - >-
+    Decision 104: _TRANSIENT_INIT_SIGNATURES lives in scripts/checks/_scaffolding.py. This
+    plan READS but does not MODIFY that file, so the coverage-gate mapping
+    (scripts/checks/** -> tests/test_validate.py) is NOT triggered; the parity guard
+    correctly lands in the existing tests/test_terraform_drift_acceptance.py drift-guard file.
+  - >-
+    Decision 80: the guard is added as a pytest inside validate.py's suite, NOT as a new
+    ci.yml step, satisfying the validate.py single-source-of-truth invariant.
+  - >-
+    Decision 48 confirms V2: no scope file is a V3 trigger (a .github/workflows/*.yml edit
+    is not a .tf/schedule/Lambda change) and a parity unit test is the feasible oracle (a
+    registry/network outage cannot be deployed and invoked).
+  - >-
+    Decision 79: neither scope file is Lambda-packaged (a workflow YAML and a test), so no
+    per-Lambda build/deploy/smoke-test tax; corroborates V2.
+  - >-
+    No .tf files in scope -> CD.35 speculative-plan pipeline assessment does not apply; the
+    workflow edit is bash retry-parity only.
+  - "Decision-scout verdict + CITE list: NO_FLAGS; CITE = Decision 73, Decision 72, Decision 48, Decision 79, Decision 104 (74 of 74 triaged)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions adjudicated via the decision-scout gate (NO_FLAGS)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    .github/workflows/terraform-drift.yml: at line 156, append
+    "|connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF" to the
+    `grep -qE` alternation so it reads
+    '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'
+    (byte-identical to terraform-apply-sandbox.yml's three sites). Rewrite the comment at
+    lines 144-146 to enumerate all eight signatures and reference
+    scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES as the SoT (and note parity
+    with terraform-apply-sandbox.yml), replacing the stale "scripts/validate.py" reference
+    and the 4-signature "Signatures:" line. Touch no other grep in the file.
+  - >-
+    tests/test_terraform_drift_acceptance.py: add
+    test_drift_workflow_init_retry_signature_parity() that imports
+    _TRANSIENT_INIT_SIGNATURES from scripts.checks._scaffolding, reads DRIFT_WORKFLOW, and
+    asserts every signature in the tuple is a substring of the init-retry grep line. CRITICAL
+    line-selection robustness: select that line by the unique `grep -qE` token (drift.yml has
+    exactly one `grep -qE` line), NOT by "could not query provider registry" alone -- after
+    this change the rewritten parity comment ALSO enumerates all eight signatures and contains
+    that substring, so anchoring on it would let the comment satisfy the guard even if the
+    executable grep regressed, defeating the recurrence-prevention property VP step 4 locks in.
+    Equivalently, require the matched line to contain both the `grep -qE` token and each
+    signature. Follow the file's existing plain-assertion style; keep ruff line-length 127.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable
+    failure stop and RCA (Decision 55).
+  - 'Report: what was implemented and verification results; include the Resolves: rec-2483 trailer in the squash-merge commit body.'
+work_areas: []
+rollback: >-
+  Revert the two edits; the drift grep returns to the registry-5xx-only 4-signature set and
+  the guard test is removed. No state, schema, or data migration is involved.
