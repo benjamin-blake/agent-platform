@@ -1,0 +1,286 @@
+schema_version: 1
+slug: "ratify-cd25-complete-t1-12"
+intent: >-
+  Complete platform tier_item T1.12 (Ratify Class B Lambda verb contracts) by ratifying candidate
+  decision CD.25 -- the pre-codegen contract ratification ritual and the sole completion gate on
+  T1.12's last open criterion -- via the shared candidate-decision ratification lane, then closing
+  T1.12's five open exit criteria and flipping it to complete. This lands the public-surface keystone
+  of the agent platform's self-describing, drift-checked typed-verb contract discipline (North Star
+  NS.4/NS.5).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ratify-cd25-complete-t1-12.yaml
+phase: >-
+  Platform tier T1 (tier_item T1.12; follow-on to PLAN-ratify-class-b-lambda-verb-contracts). Ratifies
+  CD.25 via the Decision 105 lane. Product Phase 1 Core Infrastructure (complete).
+closes_criteria:
+  - "T1.12:c1"
+  - "T1.12:c2"
+  - "T1.12:c3"
+  - "T1.12:c4"
+  - "T1.12:c5"
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 118 (dec-118) -- "Ratify CD.25 -- pre-codegen contract ratification ritual (scoped,
+      necessary not sufficient)". The verbatim text is in execution_steps; scoped to the realized
+      ritual with reversal conditions.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      (1) Flip CD.25 to the canonical ratified shape (state: ratified + ratified_as: dec-118 +
+      filed_via: ops_decisions:dec-118 + realization_evidence). (2) Flip T1.12 exit_criteria c1-c5
+      open -> met (with met_by) and status in_progress -> complete + completed_at + progress_note.
+      (3) Discharge the CD.25-scoped bootstrap_completion_exempt subset: strip the flag on the 10
+      members gated solely by CD.25, retain it (with a note) on T0.12.5 (pending CD.29) and T0.12.7
+      (pending CD.10), and rewrite the scope-(b) "STAYS OPEN" agent_instructions annotation.
+  - file: docs/plans/PLAN-ratify-cd25-complete-t1-12.yaml
+    action: Create
+    purpose: This planning artefact.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "c1: The three DuckLake Lambda verb contracts (ducklake_writer, ducklake_reader, ducklake_maintenance) still load as class B, contract_version 1, status provisional_v0."
+  - "c2: Each contract's re_ratification_trigger.first_of parses via scripts.contracts_enforcement (check_re_ratification_trigger returns no errors; evaluate_provisional_trigger fires at high metrics, unfired at empty metrics)."
+  - "c3: Each contract's verbs map is a subset of the live handler _ACTIONS dispatch surface AND the CD.25 contract-drift gate (validate_contract_drift) passes with no drift."
+  - "c4: The Step 10 multi-perspective critique convergence on the three contract deliverables is recorded (met by the prior authoring plan PLAN-ratify-class-b-lambda-verb-contracts)."
+  - "c5: CD.25 is ratified -- docs/DECISIONS.md carries a `## Decision 118:` header, CD.25 in docs/ROADMAP-PLATFORM.yaml has state: ratified + ratified_as: dec-118 + filed_via: ops_decisions:dec-118, the validate_candidate_decision_ratification referential guard passes, and T1.12 status is complete with c1-c5 all status: met."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the three Class B contracts still hold the c1/c2/c3-substrate invariants -- class B / v1 / provisional_v0, triggers parse and fire correctly, and every documented verb is in the live handler _ACTIONS dispatch table.
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.contracts import load_contract
+      from scripts.contracts_enforcement import check_re_ratification_trigger, evaluate_provisional_trigger
+      import importlib, pathlib
+      src = pathlib.Path("docs/contracts")
+      surfaces = {
+          "ducklake_writer": ("src.lambdas.ducklake_writer.handler", {"file_ops", "update_ops", "write_ops", "create_ops_tables"}),
+          "ducklake_reader": ("src.lambdas.ducklake_reader.handler", {"read_ops_current", "read_ops_history", "named_read", "query_ops"}),
+          "ducklake_maintenance": ("src.lambdas.ducklake_maintenance.handler", {"merge", "gc", "hot_merge", "merge_ops", "catalog_reinit", "restore_drill", "catalog_stats", "reconcile_columns"}),
+      }
+      hi = {"production_invocations": 10**9, "days_since_first_production_invocation": 10**9}
+      for name, (mod, documented) in surfaces.items():
+          d = load_contract(src / f"{name}.yaml")
+          assert d.contract.class_.value == "B" and d.contract.contract_version == 1, name
+          assert d.contract.status.value == "provisional_v0", name
+          assert check_re_ratification_trigger(d) == [], (name, check_re_ratification_trigger(d))
+          assert evaluate_provisional_trigger(d, {})[0] is False, name
+          assert evaluate_provisional_trigger(d, hi)[0] is True, name
+          assert set(d.verbs) == documented, (name, set(d.verbs) ^ documented)
+          live = set(importlib.import_module(mod)._ACTIONS)
+          assert documented <= live, (name, documented - live)
+          print("OK", name, len(d.verbs), "verbs subset of live dispatch")
+      PY
+    expected: Three "OK <name> <n> verbs subset of live dispatch" lines and exit 0.
+    fix_if: An AssertionError -- a contract lost its Class B shape, a trigger stopped parsing, or a documented verb is no longer in the live handler. Do NOT edit the handler to match; correct the contract only if the code surface genuinely changed.
+  - step: 2
+    phase: pre-deploy
+    action: Run the CD.25 contract-drift gate over docs/contracts/ (c3 gate side).
+    command: |
+      bin/venv-python -c "from scripts.checks.contracts.validate_contract_drift import validate_contract_drift; f=[]; validate_contract_drift(f); assert not f, f; print('DRIFT GATE PASS')"
+    expected: Prints the gate PASS banner and "DRIFT GATE PASS"; exit 0.
+    fix_if: Any drift failure (cat-1 structural or cat-2..8) -- fix the offending contract's amendment_log / status / $ref and re-run.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm Decision 118 is authored in docs/DECISIONS.md and CD.25 carries the canonical ratified shape with agreeing ratified_as / filed_via (c5 -- the ratification landed).
+    command: |
+      bin/venv-python - <<'PY'
+      import re, yaml, pathlib
+      dec = pathlib.Path("docs/DECISIONS.md").read_text()
+      assert re.search(r"^## Decision 118:", dec, re.M), "dec-118 header missing"
+      d = yaml.safe_load(pathlib.Path("docs/ROADMAP-PLATFORM.yaml").read_text())
+      cd = next(c for c in d["candidate_decisions"] if c["id"] == "CD.25")
+      assert cd["state"] == "ratified", cd["state"]
+      assert cd["ratified_as"] == "dec-118", cd.get("ratified_as")
+      assert cd["filed_via"] == "ops_decisions:dec-118", cd.get("filed_via")
+      assert cd.get("realization_evidence"), "realization_evidence missing"
+      print("OK dec-118 authored; CD.25 ratified shape coherent")
+      PY
+    expected: Prints 'OK dec-118 authored; CD.25 ratified shape coherent' and exits 0.
+    fix_if: A missing header, a state/ratified_as/filed_via mismatch, or absent realization_evidence -- the ratification bookkeeping is incomplete; fix DECISIONS.md / the CD.25 block. (If a concurrent PR claimed 118, use the next free number consistently across the header, ratified_as, and filed_via.)
+  - step: 4
+    phase: pre-deploy
+    action: Confirm T1.12 is complete with all five criteria met and the roadmap loads through the Pydantic model (c5 -- the tier-item bookkeeping; also proves CD.25 is no longer a pending blocker).
+    command: |
+      bin/venv-python - <<'PY'
+      from scripts.platform_roadmap import load
+      d = load("docs/ROADMAP-PLATFORM.yaml")
+      it = next(i for i in d.tier_items if i.id == "T1.12")
+      assert it.status == "complete", it.status
+      assert it.completed_at, "completed_at missing"
+      crit = {c.id: c.status for c in it.exit_criteria}
+      for cid in ("c1", "c2", "c3", "c4", "c5"):
+          assert crit.get(cid) == "met", (cid, crit.get(cid))
+      cd = next(c for c in d.candidate_decisions if c.id == "CD.25")
+      assert cd.state == "ratified", cd.state
+      print("OK T1.12 complete; c1-c5 met; CD.25 ratified; roadmap loads")
+      PY
+    expected: Prints 'OK T1.12 complete; c1-c5 met; CD.25 ratified; roadmap loads' and exits 0.
+    fix_if: A Pydantic ValidationError, a criterion still open, a missing met_by (validate_platform_roadmap rule (i) -- met_by must resolve to a real PLAN-<slug>.yaml), or status not complete -- correct the T1.12 block.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the CD.25-scoped bootstrap_completion_exempt discharge is correct -- stripped on the 10 solely-CD.25-gated members, retained on the two co-gated members, and the scope-(b) annotation no longer says "STAYS OPEN".
+    command: |
+      bin/venv-python - <<'PY'
+      import yaml, pathlib
+      raw = pathlib.Path("docs/ROADMAP-PLATFORM.yaml").read_text()
+      d = yaml.safe_load(raw)
+      items = {i["id"]: i for i in d["tier_items"]}
+      stripped = ["T-1.11","T-1.12","T-1.13","T-1.14","T-1.15","T-1.16","T-1.17","T-1.18","T-1.19","T0.12.6"]
+      retained = {"T0.12.5", "T0.12.7"}
+      for tid in stripped:
+          assert not items[tid].get("bootstrap_completion_exempt", False), f"{tid} still exempt"
+      for tid in retained:
+          assert items[tid].get("bootstrap_completion_exempt") is True, f"{tid} lost its retained flag"
+      assert "STAYS OPEN (close-audit-ulf-02" not in raw, "stale scope-(b) STAYS OPEN annotation not updated"
+      assert "dec-118" in raw, "scope-(b) annotation not re-grounded onto dec-118"
+      print("OK exemption discharge correct; annotation updated")
+      PY
+    expected: Prints 'OK exemption discharge correct; annotation updated' and exits 0.
+    fix_if: A stripped member still exempt, a retained member lost its flag, or the stale "STAYS OPEN" annotation survives -- correct the scope-(b) discharge edit.
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the ratified Decision reached the ops_decisions warehouse projection via the portal (behavioural read-back; the git-tracked DECISIONS.md header + guard in steps 3/7 are the authoritative gate).
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.decisions-index.jsonl').read_text().splitlines() if l.strip()]; ids={r.get('decision_id') or r.get('id') for r in rows}; assert 'dec-118' in ids, sorted(i for i in ids if str(i).startswith('dec-11'))[-5:]; print('OK dec-118 in ops_decisions projection')"
+    expected: Prints 'OK dec-118 in ops_decisions projection' and exits 0.
+    fix_if: dec-118 absent after sync -- re-run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md`. If AWS creds are unavailable (degraded mode; verify `aws sts get-caller-identity --profile agent_platform`), this warehouse read-back is SKIPPED -- the git-tracked header + referential guard remain the authoritative ratification proof; re-file the backfill once connectivity is restored.
+  - step: 7
+    phase: pre-deploy
+    action: Run the fast presubmit tier over the working tree -- integrates the CD.25 drift gate, the validate_candidate_decision_ratification referential guard (R1 -- dec-118 header resolves; ratified_as/filed_via NNN agree), the platform-roadmap criteria-integrity guard (closes_criteria refs + met_by resolution), and the Decision 86 intent-doc-freeze gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; the Contract drift gate (CD.25), platform-roadmap schema validation, and candidate-decision ratification guard all PASS.
+    fix_if: Any FAIL line -- most likely the referential guard (dec-118 header vs ratified_as/filed_via mismatch) or the roadmap criteria integrity (a closes_criteria ref or met_by that does not resolve). Fix the named artefact and re-run.
+  - step: 8
+    phase: pre-deploy
+    action: Validate this plan artefact against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-ratify-cd25-complete-t1-12.yaml
+    expected: A PASS line stating docs/plans/PLAN-ratify-cd25-complete-t1-12.yaml validates against the PlanDocument schema.
+    fix_if: A "FAIL:" line naming the schema violation -- correct the plan field and re-run.
+constraints:
+  - "/plan DRAFTS the ratification only; the portal write and roadmap flip execute at /implement time behind an execution-time human confirmation gate (Decision 105 / the ratification-lane contract). No ops_data_portal write or CD.25 flip happens during planning."
+  - "Single Portal Invariant (Decision 84): the ops_decisions warehouse write goes ONLY through `scripts.ops_data_portal --backfill-decisions-md`. Never edit logs/.decisions-index.jsonl directly (read-only cache). Numbering authority is DECISIONS.md; the caller supplies decision_id=dec-118."
+  - "Numbering race: re-check the max `## Decision NNN:` header in docs/DECISIONS.md at execution time. Highest live is dec-117, so dec-118 is next -- but a concurrent PR may claim it. If so, shift to the next free number and update the header, ratified_as, and filed_via to the SAME number (the referential guard enforces agreement)."
+  - "Scoped ratification (necessary not sufficient, per the Decisions 106/109/110/111 precedent): dec-118 ratifies the pre-codegen contract ritual MECHANISM only. It must NOT claim the per-contract conversion applications (T-1.14/17/18/19 still not_started) are finished, and must NOT graduate the three provisional_v0 contracts to ratified (that lands later via each contract's re_ratification_trigger)."
+  - "Flag-strip safety rule: strip bootstrap_completion_exempt ONLY on scope-(b) members whose ALL gating CDs are ratified. RETAIN it (with a note) on T0.12.5 (also gated by pending CD.29) and T0.12.7 (also gated by pending CD.10). Do not leave the scope-(b) 'STAYS OPEN' annotation silently false -- rewrite it to record CD.25's ratification."
+  - "Do NOT infer criterion or item status from prose (Status-Trusted-Never-Inferred). The c1-c5 -> met and in_progress -> complete flips happen only in /implement's bookkeeping walk on a verified VP pass, for the closes_criteria this plan declares."
+  - "No Lambda build/deploy/smoke-test (exemption justified): compute_affected_artifacts flags docs/ROADMAP-PLATFORM.yaml only as a bundled assets[] entry of the active data-pipeline artifact -- not a handler/includes code file, so no dispatch or import-resolution behaviour changes. The validate_lambda_deploy_gating check is advisory (Decision 104: reds only on import/setup error, never on an asset diff); the only consumers that read the bundled roadmap (the scheduled agents) are disabled; and there is direct merged precedent -- PLAN-close-audit-ulf-02.yaml edited this same asset while ratifying CDs + stripping exemption flags at V2 with a documented deploy deferral (PRs #378/#387/#389). docs/DECISIONS.md is not Lambda-packaged."
+  - "No rescue agents or workaround loops (Decision 55). On an unrecoverable failure, stop and RCA."
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (one WARN, no BLOCK). CITE: CD.25 (the CD ratified), Decision 105 (ratification lane), Decision 84 (portal ETL + numbering authority), Decision 90 (status-flip bookkeeping is a separate /implement step), Decision 79 + CD.16 (Class B ratification precondition SATISFIED), Decision 81 + CD.33 + Decision 91 (writer/reader/maintenance closed-boundary split + 6->3 re-grounding), Decision 86 (contracts are the canonical machine-parseable home), Decision 67 (executor freeze -> IMPLEMENTATION not STRATEGIC)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round"
+  - "Scout WARN resolved by Option A (human-confirmed): the ratifying edit strips bootstrap_completion_exempt on the 10 solely-CD.25-gated scope-(b) members (T-1.11..T-1.19, T0.12.6), retains it on T0.12.5 (CD.29 pending) + T0.12.7 (CD.10 pending), and rewrites the scope-(b) annotation -- mirroring the Decisions 108-113 (close-audit-ulf-02) same-edit strip precedent."
+  - "Silent-completion check (Tier Item Freshness Gate): c1-c4 already hold in-session -- the three contracts load as Class B/v1/provisional_v0 with zero trigger errors, verbs match the live _ACTIONS dispatch, the drift gate passes over 16 ritual contracts, and c4's Step 10 critique converged in the prior authoring plan. Only c5 (CD.25 ratifies) was outstanding. Per Status-Trusted-Never-Inferred, /plan declares closes_criteria and /implement flips on the verified VP pass."
+  - "met_by assignment for the /implement flip: c1-c4 -> met_by: ratify-class-b-lambda-verb-contracts (the authoring plan that produced the deliverables; PLAN file exists). c5 -> met_by: ratify-cd25-complete-t1-12 (this plan, which ratifies CD.25; PLAN file exists post-merge). Both resolve under validate_platform_roadmap rule (i)."
+  - "Blast radius: ratifying CD.25 is monotonically unblocking. It clears the completion gate on {T-1.11..T-1.19, T0.12.5/.6/.7, T1.12} and the decision_required_before 'may start' gates on T0.13, T0.7a/b/c, T1.1, T1.3, T1.4, and T3.x telemetry verifiers -- several of which retain their own pending gating CDs (necessary, not sufficient). No item is adversely affected; bootstrap_completion_exempt is read only by scripts/platform_roadmap.py (no CI gate)."
+  - "Closure obligation: EXEMPT (no bundled recs; no Delete row and no file/Lambda/write-path/config-flag/backend X->Y cutover). The CD.25 state flip is a governance transition, not a surface retirement. The scope-(b) annotation rewrite in VP step 5 doubles as the stale-reference sweep the scout WARN required."
+  - "Main divergence: at session preflight the branch was 0 commits behind origin/main, but origin/main has SINCE advanced (branch fell ~3 behind / 1 ahead during this session). The only scope-file overlap is PR #413's edit to docs/ROADMAP-PLATFORM.yaml at the OUT-OF-SCOPE T3.16 block (c1/c2/c3 met on main vs open on the branch view); CD.25, T1.12, and the scope-(b) annotation are byte-identical to origin/main and DECISIONS.md is unchanged (max header 117 holds on both). The commit-flow rebase onto origin/main (implement skill) is expected to apply cleanly -- /implement must confirm the rebase is clean before push and re-run the VP if the T3.16 delta lands in the working tree."
+  - "Prior authoring plan PLAN-ratify-class-b-lambda-verb-contracts (REPORT-ONLY, merged) authored the three contracts and re-grounded T1.12 6->3 to the DuckLake boundary; it deliberately left T1.12 in_progress because completion is CD.25-gated. This plan is the CD.25-ratification follow-on it named."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/class-b-lambda-contracts-auhhm8)."
+  - "docs/PROJECT_CONTEXT.md read; docs/contracts/candidate-decision-ratification.yaml (the lane contract) read."
+  - "docs/DECISIONS.md read for the ratification-Decision template (Decisions 108/109/110) and current max number (117)."
+  - "T1.12 tier_item + CD.25 candidate_decision + the scope-(b) bootstrap_completion_exempt agent_instructions read in docs/ROADMAP-PLATFORM.yaml."
+  - "The three Class B contracts + their live handler _ACTIONS dispatch surfaces read; c1-c4 confirmed holding in-session."
+  - "CD.10 and CD.29 confirmed pending (so T0.12.7 / T0.12.5 retain their exemption flag)."
+  - "All scope files located and readable; acceptance criteria understood and verifiable via the real loaders + the validate.py referential guard + the drift gate."
+execution_steps:
+  - "Re-check the max `## Decision NNN:` header in docs/DECISIONS.md. Highest expected is 117; use 118 unless a concurrent PR claimed it, in which case use the next free number consistently across header + ratified_as + filed_via."
+  - |
+    Author Decision 118 in docs/DECISIONS.md (place it above Decision 117 in the descending-numbered list). Verbatim text:
+
+    ## Decision 118: Ratify CD.25 -- pre-codegen contract ratification ritual (scoped, necessary not sufficient) (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-03
+    **Warehouse ID:** dec-118 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Decision:**
+    Ratifies CD.25, SCOPED to the realized ritual -- the pre-codegen contract ratification MECHANISM,
+    not a claim that every contract application is finished. The ritual is defined (T-1.11 landed
+    docs/INTENT-pre-codegen-contract-ratification.md, complete 2026-05-20) and ENFORCED in CI (T-1.12,
+    complete 2026-06-18: the scripts/contracts.py loader + $ref resolver; the scripts/validate.py
+    validate_contract_drift gate in BOTH the --pre and full tiers, covering CD.25 rejection categories
+    1-8; the scripts/session_preflight.py v0-provisional re-ratification scan; and the
+    decomposition-hints exemption-inheritance bookkeeping rule). The drift gate passes over 16 ritual
+    contracts spanning Class A (data schemas), Class B (the three DuckLake Lambda verb contracts --
+    docs/contracts/ducklake_writer.yaml / ducklake_reader.yaml / ducklake_maintenance.yaml, all at
+    provisional_v0), and Class C (cross-system invariants) -- so the ritual is live and mandatory, not
+    voluntary discipline. The CD.16 precondition ("Class B ratification unblocks on CD.16 ratification")
+    is satisfied via Decision 79 (dec-079). Ratification transits the shared candidate-decision
+    ratification lane (Decision 105) via the ops portal, superseding the dead "ratification happens once
+    the T0.7b log-decision Lambda is deployed" premise (2026-06-09 audit F-001; Decision 91).
+
+    Ratifying clears the COMPLETION gate CD.25 places on {T-1.11..T-1.19, T0.12.5, T0.12.6, T0.12.7,
+    T1.12} and the decision_required_before "may start" gates on T0.13, T0.7a/b/c, T1.1, T1.3, T1.4,
+    and the T3.x telemetry verifiers -- necessary, NOT sufficient: it does NOT close those items' own
+    open code exit criteria, does NOT graduate the three provisional_v0 Class B contracts to ratified
+    (that lands later per each contract's re_ratification_trigger via the ULF-02 ratification lane), and
+    does NOT discharge exemptions for members still gated by another pending CD (T0.12.5 remains
+    CD.29-gated; T0.12.7 remains CD.10-gated). The CD.25-scoped bootstrap_completion_exempt subset's
+    termination event (roadmap agent_instructions scope (b): "Exemption ends at CD.25 ratification")
+    fires now; the flags on members gated solely by CD.25 are stripped in the same edit as this
+    ratification, per the Decisions 108-113 precedent and the flag-strip safety rule (strip only when
+    ALL gating CDs are ratified).
+
+    **Reversal conditions:** re-open as a candidate only if the pre-codegen contract ratification
+    ritual ceases to be the canonical mechanism -- e.g. docs/contracts/{name}.yaml stops being the
+    single canonical home for Class A/B/C field/verb/invariant semantics, or the validate_contract_drift
+    CI gate is removed so contracts no longer bind their code consumers.
+
+    **Related:** Decision 105 (the ratification lane executing this), Decision 86 (contracts are the
+    canonical machine-parseable home for field/verb semantics -- the discipline this ritual enforces),
+    Decision 79 / CD.16 (the satisfied Class B deploy-gating precondition), Decision 81 / CD.33 +
+    Decision 91 (the writer/reader/maintenance closed-boundary split the Class B contracts re-grounded
+    onto), Decision 84 (the portal ETL vehicle); T1.12 (the Class B contract wave whose completion this
+    ratification unblocks).
+  - "ETL the Decision to the warehouse: run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md`. Confirm dec-118 appears in the ops_decisions projection (VP step 6). If creds are unavailable, proceed in degraded mode and re-file the backfill once connectivity returns (the git-tracked header is the authoritative record)."
+  - |
+    Flip CD.25 in docs/ROADMAP-PLATFORM.yaml to the canonical ratified shape. Change `state: pending`
+    -> `state: ratified`; change `filed_via: pending_log_decision_lambda` -> `filed_via:
+    ops_decisions:dec-118`; add `ratified_as: dec-118`; and add a `realization_evidence` field:
+
+    realization_evidence: >-
+      Ritual realized and enforced: T-1.11 landed docs/INTENT-pre-codegen-contract-ratification.md
+      (complete 2026-05-20); T-1.12 landed the enforcement machinery (complete 2026-06-18) --
+      scripts/contracts.py loader + $ref resolver, scripts/validate.py validate_contract_drift CI gate
+      (both --pre and full tiers, CD.25 categories 1-8), scripts/session_preflight.py v0-provisional
+      re-ratification scan, and the implement-skill decomposition-hints exemption inheritance. The drift
+      gate passes over 16 ritual contracts (Class A data schemas + the three Class B DuckLake Lambda
+      verb contracts at provisional_v0 + Class C cross-system invariants). CD.16 precondition satisfied
+      via Decision 79 (dec-079). Ratified via the Decision 105 shared lane / ops portal (dec-118).
+  - |
+    Flip T1.12 in docs/ROADMAP-PLATFORM.yaml: set exit_criteria c1-c5 status: open -> status: met and
+    add met_by to each (c1/c2/c3/c4 -> met_by: ratify-class-b-lambda-verb-contracts; c5 -> met_by:
+    ratify-cd25-complete-t1-12). Set the item status: in_progress -> status: complete and add
+    completed_at: "2026-07-03". Append a progress_note line recording: "2026-07-03: CD.25 ratified
+    (dec-118) via the Decision 105 lane; c1-c5 met; T1.12 -> complete. Class B contracts stay
+    provisional_v0 (graduate later per their re_ratification_trigger)."
+  - |
+    Discharge the CD.25-scoped bootstrap_completion_exempt subset in docs/ROADMAP-PLATFORM.yaml
+    (Option A). Delete the `bootstrap_completion_exempt: true` line on the 10 members gated solely by
+    CD.25: T-1.11, T-1.12, T-1.13, T-1.14, T-1.15, T-1.16, T-1.17, T-1.18, T-1.19, T0.12.6 (the field
+    defaults to False when absent). RETAIN the line on T0.12.5 and T0.12.7. Then rewrite the scope-(b)
+    agent_instructions annotation, replacing the "STAYS OPEN (close-audit-ulf-02, 2026-07-03): CD.25 is
+    not in the CD.1/CD.2/CD.13/CD.20/CD.21/CD.26 batch ... this subset's exemption flag is untouched."
+    block with:
+
+            [DISCHARGED 2026-07-03, dec-118 (Decision 118 ratifies CD.25 via the Decision 105
+            lane)]: CD.25 ratified. Its termination event ("Exemption ends at CD.25 ratification")
+            fired; bootstrap_completion_exempt stripped in the same edit for the members gated
+            SOLELY by CD.25 -- {T-1.11, T-1.12, T-1.13, T-1.14, T-1.15, T-1.16, T-1.17, T-1.18,
+            T-1.19, T0.12.6}. RETAINED (flag kept) on T0.12.5 (also gated by pending CD.29) and
+            T0.12.7 (also gated by pending CD.10) per the flag-strip safety rule (strip only when
+            ALL gating CDs are ratified); each ends when its remaining CD ratifies.
+  - "Execute the Verification Plan -- run each step; loop until all pass. On an unrecoverable failure, stop and RCA (Decision 55); do not inline-patch around it."
+  - "Merge to main via the implement-skill commit flow (rebase onto origin/main, push, PR, subscribe, squash-merge). Include a `Resolves:` trailer only if recs were bundled (none here)."
+  - "Report: dec-118 authored + ETL'd, CD.25 flipped to ratified, T1.12 c1-c5 met + complete, the scope-(b) exemption discharge (10 stripped / 2 retained + annotation), and verification results."
+rollback: >-
+  All edits are on git-tracked files (docs/DECISIONS.md, docs/ROADMAP-PLATFORM.yaml). Pre-merge:
+  revert the branch commits. The one non-git side effect is the ops_decisions warehouse append
+  (dec-118): ops_decisions is append-only SCD2, so a mis-ratification is corrected forward by a
+  superseding Decision (never a raw DELETE) -- but since /implement runs the backfill only after the
+  DECISIONS.md text is human-confirmed, a pre-merge revert simply leaves an orphaned dec-118 row that a
+  later backfill reconciles. No Lambda/Terraform/runtime state changes.
