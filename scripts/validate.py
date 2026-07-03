@@ -142,7 +142,6 @@ from scripts.checks.ops_governance.validate_warehouse_write_sources import (  # 
     validate_warehouse_write_sources,
 )
 from scripts.checks.product.trading.validate_broker_env_reads import validate_broker_env_reads  # noqa: F401,E402
-from scripts.checks.prompts.validate_copilot_multipliers import validate_copilot_multipliers  # noqa: F401,E402
 from scripts.checks.prompts.validate_prompt_files import KNOWN_MODELS, validate_prompt_files  # noqa: F401,E402
 from scripts.checks.roadmap.check_graduation_guard import (  # noqa: E402
     _check_graduation_guard,  # noqa: F401

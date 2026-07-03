@@ -35,7 +35,7 @@ class LambdaManifest(BaseModel):
     excludes: list[str] = []  # paths under an includes[] dir to NOT stage / NOT mark affected
     assets: list[str] = []  # non-import files/dirs bundled verbatim, read at runtime
     config: list[str] = []  # config/lambda/<name>/ paths
-    pip_packages: list[str] = []  # pip-installable packages (e.g. "github-copilot-sdk==0.2.2")
+    pip_packages: list[str] = []  # pip-installable packages (e.g. "boto3==1.34.0")
     runtime_config: list[str] = []  # SSM/AppConfig paths (declared; fetch deferred)
     status: Literal["active", "stub"] = "active"
     notes: str = ""

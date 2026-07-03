@@ -9,10 +9,10 @@ from scripts.checks import _common, registry
 def validate_invariants(failed: list[str]) -> None:
     """Check codebase-level invariants that guard known failure modes.
 
-    Check 1 (@file gotcha): Scan scripts/ (excluding copilot_wrapper.py) for
-    direct copilot subprocess invocations that use '-p @file' without an inline
-    instruction string -- this causes agentic models to implement specs rather
-    than plan against them (see 'Copilot CLI @file vs user message' gotcha).
+    Check 1 (@file gotcha): Scan scripts/ for direct copilot subprocess
+    invocations that use '-p @file' without an inline instruction string --
+    this causes agentic models to implement specs rather than plan against
+    them (see 'Copilot CLI @file vs user message' gotcha).
 
     Check 2 (mock count): Verify that the subprocess.run calls added to
     cleanup_after_merge() in scripts/executor/postflight.py are covered by the
@@ -25,15 +25,11 @@ def validate_invariants(failed: list[str]) -> None:
 
     # -----------------------------------------------------------------------
     # Check 1: @file without instruction in copilot subprocess calls
-    # Scan all scripts EXCEPT copilot_wrapper.py (the canonical implementation).
-    # If any other script constructs a copilot command with '-p @file' (without
-    # a preceding instruction string), flag it.
+    # If any script constructs a copilot command with '-p @file' (without a
+    # preceding instruction string), flag it.
     # -----------------------------------------------------------------------
-    wrapper_path = scripts_dir / "copilot_wrapper.py"
     at_file_pattern = re.compile(r'"-p"\s*,\s*f?"@')
     for py_file in sorted(scripts_dir.glob("**/*.py")):
-        if py_file.resolve() == wrapper_path.resolve():
-            continue
         content = py_file.read_text(encoding="utf-8")
         for m in at_file_pattern.finditer(content):
             line_num = content[: m.start()].count("\n") + 1

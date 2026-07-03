@@ -13,7 +13,6 @@ def validate_imports(failed: list[str]) -> None:
     import sys
 
     modules = [
-        ("copilot_wrapper", _common.ROOT / "scripts" / "copilot_wrapper.py"),
         ("execute_recommendation", _common.ROOT / "scripts" / "execute_recommendation.py"),
         ("classify_risk", _common.ROOT / "scripts" / "classify_risk.py"),
     ]

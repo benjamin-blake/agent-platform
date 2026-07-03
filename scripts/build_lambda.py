@@ -113,8 +113,6 @@ DUCKLAKE_LAYER_NAMES = (
 _LAMBDA_SCRIPTS = [
     "__init__.py",
     "aws_profile.py",
-    "copilot_sdk_client.py",
-    "copilot_wrapper.py",
     "github_models_client.py",
     "llm_client.py",
     "llm_utils.py",
@@ -124,8 +122,6 @@ _LAMBDA_SCRIPTS = [
     "telemetry_schemas.py",
     "tool_runtime.py",
 ]
-
-_COPILOT_SDK_PACKAGE = "github-copilot-sdk==0.2.3"  # 0.2.2 yanked from PyPI; manifest pip_packages is the live pin
 
 _LAMBDA_FUNCTION_NAMES = [
     "agent-platform-scheduled-agent-dispatcher",
@@ -231,10 +227,7 @@ def _zip_staged_dir(stage_dir: Path, zip_path: Path) -> Path:
             if f.is_file():
                 arcname = str(f.relative_to(stage_dir))
                 info = zipfile.ZipInfo(arcname)
-                if "copilot/bin/" in arcname.replace("\\", "/") and not arcname.endswith(".py"):
-                    info.external_attr = 0o755 << 16  # Unix executable bit
-                else:
-                    info.external_attr = 0o644 << 16
+                info.external_attr = 0o644 << 16
                 zf.writestr(info, f.read_bytes())
     return zip_path
 
@@ -251,7 +244,7 @@ def build_app_package(temp_dir: Path) -> Path:
     app_dir = temp_dir / "app"
     app_dir.mkdir(parents=True)
 
-    print("  Installing Copilot SDK into app package...")
+    print("  Installing pip dependencies into app package...")
     stage_bundle(manifest, app_dir, skip_pip=False)
 
     zip_path = OUTPUT_DIR / "data-pipeline.zip"
@@ -261,7 +254,7 @@ def build_app_package(temp_dir: Path) -> Path:
 def build_ops_compaction_package(temp_dir: Path) -> Path:
     """Create ops-compaction.zip from the ops-compaction manifest (manifest-driven, CD.24).
 
-    Minimal zip -- no Copilot SDK to stay under the 262 MB Lambda+AWSSDKPandas limit.
+    Minimal zip -- no pip dependencies to stay under the 262 MB Lambda+AWSSDKPandas limit.
     All bundled files are explicitly declared in src/lambdas/ops-compaction/manifest.yaml.
     """
     from scripts.lambda_manifest import load, stage_bundle  # noqa: PLC0415
@@ -695,10 +688,9 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
 
     Uses ``aws lambda update-function-code`` with --s3-bucket and
     --s3-key.  Dispatcher and findings-processor use the full
-    ``data-pipeline.zip`` (which includes the Copilot SDK).  The
-    ops_compaction Lambda uses the minimal ``ops-compaction.zip``
-    (no Copilot SDK) to stay under the 262 MB combined-with-layers
-    size limit imposed by the attached AWSSDKPandas layer.
+    ``data-pipeline.zip``.  The ops_compaction Lambda uses the minimal
+    ``ops-compaction.zip`` (no pip dependencies) to stay under the 262 MB
+    combined-with-layers size limit imposed by the attached AWSSDKPandas layer.
 
     ``only_ducklake`` scopes the deploy to the two DuckLake functions (T2.17), leaving the prod
     functions untouched (Decision 79 affected-artifact hygiene).
@@ -808,7 +800,7 @@ def _run_prod_build(args: argparse.Namespace) -> None:
         app_zip = build_app_package(temp_dir)
         print(f"  OK data-pipeline.zip ({round(app_zip.stat().st_size / 1024 / 1024, 2)} MB)")
 
-        print("[1b/4] Building ops-compaction package (no Copilot SDK, manifest-driven)...")
+        print("[1b/4] Building ops-compaction package (no pip dependencies, manifest-driven)...")
         ops_zip = build_ops_compaction_package(temp_dir)
         print(f"  OK ops-compaction.zip ({round(ops_zip.stat().st_size / 1024 / 1024, 2)} MB)")
 

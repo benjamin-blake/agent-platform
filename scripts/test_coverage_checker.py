@@ -157,7 +157,7 @@ def check_per_file_coverage(source_files: list[Path]) -> list[str]:
                 proc.communicate(timeout=300)
             except subprocess.TimeoutExpired:
                 # Kill entire process tree to prevent orphan accumulation
-                from scripts.copilot_wrapper import kill_process_tree
+                from scripts.llm_utils import kill_process_tree
 
                 kill_process_tree(proc.pid)
                 proc.wait()

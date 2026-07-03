@@ -2,6 +2,116 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 117: Executor self-modification boundary -- capabilities.yaml is the code-level SSOT (Supersedes Decision 44) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-117 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Supersedes Decision 44. Restates the executor self-modification boundary: the executor must not
+modify its own code, prompts, instructions, or tests. `config/agent/executor/capabilities.yaml`
+(`boundary_patterns`) is named as the code-level single source of truth -- loaded by
+`validate_executor_boundary()` in `scripts/validate.py` and `scripts/migrate_dq_ops_recs.py`.
+`scripts/classify_automatable.py` carries a hardcoded duplicate list for the same purpose; both
+were cleaned in the same session (ULF-05 audit closure) to drop the `copilot_wrapper.py` and
+`tests/test_copilot_wrapper` boundary rows, since those files are deleted (ULF-05 Copilot-SDK
+retirement). Enforcement mechanism (`validate_executor_boundary`, `select_next_batch` scope
+checks) is unchanged from Decision 44 -- this decision only corrects which file is the named
+authority and removes dead rows.
+
+**Reversal conditions:** revisit if `classify_automatable.py`'s duplicate list drifts from
+`capabilities.yaml` again without a lockstep fix, or if a future decomposition of the boundary
+SSOT into multiple files reintroduces the sync-drift risk this decision closes.
+
+**Related:** Decision 44 (superseded), Decision 116 (companion decision in the same ULF-05 audit
+closure session), audits/unclosed-loops-44ef5c6.yaml ULF-05.
+
+---
+
+## Decision 116: Scheduled-agent provider routing -- routine/non-agentic agents to LiteLLM (DeepSeek), judgment/agentic agents to claude -p (Supersedes Decision 49; amends CD.28's scheduled-agent clause) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-116 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Supersedes Decision 49. Amends CD.28's scheduled-agent reconciliation clause (`docs/ROADMAP-PLATFORM.yaml`
+candidate_decisions), which previously stated scheduled agents "also move to LiteLLM" as a blanket
+rule. That blanket framing is replaced with a split using CD.28's own non-agentic/agentic
+distinction:
+
+- **Routine/non-agentic agents** (doc-freshness, orphan-code, code-smell) -- single-shot findings
+  calls with no tool use -- route to LiteLLM Tier 1 (DeepSeek-direct), consistent with CD.28's
+  standing "non-agentic LLM call site -> LiteLLM-only" rule.
+- **Judgment-heavy agents** (rec-curator, transcript-review, prompt-quality) -- become AGENTIC
+  (tool-using) via `claude -p` (Claude Code headless mode, Max-plan OAuth per the AGENTS.md
+  `CLAUDE_CODE_OAUTH_TOKEN` runbook), and are thereby carved out of the non-agentic rule by CD.28's
+  own text. `claude -p` additionally restores agentic tool use for these agents, retiring the
+  `_preload_rec_curator_context` inline-data-injection workaround once the migration lands (the
+  function itself is retained unchanged in this session; only its copilot-sdk/gemini call guard
+  was removed since those providers are retired below).
+
+As part of this decision, the `copilot-sdk` and `gemini` providers are RETIRED from the scheduled-agent
+provider set effective this session: `scripts/copilot_sdk_client.py` and the handler dispatch
+branches (`_invoke_copilot_sdk`, `_invoke_gemini`, `_get_gemini_api_key`) are deleted from
+`src/data/handlers/scheduled_agent_handler.py`. An agent still declaring either provider in
+`.github/agents/schedule.yaml` raises `RetiredProviderError`, which is caught locally and recorded
+as a failed invocation (no silent misroute to `github-models`). Realization of the LiteLLM/claude -p
+routing itself is owned by T4.3 / PLAN-resolve-scheduled-agent-provider -- this session retires the
+dead provider paths and reconciles the roadmap text; it does not implement the new routing.
+`.github/agents/schedule.yaml`'s six `enabled: true` flags are flipped to `enabled: false` to match
+the deployed dispatcher's `SCHEDULED_AGENTS_ENABLED=false` reality (the schedule.yaml `enabled`
+field previously lied about live dispatch state); `provider` fields are left unchanged (T4.3-owned).
+
+**Reversal conditions:** revisit scheduled-agent provider routing on shared Anthropic Max-pool
+capacity contention between executor Tier-2 and scheduled-agent `claude -p` usage, or on
+cost_projection triggers documented in the CD.28 tier model.
+
+**Related:** Decision 49 (superseded), CD.28 (amended -- scheduled-agent reconciliation clause,
+PLAN-resolve-scheduled-agent-provider inventory entry, T4.3 intent line all updated in lockstep in
+this session), Decision 52 (gemini BYOK deprecation, now fully retired rather than merely
+deprecated), Decision 117 (companion decision in the same session), audits/unclosed-loops-44ef5c6.yaml
+ULF-05.
+
+---
+
+## Decision 115: Transient handoffs ride PR descriptions; docs/handoffs/ pattern retired (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-115 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+The `docs/handoffs/` directory pattern (standing markdown files documenting in-flight
+apply/migration state between sessions, e.g. `HANDOFF-ducklake-lambda-runtime-apply.md`) is
+retired. Future transient handoffs split into two halves instead:
+
+- **Ephemeral half** (what changed, what to verify, what's still pending) rides the PR description
+  of the PR that created the handoff need -- visible to the next session via the PR's own history,
+  with no separate file to go stale or require self-destruction instructions.
+- **Durable half** (any exit criterion, decision, or contract implication that must survive past
+  the PR) is captured directly in the plan's YAML (`docs/plans/PLAN-{slug}.yaml` acceptance
+  criteria / context) or in `docs/ROADMAP-PLATFORM.yaml` exit criteria -- the structured,
+  machine-parseable stores that are already the canonical persistence surfaces (AGENTS.md
+  "Agent-First Repository" section).
+
+No guard is added: this decision does not introduce a `validate.py` check forbidding new files
+under `docs/handoffs/`, since the pattern is retired by convention (the directory's sole occupant,
+`HANDOFF-ducklake-lambda-runtime-apply.md`, is deleted in this same session per its own
+self-destruction instructions, and `docs/handoffs/` is now empty) rather than by mechanical
+enforcement -- consistent with Decision 86's "no new standing prose-architecture docs" spirit
+without adding a new enforcement surface for a directory that no longer has an intended use.
+
+**Reversal conditions:** revisit if a future workflow demonstrates a genuine need for
+handoff state that outlives both the originating PR description and the plan/roadmap
+structured stores.
+
+**Related:** Decision 86 (no new standing prose-architecture docs; rationale->Decisions,
+forward-intent->tier_items), audits/unclosed-loops-44ef5c6.yaml ULF-12.
+
+---
+
 ## Decision 114: Raise the ROADMAP-PLATFORM.yaml size ceiling to 10,000 lines and add a deterministic guard (supersedes KG.11's 2500-line/50K-token trigger) (Decided)
 
 **Status:** Decided

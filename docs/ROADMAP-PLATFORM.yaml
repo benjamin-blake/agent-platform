@@ -1124,14 +1124,25 @@ candidate_decisions:
         - Supersedes Decision 40 (Copilot SDK + Bedrock planning, decided-deferred). Both halves moot --
           Copilot SDK retired via Decision 49 (LiteLLM subsumes the BYOK pattern); Bedrock-as-planning-
           backend retired by this CD.
-        - Aligns with Decision 49 (Copilot SDK retirement). Reconciliation note: Decision 49 retired
-          Copilot SDK as a Lambda inference provider for SCHEDULED AGENTS specifically (the path used in
-          .github/agents/schedule.yaml with provider: copilot-sdk). CD.28 commits the executor (T4.x)
-          and any non-agentic LLM call site to LiteLLM-only. The scheduled-agent provider state remains
-          governed by Decision 49 until the follow-on PLAN-resolve-scheduled-agent-provider lands (see
-          Follow-on plan inventory below) -- at which point scheduled agents also move to LiteLLM,
-          retiring the last Copilot SDK code path. CD.28 does NOT immediately retire schedule.yaml's
-          copilot-sdk provider -- that's the follow-on plan's job.
+        - Aligns with Decision 116 (supersedes Decision 49; scheduled-agent provider routing).
+          Reconciliation note: Decision 49 originally retired Copilot SDK as a Lambda inference
+          provider for SCHEDULED AGENTS specifically (the path used in .github/agents/schedule.yaml
+          with provider: copilot-sdk). CD.28 commits the executor (T4.x) and any non-agentic LLM call
+          site to LiteLLM-only -- that rule STANDS. Decision 116 splits the scheduled-agent provider
+          state using CD.28's own non-agentic/agentic distinction: routine/non-agentic agents
+          (doc-freshness, orphan-code, code-smell) -> LiteLLM Tier 1 (DeepSeek-direct), consistent
+          with the non-agentic->LiteLLM rule; judgment-heavy agents (rec-curator, transcript-review,
+          prompt-quality) become AGENTIC (tool-using) via claude -p (Claude Code headless, Max OAuth)
+          and are thereby carved out of the non-agentic rule by CD.28's own text. The scheduled-agent
+          provider state remains governed by Decision 116 until the follow-on
+          PLAN-resolve-scheduled-agent-provider lands (see Follow-on plan inventory below) -- at which
+          point the routine agents move to LiteLLM and the judgment agents move to claude -p, retiring
+          the last Copilot SDK dependency. The copilot-sdk/gemini dispatch code paths themselves
+          (scripts/copilot_sdk_client.py, the handler's _invoke_copilot_sdk/_invoke_gemini branches)
+          were deleted by PLAN-close-audit-findings-ulf-05-06-12 (2026-07-03); an agent still declaring
+          either provider now raises RetiredProviderError instead of silently dispatching. CD.28 does
+          NOT retire schedule.yaml's copilot-sdk provider FIELD -- that migration is still the
+          follow-on plan's job (T4.3-owned).
         - Preserves Decision 47 (lock-in lesson) via Anthropic-direct serving the warm-fetched-escape-hatch role.
         - Preserves INTENT-provider-agnostic-executor.md's LiteLLM Layer-1 commitment. The provider
           adapter changes its routed tier; the abstraction does not change.
@@ -1190,16 +1201,27 @@ candidate_decisions:
           CD.13 + CD.25 are designed to prevent.
 
         - PLAN-resolve-scheduled-agent-provider (priority medium)
-          Scope: migrate .github/agents/schedule.yaml entries from provider: copilot-sdk to provider:
-          litellm with tier-1 (DeepSeek) or tier-2 (Anthropic) model selection per agent. Update
-          src/data/handlers/scheduled_agent_handler.py to dispatch via LiteLLM (likely concurrent with
-          or after PLAN-retire-bedrock-code-paths). Decision 49's Copilot SDK commitment for scheduled
-          agents is retired by this plan; file as the formal supersession.
+          Scope (Decision 116 routing): migrate .github/agents/schedule.yaml entries per agent
+          judgment tier -- routine/non-agentic agents (doc-freshness, orphan-code, code-smell) get
+          provider: litellm with tier-1 (DeepSeek) model selection; judgment/agentic agents
+          (rec-curator, transcript-review, prompt-quality) get provider: claude-p (Claude Code
+          headless, Max OAuth per the AGENTS.md CLAUDE_CODE_OAUTH_TOKEN runbook), restoring agentic
+          tool use and retiring the _preload_rec_curator_context inline-data-injection workaround.
+          Update src/data/handlers/scheduled_agent_handler.py to dispatch via LiteLLM for the
+          routine tier and via claude -p for the judgment tier (likely concurrent with or after
+          PLAN-retire-bedrock-code-paths). The dead copilot-sdk/gemini dispatch code (scripts/
+          copilot_sdk_client.py, _invoke_copilot_sdk/_invoke_gemini) was already deleted by
+          PLAN-close-audit-findings-ulf-05-06-12 (2026-07-03); this follow-on plan implements the
+          replacement routing and flips schedule.yaml's provider fields + enabled: true (both
+          currently untouched: enabled is false as of 2026-07-03, matching the deployed
+          SCHEDULED_AGENTS_ENABLED=false reality). Decision 49's Copilot SDK commitment for scheduled
+          agents was already retired by Decision 116; file as the formal routing implementation.
           Gating: touches Lambda-packaged code (scheduled_agent_handler.py) and schedule.yaml --
           CD.16 per-Lambda gating applies (deploy no longer frozen per Decision 79; dispatcher
           smoke-test deferred until T4.3).
-          Rationale: CD.28 commits the architecture to LiteLLM-only; scheduled-agent provider state
-          must reconcile or the architecture is internally contradictory.
+          Rationale: CD.28 commits non-agentic call sites to LiteLLM-only; Decision 116 resolves the
+          scheduled-agent split so the architecture is internally consistent (no residual copilot-sdk
+          dispatch, no blanket LiteLLM-for-everything claim that ignores judgment agents' agentic need).
 
         - PLAN-cost-reconciliation-job (priority low)
           [Built 2026-07-02]: implemented by scripts/cost_reconciliation.py +
@@ -6877,6 +6899,11 @@ tier_items:
     effort: L
     strategic: true
     status: not_started
+    progress_note: >-
+      - 2026-07-03 (PLAN-close-audit-findings-ulf-05-06-12): note for T4.1's emit_telemetry Lambda --
+        the replacement for the local write sites in scripts/execute_recommendation.py (Decision
+        59/95's telemetry emission) is this item's emit_telemetry deterministic-glue Lambda, not a
+        continuation of the frozen (Decision 67) local write path.
     decomposition_hints:
       split_by: subsystem
       atomic_plans:
@@ -6942,6 +6969,11 @@ tier_items:
     effort: XL
     strategic: true
     status: not_started
+    progress_note: >-
+      - 2026-07-03 (PLAN-close-audit-findings-ulf-05-06-12): note for T4.2:c3 (per-turn telemetry via
+        agent_sdk) -- this is the replacement for the local write sites in
+        scripts/execute_recommendation.py:226-268/:378-381 (Decision 59/95's telemetry emission),
+        which stay frozen (Decision 67) and unmodified until this item's agent_sdk shim lands.
     decomposition_hints:
       split_by: per_persona
       atomic_plans:
@@ -6969,8 +7001,12 @@ tier_items:
       self-hosted runner, retired by CD.21/Decision 73). CD.27 keeps both options open; T4.3 atomic
       plans pick one.
 
-      Either way, findings write via log-rec Lambda; telemetry emits via agent_sdk; LLM transport is
-      LiteLLM per CD.28.
+      Either way, findings write via log-rec Lambda; telemetry emits via agent_sdk; LLM transport
+      splits per Decision 116 (supersedes Decision 49; amends CD.28's scheduled-agent clause):
+      routine/non-agentic agents (doc-freshness, orphan-code, code-smell) -> LiteLLM Tier 1
+      (DeepSeek-direct) per CD.28; judgment/agentic agents (rec-curator, transcript-review,
+      prompt-quality) -> claude -p (Claude Code headless, Max OAuth), carved out of CD.28's
+      non-agentic->LiteLLM rule by CD.28's own agentic/non-agentic distinction.
     depends_on: [T4.1, T0.7a, T0.8]
     files_in_scope:
       - terraform/scheduled_agents.tf
@@ -7007,6 +7043,12 @@ tier_items:
         -- the surviving .github/prompts/scheduled/ (x7 files) and .github/agents/schedule.yaml
         are live runtime surfaces owned by this item, not T5.3. Deletion + consumer repoint blocked
         on T4.3 re-homing the scheduled-agent loop onto the CD.27/CD.28 substrate.
+      - 2026-07-03 (PLAN-close-audit-findings-ulf-05-06-12): retired the dead copilot-sdk/gemini
+        provider dispatch from src/data/handlers/scheduled_agent_handler.py (RetiredProviderError
+        replaces the silent misroute risk) and flipped .github/agents/schedule.yaml's six
+        `enabled: true` flags to `enabled: false` to match the deployed dispatcher's
+        SCHEDULED_AGENTS_ENABLED=false reality. Provider fields and c5's deletion/repoint remain
+        open, still owned by this item's Decision-116 realization / PLAN-resolve-scheduled-agent-provider.
   - id: T4.4
     tier: T4
     name: Autonomy maturity gates A0-A5 (STRATEGIC)

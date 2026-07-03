@@ -18,14 +18,8 @@ If any of these are missing from a plan that touches handlers here, the plan is 
 - Scheduled-agent handlers route by the `provider` field in `.github/agents/schedule.yaml` — not by `LLM_PROVIDER` env var.
 - `agent-platform-data-lake` is the agent log bucket for cron workflows. Don't write to other buckets unless the plan explicitly says so.
 
-## Subprocess gotcha (Copilot SDK legacy)
-The Copilot CLI binary extracts to `$HOME` at startup. Lambda has no home directory for the sandbox user — handlers spawning Copilot subprocesses must pass `SubprocessConfig(env={"HOME": "/tmp"})`. Same applies to any future model-CLI subprocess.
-
-## Auth gotcha (Copilot SDK legacy)
-`SubprocessConfig(github_token=...)` requires an OAuth token (`gho_` prefix from `gh auth token`), NOT a classic PAT (`ghp_`). The Copilot API rejects PATs with `400 Personal Access Tokens are not supported`. Refresh via `aws secretsmanager put-secret-value --secret-id agent-platform-github-pat --secret-string "$(gh auth token)"`.
-
 ## Model ID format reminder
-Copilot SDK model IDs (e.g., `claude-haiku-4.5`, `claude-sonnet-4.6`) differ from Bedrock format (revoked for this account) and GitHub Models IDs (e.g., `gpt-5-mini`). Do not interchange — see `docs/contracts/inference-provider.md` and Decision 49.
+Model IDs differ by provider -- e.g., legacy Copilot SDK IDs (`claude-haiku-4.5`, `claude-sonnet-4.6`) vs. GitHub Models IDs (e.g., `gpt-5-mini`). Do not interchange — see `docs/contracts/inference-provider.md` and Decision 116 (supersedes Decision 49).
 
 ## awswrangler 3.x gotchas
 - `temp_s3_dir` was renamed `temp_path`. Verify `awswrangler.__version__` before calling, or pin in `requirements.txt`.

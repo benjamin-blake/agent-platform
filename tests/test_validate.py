@@ -1006,11 +1006,6 @@ class TestValidateInvariants:
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
 
-        # Wrapper file: using "-p", "@..." is allowed here
-        (tmp_path / "scripts" / "copilot_wrapper.py").write_text(
-            'cmd.extend(["-p", f"@{prompt_file}"])\n',
-            encoding="utf-8",
-        )
         # Other script: no @file pattern
         (tmp_path / "scripts" / "other.py").write_text(
             'subprocess.run(["git", "status"])\n',
@@ -1043,16 +1038,14 @@ class TestValidateInvariants:
 
         assert failed == []
 
-    def test_fails_on_at_file_without_instruction_in_non_wrapper(self, tmp_path: Path) -> None:
-        """Fails when a script other than copilot_wrapper.py uses '-p', '@file' pattern."""
+    def test_fails_on_at_file_without_instruction(self, tmp_path: Path) -> None:
+        """Fails when a script uses '-p', '@file' pattern without an instruction string."""
         scripts_dir = tmp_path / "scripts" / "executor"
         scripts_dir.mkdir(parents=True)
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
 
-        # copilot_wrapper.py: excluded from check
-        (tmp_path / "scripts" / "copilot_wrapper.py").write_text("# wrapper\n", encoding="utf-8")
-        # Another script that uses the bad pattern
+        # A script that uses the bad pattern
         (tmp_path / "scripts" / "bad_script.py").write_text(
             'cmd.extend(["-p", f"@{some_file}"])\n',
             encoding="utf-8",
@@ -1084,7 +1077,6 @@ class TestValidateInvariants:
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
 
-        (tmp_path / "scripts" / "copilot_wrapper.py").write_text("# wrapper\n", encoding="utf-8")
         # postflight: 12 subprocess.run calls (many, simulate a bloated function)
         postflight_src = "def cleanup_after_merge(branch):\n"
         for i in range(12):
@@ -2339,7 +2331,6 @@ class TestGraduationGuard:
         with (
             patch("validate._check_graduation_guard") as mock_guard,
             patch("validate.run_lint_checks"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("scripts.checks._common.run", return_value=MagicMock(stdout="agent/test\n", returncode=0)),
@@ -2824,7 +2815,6 @@ class TestPreModeDiffAware:
             patch("scripts.checks._common.get_changed_files", return_value=changed),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -2852,7 +2842,6 @@ class TestPreModeDiffAware:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -2879,7 +2868,6 @@ class TestPreModeDiffAware:
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -2906,7 +2894,6 @@ class TestPreModeDiffAware:
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "tests/test_validate.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -2936,7 +2923,6 @@ class TestPreModeDiffAware:
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_validate.py"]),
             patch("scripts.checks._common.run", side_effect=exit5_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -2971,7 +2957,6 @@ class TestPreModePytestSelection:
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -3000,7 +2985,6 @@ class TestPreModePytestSelection:
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
             patch("scripts.checks._common.run", side_effect=exit5_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -3025,7 +3009,6 @@ class TestPreModePytestSelection:
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 1.0]),
@@ -3050,7 +3033,6 @@ class TestBudgetAssertion:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate._file_budget_breach_rec"),
@@ -3072,7 +3054,6 @@ class TestBudgetAssertion:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate._file_budget_breach_rec"),
@@ -3093,7 +3074,6 @@ class TestBudgetAssertion:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
@@ -3119,7 +3099,6 @@ class TestIgnoreBudgetFlag:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
@@ -3140,7 +3119,6 @@ class TestIgnoreBudgetFlag:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
@@ -3161,7 +3139,6 @@ class TestIgnoreBudgetFlag:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
@@ -3183,7 +3160,6 @@ class TestIgnoreBudgetFlag:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 400.0]),
@@ -3232,7 +3208,6 @@ class TestIgnoreBudgetCIGuard:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=[0.0, 60.0]),
@@ -3656,7 +3631,6 @@ class TestSlocLimitsInPreMode:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_sloc_limits", side_effect=capture_sloc),
@@ -3686,7 +3660,6 @@ class TestSlocLimitsInPreMode:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_cc_limits", side_effect=capture_cc),
@@ -4501,7 +4474,6 @@ class TestPreModeChecks:
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
             patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_copilot_multipliers"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),

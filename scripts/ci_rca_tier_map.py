@@ -22,7 +22,6 @@ _FAST_TIER_BUDGET_SECONDS = 300
 _KNOWN_EXTERNAL_DEP_CHECKS: frozenset[str] = frozenset(
     {
         "validate_iam_runner_policy",
-        "validate_copilot_multipliers",
         "validate_outbox_staleness",
         "validate_warehouse_write_sources",
         "validate_dq_manifest_gate",
