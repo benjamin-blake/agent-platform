@@ -33,10 +33,15 @@ scope:
       load-bearing metric -- is underivable from the warm cache. The marker rides the EXISTING
       context_v2_json blob as a portal-derived optional field on CiRcaContext
       (warn_mode_reject: Optional[dict] = {reasons: list[str], mode_at_write: "warn"}) -- Decision-66
-      Tier-B (portal-derived, agent never sets it), NOT a new SCD2 column (Decision 103/84). The portal
-      re-serialises context_v2_json with the marker before the write in each warn-would-reject branch.
-      Strict-mode rejections raise before any write (no rec created), so strict rejection-by-reason
-      counts remain deferred to telemetry Phase 4 (T2.36) -- documented, not silently dropped.
+      Tier-B (portal-derived, agent never sets it), NOT a new SCD2 column (Decision 103/84). The
+      schema-deficiency branch is in file_rec (context_v2_json in scope), but the bundle-absent, S3-
+      missing and cross-check-disagreement branches live in helper functions (_run_ci_rca_cross_check and
+      the bundle/S3 helpers) that today only logger.warning()/raise and return None -- stamping from
+      them requires mutating the SHARED context_v2_json dict in place (passed in around L332) BEFORE the
+      json.dumps at ~L941, gated so strict mode (which raises) never stamps. schema_version stays at 1
+      (additive optional portal-derived field; the model's le=2 already permits future use, no bump
+      needed). Strict-mode rejections raise before any write (no rec created), so strict rejection-by-
+      reason counts remain deferred to telemetry Phase 4 (T2.36) -- documented, not silently dropped.
   - file: scripts/ci_rca_back_validation.py
     action: Create
     purpose: >-
@@ -49,8 +54,13 @@ scope:
       flag for /plan cross-check (Decision 55: surfacing-only, links the prior rec, never remediates;
       Decision 57 loop-closure "proof a fix reduced the failure mode"). context_v2_json is parsed from
       the JSON-string cache field exactly as ci_rca_probe_health._row_rca_confidence does. Match key is
-      the rec.file plus the closed rec carrying a preventive_action (context_v2_json has no explicit
-      failure_category field; enrichment noted as future tightening in the INTENT). No new NAMED_READS
+      FILE-ONLY (rec.file) plus the closed rec carrying a preventive_action -- the roadmap c12(iii)
+      "failed_check + failure_category (bundle-derived)" match is DEFERRED because context_v2_json has no
+      failure_category field today (a c9-style enrichment would add it); this is a materially weaker
+      heuristic than the criterion's written spec, disclosed in both the ROADMAP c12(iii) re-grounding
+      and the INTENT amend so the c12 -> met flip is honest, and file-only matching over-pairs on high-
+      churn files (e.g. scripts/validate.py), which the INTENT notes so /plan treats flags as candidates
+      only (Decision 55 surfacing-only, never remediates). No new NAMED_READS
       verb, no Lambda redeploy: the warm cache already carries context_v2_json for all rows (open +
       closed), so the roadmap c12(iii) "needs a server-side json_extract reader verb" assumption is
       superseded (re-grounded in ROADMAP scope below).
@@ -81,9 +91,14 @@ scope:
       bundle-upload backlog, override usage) versus DEFERRED to telemetry Phase 4 (strict-mode rejection-
       by-reason counts and cross-check disagreement rate on rejected writes -- no rec is created on a
       strict rejection). Document the warn_mode_reject marker (Tier-B portal-derived, rides
-      context_v2_json), the back-validation preventive-regression surfacing, and the 25%/5% alert
-      thresholds. Route the mandated first threshold-tuning follow-on to a FILED REC (do not add standing
-      prose enumerating it) -- Decision 86 field-semantics/forward-intent routing.
+      context_v2_json) and the back-validation preventive-regression surfacing (including that the match
+      is FILE-ONLY and the failed_check+failure_category match is deferred until a failure_category field
+      lands in context_v2_json, and that file-only matching over-pairs on high-churn files so /plan treats
+      flags as candidates only). Of Section 7.2's three thresholds, state that the 25% warn-alert and 5%
+      Phase-4-promotion-gate are cache-derivable and surfaced, while the 10% strict-mode-rejection alert is
+      DEFERRED with the strict rejection-by-reason counts to telemetry Phase 4 (T2.36) -- so the amend does
+      not read as silently dropping the third threshold. Route the mandated first threshold-tuning follow-on
+      to a FILED REC (do not add standing prose enumerating it) -- Decision 86 field-semantics/forward-intent routing.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -91,11 +106,15 @@ scope:
       Inferred): c1 -> status: met, met_by: ci-rca-observability-dashboard (all six follow-on plans now
       landed); c12 -> status: met, met_by: ci-rca-observability-dashboard (part iii back-validation
       landed cache-derived). Add a c3 progress note (warn-mode reject-rate gauge built; c3 stays OPEN
-      until 7 days of sub-5% data accrue). Re-ground c12(iii)'s "the join needs a NEW ducklake_reader
-      named-read verb with server-side json_extract predicates" clause to the cache-derived reality (the
-      warm cache carries context_v2_json for all rows, so the join is Python-side over the warm cache,
-      zero egress -- no new verb, no Lambda redeploy). Confirm c2/c5 stay OPEN (gated on strict-mode).
-      Append a T1.13 progress_note entry summarising this slice.
+      until 7 days of sub-5% data accrue). Re-ground c12(iii) on BOTH dimensions of the delivered
+      reality, not just the reader-verb clause: (a) "the join needs a NEW ducklake_reader named-read verb
+      with server-side json_extract predicates" is superseded -- the warm cache carries context_v2_json
+      for all rows, so the join is Python-side over the warm cache, zero egress, no new verb, no Lambda
+      redeploy; AND (b) the "failed_check + failure_category (bundle-derived)" match key is DELIVERED as
+      FILE-ONLY, with the failure_category dimension DEFERRED until a failure_category field lands in
+      context_v2_json (a c9-style enrichment) -- a materially weaker heuristic than the written spec,
+      disclosed here so the c12 -> met flip is honest rather than overclaiming against the criterion text.
+      Confirm c2/c5 stay OPEN (gated on strict-mode). Append a T1.13 progress_note entry summarising this slice.
   - file: tests/test_ci_rca_back_validation.py
     action: Create
     purpose: >-
@@ -323,7 +342,9 @@ context:
     amend + tuning follow-on routed to a rec). CITE list (verbatim): 84, 88, 103, 72, 55, 57, 86, 73, 66.
     Related: 81, 61, 60, 90.
   - >-
-    gates: decision-scout=FLAGS_FOUND (77/77, all NOTE resolved); plan-critique=<verdict> after <N> round(s)
+    gates: decision-scout=FLAGS_FOUND (77/77, all NOTE resolved); plan-critique=PROCEED after 1 round
+    (three required tightenings folded in: c12 file-only-match-key disclosure, 10%-threshold deferral in
+    the INTENT, multi-function marker stamping + no schema_version bump).
   - >-
     rec-2415 (Low, dispute-frequency throttle) is gated on this plan's Section 7.1 dispute-traffic gauge;
     the gauge lands here and satisfies the gate, but the throttle needs the empirical traffic data the
@@ -331,8 +352,11 @@ context:
     cap) touches session_preflight.py but was not folded (kept out of scope to bound the change).
   - >-
     No open ci-rca unresolved recs at planning time (ci_rca_unresolved_recs empty -- no HARD BLOCK).
-    Branch was 1 commit behind origin/main at planning time; the sole changed file
-    (docs/plans/PLAN-audit-remediation-wave-3.yaml) does not overlap scope, so rebase was deferred.
+    Branch was behind origin/main at planning time; origin/main's audit-remediation-wave-3 edited BOTH
+    docs/plans/PLAN-audit-remediation-wave-3.yaml AND docs/ROADMAP-PLATFORM.yaml (flipping tier_item
+    T3.16 to complete) -- ROADMAP-PLATFORM.yaml is a scope file of this plan, but the divergence is in the
+    T3.16 section with no textual overlap with T1.13, so the commit-flow-time auto-rebase merges cleanly;
+    /implement must rebase and re-confirm the T1.13 bookkeeping edits apply before pushing.
   - >-
     c3 flips to met only after 7 days of sub-5% warn-mode reject-rate data -- a later observation/tuning
     session (or the c2 strict-flip Decision session) closes it; this plan builds the gauge, it cannot flip
@@ -348,9 +372,12 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     Modify scripts/ops_data_portal.py: add warn_mode_reject: Optional[dict] to CiRcaContext (portal-
-    derived, Tier-B); in each warn-would-reject branch (schema-deficiency, cross-check checks 1-4, bundle-
-    absent, S3-missing) stamp the tripped-check reasons into context_v2_json before the write; strict mode
-    unchanged (raises before write).
+    derived, Tier-B; schema_version stays at 1 -- additive optional field, le=2 already permits future
+    use, no bump). In each warn-would-reject branch stamp the tripped-check reasons into the SHARED
+    context_v2_json dict in place before the json.dumps (~L941): the schema-deficiency branch is in
+    file_rec (dict in scope), but the bundle-absent, S3-missing and cross-check checks 1-4 branches are in
+    helper functions (_run_ci_rca_cross_check + bundle/S3 helpers) that today only log/raise -- mutate the
+    passed-in dict there, gated so strict mode (which raises before write) never stamps.
   - >-
     Create scripts/ci_rca_back_validation.py mirroring ci_rca_probe_health.py -- pure
     find_preventive_regressions over the warm cache (open ci_rca rec file-matching a closed prior ci_rca
