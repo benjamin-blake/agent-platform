@@ -22,9 +22,22 @@ import time
 from scripts.checks import _common
 from scripts.checks.iam_tf.validate_terraform_try import validate_terraform_try
 
-# Transient terraform registry.terraform.io 5xx signatures; used by _terraform_init_with_retry and
-# by the bounded retry loop in .github/workflows/terraform-apply-sandbox.yml (parity required).
-_TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = ("502", "Bad Gateway", "could not query provider registry", "failed after ")
+# Transient terraform registry.terraform.io 5xx signatures, plus provider-download network
+# transients (connection reset / timeout / handshake / truncated stream); used by
+# _terraform_init_with_retry and by the bounded retry loop in
+# .github/workflows/terraform-apply-sandbox.yml (parity required). Parity is substring
+# (Python `in`) vs ERE (bash `grep -qE`) and therefore holds only for metacharacter-free
+# signatures.
+_TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = (
+    "502",
+    "Bad Gateway",
+    "could not query provider registry",
+    "failed after ",
+    "connection reset by peer",
+    "i/o timeout",
+    "TLS handshake timeout",
+    "unexpected EOF",
+)
 
 # Transient Claude API error signatures; parity with _is_transient() in scripts/ci/claude_p_retry.sh.
 # Distinct from _TRANSIENT_INIT_SIGNATURES (terraform registry 5xx). Decision 73, Decision 92.

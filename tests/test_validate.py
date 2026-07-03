@@ -750,9 +750,87 @@ class TestRunTerraformChecks:
         assert len(failed) == 1
         assert "Terraform init" in failed[0]
 
+    def test_creds_free_init_retries_on_connection_reset(self) -> None:
+        """_terraform_init_with_retry retries a provider-download connection reset and succeeds on attempt 3."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                if init_call_count < 3:
+                    result.returncode = 1
+                    result.stdout = ""
+                    result.stderr = "read: connection reset by peer"
+                else:
+                    result.returncode = 0
+                    result.stdout = "Terraform has been successfully initialized!"
+                    result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 3
+        assert failed == []
+
+    def test_creds_free_init_fails_fast_on_bad_pin(self) -> None:
+        """A non-transient bad-pin provider error is not retried, even though it fails init."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                result.returncode = 1
+                result.stdout = (
+                    "Error: Failed to install provider\n"
+                    "provider registry does not have a provider named registry.terraform.io/hashicorp/aws"
+                )
+                result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 1
+        assert len(failed) == 1
+        assert "Terraform init" in failed[0]
+
     def test_transient_init_signatures_exact_set(self) -> None:
         """_TRANSIENT_INIT_SIGNATURES contains the expected tokens (parity with workflow retry loop)."""
-        expected = frozenset(("502", "Bad Gateway", "could not query provider registry", "failed after "))
+        expected = frozenset(
+            (
+                "502",
+                "Bad Gateway",
+                "could not query provider registry",
+                "failed after ",
+                "connection reset by peer",
+                "i/o timeout",
+                "TLS handshake timeout",
+                "unexpected EOF",
+            )
+        )
         assert frozenset(_validate._TRANSIENT_INIT_SIGNATURES) == expected
 
 
