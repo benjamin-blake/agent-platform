@@ -27,10 +27,13 @@ scope:
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      Reduce the _scaffold_pytest_diff closure (lines 376-383) to a one-line delegation to
-      _scaffolding.run_pytest_diff(changed_tests, failed) -- moving ALL consumer/orchestration branch logic
-      out of validate.py into the coverage-mappable _scaffolding module (Decision 104). Keeps validate.py's
-      changed surface to the single delegation line (covered by the existing TestPreModeDiffAware --pre path).
+      Reduce the _scaffold_pytest_diff closure (lines 376-383) to a one-line BARE delegation
+      `run_pytest_diff(changed_tests, failed)` -- add run_pytest_diff to the existing line-42
+      `from scripts.checks._scaffolding import (...)` facade block and call it bare (matching how
+      run_lint_checks / run_precommit_checks are already called; `_scaffolding` is NOT a bound module name).
+      Moves ALL consumer/orchestration branch logic out of validate.py into the coverage-mappable _scaffolding
+      module (Decision 104). Keeps validate.py's changed surface to the single delegation line + one import
+      name (covered by the existing TestPreModeDiffAware --pre path).
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
@@ -178,18 +181,21 @@ constraints:
   - >-
     Code placement per Decision 104: ALL new logic (excluded-set derivation, per-file partition, AND the
     run_pytest_diff orchestration/reporting) lives under scripts/checks/ referencing shared primitives via
-    _common.<name>; scripts/validate.py's _scaffold_pytest_diff closure is reduced to a ONE-LINE delegation
-    `_scaffolding.run_pytest_diff(changed_tests, failed)` -- no consumer branch logic remains in validate.py.
-    Keep within the SLOC budget (Decision 102) or split into a dedicated module.
+    _common.<name>; scripts/validate.py's _scaffold_pytest_diff closure is reduced to a ONE-LINE BARE call
+    `run_pytest_diff(changed_tests, failed)` (added to the line-42 facade import) -- no consumer branch logic
+    remains in validate.py. Keep within the SLOC budget (Decision 102) or split into a dedicated
+    scripts/checks/<domain>/*.py module; IF the split is taken, update VP step 6's `--files` list to include
+    the new module so the pre-merge coverage gate still mirrors the post-merge one.
   - >-
     Coverage-gate reality (do not re-introduce the false claim): validate_test_coverage (100% per-file line
     coverage on changed source files) runs in full_sequence ONLY, NOT pre_sequence -- so `validate --pre`
     does NOT catch a coverage shortfall. Every new/changed line in BOTH scripts/validate.py (the delegation)
     and scripts/checks/_scaffolding.py must be covered by tests/test_validate.py, and VP step 6 runs the real
-    coverage gate pre-merge. Adding the `--collect-only` probe changes the _common.run call sequence that
-    TestPreModeDiffAware's _pre_mock_run (tests/test_validate.py ~line 2799) drives through main() --pre;
-    update that mock to return returncode 0 for the new collect-only invocations so those tests do not
-    StopIteration.
+    coverage gate pre-merge. The `--collect-only` probe adds _common.run calls to the main() --pre path that
+    TestPreModeDiffAware's _pre_mock_run (tests/test_validate.py ~line 2799) intercepts; that mock is
+    cmd-agnostic (returns returncode 0 for every call), so it should already handle the probe -- treat this as
+    VERIFY-ONLY: run the existing TestPreModeDiffAware / TestPreModePytestSelection tests unchanged and edit
+    the mock only if a real failure appears.
   - >-
     Respect the fast-tier budget (Decision 80 / _FAST_TIER_BUDGET_SECONDS, 5 min): probe with
     `--collect-only` (no test execution) and only per changed test file (typically 1-3); add no per-file
@@ -290,10 +296,12 @@ execution_steps:
     exit-5 backstop for that subset); if runnable is empty but deferred is non-empty, print a summary and do
     NOT touch `failed`.
   - >-
-    scripts/validate.py -- reduce the _scaffold_pytest_diff closure to a ONE-LINE delegation
-    `_scaffolding.run_pytest_diff(changed_tests, failed)` (import already available via the facade). No
-    consumer branch logic remains in validate.py; its changed surface is the single delegation line, covered
-    by the existing TestPreModeDiffAware --pre path.
+    scripts/validate.py -- add `run_pytest_diff` to the existing line-42
+    `from scripts.checks._scaffolding import (...)` facade block, then reduce the _scaffold_pytest_diff
+    closure to a ONE-LINE BARE call `run_pytest_diff(changed_tests, failed)` (NOT module-qualified --
+    `_scaffolding` is not a bound name; every existing _scaffolding function is called bare). No consumer
+    branch logic remains in validate.py; its changed surface is the delegation line + import name, covered by
+    the existing TestPreModeDiffAware --pre path.
   - >-
     tests/test_validate.py -- add `class TestExcludedHeavyDeps` (test_heavy_deps_in_excluded_set,
     test_fast_tier_deps_not_in_excluded_set -- derivation from the real requirements files);
